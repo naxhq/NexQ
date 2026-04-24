@@ -445,6 +445,7 @@ pub fn run() {
             stt_commands::estimate_deepgram_cost,
             stt_commands::update_deepgram_config,
             stt_commands::update_groq_config,
+            stt_commands::set_stt_language,
             stt_commands::set_pause_threshold,
             stt_commands::get_pause_threshold,
             // == COMMANDS: llm ==

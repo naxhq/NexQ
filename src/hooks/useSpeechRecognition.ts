@@ -78,6 +78,7 @@ function getSpeakerLabel(cfg: ReturnType<typeof useConfigStore.getState>["meetin
  */
 export function useSpeechRecognition() {
   const isRecording = useMeetingStore((s) => s.isRecording);
+  const sttLanguage = useConfigStore((s) => s.sttLanguage);
 
   const audioMode = useMeetingStore((s) => s.audioMode);
 
@@ -145,7 +146,7 @@ export function useSpeechRecognition() {
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
-    recognition.lang = "en-US";
+    recognition.lang = sttLanguage;
 
     recognitionRef.current = recognition;
     shouldRestartRef.current = true;
@@ -292,5 +293,5 @@ export function useSpeechRecognition() {
         recognitionRef.current = null;
       }
     };
-  }, [isRecording, usesWebSpeech]);
+  }, [isRecording, usesWebSpeech, sttLanguage]);
 }

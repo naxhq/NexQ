@@ -112,7 +112,13 @@ impl LLMProvider for OpenAICompatClient {
     }
 
     async fn test_connection(&self) -> Result<bool, LLMError> {
-        let url = format!("{}/models", self.config.base_url);
+        // OpenRouter's /models endpoint is public (no auth required), so use /auth/key instead
+        // to actually validate the API key.
+        let url = if self.config.provider_name == "openrouter" {
+            format!("{}/auth/key", self.config.base_url)
+        } else {
+            format!("{}/models", self.config.base_url)
+        };
         let request = self.apply_auth(self.client.get(&url));
 
         let response = request.send().await?;

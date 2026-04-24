@@ -218,8 +218,8 @@ impl STTRouter {
                 if let Some(ref key) = self.groq_whisper_api_key {
                     p.set_api_key(key);
                 }
-                p.set_language(&self.language);
                 p.set_config(self.groq_config.clone());
+                p.set_language(&self.language); // must be after set_config — set_config overwrites language
                 Box::new(p)
             }
             STTProviderType::SherpaOnnx | STTProviderType::OrtStreaming | STTProviderType::ParakeetTdt => {
@@ -403,8 +403,8 @@ impl STTRouter {
             if let Some(ref key) = self.groq_whisper_api_key {
                 p.set_api_key(key);
             }
-            p.set_language(&self.language);
             p.set_config(config);
+            p.set_language(&self.language); // must be after set_config — set_config overwrites language
             self.active_provider = Some(Box::new(p));
             log::info!("STTRouter: Groq provider recreated with new config");
         }

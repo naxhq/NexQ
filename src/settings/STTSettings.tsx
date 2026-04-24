@@ -276,6 +276,8 @@ interface BadgeState { text: string; variant: BadgeVariant }
 export function STTSettings() {
   const sttProvider = useConfigStore((s) => s.sttProvider);
   const setConfigSTTProvider = useConfigStore((s) => s.setSTTProvider);
+  const meetingAudioConfig = useConfigStore((s) => s.meetingAudioConfig);
+  const setMeetingAudioConfig = useConfigStore((s) => s.setMeetingAudioConfig);
   const activeWhisperModel = useConfigStore((s) => s.activeWhisperModel);
   // Persisted: providers whose key has been saved + tested successfully
   const verifiedCloudProviders = useConfigStore((s) => s.verifiedCloudProviders);
@@ -283,7 +285,8 @@ export function STTSettings() {
 
   const [selectedProvider, setSelectedProvider] =
     useState<STTProviderType>(sttProvider);
-  const [language, setLanguage] = useState("en-US");
+  const sttLanguage = useConfigStore((s) => s.sttLanguage);
+  const setSttLanguage = useConfigStore((s) => s.setSttLanguage);
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
   const [hasStoredKey, setHasStoredKey] = useState(false);
@@ -419,11 +422,18 @@ export function STTSettings() {
       try {
         await setSTTProvider(provider);
         setConfigSTTProvider(provider);
+        // Sync meetingAudioConfig so useAudioConfigSync hot-swaps the live capture.
+        if (meetingAudioConfig) {
+          setMeetingAudioConfig({
+            ...meetingAudioConfig,
+            you: { ...meetingAudioConfig.you, stt_provider: provider },
+          });
+        }
       } catch (e) {
         console.error("Failed to set STT provider:", e);
       }
     },
-    [setConfigSTTProvider]
+    [setConfigSTTProvider, meetingAudioConfig, setMeetingAudioConfig]
   );
 
   /** Save & Test: test key first, only persist on success. */
@@ -734,8 +744,8 @@ export function STTSettings() {
           Language
         </h3>
         <select
-          value={language}
-          onChange={(e) => setLanguage(e.target.value)}
+          value={sttLanguage}
+          onChange={(e) => setSttLanguage(e.target.value)}
           aria-label="STT language"
           className="w-full rounded-lg border border-border/50 bg-background px-3.5 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
         >

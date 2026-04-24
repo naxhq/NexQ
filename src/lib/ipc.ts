@@ -138,6 +138,10 @@ export async function setSTTProvider(provider: string): Promise<void> {
   return invoke("set_stt_provider", { provider });
 }
 
+export async function setSTTLanguage(language: string): Promise<void> {
+  return invoke("set_stt_language", { language });
+}
+
 export async function testSTTConnection(provider: string): Promise<boolean> {
   return invoke("test_stt_connection", { provider });
 }

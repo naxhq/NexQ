@@ -150,6 +150,9 @@ interface ConfigState {
   aiResponseTextColor: string;
   aiResponseFontSize: number;
 
+  // STT language (BCP-47, e.g. "en-US", "es-ES")
+  sttLanguage: string;
+
   // Post-meeting translation
   showPostMeetingTranslation: boolean;
 
@@ -212,6 +215,7 @@ interface ConfigState {
   setTranslationTextColor: (color: string) => void;
   setAiResponseTextColor: (color: string) => void;
   setAiResponseFontSize: (size: number) => void;
+  setSttLanguage: (language: string) => void;
   setShowPostMeetingTranslation: (enabled: boolean) => void;
   toggleOpenRouterFavorite: (id: string) => void;
   addOpenRouterRecentlyUsed: (id: string) => void;
@@ -262,6 +266,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
   translationTextColor: "#fbbf24",
   aiResponseTextColor: "#d4d4d8",
   aiResponseFontSize: 12,
+  sttLanguage: "en-US",
   showPostMeetingTranslation: true,
   openrouterFavorites: [],
   openrouterRecentlyUsed: [],
@@ -536,6 +541,14 @@ export const useConfigStore = create<ConfigState>((set) => ({
     set({ aiResponseFontSize: size });
     persistValue("aiResponseFontSize", size);
   },
+  setSttLanguage: (language) => {
+    set({ sttLanguage: language });
+    persistValue("sttLanguage", language);
+    import("../lib/ipc").then(({ setSTTLanguage }) =>
+      setSTTLanguage(language)
+        .catch((e) => console.warn("[configStore] Failed to set STT language:", e))
+    );
+  },
   setShowPostMeetingTranslation: (enabled) => {
     set({ showPostMeetingTranslation: enabled });
     persistValue("showPostMeetingTranslation", enabled);
@@ -638,6 +651,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
       const translationTextColor = await store.get<string>("translationTextColor");
       const aiResponseTextColor = await store.get<string>("aiResponseTextColor");
       const aiResponseFontSize = await store.get<number>("aiResponseFontSize");
+      const sttLanguage = await store.get<string>("sttLanguage");
       const showPostMeetingTranslation = await store.get<boolean>("showPostMeetingTranslation");
       const trayNotifications = await store.get<boolean>("trayNotifications");
       const trayAutoStart = await store.get<boolean>("trayAutoStart");
@@ -782,6 +796,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
         translationTextColor: translationTextColor ?? "#fbbf24",
         aiResponseTextColor: aiResponseTextColor ?? "#d4d4d8",
         aiResponseFontSize: aiResponseFontSize ?? 12,
+        sttLanguage: sttLanguage ?? "en-US",
         showPostMeetingTranslation: showPostMeetingTranslation ?? true,
         ...(trayNotifications != null && { trayNotifications }),
         ...(trayAutoStart != null && { trayAutoStart }),
@@ -850,6 +865,13 @@ export const useConfigStore = create<ConfigState>((set) => ({
           loadedDualPass.longChunkSecs,
           loadedDualPass.pauseSecs,
         ).catch((e) => console.warn("[configStore] Failed to sync dual-pass config on load:", e))
+      );
+
+      // Sync persisted STT language to Rust backend on startup.
+      const loadedSttLanguage = sttLanguage ?? "en-US";
+      import("../lib/ipc").then(({ setSTTLanguage }) =>
+        setSTTLanguage(loadedSttLanguage)
+          .catch((e) => console.warn("[configStore] Failed to sync STT language on load:", e))
       );
 
       // Sync persisted Deepgram config to Rust backend on startup.

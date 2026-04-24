@@ -233,13 +233,25 @@ pub async fn update_groq_config(app: AppHandle, config_json: String) -> Result<(
 
     let state = app.state::<AppState>();
 
-    // Update the shared config Arc — running providers read this on each API call
+    // Preserve the router's current language — config updates must not clobber it.
+    let current_language = if let Some(ref stt_arc) = state.stt {
+        let router = stt_arc
+            .lock()
+            .map_err(|_| "STT state lock poisoned".to_string())?;
+        router.language.clone()
+    } else {
+        config.language.clone()
+    };
+
+    // Update the shared config Arc — running providers read this on each API call.
+    // Apply the preserved language so the shared Arc stays in sync with the router.
     {
         let mut cfg = state
             .shared_groq_config
             .write()
             .map_err(|_| "Groq config lock poisoned".to_string())?;
         *cfg = config.clone();
+        cfg.language = current_language.clone();
     }
 
     // Also update the STTRouter's copy (for new provider creation)
@@ -247,10 +259,37 @@ pub async fn update_groq_config(app: AppHandle, config_json: String) -> Result<(
         let mut router = stt_arc
             .lock()
             .map_err(|_| "STT state lock poisoned".to_string())?;
-        router.set_groq_config(config);
+        let mut config_with_lang = config;
+        config_with_lang.language = current_language;
+        router.set_groq_config(config_with_lang);
     }
 
     log::info!("Groq config updated via IPC (applies immediately to running provider)");
+    Ok(())
+}
+
+/// Set the recognition language for all STT providers.
+/// Accepts BCP-47 codes (e.g., "es-ES", "en-US"). Takes effect on next connection.
+#[command]
+pub async fn set_stt_language(app: AppHandle, language: String) -> Result<(), String> {
+    let state = app.state::<AppState>();
+
+    // Keep shared_groq_config in sync — Groq reads it on every API call via current_config().
+    {
+        let mut cfg = state
+            .shared_groq_config
+            .write()
+            .map_err(|_| "Groq config lock poisoned".to_string())?;
+        cfg.language = language.clone();
+    }
+
+    if let Some(ref stt_arc) = state.stt {
+        let mut router = stt_arc
+            .lock()
+            .map_err(|_| "STT state lock poisoned".to_string())?;
+        router.set_language(&language);
+        log::info!("STT language set to: {}", language);
+    }
     Ok(())
 }
 
