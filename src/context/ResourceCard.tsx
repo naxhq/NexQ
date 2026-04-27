@@ -169,7 +169,7 @@ function getFileIndexBadge(
 function getTypeConfig(fileType: string): { color: string } {
   switch (fileType) {
     case "pdf":
-      return { color: "hsl(var(--destructive))" };
+      return { color: "hsl(var(--warning))" };
     case "md":
       return { color: "hsl(var(--info))" };
     case "docx":

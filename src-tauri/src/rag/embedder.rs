@@ -73,9 +73,22 @@ fn model_char_limit(model: &str) -> usize {
     } else if m.contains("nomic-embed-text") {
         // nomic-embed-text: 8192 subword tokens
         28_000
-    } else {
-        // Conservative default for unknown models (assume 512 token context)
+    } else if m.contains("bge-large") || m.contains("bge-base") {
+        // BGE models: 512 subword tokens
         1_700
+    } else if m.contains("bge-small") || m.contains("bge-micro") {
+        800
+    } else if m.contains("e5-large") || m.contains("e5-base") {
+        1_700
+    } else if m.contains("e5-small") {
+        800
+    } else if m.contains("jina") {
+        // jina-embeddings: 8192 subword tokens
+        28_000
+    } else {
+        // Conservative default for unknown models — assume 256 subword tokens to be safe.
+        // Spanish/accented text uses more BPE tokens per char than ASCII.
+        800
     }
 }
 
@@ -117,46 +130,61 @@ impl OllamaEmbedder {
         model: &str,
     ) -> Result<Vec<Vec<f32>>, String> {
         let url = format!("{}/api/embed", self.base_url);
-        let char_limit = model_char_limit(model);
+        let base_limit = model_char_limit(model);
 
-        // Truncate any text that would exceed the model's context window
-        let safe_texts: Vec<String> = texts
-            .iter()
-            .map(|t| truncate_text(t, char_limit).to_string())
-            .collect();
+        // Retry with progressively smaller chunks if Ollama rejects with 400
+        // (handles unknown models whose actual context window is smaller than our estimate)
+        let limits = [base_limit, base_limit / 2, base_limit / 4, 256];
+        let mut last_err = String::new();
 
-        let request_body = EmbedRequest {
-            model: model.to_string(),
-            input: safe_texts,
-        };
+        for &char_limit in &limits {
+            let safe_texts: Vec<String> = texts
+                .iter()
+                .map(|t| truncate_text(t, char_limit.max(64)).to_string())
+                .collect();
 
-        let response = self
-            .client
-            .post(&url)
-            .json(&request_body)
-            .timeout(Duration::from_secs(120))
-            .send()
-            .await
-            .map_err(|e| format!("Ollama embed request failed: {}", e))?;
+            let request_body = EmbedRequest {
+                model: model.to_string(),
+                input: safe_texts,
+            };
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response
-                .text()
+            let response = self
+                .client
+                .post(&url)
+                .json(&request_body)
+                .timeout(Duration::from_secs(120))
+                .send()
                 .await
-                .unwrap_or_else(|_| "no body".to_string());
-            return Err(format!(
-                "Ollama embed returned status {}: {}",
-                status, body
-            ));
+                .map_err(|e| format!("Ollama embed request failed: {}", e))?;
+
+            if response.status().as_u16() == 400 {
+                let body = response.text().await.unwrap_or_default();
+                if body.contains("input length") || body.contains("context length") {
+                    log::warn!(
+                        "Ollama embed 400 at char_limit={}, retrying smaller. model={} body={}",
+                        char_limit, model, body
+                    );
+                    last_err = format!("Ollama embed returned status 400 Bad Request: {}", body);
+                    continue;
+                }
+                return Err(format!("Ollama embed returned status 400 Bad Request: {}", body));
+            }
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_else(|_| "no body".to_string());
+                return Err(format!("Ollama embed returned status {}: {}", status, body));
+            }
+
+            let embed_response: EmbedResponse = response
+                .json()
+                .await
+                .map_err(|e| format!("Failed to parse embed response: {}", e))?;
+
+            return Ok(embed_response.embeddings);
         }
 
-        let embed_response: EmbedResponse = response
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse embed response: {}", e))?;
-
-        Ok(embed_response.embeddings)
+        Err(last_err)
     }
 
     /// Embed a single query text with the "search_query: " prefix.
