@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 /// Load a text file (.txt or .md) and return its contents as a String.
-/// Handles UTF-8 encoding and BOM (byte order mark).
+/// Tries UTF-8 first (stripping BOM if present), then falls back to Windows-1252.
 pub fn load_text_file(file_path: &str) -> Result<String, String> {
     let path = Path::new(file_path);
 
@@ -23,16 +23,31 @@ pub fn load_text_file(file_path: &str) -> Result<String, String> {
         ));
     }
 
-    // Read raw bytes first to handle BOM
     let bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
 
     // Strip UTF-8 BOM if present (EF BB BF)
-    let text = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
-        String::from_utf8(bytes[3..].to_vec())
-            .map_err(|e| format!("File is not valid UTF-8: {}", e))?
+    let payload = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        &bytes[3..]
     } else {
-        String::from_utf8(bytes).map_err(|e| format!("File is not valid UTF-8: {}", e))?
+        &bytes
     };
 
-    Ok(text)
+    // Try UTF-8 first
+    if let Ok(text) = std::str::from_utf8(payload) {
+        return Ok(text.to_string());
+    }
+
+    // Fallback: Windows-1252 (covers Latin-1 and most Western European encodings)
+    log::warn!(
+        "File '{}' is not valid UTF-8 — decoding as Windows-1252",
+        file_path
+    );
+    let (text, _, had_errors) = encoding_rs::WINDOWS_1252.decode(payload);
+    if had_errors {
+        log::warn!(
+            "Some characters in '{}' could not be decoded and were replaced",
+            file_path
+        );
+    }
+    Ok(text.into_owned())
 }

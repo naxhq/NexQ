@@ -54,6 +54,7 @@ bzip2 = "0.5"
 ogg = "0.9"
 libopus_sys = { version = "0.3", features = ["static", "bundled"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+encoding_rs = "0.8"
 
 # Windows-specific
 [target.'cfg(windows)'.dependencies]

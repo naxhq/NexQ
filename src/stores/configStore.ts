@@ -149,6 +149,9 @@ interface ConfigState {
   translationTextColor: string;
   aiResponseTextColor: string;
   aiResponseFontSize: number;
+  aiResponseLineHeight: number;
+  aiResponseHPad: number;
+  aiResponseAlign: "left" | "center" | "right";
 
   // STT language (BCP-47, e.g. "en-US", "es-ES")
   sttLanguage: string;
@@ -215,6 +218,9 @@ interface ConfigState {
   setTranslationTextColor: (color: string) => void;
   setAiResponseTextColor: (color: string) => void;
   setAiResponseFontSize: (size: number) => void;
+  setAiResponseLineHeight: (v: number) => void;
+  setAiResponseHPad: (v: number) => void;
+  setAiResponseAlign: (align: "left" | "center" | "right") => void;
   setSttLanguage: (language: string) => void;
   setShowPostMeetingTranslation: (enabled: boolean) => void;
   toggleOpenRouterFavorite: (id: string) => void;
@@ -266,6 +272,9 @@ export const useConfigStore = create<ConfigState>((set) => ({
   translationTextColor: "#fbbf24",
   aiResponseTextColor: "#d4d4d8",
   aiResponseFontSize: 12,
+  aiResponseLineHeight: 1.6,
+  aiResponseHPad: 0,
+  aiResponseAlign: "left" as const,
   sttLanguage: "en-US",
   showPostMeetingTranslation: true,
   openrouterFavorites: [],
@@ -541,6 +550,18 @@ export const useConfigStore = create<ConfigState>((set) => ({
     set({ aiResponseFontSize: size });
     persistValue("aiResponseFontSize", size);
   },
+  setAiResponseLineHeight: (v) => {
+    set({ aiResponseLineHeight: v });
+    persistValue("aiResponseLineHeight", v);
+  },
+  setAiResponseHPad: (v) => {
+    set({ aiResponseHPad: v });
+    persistValue("aiResponseHPad", v);
+  },
+  setAiResponseAlign: (align) => {
+    set({ aiResponseAlign: align });
+    persistValue("aiResponseAlign", align);
+  },
   setSttLanguage: (language) => {
     set({ sttLanguage: language });
     persistValue("sttLanguage", language);
@@ -651,6 +672,9 @@ export const useConfigStore = create<ConfigState>((set) => ({
       const translationTextColor = await store.get<string>("translationTextColor");
       const aiResponseTextColor = await store.get<string>("aiResponseTextColor");
       const aiResponseFontSize = await store.get<number>("aiResponseFontSize");
+      const aiResponseLineHeight = await store.get<number>("aiResponseLineHeight");
+      const aiResponseHPad = await store.get<number>("aiResponseHPad");
+      const aiResponseAlign = await store.get<string>("aiResponseAlign");
       const sttLanguage = await store.get<string>("sttLanguage");
       const showPostMeetingTranslation = await store.get<boolean>("showPostMeetingTranslation");
       const trayNotifications = await store.get<boolean>("trayNotifications");
@@ -796,6 +820,9 @@ export const useConfigStore = create<ConfigState>((set) => ({
         translationTextColor: translationTextColor ?? "#fbbf24",
         aiResponseTextColor: aiResponseTextColor ?? "#d4d4d8",
         aiResponseFontSize: aiResponseFontSize ?? 12,
+        aiResponseLineHeight: aiResponseLineHeight ?? 1.6,
+        aiResponseHPad: aiResponseHPad ?? 0,
+        aiResponseAlign: (aiResponseAlign as "left" | "center" | "right") ?? "left",
         sttLanguage: sttLanguage ?? "en-US",
         showPostMeetingTranslation: showPostMeetingTranslation ?? true,
         ...(trayNotifications != null && { trayNotifications }),

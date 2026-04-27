@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from "react";
-import { HelpCircle, Sparkles, Check, Clock } from "lucide-react";
+import { HelpCircle, Sparkles, Check, Clock, X } from "lucide-react";
 import { onQuestionDetected } from "../lib/events";
 import { generateAssist } from "../lib/ipc";
 import { useTranscriptStore } from "../stores/transcriptStore";
@@ -35,7 +35,6 @@ export function QuestionDetector() {
 
   useEffect(() => {
     const p = onQuestionDetected((event) => {
-      // Only show questions from the other party — ignore "User"/"You" questions
       if (event.source === "Them" || event.source === "Interviewer") {
         addQuestion(event);
       }
@@ -61,8 +60,12 @@ export function QuestionDetector() {
     generateAssist("Assist", questionText).catch(() => {});
   }, [questions]);
 
+  const handleDismiss = useCallback((index: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setQuestions((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
   const latest = questions.length > 0 ? questions[0] : null;
-  // Show current + last 3 previous (4 total max visible)
   const previousQuestions = questions.slice(1, 4);
 
   return (
@@ -70,9 +73,7 @@ export function QuestionDetector() {
       {/* Latest question — prominent card */}
       <div
         className={`group flex items-start gap-3 rounded-lg transition-all duration-200 ${
-          latest
-            ? "cursor-pointer hover:bg-info/10 question-card-enter"
-            : ""
+          latest ? "cursor-pointer hover:bg-info/10 question-card-enter" : ""
         }`}
         onClick={() => latest && handleAssist(0)}
         onKeyDown={(e) => { if (latest && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); handleAssist(0); } }}
@@ -105,47 +106,52 @@ export function QuestionDetector() {
         </div>
 
         {latest && (
-          <button
-            onClick={(e) => { e.stopPropagation(); handleAssist(0); }}
-            aria-label={latest.assisted ? "Already answered" : "Get AI assistance for this question"}
-            className={`shrink-0 flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all duration-150 cursor-pointer ${
-              latest.assisted
-                ? "bg-success/10 border border-success/20 text-success"
-                : "bg-info/10 border border-info/20 text-info hover:bg-info/20"
-            }`}
-          >
-            {latest.assisted ? (
-              <>
-                <Check className="h-3.5 w-3.5" aria-hidden="true" />
-                Answered
-              </>
-            ) : (
-              <>
-                <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-                Assist
-              </>
-            )}
-          </button>
+          <div className="flex shrink-0 items-center gap-1">
+            <button
+              onClick={(e) => { e.stopPropagation(); handleAssist(0); }}
+              aria-label={latest.assisted ? "Already answered" : "Get AI assistance for this question"}
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all duration-150 cursor-pointer ${
+                latest.assisted
+                  ? "bg-success/10 border border-success/20 text-success"
+                  : "bg-info/10 border border-info/20 text-info hover:bg-info/20"
+              }`}
+            >
+              {latest.assisted ? (
+                <><Check className="h-3.5 w-3.5" aria-hidden="true" />Answered</>
+              ) : (
+                <><Sparkles className="h-3.5 w-3.5" aria-hidden="true" />Assist</>
+              )}
+            </button>
+            <button
+              onClick={(e) => handleDismiss(0, e)}
+              aria-label="Dismiss question"
+              className="rounded-lg p-1.5 text-muted-foreground/30 opacity-0 transition-all duration-150 hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100 cursor-pointer"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
         )}
       </div>
 
-      {/* Previous questions — vertical compact list, last 5 only, no scroll */}
+      {/* Previous questions — compact list */}
       {previousQuestions.length > 0 && (
         <div className="flex flex-col gap-1">
           {previousQuestions.map((q, idx) => {
-            const realIdx = idx + 1; // offset for handleAssist since index 0 is latest
+            const realIdx = idx + 1;
             return (
-              <button
+              <div
                 key={`q-${realIdx}-${q.timestamp_ms}`}
-                onClick={() => handleAssist(realIdx)}
-                className={`group/q flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-all duration-150 cursor-pointer question-card-enter ${
+                className={`group/q flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-all duration-150 question-card-enter ${
                   q.assisted
                     ? "bg-success/5 border border-success/10"
-                    : "bg-card/20 hover:bg-card/40 hover:border-border/20"
+                    : "bg-card/20 hover:bg-card/40 hover:border-border/20 cursor-pointer"
                 }`}
+                onClick={() => !q.assisted && handleAssist(realIdx)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleAssist(realIdx); } }}
                 title={q.text}
               >
-                {/* Status indicator */}
                 <div className="shrink-0">
                   {q.assisted ? (
                     <div className="flex h-4 w-4 items-center justify-center rounded-full bg-success/20">
@@ -158,7 +164,6 @@ export function QuestionDetector() {
                   )}
                 </div>
 
-                {/* Question text */}
                 <span className={`flex-1 truncate text-xs leading-snug transition-colors ${
                   q.assisted
                     ? "text-success/70 font-medium"
@@ -167,11 +172,17 @@ export function QuestionDetector() {
                   {q.text}
                 </span>
 
-                {/* Assist action for unanswered */}
                 {!q.assisted && (
                   <Sparkles className="h-3 w-3 shrink-0 text-info/0 group-hover/q:text-info/60 transition-colors" />
                 )}
-              </button>
+                <button
+                  onClick={(e) => handleDismiss(realIdx, e)}
+                  aria-label="Dismiss question"
+                  className="rounded p-0.5 text-muted-foreground/0 opacity-0 transition-all duration-150 hover:bg-destructive/10 hover:text-destructive group-hover/q:opacity-100 group-hover/q:text-muted-foreground/30 cursor-pointer"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
             );
           })}
         </div>

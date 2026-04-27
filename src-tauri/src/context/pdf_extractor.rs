@@ -21,13 +21,7 @@ pub fn extract_text_from_pdf(file_path: &str) -> Result<String, String> {
             Ok(trimmed)
         }
         Err(e) => {
-            log::warn!(
-                "Failed to extract text from PDF '{}': {}. Returning empty string.",
-                file_path,
-                e
-            );
-            // Return empty string gracefully instead of hard error
-            Ok(String::new())
+            Err(format!("Failed to extract text from PDF: {}", e))
         }
     }
 }

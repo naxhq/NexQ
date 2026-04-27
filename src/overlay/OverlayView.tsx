@@ -33,6 +33,13 @@ import {
   BarChart3,
   Bookmark,
   Globe,
+  Mic,
+  MicOff,
+  Volume2,
+  VolumeX,
+  Columns2,
+  PanelLeftClose,
+  PanelRightClose,
 } from "lucide-react";
 import { formatDuration } from "../lib/utils";
 
@@ -49,9 +56,16 @@ export function OverlayView() {
   const [devLogOpen, setDevLogOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  const [layoutMode, setLayoutMode] = useState<"split" | "ai" | "transcript">("split");
+  const cycleLayout = () => setLayoutMode((m) => m === "split" ? "ai" : m === "ai" ? "transcript" : "split");
   const toggleLog = useCallLogStore((s) => s.toggleOpen);
   const logOpen = useCallLogStore((s) => s.isOpen);
   const autoTrigger = useAIActionsStore((s) => s.configs.globalDefaults.autoTrigger);
+
+  const mutedYou = useConfigStore((s) => s.mutedYou);
+  const mutedThem = useConfigStore((s) => s.mutedThem);
+  const toggleMuteYou = useConfigStore((s) => s.toggleMuteYou);
+  const toggleMuteThem = useConfigStore((s) => s.toggleMuteThem);
 
   const autoTranslateActive = useTranslationStore((s) => s.autoTranslateActive);
   const setAutoTranslateActive = useTranslationStore((s) => s.setAutoTranslateActive);
@@ -156,6 +170,40 @@ export function OverlayView() {
         </div>
 
         <div className="flex items-center gap-1">
+          {/* Mute controls */}
+          <button
+            onClick={toggleMuteYou}
+            className={`rounded-lg p-2 transition-all duration-150 cursor-pointer ${
+              mutedYou
+                ? "bg-destructive/15 text-destructive hover:bg-destructive/25"
+                : "text-muted-foreground/60 hover:bg-accent/60 hover:text-foreground"
+            }`}
+            aria-label={mutedYou ? "Unmute mic (You)" : "Mute mic (You)"}
+            aria-pressed={mutedYou}
+            title={mutedYou ? "Unmute mic (You)" : "Mute mic (You)"}
+          >
+            {mutedYou ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
+          </button>
+          <button
+            onClick={toggleMuteThem}
+            className={`rounded-lg p-2 transition-all duration-150 cursor-pointer ${
+              mutedThem
+                ? "bg-destructive/15 text-destructive hover:bg-destructive/25"
+                : "text-muted-foreground/60 hover:bg-accent/60 hover:text-foreground"
+            }`}
+            aria-label={mutedThem ? "Unmute them" : "Mute them"}
+            aria-pressed={mutedThem}
+            title={mutedThem ? "Unmute them" : "Mute them"}
+          >
+            {mutedThem ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+          </button>
+          <div className="w-px h-3.5 bg-border/20 mx-0.5" />
+          <HeaderBtn
+            icon={layoutMode === "split" ? <Columns2 className="h-3.5 w-3.5" /> : layoutMode === "ai" ? <PanelLeftClose className="h-3.5 w-3.5" /> : <PanelRightClose className="h-3.5 w-3.5" />}
+            onClick={cycleLayout}
+            tooltip={layoutMode === "split" ? "Focus AI panel" : layoutMode === "ai" ? "Focus Transcript" : "Split view"}
+          />
+          <div className="w-px h-3.5 bg-border/20 mx-0.5" />
           <HeaderBtn icon={<BarChart3 className="h-3.5 w-3.5" />} active={statsOpen} onClick={() => setStatsOpen(p => !p)} tooltip="Speaker Stats (S)" />
           <HeaderBtn icon={<Bookmark className="h-3.5 w-3.5" />} active={bookmarksOpen} onClick={() => setBookmarksOpen(p => !p)} tooltip="Bookmarks (K)" />
           <HeaderBtn icon={<Activity className="h-3.5 w-3.5" />} active={logOpen} onClick={toggleLog} tooltip="AI Call Log" />
@@ -228,16 +276,31 @@ export function OverlayView() {
       <div className="absolute inset-0 flex flex-wrap gap-2.5 overflow-hidden px-3 py-2.5">
 
         {/* ── LEFT: TRANSCRIPT ── */}
-        <div className="flex min-w-[180px] min-h-0 flex-1 basis-[220px] flex-col overflow-hidden rounded-xl bg-card/20">
-          <div className="flex shrink-0 items-center border-b border-border/20 px-3 py-1.5">
-            <span className="text-meta font-semibold uppercase tracking-wider text-muted-foreground/60">Transcript</span>
+        {layoutMode !== "ai" ? (
+          <div className="flex min-w-[180px] min-h-0 flex-1 basis-[220px] flex-col overflow-hidden rounded-xl bg-card/20">
+            <div className="flex shrink-0 items-center border-b border-border/20 px-3 py-1.5">
+              <span className="text-meta font-semibold uppercase tracking-wider text-muted-foreground/60">Transcript</span>
+            </div>
+            <div className="flex flex-1 flex-col min-h-0 overflow-hidden p-2.5">
+              <TranscriptPanel />
+            </div>
           </div>
-          <div className="flex flex-1 flex-col min-h-0 overflow-hidden p-2.5">
-            <TranscriptPanel />
+        ) : (
+          <div
+            className="flex min-h-0 w-8 shrink-0 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-xl bg-card/20 transition-all duration-200 hover:bg-card/30"
+            onClick={() => setLayoutMode("split")}
+            role="button"
+            aria-label="Expand transcript panel"
+            title="Expand transcript"
+          >
+            <span className="text-[9px] font-semibold uppercase tracking-widest text-muted-foreground/40" style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}>
+              Transcript
+            </span>
           </div>
-        </div>
+        )}
 
         {/* ── RIGHT ── */}
+        {layoutMode !== "transcript" ? (
         <div className="flex min-w-[180px] min-h-0 flex-1 basis-[220px] flex-col gap-2.5 overflow-hidden">
           {/* Question detector — only shown when auto-trigger is on */}
           {autoTrigger && (
@@ -256,6 +319,19 @@ export function OverlayView() {
             </div>
           </div>
         </div>
+        ) : (
+          <div
+            className="flex min-h-0 w-8 shrink-0 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-xl bg-card/20 transition-all duration-200 hover:bg-card/30"
+            onClick={() => setLayoutMode("split")}
+            role="button"
+            aria-label="Expand AI panel"
+            title="Expand AI panel"
+          >
+            <span className="text-[9px] font-semibold uppercase tracking-widest text-muted-foreground/40" style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}>
+              AI
+            </span>
+          </div>
+        )}
       </div>
       </div>
 
