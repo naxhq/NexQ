@@ -71,8 +71,9 @@ fn model_char_limit(model: &str) -> usize {
         // mxbai-embed-large: 512 subword tokens
         1_700
     } else if m.contains("nomic-embed-text") {
-        // nomic-embed-text: 8192 subword tokens
-        28_000
+        // nomic-embed-text base: 2048 subword tokens; v1.5: 8192.
+        // Use conservative 2048-token estimate (~4 bytes/token for Spanish) = 5000 chars
+        5_000
     } else if m.contains("bge-large") || m.contains("bge-base") {
         // BGE models: 512 subword tokens
         1_700
@@ -92,15 +93,22 @@ fn model_char_limit(model: &str) -> usize {
     }
 }
 
-/// Truncate text to at most `max_chars` characters, breaking at the last word boundary.
+/// Truncate text to at most `max_chars` **bytes**, always on a valid UTF-8 char boundary.
 fn truncate_text(text: &str, max_chars: usize) -> &str {
     if text.len() <= max_chars {
         return text;
     }
-    // Prefer breaking at a whitespace boundary to avoid splitting a word
-    let boundary = text[..max_chars]
+    // Find the largest valid UTF-8 byte boundary that fits within max_chars bytes
+    let safe_end = text
+        .char_indices()
+        .take_while(|(i, _)| *i < max_chars)
+        .last()
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0);
+    // Prefer breaking at whitespace to avoid splitting a word
+    let boundary = text[..safe_end]
         .rfind(|c: char| c.is_whitespace())
-        .unwrap_or(max_chars);
+        .unwrap_or(safe_end);
     text[..boundary].trim_end()
 }
 
@@ -132,12 +140,13 @@ impl OllamaEmbedder {
         let url = format!("{}/api/embed", self.base_url);
         let base_limit = model_char_limit(model);
 
-        // Retry with progressively smaller chunks if Ollama rejects with 400
-        // (handles unknown models whose actual context window is smaller than our estimate)
-        let limits = [base_limit, base_limit / 2, base_limit / 4, 256];
+        // Retry with progressively halved char limit on 400 "input length" errors.
+        // Handles models whose real BPE token count per char is higher than estimated
+        // (common with Spanish/accented text on smaller context models).
+        let mut char_limit = base_limit;
         let mut last_err = String::new();
 
-        for &char_limit in &limits {
+        loop {
             let safe_texts: Vec<String> = texts
                 .iter()
                 .map(|t| truncate_text(t, char_limit.max(64)).to_string())
@@ -160,11 +169,15 @@ impl OllamaEmbedder {
             if response.status().as_u16() == 400 {
                 let body = response.text().await.unwrap_or_default();
                 if body.contains("input length") || body.contains("context length") {
-                    log::warn!(
-                        "Ollama embed 400 at char_limit={}, retrying smaller. model={} body={}",
-                        char_limit, model, body
-                    );
                     last_err = format!("Ollama embed returned status 400 Bad Request: {}", body);
+                    if char_limit <= 64 {
+                        break; // can't go smaller — give up
+                    }
+                    char_limit /= 2;
+                    log::warn!(
+                        "Ollama embed 400 context exceeded, retrying at char_limit={}. model={}",
+                        char_limit, model
+                    );
                     continue;
                 }
                 return Err(format!("Ollama embed returned status 400 Bad Request: {}", body));
