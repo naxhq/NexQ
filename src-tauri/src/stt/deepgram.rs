@@ -750,8 +750,29 @@ impl STTProvider for DeepgramSTT {
     }
 
     fn set_language(&mut self, language: &str) {
-        self.language = language.to_string();
-        log::info!("DeepgramSTT: Language set to {}", self.language);
+        self.language = normalize_deepgram_language(language);
+        if self.language == language {
+            log::info!("DeepgramSTT: Language set to {}", self.language);
+        } else {
+            log::info!(
+                "DeepgramSTT: Language set to {} (normalized from {})",
+                self.language,
+                language
+            );
+        }
+    }
+}
+
+fn normalize_deepgram_language(language: &str) -> String {
+    let trimmed = language.trim();
+    if trimmed.is_empty() {
+        return "en".to_string();
+    }
+
+    match trimmed {
+        // Deepgram accepts English locale subtags; other UI locales map to base codes.
+        "en-US" | "en-GB" => trimmed.to_string(),
+        _ => trimmed.split('-').next().unwrap_or(trimmed).to_string(),
     }
 }
 

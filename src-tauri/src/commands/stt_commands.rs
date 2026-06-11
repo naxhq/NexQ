@@ -79,6 +79,28 @@ pub async fn set_stt_provider(app: AppHandle, provider: String) -> Result<(), St
     Ok(())
 }
 
+/// Update the recognition language used by STT providers.
+#[command]
+pub async fn set_stt_language(app: AppHandle, language: String) -> Result<(), String> {
+    let state = app.state::<AppState>();
+
+    ensure_stt_initialized(&app, &state)?;
+
+    let stt_arc = state
+        .stt
+        .as_ref()
+        .ok_or("STT router not initialized")?
+        .clone();
+
+    let mut router = stt_arc
+        .lock()
+        .map_err(|_| "STT state lock poisoned".to_string())?;
+
+    router.set_language(&language);
+    log::info!("STT language set to: {}", language);
+    Ok(())
+}
+
 /// Test whether a given STT provider is available and configured correctly.
 #[command]
 pub async fn test_stt_connection(app: AppHandle, provider: String) -> Result<bool, String> {

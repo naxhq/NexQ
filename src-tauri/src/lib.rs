@@ -439,6 +439,7 @@ pub fn run() {
             audio_commands::ensure_ipolicy_override,
             // == COMMANDS: stt ==
             stt_commands::set_stt_provider,
+            stt_commands::set_stt_language,
             stt_commands::test_stt_connection,
             stt_commands::get_available_stt_providers,
             stt_commands::update_whisper_dual_pass_config,
