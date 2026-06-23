@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "productName": "NexQ",
-  "version": "2.20.8",
+  "version": "2.20.9",
   "identifier": "com.nexq.app",
   "build": {
     "beforeDevCommand": "npm run dev",

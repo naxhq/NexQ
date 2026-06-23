@@ -1,7 +1,7 @@
 {
   "name": "nexq",
   "private": true,
-  "version": "2.20.8",
+  "version": "2.20.9",
   "type": "module",
   "scripts": {
     "dev": "vite",
