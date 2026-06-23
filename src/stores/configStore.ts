@@ -157,9 +157,6 @@ interface ConfigState {
   // Overlay appearance
   overlayOpacity: number;
 
-  // STT language (BCP-47, e.g. "en-US", "es-ES")
-  sttLanguage: string;
-
   // Post-meeting translation
   showPostMeetingTranslation: boolean;
 
@@ -282,7 +279,6 @@ export const useConfigStore = create<ConfigState>((set) => ({
   aiResponseHPad: 0,
   aiResponseAlign: "left" as const,
   overlayOpacity: 0.65,
-  sttLanguage: "en-US",
   showPostMeetingTranslation: true,
   openrouterFavorites: [],
   openrouterRecentlyUsed: [],
