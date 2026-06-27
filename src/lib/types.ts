@@ -10,7 +10,7 @@ export type AudioSource = "Mic" | "System" | "Room";
 // == MEETING MODE TYPES ==
 
 export type AudioMode = "online" | "in_person";
-export type AIScenario = "team_meeting" | "lecture" | "interview" | "webinar" | "custom";
+export type AIScenario = "team_meeting" | "lecture" | "interview" | "webinar" | "oral_exam" | "custom";
 export type SpeakerSource = "fixed" | "diarization" | "room";
 
 export interface AudioDevice {

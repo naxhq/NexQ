@@ -193,16 +193,21 @@ pub async fn translate_segments(
         .ok_or("Translation router not initialized")?;
 
     // Clone provider Arc out of lock scope — safe to .await
-    let (provider_arc, provider_name) = {
+    let (provider_arc, provider_name, is_llm) = {
         let router = trans_arc.lock().map_err(|_| "Lock poisoned")?;
         let p = router.get_provider().map_err(|e| e.to_string())?;
         let name = p.provider_name().to_string();
-        (p, name)
+        let is_llm = router.active_type() == Some(&TranslationProviderType::Llm);
+        (p, name, is_llm)
     };
 
     for (seg_id, text) in segment_ids.iter().zip(texts.iter()) {
-        let translated = provider_arc.translate(text, source, &target).await
-            .map_err(|e| e.to_string())?;
+        let translated = if is_llm {
+            translate_via_llm(&app, text, source, &target).await?
+        } else {
+            provider_arc.translate(text, source, &target).await
+                .map_err(|e| e.to_string())?
+        };
 
         // Save to DB
         if let Some(ref db_arc) = state.database {
@@ -302,22 +307,30 @@ pub async fn translate_batch(
         }));
     }
 
+    let (provider_arc, provider_name, is_llm) = {
+        let trans_arc = state.translation.as_ref()
+            .ok_or("Translation router not initialized")?;
+        let router = trans_arc.lock().map_err(|_| "Lock poisoned")?;
+        let p = router.get_provider().map_err(|e| e.to_string())?;
+        let is_llm = router.active_type() == Some(&TranslationProviderType::Llm);
+        (p, router.active_provider_name(), is_llm)
+    };
+
     // Translate only untranslated segments in chunks of 10
     let mut completed = already_done;
     for chunk in untranslated.chunks(10) {
         let texts: Vec<String> = chunk.iter().map(|(_, t)| t.clone()).collect();
 
-        // Clone Arc out of lock before .await
-        let (provider_arc, provider_name) = {
-            let trans_arc = state.translation.as_ref()
-                .ok_or("Translation router not initialized")?;
-            let router = trans_arc.lock().map_err(|_| "Lock poisoned")?;
-            let p = router.get_provider().map_err(|e| e.to_string())?;
-            (p, router.active_provider_name())
+        let translations = if is_llm {
+            let mut results = Vec::with_capacity(texts.len());
+            for text in &texts {
+                results.push(translate_via_llm(&app, text, None, &target).await?);
+            }
+            results
+        } else {
+            provider_arc.translate_batch(&texts, None, &target).await
+                .map_err(|e| e.to_string())?
         };
-
-        let translations = provider_arc.translate_batch(&texts, None, &target).await
-            .map_err(|e| e.to_string())?;
 
         // Save each translation
         for ((seg_id, orig_text), translated) in chunk.iter().zip(translations.iter()) {

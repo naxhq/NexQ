@@ -141,6 +141,26 @@ const EXCLUSIVE_FALLBACK_ORDER: STTProviderType[] = [
   "sherpa_onnx", "ort_streaming", "parakeet_tdt",
 ];
 
+const STT_LANGUAGES = [
+  { value: "en-US", label: "English (US)" },
+  { value: "en-GB", label: "English (UK)" },
+  { value: "es-ES", label: "Spanish" },
+  { value: "fr-FR", label: "French" },
+  { value: "de-DE", label: "German" },
+  { value: "it-IT", label: "Italian" },
+  { value: "pt-BR", label: "Portuguese (Brazil)" },
+  { value: "ja-JP", label: "Japanese" },
+  { value: "zh-CN", label: "Chinese (Simplified)" },
+  { value: "ko-KR", label: "Korean" },
+  { value: "nl-NL", label: "Dutch" },
+  { value: "hi-IN", label: "Hindi" },
+  { value: "ru-RU", label: "Russian" },
+  { value: "ar-SA", label: "Arabic" },
+  { value: "tr-TR", label: "Turkish" },
+  { value: "pl-PL", label: "Polish" },
+  { value: "sv-SE", label: "Swedish" },
+];
+
 function isExclusiveProvider(provider: string): boolean {
   return EXCLUSIVE_PROVIDERS.includes(provider as STTProviderType);
 }
@@ -175,6 +195,8 @@ export function MeetingAudioSettings() {
   } = useConfigStore();
   const diarizationEnabled = useConfigStore((s) => s.diarizationEnabled);
   const setDiarizationEnabled = useConfigStore((s) => s.setDiarizationEnabled);
+  const sttLanguage = useConfigStore((s) => s.sttLanguage);
+  const setSTTLanguage = useConfigStore((s) => s.setSTTLanguage);
 
   const [devices, setDevices] = useState<AudioDeviceList>({
     inputs: [],
@@ -339,23 +361,39 @@ export function MeetingAudioSettings() {
     <div className="flex flex-col gap-4">
 
       {/* ── Quick Presets ── */}
-      <div className="flex items-center gap-2 rounded-xl border border-border/20 bg-card/40 px-4 py-2.5">
-        <span className="mr-1 shrink-0 text-meta font-semibold uppercase tracking-wider text-muted-foreground/60">
-          Presets
-        </span>
-        {BUILT_IN_PRESETS.map((preset) => (
-          <button
-            key={preset.name}
-            onClick={() => handlePresetSelect(preset)}
-            className={`cursor-pointer rounded-lg border px-3 py-1 text-xs font-medium transition-all duration-150 active:scale-95 ${
-              config.preset_name === preset.name
-                ? "border-primary/50 bg-primary/10 text-primary shadow-sm shadow-primary/10"
-                : "border-border/30 text-muted-foreground/70 hover:border-border/60 hover:bg-accent/40 hover:text-foreground"
-            }`}
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border/20 bg-card/40 px-4 py-2.5">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+          <span className="mr-1 shrink-0 text-meta font-semibold uppercase tracking-wider text-muted-foreground/60">
+            Presets
+          </span>
+          {BUILT_IN_PRESETS.map((preset) => (
+            <button
+              key={preset.name}
+              onClick={() => handlePresetSelect(preset)}
+              className={`cursor-pointer rounded-lg border px-3 py-1 text-xs font-medium transition-all duration-150 active:scale-95 ${
+                config.preset_name === preset.name
+                  ? "border-primary/50 bg-primary/10 text-primary shadow-sm shadow-primary/10"
+                  : "border-border/30 text-muted-foreground/70 hover:border-border/60 hover:bg-accent/40 hover:text-foreground"
+              }`}
+            >
+              {preset.name}
+            </button>
+          ))}
+        </div>
+        <label className="flex shrink-0 items-center gap-2 text-meta font-semibold uppercase tracking-wider text-muted-foreground/60">
+          STT Language
+          <select
+            value={sttLanguage}
+            onChange={(e) => setSTTLanguage(e.target.value)}
+            className="h-8 cursor-pointer rounded-lg border border-border/40 bg-background/60 px-2 text-xs font-medium normal-case tracking-normal text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
           >
-            {preset.name}
-          </button>
-        ))}
+            {STT_LANGUAGES.map((lang) => (
+              <option key={lang.value} value={lang.value}>
+                {lang.label}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
       {/* ── Main two-panel: YOU | THEM ── */}

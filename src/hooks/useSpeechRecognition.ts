@@ -15,7 +15,6 @@ import { emit } from "@tauri-apps/api/event";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useTranscriptStore } from "../stores/transcriptStore";
 import { useConfigStore } from "../stores/configStore";
-import { useSpeakerStore } from "../stores/speakerStore";
 import { pushTranscript, ensureIpolicyOverride } from "../lib/ipc";
 
 // Web Speech API types (not in all TS libs)
@@ -173,8 +172,6 @@ export function useSpeechRecognition() {
           segmentCounterRef.current += 1;
           const now = Date.now();
           const speakerId = speakerLabel === "User" ? "you" : "them";
-          const wordCount = transcript.split(/\s+/).filter(Boolean).length;
-          useSpeakerStore.getState().updateStats(speakerId, wordCount, 0);
           const finalSeg = {
             id: segId,
             text: transcript,

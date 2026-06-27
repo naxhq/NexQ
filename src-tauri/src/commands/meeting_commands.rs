@@ -66,6 +66,24 @@ pub async fn start_meeting(
     let meeting = meetings::create_meeting(db.connection(), &title)
         .map_err(|e| format!("Failed to create meeting: {}", e))?;
 
+    // Clear per-meeting state so the new meeting starts fresh.
+    // The intelligence buffer and last detected question persist across
+    // meetings otherwise, leaking the previous meeting's transcript into
+    // the first AI call of the new meeting.
+    drop(db); // release DB lock before acquiring other locks
+    if let Some(intel_arc) = state.intelligence.as_ref() {
+        if let Ok(mut engine) = intel_arc.lock() {
+            engine.clear_session();
+        }
+    }
+    if let Some(rag_arc) = state.rag.as_ref() {
+        if let Ok(mut rag_mgr) = rag_arc.lock() {
+            if let Some(indexer) = rag_mgr.transcript_indexer_mut() {
+                indexer.reset();
+            }
+        }
+    }
+
     serde_json::to_string(&meeting).map_err(|e| format!("Failed to serialize meeting: {}", e))
 }
 

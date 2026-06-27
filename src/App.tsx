@@ -25,6 +25,7 @@ import type { AppView, Meeting, AudioMode, AIScenario } from "./lib/types";
 import { useDemoShortcut } from "./demo/useDemoShortcut";
 import { DemoPicker } from "./demo/DemoPicker";
 import { DemoBadge } from "./demo/DemoBadge";
+import { showLauncherWindow, showOverlayWindow } from "./lib/windows";
 
 function App() {
   const currentView = useMeetingStore((s) => s.currentView);
@@ -123,13 +124,9 @@ function App() {
   // LAUNCHER window: when meeting starts, show overlay Tauri window and hide self
   useEffect(() => {
     if (windowLabel !== "launcher") return;
-    import("@tauri-apps/api/webviewWindow").then(async ({ WebviewWindow, getCurrentWebviewWindow }) => {
-      if (currentView === "overlay") {
-        const overlayWin = await WebviewWindow.getByLabel("overlay");
-        if (overlayWin) await overlayWin.show().catch(() => {});
-        await getCurrentWebviewWindow().hide().catch(() => {});
-      }
-    });
+    if (currentView === "overlay") {
+      showOverlayWindow().catch(() => {});
+    }
   }, [currentView, windowLabel]);
 
   // LAUNCHER window: listen for nexq:meeting_ended from overlay, show self + reset state
@@ -145,12 +142,18 @@ function App() {
         elapsedMs: 0,
       });
       useMeetingStore.getState().loadRecentMeetings().catch(() => {});
-      import("@tauri-apps/api/webviewWindow").then(({ getCurrentWebviewWindow }) => {
-        getCurrentWebviewWindow().show().catch(() => {});
-      });
+      showLauncherWindow().catch(() => {});
     }).then((fn) => { unlisten = fn; });
     return () => { unlisten?.(); };
   }, [windowLabel]);
+
+  // OVERLAY window: when currentView->"launcher", hide self + show launcher
+  useEffect(() => {
+    if (windowLabel !== "overlay") return;
+    if (currentView === "launcher") {
+      showLauncherWindow().catch(() => {});
+    }
+  }, [currentView, windowLabel]);
 
   // OVERLAY window: listen for nexq:meeting_started, initialize local state
   useEffect(() => {
@@ -175,18 +178,6 @@ function App() {
     ).then((fn) => { unlisten = fn; });
     return () => { unlisten?.(); };
   }, [windowLabel]);
-
-  // OVERLAY window: when currentView→"launcher" (endMeetingFlow ran here), hide self + show launcher
-  useEffect(() => {
-    if (windowLabel !== "overlay") return;
-    if (currentView === "launcher") {
-      import("@tauri-apps/api/webviewWindow").then(async ({ WebviewWindow, getCurrentWebviewWindow }) => {
-        const launcherWin = await WebviewWindow.getByLabel("launcher");
-        if (launcherWin) await launcherWin.show().catch(() => {});
-        await getCurrentWebviewWindow().hide().catch(() => {});
-      });
-    }
-  }, [currentView, windowLabel]);
 
   const previousView = useMeetingStore((s) => s.previousView);
 
@@ -267,13 +258,7 @@ function App() {
     }).then((unlisten) => unlisteners.push(unlisten));
 
     listen("tray_show_overlay", () => {
-      import("@tauri-apps/api/webviewWindow").then(async ({ WebviewWindow }) => {
-        const overlay = await WebviewWindow.getByLabel("overlay");
-        if (overlay) {
-          await overlay.show().catch(() => {});
-          await overlay.setFocus().catch(() => {});
-        }
-      }).catch(() => {});
+      showOverlayWindow().catch(() => {});
     }).then((unlisten) => unlisteners.push(unlisten));
 
     listen<string>("tray_copy", (e) => {

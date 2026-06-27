@@ -33,10 +33,15 @@ export function useTranscriptPersistence() {
       const segments = useTranscriptStore.getState().segments;
       const currentLastIndex = useMeetingStore.getState().lastPersistedIndex;
 
-      // Get only final segments that haven't been persisted yet
-      const newSegments = segments
-        .slice(currentLastIndex)
-        .filter((s) => s.is_final);
+      // Persist only the contiguous finalized prefix after the last checkpoint.
+      // If a later final arrives while an earlier interim is still open, don't
+      // advance past that interim or it can be skipped when it finalizes.
+      let persistUntil = currentLastIndex;
+      while (persistUntil < segments.length && segments[persistUntil].is_final) {
+        persistUntil += 1;
+      }
+
+      const newSegments = segments.slice(currentLastIndex, persistUntil);
 
       if (newSegments.length === 0) return;
 
@@ -50,9 +55,7 @@ export function useTranscriptPersistence() {
         }
       }
 
-      // Update the persisted index to include all segments we've checked
-      // (even non-final ones, since we'll skip them anyway)
-      setLastPersistedIndex(segments.length);
+      setLastPersistedIndex(persistUntil);
     }
 
     // Set up the 30-second interval

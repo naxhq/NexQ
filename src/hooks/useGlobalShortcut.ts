@@ -6,6 +6,7 @@ import {
 import { useMeetingStore } from "../stores/meetingStore";
 import { useAIActionsStore } from "../stores/aiActionsStore";
 import { generateAssist } from "../lib/ipc";
+import { showLauncherWindow, showOverlayWindow } from "../lib/windows";
 
 export function useGlobalShortcut() {
   // Global shortcuts (work even when window is not focused)
@@ -36,8 +37,10 @@ export function useGlobalShortcut() {
               const store = useMeetingStore.getState();
               if (store.currentView === "overlay") {
                 store.setCurrentView("launcher");
+                showLauncherWindow().catch(() => {});
               } else if (store.activeMeeting) {
                 store.setCurrentView("overlay");
+                showOverlayWindow().catch(() => {});
               }
             }
           },

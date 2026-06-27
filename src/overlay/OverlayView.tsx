@@ -23,6 +23,7 @@ import { useSpeakerDetection } from "../hooks/useSpeakerDetection";
 import { useTopicDetection } from "../hooks/useTopicDetection";
 import { useTranslation } from "../hooks/useTranslation";
 import { MODE_COLORS } from "../lib/speakerColors";
+import { showLauncherWindow } from "../lib/windows";
 import {
   GripHorizontal,
   Minus,
@@ -136,6 +137,11 @@ export function OverlayView() {
     }
   }, [activeMeeting?.id, targetLang]);
 
+  const handleMinimizeToDashboard = useCallback(() => {
+    setCurrentView("launcher");
+    showLauncherWindow().catch(() => {});
+  }, [setCurrentView]);
+
   const meetingTitle = activeMeeting?.title || "NexQ";
 
   return (
@@ -218,7 +224,7 @@ export function OverlayView() {
           <HeaderBtn icon={<Terminal className="h-3.5 w-3.5" />} active={devLogOpen} onClick={() => setDevLogOpen(p => !p)} tooltip="Dev Log (Ctrl+Shift+L)" />
           <HeaderBtn icon={<Eye className="h-3.5 w-3.5" />} onClick={cycleOpacity} tooltip={`Transparency: ${Math.round(overlayOpacity * 100)}% (click to cycle)`} />
           <HeaderBtn icon={<Settings className="h-3.5 w-3.5" />} onClick={() => setCurrentView("settings")} tooltip="Settings" />
-          <HeaderBtn icon={<Minus className="h-3.5 w-3.5" />} onClick={() => setCurrentView("launcher")} tooltip="Minimize to Dashboard" />
+          <HeaderBtn icon={<Minus className="h-3.5 w-3.5" />} onClick={handleMinimizeToDashboard} tooltip="Minimize to Dashboard" />
 
           {/* Translation controls */}
           <button

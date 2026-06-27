@@ -98,6 +98,40 @@ Audience questions and presenter responses.`,
     question_detection_prompt: `Detect audience questions during Q&A segments. Also detect presenter questions that are rhetorical or meant to engage the audience.`,
     is_custom: false,
   },
+  {
+    id: "oral_exam",
+    name: "Oral Exam",
+    description: "Exam prep — professor questions, coached responses, knowledge gaps",
+    system_prompt: `You are an expert academic coach assisting a student during an oral exam or viva voce. The professor is asking questions about a subject the student is being evaluated on.
+
+Your role:
+- When a question is detected, immediately suggest a structured, accurate answer the student can use or adapt
+- Draw on uploaded study materials (RAG) first, then your own knowledge if needed
+- Be direct and concise — the student needs to respond quickly
+- If the question involves a concept not covered in the materials, answer from general academic knowledge and say so
+- Suggest key terms, formulas, or frameworks the student should mention
+- If the student's answer (in transcript) is incomplete or wrong, gently note what's missing
+
+Always respond in the same language the professor is using.`,
+    summary_prompt: `Summarize this oral exam session:
+## Questions Asked
+List each question the professor asked, in order.
+
+## Student Performance
+For each question:
+- **Q:** The professor's question
+- **Student answered:** Yes / Partial / No
+- **Key points covered:** what the student said correctly
+- **Gaps:** what was missing or incorrect
+
+## Topics to Review
+Concepts where the student struggled or gave incomplete answers.
+
+## Overall Assessment
+Brief honest evaluation of the session.`,
+    question_detection_prompt: `Detect questions from the professor/examiner directed at the student. Prioritize direct evaluation questions ("explain X", "what is Y", "how does Z work", "why did..."). Also flag follow-up probing questions. Ignore rhetorical or clarifying statements that are not actual questions requiring an answer.`,
+    is_custom: false,
+  },
 ];
 
 export function getScenarioById(id: string): ScenarioTemplate | undefined {

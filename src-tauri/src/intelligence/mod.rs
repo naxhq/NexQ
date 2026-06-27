@@ -253,4 +253,14 @@ impl IntelligenceEngine {
     pub fn get_action_config(&self, mode: &str) -> Option<&action_config::ActionConfig> {
         self.action_configs.actions.get(mode)
     }
+
+    /// Reset per-meeting state so the next meeting starts clean.
+    /// Clears the transcript buffer and last detected question.
+    pub fn clear_session(&mut self) {
+        self.transcript_buffer.clear();
+        self.last_detected_question = None;
+        self.cancel_requested.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.is_generating.store(false, std::sync::atomic::Ordering::SeqCst);
+        log::info!("[intelligence] session cleared for new meeting");
+    }
 }

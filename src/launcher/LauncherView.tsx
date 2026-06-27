@@ -14,6 +14,7 @@ import { TokenBudget } from "../context/TokenBudget";
 import { TestSearchDialog } from "../context/TestSearchDialog";
 import { NEXQ_VERSION, NEXQ_DEVELOPER } from "../lib/version";
 import { ServiceStatusBar } from "../components/ServiceStatusBar";
+import { showOverlayWindow } from "../lib/windows";
 import type { MeetingSummary, AudioMode, AIScenario } from "../lib/types";
 import {
   Settings,
@@ -192,9 +193,18 @@ export function LauncherView() {
   const handleRenameMeeting = useCallback(async () => { await loadRecentMeetings(); }, [loadRecentMeetings]);
 
   const handleSelectMeeting = useCallback((meetingId: string) => {
-    if (activeMeeting?.id === meetingId) { setCurrentView("overlay"); return; }
+    if (activeMeeting?.id === meetingId) {
+      setCurrentView("overlay");
+      showOverlayWindow().catch(() => {});
+      return;
+    }
     setSelectedMeetingId(meetingId);
   }, [activeMeeting, setCurrentView]);
+
+  const handleReturnToMeeting = useCallback(() => {
+    setCurrentView("overlay");
+    showOverlayWindow().catch(() => {});
+  }, [setCurrentView]);
 
   const handleRagUpdate = useCallback(async () => {
     setRagStatus("updating");
@@ -240,7 +250,7 @@ export function LauncherView() {
         {/* Active meeting in header */}
         {activeMeeting && (
           <button
-            onClick={() => setCurrentView("overlay")}
+            onClick={handleReturnToMeeting}
             className="group live-ring-pulse flex items-center gap-2 rounded-full border border-success/20 bg-success/10 pl-3 pr-2 py-1.5 shadow-sm shadow-success/10 transition-all hover:bg-success/20 hover:border-success/30 hover:shadow-md hover:shadow-success/10 cursor-pointer"
           >
             <Radio className="h-3 w-3 text-success animate-pulse" />
@@ -570,7 +580,7 @@ export function LauncherView() {
               <button autoFocus onClick={handleEndAndStartNew} className="w-full rounded-xl bg-primary px-4 py-2 text-xs font-medium text-primary-foreground transition-all duration-150 hover:bg-primary/90 hover:-translate-y-px active:translate-y-px active:scale-[0.98] cursor-pointer">
                 End Current & Start New
               </button>
-              <button onClick={() => { setShowConflictPrompt(false); setCurrentView("overlay"); }} className="w-full rounded-xl border border-border/40 bg-secondary/30 px-4 py-2 text-xs font-medium text-foreground transition-all duration-150 hover:bg-secondary/50 active:scale-[0.98] cursor-pointer">
+              <button onClick={() => { setShowConflictPrompt(false); handleReturnToMeeting(); }} className="w-full rounded-xl border border-border/40 bg-secondary/30 px-4 py-2 text-xs font-medium text-foreground transition-all duration-150 hover:bg-secondary/50 active:scale-[0.98] cursor-pointer">
                 Return to Current Meeting
               </button>
               <button onClick={() => setShowConflictPrompt(false)} className="w-full rounded-xl px-4 py-1.5 text-xs text-muted-foreground hover:text-foreground cursor-pointer">

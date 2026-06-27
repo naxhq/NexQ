@@ -1450,10 +1450,12 @@ async fn create_stt_provider_for_party(
 
     let stt_type = STTProviderType::from_str(&config.stt_provider)
         .ok_or_else(|| format!("Unknown STT provider: {}", config.stt_provider))?;
+    let stt_language = get_stt_language(state);
 
     crate::stt::emit_stt_debug(app, "info", "stt",
-        &format!("[{}] Creating provider: {} (model: {})",
+        &format!("[{}] Creating provider: {} (lang: {}, model: {})",
             party_role, config.stt_provider,
+            stt_language,
             config.local_model_id.as_deref().unwrap_or("n/a")));
 
     match stt_type {
