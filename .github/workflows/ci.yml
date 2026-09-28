@@ -33,6 +33,9 @@ jobs:
       - name: TypeScript check
         run: npx tsc --noEmit
 
+      - name: Stage ONNX Runtime
+        run: node scripts/fetch-onnxruntime.mjs
+
       - name: Rust check
         run: cargo check
         working-directory: src-tauri

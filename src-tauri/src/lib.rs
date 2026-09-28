@@ -6,6 +6,7 @@ pub mod db;
 pub mod intelligence;
 pub mod rag;
 pub mod llm;
+pub mod ort_runtime;
 pub mod state;
 pub mod stt;
 pub mod translation;

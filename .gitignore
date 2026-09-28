@@ -35,6 +35,7 @@ ehthumbs.db
 # Tauri
 src-tauri/target/
 src-tauri/gen/
+src-tauri/ort/
 WixTools/
 
 # Tauri updater signing key

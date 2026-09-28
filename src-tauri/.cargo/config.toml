@@ -5,10 +5,9 @@ CMAKE_GENERATOR = "Ninja"
 
 # Portable CPU baseline for whisper.cpp/ggml (whisper-rs-sys forwards GGML_* to CMake).
 # ggml defaults to GGML_NATIVE=ON, which bakes the *build machine's* CPU features
-# (AVX-512/AVX2/BMI2 on GitHub runners) into nexq.exe. Since the MSVC linker may keep
-# ggml's copy of shared inline C++ (STL) functions, those instructions can end up in
-# code that runs at startup: v2.20.8 crashed with 0xC000001D (illegal instruction,
-# BMI2 `shlx`) on CPUs / x64 emulators without them — issue #6.
+# (AVX2 on GitHub runners) into nexq.exe, so local Whisper would fault with 0xC000001D
+# (illegal instruction) on CPUs / x64 emulators without it. (The #6 launch crash
+# itself came from the static ONNX Runtime build — see src/ort_runtime.rs.)
 # NOTE: whisper-rs-sys does not rerun its build script when these change; bump the
 # rust-cache key in .github/workflows/*.yml (or `cargo clean -p whisper-rs-sys`).
 GGML_NATIVE = "OFF"

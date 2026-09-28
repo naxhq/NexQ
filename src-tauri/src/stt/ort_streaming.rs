@@ -915,6 +915,7 @@ fn inference_thread_main(
 fn load_ort_session(path: &std::path::Path) -> Result<ort::session::Session, String> {
     let filename = path.file_name().unwrap_or_default().to_string_lossy();
 
+    crate::ort_runtime::ensure_loaded()?;
     let session = ort::session::Session::builder()
         .map_err(|e| format!("Session builder error: {}", e))?
         .with_intra_threads(4)

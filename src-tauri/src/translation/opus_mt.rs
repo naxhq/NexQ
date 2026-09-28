@@ -270,6 +270,7 @@ impl TranslationProvider for OpusMtTranslator {
 // ── ONNX inference helpers ──
 
 fn load_onnx_session(path: &std::path::Path) -> Result<ort::session::Session, String> {
+    crate::ort_runtime::ensure_loaded()?;
     ort::session::Session::builder()
         .map_err(|e| format!("Failed to create session builder: {}", e))?
         .with_intra_threads(4)
