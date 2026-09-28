@@ -318,7 +318,18 @@ pub async fn generate_assist(
                 let has_question = question_text.is_some();
                 let has_transcript = !transcript_excerpt.is_empty();
 
-                if has_question || has_transcript {
+                // Skip the search when nothing is indexed: search_async embeds the query
+                // via Ollama *before* touching the index, so an empty index still cost
+                // 1–2 embed round trips (and possibly an Ollama model swap) on every
+                // Assist/Ask before the LLM call started. If the status query fails, search anyway.
+                let has_indexed_chunks = state.database.as_ref().map_or(false, |db| {
+                    db.lock()
+                        .ok()
+                        .and_then(|guard| rag::RagManager::get_status(guard.connection()).ok())
+                        .map_or(true, |status| status.total_chunks > 0)
+                });
+
+                if (has_question || has_transcript) && has_indexed_chunks {
                     if let (Some(rag_arc), Some(db_arc)) =
                         (state.rag.as_ref(), state.database.as_ref()) {
 

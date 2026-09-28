@@ -125,7 +125,11 @@ impl LLMProvider for OllamaClient {
         let mut body = json!({
             "model": model,
             "messages": msgs,
-            "stream": true
+            "stream": true,
+            // Ollama unloads idle models after 5 min by default; questions in a meeting
+            // are often further apart, and reloading from disk on CPU-only machines
+            // adds many seconds before the first token.
+            "keep_alive": "30m"
         });
 
         // Apply per-request generation params via Ollama's "options" object
