@@ -27,6 +27,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          # Bump when ggml/whisper build flags in src-tauri/.cargo/config.toml change —
+          # whisper-rs-sys won't rebuild on env changes, so a stale cache keeps old flags.
+          prefix-key: v1-ggml-portable
 
       - name: Install dependencies
         run: npm ci

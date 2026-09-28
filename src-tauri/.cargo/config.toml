@@ -3,6 +3,24 @@
 LIBCLANG_PATH = "C:\\Program Files\\LLVM\\bin"
 CMAKE_GENERATOR = "Ninja"
 
+# Portable CPU baseline for whisper.cpp/ggml (whisper-rs-sys forwards GGML_* to CMake).
+# ggml defaults to GGML_NATIVE=ON, which bakes the *build machine's* CPU features
+# (AVX-512/AVX2/BMI2 on GitHub runners) into nexq.exe. Since the MSVC linker may keep
+# ggml's copy of shared inline C++ (STL) functions, those instructions can end up in
+# code that runs at startup: v2.20.8 crashed with 0xC000001D (illegal instruction,
+# BMI2 `shlx`) on CPUs / x64 emulators without them — issue #6.
+# NOTE: whisper-rs-sys does not rerun its build script when these change; bump the
+# rust-cache key in .github/workflows/*.yml (or `cargo clean -p whisper-rs-sys`).
+GGML_NATIVE = "OFF"
+GGML_SSE42 = "ON"
+GGML_AVX = "OFF"
+GGML_AVX2 = "OFF"
+GGML_AVX_VNNI = "OFF"
+GGML_BMI2 = "OFF"
+GGML_FMA = "OFF"
+GGML_F16C = "OFF"
+GGML_AVX512 = "OFF"
+
 # Statically link the MSVC C runtime so users don't need VC++ Redistributable
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
