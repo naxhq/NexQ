@@ -1,3 +1,9 @@
+## [2.21.1](https://github.com/naxhq/NexQ/compare/v2.21.0...v2.21.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* **onnx:** load ONNX Runtime dynamically to fix launch crash on older/ARM CPUs ([a36439a](https://github.com/naxhq/NexQ/commit/a36439a65fa70e27ccb18f45c181a8dec5a1e6af)), closes [#6](https://github.com/naxhq/NexQ/issues/6) [#6](https://github.com/naxhq/NexQ/issues/6)
 # [2.21.0](https://github.com/VahidAlizadeh/NexQ/compare/v2.20.8...v2.21.0) (2026-09-28)
 
 
