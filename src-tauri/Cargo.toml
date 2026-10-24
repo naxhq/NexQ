@@ -51,7 +51,7 @@ zip = "2"
 ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "tracing", "api-24", "load-dynamic"] }
 ndarray = "0.17"  # Must match ort's ndarray version
 rustfft = "6"
-tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
+tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
 tar = "0.4"
 bzip2 = "0.5"
 ogg = "0.9"
