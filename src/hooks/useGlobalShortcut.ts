@@ -3,6 +3,7 @@ import {
   register,
   unregister,
 } from "@tauri-apps/plugin-global-shortcut";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useAIActionsStore } from "../stores/aiActionsStore";
 import { isQuitPending } from "../lib/ipc";
@@ -77,6 +78,7 @@ export function useGlobalShortcut() {
     const shortcuts: string[] = [];
 
     async function registerShortcuts() {
+      const isLauncher = getCurrentWebviewWindow().label === "launcher";
       // Register each shortcut independently — one failure shouldn't block the rest.
       // Unregister first to handle hot-reload / React strict mode re-mounts.
       const defs: Array<{ key: string; handler: (event: { state: string }) => void }> = [
@@ -111,6 +113,7 @@ export function useGlobalShortcut() {
       ];
 
       for (const { key, handler } of defs) {
+        if (key === "CmdOrCtrl+M" && !isLauncher) continue;
         try {
           await unregister(key).catch(() => {}); // Clean up stale registration
           await register(key, handler);

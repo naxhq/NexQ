@@ -13,6 +13,7 @@ import {
 import { useConfigStore } from "./configStore";
 import { useTranscriptStore } from "./transcriptStore";
 import { initMeetingSpeakers, resetMeetingScopedStores } from "./resetMeeting";
+import { showToast } from "./toastStore";
 
 interface MeetingState {
   // View state
@@ -225,6 +226,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         }
       } catch (err) {
         console.warn("[meetingStore] Audio capture failed to start:", err);
+        showToast(`Audio capture failed: ${err instanceof Error ? err.message : String(err)}`, "error");
         // Continue anyway — meeting is created, user can still use AI features
       }
 

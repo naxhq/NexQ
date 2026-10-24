@@ -1,13 +1,11 @@
-// System audio capture via cpal loopback.
-// Captures audio from a specific output device by building an input stream
-// on it — cpal's WASAPI backend handles the loopback flag automatically.
-// This approach works with Bluetooth, USB, and virtual audio devices.
-
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+#[cfg(not(target_os = "macos"))]
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
+#[cfg(not(target_os = "macos"))]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use super::resampler::resample;
@@ -15,8 +13,10 @@ use super::{AudioChunk, AudioSource};
 
 const TARGET_SAMPLE_RATE: u32 = 16000;
 
-/// Start system audio loopback capture using cpal.
-/// Uses the default output device.
+#[cfg(target_os = "macos")]
+#[path = "macos_system_capture.rs"]
+mod macos;
+
 pub fn start_system_capture(
     tx: mpsc::Sender<AudioChunk>,
     stop_flag: Arc<AtomicBool>,
@@ -24,11 +24,16 @@ pub fn start_system_capture(
     start_system_capture_device(tx, stop_flag, None)
 }
 
-/// Start system audio loopback capture on a specific output device.
-/// If device_name is None, uses the default output device.
-///
-/// Works by calling build_input_stream() on an output device —
-/// cpal's WASAPI backend automatically sets the loopback capture flag.
+#[cfg(target_os = "macos")]
+pub fn start_system_capture_device(
+    tx: mpsc::Sender<AudioChunk>,
+    stop_flag: Arc<AtomicBool>,
+    device_name: Option<String>,
+) -> Result<std::thread::JoinHandle<()>, String> {
+    macos::start(tx, stop_flag, device_name)
+}
+
+#[cfg(not(target_os = "macos"))]
 pub fn start_system_capture_device(
     tx: mpsc::Sender<AudioChunk>,
     stop_flag: Arc<AtomicBool>,
@@ -51,6 +56,7 @@ pub fn start_system_capture_device(
     Ok(handle)
 }
 
+#[cfg(not(target_os = "macos"))]
 fn run_cpal_loopback(
     tx: mpsc::Sender<AudioChunk>,
     stop_flag: Arc<AtomicBool>,

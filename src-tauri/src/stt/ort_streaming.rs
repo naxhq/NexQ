@@ -20,6 +20,8 @@ use tokio::sync::mpsc;
 use crate::audio::AudioChunk;
 use crate::stt::provider::{STTProvider, STTProviderType, TranscriptResult};
 
+mod nemo;
+
 /// Audio sample rate expected by the models.
 const SAMPLE_RATE: u32 = 16_000;
 
@@ -642,6 +644,16 @@ fn inference_thread_main(
             return;
         }
     };
+
+    if encoder.inputs().first().map(|input| input.name()) == Some("audio_signal") {
+        if let Err(error) = nemo::run(
+            &mut encoder, &mut decoder, &mut joiner, &tokens, &language,
+            &stop_flag, &audio_rx, &result_tx, segment_counter_start, &debug,
+        ) {
+            debug("error", &format!("NeMo TDT inference failed: {error}"));
+        }
+        return;
+    }
 
     // Discover joiner input ranks (rank 2 for Zipformer, rank 3 for Parakeet TDT)
     let joiner_info = JoinerInfo::discover(&joiner);

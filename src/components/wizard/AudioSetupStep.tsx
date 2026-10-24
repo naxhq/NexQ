@@ -263,21 +263,21 @@ export function AudioSetupStep() {
             Audio Source
           </label>
           <select
-            value={config.you.device_id}
+            value={JSON.stringify([config.you.is_input_device, config.you.device_id])}
             onChange={(e) => {
-              const isInput = devices.inputs.some((d) => d.id === e.target.value);
-              updateConfig("you", e.target.value, isInput);
+              const [isInput, deviceId]: [boolean, string] = JSON.parse(e.target.value);
+              updateConfig("you", deviceId, isInput);
             }}
             disabled={loadingDevices}
             className="w-full rounded-xl border border-border/40 bg-background px-4 py-3 text-sm transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
           >
-            <option value="default">
+            <option value={JSON.stringify([true, "default"])}>
               {loadingDevices ? "Detecting devices..." : "Default microphone"}
             </option>
             {devices.inputs.length > 0 && (
               <optgroup label="Microphones">
                 {devices.inputs.map((d) => (
-                  <option key={d.id} value={d.id}>
+                  <option key={d.id} value={JSON.stringify([d.is_input, d.id])}>
                     {d.name}{d.is_default ? " (Default)" : ""}
                   </option>
                 ))}
@@ -286,7 +286,7 @@ export function AudioSetupStep() {
             {devices.outputs.length > 0 && (
               <optgroup label="Speakers / Output">
                 {devices.outputs.map((d) => (
-                  <option key={d.id} value={d.id}>
+                  <option key={d.id} value={JSON.stringify([d.is_input, d.id])}>
                     {d.name}{d.is_default ? " (Default)" : ""}
                   </option>
                 ))}
@@ -304,21 +304,21 @@ export function AudioSetupStep() {
             Audio Source
           </label>
           <select
-            value={config.them.device_id}
+            value={JSON.stringify([config.them.is_input_device, config.them.device_id])}
             onChange={(e) => {
-              const isInput = devices.inputs.some((d) => d.id === e.target.value);
-              updateConfig("them", e.target.value, isInput);
+              const [isInput, deviceId]: [boolean, string] = JSON.parse(e.target.value);
+              updateConfig("them", deviceId, isInput);
             }}
             disabled={loadingDevices}
             className="w-full rounded-xl border border-border/40 bg-background px-4 py-3 text-sm transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
           >
-            <option value="default">
+            <option value={JSON.stringify([false, "default"])}>
               {loadingDevices ? "Detecting devices..." : "Default output (loopback)"}
             </option>
             {devices.outputs.length > 0 && (
               <optgroup label="Speakers / Output">
                 {devices.outputs.map((d) => (
-                  <option key={d.id} value={d.id}>
+                  <option key={d.id} value={JSON.stringify([d.is_input, d.id])}>
                     {d.name}{d.is_default ? " (Default)" : ""}
                   </option>
                 ))}
@@ -327,7 +327,7 @@ export function AudioSetupStep() {
             {devices.inputs.length > 0 && (
               <optgroup label="Microphones">
                 {devices.inputs.map((d) => (
-                  <option key={d.id} value={d.id}>
+                  <option key={d.id} value={JSON.stringify([d.is_input, d.id])}>
                     {d.name}{d.is_default ? " (Default)" : ""}
                   </option>
                 ))}

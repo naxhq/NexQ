@@ -668,8 +668,8 @@ function PartyPanel({
   const isActive = level > 0.005;
   const barWidth = isActive ? Math.min(100, Math.round(scaledLv * 100)) : 0;
 
-  function handleDeviceChange(deviceId: string) {
-    const isInput = inputDevices.some((d) => d.device.id === deviceId);
+  function handleDeviceChange(value: string) {
+    const [isInput, deviceId]: [boolean, string] = JSON.parse(value);
     onChange({ device_id: deviceId, is_input_device: isInput });
   }
 
@@ -749,18 +749,18 @@ function PartyPanel({
             Source
           </label>
           <select
-            value={party.device_id}
+            value={JSON.stringify([party.is_input_device, party.device_id])}
             onChange={(e) => handleDeviceChange(e.target.value)}
             disabled={loadingDevices}
             className="w-full cursor-pointer rounded-lg border border-border/40 bg-background/60 px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
           >
-            <option value="default">
+            <option value={JSON.stringify([role === "you", "default"])}>
               {loadingDevices ? "Loading..." : "Default"}
             </option>
             {inputDevices.length > 0 && (
               <optgroup label="Microphones">
                 {inputDevices.map((d) => (
-                  <option key={d.device.id} value={d.device.id}>
+                  <option key={d.device.id} value={JSON.stringify([d.device.is_input, d.device.id])}>
                     {d.device.name}{d.device.is_default ? " (Default)" : ""}
                   </option>
                 ))}
@@ -769,7 +769,7 @@ function PartyPanel({
             {outputDevices.length > 0 && (
               <optgroup label="Speakers / Output">
                 {outputDevices.map((d) => (
-                  <option key={d.device.id} value={d.device.id}>
+                  <option key={d.device.id} value={JSON.stringify([d.device.is_input, d.device.id])}>
                     {d.device.name}{d.device.is_default ? " (Default)" : ""}
                   </option>
                 ))}

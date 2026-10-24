@@ -7,6 +7,8 @@
 	     tries to access audio input. -->
 	<key>NSMicrophoneUsageDescription</key>
 	<string>NexQ captures audio so it can transcribe and assist during your calls.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>NexQ captures audio played by your selected output device to transcribe the other participants in your calls.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 </dict>

@@ -37,7 +37,6 @@ anyhow = "1"
 thiserror = "1"
 log = "0.4"
 env_logger = "0.11"
-cpal = "0.15"
 hound = "3.5"
 pdf-extract = "0.7"
 lopdf = "0.32"
@@ -58,6 +57,9 @@ ogg = "0.9"
 libopus_sys = { version = "0.3", features = ["static", "bundled"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 encoding_rs = "0.8"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+cpal = "0.15"
 
 # Windows-specific
 [target.'cfg(windows)'.dependencies]
@@ -90,8 +92,11 @@ wasapi = "0.22"
 
 # macOS-specific
 [target.'cfg(target_os = "macos")'.dependencies]
+cpal = "0.16"
 # Used by src/commands/stealth_commands.rs to set the overlay NSWindow's
 # `sharingType` to NSWindowSharingNone (equivalent of Windows' WDA_EXCLUDEFROMCAPTURE).
 objc2 = "0.6"
+coreaudio-sys = "0.2"
+core-foundation = "0.10"
 # macOS Keychain credential backend (src/credentials/macos_keychain.rs).
 security-framework = "3"

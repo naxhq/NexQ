@@ -7,7 +7,7 @@ NexQ uses a dual-party audio model to capture and transcribe both sides of a con
 NexQ captures two independent audio streams:
 
 - **"You" channel** -- your microphone, capturing your voice
-- **"Them" channel** -- system audio loopback (WASAPI), capturing remote participants
+- **"Them" channel** -- system output capture (WASAPI on Windows, Core Audio taps on macOS 14.2+), capturing remote participants
 
 Each channel has its own:
 - Audio device selection
@@ -29,7 +29,7 @@ The Audio and Devices settings panel provides controls for selecting and testing
 
 1. Open Settings (`Ctrl+,`) > Audio
 2. Under **"You" (Microphone)**, select your input device from the dropdown
-3. The dropdown lists all available input devices recognized by Windows
+3. Choose the input entry for your microphone; an audio interface can also appear as a separate output entry with the same name
 4. Click **Test** to verify -- the live peak meter should respond when you speak
 
 ### Choosing the Right Microphone
@@ -52,11 +52,13 @@ If the level meter barely moves when you speak:
 
 ### How It Works
 
-NexQ uses **Windows WASAPI loopback** to capture system audio. This records whatever audio is playing through your selected output device -- it captures Zoom, Teams, Google Meet, phone calls via speakers, YouTube, or any other audio source.
+NexQ records the audio playing through your selected output device, including Zoom, Teams, Google Meet, and other applications.
 
-- **No special drivers required.** WASAPI loopback is a built-in Windows feature.
-- **No virtual audio cable needed.** NexQ taps directly into the output device's audio stream.
-- **Works on Windows 10 and 11.** No additional setup required.
+- **Windows 10 and 11:** native WASAPI loopback.
+- **macOS 14.2 and later:** a native Core Audio tap on the selected output. The input and output of the same audio interface remain independent.
+- **No virtual cable required** on these platforms.
+- **macOS permissions:** grant NexQ microphone and system-audio recording access in **System Settings > Privacy & Security**. Reopen NexQ if macOS requests it.
+- **Older macOS:** native output capture is unavailable. A virtual loopback device exposed as an input can be selected instead.
 
 ### Configuration
 
@@ -73,6 +75,16 @@ Select the device that your conferencing app (Zoom, Teams, etc.) uses for audio 
 - **Default output device** -- if unsure, this is usually correct
 
 You can verify by playing audio through your meeting app and checking that the "Them" level meter in NexQ responds.
+
+## Transcription on macOS
+
+Audio capture and speech recognition are separate. Choose a provider for **each** party:
+
+- **Local Parakeet TDT:** download the model once, then select it for both "You" and "Them". It consumes each selected native audio stream without an API key.
+- **Cloud providers:** configure their API key before starting capture.
+- **Web Speech:** depends on the embedded browser's speech service and may return `service-not-allowed` on macOS. It is not a replacement for selected-output capture.
+
+The bundled Parakeet TDT export transcribes utterances after a pause, or splits continuous audio at roughly 20 seconds. Model processing adds latency; an active level meter does not imply an immediate transcript.
 
 ## Recording
 
@@ -99,9 +111,9 @@ NexQ can record meeting audio alongside the live transcript.
 **Solution**:
 
 1. Verify you selected the correct **output device** in NexQ -- it must match the device your meeting app plays audio through
-2. Open **Windows Settings > System > Sound** and check that audio is playing through the expected output device
-3. Some audio devices do not support WASAPI loopback. Try selecting a different output device
-4. If using a virtual audio cable or audio routing software, ensure it is configured to pass audio through a WASAPI-compatible output
+2. Check the output used by your meeting app in **Windows Settings > System > Sound** or **macOS System Settings > Sound > Output**
+3. On macOS, check microphone and system-audio recording permissions in **System Settings > Privacy & Security**
+4. If startup fails, read the error notification; NexQ does not silently substitute the microphone for an unavailable output
 
 ### Microphone Too Quiet
 
@@ -122,7 +134,7 @@ NexQ can record meeting audio alongside the live transcript.
 **Solution**:
 
 - **Use headphones.** This is the most effective fix. Speakers feed your voice back into the system audio loopback.
-- Ensure "You" and "Them" are using different physical devices (mic for input, headphones for output)
+- Select an **input** for "You" and an **output** for "Them". Both may belong to the same audio interface; choosing its input twice intentionally duplicates the microphone.
 - Enable echo cancellation in your meeting app (Zoom, Teams, etc.)
 
 ### Wrong Audio Device Selected
