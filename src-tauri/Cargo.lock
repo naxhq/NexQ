@@ -2706,9 +2706,9 @@ dependencies = [
 
 [[package]]
 name = "libopus_sys"
-version = "0.3.3"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b81c32f233fb2507347a93f97b9919493be9db7ec2249ce2c3ed0c89ad8edf60"
+checksum = "5b71d4755aa6b983b59a3d70d49f0ef928dca8fb5303df2e907e15a40595d0f3"
 dependencies = [
  "cmake",
  "log",

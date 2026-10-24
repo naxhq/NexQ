@@ -55,7 +55,7 @@ tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
 tar = "0.4"
 bzip2 = "0.5"
 ogg = "0.9"
-libopus_sys = { version = "0.3", features = ["static", "bundled"] }
+libopus_sys = { version = "0.4", features = ["static", "bundled"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 encoding_rs = "0.8"
 
