@@ -53,10 +53,8 @@ fn extract_with_lopdf(file_path: &str) -> Result<String, String> {
     for page_id in doc.page_iter() {
         let font_maps = get_page_font_maps(&doc, page_id);
 
-        let content_bytes = match doc.get_page_content(page_id) {
-            Ok(b) => b,
-            Err(_) => continue,
-        };
+        // lopdf 0.46: a page with unreadable content streams yields empty bytes.
+        let content_bytes = doc.get_page_content(page_id);
         let content = match Content::decode(&content_bytes) {
             Ok(c) => c,
             Err(_) => continue,
