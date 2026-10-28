@@ -37,7 +37,7 @@ thiserror = "1"
 log = "0.4"
 hound = "3.5"
 pdf-extract = "0.12"
-lopdf = "0.42"
+lopdf = "0.46"
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 url = "2"
 whisper-rs = "0.16"
