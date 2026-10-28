@@ -58,11 +58,13 @@ pub async fn set_llm_provider(
         .lock()
         .map_err(|e| format!("Failed to lock LLM router: {}", e))?;
 
+    // Log the provider type only: the raw config JSON carries the API key / auth value.
+    let provider_type = config.provider_type.clone();
     router
         .set_provider(config)
         .map_err(|e| format!("Failed to set provider: {}", e))?;
 
-    log::info!("LLM provider set to: {}", provider);
+    log::info!("LLM provider set to: {}", provider_type);
     Ok(())
 }
 
