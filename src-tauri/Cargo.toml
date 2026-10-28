@@ -41,7 +41,7 @@ lopdf = "0.46"
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 url = "2"
 whisper-rs = "0.16"
-sha2 = "0.10"
+sha2 = "0.11"
 zip = "2"
 # load-dynamic: onnxruntime.dll is bundled and loaded on first use (see src/ort_runtime.rs)
 ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "tracing", "api-24", "load-dynamic"] }
