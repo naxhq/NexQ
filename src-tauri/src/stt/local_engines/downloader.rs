@@ -108,7 +108,7 @@ pub async fn download_file(
     // Verify SHA256 if a hash is provided
     if !sha256_expected.is_empty() {
         emit(downloaded, total_size, "verifying");
-        let hash = format!("{:x}", hasher.finalize());
+        let hash = hex(&hasher.finalize());
         if hash != sha256_expected {
             let _ = tokio::fs::remove_file(&tmp_path).await;
             emit(downloaded, total_size, "error");
@@ -186,4 +186,23 @@ pub fn extract_tar_bz2(archive_path: &std::path::Path, dest_dir: &std::path::Pat
         dest_dir.display()
     );
     Ok(dest_dir.to_path_buf())
+}
+
+/// Lowercase hex of a digest (sha2 0.11's output type has no `{:x}`).
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn sha256_hex_matches_the_standard_test_vector() {
+        assert_eq!(
+            hex(&Sha256::digest(b"abc")),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
 }
