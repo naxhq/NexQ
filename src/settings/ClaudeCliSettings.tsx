@@ -218,6 +218,7 @@ export function ClaudeCliSettings({ selected, active, onSelect }: ClaudeCliSetti
           type="button"
           onClick={onSelect}
           aria-pressed={selected}
+          aria-label={`Claude, ${ROW_LABEL[state]}${active ? ", active" : ""}`}
           className={`relative flex flex-col items-start rounded-xl border p-3 text-left transition-all duration-150 cursor-pointer ${
             selected
               ? "border-primary bg-primary/5 ring-1 ring-primary/20"
