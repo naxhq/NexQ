@@ -771,13 +771,13 @@ impl STTProvider for DeepgramSTT {
     }
 }
 
-/// The speaker ID most words carry (ties go to the lower ID), if any word has one.
 /// First 40 characters for debug logs. Slicing bytes would panic inside a
 /// multi-byte character (Cyrillic, CJK, accented Latin).
 fn log_preview(text: &str) -> String {
     text.chars().take(40).collect()
 }
 
+/// The speaker ID most words carry (ties go to the lower ID), if any word has one.
 fn dominant_speaker(words: &[DeepgramWord]) -> Option<u32> {
     let mut counts: std::collections::BTreeMap<u32, usize> = std::collections::BTreeMap::new();
     for sid in words.iter().filter_map(|w| w.speaker) {
@@ -810,14 +810,14 @@ pub fn estimate_cost(duration_minutes: f32, streams: u32) -> (f32, f32) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn log_preview_respects_char_boundaries() {
         let text = "Еще раз проверка микрофона, как слышно, прием. Да, сразу.";
-        assert_eq!(super::log_preview(text).chars().count(), 40);
-        assert_eq!(super::log_preview("short"), "short");
+        assert_eq!(log_preview(text).chars().count(), 40);
+        assert_eq!(log_preview("short"), "short");
     }
-
-    use super::*;
 
     fn results_json(start: f64, duration: f64, speakers: &[u32]) -> String {
         let words: Vec<serde_json::Value> = speakers
