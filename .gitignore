@@ -53,6 +53,10 @@ CLAUDE.md
 docs/development
 docs/superpowers
 
+# Local tool output and notes
+.planning/
+.playwright-mcp/
+
 # Logs
 *.log
 npm-debug.log*

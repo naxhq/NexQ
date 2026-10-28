@@ -33,7 +33,6 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
 async-trait = "0.1"
 futures = "0.3"
-anyhow = "1"
 thiserror = "1"
 log = "0.4"
 hound = "3.5"
@@ -41,7 +40,6 @@ pdf-extract = "0.12"
 lopdf = "0.42"
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 url = "2"
-base64 = "0.22"
 whisper-rs = "0.16"
 sha2 = "0.10"
 zip = "2"
@@ -89,7 +87,6 @@ windows = { version = "0.58", features = [
     "Win32_System_Variant",
     "Win32_System_LibraryLoader",
 ] }
-wasapi = "0.22"
 
 # macOS-specific
 [target.'cfg(target_os = "macos")'.dependencies]

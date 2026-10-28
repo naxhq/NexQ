@@ -20,6 +20,15 @@ updates:
       # tailwind-merge 3 requires Tailwind CSS 4; the app is on Tailwind 3.
       - dependency-name: tailwind-merge
         update-types: ["version-update:semver-major"]
+      # React 19 is a deliberate migration (react-dom, types, tests), not a bump.
+      - dependency-name: react
+        update-types: ["version-update:semver-major"]
+      - dependency-name: react-dom
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/react-dom"
+        update-types: ["version-update:semver-major"]
     groups:
       npm-minor-patch:
         update-types: ["minor", "patch"]

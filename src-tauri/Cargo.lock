@@ -3187,9 +3187,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 name = "nexq"
 version = "2.28.0"
 dependencies = [
- "anyhow",
  "async-trait",
- "base64 0.22.1",
  "bzip2",
  "chrono",
  "core-foundation 0.10.1",
@@ -3234,7 +3232,6 @@ dependencies = [
  "tokio-tungstenite",
  "url",
  "uuid",
- "wasapi",
  "whisper-rs",
  "windows 0.58.0",
  "zip 2.6.1",
@@ -6421,19 +6418,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec4cdd0dd910afe868b7ef477227d8d538b46b3075031afee8a9f2acb0a2ed0b"
 dependencies = [
  "try-lock",
-]
-
-[[package]]
-name = "wasapi"
-version = "0.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7834ac561bea8a7413661fdda62180f9e054f99815269cd3572cf7e40d9c3191"
-dependencies = [
- "log",
- "num-integer",
- "thiserror 2.0.21",
- "windows 0.62.2",
- "windows-core 0.62.2",
 ]
 
 [[package]]
