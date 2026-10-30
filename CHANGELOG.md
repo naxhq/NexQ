@@ -1,3 +1,16 @@
+# [2.29.0](https://github.com/naxhq/NexQ/compare/v2.28.3...v2.29.0) (2026-10-30)
+
+
+### Bug Fixes
+
+* **audio:** a missing microphone no longer stops all capture ([d726234](https://github.com/naxhq/NexQ/commit/d72623449abde6c32fdd383f3997443c428d282f)), closes [#47](https://github.com/naxhq/NexQ/issues/47)
+* **deps:** move zip to 9.1.3 for the Zip Cloaking advisory (GHSA-m665-v7pm-7grj) ([30ae24e](https://github.com/naxhq/NexQ/commit/30ae24e648cce5779b1e8a380d2270e3ce4e7158))
+
+
+### Features
+
+* **overlay:** Auto-Trigger answers the other party's questions on its own ([26a5d11](https://github.com/naxhq/NexQ/commit/26a5d11bbac058acc2a84adc9a9510179ffaff2f)), closes [#48](https://github.com/naxhq/NexQ/issues/48)
+* **shortcuts:** Assist from any app with Ctrl+Shift+Space during a meeting ([9945d5d](https://github.com/naxhq/NexQ/commit/9945d5dce3f0f2e7060f34e0dba9117847550410)), closes [#49](https://github.com/naxhq/NexQ/issues/49)
 ## [2.28.3](https://github.com/naxhq/NexQ/compare/v2.28.2...v2.28.3) (2026-10-29)
 
 
