@@ -862,10 +862,11 @@ pub async fn generate_assist(
 
     // Determine transcript window: per-action override or global default,
     // unless the user picked a scope for this request.
-    let action_window_seconds = action_cfg
-        .as_ref()
-        .and_then(|c| c.transcript_window_seconds)
-        .unwrap_or(global_defaults.transcript_window_seconds);
+    let action_window_seconds = default_window_seconds(
+        &mode,
+        action_cfg.as_ref().and_then(|c| c.transcript_window_seconds),
+        global_defaults.transcript_window_seconds,
+    );
     let window = context_scope::stateless_window(user_scope.as_ref(), action_window_seconds);
     let mut window_seconds = match window {
         TranscriptWindow::Seconds(secs) => secs,
@@ -1244,9 +1245,22 @@ pub async fn get_action_configs(
         .map_err(|e| format!("Failed to serialize action configs: {}", e))
 }
 
+/// A meeting summary covers the whole meeting unless its action sets a window;
+/// other actions fall back to the global window.
+fn default_window_seconds(mode: &str, action_window: Option<u64>, global_window: u64) -> u64 {
+    action_window.unwrap_or(if mode == "MeetingSummary" { 0 } else { global_window })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn meeting_summary_defaults_to_whole_meeting() {
+        assert_eq!(default_window_seconds("MeetingSummary", None, 300), 0);
+        assert_eq!(default_window_seconds("MeetingSummary", Some(120), 300), 120);
+        assert_eq!(default_window_seconds("Assist", None, 300), 300);
+    }
 
     #[test]
     fn document_fallback_is_capped() {
