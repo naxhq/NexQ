@@ -63,9 +63,9 @@ pub struct AudioCaptureManager {
     system_thread: Option<std::thread::JoinHandle<()>>,
     /// System capture via input device (cpal stream, for virtual cables tagged as System)
     system_input_stream: Option<cpal::Stream>,
-    /// Why the other party ("Them") isn't being captured, when only that side
-    /// failed to start (the mic keeps running). Taken by the caller to warn the user.
-    system_warning: Option<String>,
+    /// What didn't start as chosen (a missing device replaced by the default,
+    /// or one side not captured at all). Taken by the caller to warn the user.
+    warnings: Vec<String>,
     /// Active recorder (if recording is enabled)
     recorder: Option<SharedRecorder>,
     /// Current meeting ID for recording file naming
@@ -102,7 +102,7 @@ impl AudioCaptureManager {
             mic_stream: None,
             system_thread: None,
             system_input_stream: None,
-            system_warning: None,
+            warnings: Vec::new(),
             recorder: None,
             meeting_id: None,
             mic_vad: VoiceActivityDetector::new(),
@@ -138,7 +138,11 @@ impl AudioCaptureManager {
         }
 
         log::info!("Starting audio capture pipeline");
-        self.system_warning = None;
+        self.warnings.clear();
+        // Why "You" isn't captured, if the mic (and the default mic) failed.
+        let mut mic_error: Option<String> = None;
+        // Why "Them" isn't captured, if their device failed.
+        let mut system_error: Option<String> = None;
 
         // Reset stop flag
         self.stop_flag.store(false, Ordering::SeqCst);
@@ -170,15 +174,15 @@ impl AudioCaptureManager {
             }
         } else {
             // Standard: separate mic capture
-            let mic_tx = tx.clone();
-            match mic_capture::start_mic_capture(mic_device_id, mic_tx, AudioSource::Mic) {
+            match self.start_mic_or_default(mic_device_id, tx.clone()) {
                 Ok(stream) => {
                     self.mic_stream = Some(stream);
                     log::info!("Mic capture started");
                 }
                 Err(e) => {
-                    log::error!("Failed to start mic capture: {}", e);
-                    return Err(format!("Mic capture failed: {}", e));
+                    // Keep going: the other side may still be captured.
+                    log::error!("Failed to start mic capture: {e}");
+                    mic_error = Some(e);
                 }
             }
         }
@@ -197,18 +201,27 @@ impl AudioCaptureManager {
                 Err(e) => {
                     // Keep "You" running; the caller warns about the other side.
                     log::error!("System input capture failed: {e}. The other party won't be captured.");
-                    self.system_warning = Some(format!("Couldn't capture the other side ({e}). Your microphone is still transcribed."));
+                    system_error = Some(e);
                 }
             }
         } else {
-            let system_tx = tx.clone();
-            let stop_flag = Arc::clone(&self.stop_flag);
             let device_name = if system_device_id.is_empty() || system_device_id == "default" {
                 None
             } else {
                 Some(system_device_id.to_string())
             };
-            match system_capture::start_system_capture_device(system_tx, stop_flag, device_name) {
+            let mut started = system_capture::start_system_capture_device(tx.clone(), Arc::clone(&self.stop_flag), device_name.clone());
+            // A chosen output that isn't connected falls back to the default output.
+            if let (Err(e), Some(name)) = (&started, &device_name) {
+                log::warn!("Output '{name}' failed ({e}); capturing the default output instead");
+                started = system_capture::start_system_capture_device(tx.clone(), Arc::clone(&self.stop_flag), None);
+                if started.is_ok() {
+                    self.warnings.push(format!(
+                        "The other side's device '{name}' isn't available, so NexQ is capturing your default output instead."
+                    ));
+                }
+            }
+            match started {
                 Ok(handle) => {
                     self.system_thread = Some(handle);
                     log::info!("System output audio capture started");
@@ -216,9 +229,25 @@ impl AudioCaptureManager {
                 Err(e) => {
                     // Keep "You" running; the caller warns about the other side.
                     log::error!("System output capture failed: {e}. The other party won't be captured.");
-                    self.system_warning = Some(format!("Couldn't capture the other side ({e}). Your microphone is still transcribed."));
+                    system_error = Some(e);
                 }
             }
+        }
+
+        match (mic_error, system_error) {
+            (Some(mic), Some(system)) => {
+                self.stop_flag.store(true, Ordering::SeqCst);
+                self.mic_stream.take();
+                self.system_input_stream.take();
+                return Err(format!("Couldn't capture any audio. Microphone: {mic}. Other side: {system}"));
+            }
+            (Some(mic), None) => self.warnings.push(format!(
+                "Couldn't capture your microphone ({mic}). The other side is still transcribed."
+            )),
+            (None, Some(system)) => self.warnings.push(format!(
+                "Couldn't capture the other side ({system}). Your microphone is still transcribed."
+            )),
+            (None, None) => {}
         }
 
         // Start recording if enabled
@@ -231,9 +260,26 @@ impl AudioCaptureManager {
         Ok(())
     }
 
-    /// Why only the mic started (the other party's capture failed), once.
-    pub fn take_system_warning(&mut self) -> Option<String> {
-        self.system_warning.take()
+    /// What didn't start as chosen, once (see `warnings`).
+    pub fn take_warnings(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.warnings)
+    }
+
+    /// Open `device_id` as the microphone, or the default microphone when the
+    /// chosen one fails (a headset that's switched off).
+    fn start_mic_or_default(&mut self, device_id: &str, tx: mpsc::Sender<AudioChunk>) -> Result<cpal::Stream, String> {
+        match mic_capture::start_mic_capture(device_id, tx.clone(), AudioSource::Mic) {
+            Err(e) if !device_id.is_empty() && device_id != "default" => {
+                log::warn!("Microphone '{device_id}' failed ({e}); trying the default microphone");
+                let stream = mic_capture::start_mic_capture("default", tx, AudioSource::Mic)
+                    .map_err(|default_err| format!("{e}; the default microphone failed too: {default_err}"))?;
+                self.warnings.push(format!(
+                    "Your microphone '{device_id}' isn't available, so NexQ is using the default microphone."
+                ));
+                Ok(stream)
+            }
+            result => result,
+        }
     }
 
     /// Stop all audio capture.

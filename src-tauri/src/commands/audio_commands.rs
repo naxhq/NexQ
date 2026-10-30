@@ -113,7 +113,7 @@ pub async fn start_capture(
             .map_err(|_| "Audio state lock poisoned".to_string())?;
         let mgr = guard.get_or_insert_with(AudioCaptureManager::new);
         mgr.start_capture(&mic_device_id, &system_device_id, false, tx)?;
-        if let Some(warning) = mgr.take_system_warning() {
+        for warning in mgr.take_warnings() {
             let _ = app.emit("capture_warning", warning);
         }
     }
@@ -1002,7 +1002,7 @@ pub async fn start_capture_per_party(
             mic_device, system_device
         );
         mgr.start_capture(&mic_device, &system_device, system_is_input, tx)?;
-        if let Some(warning) = mgr.take_system_warning() {
+        for warning in mgr.take_warnings() {
             let _ = app.emit("capture_warning", warning);
         }
     }
