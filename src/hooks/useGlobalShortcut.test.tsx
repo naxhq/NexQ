@@ -84,3 +84,23 @@ it("reports denied audio capture while retaining the created meeting", async () 
   ])));
   expect(launcher.getState().activeMeeting?.id).toBe("shortcut-meeting");
 });
+
+it("holds the Assist shortcut in the overlay only while a meeting runs", async () => {
+  const overlay = await mountWindow("overlay");
+  const { DEFAULT_ASSIST_SHORTCUT } = await import("../stores/configStore");
+  expect(shortcuts.has(DEFAULT_ASSIST_SHORTCUT)).toBe(false);
+
+  act(() => overlay.setState({ activeMeeting: { id: "m1" } as Meeting }));
+  await waitFor(() => expect(shortcuts.has(DEFAULT_ASSIST_SHORTCUT)).toBe(true));
+
+  act(() => overlay.setState({ activeMeeting: null }));
+  await waitFor(() => expect(shortcuts.has(DEFAULT_ASSIST_SHORTCUT)).toBe(false));
+});
+
+it("leaves the Assist shortcut to the overlay", async () => {
+  const launcher = await mountWindow("launcher");
+  const { DEFAULT_ASSIST_SHORTCUT } = await import("../stores/configStore");
+  act(() => launcher.setState({ activeMeeting: { id: "m1" } as Meeting }));
+  await new Promise((r) => setTimeout(r, 20));
+  expect(shortcuts.has(DEFAULT_ASSIST_SHORTCUT)).toBe(false);
+});

@@ -18,6 +18,7 @@ describe("acceleratorFromEvent", () => {
     expect(acceleratorFromEvent(press({ ctrlKey: true, shiftKey: true, key: "H" }), false)).toBe("CmdOrCtrl+Shift+H");
     expect(acceleratorFromEvent(press({ metaKey: true }), false)).toBe("Super+H");
     expect(acceleratorFromEvent(press({ ctrlKey: true, code: "Digit7", key: "7" }), false)).toBe("CmdOrCtrl+7");
+    expect(acceleratorFromEvent(press({ ctrlKey: true, shiftKey: true, code: "Space", key: " " }), false)).toBe("CmdOrCtrl+Shift+Space");
   });
 
   it("macOS: Command is primary, Control stays separate", () => {

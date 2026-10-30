@@ -163,6 +163,8 @@ function pushMeetingDetection(config: MeetingDetectionConfig): void {
 
 /** Default global shortcut for stealth mode (Cmd on macOS, Ctrl elsewhere). */
 export const DEFAULT_STEALTH_SHORTCUT = "CmdOrCtrl+Shift+H";
+/** Assist from any app during a meeting (Space only works in the overlay). */
+export const DEFAULT_ASSIST_SHORTCUT = "CmdOrCtrl+Shift+Space";
 
 export async function persistValue(key: string, value: unknown): Promise<void> {
   try {
@@ -298,6 +300,7 @@ interface ConfigState {
   stealthMode: boolean;
   /** Global shortcut that toggles stealth mode. */
   stealthShortcut: string;
+  assistShortcut: string;
   /** Offer to start NexQ when Zoom, Teams, Meet… start a call. */
   meetingDetection: MeetingDetectionConfig;
 
@@ -396,6 +399,7 @@ interface ConfigState {
   /** Record a stealth change the backend already applied (tray toggle). */
   stealthModeApplied: (enabled: boolean) => void;
   setStealthShortcut: (shortcut: string) => void;
+  setAssistShortcut: (shortcut: string) => void;
   /** Replace the meeting detection settings (persisted + pushed to the backend). */
   setMeetingDetection: (config: MeetingDetectionConfig) => void;
   loadConfig: () => Promise<void>;
@@ -473,6 +477,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
   trayStealthEnabled: true,
   stealthMode: false,
   stealthShortcut: DEFAULT_STEALTH_SHORTCUT,
+  assistShortcut: DEFAULT_ASSIST_SHORTCUT,
   meetingDetection: DEFAULT_MEETING_DETECTION,
   _loaded: false,
   mutedYou: false,
@@ -912,6 +917,10 @@ export const useConfigStore = create<ConfigState>((set) => ({
     set({ stealthShortcut: shortcut });
     persistValue("stealthShortcut", shortcut);
   },
+  setAssistShortcut: (shortcut) => {
+    set({ assistShortcut: shortcut });
+    persistValue("assistShortcut", shortcut);
+  },
   setMeetingDetection: (config) => {
     set({ meetingDetection: config });
     persistValue("meetingDetection", config);
@@ -983,6 +992,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
       const trayAutoDetectMeeting = await store.get<boolean>("trayAutoDetectMeeting");
       const trayStealthEnabled = await store.get<boolean>("trayStealthEnabled");
       const stealthShortcut = await store.get<string>("stealthShortcut");
+      const assistShortcut = await store.get<string>("assistShortcut");
       const stealthMode = await store.get<boolean>("stealthMode");
       const savedMeetingDetection = await store.get<Partial<MeetingDetectionConfig>>("meetingDetection");
       const meetingDetection = { ...DEFAULT_MEETING_DETECTION, ...(savedMeetingDetection ?? {}) };
@@ -1162,6 +1172,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
         ...(trayAutoDetectMeeting != null && { trayAutoDetectMeeting }),
         ...(trayStealthEnabled != null && { trayStealthEnabled }),
         ...(stealthShortcut != null && { stealthShortcut }),
+        ...(assistShortcut != null && { assistShortcut }),
         ...(stealthMode != null && { stealthMode }),
         meetingDetection,
       }));
@@ -1250,6 +1261,9 @@ export const useConfigStore = create<ConfigState>((set) => ({
       });
       store.onKeyChange<string>("stealthShortcut", (val) => {
         if (val != null) set({ stealthShortcut: val });
+      });
+      store.onKeyChange<string>("assistShortcut", (val) => {
+        if (val != null) set({ assistShortcut: val });
       });
       store.onKeyChange<MeetingDetectionConfig>("meetingDetection", (val) => {
         if (val != null) set({ meetingDetection: { ...DEFAULT_MEETING_DETECTION, ...val } });

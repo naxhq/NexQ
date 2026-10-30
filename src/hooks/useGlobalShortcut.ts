@@ -12,7 +12,7 @@ import { isOverlayVisible, meetingShortcutAction, showLauncherWindow, showMeetin
 import { endMeetingFromThisWindow } from "./useUpdater";
 import { showToast } from "../stores/toastStore";
 import { useConfigStore } from "../stores/configStore";
-import { reservedShortcutAction } from "../lib/shortcutLabel";
+import { normalizeAccelerator, reservedShortcutAction } from "../lib/shortcutLabel";
 
 /** Ctrl+M: end the running meeting (in every window that holds it) or start one. */
 async function toggleMeetingFromShortcut(): Promise<void> {
@@ -46,6 +46,42 @@ export async function toggleStealthMode(): Promise<void> {
 
 export function useGlobalShortcut() {
   const stealthShortcut = useConfigStore((s) => s.stealthShortcut);
+  const assistShortcut = useConfigStore((s) => s.assistShortcut);
+  const meetingActive = useMeetingStore((s) => !!s.activeMeeting);
+
+  // Assist from any app (Space only works while the overlay has focus). Held
+  // only during a meeting, by the overlay window, so the key combination
+  // stays free for other apps the rest of the time.
+  useEffect(() => {
+    const key = assistShortcut;
+    if (!meetingActive || !key || getCurrentWebviewWindow().label !== "overlay") return;
+    if (reservedShortcutAction(key) || normalizeAccelerator(key) === normalizeAccelerator(stealthShortcut)) {
+      console.warn(`[useGlobalShortcut] Assist shortcut ${key} collides with another shortcut; not registered`);
+      return;
+    }
+    let registered = false;
+    let cancelled = false;
+    (async () => {
+      try {
+        await unregister(key).catch(() => {});
+        if (cancelled) return;
+        await register(key, (event) => {
+          if (event.state !== "Pressed") return;
+          const visible = useAIActionsStore.getState().configs.actions["Assist"]?.visible !== false;
+          if (visible) runUserAction("Assist").catch(() => {});
+        });
+        registered = true;
+        // The meeting ended (or the key changed) while registering.
+        if (cancelled) unregister(key).catch(() => {});
+      } catch (err) {
+        console.warn(`Failed to register Assist shortcut ${key}:`, err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (registered) unregister(key).catch(() => {});
+    };
+  }, [assistShortcut, stealthShortcut, meetingActive]);
 
   // Stealth mode shortcut (user-configurable, re-registered when it changes)
   useEffect(() => {

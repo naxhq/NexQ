@@ -17,6 +17,8 @@ These shortcuts are registered system-wide and work regardless of which applicat
 | `Ctrl+M` | Start / End Meeting | Starts a new meeting if none is active; ends the current meeting if one is running |
 | `Ctrl+B` | Toggle Overlay | Switches between the launcher (dashboard) and the overlay (meeting) window. Only works when a meeting is active |
 | `Ctrl+,` | Open / Close Settings | Toggles the settings panel |
+| `Ctrl+Shift+H` | Hide from screen share | Turns stealth mode on or off. Change it in Settings > General |
+| `Ctrl+Shift+Space` | Assist from any app | During a meeting, generates AI Assist without switching to NexQ. Change it in Settings > General |
 
 ## Meeting Shortcuts
 
@@ -46,5 +48,5 @@ NexQ lives in the Windows system tray. Interaction patterns:
 ## Tips
 
 - **Overlay during meetings**: Use `Ctrl+B` to bring up the always-on-top overlay while your meeting app (Zoom, Teams, etc.) is in the foreground. The overlay is transparent and stays above other windows.
-- **Quick AI assist**: During a meeting, press `Space` at any time to get an instant AI analysis of the current conversation. No need to switch windows.
+- **Quick AI assist**: During a meeting, press `Ctrl+Shift+Space` from any app (your meeting app included) to get an instant AI answer without switching to NexQ, which matters when you're sharing your screen. `Space` does the same while the NexQ window is focused.
 - **Mute sources independently**: You can mute "You" (mic) or "Them" (system audio) STT independently from the overlay controls. This pauses transcription for that source without stopping audio capture or recording.

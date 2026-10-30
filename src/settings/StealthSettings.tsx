@@ -1,51 +1,31 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ScreenShareOff } from "lucide-react";
-import { DEFAULT_STEALTH_SHORTCUT, useConfigStore } from "../stores/configStore";
+import { DEFAULT_ASSIST_SHORTCUT, DEFAULT_STEALTH_SHORTCUT, useConfigStore } from "../stores/configStore";
 import { showToast } from "../stores/toastStore";
 import { getStealthSupport } from "../lib/ipc";
-import { acceleratorFromEvent, formatShortcut, reservedShortcutAction } from "../lib/shortcutLabel";
+import { ShortcutButton } from "./ShortcutButton";
 import type { StealthSupport } from "../lib/types";
 
-/** Settings → General: stealth mode ("Hide from screen share") and its shortcut. */
+/**
+ * Settings → General: stealth mode ("Hide from screen share"), its shortcut,
+ * and the Assist shortcut that works without switching to NexQ.
+ */
 export function StealthSettings() {
   const stealthMode = useConfigStore((s) => s.stealthMode);
   const setStealthMode = useConfigStore((s) => s.setStealthMode);
   const shortcut = useConfigStore((s) => s.stealthShortcut);
   const setShortcut = useConfigStore((s) => s.setStealthShortcut);
+  const assistShortcut = useConfigStore((s) => s.assistShortcut);
+  const setAssistShortcut = useConfigStore((s) => s.setAssistShortcut);
+  const stealthTaken = useMemo(() => ({ [assistShortcut]: "Assist" }), [assistShortcut]);
+  const assistTaken = useMemo(() => ({ [shortcut]: "Hide from screen share" }), [shortcut]);
 
   const [support, setSupport] = useState<StealthSupport | null>(null);
   const [busy, setBusy] = useState(false);
-  const [recording, setRecording] = useState(false);
 
   useEffect(() => {
     getStealthSupport().then(setSupport).catch(() => setSupport(null));
   }, []);
-
-  // Rebinding: the next Ctrl/Cmd/Alt combination becomes the shortcut; Esc cancels.
-  useEffect(() => {
-    if (!recording) return;
-    const onKey = (e: KeyboardEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.key === "Escape") {
-        setRecording(false);
-        return;
-      }
-      const accel = acceleratorFromEvent(e);
-      if (!accel) return;
-      const taken = reservedShortcutAction(accel);
-      if (taken) {
-        // Keep listening: the current binding (and the other action) stay as they are.
-        showToast(`${formatShortcut(accel)} is already used by "${taken}"`, "error");
-        return;
-      }
-      setShortcut(accel);
-      setRecording(false);
-      showToast(`Shortcut set to ${formatShortcut(accel)}`, "success");
-    };
-    window.addEventListener("keydown", onKey, { capture: true });
-    return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [recording, setShortcut]);
 
   const unsupported = support?.supported === false;
 
@@ -105,25 +85,17 @@ export function StealthSettings() {
             Works from any app. Also in the tray menu and the meeting overlay.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {shortcut !== DEFAULT_STEALTH_SHORTCUT && !recording && (
-            <button
-              onClick={() => setShortcut(DEFAULT_STEALTH_SHORTCUT)}
-              className="rounded-md px-2 py-1 text-meta text-muted-foreground hover:bg-accent hover:text-foreground cursor-pointer"
-            >
-              Reset
-            </button>
-          )}
-          <button
-            onClick={() => setRecording((r) => !r)}
-            aria-label={recording ? "Press the new shortcut, or Escape to cancel" : `Change shortcut, currently ${formatShortcut(shortcut)}`}
-            className={`rounded-lg px-2.5 py-1 font-mono text-xs transition-colors duration-150 cursor-pointer ${
-              recording ? "bg-primary/15 text-primary ring-1 ring-primary/30" : "bg-secondary/60 text-foreground hover:bg-secondary"
-            }`}
-          >
-            {recording ? "Press keys…" : formatShortcut(shortcut)}
-          </button>
+        <ShortcutButton value={shortcut} defaultValue={DEFAULT_STEALTH_SHORTCUT} onChange={setShortcut} others={stealthTaken} />
+      </div>
+
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <span className="text-xs font-medium text-foreground/80">Assist from any app</span>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            During a meeting, asks for an answer without switching to NexQ. Space works only in the overlay.
+          </p>
         </div>
+        <ShortcutButton value={assistShortcut} defaultValue={DEFAULT_ASSIST_SHORTCUT} onChange={setAssistShortcut} others={assistTaken} />
       </div>
 
       {support?.note && <p className="text-meta text-muted-foreground/70">{support.note}</p>}

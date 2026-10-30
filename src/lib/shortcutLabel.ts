@@ -54,6 +54,7 @@ export function acceleratorFromEvent(
   if (/^Key[A-Z]$/.test(e.code)) key = e.code.slice(3);
   else if (/^Digit[0-9]$/.test(e.code)) key = e.code.slice(5);
   else if (/^F([1-9]|1[0-9]|2[0-4])$/.test(e.code)) key = e.code;
+  else if (e.code === "Space") key = "Space";
   else return null;
   parts.push(key);
   return parts.join("+");
