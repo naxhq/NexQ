@@ -4,7 +4,16 @@ import { onQuestionDetected } from "../lib/events";
 import { runUserAction } from "../lib/userAction";
 import { useTranscriptStore } from "../stores/transcriptStore";
 import { useMeetingStore } from "../stores/meetingStore";
+import { useAIActionsStore } from "../stores/aiActionsStore";
 import type { DetectedQuestion } from "../lib/types";
+
+/**
+ * Quiet time after the other party's last words before Auto-Trigger answers
+ * their question, so a question still being asked isn't answered half-way.
+ */
+export const AUTO_TRIGGER_DELAY_MS = 1500;
+
+const isOtherParty = (speaker: string) => speaker === "Them" || speaker === "Interviewer";
 
 export function looksLikeQuestion(text: string): boolean {
   const trimmed = text.trim();
@@ -39,6 +48,15 @@ export function QuestionDetector() {
   const checkedTextRef = useRef<Map<string, string>>(new Map());
   const segments = useTranscriptStore((s) => s.segments);
   const activeMeetingId = useMeetingStore((s) => s.activeMeeting?.id ?? "");
+  const autoTrigger = useAIActionsStore((s) => s.configs.globalDefaults.autoTrigger);
+  // Changes whenever the other party says more (a new line, or a line growing).
+  const otherPartyActivity = useTranscriptStore((s) => {
+    for (let i = s.segments.length - 1; i >= 0; i--) {
+      const seg = s.segments[i];
+      if (isOtherParty(seg.speaker)) return `${seg.id}:${seg.text.length}`;
+    }
+    return "";
+  });
 
   // Clear detected questions when a new meeting starts so a question from the
   // previous meeting doesn't linger in the overlay.
@@ -64,7 +82,7 @@ export function QuestionDetector() {
 
   useEffect(() => {
     const p = onQuestionDetected((event) => {
-      if (event.source === "Them" || event.source === "Interviewer") {
+      if (isOtherParty(event.source)) {
         addQuestion(event);
       }
     });
@@ -76,7 +94,7 @@ export function QuestionDetector() {
     for (const seg of segments) {
       if (!seg.is_final || checked.get(seg.id) === seg.text) continue;
       checked.set(seg.id, seg.text);
-      if (seg.speaker !== "Them" && seg.speaker !== "Interviewer") continue;
+      if (!isOtherParty(seg.speaker)) continue;
       const sentence = lastSentence(seg.text);
       if (sentence && looksLikeQuestion(sentence)) {
         addQuestion({ text: sentence, confidence: 0.8, timestamp_ms: seg.timestamp_ms, source: seg.speaker }, seg.id);
@@ -99,6 +117,15 @@ export function QuestionDetector() {
 
   const latest = questions.length > 0 ? questions[0] : null;
   const previousQuestions = questions.slice(1, 4);
+
+  // Auto-Trigger: answer the newest question once the other party has been
+  // quiet for a moment. More words from them restart the wait.
+  const waiting = autoTrigger && !!latest && !latest.assisted;
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = setTimeout(() => handleAssist(0), AUTO_TRIGGER_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [waiting, latest?.text, otherPartyActivity, handleAssist]);
 
   return (
     <div className="flex flex-col gap-2.5" role="region" aria-label="Detected questions">
