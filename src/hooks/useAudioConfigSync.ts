@@ -94,8 +94,9 @@ export function useAudioConfigSync() {
         // so they don't stay stuck as gray italic after the new provider takes over.
         useTranscriptStore.getState().finalizeAllInterim();
 
-        // Stop current capture and wait for full cleanup
-        await stopCapture();
+        // Stop current capture and wait for full cleanup. The recording stays
+        // open: the new capture keeps writing the meeting's audio to it.
+        await stopCapture(true);
         log("info", "config", "Hot-swap: capture stopped, waiting for resource release...");
 
         // Let Rust fully release WASAPI/audio resources

@@ -68,6 +68,9 @@ pub struct AudioCaptureManager {
     warnings: Vec<String>,
     /// Active recorder (if recording is enabled)
     recorder: Option<SharedRecorder>,
+    /// When a device change paused capture with the recorder kept open: the
+    /// restart fills the gap with silence so the recording stays in time.
+    recording_paused_at: Option<std::time::Instant>,
     /// Current meeting ID for recording file naming
     meeting_id: Option<String>,
     /// VAD for mic audio
@@ -104,6 +107,7 @@ impl AudioCaptureManager {
             system_input_stream: None,
             warnings: Vec::new(),
             recorder: None,
+            recording_paused_at: None,
             meeting_id: None,
             mic_vad: VoiceActivityDetector::new(),
             system_vad: VoiceActivityDetector::new(),
@@ -250,10 +254,7 @@ impl AudioCaptureManager {
             (None, None) => {}
         }
 
-        // Start recording if enabled
-        if self.recording_enabled {
-            self.start_recording_internal();
-        }
+        self.resume_or_start_recording();
 
         self.is_capturing = true;
         log::info!("Audio capture pipeline started");
@@ -284,11 +285,26 @@ impl AudioCaptureManager {
 
     /// Stop all audio capture.
     /// Returns (wav_path, start_time_ms) if a recording was active.
-    pub fn stop_capture(&mut self) -> Option<(std::path::PathBuf, u64)> {
-        if !self.is_capturing {
+    ///
+    /// `keep_recording` (a device change mid-meeting): the recorder stays
+    /// open and the next `start_capture` keeps writing to it.
+    pub fn stop_capture(&mut self, keep_recording: bool) -> Option<(std::path::PathBuf, u64)> {
+        if self.is_capturing {
+            self.stop_streams();
+        }
+        if keep_recording {
+            if self.recorder.is_some() && self.recording_paused_at.is_none() {
+                self.recording_paused_at = Some(std::time::Instant::now());
+            }
             return None;
         }
+        // Also when the restart after a device change failed: the recording
+        // kept open for it is finalized here.
+        self.recording_paused_at = None;
+        self.stop_recording_internal()
+    }
 
+    fn stop_streams(&mut self) {
         log::info!("Stopping audio capture pipeline");
 
         // Signal system capture thread to stop
@@ -306,17 +322,12 @@ impl AudioCaptureManager {
             let _ = thread.join();
         }
 
-        // Stop recording — capture info for post-meeting pipeline
-        let recording_info = self.stop_recording_internal();
-
         // Reset VADs
         self.mic_vad.reset();
         self.system_vad.reset();
 
         self.is_capturing = false;
         log::info!("Audio capture pipeline stopped");
-
-        recording_info
     }
 
     /// Check if capture is active.
@@ -463,6 +474,16 @@ impl AudioCaptureManager {
         detected
     }
 
+    /// Start recording if enabled, or keep writing the one a device change
+    /// kept open (a new recorder would replace the meeting's audio so far).
+    fn resume_or_start_recording(&mut self) {
+        if let (Some(rec), Some(paused_at)) = (&self.recorder, self.recording_paused_at.take()) {
+            rec.write_samples(&gap_silence(paused_at.elapsed()));
+        } else if self.recording_enabled && self.recorder.is_none() {
+            self.start_recording_internal();
+        }
+    }
+
     fn start_recording_internal(&mut self) {
         let meeting_id = self
             .meeting_id
@@ -502,10 +523,15 @@ impl AudioCaptureManager {
 
 impl Drop for AudioCaptureManager {
     fn drop(&mut self) {
-        if self.is_capturing {
-            self.stop_capture();
-        }
+        self.stop_capture(false);
     }
+}
+
+/// Silence for the time capture was paused by a device change (16 kHz mono),
+/// at most a minute.
+fn gap_silence(gap: std::time::Duration) -> Vec<i16> {
+    let ms = gap.as_millis().min(60_000) as usize;
+    vec![0; ms * 16]
 }
 
 /// The output contract consumed by STT (Sub-PRD 4).
@@ -699,5 +725,61 @@ pub async fn process_recording(
         log::error!("Failed to emit recording_ready event: {}", e);
     } else {
         log::info!("Emitted recording_ready for meeting {}", meeting_id_clone);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_wav(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("nexq-rec-{}-{}", name, std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("meeting.wav")
+    }
+
+    /// A device change mid-meeting must not replace the recording: the
+    /// recorder stays open and the gap becomes silence.
+    #[test]
+    fn a_device_change_keeps_the_recording() {
+        let path = temp_wav("keep");
+        let mut mgr = AudioCaptureManager::new();
+        mgr.recording_enabled = true;
+        let rec = SharedRecorder::new(recorder::start_recording_at(path.clone()).unwrap());
+        let started = rec.start_time_ms;
+        rec.write_samples(&[100; 16_000]); // 1 s before the change
+        mgr.recorder = Some(rec);
+
+        assert_eq!(mgr.stop_capture(true), None, "nothing to process yet");
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        mgr.resume_or_start_recording();
+        mgr.recorder.as_ref().unwrap().write_samples(&[100; 16_000]); // 1 s after
+
+        let (saved, start_time_ms) = mgr.stop_capture(false).expect("recording info at End");
+        assert_eq!((saved.as_path(), start_time_ms), (path.as_path(), started));
+        let reader = hound::WavReader::open(&path).unwrap();
+        let samples: Vec<i16> = reader.into_samples::<i16>().map(Result::unwrap).collect();
+        assert!(samples.len() >= 32_000 + 3_200, "both parts and the gap: {}", samples.len());
+        assert_eq!(samples[0], 100, "audio from before the change is still there");
+        assert_eq!(samples[16_000], 0, "the gap is silence");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// The restart after a device change failed: End still finalizes the recording.
+    #[test]
+    fn end_finalizes_a_kept_recording_without_capture() {
+        let path = temp_wav("end");
+        let mut mgr = AudioCaptureManager::new();
+        mgr.recorder = Some(SharedRecorder::new(recorder::start_recording_at(path.clone()).unwrap()));
+        mgr.stop_capture(true);
+        assert!(mgr.stop_capture(false).is_some());
+        assert!(mgr.recorder.is_none() && mgr.recording_paused_at.is_none());
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn gap_silence_is_capped_at_a_minute() {
+        assert_eq!(gap_silence(std::time::Duration::from_millis(250)).len(), 4_000);
+        assert_eq!(gap_silence(std::time::Duration::from_secs(600)).len(), 60 * 16_000);
     }
 }

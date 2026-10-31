@@ -128,8 +128,11 @@ fn dirs_fallback() -> Result<PathBuf, String> {
 /// Returns a RecorderHandle for writing samples and stopping.
 pub fn start_recording(meeting_id: &str) -> Result<RecorderHandle, String> {
     let recordings_dir = get_recordings_dir()?;
-    let output_path = recordings_dir.join(format!("{}.wav", meeting_id));
+    start_recording_at(recordings_dir.join(format!("{}.wav", meeting_id)))
+}
 
+/// Start recording to `output_path`.
+pub fn start_recording_at(output_path: PathBuf) -> Result<RecorderHandle, String> {
     log::info!("Starting recording to: {}", output_path.display());
 
     let spec = WavSpec {

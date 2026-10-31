@@ -369,9 +369,10 @@ pub async fn start_capture(
     Ok(())
 }
 
-/// Stop all audio capture.
+/// Stop all audio capture. `keep_recording` (a device change mid-meeting)
+/// keeps the meeting's recording open for the capture that follows.
 #[command]
-pub async fn stop_capture(app: AppHandle) -> Result<(), String> {
+pub async fn stop_capture(app: AppHandle, keep_recording: Option<bool>) -> Result<(), String> {
     let state = app.state::<AppState>();
 
     // Restore original default capture device if IPolicyConfig override was active
@@ -385,7 +386,7 @@ pub async fn stop_capture(app: AppHandle) -> Result<(), String> {
 
         match guard.as_mut() {
             Some(mgr) => {
-                let info = mgr.stop_capture();
+                let info = mgr.stop_capture(keep_recording.unwrap_or(false));
                 log::info!("Audio capture stopped via command");
                 info
             }
@@ -867,7 +868,7 @@ pub async fn start_capture_per_party(
                 log::info!("start_capture_per_party: stopping existing capture for hot-swap");
                 crate::stt::emit_stt_debug(&app, "info", "stt",
                     "Hot-swap: stopping existing audio capture + STT providers");
-                mgr.stop_capture();
+                mgr.stop_capture(true);
             }
         }
     }

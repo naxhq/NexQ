@@ -59,8 +59,9 @@ export async function startCapture(
   });
 }
 
-export async function stopCapture(): Promise<void> {
-  return invoke("stop_capture");
+/** `keepRecording`: a device change mid-meeting; the recording continues after the restart. */
+export async function stopCapture(keepRecording = false): Promise<void> {
+  return invoke("stop_capture", { keepRecording });
 }
 
 export async function getAudioLevel(): Promise<string> {
