@@ -9,6 +9,9 @@ edition = "2021"
 name = "nexq_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

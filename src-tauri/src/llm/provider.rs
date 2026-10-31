@@ -214,7 +214,7 @@ pub fn emit_thinking(app: &AppHandle, params: &GenerationParams) {
 
 /// Emits `llm_stream_error` for this request (nothing for silent streams — the
 /// caller gets the error from the returned `Result`).
-pub fn emit_error(app: &AppHandle, params: &GenerationParams, message: &str) {
+pub fn emit_error<R: tauri::Runtime>(app: &AppHandle<R>, params: &GenerationParams, message: &str) {
     // A stopped stream already got its cancelled end event; no error on top of it.
     if params.silent || is_cancelled(params) {
         return;
@@ -449,6 +449,39 @@ pub trait LLMProvider: Send + Sync {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn llm_stream_error_event_carries_redacted_text() {
+        use tauri::{Listener, test::mock_app};
+        let app = mock_app();
+        let received: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = received.clone();
+        app.listen("llm_stream_error", move |event| {
+            sink.lock().unwrap().push(event.payload().to_string());
+        });
+        let params = GenerationParams {
+            request_id: Some("req-test".into()),
+            ..Default::default()
+        };
+        let secret = "sk-ant-api03-FAKETESTKEY0123456789abcdefXYZ";
+        emit_error(
+            app.handle(),
+            &params,
+            &format!("upstream rejected key {secret}"),
+        );
+        // Tauri delivers events asynchronously; poll briefly.
+        for _ in 0..50 {
+            if !received.lock().unwrap().is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let events = received.lock().unwrap().clone();
+        assert_eq!(events.len(), 1, "expected one llm_stream_error event");
+        assert!(!events[0].contains(secret), "secret reached the event: {}", events[0]);
+        assert!(events[0].contains("[redacted]"), "{}", events[0]);
+        assert!(events[0].contains("req-test"), "{}", events[0]);
+    }
 
     fn collecting_sink() -> (TokenSink, Arc<Mutex<String>>) {
         let collected = Arc::new(Mutex::new(String::new()));
