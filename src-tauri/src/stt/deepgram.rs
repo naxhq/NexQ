@@ -115,14 +115,20 @@ struct AudioTimeline {
     resumes: Vec<(u64, u64)>,
     /// Whether the previous chunk was left out (or none was sent yet).
     paused: bool,
+    /// Capture time the previous sent chunk ended at.
+    last_end_ms: Option<u64>,
 }
 
 impl AudioTimeline {
     /// Resume points kept: results only ever refer to recent audio.
     const MAX_RESUMES: usize = 1024;
 
+    /// A capture-time jump between two sent chunks larger than this is a gap
+    /// in what Deepgram heard (audio left out of a replay, or never captured).
+    const GAP_MS: u64 = 200;
+
     fn new() -> Self {
-        Self { sent_samples: 0, resumes: Vec::new(), paused: true }
+        Self { sent_samples: 0, resumes: Vec::new(), paused: true, last_end_ms: None }
     }
 
     fn sent_ms(&self) -> u64 {
@@ -130,15 +136,19 @@ impl AudioTimeline {
     }
 
     /// A chunk of `samples` was sent; its audio was captured ending at `captured_at_ms`.
+    /// Contiguous audio shares one resume point, so replaying 30 s of small
+    /// chunks doesn't push the older points out.
     fn sent(&mut self, samples: u64, captured_at_ms: u64) {
-        if self.paused {
-            let start_ms = captured_at_ms.saturating_sub(samples * 1000 / SAMPLE_RATE);
+        let start_ms = captured_at_ms.saturating_sub(samples * 1000 / SAMPLE_RATE);
+        let gap = self.last_end_ms.is_none_or(|end| start_ms.abs_diff(end) > Self::GAP_MS);
+        if self.paused || gap {
             self.resumes.push((self.sent_ms(), start_ms));
             if self.resumes.len() > Self::MAX_RESUMES {
                 self.resumes.drain(..Self::MAX_RESUMES / 2);
             }
             self.paused = false;
         }
+        self.last_end_ms = Some(captured_at_ms);
         self.sent_samples += samples;
     }
 
@@ -754,7 +764,7 @@ impl STTProvider for DeepgramSTT {
             return Ok(());
         }
 
-        if let Err(chunk) = self.try_send_chunk(chunk, false) {
+        if let Err(chunk) = self.try_send_chunk(chunk) {
             self.buffer_pending(chunk);
         }
         Ok(())
@@ -918,7 +928,9 @@ impl DeepgramSTT {
             if !task.is_finished() {
                 return;
             }
-            let outcome = self.reconnect_task.take().and_then(|t| t.now_or_never());
+            // Unconstrained: with the task's coop budget used up, polling a
+            // finished JoinHandle can still return Pending (and drop the socket).
+            let outcome = self.reconnect_task.take().and_then(|t| tokio::task::unconstrained(t).now_or_never());
             match outcome {
                 Some(Ok(Ok(ws))) => {
                     log::info!("DeepgramSTT: reconnected ({}) after {} attempt(s)", self.party, self.reconnect_attempt + 1);
@@ -978,9 +990,7 @@ impl DeepgramSTT {
                 log::warn!("DeepgramSTT: {} buffered chunk(s) not sent at stop", self.pending_audio.len() + 1);
                 break;
             }
-            let mut timeline = self.timeline.lock().unwrap_or_else(|e| e.into_inner());
-            timeline.skipped();
-            timeline.sent(samples, chunk.timestamp_ms);
+            self.timeline.lock().unwrap_or_else(|e| e.into_inner()).sent(samples, chunk.timestamp_ms);
         }
         self.pending_audio.clear();
         self.pending_samples = 0;
@@ -990,7 +1000,7 @@ impl DeepgramSTT {
     fn flush_pending_nonblocking(&mut self) {
         while let Some(chunk) = self.pending_audio.pop_front() {
             let samples = chunk.pcm_data.len();
-            match self.try_send_chunk(chunk, true) {
+            match self.try_send_chunk(chunk) {
                 Ok(()) => self.pending_samples -= samples,
                 Err(chunk) => {
                     self.pending_audio.push_front(chunk);
@@ -1000,18 +1010,17 @@ impl DeepgramSTT {
         }
     }
 
-    /// Queue one chunk for the writer. `resume` anchors Deepgram's clock to this
-    /// chunk's capture time (replayed audio arrives late but keeps its own time).
+    /// Queue one chunk for the writer. The timeline dates it by its own capture
+    /// time (replayed audio arrives late but keeps its time).
     /// Gives the chunk back if it could not be queued.
-    fn try_send_chunk(&mut self, chunk: AudioChunk, resume: bool) -> Result<(), AudioChunk> {
+    fn try_send_chunk(&mut self, chunk: AudioChunk) -> Result<(), AudioChunk> {
         let Some(tx) = self.audio_tx.as_ref() else { return Err(chunk) };
         match tx.try_send(Self::pcm_to_bytes(&chunk.pcm_data)) {
             Ok(()) => {
-                let mut timeline = self.timeline.lock().unwrap_or_else(|e| e.into_inner());
-                if resume {
-                    timeline.skipped();
-                }
-                timeline.sent(chunk.pcm_data.len() as u64, chunk.timestamp_ms);
+                self.timeline
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .sent(chunk.pcm_data.len() as u64, chunk.timestamp_ms);
                 Ok(())
             }
             Err(mpsc::error::TrySendError::Full(_)) => Err(chunk),
@@ -1123,6 +1132,24 @@ mod tests {
         tl.sent(CHUNK, t0 + 100_100);
         assert_eq!(tl.epoch_at(1_500), Some(t0 + 1_500));
         assert_eq!(tl.epoch_at(3_050), Some(t0 + 100_050));
+    }
+
+    /// 30 s replayed in 10 ms chunks after a reconnect, with one pause left out.
+    #[test]
+    fn replayed_audio_keeps_its_capture_times() {
+        let t0 = 1_800_000_000_000;
+        let mut tl = AudioTimeline::new();
+        // 15 s of speech, a 2 s pause (not buffered), then 15 s more.
+        for i in 1..=1_500 {
+            tl.sent(160, t0 + i * 10);
+        }
+        for i in 1..=1_500 {
+            tl.sent(160, t0 + 17_000 + i * 10);
+        }
+        assert_eq!(tl.resumes.len(), 2, "one resume point per contiguous run");
+        assert_eq!(tl.epoch_at(0), Some(t0), "the start of the replay keeps its time");
+        assert_eq!(tl.epoch_at(14_000), Some(t0 + 14_000));
+        assert_eq!(tl.epoch_at(16_000), Some(t0 + 18_000), "after the pause");
     }
 
     #[test]

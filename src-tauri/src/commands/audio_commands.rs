@@ -1443,13 +1443,20 @@ pub async fn start_capture_per_party(
             if !mix_sys.is_empty() { rec.write_samples(&mix_sys); }
         }
 
-        // Clean shutdown
-        if let Some(ref mut provider) = you_stt_provider {
-            let _ = provider.stop_stream().await;
-        }
-        if let Some(ref mut provider) = them_stt_provider {
-            let _ = provider.stop_stream().await;
-        }
+        // Clean shutdown, both parties at once: a cloud provider waits for its
+        // last results here (Deepgram up to a few seconds).
+        tokio::join!(
+            async {
+                if let Some(ref mut provider) = you_stt_provider {
+                    let _ = provider.stop_stream().await;
+                }
+            },
+            async {
+                if let Some(ref mut provider) = them_stt_provider {
+                    let _ = provider.stop_stream().await;
+                }
+            },
+        );
 
         // Restore IPolicyConfig override if active (crash recovery for async task exit)
         {
