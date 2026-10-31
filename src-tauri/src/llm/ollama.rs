@@ -261,3 +261,44 @@ impl LLMProvider for OllamaClient {
         Ok(stats)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    /// Serves one HTTP 500 whose body echoes a credential, like a real
+    /// upstream error might. Returns the base URL to point the client at.
+    fn serve_500_with_body(body: &'static str) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                let resp = format!(
+                    "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    #[test]
+    fn provider_http_error_body_is_redacted() {
+        let secret = "sk-ant-api03-FAKETESTKEY0123456789abcdefXYZ";
+        let body = Box::leak(format!("{{\"error\":\"upstream rejected key {secret}\"}}").into_boxed_str());
+        let base = serve_500_with_body(body);
+        let client = OllamaClient::new(Some(&base));
+        let err = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(client.list_models())
+            .expect_err("500 must surface as an error");
+        let msg = err.to_string();
+        assert!(!msg.contains(secret), "credential leaked in provider error: {msg}");
+        assert!(msg.contains("[redacted]"), "{msg}");
+    }
+}
