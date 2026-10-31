@@ -1,3 +1,12 @@
+## [2.29.1](https://github.com/naxhq/NexQ/compare/v2.29.0...v2.29.1) (2026-10-31)
+
+
+### Bug Fixes
+
+* **audio:** a device change mid-meeting keeps the meeting's recording ([#53](https://github.com/naxhq/NexQ/issues/53)) ([89cf8c7](https://github.com/naxhq/NexQ/commit/89cf8c7b796438f55163a971f49266c7afd262a4))
+* **intelligence:** meeting summary covers the whole meeting by default ([#52](https://github.com/naxhq/NexQ/issues/52)) ([6eb1398](https://github.com/naxhq/NexQ/commit/6eb1398c7e58e7820f058981511f30ecdb74e0c9))
+* **meeting:** keep the meeting open when End can't save the transcript ([#51](https://github.com/naxhq/NexQ/issues/51)) ([d40075d](https://github.com/naxhq/NexQ/commit/d40075dd206973834f5f56beae3c345c39f165bb))
+* **stt:** reconnect Deepgram in the background without stalling the audio loop ([#50](https://github.com/naxhq/NexQ/issues/50)) ([898cdc2](https://github.com/naxhq/NexQ/commit/898cdc2de9149561ecc779c29c1874fa912a8781)), closes [#46](https://github.com/naxhq/NexQ/issues/46)
 # [2.29.0](https://github.com/naxhq/NexQ/compare/v2.28.3...v2.29.0) (2026-10-30)
 
 
