@@ -219,10 +219,12 @@ pub fn emit_error(app: &AppHandle, params: &GenerationParams, message: &str) {
     if params.silent || is_cancelled(params) {
         return;
     }
+    // The message can come from a CLI or provider response: mask credentials
+    // before it reaches the frontend (the full text stays in the log).
     let _ = app.emit(
         "llm_stream_error",
         StreamErrorPayload {
-            message: message.to_string(),
+            message: crate::logging::redact(message),
             request_id: params.request_id.clone(),
         },
     );

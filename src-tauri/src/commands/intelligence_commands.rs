@@ -573,7 +573,7 @@ pub(crate) async fn session_assist(state: &AppState, app: &AppHandle, req: Sessi
         Err(AskFailure::Closed) => end_closed(app, params, start),
         // Part of the answer is already on screen: report, don't repeat it.
         Err(AskFailure::AfterOutput(e)) | Err(AskFailure::Error(e)) => {
-            let message = e.to_string();
+            let message = crate::logging::redact(&e.to_string());
             emit_error(app, params, &message);
             SessionOutcome::Done(Err(message))
         }
@@ -581,7 +581,9 @@ pub(crate) async fn session_assist(state: &AppState, app: &AppHandle, req: Sessi
             log::warn!("Claude session context full ({e}); answering this request statelessly");
             SessionOutcome::Stateless
         }
-        Err(AskFailure::Unavailable(kind, e)) => SessionOutcome::Unavailable(kind, e.to_string()),
+        Err(AskFailure::Unavailable(kind, e)) => {
+            SessionOutcome::Unavailable(kind, crate::logging::redact(&e.to_string()))
+        }
     }
 }
 

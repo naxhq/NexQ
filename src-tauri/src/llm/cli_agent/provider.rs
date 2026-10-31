@@ -152,7 +152,9 @@ pub fn to_llm_error(err: AgentError) -> LLMError {
     if err.is_cancel() {
         return LLMError::Cancelled;
     }
-    let message = err.to_string();
+    // Stderr tails and CLI result text end up here; mask credentials before
+    // they become public error messages.
+    let message = crate::logging::redact(&err.to_string());
     match err.kind() {
         AgentErrorKind::NotInstalled => LLMError::NotConfigured(message),
         AgentErrorKind::NotLoggedIn => LLMError::AuthError(message),
@@ -410,6 +412,19 @@ mod tests {
             to_llm_error(AgentError::Cli(AgentErrorKind::RateLimited, "usage limit".into())),
             LLMError::ProviderError(_)
         ));
+    }
+
+    #[test]
+    fn claude_cli_error_text_is_redacted_before_it_is_public() {
+        let secret = "sk-ant-api03-SECRETVALUE0123456789abcdef";
+        let crashed = AgentError::Crashed(format!("claude exited unexpectedly (exit code 1): {secret}"));
+        match to_llm_error(crashed) {
+            LLMError::ProviderError(msg) => {
+                assert!(!msg.contains(secret), "secret leaked: {msg}");
+                assert!(msg.contains("[redacted]"), "{msg}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
     }
 
     /// Records what the manager spawned and asked; streams two deltas.
