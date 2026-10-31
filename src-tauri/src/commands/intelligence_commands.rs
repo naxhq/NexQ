@@ -1245,10 +1245,12 @@ pub async fn get_action_configs(
         .map_err(|e| format!("Failed to serialize action configs: {}", e))
 }
 
-/// A meeting summary covers the whole meeting unless its action sets a window;
-/// other actions fall back to the global window.
+/// The meeting-view actions (summary, action items, bookmark suggestions)
+/// cover the whole meeting unless their action sets a window; other actions
+/// fall back to the global window.
 fn default_window_seconds(mode: &str, action_window: Option<u64>, global_window: u64) -> u64 {
-    action_window.unwrap_or(if mode == "MeetingSummary" { 0 } else { global_window })
+    let whole_meeting = matches!(mode, "MeetingSummary" | "ActionItemsExtraction" | "BookmarkSuggestions");
+    action_window.unwrap_or(if whole_meeting { 0 } else { global_window })
 }
 
 #[cfg(test)]
@@ -1256,8 +1258,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn meeting_summary_defaults_to_whole_meeting() {
+    fn meeting_view_actions_default_to_whole_meeting() {
         assert_eq!(default_window_seconds("MeetingSummary", None, 300), 0);
+        assert_eq!(default_window_seconds("ActionItemsExtraction", None, 300), 0);
+        assert_eq!(default_window_seconds("BookmarkSuggestions", None, 300), 0);
         assert_eq!(default_window_seconds("MeetingSummary", Some(120), 300), 120);
         assert_eq!(default_window_seconds("Assist", None, 300), 300);
     }
