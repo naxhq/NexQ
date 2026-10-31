@@ -11,15 +11,18 @@ export async function saveSegmentsWithRetry<T>(
 ): Promise<number> {
   let failed = 0;
   for (const segment of segments) {
+    // Once a line failed every attempt the database is likely unavailable:
+    // try the rest once each, so End doesn't wait on retries for every line.
+    const tries = failed > 0 ? 1 : attempts;
     let saved = false;
-    for (let attempt = 1; attempt <= attempts && !saved; attempt++) {
+    for (let attempt = 1; attempt <= tries && !saved; attempt++) {
       try {
         await save(segment);
         onSaved(segment);
         saved = true;
       } catch (err) {
-        console.error(`[endMeetingSave] Failed to save segment (attempt ${attempt}/${attempts}):`, err);
-        if (attempt < attempts) await new Promise((r) => setTimeout(r, delayMs));
+        console.error(`[endMeetingSave] Failed to save segment (attempt ${attempt}/${tries}):`, err);
+        if (attempt < tries) await new Promise((r) => setTimeout(r, delayMs));
       }
     }
     if (!saved) failed++;
