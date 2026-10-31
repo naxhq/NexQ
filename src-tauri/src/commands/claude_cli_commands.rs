@@ -240,6 +240,9 @@ mod tests {
         assert!(validate_config(&with("")).is_err());
     }
 
+    // Uses Windows path syntax (`C:\...`); on other OSes `Path` does not split
+    // on `\`, so the test only makes sense on Windows.
+    #[cfg(windows)]
     #[test]
     fn claude_cli_login_launch_keeps_path_out_of_cmd() {
         let bin = Path::new(r"C:\Users\Tom&Jerry 100%\.local\bin\claude.exe");
