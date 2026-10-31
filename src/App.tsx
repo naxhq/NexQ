@@ -289,6 +289,8 @@ function App() {
     listen("tray_stop_meeting", () => {
       useMeetingStore.getState().endMeetingFlow().catch((err) => {
         console.error("[App] Tray stop meeting failed:", err);
+        // The meeting stays open (e.g. transcript lines not saved yet): say why.
+        showToast(err instanceof Error ? err.message : "Couldn't end meeting", "error");
       });
     }).then((unlisten) => unlisteners.push(unlisten));
 

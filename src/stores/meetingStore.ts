@@ -295,16 +295,15 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
       const { segmentsToSave, segmentForSave, markSegmentSaved } = await import("../lib/transcriptPersistence");
       const { toSave: unpersisted } = segmentsToSave(segments, lastIdx, { all: true });
 
-      for (const seg of unpersisted) {
-        try {
-          const { appendTranscriptSegment } = await import("../lib/ipc");
-          await appendTranscriptSegment(meeting.id, segmentForSave(seg));
-          markSegmentSaved(seg);
-        } catch (err) {
-          console.error("[meetingStore] Failed to persist segment:", err);
-          break;
-        }
-      }
+      const { appendTranscriptSegment } = await import("../lib/ipc");
+      const { saveSegmentsWithRetry, unsavedTranscriptError } = await import("../lib/endMeetingSave");
+      const failed = await saveSegmentsWithRetry(
+        unpersisted,
+        (seg) => appendTranscriptSegment(meeting.id, segmentForSave(seg)),
+        markSegmentSaved
+      );
+      // Keep the meeting and its transcript: End can be pressed again.
+      if (failed > 0) throw unsavedTranscriptError(failed);
     }
 
     // 4. Persist AI call log entries as AI interactions before ending
@@ -349,6 +348,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         await ipcEndMeeting(meeting.id);
       } catch (err) {
         console.error("[meetingStore] Failed to end meeting:", err);
+        throw new Error("The meeting could not be closed in the database. It is still open — press End again.");
       }
     }
 
