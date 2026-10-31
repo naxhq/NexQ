@@ -76,7 +76,7 @@ impl LLMProvider for GeminiClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            let body = crate::logging::redact(&response.text().await.unwrap_or_default());
             if status.as_u16() == 401 || status.as_u16() == 403 {
                 return Err(LLMError::AuthError(format!(
                     "Gemini authentication failed ({}): {}",
@@ -223,7 +223,7 @@ impl LLMProvider for GeminiClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            let body = crate::logging::redact(&response.text().await.unwrap_or_default());
             let err_msg = format!("Gemini request failed ({}): {}", status, body);
             check_cancelled(&params)?;
             emit_error(&app_handle, &params, &err_msg);

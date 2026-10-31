@@ -36,7 +36,7 @@ impl LLMProvider for OllamaClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            let body = crate::logging::redact(&response.text().await.unwrap_or_default());
             return Err(LLMError::ConnectionFailed(format!(
                 "Ollama not reachable ({}): {}",
                 status, body
@@ -166,7 +166,7 @@ impl LLMProvider for OllamaClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            let body = crate::logging::redact(&response.text().await.unwrap_or_default());
             let err_msg = format!("Ollama completion failed ({}): {}", status, body);
             check_cancelled(&params)?;
             emit_error(&app_handle, &params, &err_msg);

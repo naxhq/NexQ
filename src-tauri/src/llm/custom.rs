@@ -315,7 +315,7 @@ impl LLMProvider for CustomClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            let body = crate::logging::redact(&response.text().await.unwrap_or_default());
             let err_msg = format!("Custom endpoint request failed ({}): {}", status, body);
             check_cancelled(&params)?;
             emit_error(&app_handle, &params, &err_msg);

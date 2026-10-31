@@ -214,7 +214,7 @@ pub async fn fetch_openrouter_models(
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let body = crate::logging::redact(&response.text().await.unwrap_or_default());
         if status.as_u16() == 401 || status.as_u16() == 403 {
             return Err(format!("Authentication failed ({}): {}", status, body));
         }

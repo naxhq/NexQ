@@ -105,7 +105,7 @@ impl GeminiCacheClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body_text = response.text().await.unwrap_or_default();
+            let body_text = crate::logging::redact(&response.text().await.unwrap_or_default());
             return Err(format!(
                 "Gemini cache create failed ({}): {}",
                 status, body_text
@@ -142,7 +142,7 @@ impl GeminiCacheClient {
 
         if !response.status().is_success() && response.status().as_u16() != 404 {
             let status = response.status();
-            let body_text = response.text().await.unwrap_or_default();
+            let body_text = crate::logging::redact(&response.text().await.unwrap_or_default());
             return Err(format!(
                 "Gemini cache delete failed ({}): {}",
                 status, body_text

@@ -114,7 +114,7 @@ impl AnthropicClient {
                 return Ok(None);
             }
             if !status.is_success() {
-                let body = response.text().await.unwrap_or_default();
+                let body = crate::logging::redact(&response.text().await.unwrap_or_default());
                 let message = format!("Anthropic model list failed ({status}): {body}");
                 return Err(if status.as_u16() == 401 || status.as_u16() == 403 {
                     LLMError::AuthError(message)
@@ -259,7 +259,7 @@ impl LLMProvider for AnthropicClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            let body = crate::logging::redact(&response.text().await.unwrap_or_default());
             let err_msg = format!("Anthropic request failed ({}): {}", status, body);
             check_cancelled(&params)?;
             emit_error(&app_handle, &params, &err_msg);
@@ -329,6 +329,7 @@ impl LLMProvider for AnthropicClient {
                                 .and_then(|m| m.as_str())
                                 .unwrap_or("Unknown Anthropic error")
                                 .to_string();
+                            let err_msg = crate::logging::redact(&err_msg);
                             emit_error(&app_handle, &params, &err_msg);
                             return Err(LLMError::ProviderError(err_msg));
                         }
