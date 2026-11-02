@@ -98,7 +98,8 @@ pub fn capturing_processes() -> Vec<String> {
 #[cfg(target_os = "windows")]
 pub fn visible_windows() -> Vec<WindowInfo> {
     use std::collections::HashMap;
-    use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{HWND, LPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetClassNameW, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
     };
