@@ -1,3 +1,14 @@
+# [2.30.0](https://github.com/naxhq/NexQ/compare/v2.29.1...v2.30.0) (2026-11-02)
+
+
+### Bug Fixes
+
+* **claude:** interim text rides along with one request, never recorded as sent ([0bec9f1](https://github.com/naxhq/NexQ/commit/0bec9f1a3276fb088247f2526294afaca8c94fcc))
+
+
+### Features
+
+* **stt:** support Vietnamese and preserve live context ([#58](https://github.com/naxhq/NexQ/issues/58)) ([8ae8f23](https://github.com/naxhq/NexQ/commit/8ae8f239580e8b51c03dca775ba1ae2ae3bd7b04))
 ## [2.29.1](https://github.com/naxhq/NexQ/compare/v2.29.0...v2.29.1) (2026-10-31)
 
 
