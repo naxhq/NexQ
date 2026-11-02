@@ -76,7 +76,7 @@ This only appears the first time you install. Subsequent launches will not trigg
 2. **Don't use Windows Speech for "Them"**: Windows Speech only listens to your default microphone. It can't transcribe audio playing on your computer (Zoom, Teams, YouTube). Use Parakeet TDT, Deepgram or Groq for the other side.
 3. **Check provider config**: Open Settings > STT and verify your provider is correctly configured
 4. **Test connection**: Click **Test Connection** to verify the STT provider is reachable
-5. **Check API key**: For cloud providers (Deepgram, Groq), ensure your API key is valid and has not expired
+5. **Check API key**: For cloud providers (Deepgram, Groq, Cartesia), ensure your API key is valid and has not expired
 6. **Check internet connection**: Cloud STT providers require a stable internet connection. If your connection is intermittent, transcription may fail silently
 7. **Try Web Speech API**: Switch to Web Speech API temporarily to verify audio is reaching the STT pipeline. If Web Speech works but your chosen provider does not, the issue is with the provider configuration
 8. **Check the Dev Log**: press `Ctrl+Shift+L` in the meeting window for STT errors, or send your log (see [Collecting logs](#collecting-logs-for-a-bug-report))
@@ -91,6 +91,17 @@ This only appears the first time you install. Subsequent launches will not trigg
 - Web Speech API has session limits in some browser engines. Ending and restarting the meeting resets the session
 - Do not switch STT providers mid-session without stopping first -- hot-swapping the Web Speech API breaks the browser recognition session
 - Ensure you have an active internet connection (Web Speech API may require it depending on the system)
+
+### Cartesia Problems
+
+**Problem**: Cartesia transcribes the wrong words, shows "reconnecting", or uses more credits than expected.
+
+**Solution**:
+
+- **Language**: Cartesia transcribes only English, French, Hindi, Japanese and Spanish. For other languages, choose a different provider. Settings > STT shows a warning when the selected language isn't supported
+- **Reconnecting**: if the connection drops, NexQ reconnects on its own (after 1, 2, 4 and 8 seconds, then every 15 seconds) and keeps the sentence in progress. Speech while offline isn't transcribed
+- **"Cartesia refused the API key or account"**: NexQ stops retrying. Check the key in Settings > STT and your credit balance at [play.cartesia.ai](https://play.cartesia.ai/usage)
+- **Credits**: Cartesia bills every second the stream is open, including silence and while the channel is muted. One channel uses about 10,800 credits per hour; Cartesia on both "You" and "Them" uses about 21,600. In in-person mode NexQ mutes "You", so don't choose Cartesia for "You" there: it would be billed without transcribing anything
 
 ### Local Whisper Model Slow or Inaccurate
 

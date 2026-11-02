@@ -39,7 +39,7 @@ Live two-party transcription, instant AI answers grounded in your own documents,
 
 - **Local-first and private.** Audio is captured on your machine, and you choose where it goes: fully offline engines (Whisper, Parakeet, Ollama) or the cloud providers you configure. No bot joins your call.
 - **Free and open source.** MIT licensed, no account, no subscription, no usage caps.
-- **Bring your own models.** 10 speech-to-text engines and 9 LLM providers, from local Whisper and Ollama to Deepgram, OpenAI, Gemini, or your existing Claude Pro/Max subscription.
+- **Bring your own models.** 11 speech-to-text engines and 9 LLM providers, from local Whisper and Ollama to Deepgram, OpenAI, Gemini, or your existing Claude Pro/Max subscription.
 - **Built for the moment.** Answers stream in while the other person is still talking, grounded in your resume, notes, or slides.
 
 ## What's new
@@ -59,7 +59,7 @@ Live two-party transcription, instant AI answers grounded in your own documents,
 
 **Transcription**
 - Two independent streams: your mic ("You") and system audio ("Them"), each with its own engine, language and mute
-- 10 STT engines, local or cloud ([table below](#supported-providers))
+- 11 STT engines, local or cloud ([table below](#supported-providers))
 - Speaker labeling and remote-speaker separation
 - Real-time translation into 100+ languages (5 providers, including offline OPUS-MT)
 
@@ -143,7 +143,7 @@ Guides: [Getting started](docs/user-guide/getting-started.md) · [Choosing provi
 ## Supported providers
 
 <details>
-<summary><b>Speech-to-text (10)</b></summary>
+<summary><b>Speech-to-text (11)</b></summary>
 
 | Engine | Runs | Notes |
 |---|---|---|
@@ -157,6 +157,7 @@ Guides: [Getting started](docs/user-guide/getting-started.md) · [Choosing provi
 | Groq Whisper | Cloud | Fast Whisper with a free tier |
 | Whisper API | Cloud | OpenAI Whisper REST API |
 | Azure Speech | Cloud | Azure Cognitive Services |
+| Cartesia | Cloud | ink-2 real-time streaming with built-in turn detection |
 
 </details>
 

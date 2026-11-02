@@ -54,6 +54,16 @@ NexQ uses a two-party audio model: **"You"** (microphone) and **"Them"** (system
   - Batch segment duration
   - Response format, timestamp granularity
 
+### Cartesia
+
+- **Setup**: Create an account at [cartesia.ai](https://cartesia.ai) and create an API key at [play.cartesia.ai/keys](https://play.cartesia.ai/keys)
+- **Requires API Key**: Yes
+- **Runs Locally**: No (cloud)
+- **Best For**: Real-time transcription where each line ends when the speaker finishes a thought
+- **Model**: ink-2. Cartesia decides where each turn ends and detects the language on its own, so there is nothing to configure
+- **Languages**: English, French, Hindi, Japanese, Spanish. Settings warns when the selected language isn't one of them
+- **Cost**: Billed per second of audio, silence and muted time included (about 3 credits per second for each channel that uses Cartesia)
+
 ### Whisper (Local)
 
 - **Setup**: Download a Whisper model from Settings > STT > Local Models
