@@ -18,6 +18,19 @@ const SPEAKER_COLORS: Record<string, string> = {
   Unknown: "text-muted-foreground",
 };
 
+function countWords(text: string): number {
+  let cjkCount = 0;
+  // Normalize composed letters first (e.g. Hangul syllables). Count CJK
+  // characters individually, including the Japanese long vowel mark ー.
+  const remaining = text.normalize("NFC").replace(
+    /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}ー]/gu,
+    () => { cjkCount += 1; return " "; }
+  );
+  // Keep whitespace-delimited words for other scripts, ignoring punctuation
+  // alone. Replacing CJK characters with spaces separates adjacent Latin words.
+  return cjkCount + remaining.split(/\s+/).filter((word) => /[\p{L}\p{N}]/u.test(word)).length;
+}
+
 function formatStatDuration(seconds: number): string {
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
@@ -53,7 +66,7 @@ export function useMeetingStats(meeting: Meeting | null): MeetingStats {
     const speakerWords: Record<string, number> = {};
     let totalWords = 0;
     for (const seg of meeting.transcript) {
-      const words = seg.text.split(/\s+/).filter(Boolean).length;
+      const words = countWords(seg.text);
       totalWords += words;
       speakerWords[seg.speaker] = (speakerWords[seg.speaker] || 0) + words;
     }
