@@ -20,10 +20,11 @@ const SPEAKER_COLORS: Record<string, string> = {
 
 function countWords(text: string): number {
   let cjkCount = 0;
-  // Normalize composed letters first (e.g. Hangul syllables). Count CJK
-  // characters individually, including the Japanese long vowel mark ー.
+  // Chinese and Japanese don't put spaces between words, so count each
+  // character, including the Japanese long vowel mark ー. Korean does, so its
+  // words are counted by whitespace like other scripts.
   const remaining = text.normalize("NFC").replace(
-    /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}ー]/gu,
+    /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー]/gu,
     () => { cjkCount += 1; return " "; }
   );
   // Keep whitespace-delimited words for other scripts, ignoring punctuation
