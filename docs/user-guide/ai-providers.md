@@ -29,6 +29,8 @@ NexQ supports 10 STT providers. Each channel ("You" and "Them") can use a differ
 
 **Use a local provider** if privacy is critical or you need offline capability. Whisper with the large-v3 model provides the best local accuracy, but requires significant CPU/RAM. Smaller models (tiny, base) are faster but less accurate.
 
+**For Vietnamese transcription**, select **Vietnamese** under Settings > STT Providers > Language. Deepgram Nova-3, Azure Speech, and multilingual Whisper models support Vietnamese; choose a model that supports the language for each channel. The included Parakeet models do not support Vietnamese. A language change takes effect when the STT provider reconnects, so start a new meeting after changing it.
+
 ## LLM Provider Comparison
 
 ![LLM Providers settings panel](../../website/public/screenshots/Setting/Setting-LLM%20Providers.png)
