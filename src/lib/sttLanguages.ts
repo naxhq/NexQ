@@ -19,3 +19,11 @@ export const STT_LANGUAGES = [
   { value: "sv-SE", label: "Swedish" },
   { value: "vi-VN", label: "Vietnamese" },
 ];
+
+/** Languages Cartesia ink-2 detects on its own (it has no language setting). */
+const CARTESIA_LANGUAGES = ["en", "fr", "hi", "ja", "es"];
+
+/** Whether Cartesia ink-2 transcribes `language`, an STT_LANGUAGES value such as "fr-FR". */
+export function cartesiaSupportsLanguage(language: string): boolean {
+  return CARTESIA_LANGUAGES.includes(language.split("-")[0].toLowerCase());
+}

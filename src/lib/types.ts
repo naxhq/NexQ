@@ -466,6 +466,7 @@ export type STTProviderType =
   | "whisper_api"
   | "azure_speech"
   | "groq_whisper"
+  | "cartesia"
   | "web_speech"
   | "sherpa_onnx"
   | "ort_streaming"
