@@ -1,3 +1,16 @@
+# [2.31.0](https://github.com/naxhq/NexQ/compare/v2.30.0...v2.31.0) (2026-11-02)
+
+
+### Bug Fixes
+
+* **intelligence:** detect Chinese and Japanese questions ([#61](https://github.com/naxhq/NexQ/issues/61)) ([e5f099f](https://github.com/naxhq/NexQ/commit/e5f099fe9f2ecd6b73e2253120e9f15f5c088bb7))
+* **meetings:** count CJK characters in meeting statistics ([#63](https://github.com/naxhq/NexQ/issues/63)) ([a683744](https://github.com/naxhq/NexQ/commit/a683744af124b026e3b1cca0a627a12aaf38032c))
+* **meetings:** preserve Unicode export filenames ([#62](https://github.com/naxhq/NexQ/issues/62)) ([730a233](https://github.com/naxhq/NexQ/commit/730a2332202c2aabb266dccbc8a02b2c2ef35719))
+
+
+### Features
+
+* **stt:** add Cartesia ink-2 streaming provider ([#71](https://github.com/naxhq/NexQ/issues/71)) ([ee2c518](https://github.com/naxhq/NexQ/commit/ee2c5186cca2ef4856762ee6646e6f6c040c1ffc)), closes [#59](https://github.com/naxhq/NexQ/issues/59)
 # [2.30.0](https://github.com/naxhq/NexQ/compare/v2.29.1...v2.30.0) (2026-11-02)
 
 
