@@ -28,8 +28,8 @@ export const useTranscriptStore = create<TranscriptState>((set) => ({
 
   // Upsert by id: a final with an existing id (a line that grew) replaces it.
   // An interim extending a line that is already final only adds the interim
-  // words as `pending_text`: the line keeps its final text, so it stays final
-  // for the AI and persistence while the speaker keeps talking.
+  // words as `pending_text`: the line keeps its final text for persistence
+  // while the speaker keeps talking.
   updateInterimSegment: (segment) =>
     set((state) => {
       const existing = state.segments.findIndex(

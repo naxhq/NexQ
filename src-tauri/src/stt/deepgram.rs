@@ -105,7 +105,8 @@ fn reconnect_backoff(attempt: u32) -> Duration {
 }
 
 /// Maps Deepgram's clock (how much audio it has received on this connection)
-/// to wall-clock time. Silence isn't sent, so that clock skips every pause:
+/// to wall-clock time. Extended digital silence isn't sent, so its clock skips
+/// the remainder of long pauses:
 /// each point where sending resumes records the wall-clock time of the audio
 /// at that offset.
 struct AudioTimeline {
@@ -199,6 +200,8 @@ pub struct DeepgramSTT {
     /// Audio captured while offline (or while the writer was busy), oldest first.
     pending_audio: VecDeque<AudioChunk>,
     pending_samples: usize,
+    /// Digital silence still needed after the latest non-silent chunk.
+    silence_tail_samples: usize,
     /// Tests point the provider at a local WebSocket server.
     url_override: Option<String>,
 }
@@ -257,6 +260,7 @@ impl DeepgramSTT {
             next_reconnect_at: None,
             pending_audio: VecDeque::new(),
             pending_samples: 0,
+            silence_tail_samples: 0,
             url_override: None,
         }
     }
@@ -724,6 +728,13 @@ impl STTProvider for DeepgramSTT {
         &mut self,
         chunk: AudioChunk,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Deepgram needs audio containing a pause to detect an endpoint. Send a
+        // bounded tail after speech, then suppress prolonged digital silence.
+        if !self.should_forward_audio(&chunk) {
+            self.timeline.lock().unwrap_or_else(|e| e.into_inner()).skipped();
+            return Ok(());
+        }
+
         // The connection died under us (server close, read or write error).
         if self.is_streaming && matches!(self.connection_state.load(Ordering::SeqCst), 0 | 3) {
             self.mark_disconnected();
@@ -752,15 +763,6 @@ impl STTProvider for DeepgramSTT {
                 log::warn!("DeepgramSTT: writer stalled for 5 s of audio ({}), reconnecting", self.party);
                 self.mark_disconnected();
             }
-            return Ok(());
-        }
-
-        // Only skip digital silence (RMS < 0.5). Deepgram has server-side VAD
-        // (vad_events=true), so client-side is_speech filtering is redundant and
-        // drops system audio where WASAPI loopback levels are below the local
-        // VAD threshold but are perfectly valid speech for Deepgram.
-        if is_digital_silence(&chunk) {
-            self.timeline.lock().unwrap_or_else(|e| e.into_inner()).skipped();
             return Ok(());
         }
 
@@ -962,11 +964,27 @@ impl DeepgramSTT {
         }));
     }
 
+    /// Forward enough silence for endpointing and smart formatting, bounded so
+    /// an idle stream doesn't send digital silence indefinitely.
+    fn should_forward_audio(&mut self, chunk: &AudioChunk) -> bool {
+        if chunk.pcm_data.is_empty() {
+            return false;
+        }
+        if !is_digital_silence(chunk) {
+            let endpoint_ms = self.config.endpointing.unwrap_or(10).clamp(10, 5000);
+            let tail_ms = endpoint_ms.max(3000) + 500;
+            self.silence_tail_samples = (SAMPLE_RATE as usize * tail_ms as usize) / 1000;
+            return true;
+        }
+        if self.silence_tail_samples == 0 {
+            return false;
+        }
+        self.silence_tail_samples = self.silence_tail_samples.saturating_sub(chunk.pcm_data.len());
+        true
+    }
+
     /// Keep a chunk for later; the oldest audio goes first when 30 s are exceeded.
     fn buffer_pending(&mut self, chunk: AudioChunk) {
-        if is_digital_silence(&chunk) {
-            return;
-        }
         self.pending_samples += chunk.pcm_data.len();
         self.pending_audio.push_back(chunk);
         while self.pending_samples > PENDING_AUDIO_MAX_SAMPLES {
@@ -1032,7 +1050,7 @@ impl DeepgramSTT {
     }
 }
 
-/// Digital silence (RMS < 0.5) isn't sent to Deepgram.
+/// Digital silence (RMS < 0.5); used to limit long idle periods.
 fn is_digital_silence(chunk: &AudioChunk) -> bool {
     if chunk.pcm_data.is_empty() {
         return false;
@@ -1382,14 +1400,50 @@ mod tests {
     }
 
     #[test]
-    fn offline_buffer_keeps_the_newest_30_seconds_and_no_silence() {
+    fn offline_buffer_keeps_the_newest_30_seconds() {
         let mut provider = DeepgramSTT::new();
         for i in 0..400 { provider.buffer_pending(chunk(1, i)); }
         assert!(provider.pending_samples <= PENDING_AUDIO_MAX_SAMPLES);
         assert_eq!(provider.pending_audio.back().unwrap().timestamp_ms, 399, "newest audio must be kept");
-        let before = provider.pending_audio.len();
-        provider.buffer_pending(AudioChunk { pcm_data: vec![0; 1600], source: crate::audio::AudioSource::System, timestamp_ms: 1, is_speech: false });
-        assert_eq!(provider.pending_audio.len(), before, "digital silence is not buffered");
+    }
+
+    #[test]
+    fn forwards_a_bounded_silence_tail_after_speech() {
+        let mut provider = DeepgramSTT::new();
+        let silent = chunk(0, 0); // 100 ms of digital silence
+        assert!(!provider.should_forward_audio(&silent), "idle silence is skipped");
+        assert!(provider.should_forward_audio(&chunk(100, 100)));
+        for _ in 0..35 {
+            assert!(provider.should_forward_audio(&silent), "send the full 3.5 s tail");
+        }
+        assert!(!provider.should_forward_audio(&silent), "skip prolonged silence");
+        assert!(provider.should_forward_audio(&chunk(100, 200)));
+        assert!(provider.should_forward_audio(&silent), "new speech resets the tail");
+    }
+
+    #[test]
+    fn silence_tail_covers_long_endpoint_setting() {
+        let mut provider = DeepgramSTT::new();
+        provider.config.endpointing = Some(5000);
+        assert!(provider.should_forward_audio(&chunk(100, 100)));
+        let silent = chunk(0, 0);
+        for _ in 0..55 { assert!(provider.should_forward_audio(&silent)); }
+        assert!(!provider.should_forward_audio(&silent));
+    }
+
+    #[tokio::test]
+    async fn feed_audio_sends_a_pause_after_speech() {
+        let mut provider = DeepgramSTT::new();
+        let (audio_tx, mut audio_rx) = mpsc::channel::<Vec<u8>>(4);
+        provider.audio_tx = Some(audio_tx);
+        provider.is_streaming = true;
+        provider.connection_state.store(2, Ordering::SeqCst);
+        provider.feed_audio(chunk(0, 100)).await.unwrap();
+        assert!(audio_rx.try_recv().is_err(), "initial silence is skipped");
+        provider.feed_audio(chunk(100, 200)).await.unwrap();
+        provider.feed_audio(chunk(0, 300)).await.unwrap();
+        assert!(audio_rx.try_recv().is_ok(), "speech reaches the writer");
+        assert!(audio_rx.try_recv().is_ok(), "the following pause reaches the writer");
     }
 
     #[tokio::test]
