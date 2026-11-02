@@ -26,6 +26,12 @@ const INTERROGATIVE_STARTERS: &[&str] = &[
     "tell",
 ];
 
+/// Common Chinese question words, including simplified and traditional forms.
+const CHINESE_QUESTION_WORDS: &[&str] = &[
+    "什么", "什麼", "怎么", "怎麼", "为什么", "為什麼",
+    "哪", "谁", "誰", "多少", "如何",
+];
+
 /// Interview-specific patterns that indicate a question or prompt.
 const INTERVIEW_PATTERNS: &[&str] = &[
     "walk me through",
@@ -65,15 +71,27 @@ impl QuestionDetector {
 
         for sentence in &sentences {
             let trimmed = sentence.trim();
-            if trimmed.is_empty() || trimmed.len() < 5 {
+            // Short questions such as "谁？" and "Why?" are valid, but
+            // punctuation-only fragments are not.
+            if !trimmed.chars().any(char::is_alphanumeric) {
                 continue;
             }
 
             let mut confidence: f64 = 0.0;
 
             // Layer 1: Check for question mark
-            if trimmed.ends_with('?') {
+            if trimmed.ends_with(['?', '？']) {
                 confidence = 0.95;
+            }
+
+            // STT may omit question marks or use a full stop instead. Chinese
+            // question words need no whitespace boundaries; Chinese and Japanese
+            // question particles are signals only at the end of the sentence.
+            let body = trimmed.trim_end_matches(['.', '!', '。', '！', '…']);
+            if body.ends_with(['吗', '嗎', '呢', '吧', 'か'])
+                || CHINESE_QUESTION_WORDS.iter().any(|word| body.contains(word))
+            {
+                confidence = confidence.max(0.6);
             }
 
             // Layer 1: Check for interrogative word starters
@@ -118,7 +136,7 @@ fn split_sentences(text: &str) -> Vec<String> {
 
     for ch in text.chars() {
         current.push(ch);
-        if ch == '.' || ch == '?' || ch == '!' {
+        if matches!(ch, '.' | '?' | '!' | '。' | '？' | '！' | '\n') {
             let trimmed = current.trim().to_string();
             if !trimmed.is_empty() {
                 sentences.push(trimmed);
@@ -134,4 +152,71 @@ fn split_sentences(text: &str) -> Vec<String> {
     }
 
     sentences
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_full_width_and_short_questions() {
+        for text in ["计划完成了？", "準備できました？", "谁？", "Why?"] {
+            let questions = QuestionDetector::new().detect_questions(text, 42, "Them");
+            assert_eq!(questions.len(), 1, "{text}");
+            assert_eq!(questions[0].text, text);
+            assert_eq!(questions[0].confidence, 0.95);
+            assert_eq!(questions[0].timestamp_ms, 42);
+            assert_eq!(questions[0].source, "Them");
+        }
+    }
+
+    #[test]
+    fn detects_chinese_questions_without_question_marks() {
+        for text in [
+            "准备好了吗", "準備好了嗎。", "你的计划呢", "这样可以吧",
+            "这是什么", "這是什麼", "这个问题怎么解决", "這個問題怎麼解決",
+            "为什么需要重试", "為什麼需要重試", "哪天发布", "选哪个方案",
+            "谁来负责", "誰來負責", "需要多少时间", "如何开始",
+        ] {
+            let questions = QuestionDetector::new().detect_questions(text, 0, "You");
+            assert_eq!(questions.len(), 1, "{text}");
+            assert_eq!(questions[0].confidence, 0.6, "{text}");
+        }
+    }
+
+    #[test]
+    fn detects_japanese_question_endings() {
+        for text in ["準備できましたか", "いつ始めますか。", "これでよいですか！"] {
+            let questions = QuestionDetector::new().detect_questions(text, 0, "Them");
+            assert_eq!(questions.len(), 1, "{text}");
+            assert_eq!(questions[0].confidence, 0.6, "{text}");
+        }
+    }
+
+    #[test]
+    fn separates_cjk_sentences_and_unpunctuated_lines() {
+        let questions = QuestionDetector::new().detect_questions(
+            "今天讨论进度。计划完成了吗？谢谢！\n準備できましたか\nCan we start?", 7, "Them",
+        );
+        assert_eq!(
+            questions.iter().map(|q| q.text.as_str()).collect::<Vec<_>>(),
+            ["计划完成了吗？", "準備できましたか", "Can we start?"]
+        );
+    }
+
+    #[test]
+    fn preserves_english_confidence_and_ignores_statements() {
+        for (text, confidence) in [
+            ("What is the plan?", 0.95),
+            ("How can we start", 0.6),
+            ("Tell me about your last project", 0.85),
+        ] {
+            let questions = QuestionDetector::new().detect_questions(text, 0, "Them");
+            assert_eq!(questions.len(), 1, "{text}");
+            assert_eq!(questions[0].confidence, confidence);
+        }
+        for text in ["", "   ", "！？??...", "会议结束了。谢谢大家！", "会議は終了しました。", "The meeting is over."] {
+            assert!(QuestionDetector::new().detect_questions(text, 0, "Them").is_empty(), "{text}");
+        }
+    }
 }
