@@ -15,9 +15,28 @@ export const AUTO_TRIGGER_DELAY_MS = 1500;
 
 const isOtherParty = (speaker: string) => speaker === "Them" || speaker === "Interviewer";
 
+// Chinese and Japanese question signals, kept in step with
+// src-tauri/src/intelligence/question_detector.rs.
+const CHINESE_QUESTION_WORDS = ["什么", "什麼", "怎么", "怎麼", "为什么", "為什麼", "哪", "谁", "誰", "多少", "如何"];
+// A question word meaning "any" or "no matter" (没什么问题, 无论如何) doesn't ask anything.
+const CHINESE_NON_QUESTION_PHRASES = [
+  "没什么", "沒什麼", "什么都", "什麼都", "什么也", "什麼也", "不怎么", "不怎麼",
+  "哪怕", "谁都", "誰都", "谁也", "誰也", "无论", "無論", "不管", "多多少少",
+];
+// A bare か also ends ordinary words (静か, 確か, とか).
+const JAPANESE_QUESTION_ENDINGS = ["ですか", "ますか", "ませんか", "でしたか", "ましたか", "でしょうか", "ましょうか", "のか", "ないか"];
+
+function isCjkQuestion(sentence: string): boolean {
+  const body = sentence.replace(/[.!。！…]+$/u, "");
+  return /[吗嗎呢]$/u.test(body)
+    || JAPANESE_QUESTION_ENDINGS.some((ending) => body.endsWith(ending))
+    || (CHINESE_QUESTION_WORDS.some((word) => body.includes(word))
+      && !CHINESE_NON_QUESTION_PHRASES.some((phrase) => body.includes(phrase)));
+}
+
 export function looksLikeQuestion(text: string): boolean {
   const trimmed = text.trim();
-  if (trimmed.endsWith("?")) return true;
+  if (/[?？]$/u.test(trimmed) || isCjkQuestion(trimmed)) return true;
   const lower = trimmed.toLowerCase();
   const qWords = [
     "what ", "how ", "why ", "when ", "where ", "who ", "which ",
@@ -32,7 +51,7 @@ export function looksLikeQuestion(text: string): boolean {
  * question is usually the last sentence, not the whole line.
  */
 export function lastSentence(text: string): string {
-  const sentences = text.trim().match(/[^.?!]+[.?!]*/g) ?? [];
+  const sentences = text.trim().match(/[^.?!。？！\n]+[.?!。？！]*/gu) ?? [];
   return (sentences[sentences.length - 1] ?? "").trim();
 }
 

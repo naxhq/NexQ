@@ -70,6 +70,17 @@ describe("QuestionDetector", () => {
     expect(looksLikeQuestion(lastSentence("We run preview days. How many do you run"))).toBe(true);
   });
 
+  it("finds Chinese and Japanese questions", () => {
+    expect(lastSentence("今天讨论进度。计划完成了吗？")).toBe("计划完成了吗？");
+    expect(lastSentence("ありがとうございます。\n準備できましたか")).toBe("準備できましたか");
+    for (const q of ["计划完成了？", "准备好了吗", "你的计划呢", "這個問題怎麼解決", "准备什么时候发布", "いつ始めますか。", "一緒に行きませんか"]) {
+      expect(looksLikeQuestion(q), q).toBe(true);
+    }
+    for (const s of ["会议结束了。", "我们开始吧", "没什么问题", "无论如何都要按时完成", "会議は終了しました。", "とても静か", "コーヒーとか"]) {
+      expect(looksLikeQuestion(s), s).toBe(false);
+    }
+  });
+
   it("finds a question a line gains after its first final", () => {
     useTranscriptStore.setState({ segments: [seg("So here's the situation.")] });
     render(<QuestionDetector />);

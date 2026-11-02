@@ -32,6 +32,21 @@ const CHINESE_QUESTION_WORDS: &[&str] = &[
     "哪", "谁", "誰", "多少", "如何",
 ];
 
+/// Phrases where a Chinese question word means "any" or "no matter" rather
+/// than asking (没什么问题 "no problem", 无论如何 "no matter what").
+const CHINESE_NON_QUESTION_PHRASES: &[&str] = &[
+    "没什么", "沒什麼", "什么都", "什麼都", "什么也", "什麼也",
+    "不怎么", "不怎麼", "哪怕", "谁都", "誰都", "谁也", "誰也",
+    "无论", "無論", "不管", "多多少少",
+];
+
+/// Japanese question endings. A bare か also ends ordinary words
+/// (静か "quiet", 確か "surely", とか "and so on"), so it isn't enough alone.
+const JAPANESE_QUESTION_ENDINGS: &[&str] = &[
+    "ですか", "ますか", "ませんか", "でしたか", "ましたか",
+    "でしょうか", "ましょうか", "のか", "ないか",
+];
+
 /// Interview-specific patterns that indicate a question or prompt.
 const INTERVIEW_PATTERNS: &[&str] = &[
     "walk me through",
@@ -84,13 +99,8 @@ impl QuestionDetector {
                 confidence = 0.95;
             }
 
-            // STT may omit question marks or use a full stop instead. Chinese
-            // question words need no whitespace boundaries; Chinese and Japanese
-            // question particles are signals only at the end of the sentence.
-            let body = trimmed.trim_end_matches(['.', '!', '。', '！', '…']);
-            if body.ends_with(['吗', '嗎', '呢', '吧', 'か'])
-                || CHINESE_QUESTION_WORDS.iter().any(|word| body.contains(word))
-            {
+            // STT may omit question marks or use a full stop instead.
+            if is_cjk_question(trimmed) {
                 confidence = confidence.max(0.6);
             }
 
@@ -127,6 +137,18 @@ impl QuestionDetector {
 
         questions
     }
+}
+
+/// Chinese and Japanese question signals for a sentence without a question
+/// mark. Question particles count only at the end of the sentence; Chinese
+/// question words need no whitespace boundaries. Auto-Trigger answers detected
+/// questions, so suggestions such as 我们开始吧 ("let's start") are left out.
+fn is_cjk_question(sentence: &str) -> bool {
+    let body = sentence.trim_end_matches(['.', '!', '。', '！', '…']);
+    body.ends_with(['吗', '嗎', '呢'])
+        || JAPANESE_QUESTION_ENDINGS.iter().any(|ending| body.ends_with(ending))
+        || (CHINESE_QUESTION_WORDS.iter().any(|word| body.contains(word))
+            && !CHINESE_NON_QUESTION_PHRASES.iter().any(|phrase| body.contains(phrase)))
 }
 
 /// Split text into sentences using common sentence terminators.
@@ -173,7 +195,7 @@ mod tests {
     #[test]
     fn detects_chinese_questions_without_question_marks() {
         for text in [
-            "准备好了吗", "準備好了嗎。", "你的计划呢", "这样可以吧",
+            "准备好了吗", "準備好了嗎。", "你的计划呢",
             "这是什么", "這是什麼", "这个问题怎么解决", "這個問題怎麼解決",
             "为什么需要重试", "為什麼需要重試", "哪天发布", "选哪个方案",
             "谁来负责", "誰來負責", "需要多少时间", "如何开始",
@@ -186,7 +208,7 @@ mod tests {
 
     #[test]
     fn detects_japanese_question_endings() {
-        for text in ["準備できましたか", "いつ始めますか。", "これでよいですか！"] {
+        for text in ["準備できましたか", "いつ始めますか。", "これでよいですか！", "一緒に行きませんか", "どうでしょうか"] {
             let questions = QuestionDetector::new().detect_questions(text, 0, "Them");
             assert_eq!(questions.len(), 1, "{text}");
             assert_eq!(questions[0].confidence, 0.6, "{text}");
@@ -215,7 +237,14 @@ mod tests {
             assert_eq!(questions.len(), 1, "{text}");
             assert_eq!(questions[0].confidence, confidence);
         }
-        for text in ["", "   ", "！？??...", "会议结束了。谢谢大家！", "会議は終了しました。", "The meeting is over."] {
+        for text in [
+            "", "   ", "！？??...", "会议结束了。谢谢大家！", "会議は終了しました。", "The meeting is over.",
+            // Suggestions and indefinite uses of question words are statements.
+            "我们开始吧", "好，那就这样吧。", "没什么问题", "我什么都可以", "无论如何都要按时完成",
+            "不管怎么样，我们明天发布", "哪怕晚一点也没关系",
+            // Words that merely end in か.
+            "とても静か", "確か", "コーヒーとか",
+        ] {
             assert!(QuestionDetector::new().detect_questions(text, 0, "Them").is_empty(), "{text}");
         }
     }
