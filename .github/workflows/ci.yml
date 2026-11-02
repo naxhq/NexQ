@@ -80,9 +80,10 @@ jobs:
       - name: Stage ONNX Runtime
         run: node scripts/fetch-onnxruntime.mjs
 
-      - name: Rust check
+      - name: Rust check and tests
         shell: bash
         working-directory: src-tauri
         run: |
           source ../scripts/macos-env.sh
           cargo check
+          cargo test --lib
