@@ -254,11 +254,11 @@ pub async fn translate_batch(
         let db_arc = state.database.as_ref().ok_or("DB not initialized")?;
         let db = db_arc.lock().map_err(|_| "DB lock poisoned")?;
 
-        let total: usize = db.connection().query_row(
+        let total = db.connection().query_row(
             "SELECT COUNT(*) FROM transcript_segments WHERE meeting_id = ?1 AND is_final = 1",
             [&meeting_id],
-            |row| row.get(0),
-        ).map_err(|e| e.to_string())?;
+            |row| row.get::<_, i64>(0),
+        ).map_err(|e| e.to_string())? as usize;
 
         let already_done = crate::db::translation::count_meeting_translations(
             db.connection(), &meeting_id, &target,
