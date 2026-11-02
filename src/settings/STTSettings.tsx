@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useConfigStore } from "../stores/configStore";
+import { STT_LANGUAGES } from "../lib/sttLanguages";
 import {
   setSTTProvider,
   testSTTConnection,
@@ -143,27 +144,6 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
   },
 ];
 
-const LANGUAGES = [
-  { value: "en-US", label: "English (US)" },
-  { value: "en-GB", label: "English (UK)" },
-  { value: "es-ES", label: "Spanish" },
-  { value: "fr-FR", label: "French" },
-  { value: "de-DE", label: "German" },
-  { value: "it-IT", label: "Italian" },
-  { value: "pt-BR", label: "Portuguese (Brazil)" },
-  { value: "ja-JP", label: "Japanese" },
-  { value: "zh-CN", label: "Chinese (Simplified)" },
-  { value: "ko-KR", label: "Korean" },
-  { value: "nl-NL", label: "Dutch" },
-  { value: "hi-IN", label: "Hindi" },
-  { value: "ru-RU", label: "Russian" },
-  { value: "ar-SA", label: "Arabic" },
-  { value: "tr-TR", label: "Turkish" },
-  { value: "pl-PL", label: "Polish" },
-  { value: "cs-CZ", label: "Czech" },
-  { value: "sv-SE", label: "Swedish" },
-  { value: "vi-VN", label: "Vietnamese" },
-];
 
 // ── Deepgram Models ──
 
@@ -756,7 +736,7 @@ export function STTSettings() {
           aria-label="STT language"
           className="w-full rounded-lg border border-border/50 bg-background px-3.5 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
         >
-          {LANGUAGES.map((lang) => (
+          {STT_LANGUAGES.map((lang) => (
             <option key={lang.value} value={lang.value}>
               {lang.label}
             </option>

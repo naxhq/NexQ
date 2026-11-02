@@ -4,6 +4,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useConfigStore } from "../stores/configStore";
+import { STT_LANGUAGES } from "../lib/sttLanguages";
 import {
   listAudioDevices,
   setRecordingEnabled,
@@ -141,26 +142,6 @@ const EXCLUSIVE_FALLBACK_ORDER: STTProviderType[] = [
   "sherpa_onnx", "ort_streaming", "parakeet_tdt",
 ];
 
-const STT_LANGUAGES = [
-  { value: "en-US", label: "English (US)" },
-  { value: "en-GB", label: "English (UK)" },
-  { value: "es-ES", label: "Spanish" },
-  { value: "fr-FR", label: "French" },
-  { value: "de-DE", label: "German" },
-  { value: "it-IT", label: "Italian" },
-  { value: "pt-BR", label: "Portuguese (Brazil)" },
-  { value: "ja-JP", label: "Japanese" },
-  { value: "zh-CN", label: "Chinese (Simplified)" },
-  { value: "ko-KR", label: "Korean" },
-  { value: "nl-NL", label: "Dutch" },
-  { value: "hi-IN", label: "Hindi" },
-  { value: "ru-RU", label: "Russian" },
-  { value: "ar-SA", label: "Arabic" },
-  { value: "tr-TR", label: "Turkish" },
-  { value: "pl-PL", label: "Polish" },
-  { value: "cs-CZ", label: "Czech" },
-  { value: "sv-SE", label: "Swedish" },
-];
 
 function isExclusiveProvider(provider: string): boolean {
   return EXCLUSIVE_PROVIDERS.includes(provider as STTProviderType);

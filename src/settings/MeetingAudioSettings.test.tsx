@@ -37,6 +37,15 @@ const initialConfig: MeetingAudioConfig = {
 beforeEach(() => useConfigStore.setState({ meetingAudioConfig: initialConfig }));
 afterEach(cleanup);
 
+it("allows Vietnamese to be selected in Audio & Devices", async () => {
+  useConfigStore.setState({ sttLanguage: "en-US" });
+  render(<MeetingAudioSettings />);
+  const select = screen.getByRole("combobox", { name: /STT Language/i });
+  await userEvent.setup().selectOptions(select, "vi-VN");
+  expect(useConfigStore.getState().sttLanguage).toBe("vi-VN");
+  expect(within(select).getByRole<HTMLOptionElement>("option", { name: "Vietnamese" }).selected).toBe(true);
+});
+
 describe.each([
   { surface: "settings", Component: MeetingAudioSettings },
   { surface: "wizard", Component: AudioSetupStep },
