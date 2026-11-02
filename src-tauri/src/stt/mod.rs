@@ -7,6 +7,7 @@ pub mod windows_native;
 pub mod word_diff;
 // Sub-PRD 9: Additional providers
 pub mod azure_speech;
+pub mod cartesia;
 pub mod groq_whisper;
 pub mod whisper_api;
 // STT Engine Overhaul: New streaming providers
