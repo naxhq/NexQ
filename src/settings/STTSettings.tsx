@@ -162,6 +162,7 @@ const LANGUAGES = [
   { value: "pl-PL", label: "Polish" },
   { value: "cs-CZ", label: "Czech" },
   { value: "sv-SE", label: "Swedish" },
+  { value: "vi-VN", label: "Vietnamese" },
 ];
 
 // ── Deepgram Models ──
@@ -761,7 +762,17 @@ export function STTSettings() {
             </option>
           ))}
         </select>
-        {selectedProvider === "parakeet_tdt" && parakeetCtcEnglishOnly && (
+        {sttLanguage === "vi-VN" && selectedProvider === "parakeet_tdt" && (
+          <p className="mt-2 text-xs text-warning">
+            The included Parakeet models do not support Vietnamese. Choose a multilingual Whisper model, Deepgram Nova-3, or Azure Speech.
+          </p>
+        )}
+        {sttLanguage === "vi-VN" && selectedProvider === "deepgram" && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            Select a Deepgram model that supports Vietnamese, such as Nova-3.
+          </p>
+        )}
+        {selectedProvider === "parakeet_tdt" && parakeetCtcEnglishOnly && sttLanguage !== "vi-VN" && (
           <p className="mt-2 text-xs text-warning">
             Parakeet CTC 110M is English-only. Use Parakeet TDT 0.6B v3 for Russian and other supported languages.
           </p>
