@@ -130,6 +130,14 @@ const STT_OPTIONS: {
     requiresKey: true,
     isCloud: true,
   },
+  {
+    value: "cartesia",
+    label: "Cartesia",
+    shortLabel: "Cartesia",
+    icon: <Cloud className="h-3.5 w-3.5" />,
+    requiresKey: true,
+    isCloud: true,
+  },
 ];
 
 // ── Web Speech / Windows Speech mutual exclusion ──
@@ -138,7 +146,7 @@ const STT_OPTIONS: {
 const EXCLUSIVE_PROVIDERS: STTProviderType[] = ["web_speech", "windows_native"];
 
 const EXCLUSIVE_FALLBACK_ORDER: STTProviderType[] = [
-  "deepgram", "groq_whisper", "whisper_api", "azure_speech",
+  "deepgram", "groq_whisper", "whisper_api", "azure_speech", "cartesia",
   "sherpa_onnx", "ort_streaming", "parakeet_tdt",
 ];
 
@@ -279,7 +287,7 @@ export function MeetingAudioSettings() {
   }
 
   async function checkApiKeys() {
-    const providers = ["deepgram", "whisper_api", "azure_speech", "groq_whisper"];
+    const providers = ["deepgram", "whisper_api", "azure_speech", "groq_whisper", "cartesia"];
     const status: Record<string, boolean> = {};
     for (const p of providers) {
       try {

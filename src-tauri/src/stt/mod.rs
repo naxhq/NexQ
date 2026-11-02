@@ -7,6 +7,7 @@ pub mod windows_native;
 pub mod word_diff;
 // Sub-PRD 9: Additional providers
 pub mod azure_speech;
+pub mod cartesia;
 pub mod groq_whisper;
 pub mod whisper_api;
 // STT Engine Overhaul: New streaming providers
@@ -83,7 +84,7 @@ struct TranscriptSegmentPayload {
 /// Routes audio chunks to the active STT provider and emits IPC events.
 ///
 /// The STTRouter manages:
-/// - The active STT provider (Windows Native, Deepgram, Whisper API, Azure Speech, Groq Whisper)
+/// - The active STT provider (Windows Native, Deepgram, Whisper API, Azure Speech, Groq Whisper, Cartesia)
 /// - Dual audio streams (mic -> "User", system -> "Interviewer")
 /// - IPC event emission for transcript_update (interim) and transcript_final
 /// - Provider switching at runtime
@@ -112,6 +113,8 @@ pub struct STTRouter {
     pub(crate) groq_whisper_api_key: Option<String>,
     /// Groq Whisper configuration (model, temperature, etc.)
     pub(crate) groq_config: groq_whisper::GroqConfig,
+    /// Cartesia API key (cached from credential store)
+    pub(crate) cartesia_api_key: Option<String>,
     /// Counter for generating unique segment IDs
     segment_counter: u64,
     /// Reference to the Tauri app handle for emitting events
@@ -133,6 +136,7 @@ impl STTRouter {
             azure_speech_region: None,
             groq_whisper_api_key: None,
             groq_config: groq_whisper::GroqConfig::default(),
+            cartesia_api_key: None,
             segment_counter: 0,
             app_handle: None,
         }
@@ -222,6 +226,14 @@ impl STTRouter {
                 }
                 p.set_config(self.groq_config.clone());
                 p.set_language(&self.language); // must be after set_config — set_config overwrites language
+                Box::new(p)
+            }
+            STTProviderType::Cartesia => {
+                let mut p = cartesia::CartesiaSTT::new();
+                if let Some(ref key) = self.cartesia_api_key {
+                    p.set_api_key(key);
+                }
+                p.set_language(&self.language);
                 Box::new(p)
             }
             STTProviderType::SherpaOnnx | STTProviderType::OrtStreaming | STTProviderType::ParakeetTdt => {
@@ -462,6 +474,17 @@ impl STTRouter {
         }
     }
 
+    /// Set the Cartesia API key.
+    pub fn set_cartesia_api_key(&mut self, key: &str) {
+        self.cartesia_api_key = Some(key.to_string());
+
+        if self.active_type == Some(STTProviderType::Cartesia) {
+            let mut p = cartesia::CartesiaSTT::with_api_key(key);
+            p.set_language(&self.language);
+            self.active_provider = Some(Box::new(p));
+        }
+    }
+
     /// Test the connection for a given provider type.
     pub async fn test_provider_connection(
         &self,
@@ -527,6 +550,17 @@ impl STTRouter {
                     .as_deref()
                     .ok_or("No Groq API key configured")?;
                 let provider = groq_whisper::GroqWhisperSTT::with_api_key(key);
+                provider
+                    .test_connection()
+                    .await
+                    .map_err(|e| format!("Connection test failed: {}", e))
+            }
+            STTProviderType::Cartesia => {
+                let key = self
+                    .cartesia_api_key
+                    .as_deref()
+                    .ok_or("No Cartesia API key configured")?;
+                let provider = cartesia::CartesiaSTT::with_api_key(key);
                 provider
                     .test_connection()
                     .await

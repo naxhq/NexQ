@@ -28,6 +28,7 @@ export const STT_PROVIDERS = [
   { name: 'Groq Whisper', local: false },
   { name: 'Whisper API', local: false },
   { name: 'Azure Speech', local: false },
+  { name: 'Cartesia', local: false },
 ];
 
 export const LLM_PROVIDERS = [

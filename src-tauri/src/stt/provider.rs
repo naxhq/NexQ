@@ -96,6 +96,8 @@ pub enum STTProviderType {
     /// NVIDIA Parakeet TDT — CTC/TDT architecture via ONNX Runtime.
     /// #1 on Open ASR Leaderboard (~6% WER), native streaming.
     ParakeetTdt,
+    /// Cartesia ink-2 over WebSocket, with Cartesia's own turn detection.
+    Cartesia,
 }
 
 impl STTProviderType {
@@ -111,6 +113,7 @@ impl STTProviderType {
             STTProviderType::SherpaOnnx => "sherpa_onnx",
             STTProviderType::OrtStreaming => "ort_streaming",
             STTProviderType::ParakeetTdt => "parakeet_tdt",
+            STTProviderType::Cartesia => "cartesia",
         }
     }
 
@@ -126,6 +129,7 @@ impl STTProviderType {
             "sherpa_onnx" => Some(STTProviderType::SherpaOnnx),
             "ort_streaming" => Some(STTProviderType::OrtStreaming),
             "parakeet_tdt" => Some(STTProviderType::ParakeetTdt),
+            "cartesia" => Some(STTProviderType::Cartesia),
             _ => None,
         }
     }
@@ -325,6 +329,16 @@ pub fn list_available_providers() -> Vec<STTProviderInfo> {
                 "sv".to_string(),
                 "vi".to_string(),
             ],
+        },
+        STTProviderInfo {
+            provider_type: "cartesia".to_string(),
+            name: "Cartesia".to_string(),
+            requires_api_key: true,
+            is_local: false,
+            supported_languages: crate::stt::cartesia::SUPPORTED_LANGUAGES
+                .iter()
+                .map(|l| l.to_string())
+                .collect(),
         },
         STTProviderInfo {
             provider_type: "sherpa_onnx".to_string(),

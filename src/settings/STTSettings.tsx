@@ -5,7 +5,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useConfigStore } from "../stores/configStore";
-import { STT_LANGUAGES } from "../lib/sttLanguages";
+import { STT_LANGUAGES, cartesiaSupportsLanguage } from "../lib/sttLanguages";
 import {
   setSTTProvider,
   testSTTConnection,
@@ -141,6 +141,14 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
     requiresApiKey: true,
     isLocal: false,
     credentialKey: "groq_whisper",
+  },
+  {
+    value: "cartesia",
+    label: "Cartesia",
+    description: "Ink-2 streaming with turn detection",
+    requiresApiKey: true,
+    isLocal: false,
+    credentialKey: "cartesia",
   },
 ];
 
@@ -757,6 +765,17 @@ export function STTSettings() {
             Parakeet CTC 110M is English-only. Use Parakeet TDT 0.6B v3 for Russian and other supported languages.
           </p>
         )}
+        {selectedProvider === "cartesia" && (
+          cartesiaSupportsLanguage(sttLanguage) ? (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Cartesia detects English, French, Hindi, Japanese and Spanish on its own.
+            </p>
+          ) : (
+            <p className="mt-2 text-xs text-warning">
+              Cartesia transcribes only English, French, Hindi, Japanese and Spanish. Choose another provider for this language.
+            </p>
+          )
+        )}
       </div>
 
       {/* Test Connection — only for local/always-ready providers; cloud uses Save & Test in the key section */}
@@ -876,6 +895,7 @@ function ProviderIcon({ value, isSelected }: { value: STTProviderType; isSelecte
     case "deepgram":
     case "whisper_api":
     case "azure_speech":
+    case "cartesia":
       return <Cloud className={cls} />;
     case "groq_whisper":
       return <Zap className={cls} />;
