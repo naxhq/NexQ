@@ -160,7 +160,7 @@ npm run build                    # tsc + Vite production build
 cd src-tauri && cargo test --lib # Rust unit tests
 ```
 
-CI runs the type check, the frontend tests and `cargo check` on every pull request.
+CI runs the type check, the frontend tests and `cargo check` on every pull request, plus `cargo test --lib` on macOS.
 
 - Add or update tests for behavior you change. Frontend tests live next to the code (`*.test.ts` / `*.test.tsx`); Rust tests are `#[cfg(test)]` modules in the same file.
 - For audio, STT and overlay changes, also do a manual smoke test with `npx tauri dev` and describe what you tested in the PR.
