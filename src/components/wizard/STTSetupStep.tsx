@@ -63,6 +63,14 @@ const PROVIDERS: ProviderChoice[] = [
     requiresKey: true,
     free: false,
   },
+  {
+    value: "cartesia",
+    label: "Cartesia",
+    icon: <Cloud className="h-4 w-4" />,
+    description: "Ink-2 streaming with turn detection",
+    requiresKey: true,
+    free: false,
+  },
 ];
 
 export function STTSetupStep() {
@@ -80,7 +88,7 @@ export function STTSetupStep() {
   // Check which API keys are stored
   useEffect(() => {
     async function check() {
-      const providers = ["deepgram", "whisper_api", "azure_speech", "groq_whisper"];
+      const providers = ["deepgram", "whisper_api", "azure_speech", "groq_whisper", "cartesia"];
       const status: Record<string, boolean> = {};
       for (const p of providers) {
         try {

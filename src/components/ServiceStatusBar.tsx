@@ -42,6 +42,7 @@ export const STT_LABELS: Record<string, string> = {
   whisper_api: "Whisper API",
   azure_speech: "Azure",
   groq_whisper: "Groq STT",
+  cartesia: "Cartesia",
   sherpa_onnx: "Sherpa-ONNX",
   ort_streaming: "ORT Streaming",
   parakeet_tdt: "Parakeet TDT",
@@ -68,6 +69,7 @@ const STT_PROVIDER_OPTIONS: {
   { value: "whisper_api", label: "Whisper API", IconComponent: Cloud, requiresKey: true, isCloud: true },
   { value: "azure_speech", label: "Azure Speech", IconComponent: Cloud, requiresKey: true, isCloud: true },
   { value: "groq_whisper", label: "Groq Whisper", IconComponent: Zap, requiresKey: true, isCloud: true },
+  { value: "cartesia", label: "Cartesia", IconComponent: Cloud, requiresKey: true, isCloud: true },
 ];
 
 // ── Web Speech / Windows Speech mutual exclusion ──
@@ -76,7 +78,7 @@ const STT_PROVIDER_OPTIONS: {
 const EXCLUSIVE_PROVIDERS: STTProviderType[] = ["web_speech", "windows_native"];
 
 const EXCLUSIVE_FALLBACK_ORDER: STTProviderType[] = [
-  "deepgram", "groq_whisper", "whisper_api", "azure_speech",
+  "deepgram", "groq_whisper", "whisper_api", "azure_speech", "cartesia",
   "sherpa_onnx", "ort_streaming", "parakeet_tdt",
 ];
 
@@ -657,7 +659,7 @@ function STTPickerDropdown({
     let cancelled = false;
     (async () => {
       try {
-        const cloudProviders = ["deepgram", "whisper_api", "azure_speech", "groq_whisper"];
+        const cloudProviders = ["deepgram", "whisper_api", "azure_speech", "groq_whisper", "cartesia"];
         const [engines, ...keyResults] = await Promise.all([
           listLocalSTTEngines(),
           ...cloudProviders.map(async (p) => {
