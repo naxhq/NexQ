@@ -208,8 +208,9 @@ export async function generateAssist(
   const requestId = opts.requestId ?? crypto.randomUUID();
 
   // Universal transcript: unless the caller supplies segments (past meetings),
-  // gather all final segments from the frontend store (the single source of
-  // truth — every STT engine feeds into it).
+  // snapshot the live transcript from the frontend store (the single source of
+  // truth — every STT engine feeds into it). Interim text is labeled and is
+  // never promoted to a final segment in the store.
   // The backend applies the per-action transcript window setting.
   let segments = opts.transcriptSegments;
   if (!segments) {
@@ -220,8 +221,15 @@ export async function generateAssist(
     const { speakers } = useSpeakerStore.getState();
     const nameOf = (key: string) => speakers[key]?.display_name;
     segments = useTranscriptStore.getState().segments
-      .filter(s => s.is_final)
-      .map(s => ({ id: s.id, text: s.text, speaker: assistSpeakerLabel(s, nameOf), timestamp_ms: s.timestamp_ms }));
+      .map((s) => {
+        const pending = s.pending_text?.trim();
+        const text = pending || s.text;
+        const interim = !s.is_final || !!pending;
+        const label = assistSpeakerLabel(s, nameOf);
+        const speaker = interim ? `${label === "User" ? "You" : label} (interim)` : label;
+        return { id: s.id, text, speaker, timestamp_ms: s.timestamp_ms };
+      })
+      .filter((s) => s.text.trim().length > 0);
   }
 
   return invoke("generate_assist", {

@@ -55,9 +55,9 @@ export interface TranscriptSegment {
   is_final: boolean;
   confidence: number;
   /**
-   * Frontend only (never sent over IPC or saved): while interim words extend
-   * a final line, the line's display text including them. `text` keeps the
-   * final words, so the line stays final for the AI and persistence.
+   * Frontend only (never saved): while interim words extend a final line,
+   * this is the displayed text. AI requests may snapshot it as interim;
+   * `text` keeps the finalized words for persistence.
    */
   pending_text?: string;
 }
