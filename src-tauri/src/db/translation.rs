@@ -146,6 +146,7 @@ pub fn count_meeting_translations(
     conn.query_row(
         "SELECT COUNT(*) FROM transcript_translations WHERE meeting_id = ?1 AND target_lang = ?2",
         params![meeting_id, target_lang],
-        |row| row.get::<_, usize>(0),
+        |row| row.get::<_, i64>(0),
     )
+    .map(|count| count as usize)
 }
