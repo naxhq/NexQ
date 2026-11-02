@@ -285,7 +285,7 @@ fn check_speech_recognizer_available(language: &str) -> bool {
                 &HSTRING::from("freeform"),
             )?;
             recognizer.Constraints()?.Append(&constraint)?;
-            recognizer.CompileConstraintsAsync()?.get()?;
+            recognizer.CompileConstraintsAsync()?.join()?;
             Ok(true)
         })().unwrap_or(false);
 
@@ -427,7 +427,7 @@ fn run_windows_speech_recognizer(
             }
             // Compile — mandatory before StartAsync
             match recognizer.CompileConstraintsAsync() {
-                Ok(op) => match op.get() {
+                Ok(op) => match op.join() {
                     Ok(compile_result) => {
                         // CRITICAL: Check the actual compilation status, not just Ok/Err.
                         // A non-Success status means the recognizer will silently produce
@@ -521,7 +521,7 @@ fn run_windows_speech_recognizer(
         SpeechRecognizer,
         SpeechRecognitionHypothesisGeneratedEventArgs,
     >::new(move |_recognizer, args| {
-        if let Some(args) = args {
+        if let Ok(args) = args.ok() {
             if let Ok(hypothesis) = args.Hypothesis() {
                 if let Ok(text) = hypothesis.Text() {
                     let text_str = text.to_string();
@@ -564,7 +564,7 @@ fn run_windows_speech_recognizer(
         SpeechContinuousRecognitionSession,
         SpeechContinuousRecognitionResultGeneratedEventArgs,
     >::new(move |_session, args| {
-        if let Some(args) = args {
+        if let Ok(args) = args.ok() {
             if let Ok(result) = args.Result() {
                 if let Ok(text) = result.Text() {
                     let text_str = text.to_string();
@@ -623,7 +623,7 @@ fn run_windows_speech_recognizer(
         SpeechContinuousRecognitionSession,
         SpeechContinuousRecognitionCompletedEventArgs,
     >::new(move |_session, args| {
-        if let Some(args) = args {
+        if let Ok(args) = args.ok() {
             if let Ok(status) = args.Status() {
                 let status_name = match status {
                     SpeechRecognitionResultStatus::Success => "Success",
@@ -669,7 +669,7 @@ fn run_windows_speech_recognizer(
 
     // Start continuous recognition
     let start_err = match session.StartAsync() {
-        Ok(op) => match op.get() {
+        Ok(op) => match op.join() {
             Ok(_) => None,
             Err(e) => Some(e),
         },
@@ -723,11 +723,11 @@ fn run_windows_speech_recognizer(
             // 0x80131509 (InvalidOperationException). StopAsync transitions it back to
             // a startable state.
             if let Ok(stop_op) = session.StopAsync() {
-                let _ = stop_op.get();
+                let _ = stop_op.join();
             }
 
             match session.StartAsync() {
-                Ok(op) => match op.get() {
+                Ok(op) => match op.join() {
                     Ok(_) => {
                         log::info!("WindowsNativeSTT: Session restarted successfully");
                         // Don't spam status updates — only show on first restart
@@ -777,7 +777,7 @@ fn run_windows_speech_recognizer(
 
     // Stop recognition
     if let Ok(op) = session.StopAsync() {
-        let _ = op.get();
+        let _ = op.join();
     }
 
     unsafe { windows::Win32::System::Com::CoUninitialize(); }

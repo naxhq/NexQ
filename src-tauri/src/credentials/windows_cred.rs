@@ -61,7 +61,7 @@ pub fn credential_read(provider: &str) -> Result<Option<String>, String> {
         let result = CredReadW(
             PCWSTR(target_wide.as_ptr()),
             CRED_TYPE_GENERIC,
-            0,
+            None,
             &mut pcred,
         );
 
@@ -106,7 +106,7 @@ pub fn credential_delete(provider: &str) -> Result<(), String> {
         let result = CredDeleteW(
             PCWSTR(target_wide.as_ptr()),
             CRED_TYPE_GENERIC,
-            0,
+            None,
         );
 
         match result {

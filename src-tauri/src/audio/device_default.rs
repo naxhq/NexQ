@@ -298,7 +298,7 @@ pub fn restore_default_capture_device(original_endpoint_id: &str) -> Result<(), 
 fn get_device_friendly_name_internal(
     device: &windows::Win32::Media::Audio::IMMDevice,
 ) -> Option<String> {
-    use windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY;
+    use windows::Win32::Foundation::PROPERTYKEY;
     use windows::core::GUID;
 
     unsafe {

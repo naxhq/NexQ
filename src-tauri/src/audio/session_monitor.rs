@@ -183,7 +183,7 @@ fn enumerate_wasapi_sessions(
 #[cfg(target_os = "windows")]
 fn get_device_name(device: &windows::Win32::Media::Audio::IMMDevice) -> Option<String> {
     unsafe {
-        use windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY;
+        use windows::Win32::Foundation::PROPERTYKEY;
         use windows::core::GUID;
 
         // PKEY_Device_FriendlyName = {a45c254e-df1c-4efd-8020-67d146a850e0}, 14

@@ -631,7 +631,7 @@ fn read_all_peaks_raw() -> Vec<DevicePeakLevel> {
 /// matching the format that cpal uses for device names.
 #[cfg(target_os = "windows")]
 fn get_device_friendly_name(device: &windows::Win32::Media::Audio::IMMDevice) -> Option<String> {
-    use windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY;
+    use windows::Win32::Foundation::PROPERTYKEY;
     use windows::core::GUID;
     unsafe {
         // PKEY_Device_FriendlyName = {a45c254e-df1c-4efd-8020-67d146a850e0}, 14
