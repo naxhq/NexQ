@@ -87,6 +87,8 @@ NexQ uses an LLM to generate AI assistance during meetings. The easiest local op
 
 The meeting is saved automatically with full transcript, AI interactions, and summary.
 
+In meeting details, **Words** counts each Chinese character and Japanese kana individually, since those languages don't put spaces between words. Other text, including Korean, is counted by whitespace-separated words. Punctuation alone is not counted. **Pace** and the header's speaker percentages use the same counts.
+
 ## Next Steps
 
 - [Interview Copilot Guide](interview-copilot.md) -- Use NexQ as your real-time interview assistant

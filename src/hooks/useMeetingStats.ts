@@ -18,6 +18,20 @@ const SPEAKER_COLORS: Record<string, string> = {
   Unknown: "text-muted-foreground",
 };
 
+function countWords(text: string): number {
+  let cjkCount = 0;
+  // Chinese and Japanese don't put spaces between words, so count each
+  // character, including the Japanese long vowel mark ー. Korean does, so its
+  // words are counted by whitespace like other scripts.
+  const remaining = text.normalize("NFC").replace(
+    /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー]/gu,
+    () => { cjkCount += 1; return " "; }
+  );
+  // Keep whitespace-delimited words for other scripts, ignoring punctuation
+  // alone. Replacing CJK characters with spaces separates adjacent Latin words.
+  return cjkCount + remaining.split(/\s+/).filter((word) => /[\p{L}\p{N}]/u.test(word)).length;
+}
+
 function formatStatDuration(seconds: number): string {
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
@@ -53,7 +67,7 @@ export function useMeetingStats(meeting: Meeting | null): MeetingStats {
     const speakerWords: Record<string, number> = {};
     let totalWords = 0;
     for (const seg of meeting.transcript) {
-      const words = seg.text.split(/\s+/).filter(Boolean).length;
+      const words = countWords(seg.text);
       totalWords += words;
       speakerWords[seg.speaker] = (speakerWords[seg.speaker] || 0) + words;
     }
