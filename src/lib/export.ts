@@ -50,7 +50,11 @@ function segmentTime(seg: TranscriptSegment, startMs: number): string {
 }
 
 function safeFilename(title: string): string {
-  return title.replace(/[^a-zA-Z0-9 _-]/g, "").trim() || "meeting";
+  // Keep Unicode and valid punctuation; remove characters forbidden in Windows
+  // filenames (which also covers macOS path separators).
+  const name = title.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "").trim().replace(/[. ]+$/g, "") || "meeting";
+  // Windows reserves device names even when followed by an extension.
+  return /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(name) ? `_${name}` : name;
 }
 
 // ── Export: Markdown ──────────────────────────────────────────────────────────

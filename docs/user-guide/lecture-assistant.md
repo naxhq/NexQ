@@ -108,6 +108,8 @@ Open the Launcher to access the full meeting record:
 - Action items and bookmarks are included in the export
 - Use the exported notes as a study guide
 
+Suggested export filenames preserve your meeting title's Unicode text, including Chinese, Japanese and Korean. Characters that are invalid in filenames are removed; an empty result uses `meeting`.
+
 ## Tips
 
 - **For long lectures (2+ hours)**, use Web Speech API. It handles extended sessions without session timeouts or API cost concerns.
