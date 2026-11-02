@@ -422,15 +422,16 @@ pub(crate) async fn session_assist(state: &AppState, app: &AppHandle, req: Sessi
         SessionScope::Live(_) => state.live_meeting.lock().ok().and_then(|m| m.clone()).map(|m| m.start_ms).unwrap_or(0),
         _ => 0,
     };
-    let finals = match &key.scope {
-        SessionScope::Live(_) => {
+    let (finals, interim) = match &key.scope {
+        SessionScope::Live(_) => routing::split_interim(
             req.transcript_segments
                 .map(|json| routing::segments_from_json(json, live_start_ms))
-                .unwrap_or_default()
-        }
+                .unwrap_or_default(),
+        ),
         // The whole transcript is preloaded into a past-meeting session.
-        _ => Vec::new(),
+        _ => (Vec::new(), Vec::new()),
     };
+    let interim_text = crate::llm::cli_agent::context::transcript_lines(&interim, false);
 
     let ready = state.meeting_sessions.ensure_current(key, req.epoch, || match &key.scope {
         SessionScope::Live(_) => Ok(crate::commands::meeting_commands::live_session_record(state, key.tier, &finals)),
@@ -458,6 +459,7 @@ pub(crate) async fn session_assist(state: &AppState, app: &AppHandle, req: Sessi
             .or_else(|| req.detected_question.clone());
         let recent: String = finals
             .iter()
+            .chain(&interim)
             .map(|s| format!("{}: {}", s.speaker, s.text))
             .collect::<Vec<_>>()
             .join("\n");
@@ -478,6 +480,7 @@ pub(crate) async fn session_assist(state: &AppState, app: &AppHandle, req: Sessi
         routing::compose_delta(
             new,
             &[
+                ("## Still being transcribed (may change)", interim_text.as_str()),
                 ("## Relevant document excerpts", rag_context.as_str()),
                 (context_scope::SCOPE_HEADER, scope_note.as_str()),
             ],

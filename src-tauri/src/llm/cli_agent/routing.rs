@@ -735,7 +735,17 @@ pub fn fallback_segment_id(timestamp_ms: i64, speaker: &str, text: &str) -> Stri
     format!("seg-{:016x}", hasher.finish())
 }
 
-/// Final segments from `generate_assist`'s `transcript_segments` JSON, with
+/// Speaker suffix the frontend gives text the STT hasn't finalized yet.
+pub const INTERIM_SUFFIX: &str = " (interim)";
+
+/// Split request segments into final lines and text still being transcribed.
+/// Interim text may still change, so it rides along with one request and is
+/// never recorded as sent (nor preloaded) in a session.
+pub fn split_interim(segments: Vec<Seg>) -> (Vec<Seg>, Vec<Seg>) {
+    segments.into_iter().partition(|s| !s.speaker.ends_with(INTERIM_SUFFIX))
+}
+
+/// Segments from `generate_assist`'s `transcript_segments` JSON, with
 /// timestamps relative to `start_ms`. Blank segments are skipped.
 pub fn segments_from_json(json: &str, start_ms: i64) -> Vec<Seg> {
     #[derive(Deserialize)]
@@ -1022,6 +1032,21 @@ mod tests {
         assert_eq!(segs[1].id, fallback_segment_id(1_700_000_070_000, "Them", "Yo"), "id-less segments get a stable id");
         assert!(segments_from_json("not json", 0).is_empty());
         assert_eq!(relative_ms(5_000, 1_700_000_000_000), 5_000, "already relative");
+    }
+
+    /// Interim text goes with one request but never into the session's record:
+    /// the final words, once they arrive, are sent as a new line, not a correction.
+    #[test]
+    fn routing_interim_text_is_not_recorded_as_sent() {
+        let json = r#"[{"id":"a","text":"Hi","speaker":"User","timestamp_ms":1000},
+                       {"id":"b","text":"What about the bud","speaker":"Them (interim)","timestamp_ms":2000}]"#;
+        let (finals, interim) = split_interim(segments_from_json(json, 0));
+        assert_eq!(finals.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["a"]);
+        assert_eq!(interim[0].speaker, "Them (interim)");
+        let mut cursor = DeltaCursor::default();
+        cursor.take_new(&finals);
+        let final_b = Seg { text: "What about the budget?".into(), speaker: "Them".into(), ..interim[0].clone() };
+        assert_eq!(cursor.take_new(&[final_b.clone()]), vec![final_b], "whole line, unmarked");
     }
 
     #[test]

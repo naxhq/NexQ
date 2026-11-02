@@ -226,6 +226,7 @@ export async function generateAssist(
         const text = pending || s.text;
         const interim = !s.is_final || !!pending;
         const label = assistSpeakerLabel(s, nameOf);
+        // The Claude session path keys on this suffix (routing::INTERIM_SUFFIX).
         const speaker = interim ? `${label === "User" ? "You" : label} (interim)` : label;
         return { id: s.id, text, speaker, timestamp_ms: s.timestamp_ms };
       })
