@@ -139,12 +139,13 @@ pub async fn start_capture(
                 router.azure_speech_key.clone(),
                 router.azure_speech_region.clone(),
                 router.groq_whisper_api_key.clone(),
+                router.cartesia_api_key.clone(),
                 router.language.clone(),
             ))
         });
 
         match stt_config {
-            Some((pt, dk, dg_cfg, wk, ak, ar, gk, lang)) => {
+            Some((pt, dk, dg_cfg, wk, ak, ar, gk, ck, lang)) => {
                 use crate::stt::provider::STTProviderType;
                 let p: Box<dyn STTProvider> = match pt {
                     STTProviderType::Deepgram => {
@@ -178,6 +179,15 @@ pub async fn start_capture(
                             None => crate::stt::groq_whisper::GroqWhisperSTT::new(),
                         };
                         p.set_language(&lang);
+                        Box::new(p)
+                    }
+                    STTProviderType::Cartesia => {
+                        let mut p = match ck.as_deref() {
+                            Some(k) => crate::stt::cartesia::CartesiaSTT::with_api_key(k),
+                            None => crate::stt::cartesia::CartesiaSTT::new(),
+                        };
+                        p.set_language(&lang);
+                        p.set_app_handle(app.clone());
                         Box::new(p)
                     }
                     _ => return Ok(()), // shouldn't reach
@@ -1593,6 +1603,19 @@ async fn create_stt_provider_for_party(
             // Use shared config Arc — provider reads latest config on each API call,
             // so settings changes take effect immediately without restarting
             p.set_shared_config(state.shared_groq_config.clone());
+            p.set_app_handle(app.clone());
+            p.set_party(party_role);
+            Ok(Some(Box::new(p)))
+        }
+        STTProviderType::Cartesia => {
+            let lang = get_stt_language(state);
+            let key = get_credential_key(state, "cartesia");
+            log::info!("Cartesia key for '{}': {}", party_role, if key.is_some() { "present" } else { "MISSING" });
+            let mut p = match key.as_deref() {
+                Some(k) => crate::stt::cartesia::CartesiaSTT::with_api_key(k),
+                None => crate::stt::cartesia::CartesiaSTT::new(),
+            };
+            p.set_language(&lang);
             p.set_app_handle(app.clone());
             p.set_party(party_role);
             Ok(Some(Box::new(p)))

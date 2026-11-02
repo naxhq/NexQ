@@ -5,7 +5,7 @@ use crate::stt::provider::{self, STTProviderType};
 
 /// Switch the active STT provider.
 ///
-/// `provider` is one of: "windows_native", "deepgram", "whisper_api", "azure_speech", "groq_whisper"
+/// `provider` is one of: "windows_native", "deepgram", "whisper_api", "azure_speech", "groq_whisper", "cartesia"
 #[command]
 pub async fn set_stt_provider(app: AppHandle, provider: String) -> Result<(), String> {
     let provider_type = STTProviderType::from_str(&provider)
@@ -53,6 +53,11 @@ pub async fn set_stt_provider(app: AppHandle, provider: String) -> Result<(), St
                 STTProviderType::GroqWhisper => {
                     if let Ok(Some(key)) = cred.get_key("groq_whisper") {
                         router.set_groq_whisper_api_key(&key);
+                    }
+                }
+                STTProviderType::Cartesia => {
+                    if let Ok(Some(key)) = cred.get_key("cartesia") {
+                        router.set_cartesia_api_key(&key);
                     }
                 }
                 STTProviderType::WindowsNative | STTProviderType::WhisperCpp => {
@@ -125,6 +130,11 @@ pub async fn test_stt_connection(app: AppHandle, provider: String) -> Result<boo
                 STTProviderType::GroqWhisper => {
                     if let Ok(Some(key)) = cred.get_key("groq_whisper") {
                         router.set_groq_whisper_api_key(&key);
+                    }
+                }
+                STTProviderType::Cartesia => {
+                    if let Ok(Some(key)) = cred.get_key("cartesia") {
+                        router.set_cartesia_api_key(&key);
                     }
                 }
                 STTProviderType::WindowsNative | STTProviderType::WhisperCpp => {}
