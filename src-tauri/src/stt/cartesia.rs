@@ -1542,6 +1542,48 @@ mod tests {
         assert!(after.iter().any(|t| t.to_lowercase().contains("meeting")));
     }
 
+    /// Muted after the first sentence: Cartesia returns it and the stream
+    /// closes, so the muted 3 s aren't billed. Unmuting starts a new stream
+    /// that transcribes the second sentence.
+    #[tokio::test]
+    #[ignore = "calls the Cartesia API; needs CARTESIA_API_KEY and CARTESIA_TEST_WAV"]
+    async fn live_mute_closes_and_unmute_resumes() {
+        let key = std::env::var("CARTESIA_API_KEY").expect("CARTESIA_API_KEY");
+        let wav = std::fs::read(std::env::var("CARTESIA_TEST_WAV").expect("CARTESIA_TEST_WAV")).unwrap();
+        let samples = wav_samples(&wav);
+        let (first, rest) = samples.split_at(16_000 * 45 / 10);
+
+        let mut stt = CartesiaSTT::with_api_key(&key);
+        let (tx, mut rx) = mpsc::channel(1024);
+        stt.start_stream(tx).await.expect("start");
+        for frame in first.chunks(1600) {
+            stt.feed_audio(chunk(frame.to_vec())).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        stt.set_muted(true);
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let mut by_end_of_mute = Vec::new();
+        while let Ok(result) = rx.try_recv() {
+            if result.is_final { by_end_of_mute.push(result.text) }
+        }
+        println!("finals by the end of the mute: {:?}", by_end_of_mute);
+        assert!(!stt.is_streaming, "still streaming while muted");
+
+        stt.set_muted(false);
+        for frame in rest.chunks(1600) {
+            stt.feed_audio(chunk(frame.to_vec())).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        stt.stop_stream().await.unwrap();
+        let mut after = Vec::new();
+        while let Ok(result) = rx.try_recv() {
+            if result.is_final { after.push(result.text) }
+        }
+        println!("finals after unmute: {:?}", after);
+        assert_eq!(by_end_of_mute.len(), 1, "the first sentence should come back at mute");
+        assert!(after.iter().any(|t| t.to_lowercase().contains("meeting")));
+    }
+
     #[test]
     fn parses_every_event_type() {
         assert_eq!(
