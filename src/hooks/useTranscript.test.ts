@@ -1,11 +1,32 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { processSpeaker } from "./useTranscript";
+import { renderHook } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../lib/events", () => ({
+  onTranscriptUpdate: () => Promise.resolve(() => {}),
+  onTranscriptFinal: () => Promise.resolve(() => {}),
+}));
+
+import { processSpeaker, useTranscript } from "./useTranscript";
 import { useSpeakerStore } from "../stores/speakerStore";
+import { INTERIM_LIFETIME_MS, useTranscriptStore } from "../stores/transcriptStore";
 import type { TranscriptSegment } from "../lib/types";
 
 function them(id: string, text: string, extra: Partial<TranscriptSegment> = {}): TranscriptSegment {
   return { id, text, speaker: "Them", timestamp_ms: 1, is_final: true, confidence: 1, ...extra };
 }
+
+describe("useTranscript", () => {
+  it("clears an interim no final followed, without any new transcript event", () => {
+    vi.useFakeTimers();
+    useTranscriptStore.getState().clearSegments();
+    const { unmount } = renderHook(() => useTranscript());
+    useTranscriptStore.getState().updateInterimSegment(them("you_1_acc_1", "Good", { is_final: false }));
+    vi.advanceTimersByTime(INTERIM_LIFETIME_MS + 2_000);
+    expect(useTranscriptStore.getState().segments).toEqual([]);
+    unmount();
+    vi.useRealTimers();
+  });
+});
 
 describe("processSpeaker", () => {
   beforeEach(() => useSpeakerStore.getState().initForOnline());

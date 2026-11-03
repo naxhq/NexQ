@@ -10,6 +10,8 @@ import { useSpeakerStore } from "../stores/speakerStore";
 import { useConfigStore } from "../stores/configStore";
 import type { TranscriptSegment, TranscriptUpdateEvent } from "../lib/types";
 
+const STALE_INTERIM_CHECK_MS = 2_000;
+
 // Cache reference to avoid repeated imports
 let _meetingStoreRef: typeof import("../stores/meetingStore") | null = null;
 
@@ -136,6 +138,15 @@ export function useTranscript() {
     appendRef.current = appendSegment;
     updateRef.current = updateInterimSegment;
   }, [appendSegment, updateInterimSegment]);
+
+  // Runs in each window: the launcher and the overlay keep their own transcript.
+  useEffect(() => {
+    const timer = setInterval(
+      () => useTranscriptStore.getState().dropStaleInterim(),
+      STALE_INTERIM_CHECK_MS
+    );
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     let unlistenUpdate: UnlistenFn | null = null;
