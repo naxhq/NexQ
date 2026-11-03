@@ -172,6 +172,16 @@ pub trait STTProvider: Send + Sync {
     fn set_muted(&mut self, _muted: bool) {}
 }
 
+/// Record a party's mute flag: true when it differs from the state last
+/// passed to its provider (`applied`), which is then updated.
+pub fn mute_changed(applied: &mut bool, muted: bool) -> bool {
+    if *applied == muted {
+        return false;
+    }
+    *applied = muted;
+    true
+}
+
 /// Provider info for the frontend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct STTProviderInfo {
@@ -410,4 +420,21 @@ pub fn list_available_providers() -> Vec<STTProviderInfo> {
             ],
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The audio loop tells a provider about mute only when the flag changes.
+    #[test]
+    fn mute_changes_are_reported_once() {
+        let mut applied = false;
+        assert!(!mute_changed(&mut applied, false));
+        assert!(mute_changed(&mut applied, true));
+        assert!(applied);
+        assert!(!mute_changed(&mut applied, true));
+        assert!(mute_changed(&mut applied, false));
+        assert!(!applied);
+    }
 }

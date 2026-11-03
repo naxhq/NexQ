@@ -80,7 +80,7 @@ impl Default for DeepgramConfig {
 pub struct ConnectionStatusEvent {
     pub provider: String,
     pub party: String,
-    pub status: String, // "connecting", "connected", "error", "disconnected", "reconnecting"
+    pub status: String, // "connecting", "connected", "error", "disconnected", "reconnecting", "paused" (muted)
     pub message: Option<String>,
 }
 
