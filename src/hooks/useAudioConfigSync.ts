@@ -12,6 +12,7 @@ import { useMeetingStore } from "../stores/meetingStore";
 import { useDevLogStore } from "../stores/devLogStore";
 import { useTranscriptStore } from "../stores/transcriptStore";
 import { stopCapture, startCapturePerParty } from "../lib/ipc";
+import { skipYouStt } from "../lib/audioMode";
 
 export function useAudioConfigSync() {
   const isRecording = useMeetingStore((s) => s.isRecording);
@@ -110,7 +111,9 @@ export function useAudioConfigSync() {
         }
 
         log("info", "config", "Hot-swap: starting new capture pipeline...");
-        await startCapturePerParty(freshConfig.you, freshConfig.them);
+        await startCapturePerParty(freshConfig.you, freshConfig.them, {
+          skipYouStt: skipYouStt(useMeetingStore.getState().audioMode),
+        });
         const freshKey = JSON.stringify(freshConfig);
         appliedConfigRef.current = freshKey;
         pendingConfigRef.current = freshKey;

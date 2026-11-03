@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { AppView, Meeting, MeetingSummary, AudioMode, AIScenario, WindowMeetingEndedEvent } from "../lib/types";
 import { shouldPersistOverlayData } from "../lib/windows";
+import { skipYouStt } from "../lib/audioMode";
 import {
   startMeeting as ipcStartMeeting,
   endMeeting as ipcEndMeeting,
@@ -206,7 +207,8 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         if (config.meetingAudioConfig) {
           await startCapturePerParty(
             config.meetingAudioConfig.you,
-            config.meetingAudioConfig.them
+            config.meetingAudioConfig.them,
+            { skipYouStt: skipYouStt(resolvedMode) }
           );
           // In-person mode: mute "you" source — room mic captures everyone,
           // separate mic capture is redundant and creates duplicate "You" transcripts.
