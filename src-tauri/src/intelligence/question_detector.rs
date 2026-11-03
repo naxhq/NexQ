@@ -47,6 +47,18 @@ const JAPANESE_QUESTION_ENDINGS: &[&str] = &[
     "でしょうか", "ましょうか", "のか", "ないか",
 ];
 
+/// A tag on its own ("Right?", "You know?") asks nothing the AI could answer.
+const TAG_QUESTIONS: &[&str] = &[
+    "right", "okay", "ok", "yeah", "yep", "yes", "no", "nope", "sure", "correct", "true", "really",
+    "agreed", "alright", "all right", "huh", "hmm", "hm", "eh", "see", "you see", "you know",
+    "isn't it", "sorry", "pardon", "hello", "cool", "good",
+];
+
+/// Words that can come before a tag ("So, right?").
+const TAG_LEAD_INS: &[&str] = &[
+    "and", "so", "but", "well", "oh", "um", "uh", "okay", "ok", "yeah", "yes", "no",
+];
+
 /// Interview-specific patterns that indicate a question or prompt.
 const INTERVIEW_PATTERNS: &[&str] = &[
     "walk me through",
@@ -88,7 +100,7 @@ impl QuestionDetector {
             let trimmed = sentence.trim();
             // Short questions such as "谁？" and "Why?" are valid, but
             // punctuation-only fragments are not.
-            if !trimmed.chars().any(char::is_alphanumeric) {
+            if !trimmed.chars().any(char::is_alphanumeric) || is_tag_question(trimmed) {
                 continue;
             }
 
@@ -137,6 +149,21 @@ impl QuestionDetector {
 
         questions
     }
+}
+
+/// Whether a sentence is only a tag, with or without words leading into it.
+fn is_tag_question(sentence: &str) -> bool {
+    let lower = sentence.to_lowercase();
+    let words: Vec<&str> = lower
+        .split(|c: char| c.is_whitespace() || matches!(c, ',' | '.' | '?' | '？' | '!' | '…'))
+        .filter(|word| !word.is_empty())
+        .collect();
+    let lead_ins = words
+        .iter()
+        .take(words.len().saturating_sub(1))
+        .take_while(|word| TAG_LEAD_INS.contains(word))
+        .count();
+    TAG_QUESTIONS.contains(&words[lead_ins..].join(" ").as_str())
 }
 
 /// Chinese and Japanese question signals for a sentence without a question
@@ -190,6 +217,29 @@ mod tests {
             assert_eq!(questions[0].timestamp_ms, 42);
             assert_eq!(questions[0].source, "Them");
         }
+    }
+
+    #[test]
+    fn skips_a_bare_tag_but_keeps_short_questions() {
+        for text in ["Right?", "right?", "Okay?", "Yeah, right?", "So, right?", "You know?", "Isn't it?", "Really?"] {
+            let questions = QuestionDetector::new().detect_questions(text, 0, "Them");
+            assert!(questions.is_empty(), "{text}");
+        }
+        for text in ["Why?", "Is that right?", "Right now?", "And you?"] {
+            let questions = QuestionDetector::new().detect_questions(text, 0, "Them");
+            assert_eq!(questions.len(), 1, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_trailing_tag_leaves_the_question_before_it() {
+        let questions = QuestionDetector::new().detect_questions(
+            "Is that what you were thinking about? Right?", 0, "Them",
+        );
+        assert_eq!(
+            questions.iter().map(|q| q.text.as_str()).collect::<Vec<_>>(),
+            ["Is that what you were thinking about?"]
+        );
     }
 
     #[test]

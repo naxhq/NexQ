@@ -70,7 +70,7 @@ When the meeting starts, the overlay window (500x700, always-on-top, transparent
    - `4` -- Recap (summarizes the conversation so far)
    - `5` -- Ask Question (free-form query)
 
-Question detection recognizes `?` and `？`, common Chinese question words (such as 什么 / 什麼, 怎么 / 怎麼 and 哪), Chinese sentence endings 吗 / 嗎 and 呢, and Japanese question endings such as ですか, ますか and でしょうか. Suggestions ending in 吧 ("let's…") and phrases such as 没什么 or 无论如何 are not treated as questions. These are heuristic signals: an ambiguous phrase can still be marked as a question.
+Question detection recognizes `?` and `？`, common Chinese question words (such as 什么 / 什麼, 怎么 / 怎麼 and 哪), Chinese sentence endings 吗 / 嗎 and 呢, and Japanese question endings such as ですか, ますか and でしょうか. Suggestions ending in 吧 ("let's…"), phrases such as 没什么 or 无论如何, and a bare tag such as "Right?" or "You know?" are not treated as questions. These are heuristic signals: an ambiguous phrase can still be marked as a question.
 
 Detected questions appear as cards in the overlay. By default the newest one is answered automatically; to choose which questions get an answer, turn off **Auto-Answer** in Settings > AI Actions and click the card you need.
 

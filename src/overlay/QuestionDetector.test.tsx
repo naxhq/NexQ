@@ -108,6 +108,21 @@ describe("QuestionDetector", () => {
     }
   });
 
+  it("ignores a bare tag, which leaves nothing to answer", () => {
+    for (const tag of ["Right?", "right", "Okay?", "Yeah, right?", "So, right?", "You know?", "Isn't it?", "Really?"]) {
+      expect(looksLikeQuestion(tag), tag).toBe(false);
+    }
+    for (const q of ["Why?", "Is that right?", "Right now?", "And you?", "Can you start?"]) {
+      expect(looksLikeQuestion(q), q).toBe(true);
+    }
+  });
+
+  it("looks past a trailing tag for the question before it", () => {
+    expect(lastSentence("Is that what you were thinking about? Right?")).toBe("Is that what you were thinking about?");
+    expect(lastSentence("Can something change? Okay? Yeah, right?")).toBe("Can something change?");
+    expect(lastSentence("Right?")).toBe("Right?");
+  });
+
   it("finds a question a line gains after its first final", () => {
     useTranscriptStore.setState({ segments: [seg("So here's the situation.")] });
     render(<QuestionDetector />);
