@@ -139,7 +139,7 @@ export function GeneralSettings() {
       {/* Moved notice */}
       <div className="rounded-xl border border-info/20 bg-info/5 px-5 py-3">
         <p className="text-xs text-info/80">
-          Context Window, Auto-Trigger, and AI instructions have moved to the <strong className="text-info">AI Actions</strong> tab.
+          Context Window, Question Detection, Auto-Answer, and AI instructions have moved to the <strong className="text-info">AI Actions</strong> tab.
         </p>
       </div>
 

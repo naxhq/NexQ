@@ -61,6 +61,17 @@ interface TrackedQuestion extends DetectedQuestion {
   segmentId?: string;
 }
 
+/** The overlay's question card, unless question detection is off. */
+export function QuestionPanel() {
+  const questionDetection = useAIActionsStore((s) => s.configs.globalDefaults.questionDetection);
+  if (!questionDetection) return null;
+  return (
+    <div className="shrink-0 rounded-xl border border-info/10 bg-info/5 px-4 py-3">
+      <QuestionDetector />
+    </div>
+  );
+}
+
 export function QuestionDetector() {
   const [questions, setQuestions] = useState<TrackedQuestion[]>([]);
   // Text of each final line when it was last checked for a question.

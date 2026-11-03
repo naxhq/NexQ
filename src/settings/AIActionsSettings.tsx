@@ -85,9 +85,13 @@ const HELP: Record<string, { title: string; body: string }> = {
     title: "Additional Instructions",
     body: "Free-form text injected into every AI prompt. Use this for:\n\n\u2022 Role context (e.g. \"I'm a Product Manager\")\n\u2022 Domain-specific terminology or acronyms\n\u2022 Additional formatting or style rules\n\nCombined with the preset selections above. Clear this field if it duplicates preset text.",
   },
+  questionDetection: {
+    title: "Question Detection",
+    body: "When enabled, questions from the other party appear as cards in the overlay. Click a card to get an answer to that question.\n\nTurn OFF to hide the cards. You can still trigger actions manually with the overlay buttons.",
+  },
   autoTrigger: {
-    title: "Auto-Trigger",
-    body: "When enabled, NexQ listens for questions directed at you during the meeting and automatically generates suggested answers.\n\nTurn OFF during presentations or when you want manual-only control. You can still trigger actions manually with the overlay buttons.",
+    title: "Auto-Answer",
+    body: "When enabled, NexQ answers the newest detected question on its own, once the other party has been quiet for a moment.\n\nTurn OFF to keep the question cards and choose which ones to answer. Needs Question Detection.",
   },
   temperature: {
     title: "Temperature",
@@ -536,19 +540,40 @@ export function AIActionsSettings() {
             />
 
             <div className="space-y-4">
-              {/* Auto-Trigger */}
+              {/* Question Detection */}
               <div>
                 <div className="flex items-center justify-between">
                   <label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                    Auto-Trigger
-                    <HelpButton id="autoTrigger" activeId={openHelp} onToggle={toggleHelp} />
+                    Question Detection
+                    <HelpButton id="questionDetection" activeId={openHelp} onToggle={toggleHelp} />
                   </label>
                   <Toggle
-                    checked={configs.globalDefaults.autoTrigger}
-                    onChange={(v) => handleGlobalDefaultChange("autoTrigger", v)}
-                    label="Toggle auto-trigger"
+                    checked={configs.globalDefaults.questionDetection}
+                    onChange={(v) => handleGlobalDefaultChange("questionDetection", v)}
+                    label="Toggle question detection"
                   />
                 </div>
+                {openHelp === "questionDetection" && <HelpPanel id="questionDetection" />}
+              </div>
+
+              {/* Auto-Answer: only answers questions detection found */}
+              <div>
+                <fieldset
+                  disabled={!configs.globalDefaults.questionDetection}
+                  className={`min-w-0 ${configs.globalDefaults.questionDetection ? "" : "opacity-50"}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                      Auto-Answer
+                      <HelpButton id="autoTrigger" activeId={openHelp} onToggle={toggleHelp} />
+                    </label>
+                    <Toggle
+                      checked={configs.globalDefaults.autoTrigger}
+                      onChange={(v) => handleGlobalDefaultChange("autoTrigger", v)}
+                      label="Toggle auto-answer"
+                    />
+                  </div>
+                </fieldset>
                 {openHelp === "autoTrigger" && <HelpPanel id="autoTrigger" />}
               </div>
 

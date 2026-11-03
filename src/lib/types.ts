@@ -923,6 +923,7 @@ export interface ActionConfig {
 export interface GlobalDefaults {
   transcriptWindowSeconds: number;
   temperature: number;
+  questionDetection: boolean;
   autoTrigger: boolean;
 }
 

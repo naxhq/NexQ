@@ -201,7 +201,8 @@ NexQ supports loading documents (PDF, TXT, MD, DOCX) as context for AI responses
 The AI Actions panel configures how NexQ's AI assistance behaves during meetings. Key options include:
 
 - **Action types** -- enable or disable specific AI modes (Assist, What to Say, Shorten, Follow-Up, Recap, Ask Question)
-- **Auto-trigger settings** -- configure whether AI suggestions appear automatically based on conversation flow, or only when manually triggered
+- **Question Detection** -- show questions from the other party as cards in the overlay; click a card to get an answer to that question
+- **Auto-Answer** -- answer the newest detected question automatically. Turn it off to keep the cards and choose which questions to answer
 - **Response style** -- adjust the tone, length, and format of AI responses
 - **Context window** -- control how much conversation history is sent to the LLM with each request
 

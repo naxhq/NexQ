@@ -36,6 +36,7 @@ pub struct GlobalDefaults {
     pub transcript_window_seconds: u64,
     pub rag_top_k: usize, // Legacy: retained for deserialization of old configs. Superseded by RagConfig.top_k.
     pub temperature: f64,
+    pub question_detection: bool,
     pub auto_trigger: bool,
 }
 
@@ -45,6 +46,7 @@ impl Default for GlobalDefaults {
             transcript_window_seconds: 300,
             rag_top_k: 5,
             temperature: 0.3,
+            question_detection: true,
             auto_trigger: true,
         }
     }
@@ -265,5 +267,19 @@ impl Default for AllActionConfigs {
             instruction_presets: InstructionPresets::default(),
             actions,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Configs saved before the setting existed: Auto-Answer off used to hide
+    /// the question cards too, and now keeps them.
+    #[test]
+    fn saved_configs_without_question_detection_turn_it_on() {
+        let defaults: GlobalDefaults = serde_json::from_str(r#"{"autoTrigger":false}"#).unwrap();
+        assert!(defaults.question_detection);
+        assert!(!defaults.auto_trigger);
     }
 }

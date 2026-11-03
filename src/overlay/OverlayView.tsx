@@ -2,12 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useScenarioStore } from "../stores/scenarioStore";
 import { useCallLogStore } from "../stores/callLogStore";
-import { useAIActionsStore } from "../stores/aiActionsStore";
 import { useTranslationStore } from "../stores/translationStore";
 import { showToast } from "../stores/toastStore";
 import { translateBatch } from "../lib/ipc";
 import { TranscriptPanel } from "./TranscriptPanel";
-import { QuestionDetector } from "./QuestionDetector";
+import { QuestionPanel } from "./QuestionDetector";
 import { AIResponsePanel } from "./AIResponsePanel";
 import { ModeButtons } from "./ModeButtons";
 import { AskInput } from "./AskInput";
@@ -77,7 +76,6 @@ export function OverlayView() {
   const cycleLayout = () => setLayoutMode((m) => m === "split" ? "ai" : m === "ai" ? "transcript" : "split");
   const toggleLog = useCallLogStore((s) => s.toggleOpen);
   const logOpen = useCallLogStore((s) => s.isOpen);
-  const autoTrigger = useAIActionsStore((s) => s.configs.globalDefaults.autoTrigger);
 
   const mutedYou = useConfigStore((s) => s.mutedYou);
   const mutedThem = useConfigStore((s) => s.mutedThem);
@@ -341,12 +339,7 @@ export function OverlayView() {
         {/* ── RIGHT ── */}
         {layoutMode !== "transcript" ? (
         <div className="flex min-w-[180px] min-h-0 flex-1 basis-[220px] flex-col gap-2.5 overflow-hidden">
-          {/* Question detector — only shown when auto-trigger is on */}
-          {autoTrigger && (
-            <div className="shrink-0 rounded-xl border border-info/10 bg-info/5 px-4 py-3">
-              <QuestionDetector />
-            </div>
-          )}
+          <QuestionPanel />
 
           {/* AI Response */}
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl bg-card/20">

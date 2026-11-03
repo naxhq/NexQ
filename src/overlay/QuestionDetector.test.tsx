@@ -1,22 +1,24 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../lib/events", () => ({ onQuestionDetected: () => Promise.resolve(() => {}) }));
 vi.mock("../lib/userAction", () => ({ runUserAction: vi.fn(() => Promise.resolve()) }));
 
-import { AUTO_TRIGGER_DELAY_MS, QuestionDetector, lastSentence, looksLikeQuestion } from "./QuestionDetector";
+import { AUTO_TRIGGER_DELAY_MS, QuestionDetector, QuestionPanel, lastSentence, looksLikeQuestion } from "./QuestionDetector";
 import { runUserAction } from "../lib/userAction";
 import { useAIActionsStore } from "../stores/aiActionsStore";
 import { useTranscriptStore } from "../stores/transcriptStore";
-import type { TranscriptSegment } from "../lib/types";
+import type { GlobalDefaults, TranscriptSegment } from "../lib/types";
 
 const seg = (text: string, is_final = true): TranscriptSegment =>
   ({ id: "them_1", text, speaker: "Them", timestamp_ms: 1, is_final, confidence: 1 }) as TranscriptSegment;
 
-function setAutoTrigger(on: boolean) {
+function setDefaults(defaults: Partial<GlobalDefaults>) {
   const { configs } = useAIActionsStore.getState();
-  useAIActionsStore.setState({ configs: { ...configs, globalDefaults: { ...configs.globalDefaults, autoTrigger: on } } });
+  useAIActionsStore.setState({ configs: { ...configs, globalDefaults: { ...configs.globalDefaults, ...defaults } } });
 }
+
+const setAutoTrigger = (on: boolean) => setDefaults({ autoTrigger: on });
 
 afterEach(() => {
   cleanup();
@@ -61,6 +63,31 @@ describe("Auto-Trigger", () => {
     act(() => vi.advanceTimersByTime(AUTO_TRIGGER_DELAY_MS * 3));
     expect(runUserAction).not.toHaveBeenCalled();
     expect(screen.getByText(/What would you do first\?/)).toBeTruthy();
+  });
+});
+
+describe("QuestionPanel", () => {
+  it("keeps detecting with Auto-Answer off, so the user picks what to answer", () => {
+    vi.useFakeTimers();
+    setDefaults({ questionDetection: true, autoTrigger: false });
+    useTranscriptStore.setState({ segments: [seg("What would you do first?")] });
+    render(<QuestionPanel />);
+    act(() => vi.advanceTimersByTime(AUTO_TRIGGER_DELAY_MS * 3));
+    expect(runUserAction).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Get AI assistance for this question" }));
+    expect(runUserAction).toHaveBeenCalledWith("Assist", "What would you do first?");
+  });
+
+  it("shows nothing and answers nothing with detection off", () => {
+    vi.useFakeTimers();
+    setDefaults({ questionDetection: false, autoTrigger: true });
+    useTranscriptStore.setState({ segments: [seg("What would you do first?")] });
+    render(<QuestionPanel />);
+    act(() => vi.advanceTimersByTime(AUTO_TRIGGER_DELAY_MS * 3));
+    expect(screen.queryByText(/What would you do first\?/)).toBeNull();
+    expect(runUserAction).not.toHaveBeenCalled();
+    setDefaults({ questionDetection: true });
   });
 });
 
