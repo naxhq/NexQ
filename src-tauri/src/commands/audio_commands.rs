@@ -841,6 +841,18 @@ pub async fn get_audio_sessions() -> Result<String, String> {
         .map_err(|e| format!("Failed to serialize audio sessions: {}", e))
 }
 
+/// Whether a party's STT needs the OS default mic switched to its device (IPolicyConfig).
+/// Web Speech and Windows Speech only hear the default recording device; every
+/// other provider reads NexQ's own capture of the chosen device. A party whose
+/// STT is skipped needs no switch.
+fn needs_default_mic_override(config: &crate::audio::PartyAudioConfig, stt_skipped: bool) -> bool {
+    let provider = config.stt_provider.as_str();
+    !stt_skipped
+        && (provider == "web_speech" || provider == "windows_native")
+        && config.is_input_device
+        && config.device_id != "default"
+}
+
 /// Start per-party audio capture with independent STT pipelines.
 ///
 /// Each party (You / Them) independently selects:
@@ -848,12 +860,15 @@ pub async fn get_audio_sessions() -> Result<String, String> {
 ///   - An STT provider (web_speech, windows_native, deepgram, etc.)
 ///
 /// If STT = "web_speech", Rust skips STT for that party (frontend handles it).
+/// `skip_you_stt` (in-person meetings, where the room mic is "Them") starts no
+/// "You" provider at all, so a cloud provider isn't billed for a muted mic.
 /// Audio is still captured for levels, recording, and (optionally) the other party's STT.
 #[command]
 pub async fn start_capture_per_party(
     app: AppHandle,
     you_config: String,
     them_config: String,
+    skip_you_stt: Option<bool>,
 ) -> Result<(), String> {
     use crate::audio::PartyAudioConfig;
 
@@ -861,6 +876,7 @@ pub async fn start_capture_per_party(
         serde_json::from_str(&you_config).map_err(|e| format!("Invalid you_config: {}", e))?;
     let them: PartyAudioConfig =
         serde_json::from_str(&them_config).map_err(|e| format!("Invalid them_config: {}", e))?;
+    let skip_you_stt = skip_you_stt.unwrap_or(false);
 
     let state = app.state::<AppState>();
 
@@ -884,10 +900,11 @@ pub async fn start_capture_per_party(
     }
 
     log::info!(
-        "Starting per-party capture: You={{device='{}', input={}, stt={}}}, Them={{device='{}', input={}, stt={}}}",
+        "Starting per-party capture: You={{device='{}', input={}, stt={}, skipped={}}}, Them={{device='{}', input={}, stt={}}}",
         you.device_id,
         you.is_input_device,
         you.stt_provider,
+        skip_you_stt,
         them.device_id,
         them.is_input_device,
         them.stt_provider
@@ -913,20 +930,16 @@ pub async fn start_capture_per_party(
     // The override must happen before capture starts so that Web Speech API
     // picks up the correct device when recognition.start() is called.
     {
-        let needs_override = |config: &crate::audio::PartyAudioConfig, role: &str| -> bool {
-            let provider = config.stt_provider.as_str();
-            let is_web_or_win = provider == "web_speech" || provider == "windows_native";
-            let result = is_web_or_win && config.is_input_device && config.device_id != "default";
-            log::info!(
-                "IPolicyConfig check [{}]: provider='{}', is_input={}, device_id='{}', needs_override={}",
-                role, provider, config.is_input_device, config.device_id, result
-            );
-            result
-        };
+        let you_needs_override = needs_default_mic_override(&you, skip_you_stt);
+        let them_needs_override = needs_default_mic_override(&them, false);
+        log::info!(
+            "IPolicyConfig check: You needs_override={} (provider='{}', stt_skipped={}), Them needs_override={} (provider='{}')",
+            you_needs_override, you.stt_provider, skip_you_stt, them_needs_override, them.stt_provider
+        );
 
-        if needs_override(&you, "You") || needs_override(&them, "Them") {
+        if you_needs_override || them_needs_override {
             // Pick the device that needs the override (prefer "You" if both need it)
-            let target_device = if needs_override(&you, "You") {
+            let target_device = if you_needs_override {
                 &you.device_id
             } else {
                 &them.device_id
@@ -995,10 +1008,10 @@ pub async fn start_capture_per_party(
         }
 
         // Emit IPolicyConfig status event for frontend synchronization
-        let override_applied = needs_override(&you, "You") || needs_override(&them, "Them");
+        let override_applied = you_needs_override || them_needs_override;
         let _ = app.emit("ipolicy_status", serde_json::json!({
             "applied": override_applied,
-            "target_device": if needs_override(&you, "You") { &you.device_id } else { &them.device_id },
+            "target_device": if you_needs_override { &you.device_id } else { &them.device_id },
         }));
     }
 
@@ -1018,8 +1031,13 @@ pub async fn start_capture_per_party(
         }
     }
 
-    // ── Create STT provider for "You" party (if not web_speech) ──
-    let you_stt = create_stt_provider_for_party(&you, &state, &app, "You").await?;
+    // ── Create STT provider for "You" party (if not web_speech or skipped) ──
+    let you_stt = if skip_you_stt {
+        crate::stt::emit_stt_debug(&app, "info", "stt", "'You' STT skipped (in-person meeting)");
+        None
+    } else {
+        create_stt_provider_for_party(&you, &state, &app, "You").await?
+    };
 
     // ── Create STT provider for "Them" party (if not web_speech) ──
     let them_stt = create_stt_provider_for_party(&them, &state, &app, "Them").await?;
@@ -2045,3 +2063,43 @@ pub async fn get_mute_status(app: AppHandle) -> Result<String, String> {
     serde_json::to_string(&status).map_err(|e| format!("Failed to serialize: {}", e))
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::{PartyAudioConfig, PartyRole};
+
+    fn party(stt_provider: &str, device_id: &str, is_input_device: bool) -> PartyAudioConfig {
+        PartyAudioConfig {
+            role: PartyRole::You,
+            device_id: device_id.to_string(),
+            is_input_device,
+            stt_provider: stt_provider.to_string(),
+            local_model_id: None,
+        }
+    }
+
+    /// Web Speech and Windows Speech hear only the OS default mic, so a
+    /// non-default input device needs the default switched to it.
+    #[test]
+    fn default_mic_override_only_for_speech_engines_on_a_chosen_mic() {
+        let headset = "Microphone (Logi USB Headset H340)";
+        assert!(needs_default_mic_override(&party("web_speech", headset, true), false));
+        assert!(needs_default_mic_override(&party("windows_native", headset, true), false));
+        // Every other provider reads NexQ's own capture of the chosen device.
+        assert!(!needs_default_mic_override(&party("cartesia", headset, true), false));
+        assert!(!needs_default_mic_override(&party("parakeet_tdt", headset, true), false));
+        // Already the default, or an output device: nothing to switch.
+        assert!(!needs_default_mic_override(&party("web_speech", "default", true), false));
+        assert!(!needs_default_mic_override(&party("web_speech", "Speakers (Realtek)", false), false));
+    }
+
+    /// In an in-person meeting "You" isn't transcribed, so its engine choice
+    /// must not move the Windows default mic.
+    #[test]
+    fn a_skipped_party_never_switches_the_default_mic() {
+        let headset = "Microphone (Logi USB Headset H340)";
+        assert!(!needs_default_mic_override(&party("web_speech", headset, true), true));
+        assert!(!needs_default_mic_override(&party("windows_native", headset, true), true));
+    }
+}

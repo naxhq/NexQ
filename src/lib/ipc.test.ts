@@ -5,7 +5,8 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invoke(...args),
 }));
 
-import { generateAssist } from "./ipc";
+import { generateAssist, startCapturePerParty } from "./ipc";
+import type { PartyAudioConfig } from "./types";
 import { useTranscriptStore } from "../stores/transcriptStore";
 
 describe("generateAssist", () => {
@@ -92,5 +93,29 @@ describe("generateAssist", () => {
     await generateAssist("Recap", undefined, { scope: null });
     expect("scope" in invoke.mock.calls[1][1]).toBe(false);
     expect("scope" in invoke.mock.calls[2][1]).toBe(false);
+  });
+});
+
+describe("startCapturePerParty", () => {
+  const you: PartyAudioConfig = { role: "You", device_id: "Mic", is_input_device: true, stt_provider: "cartesia" };
+  const them: PartyAudioConfig = { role: "Them", device_id: "Room mic", is_input_device: true, stt_provider: "cartesia" };
+
+  beforeEach(() => {
+    invoke.mockReset();
+    invoke.mockResolvedValue(undefined);
+  });
+
+  it("asks the backend to skip the You transcriber when told to", async () => {
+    await startCapturePerParty(you, them, { skipYouStt: true });
+    expect(invoke).toHaveBeenCalledWith("start_capture_per_party", {
+      youConfig: JSON.stringify(you),
+      themConfig: JSON.stringify(them),
+      skipYouStt: true,
+    });
+  });
+
+  it("starts both transcribers by default", async () => {
+    await startCapturePerParty(you, them);
+    expect(invoke.mock.calls[0][1].skipYouStt).toBe(false);
   });
 });

@@ -124,11 +124,13 @@ export async function getAudioSessions(): Promise<AudioSessionInfo[]> {
 
 export async function startCapturePerParty(
   youConfig: PartyAudioConfig,
-  themConfig: PartyAudioConfig
+  themConfig: PartyAudioConfig,
+  options: { skipYouStt?: boolean } = {}
 ): Promise<void> {
   return invoke("start_capture_per_party", {
     youConfig: JSON.stringify(youConfig),
     themConfig: JSON.stringify(themConfig),
+    skipYouStt: options.skipYouStt ?? false,
   });
 }
 
