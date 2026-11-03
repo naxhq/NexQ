@@ -166,6 +166,10 @@ pub trait STTProvider: Send + Sync {
 
     /// Set the recognition language (e.g., "en-US", "es-ES").
     fn set_language(&mut self, language: &str);
+
+    /// The party was muted or unmuted. A provider that bills for an open
+    /// stream can close it while muted. Must not block: the audio loop calls it.
+    fn set_muted(&mut self, _muted: bool) {}
 }
 
 /// Provider info for the frontend.
