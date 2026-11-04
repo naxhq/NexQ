@@ -34,8 +34,9 @@ NexQ uses a two-party audio model: **"You"** (microphone) and **"Them"** (system
 - **Requires API Key**: Yes
 - **Runs Locally**: No (cloud)
 - **Best For**: High-accuracy real-time transcription
-- **Models**: nova-3 (recommended), nova-2, nova, enhanced, base
-- **Configuration Options**:
+- **Models**: nova-3 (recommended), nova-2, nova, enhanced, base; Flux and Flux Multilingual for Auto-Answer
+- **Flux**: tells NexQ when a speaker has finished, so Auto-Answer replies at once. It doesn't tell speakers apart. Quiet time counts toward Deepgram usage; muted time doesn't, since muting closes the stream
+- **Configuration Options** (Flux uses only numerals, the profanity filter and key terms):
   - Smart formatting, punctuation, numerals
   - Endpointing threshold (silence detection)
   - Diarization, profanity filter
