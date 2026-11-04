@@ -22,6 +22,7 @@ const ipc = vi.hoisted(() => ({
   setLLMProvider: vi.fn(),
   setActiveModel: vi.fn(),
   setClaudeCliConfig: vi.fn(),
+  storeApiKey: vi.fn(),
 }));
 
 vi.mock("../lib/ipc", async (importOriginal) => ({
@@ -32,6 +33,7 @@ vi.mock("../lib/ipc", async (importOriginal) => ({
   setLLMProvider: (...a: unknown[]) => ipc.setLLMProvider(...a),
   setActiveModel: (...a: unknown[]) => ipc.setActiveModel(...a),
   setClaudeCliConfig: (...a: unknown[]) => ipc.setClaudeCliConfig(...a),
+  storeApiKey: (...a: unknown[]) => ipc.storeApiKey(...a),
   getApiKey: async () => null,
   hasApiKey: async () => false,
   listModels: async () => [],
@@ -79,6 +81,7 @@ describe("Settings ↔ footer sync of the active LLM", () => {
     ipc.setLLMProvider.mockReset().mockResolvedValue(undefined);
     ipc.setActiveModel.mockReset().mockResolvedValue(undefined);
     ipc.setClaudeCliConfig.mockReset().mockResolvedValue(undefined);
+    ipc.storeApiKey.mockReset().mockResolvedValue(undefined);
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
@@ -110,6 +113,54 @@ describe("Settings ↔ footer sync of the active LLM", () => {
     expect(screen.queryByRole("button", { name: "Use Claude" })).not.toBeInTheDocument();
     // Same side effects as every other activation path.
     expect(useConfigStore.getState().verifiedCloudProviders).toContain("claude_cli");
+  });
+
+  describe("Custom endpoint", () => {
+    const OLLAMA_CLOUD = { provider_type: "custom", base_url: "https://ollama.com/v1" };
+
+    beforeEach(() => {
+      useConfigStore.setState({
+        llmProvider: "custom",
+        llmModel: "gemma4:31b-cloud",
+        lastModelByProvider: { custom: "gemma4:31b-cloud" },
+        customLlmBaseUrl: OLLAMA_CLOUD.base_url,
+        customLlmAuthType: "bearer",
+      });
+    });
+
+    // Reported: a new token was saved but the custom endpoint in use kept
+    // the old one (401) until NexQ restarted; the pasted key had spaces too.
+    it("a token changed while Custom is in use applies at once, without spaces around it", async () => {
+      render(<LLMSettings />);
+      const token = await screen.findByPlaceholderText("Bearer token...");
+      fireEvent.change(token, { target: { value: "  the-key \t" } });
+      fireEvent.blur(token);
+      await waitFor(() =>
+        expect(ipc.setLLMProvider).toHaveBeenLastCalledWith(
+          JSON.stringify({ ...OLLAMA_CLOUD, auth_type: "bearer", auth_value: "the-key" }),
+        ),
+      );
+      expect(ipc.storeApiKey).toHaveBeenCalledWith("custom", "the-key");
+      expect(token).toHaveValue("the-key");
+    });
+
+    it("a changed auth type applies at once", async () => {
+      render(<LLMSettings />);
+      await screen.findByPlaceholderText("Bearer token...");
+      fireEvent.change(screen.getByDisplayValue("Bearer Token"), { target: { value: "none" } });
+      await waitFor(() => expect(ipc.setLLMProvider).toHaveBeenLastCalledWith(JSON.stringify(OLLAMA_CLOUD)));
+    });
+
+    it("while another provider is in use, a token is only saved", async () => {
+      useConfigStore.setState({ llmProvider: "ollama", llmModel: "llama3.2" });
+      render(<LLMSettings />);
+      fireEvent.click(screen.getByRole("button", { name: /^Custom\b/ }));
+      const token = await screen.findByPlaceholderText("Bearer token...");
+      fireEvent.change(token, { target: { value: "the-key" } });
+      fireEvent.blur(token);
+      await waitFor(() => expect(ipc.storeApiKey).toHaveBeenCalledWith("custom", "the-key"));
+      expect(ipc.setLLMProvider).not.toHaveBeenCalled();
+    });
   });
 
   it("the bottom 'Set as Active' button takes the same path", async () => {
