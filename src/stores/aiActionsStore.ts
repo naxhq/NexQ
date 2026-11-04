@@ -61,7 +61,7 @@ function createDefaultConfigs(): AllActionConfigs {
       transcriptWindowSeconds: 300,
       temperature: 0.3,
       questionDetection: true,
-      autoTrigger: true,
+      autoTrigger: false,
     },
     customInstructions: "",
     instructionPresets: { tone: null, format: null, length: null, opinion: null },

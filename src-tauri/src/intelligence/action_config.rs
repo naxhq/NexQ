@@ -47,7 +47,7 @@ impl Default for GlobalDefaults {
             rag_top_k: 5,
             temperature: 0.3,
             question_detection: true,
-            auto_trigger: true,
+            auto_trigger: false,
         }
     }
 }
@@ -273,6 +273,14 @@ impl Default for AllActionConfigs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A new install finds questions, and answering them stays your choice.
+    #[test]
+    fn new_installs_detect_questions_without_answering_them() {
+        let defaults = GlobalDefaults::default();
+        assert!(defaults.question_detection);
+        assert!(!defaults.auto_trigger);
+    }
 
     /// Configs saved before the setting existed: Auto-Answer off used to hide
     /// the question cards too, and now keeps them.

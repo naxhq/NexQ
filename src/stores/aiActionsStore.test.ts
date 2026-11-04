@@ -12,6 +12,15 @@ vi.mock("../lib/ipc", async (importOriginal) => ({
 
 import { useAIActionsStore } from "./aiActionsStore";
 
+describe("a new install", () => {
+  it("detects questions, and leaves answering them to you", () => {
+    expect(useAIActionsStore.getState().configs.globalDefaults).toMatchObject({
+      questionDetection: true,
+      autoTrigger: false,
+    });
+  });
+});
+
 describe("loadConfigs with saved settings", () => {
   beforeEach(() => {
     // The shape versions before Question Detection saved.
@@ -34,6 +43,12 @@ describe("loadConfigs with saved settings", () => {
       temperature: 0.7,
       transcriptWindowSeconds: 120,
     });
+  });
+
+  it("keeps Auto-Answer on when it was saved on", async () => {
+    disk.saved = { actions: {}, globalDefaults: { autoTrigger: true } };
+    await useAIActionsStore.getState().loadConfigs();
+    expect(useAIActionsStore.getState().configs.globalDefaults.autoTrigger).toBe(true);
   });
 
   it("keeps Question Detection off when it was saved off", async () => {
