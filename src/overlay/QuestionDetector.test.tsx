@@ -1,16 +1,37 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../lib/events", () => ({ onQuestionDetected: () => Promise.resolve(() => {}) }));
+// Transcript event handlers the component subscribes, so a test can send lines.
+const listeners = vi.hoisted(() => ({
+  update: [] as Array<(e: { segment: unknown }) => void>,
+  final: [] as Array<(e: { segment: unknown }) => void>,
+}));
+vi.mock("../lib/events", () => {
+  const subscribe = (list: Array<(e: { segment: unknown }) => void>) => (h: (e: { segment: unknown }) => void) => {
+    list.push(h);
+    return Promise.resolve(() => { list.splice(list.indexOf(h), 1); });
+  };
+  return {
+    onQuestionDetected: () => Promise.resolve(() => {}),
+    onTranscriptUpdate: subscribe(listeners.update),
+    onTranscriptFinal: subscribe(listeners.final),
+  };
+});
 vi.mock("../lib/userAction", () => ({ runUserAction: vi.fn(() => Promise.resolve()) }));
+vi.mock("../lib/ipc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/ipc")>()),
+  cancelGeneration: vi.fn(() => Promise.resolve()),
+}));
 
 import { AUTO_TRIGGER_DELAY_MS, QuestionDetector, QuestionPanel, lastSentence, looksLikeQuestion } from "./QuestionDetector";
 import { runUserAction } from "../lib/userAction";
+import { cancelGeneration } from "../lib/ipc";
+import { useStreamStore } from "../stores/streamStore";
 import { useAIActionsStore } from "../stores/aiActionsStore";
 import { useQuestionStore } from "../stores/questionStore";
 import { resetMeetingScopedStores } from "../stores/resetMeeting";
 import { useTranscriptStore } from "../stores/transcriptStore";
-import type { GlobalDefaults, TranscriptSegment } from "../lib/types";
+import type { GlobalDefaults, TranscriptSegment, TurnSignal } from "../lib/types";
 
 const seg = (text: string, is_final = true): TranscriptSegment =>
   ({ id: "them_1", text, speaker: "Them", timestamp_ms: 1, is_final, confidence: 1 }) as TranscriptSegment;
@@ -25,8 +46,163 @@ const setAutoTrigger = (on: boolean) => setDefaults({ autoTrigger: on });
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
-  vi.mocked(runUserAction).mockClear();
+  vi.mocked(runUserAction).mockReset().mockImplementation(() => Promise.resolve());
+  vi.mocked(cancelGeneration).mockClear();
   useQuestionStore.getState().clear();
+  useStreamStore.getState().resetForMeeting();
+  listeners.update.length = 0;
+  listeners.final.length = 0;
+});
+
+/** A line from the other party carrying a provider turn signal. */
+const turnLine = (text: string, turn: TurnSignal, id = "them_t1"): TranscriptSegment =>
+  ({ id, text, speaker: "Them", timestamp_ms: 1, is_final: turn === "end", confidence: 1, turn }) as TranscriptSegment;
+
+/** Delivers a line as the transcript events do (store first, as useTranscript does). */
+function send(line: TranscriptSegment) {
+  act(() => {
+    if (line.is_final) useTranscriptStore.setState({ segments: [line] });
+    for (const h of [...(line.is_final ? listeners.final : listeners.update)]) h({ segment: line });
+  });
+}
+
+/** Lets queued Auto-Answer steps (and their stops) finish. */
+async function settle() {
+  for (let i = 0; i < 6; i++) await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+}
+
+/** Answers keep running until cancelled, like real streams. */
+function answersRunUntilStopped() {
+  const running = new Map<string, () => void>();
+  vi.mocked(runUserAction).mockImplementation((_mode, _q, opts) => {
+    const id = opts?.requestId ?? "?";
+    useStreamStore.setState({ isStreaming: true, streamRequestId: id });
+    return new Promise<void>((resolve) => running.set(id, resolve));
+  });
+  vi.mocked(cancelGeneration).mockImplementation(async (id) => {
+    useStreamStore.setState({ isStreaming: false, streamRequestId: null });
+    if (id) running.get(id)?.();
+  });
+}
+
+const askedFor = () => vi.mocked(runUserAction).mock.calls.map((c) => c[1]);
+const requestOf = (n: number) => vi.mocked(runUserAction).mock.calls[n][2]?.requestId;
+
+describe("Auto-Answer with the provider's turn signals (Cartesia, Deepgram Flux)", () => {
+  it("answers as soon as the provider says the speaker finished, with no quiet wait", async () => {
+    vi.useFakeTimers();
+    setAutoTrigger(true);
+    render(<QuestionDetector />);
+    send(turnLine("Thanks. What would you do first?", "end"));
+    await settle();
+    expect(askedFor()).toEqual(["What would you do first?"]);
+    // The quiet wait doesn't answer it a second time.
+    await act(async () => { await vi.advanceTimersByTimeAsync(AUTO_TRIGGER_DELAY_MS * 3); });
+    expect(runUserAction).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Answered")).toBeTruthy();
+  });
+
+  it("starts early on 'probably done' and keeps that answer when the turn ends the same", async () => {
+    vi.useFakeTimers();
+    setAutoTrigger(true);
+    render(<QuestionDetector />);
+    send(turnLine("What would you do first?", "eager_end"));
+    await settle();
+    expect(askedFor()).toEqual(["What would you do first?"]);
+    send(turnLine("What would you do first?", "end"));
+    await settle();
+    expect(runUserAction).toHaveBeenCalledTimes(1);
+    expect(cancelGeneration).not.toHaveBeenCalled();
+  });
+
+  it("stops the early answer when they keep talking, and answers the whole question at the end", async () => {
+    vi.useFakeTimers();
+    setAutoTrigger(true);
+    answersRunUntilStopped();
+    render(<QuestionDetector />);
+    send(turnLine("What would you do", "eager_end"));
+    await settle();
+    const early = requestOf(0);
+    send(turnLine("What would you do", "resumed"));
+    await settle();
+    expect(cancelGeneration).toHaveBeenCalledWith(early);
+    expect(screen.queryByText("Answered")).toBeNull();
+
+    send(turnLine("What would you do if the build broke?", "end"));
+    await settle();
+    expect(askedFor()).toEqual(["What would you do", "What would you do if the build broke?"]);
+  });
+
+  it("replaces the early answer when the turn ends with a different question", async () => {
+    vi.useFakeTimers();
+    setAutoTrigger(true);
+    answersRunUntilStopped();
+    render(<QuestionDetector />);
+    send(turnLine("What would you do?", "eager_end"));
+    await settle();
+    send(turnLine("What would you do if the build broke?", "end"));
+    await settle();
+    expect(cancelGeneration).toHaveBeenCalledWith(requestOf(0));
+    expect(askedFor()).toEqual(["What would you do?", "What would you do if the build broke?"]);
+  });
+
+  it("never stops an answer you asked for: the question waits as a card to click", async () => {
+    vi.useFakeTimers();
+    setAutoTrigger(true);
+    useStreamStore.setState({ isStreaming: true, streamRequestId: "yours" });
+    render(<QuestionDetector />);
+    send(turnLine("What would you do first?", "end"));
+    await settle();
+    await act(async () => { await vi.advanceTimersByTimeAsync(AUTO_TRIGGER_DELAY_MS * 3); });
+    expect(runUserAction).not.toHaveBeenCalled();
+    expect(cancelGeneration).not.toHaveBeenCalled();
+    expect(screen.getByText(/What would you do first\?/)).toBeTruthy();
+    expect(screen.queryByText("Answered")).toBeNull();
+  });
+
+  it("answers nothing on turn signals with Auto-Answer off", async () => {
+    vi.useFakeTimers();
+    setAutoTrigger(false);
+    render(<QuestionDetector />);
+    send(turnLine("What would you do first?", "eager_end"));
+    send(turnLine("What would you do first?", "end"));
+    await settle();
+    expect(runUserAction).not.toHaveBeenCalled();
+  });
+});
+
+describe("Auto-Answer without turn signals (Deepgram Nova and the others)", () => {
+  it("a refused automatic answer leaves the question to click, not marked answered", async () => {
+    vi.useFakeTimers();
+    setAutoTrigger(true);
+    useStreamStore.setState({ isStreaming: true, streamRequestId: "yours" });
+    useTranscriptStore.setState({ segments: [seg("What would you do first?")] });
+    render(<QuestionDetector />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(AUTO_TRIGGER_DELAY_MS * 3); });
+    await settle();
+    expect(runUserAction).not.toHaveBeenCalled();
+    expect(screen.queryByText("Answered")).toBeNull();
+  });
+
+  it("a line that grows into another question replaces the running automatic answer", async () => {
+    vi.useFakeTimers();
+    setAutoTrigger(true);
+    answersRunUntilStopped();
+    useTranscriptStore.setState({ segments: [seg("What would you do")] });
+    render(<QuestionDetector />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(AUTO_TRIGGER_DELAY_MS); });
+    await settle();
+    expect(askedFor()).toEqual(["What would you do"]);
+
+    act(() => useTranscriptStore.setState({ segments: [seg("What would you do if the build broke?")] }));
+    await settle();
+    expect(cancelGeneration).toHaveBeenCalledWith(requestOf(0));
+    await act(async () => { await vi.advanceTimersByTimeAsync(AUTO_TRIGGER_DELAY_MS - 1); });
+    expect(runUserAction).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    await settle();
+    expect(askedFor()).toEqual(["What would you do", "What would you do if the build broke?"]);
+  });
 });
 
 describe("Auto-Trigger", () => {
@@ -38,7 +214,7 @@ describe("Auto-Trigger", () => {
     act(() => vi.advanceTimersByTime(AUTO_TRIGGER_DELAY_MS - 100));
     expect(runUserAction).not.toHaveBeenCalled();
     act(() => vi.advanceTimersByTime(100));
-    expect(runUserAction).toHaveBeenCalledWith("Assist", "What would you do first?");
+    expect(runUserAction).toHaveBeenCalledWith("Assist", "What would you do first?", expect.anything());
     act(() => vi.advanceTimersByTime(AUTO_TRIGGER_DELAY_MS * 3));
     expect(runUserAction).toHaveBeenCalledTimes(1);
   });
@@ -55,7 +231,7 @@ describe("Auto-Trigger", () => {
     act(() => vi.advanceTimersByTime(AUTO_TRIGGER_DELAY_MS - 1));
     expect(runUserAction).not.toHaveBeenCalled();
     act(() => vi.advanceTimersByTime(1));
-    expect(runUserAction).toHaveBeenCalledWith("Assist", "What would you do if the build broke?");
+    expect(runUserAction).toHaveBeenCalledWith("Assist", "What would you do if the build broke?", expect.anything());
   });
 
   it("only shows the question when turned off", () => {
@@ -129,7 +305,7 @@ describe("QuestionPanel coming back (layout switch, Settings)", () => {
       segments: [seg(question), { ...seg("And how long would it take?"), id: "them_2" }],
     }));
     act(() => vi.advanceTimersByTime(AUTO_TRIGGER_DELAY_MS));
-    expect(runUserAction).toHaveBeenCalledWith("Assist", "And how long would it take?");
+    expect(runUserAction).toHaveBeenCalledWith("Assist", "And how long would it take?", expect.anything());
   });
 
   it("doesn't answer a question still waiting when the panel went away", () => {
@@ -172,7 +348,7 @@ describe("QuestionPanel coming back (layout switch, Settings)", () => {
     // Same line id as the last meeting's: the new meeting's line is still checked.
     act(() => useTranscriptStore.setState({ segments: [seg(question)] }));
     act(() => vi.advanceTimersByTime(AUTO_TRIGGER_DELAY_MS));
-    expect(runUserAction).toHaveBeenCalledWith("Assist", question);
+    expect(runUserAction).toHaveBeenCalledWith("Assist", question, expect.anything());
   });
 });
 

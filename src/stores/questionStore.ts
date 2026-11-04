@@ -9,8 +9,26 @@ export interface TrackedQuestion extends DetectedQuestion {
   heldBack?: boolean;
 }
 
+/** An automatic answer NexQ started, so it knows what it may stop. */
+export interface AutoAnswerRef {
+  requestId: string;
+  /** Transcript line the question came from. */
+  segmentId: string;
+  question: string;
+  /** Started on "probably done" and not yet confirmed by the turn's end. */
+  early: boolean;
+  /** Settles once the answer has finished, was stopped, or was refused. */
+  done: Promise<void>;
+}
+
 /** Text of each final line when it was last checked for a question. */
 const checkedText = new Map<string, string>();
+
+/**
+ * Lines from a provider that detects turns (Cartesia, Deepgram Flux): Auto-Answer
+ * follows the provider's signals there, not the quiet wait.
+ */
+const turnLines = new Set<string>();
 
 interface QuestionState {
   questions: TrackedQuestion[];
@@ -25,6 +43,18 @@ interface QuestionState {
   markAssisted: (index: number) => void;
   dismiss: (index: number) => void;
   clear: () => void;
+
+  /** The newest automatic answer NexQ started (it may have finished since). */
+  autoAnswer: AutoAnswerRef | null;
+  setAutoAnswer: (ref: AutoAnswerRef | null) => void;
+  /** Shows `question` as the line's question, answered (a new card if the line has none). */
+  answerLine: (question: DetectedQuestion, segmentId: string) => void;
+  /** The question stays a card to click; Auto-Answer leaves it alone. */
+  holdBack: (segmentId: string | undefined, text: string) => void;
+  /** The line's question became `text`: a new question, not answered yet. */
+  reviseLine: (segmentId: string, text: string) => void;
+  markTurnLine: (segmentId: string) => void;
+  isTurnLine: (segmentId: string | undefined) => boolean;
 }
 
 // The panel unmounts on a layout switch and while Settings is open, so what it
@@ -32,6 +62,7 @@ interface QuestionState {
 export const useQuestionStore = create<QuestionState>((set) => ({
   questions: [],
   panelSeen: false,
+  autoAnswer: null,
 
   addQuestion: (q, segmentId) =>
     set((state) => {
@@ -71,6 +102,41 @@ export const useQuestionStore = create<QuestionState>((set) => ({
 
   clear: () => {
     checkedText.clear();
-    set({ questions: [], panelSeen: false });
+    turnLines.clear();
+    set({ questions: [], panelSeen: false, autoAnswer: null });
   },
+
+  setAutoAnswer: (ref) => set({ autoAnswer: ref }),
+
+  answerLine: (q, segmentId) =>
+    set((state) => {
+      const i = state.questions.findIndex((p) => p.segmentId === segmentId);
+      if (i < 0) {
+        return { questions: [{ ...q, assisted: true, segmentId }, ...state.questions].slice(0, 10) };
+      }
+      return {
+        questions: state.questions.map((p, j) =>
+          j === i ? { ...p, text: q.text, assisted: true, heldBack: false } : p),
+      };
+    }),
+
+  holdBack: (segmentId, text) =>
+    set((state) => ({
+      questions: state.questions.map((q) =>
+        (segmentId !== undefined ? q.segmentId === segmentId : q.text === text)
+          ? { ...q, assisted: false, heldBack: true }
+          : q),
+    })),
+
+  reviseLine: (segmentId, text) =>
+    set((state) => ({
+      questions: state.questions.map((q) =>
+        q.segmentId === segmentId ? { ...q, text, assisted: false, heldBack: false } : q),
+    })),
+
+  markTurnLine: (segmentId) => {
+    turnLines.add(segmentId);
+  },
+
+  isTurnLine: (segmentId) => segmentId !== undefined && turnLines.has(segmentId),
 }));

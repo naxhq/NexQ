@@ -8,6 +8,7 @@ import { useMeetingStore } from "../stores/meetingStore";
 import { useAIActionsStore } from "../stores/aiActionsStore";
 import { isQuitPending } from "../lib/ipc";
 import { runUserAction } from "../lib/userAction";
+import { inTurn, makeWayForYou } from "../lib/autoAnswer";
 import { isOverlayVisible, meetingShortcutAction, showLauncherWindow, showMeetingOverlay } from "../lib/windows";
 import { endMeetingFromThisWindow } from "./useUpdater";
 import { showToast } from "../stores/toastStore";
@@ -44,6 +45,17 @@ export async function toggleStealthMode(): Promise<void> {
   }
 }
 
+/**
+ * Assist you asked for (Space or the global shortcut). It comes first: a
+ * running automatic answer is stopped for it; any other answer is left alone.
+ */
+function assistFirst() {
+  void inTurn(async () => {
+    await makeWayForYou();
+    runUserAction("Assist").catch(() => {});
+  });
+}
+
 export function useGlobalShortcut() {
   const stealthShortcut = useConfigStore((s) => s.stealthShortcut);
   const assistShortcut = useConfigStore((s) => s.assistShortcut);
@@ -68,7 +80,7 @@ export function useGlobalShortcut() {
         await register(key, (event) => {
           if (event.state !== "Pressed") return;
           const visible = useAIActionsStore.getState().configs.actions["Assist"]?.visible !== false;
-          if (visible) runUserAction("Assist").catch(() => {});
+          if (visible) assistFirst();
         });
         registered = true;
         // The meeting ended (or the key changed) while registering.
@@ -187,7 +199,7 @@ export function useGlobalShortcut() {
         case "Space":
           if (isVisible("Assist")) {
             e.preventDefault();
-            runUserAction("Assist").catch(() => {});
+            assistFirst();
           }
           break;
         case "Numpad1":

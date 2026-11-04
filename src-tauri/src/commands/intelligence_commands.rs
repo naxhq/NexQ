@@ -1040,8 +1040,11 @@ pub async fn generate_assist(
     result
 }
 
+/// Stops the answer being generated. With `request_id`, only that answer: if
+/// another one is running instead, it is left alone.
 #[command]
 pub async fn cancel_generation(
+    request_id: Option<String>,
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
@@ -1057,7 +1060,10 @@ pub async fn cancel_generation(
     // Only sets the flag: providers stop at the next chunk and the generation guard is
     // released when `generate_assist` returns. The cancelled end event is emitted here so
     // the UI settles immediately, tagged with the in-flight request id.
-    let in_flight = engine.cancel();
+    let in_flight = match request_id.as_deref() {
+        Some(id) => engine.cancel_request(id),
+        None => engine.cancel(),
+    };
     drop(engine);
 
     if let Some(request_id) = in_flight {
