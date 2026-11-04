@@ -1,11 +1,10 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { HelpCircle, Sparkles, Check, Clock, X } from "lucide-react";
 import { onQuestionDetected } from "../lib/events";
 import { runUserAction } from "../lib/userAction";
 import { useTranscriptStore } from "../stores/transcriptStore";
-import { useMeetingStore } from "../stores/meetingStore";
 import { useAIActionsStore } from "../stores/aiActionsStore";
-import type { DetectedQuestion } from "../lib/types";
+import { useQuestionStore } from "../stores/questionStore";
 
 /**
  * Quiet time after the other party's last words before Auto-Trigger answers
@@ -73,12 +72,6 @@ export function lastSentence(text: string): string {
   return (sentences[last] ?? "").trim();
 }
 
-interface TrackedQuestion extends DetectedQuestion {
-  assisted: boolean;
-  /** Transcript line the question came from (lines grow while someone talks). */
-  segmentId?: string;
-}
-
 /** The overlay's question card, unless question detection is off. */
 export function QuestionPanel() {
   const questionDetection = useAIActionsStore((s) => s.configs.globalDefaults.questionDetection);
@@ -91,11 +84,10 @@ export function QuestionPanel() {
 }
 
 export function QuestionDetector() {
-  const [questions, setQuestions] = useState<TrackedQuestion[]>([]);
-  // Text of each final line when it was last checked for a question.
-  const checkedTextRef = useRef<Map<string, string>>(new Map());
+  const questions = useQuestionStore((s) => s.questions);
+  const addQuestion = useQuestionStore((s) => s.addQuestion);
+  const justMountedRef = useRef(true);
   const segments = useTranscriptStore((s) => s.segments);
-  const activeMeetingId = useMeetingStore((s) => s.activeMeeting?.id ?? "");
   const autoTrigger = useAIActionsStore((s) => s.configs.globalDefaults.autoTrigger);
   // Changes whenever the other party says more (a new line, or a line growing).
   const otherPartyActivity = useTranscriptStore((s) => {
@@ -105,28 +97,6 @@ export function QuestionDetector() {
     }
     return "";
   });
-
-  // Clear detected questions when a new meeting starts so a question from the
-  // previous meeting doesn't linger in the overlay.
-  useEffect(() => {
-    setQuestions([]);
-    checkedTextRef.current = new Map();
-  }, [activeMeetingId]);
-
-  const addQuestion = useCallback((q: DetectedQuestion, segmentId?: string) => {
-    setQuestions((prev) => {
-      // The same line grew: update its question in place (unless already answered).
-      if (segmentId) {
-        const i = prev.findIndex((p) => p.segmentId === segmentId);
-        if (i >= 0) {
-          if (prev[i].assisted || prev[i].text === q.text) return prev;
-          return prev.map((p, j) => (j === i ? { ...p, text: q.text } : p));
-        }
-      }
-      if (prev.length > 0 && prev[0].text === q.text) return prev;
-      return [{ ...q, assisted: false, segmentId }, ...prev].slice(0, 10);
-    });
-  }, []);
 
   useEffect(() => {
     const p = onQuestionDetected((event) => {
@@ -138,29 +108,31 @@ export function QuestionDetector() {
   }, [addQuestion]);
 
   useEffect(() => {
-    const checked = checkedTextRef.current;
+    const { checkLine, panelSeen, setPanelSeen, holdBackUnanswered } = useQuestionStore.getState();
     for (const seg of segments) {
-      if (!seg.is_final || checked.get(seg.id) === seg.text) continue;
-      checked.set(seg.id, seg.text);
+      if (!seg.is_final || !checkLine(seg.id, seg.text)) continue;
       if (!isOtherParty(seg.speaker)) continue;
       const sentence = lastSentence(seg.text);
       if (sentence && looksLikeQuestion(sentence)) {
         addQuestion({ text: sentence, confidence: 0.8, timestamp_ms: seg.timestamp_ms, source: seg.speaker }, seg.id);
       }
     }
+    // Back from a layout switch or Settings: what is unanswered now can be
+    // minutes old, so it stays a card to click rather than getting answered.
+    if (justMountedRef.current && panelSeen) holdBackUnanswered();
+    justMountedRef.current = false;
+    setPanelSeen();
   }, [segments, addQuestion]);
 
   const handleAssist = useCallback((index: number) => {
     const questionText = questions[index]?.text;
-    setQuestions((prev) =>
-      prev.map((q, i) => i === index ? { ...q, assisted: true } : q)
-    );
+    useQuestionStore.getState().markAssisted(index);
     runUserAction("Assist", questionText).catch(() => {});
   }, [questions]);
 
   const handleDismiss = useCallback((index: number, e: React.MouseEvent) => {
     e.stopPropagation();
-    setQuestions((prev) => prev.filter((_, i) => i !== index));
+    useQuestionStore.getState().dismiss(index);
   }, []);
 
   const latest = questions.length > 0 ? questions[0] : null;
@@ -168,7 +140,7 @@ export function QuestionDetector() {
 
   // Auto-Trigger: answer the newest question once the other party has been
   // quiet for a moment. More words from them restart the wait.
-  const waiting = autoTrigger && !!latest && !latest.assisted;
+  const waiting = autoTrigger && !!latest && !latest.assisted && !latest.heldBack;
   useEffect(() => {
     if (!waiting) return;
     const timer = setTimeout(() => handleAssist(0), AUTO_TRIGGER_DELAY_MS);

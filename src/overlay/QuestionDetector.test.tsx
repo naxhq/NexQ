@@ -7,6 +7,8 @@ vi.mock("../lib/userAction", () => ({ runUserAction: vi.fn(() => Promise.resolve
 import { AUTO_TRIGGER_DELAY_MS, QuestionDetector, QuestionPanel, lastSentence, looksLikeQuestion } from "./QuestionDetector";
 import { runUserAction } from "../lib/userAction";
 import { useAIActionsStore } from "../stores/aiActionsStore";
+import { useQuestionStore } from "../stores/questionStore";
+import { resetMeetingScopedStores } from "../stores/resetMeeting";
 import { useTranscriptStore } from "../stores/transcriptStore";
 import type { GlobalDefaults, TranscriptSegment } from "../lib/types";
 
@@ -24,6 +26,7 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.mocked(runUserAction).mockClear();
+  useQuestionStore.getState().clear();
 });
 
 describe("Auto-Trigger", () => {
@@ -88,6 +91,88 @@ describe("QuestionPanel", () => {
     expect(screen.queryByText(/What would you do first\?/)).toBeNull();
     expect(runUserAction).not.toHaveBeenCalled();
     setDefaults({ questionDetection: true });
+  });
+});
+
+describe("QuestionPanel coming back (layout switch, Settings)", () => {
+  const question = "What would you do first?";
+
+  it("doesn't answer an answered question again, and still shows it as answered", () => {
+    vi.useFakeTimers();
+    setDefaults({ questionDetection: true, autoTrigger: true });
+    useTranscriptStore.setState({ segments: [seg(question)] });
+    const { unmount } = render(<QuestionPanel />);
+    act(() => vi.advanceTimersByTime(AUTO_TRIGGER_DELAY_MS));
+    expect(runUserAction).toHaveBeenCalledTimes(1);
+
+    unmount();
+    render(<QuestionPanel />);
+    act(() => vi.advanceTimersByTime(AUTO_TRIGGER_DELAY_MS * 3));
+    expect(runUserAction).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Already answered" })).toBeTruthy();
+  });
+
+  it("shows a question asked while away without answering it, then answers the next one", () => {
+    vi.useFakeTimers();
+    setDefaults({ questionDetection: true, autoTrigger: true });
+    useTranscriptStore.setState({ segments: [] });
+    const { unmount } = render(<QuestionPanel />);
+    unmount();
+
+    useTranscriptStore.setState({ segments: [seg(question)] });
+    render(<QuestionPanel />);
+    act(() => vi.advanceTimersByTime(AUTO_TRIGGER_DELAY_MS * 3));
+    expect(screen.getByText(/What would you do first\?/)).toBeTruthy();
+    expect(runUserAction).not.toHaveBeenCalled();
+
+    act(() => useTranscriptStore.setState({
+      segments: [seg(question), { ...seg("And how long would it take?"), id: "them_2" }],
+    }));
+    act(() => vi.advanceTimersByTime(AUTO_TRIGGER_DELAY_MS));
+    expect(runUserAction).toHaveBeenCalledWith("Assist", "And how long would it take?");
+  });
+
+  it("doesn't answer a question still waiting when the panel went away", () => {
+    vi.useFakeTimers();
+    setDefaults({ questionDetection: true, autoTrigger: true });
+    useTranscriptStore.setState({ segments: [seg(question)] });
+    const { unmount } = render(<QuestionPanel />);
+    act(() => vi.advanceTimersByTime(AUTO_TRIGGER_DELAY_MS - 1));
+    unmount();
+
+    render(<QuestionPanel />);
+    act(() => vi.advanceTimersByTime(AUTO_TRIGGER_DELAY_MS * 3));
+    expect(runUserAction).not.toHaveBeenCalled();
+    expect(screen.getByText(/What would you do first\?/)).toBeTruthy();
+  });
+
+  it("keeps a dismissed question dismissed", () => {
+    setDefaults({ questionDetection: true, autoTrigger: false });
+    useTranscriptStore.setState({ segments: [seg(question)] });
+    const { unmount } = render(<QuestionPanel />);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss question" }));
+    unmount();
+
+    render(<QuestionPanel />);
+    expect(screen.queryByText(/What would you do first\?/)).toBeNull();
+  });
+
+  it("starts empty in a new meeting, and answers its first question", async () => {
+    setDefaults({ questionDetection: true, autoTrigger: true });
+    useTranscriptStore.setState({ segments: [seg(question)] });
+    const { unmount } = render(<QuestionPanel />);
+    expect(screen.getByText(/What would you do first\?/)).toBeTruthy();
+    unmount();
+
+    await resetMeetingScopedStores();
+    vi.useFakeTimers();
+    render(<QuestionPanel />);
+    expect(screen.queryByText(/What would you do first\?/)).toBeNull();
+
+    // Same line id as the last meeting's: the new meeting's line is still checked.
+    act(() => useTranscriptStore.setState({ segments: [seg(question)] }));
+    act(() => vi.advanceTimersByTime(AUTO_TRIGGER_DELAY_MS));
+    expect(runUserAction).toHaveBeenCalledWith("Assist", question);
   });
 });
 
