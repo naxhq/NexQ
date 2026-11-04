@@ -70,6 +70,28 @@ fn accumulator_segment_json(id: &str, speaker: &str, output: &AccumulatorOutput)
             seg["speaker_id"] = serde_json::json!(speaker_id);
         }
     }
+    with_turn(seg, output.turn)
+}
+
+/// A line straight from a provider that segments on its own (Web Speech,
+/// whisper.cpp), without the accumulator.
+fn result_segment_json(id: &str, speaker: &str, result: &crate::stt::provider::TranscriptResult) -> serde_json::Value {
+    let seg = serde_json::json!({
+        "id": id,
+        "text": result.text,
+        "speaker": speaker,
+        "timestamp_ms": result.timestamp_ms,
+        "is_final": result.is_final,
+        "confidence": result.confidence
+    });
+    with_turn(seg, result.turn)
+}
+
+/// Adds the provider's turn signal ("eager_end", "resumed", "end"), if any.
+fn with_turn(mut seg: serde_json::Value, turn: Option<crate::stt::provider::TurnSignal>) -> serde_json::Value {
+    if let Some(turn) = turn {
+        seg["turn"] = serde_json::json!(turn.as_str());
+    }
     seg
 }
 
@@ -1144,14 +1166,7 @@ pub async fn start_capture_per_party(
                         };
                         let seg_id = format!("you_{}_{}", prefix, output.id);
                         let payload = serde_json::json!({
-                            "segment": {
-                                "id": seg_id,
-                                "text": output.text,
-                                "speaker": "User",
-                                "timestamp_ms": output.timestamp_ms,
-                                "is_final": output.is_final,
-                                "confidence": output.confidence
-                            }
+                            "segment": accumulator_segment_json(&seg_id, "User", &output)
                         });
                         let _ = stt_app.emit(event_name, &payload);
                     }
@@ -1161,14 +1176,7 @@ pub async fn start_capture_per_party(
                 if let Some(output) = accumulator.flush() {
                     let seg_id = format!("you_{}_{}", prefix, output.id);
                     let payload = serde_json::json!({
-                        "segment": {
-                            "id": seg_id,
-                            "text": output.text,
-                            "speaker": "User",
-                            "timestamp_ms": output.timestamp_ms,
-                            "is_final": true,
-                            "confidence": output.confidence
-                        }
+                        "segment": accumulator_segment_json(&seg_id, "User", &output)
                     });
                     let _ = stt_app.emit("transcript_final", &payload);
                 }
@@ -1195,14 +1203,7 @@ pub async fn start_capture_per_party(
                         "transcript_update"
                     };
                     let payload = serde_json::json!({
-                        "segment": {
-                            "id": seg_id,
-                            "text": result.text,
-                            "speaker": "User",
-                            "timestamp_ms": result.timestamp_ms,
-                            "is_final": result.is_final,
-                            "confidence": result.confidence
-                        }
+                        "segment": result_segment_json(&seg_id, "User", &result)
                     });
                     let _ = stt_app.emit(event_name, &payload);
                 }
@@ -2068,6 +2069,49 @@ pub async fn get_mute_status(app: AppHandle) -> Result<String, String> {
 mod tests {
     use super::*;
     use crate::audio::{PartyAudioConfig, PartyRole};
+    use crate::stt::provider::{TranscriptResult, TurnSignal};
+
+    fn output(turn: Option<TurnSignal>) -> AccumulatorOutput {
+        AccumulatorOutput {
+            id: "acc_1".into(),
+            text: "What would you do?".into(),
+            speaker: "Them".into(),
+            speaker_tag: None,
+            timestamp_ms: 5,
+            is_final: true,
+            confidence: 1.0,
+            turn,
+        }
+    }
+
+    #[test]
+    fn a_line_carries_its_turn_signal_only_when_it_has_one() {
+        let seg = accumulator_segment_json("them_x_acc_1", "Them", &output(Some(TurnSignal::End)));
+        assert_eq!(seg["turn"], "end");
+        assert_eq!(seg["text"], "What would you do?");
+        let plain = accumulator_segment_json("them_x_acc_1", "Them", &output(None));
+        assert!(plain.get("turn").is_none());
+    }
+
+    #[test]
+    fn a_line_straight_from_a_provider_carries_its_turn_signal() {
+        let result = TranscriptResult {
+            text: "Hello".into(),
+            is_final: false,
+            confidence: 0.8,
+            timestamp_ms: 7,
+            speaker: Some("You".into()),
+            language: None,
+            segment_id: None,
+            duration_ms: None,
+            speaker_tag: None,
+            turn: Some(TurnSignal::EagerEnd),
+        };
+        let seg = result_segment_json("you_x_1", "User", &result);
+        assert_eq!((seg["turn"].as_str(), seg["speaker"].as_str()), (Some("eager_end"), Some("User")));
+        let plain = result_segment_json("you_x_1", "User", &TranscriptResult { turn: None, ..result });
+        assert!(plain.get("turn").is_none());
+    }
 
     fn party(stt_provider: &str, device_id: &str, is_input_device: bool) -> PartyAudioConfig {
         PartyAudioConfig {

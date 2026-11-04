@@ -471,6 +471,7 @@ impl DeepgramSTT {
             segment_id: None,
             duration_ms,
             speaker_tag,
+            turn: None,
         })
     }
 

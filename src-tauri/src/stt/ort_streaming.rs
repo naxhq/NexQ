@@ -872,6 +872,7 @@ fn inference_thread_main(
                             segment_id: Some(seg_id),
                             duration_ms: None,
                             speaker_tag: None,
+                            turn: None,
                         });
                     }
                 } else {
@@ -893,6 +894,7 @@ fn inference_thread_main(
                                 segment_id: Some(seg_id),
                                 duration_ms: None,
                                 speaker_tag: None,
+                                turn: None,
                             });
                         }
 
@@ -922,6 +924,7 @@ fn inference_thread_main(
                 segment_id: Some(seg_id),
                 duration_ms: None,
                 speaker_tag: None,
+                turn: None,
             });
         }
     }

@@ -6,6 +6,8 @@
 // - turn.update / turn.eager_end carry the turn so far (cumulative, never
 //   revised) and become interim results
 // - turn.end carries the finished turn and becomes the final result
+// - turn.eager_end, turn.resume and turn.end are passed on as turn signals
+//   (EagerEnd, Resumed, End), so Auto-Answer can answer without waiting
 // Cartesia sends no word timestamps, so a turn is stamped with the time its
 // turn.start arrived.
 //
@@ -36,7 +38,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use crate::audio::AudioChunk;
 use crate::stt::deepgram::ConnectionStatusEvent;
-use crate::stt::provider::{STTProvider, STTProviderType, TranscriptResult};
+use crate::stt::provider::{STTProvider, STTProviderType, TranscriptResult, TurnSignal};
 
 type CartesiaSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -188,7 +190,16 @@ impl TurnTracker {
                 if self.turn_text.is_empty() {
                     return None;
                 }
-                Some(self.result(self.turn_text.clone(), false, start, None))
+                let turn = matches!(event, ServerEvent::TurnEagerEnd { .. }).then_some(TurnSignal::EagerEnd);
+                Some(self.result(self.turn_text.clone(), false, start, None, turn))
+            }
+            // Carries no text: the turn's latest text goes out again, marked.
+            ServerEvent::TurnResume {} => {
+                if self.turn_text.is_empty() {
+                    return None;
+                }
+                let start = *self.turn_start_ms.get_or_insert(now_ms);
+                Some(self.result(self.turn_text.clone(), false, start, None, Some(TurnSignal::Resumed)))
             }
             ServerEvent::TurnEnd { transcript } => {
                 let start = self.turn_start_ms.take().unwrap_or(now_ms);
@@ -197,7 +208,8 @@ impl TurnTracker {
                 if text.is_empty() {
                     return None;
                 }
-                Some(self.result(text.to_string(), true, start, Some(now_ms.saturating_sub(start))))
+                let duration = Some(now_ms.saturating_sub(start));
+                Some(self.result(text.to_string(), true, start, duration, Some(TurnSignal::End)))
             }
             _ => None,
         }
@@ -205,16 +217,24 @@ impl TurnTracker {
 
     /// The open turn's latest text as a final, for when the connection ends
     /// before its turn.end. Clears the turn, so it is only reported once.
+    /// Cartesia never said the speaker finished, so it carries no turn signal.
     fn finish_open_turn(&mut self, now_ms: u64) -> Option<TranscriptResult> {
         let start = self.turn_start_ms.take()?;
         let text = std::mem::take(&mut self.turn_text);
         if text.is_empty() {
             return None;
         }
-        Some(self.result(text, true, start, Some(now_ms.saturating_sub(start))))
+        Some(self.result(text, true, start, Some(now_ms.saturating_sub(start)), None))
     }
 
-    fn result(&self, text: String, is_final: bool, start_ms: u64, duration_ms: Option<u64>) -> TranscriptResult {
+    fn result(
+        &self,
+        text: String,
+        is_final: bool,
+        start_ms: u64,
+        duration_ms: Option<u64>,
+        turn: Option<TurnSignal>,
+    ) -> TranscriptResult {
         TranscriptResult {
             text,
             is_final,
@@ -226,6 +246,7 @@ impl TurnTracker {
             segment_id: None,
             duration_ms,
             speaker_tag: None,
+            turn,
         }
     }
 }
@@ -1166,14 +1187,19 @@ mod tests {
 
         let mut interims = 0;
         let mut finals = Vec::new();
+        let mut signals = std::collections::BTreeMap::new();
         while let Ok(result) = rx.try_recv() {
+            if let Some(turn) = result.turn {
+                *signals.entry(turn.as_str()).or_insert(0) += 1;
+            }
             if result.is_final { finals.push(result) } else { interims += 1 }
         }
-        println!("{} interim results, {} final turns", interims, finals.len());
+        println!("{} interim results, {} final turns, turn signals {:?}", interims, finals.len(), signals);
         for f in &finals {
-            println!("final: start {} ms, {:?} ms long: {}", f.timestamp_ms % 100_000, f.duration_ms, f.text);
+            println!("final ({:?}): start {} ms, {:?} ms long: {}", f.turn, f.timestamp_ms % 100_000, f.duration_ms, f.text);
         }
         assert!(!finals.is_empty(), "no final turn");
+        assert!(finals.iter().any(|f| f.turn == Some(TurnSignal::End)), "no final carried the End signal");
         let all = finals.iter().map(|f| f.text.to_lowercase()).collect::<Vec<_>>().join(" ");
         assert!(all.contains("meeting"), "unexpected transcript: {all}");
     }
@@ -1265,7 +1291,8 @@ mod tests {
         let eager = turns.on_event(&event(r#"{"type":"turn.eager_end","transcript":"Hi I need to cancel"}"#), 11_000).unwrap();
         assert!(!eager.is_final);
         assert_eq!(eager.text, "Hi I need to cancel");
-        assert!(turns.on_event(&event(r#"{"type":"turn.resume"}"#), 11_100).is_none());
+        let resumed = turns.on_event(&event(r#"{"type":"turn.resume"}"#), 11_100).unwrap();
+        assert_eq!((resumed.text.as_str(), resumed.is_final), ("Hi I need to cancel", false));
 
         let end = turns.on_event(&event(r#"{"type":"turn.end","transcript":"Hi I need to cancel my plan. "}"#), 12_500).unwrap();
         assert!(end.is_final);
@@ -1274,6 +1301,43 @@ mod tests {
         assert_eq!(end.duration_ms, Some(2_500));
         assert_eq!(end.language, None);
         assert_eq!(end.speaker_tag, None);
+    }
+
+    #[test]
+    fn turn_events_carry_cartesias_turn_signals() {
+        let mut turns = TurnTracker::new("Them");
+        turns.on_event(&event(r#"{"type":"turn.start"}"#), 10_000);
+        let update = turns.on_event(&event(r#"{"type":"turn.update","transcript":"What would you"}"#), 10_300).unwrap();
+        assert_eq!(update.turn, None);
+
+        let eager = turns.on_event(&event(r#"{"type":"turn.eager_end","transcript":"What would you do"}"#), 10_800).unwrap();
+        assert_eq!((eager.turn, eager.is_final), (Some(TurnSignal::EagerEnd), false));
+
+        // turn.resume carries no text: it reports the turn's latest text again.
+        let resumed = turns.on_event(&event(r#"{"type":"turn.resume"}"#), 11_000).unwrap();
+        assert_eq!((resumed.turn, resumed.is_final), (Some(TurnSignal::Resumed), false));
+        assert_eq!((resumed.text.as_str(), resumed.timestamp_ms), ("What would you do", 10_000));
+
+        let end = turns.on_event(&event(r#"{"type":"turn.end","transcript":"What would you do first?"}"#), 12_000).unwrap();
+        assert_eq!((end.turn, end.is_final), (Some(TurnSignal::End), true));
+    }
+
+    #[test]
+    fn a_resume_before_any_text_reports_nothing() {
+        let mut turns = TurnTracker::new("Them");
+        turns.on_event(&event(r#"{"type":"turn.start"}"#), 1_000);
+        assert!(turns.on_event(&event(r#"{"type":"turn.resume"}"#), 1_100).is_none());
+    }
+
+    #[test]
+    fn a_turn_cut_short_by_the_connection_has_no_turn_signal() {
+        // Cartesia didn't say the speaker finished, so Auto-Answer must not
+        // treat it as a turn end.
+        let mut turns = TurnTracker::new("Them");
+        turns.on_event(&event(r#"{"type":"turn.start"}"#), 1_000);
+        turns.on_event(&event(r#"{"type":"turn.eager_end","transcript":"What would"}"#), 1_500);
+        let last = turns.finish_open_turn(2_000).unwrap();
+        assert_eq!((last.is_final, last.turn), (true, None));
     }
 
     #[test]
