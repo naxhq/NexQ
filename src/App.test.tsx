@@ -50,7 +50,7 @@ beforeAll(() => {
     if (cmd === "list_meetings") return "[]"; // Sent as a JSON string, like the two below
     if (cmd === "get_rag_status" || cmd === "get_token_budget") return "null";
     return [];
-  });
+  }, { shouldMockEvents: true });
   vi.stubGlobal("ResizeObserver", class {
     observe() {}
     unobserve() {}
@@ -66,6 +66,22 @@ afterEach(() => {
   useMeetingStore.getState().stopTimer();
   useMeetingStore.setState({ activeMeeting: null, currentView: "launcher", isRecording: false });
   useScenarioStore.setState({ activeScenarioId: "team_meeting", customScenarios: [], scenarioOverrides: {} });
+});
+
+describe("scenarios saved by another window", () => {
+  it("show up in this window", async () => {
+    await launchOverlayOn("lecture");
+    const { emit } = await vi.importActual<typeof import("@tauri-apps/api/event")>("@tauri-apps/api/event");
+    await vi.waitFor(async () => {
+      await emit("store://change", {
+        resourceId: 1,
+        key: "customScenarios",
+        value: [{ id: "custom_1", name: "Board review", is_custom: true }],
+        exists: true,
+      });
+      expect(useScenarioStore.getState().resolveScenario("custom_1")).toBe("custom_1");
+    });
+  });
 });
 
 describe("the overlay's scenario chip", () => {

@@ -214,6 +214,7 @@ export function ScenarioSettings() {
   const updatePrompt = useScenarioStore((s) => s.updatePrompt);
   const resetScenarioOverrides = useScenarioStore((s) => s.resetScenarioOverrides);
   const createCustomScenario = useScenarioStore((s) => s.createCustomScenario);
+  const updateCustomScenario = useScenarioStore((s) => s.updateCustomScenario);
   const deleteCustomScenario = useScenarioStore((s) => s.deleteCustomScenario);
   const cloneScenario = useScenarioStore((s) => s.cloneScenario);
 
@@ -409,11 +410,7 @@ export function ScenarioSettings() {
             isModified={isFieldModified(field.key)}
             onSave={(val) => {
               if (currentTemplate.is_custom) {
-                // For custom scenarios, update the scenario directly by cloning and re-creating
-                const updated: ScenarioTemplate = { ...currentTemplate, [field.key]: val };
-                deleteCustomScenario(activeScenarioId);
-                createCustomScenario(updated);
-                setActiveScenario(updated.id as AIScenario);
+                updateCustomScenario({ ...currentTemplate, [field.key]: val });
               } else {
                 updatePrompt(activeScenarioId, field.key, val);
               }

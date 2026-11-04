@@ -42,6 +42,7 @@ interface ScenarioState {
   ) => void;
   resetScenarioOverrides: (scenarioId: string) => void;
   createCustomScenario: (template: ScenarioTemplate) => void;
+  updateCustomScenario: (template: ScenarioTemplate) => void;
   deleteCustomScenario: (id: string) => void;
   cloneScenario: (sourceId: string, newName: string) => ScenarioTemplate | null;
 
@@ -111,6 +112,14 @@ export const useScenarioStore = create<ScenarioState>((set, get) => ({
     });
   },
 
+  updateCustomScenario: (template) => {
+    set((s) => {
+      const updated = s.customScenarios.map((c) => (c.id === template.id ? template : c));
+      persistValue("customScenarios", updated);
+      return { customScenarios: updated };
+    });
+  },
+
   deleteCustomScenario: (id) => {
     set((s) => {
       const updated = s.customScenarios.filter((sc) => sc.id !== id);
@@ -173,6 +182,24 @@ export const useScenarioStore = create<ScenarioState>((set, get) => ({
     }
   },
 }));
+
+/**
+ * Cross-window sync: when another window saves scenarios, update this window's
+ * copy, so an edit here can't overwrite them with old ones. The active scenario
+ * stays per window: the overlay's is the running meeting's.
+ */
+export async function watchSavedScenarios(): Promise<() => void> {
+  const store = await getStore();
+  const stop = await Promise.all([
+    store.onKeyChange<ScenarioTemplate[]>("customScenarios", (value) => {
+      useScenarioStore.setState({ customScenarios: value ?? [] });
+    }),
+    store.onKeyChange<ScenarioState["scenarioOverrides"]>("scenarioOverrides", (value) => {
+      useScenarioStore.setState({ scenarioOverrides: value ?? {} });
+    }),
+  ]);
+  return () => stop.forEach((fn) => fn());
+}
 
 /** The scenarios a meeting can use, in the order the pickers list them. */
 export function useMeetingScenarios(): ScenarioTemplate[] {

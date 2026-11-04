@@ -2,7 +2,7 @@ import { useEffect, useCallback, useState } from "react";
 import { useMeetingStore } from "./stores/meetingStore";
 import { useConfigStore } from "./stores/configStore";
 import { useAIActionsStore } from "./stores/aiActionsStore";
-import { useScenarioStore } from "./stores/scenarioStore";
+import { useScenarioStore, watchSavedScenarios } from "./stores/scenarioStore";
 import { LauncherView } from "./launcher/LauncherView";
 import { OverlayView } from "./overlay/OverlayView";
 import { SettingsOverlay } from "./settings/SettingsOverlay";
@@ -89,6 +89,13 @@ function App() {
     // Load scenario config (custom scenarios, overrides, active scenario)
     useScenarioStore.getState().loadScenarioConfig();
   }, [loadConfig]);
+
+  useEffect(() => {
+    const watching = watchSavedScenarios().catch(() => undefined);
+    return () => {
+      watching.then((stop) => stop?.());
+    };
+  }, []);
 
   // Load recent meetings on app start
   useEffect(() => {
