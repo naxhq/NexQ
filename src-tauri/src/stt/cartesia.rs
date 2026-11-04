@@ -11,7 +11,9 @@
 //
 // - API key in the X-API-Key handshake header, never in the URL
 // - Gaps are filled with silence: Cartesia waits for audio instead of assuming
-//   silence, and a muted party (or idle system loopback) sends none
+//   silence, and idle system loopback sends none
+// - Muting a party closes its stream, so muted time isn't billed; unmuting
+//   reconnects at once and sends the audio held meanwhile (at most 1 s) first
 // - Background reconnect (1, 2, 4, 8, then every 15 s) that never blocks the
 //   audio loop; audio captured while offline is dropped, since Cartesia takes
 //   audio no faster than real time and a backlog could never catch up
@@ -80,6 +82,19 @@ const STALLED_SAMPLES: usize = 5 * SAMPLE_RATE as usize;
 
 /// Cartesia error codes that a reconnect can't fix (rejected key, account).
 const FATAL_STATUS_CODES: [u16; 3] = [401, 402, 403];
+
+/// Most audio held while reconnecting after an unmute (1 s at 16 kHz).
+const RESUME_HOLD_SAMPLES: usize = SAMPLE_RATE as usize;
+
+/// Hold audio fed while reconnecting after an unmute, keeping the newest
+/// RESUME_HOLD_SAMPLES.
+fn hold_for_resume(held: &mut Vec<i16>, samples: &[i16]) {
+    held.extend_from_slice(samples);
+    if held.len() > RESUME_HOLD_SAMPLES {
+        let excess = held.len() - RESUME_HOLD_SAMPLES;
+        held.drain(..excess);
+    }
+}
 
 /// Delay before reconnect attempt `attempt` (1-based): 1, 2, 4, 8, then every 15 s.
 fn reconnect_backoff(attempt: u32) -> Duration {
@@ -281,6 +296,12 @@ pub struct CartesiaSTT {
     dropped_chunks: u64,
     /// Samples dropped in a row for lack of queue room.
     dropped_samples_streak: usize,
+    /// The party is muted: no stream is open, so nothing is sent or billed.
+    paused: bool,
+    /// Set by an unmute until the new stream is ready; audio fed meanwhile is held.
+    resuming_since: Option<Instant>,
+    /// Audio held while reconnecting after an unmute, sent before live audio.
+    resume_hold: Vec<i16>,
 }
 
 impl CartesiaSTT {
@@ -303,6 +324,9 @@ impl CartesiaSTT {
             next_reconnect_at: None,
             dropped_chunks: 0,
             dropped_samples_streak: 0,
+            paused: false,
+            resuming_since: None,
+            resume_hold: Vec::new(),
         }
     }
 
@@ -401,6 +425,59 @@ impl CartesiaSTT {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .finish_open_turn(epoch_now_ms())
+    }
+
+    /// Muted: close the stream so nothing is sent or billed. Cartesia still
+    /// sends the turn in progress (the reader delivers it), and nothing
+    /// reconnects until unmute.
+    fn pause(&mut self) {
+        self.paused = true;
+        self.resuming_since = None;
+        self.resume_hold.clear();
+        if let Some(task) = self.reconnect_task.take() {
+            task.abort();
+        }
+        self.next_reconnect_at = None;
+        if self.is_streaming {
+            // Dropping the audio sender makes the writer send the close command.
+            self.audio_tx = None;
+            self.is_streaming = false;
+            log::info!("CartesiaSTT: paused ({}): stream closed while muted", self.party);
+        } else {
+            log::info!("CartesiaSTT: paused ({}) while not connected", self.party);
+        }
+        self.emit_status("paused", Some("Muted: not streaming to Cartesia".to_string()));
+    }
+
+    /// Unmuted: reconnect right away. Audio fed until the stream is ready is
+    /// held (at most 1 s) and sent first, so the first words aren't lost.
+    fn resume(&mut self) {
+        self.paused = false;
+        // Not started, already stopped, or the key was refused.
+        if self.result_tx.is_none() || self.reconnect_blocked {
+            return;
+        }
+        self.resuming_since = Some(Instant::now());
+        self.reconnect_attempt = 0;
+        self.next_reconnect_at = None;
+        self.drive_reconnect();
+    }
+
+    /// After an unmute, send the audio held while reconnecting before live audio.
+    fn flush_resume_hold(&mut self) {
+        let Some(since) = self.resuming_since.take() else { return };
+        let held = std::mem::take(&mut self.resume_hold);
+        if let Some(audio_tx) = self.audio_tx.as_ref() {
+            for frame in held.chunks(SAMPLE_RATE as usize / 10) {
+                let _ = audio_tx.try_send(pcm_to_bytes(frame));
+            }
+        }
+        log::info!(
+            "CartesiaSTT: resumed ({}): connected in {} ms, sent {} ms of held audio",
+            self.party,
+            since.elapsed().as_millis(),
+            held.len() * 1000 / SAMPLE_RATE as usize
+        );
     }
 
     /// The reader or the writer has stopped: the connection is gone.
@@ -623,6 +700,13 @@ impl STTProvider for CartesiaSTT {
             task.abort();
         }
         self.reconnect_blocked = false;
+        if self.paused {
+            // Muted from the start: connect on the first unmute, not now.
+            self.result_tx = Some(result_tx);
+            log::info!("CartesiaSTT: muted at start ({}); connecting on unmute", self.party);
+            self.emit_status("paused", Some("Muted: not streaming to Cartesia".to_string()));
+            return Ok(());
+        }
 
         log::info!(
             "CartesiaSTT: connecting ({}, model {}, app language {}; ink-2 detects the language itself)",
@@ -660,16 +744,26 @@ impl STTProvider for CartesiaSTT {
         if self.result_tx.is_none() || chunk.pcm_data.is_empty() {
             return Ok(());
         }
+        // Muted: nothing goes to Cartesia (the audio loop doesn't feed a muted party anyway).
+        if self.paused {
+            return Ok(());
+        }
         if self.is_streaming && self.session_ended() {
             self.mark_disconnected();
         }
-        // Offline: drop this audio and advance the reconnect, never waiting.
+        // Offline: advance the reconnect, never waiting. Right after an unmute
+        // the audio is held for the new stream; after a lost connection it's
+        // dropped, since a backlog could never catch up.
         if !self.is_streaming {
             self.drive_reconnect();
             if !self.is_streaming {
+                if self.resuming_since.is_some() {
+                    hold_for_resume(&mut self.resume_hold, &chunk.pcm_data);
+                }
                 return Ok(());
             }
         }
+        self.flush_resume_hold();
         let Some(audio_tx) = self.audio_tx.as_ref() else {
             return Ok(());
         };
@@ -700,6 +794,8 @@ impl STTProvider for CartesiaSTT {
             task.abort();
         }
         self.next_reconnect_at = None;
+        self.resuming_since = None;
+        self.resume_hold.clear();
         // Dropping the audio sender makes the writer send the close command.
         self.audio_tx = None;
         if let Some(reader) = self.reader_task.take() {
@@ -762,6 +858,17 @@ impl STTProvider for CartesiaSTT {
                 "CartesiaSTT: ink-2 transcribes English, French, Hindi, Japanese and Spanish; '{}' isn't one of them",
                 language
             );
+        }
+    }
+
+    fn set_muted(&mut self, muted: bool) {
+        if muted == self.paused {
+            return;
+        }
+        if muted {
+            self.pause();
+        } else {
+            self.resume();
         }
     }
 }
@@ -1129,6 +1236,225 @@ mod tests {
         assert!(stt.reconnect_task.is_none() && stt.result_tx.is_none());
     }
 
+    #[test]
+    fn resume_hold_keeps_the_newest_second() {
+        let mut held = Vec::new();
+        hold_for_resume(&mut held, &vec![1; 12_000]);
+        hold_for_resume(&mut held, &vec![2; 12_000]);
+        assert_eq!(held.len(), 16_000);
+        assert_eq!((held[0], held[3_999], held[4_000]), (1, 1, 2));
+    }
+
+    /// A local server that closes each session when it gets the close command,
+    /// and counts the sessions it accepted.
+    async fn closing_server(listener: TcpListener) -> Arc<std::sync::atomic::AtomicUsize> {
+        let accepts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = Arc::clone(&accepts);
+        tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                counted.fetch_add(1, Ordering::SeqCst);
+                let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+                tokio::spawn(async move {
+                    while let Some(Ok(message)) = ws.next().await {
+                        if let Message::Text(_) = message {
+                            let _ = ws.close(None).await;
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+        accepts
+    }
+
+    /// Muting closes the stream (Cartesia still returns the sentence in
+    /// progress) and nothing reconnects or is sent while muted.
+    #[tokio::test]
+    async fn muting_closes_the_stream_and_keeps_the_last_turn() {
+        let (listener, url) = local_server().await;
+        let accepts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = Arc::clone(&accepts);
+        tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                counted.fetch_add(1, Ordering::SeqCst);
+                let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+                tokio::spawn(async move {
+                    while let Some(Ok(message)) = ws.next().await {
+                        if let Message::Text(_) = message {
+                            ws.send(text(r#"{"type":"turn.start"}"#)).await.unwrap();
+                            ws.send(text(r#"{"type":"turn.end","transcript":"said before mute"}"#)).await.unwrap();
+                            let _ = ws.close(None).await;
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+
+        let mut stt = CartesiaSTT::for_endpoint("test-key", &url);
+        let (tx, mut rx) = mpsc::channel(16);
+        stt.start_stream(tx).await.unwrap();
+        stt.feed_audio(chunk(vec![7; 160])).await.unwrap();
+        stt.set_muted(true);
+        let last = next_result(&mut rx).await;
+        assert_eq!((last.text.as_str(), last.is_final), ("said before mute", true));
+
+        for _ in 0..30 {
+            stt.feed_audio(chunk(vec![7; 160])).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(accepts.load(Ordering::SeqCst), 1, "reconnected while muted");
+        assert!(!stt.is_streaming);
+        assert!(rx.try_recv().is_err(), "results while muted");
+    }
+
+    /// Unmuting reconnects at once, and the first words (fed while Cartesia is
+    /// still connecting) reach it before live audio.
+    #[tokio::test]
+    async fn unmuting_reconnects_and_sends_held_audio_first() {
+        let (listener, url) = local_server().await;
+        let (first_tx, mut first_rx) = mpsc::channel::<Vec<u8>>(4);
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+            while let Some(Ok(message)) = ws.next().await {
+                if let Message::Text(_) = message {
+                    let _ = ws.close(None).await;
+                    break;
+                }
+            }
+            // Session 2 answers slowly, so audio fed meanwhile has to be held.
+            let (socket, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+            let mut answered = false;
+            while let Some(Ok(message)) = ws.next().await {
+                if let Message::Binary(bytes) = message {
+                    if bytes.iter().all(|b| *b == 0) {
+                        continue;
+                    }
+                    let _ = first_tx.send(bytes.to_vec()).await;
+                    if !answered {
+                        answered = true;
+                        ws.send(text(r#"{"type":"turn.start"}"#)).await.unwrap();
+                        ws.send(text(r#"{"type":"turn.end","transcript":"after unmute"}"#)).await.unwrap();
+                    }
+                }
+            }
+        });
+
+        let mut stt = CartesiaSTT::for_endpoint("test-key", &url);
+        let (tx, mut rx) = mpsc::channel(16);
+        stt.start_stream(tx).await.unwrap();
+        stt.set_muted(true);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        stt.set_muted(false);
+        stt.feed_audio(chunk(vec![3; 160])).await.unwrap();
+        stt.feed_audio(chunk(vec![4; 160])).await.unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !stt.is_streaming && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            stt.feed_audio(chunk(vec![5; 160])).await.unwrap();
+        }
+
+        let first = tokio::time::timeout(Duration::from_secs(5), first_rx.recv()).await.unwrap().unwrap();
+        let mut expected = pcm_to_bytes(&vec![3; 160]);
+        expected.extend(pcm_to_bytes(&vec![4; 160]));
+        assert!(first.starts_with(&expected), "the held first words weren't sent first");
+        assert_eq!(next_result(&mut rx).await.text, "after unmute");
+    }
+
+    #[tokio::test]
+    async fn muted_at_start_connects_only_on_unmute() {
+        let (listener, url) = local_server().await;
+        let accepts = closing_server(listener).await;
+        let mut stt = CartesiaSTT::for_endpoint("test-key", &url);
+        stt.set_muted(true);
+        let (tx, _rx) = mpsc::channel(16);
+        stt.start_stream(tx).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(accepts.load(Ordering::SeqCst), 0, "connected while muted");
+
+        stt.set_muted(false);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !stt.is_streaming && Instant::now() < deadline {
+            stt.feed_audio(chunk(vec![7; 160])).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(stt.is_streaming);
+        assert_eq!(accepts.load(Ordering::SeqCst), 1);
+        stt.stop_stream().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stopping_while_muted_ends_without_reconnecting() {
+        let (listener, url) = local_server().await;
+        let accepts = closing_server(listener).await;
+        let mut stt = CartesiaSTT::for_endpoint("test-key", &url);
+        let (tx, _rx) = mpsc::channel(16);
+        stt.start_stream(tx).await.unwrap();
+        stt.set_muted(true);
+        let started = Instant::now();
+        stt.stop_stream().await.unwrap();
+        assert!(started.elapsed() < Duration::from_secs(2), "stop waited {:?}", started.elapsed());
+        stt.set_muted(false);
+        stt.feed_audio(chunk(vec![7; 160])).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(accepts.load(Ordering::SeqCst), 1, "reconnected after stop");
+        assert!(stt.reconnect_task.is_none());
+    }
+
+    /// Fast mute/unmute toggling ends with one live session: audio reaches only
+    /// it, so each turn arrives once.
+    #[tokio::test]
+    async fn rapid_mute_toggling_leaves_one_live_session() {
+        let (listener, url) = local_server().await;
+        tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+                tokio::spawn(async move {
+                    let mut answered = false;
+                    while let Some(Ok(message)) = ws.next().await {
+                        match message {
+                            Message::Binary(bytes) if !answered && bytes.iter().any(|b| *b != 0) => {
+                                answered = true;
+                                ws.send(text(r#"{"type":"turn.start"}"#)).await.unwrap();
+                                ws.send(text(r#"{"type":"turn.end","transcript":"once"}"#)).await.unwrap();
+                            }
+                            Message::Text(_) => {
+                                let _ = ws.close(None).await;
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                });
+            }
+        });
+
+        let mut stt = CartesiaSTT::for_endpoint("test-key", &url);
+        let (tx, mut rx) = mpsc::channel(64);
+        stt.start_stream(tx).await.unwrap();
+        for _ in 0..3 {
+            stt.set_muted(true);
+            stt.set_muted(false);
+        }
+        let mut finals = Vec::new();
+        let until = Instant::now() + Duration::from_millis(800);
+        while Instant::now() < until {
+            stt.feed_audio(chunk(vec![7; 160])).await.unwrap();
+            while let Ok(result) = rx.try_recv() {
+                if result.is_final { finals.push(result.text) }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(stt.is_streaming);
+        assert_eq!(finals, ["once"]);
+    }
+
     /// Samples of a 16-bit PCM WAV file (its `data` chunk).
     fn wav_samples(wav: &[u8]) -> Vec<i16> {
         let mut pos = 12;
@@ -1213,6 +1539,48 @@ mod tests {
         }
         println!("finals after the gap: {:?}", after);
         assert_eq!(during_gap.len(), 1, "the first turn should end during the gap");
+        assert!(after.iter().any(|t| t.to_lowercase().contains("meeting")));
+    }
+
+    /// Muted after the first sentence: Cartesia returns it and the stream
+    /// closes, so the muted 3 s aren't billed. Unmuting starts a new stream
+    /// that transcribes the second sentence.
+    #[tokio::test]
+    #[ignore = "calls the Cartesia API; needs CARTESIA_API_KEY and CARTESIA_TEST_WAV"]
+    async fn live_mute_closes_and_unmute_resumes() {
+        let key = std::env::var("CARTESIA_API_KEY").expect("CARTESIA_API_KEY");
+        let wav = std::fs::read(std::env::var("CARTESIA_TEST_WAV").expect("CARTESIA_TEST_WAV")).unwrap();
+        let samples = wav_samples(&wav);
+        let (first, rest) = samples.split_at(16_000 * 45 / 10);
+
+        let mut stt = CartesiaSTT::with_api_key(&key);
+        let (tx, mut rx) = mpsc::channel(1024);
+        stt.start_stream(tx).await.expect("start");
+        for frame in first.chunks(1600) {
+            stt.feed_audio(chunk(frame.to_vec())).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        stt.set_muted(true);
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let mut by_end_of_mute = Vec::new();
+        while let Ok(result) = rx.try_recv() {
+            if result.is_final { by_end_of_mute.push(result.text) }
+        }
+        println!("finals by the end of the mute: {:?}", by_end_of_mute);
+        assert!(!stt.is_streaming, "still streaming while muted");
+
+        stt.set_muted(false);
+        for frame in rest.chunks(1600) {
+            stt.feed_audio(chunk(frame.to_vec())).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        stt.stop_stream().await.unwrap();
+        let mut after = Vec::new();
+        while let Ok(result) = rx.try_recv() {
+            if result.is_final { after.push(result.text) }
+        }
+        println!("finals after unmute: {:?}", after);
+        assert_eq!(by_end_of_mute.len(), 1, "the first sentence should come back at mute");
         assert!(after.iter().any(|t| t.to_lowercase().contains("meeting")));
     }
 

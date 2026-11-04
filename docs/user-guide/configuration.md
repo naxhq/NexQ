@@ -62,7 +62,7 @@ NexQ uses a two-party audio model: **"You"** (microphone) and **"Them"** (system
 - **Best For**: Real-time transcription where each line ends when the speaker finishes a thought
 - **Model**: ink-2. Cartesia decides where each turn ends and detects the language on its own, so there is nothing to configure
 - **Languages**: English, French, Hindi, Japanese, Spanish. Settings warns when the selected language isn't one of them
-- **Cost**: Billed per second of audio, silence and muted time included (about 3 credits per second for each channel that uses Cartesia)
+- **Cost**: Billed per second of audio while a channel is unmuted, silence included (about 3 credits per second for each channel that uses Cartesia). Muted time isn't billed: muting closes the stream
 
 ### Whisper (Local)
 

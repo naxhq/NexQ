@@ -101,7 +101,7 @@ This only appears the first time you install. Subsequent launches will not trigg
 - **Language**: Cartesia transcribes only English, French, Hindi, Japanese and Spanish. For other languages, choose a different provider. Settings > STT shows a warning when the selected language isn't supported
 - **Reconnecting**: if the connection drops, NexQ reconnects on its own (after 1, 2, 4 and 8 seconds, then every 15 seconds) and keeps the sentence in progress. Speech while offline isn't transcribed
 - **"Cartesia refused the API key or account"**: NexQ stops retrying. Check the key in Settings > STT and your credit balance at [play.cartesia.ai](https://play.cartesia.ai/usage)
-- **Credits**: Cartesia bills every second the stream is open, including silence and while the channel is muted. One channel uses about 10,800 credits per hour; Cartesia on both "You" and "Them" uses about 21,600. In in-person meetings the room mic is transcribed as "Them", so NexQ doesn't start a "You" provider at all, and "You" uses no credits
+- **Credits**: Cartesia bills every second of audio it receives while a channel is unmuted, including silence. One unmuted channel uses about 10,800 credits per hour; Cartesia on both "You" and "Them" uses about 21,600. Muting a channel closes its Cartesia stream, so muted time costs nothing; unmuting reconnects in a fraction of a second and keeps your first words. In in-person meetings the room mic is transcribed as "Them", so NexQ doesn't start a "You" provider at all, and "You" uses no credits
 
 ### Local Whisper Model Slow or Inaccurate
 
