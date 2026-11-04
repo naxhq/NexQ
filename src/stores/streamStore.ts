@@ -54,6 +54,8 @@ interface StreamState {
   streamMeta: StreamMeta | null;
   /** Request id of the user action awaiting its start event. */
   pendingRequestId: string | null;
+  /** Request id of the answer streaming now (null when idle or unknown). */
+  streamRequestId: string | null;
 
   /** Id of the history entry shown as "Current" (null while streaming / none). */
   currentId: string | null;
@@ -71,6 +73,10 @@ interface StreamState {
   setPending: (mode: IntelligenceMode | string, requestId: string) => void;
   /** The pending action failed before starting (only clears that request). */
   clearPending: (requestId: string) => void;
+  /** Whether `requestId` is the request being sent or streamed now. */
+  isRunning: (requestId: string) => boolean;
+  /** When `requestId` ends, drop it: not kept in History, not left on screen. */
+  discardRequest: (requestId: string) => void;
   setPhase: (phase: StreamPhase) => void;
   startStream: (mode: IntelligenceMode, model: string, provider: string, details?: StreamStartDetails) => void;
   setSources: (sources: StreamSource[]) => void;
@@ -90,7 +96,11 @@ const IDLE_PROGRESS = {
   firstTokenAt: null,
   streamMeta: null,
   pendingRequestId: null,
+  streamRequestId: null,
 };
+
+/** Requests to drop when they end (automatic answers NexQ stopped). */
+const discarded = new Set<string>();
 
 export const useStreamStore = create<StreamState>((set, get) => ({
   isStreaming: false,
@@ -149,6 +159,15 @@ export const useStreamStore = create<StreamState>((set, get) => ({
     set({ ...IDLE_PROGRESS, currentMode: get().isStreaming ? get().currentMode : null });
   },
 
+  isRunning: (requestId) => {
+    const state = get();
+    return state.pendingRequestId === requestId || (state.isStreaming && state.streamRequestId === requestId);
+  },
+
+  discardRequest: (requestId) => {
+    discarded.add(requestId);
+  },
+
   setPhase: (phase) => set({ phase }),
 
   startStream: (mode, model, provider, details = {}) => {
@@ -171,6 +190,7 @@ export const useStreamStore = create<StreamState>((set, get) => ({
       requestStartedAt: fromClick ? state.requestStartedAt : Date.now(),
       firstTokenAt: null,
       pendingRequestId: null,
+      streamRequestId: details.requestId ?? null,
       currentId: null,
       streamMeta: {
         model,
@@ -204,12 +224,14 @@ export const useStreamStore = create<StreamState>((set, get) => ({
       first_token_ms: started !== null && state.firstTokenAt !== null ? state.firstTokenAt - started : undefined,
       scope_label: state.streamMeta?.scopeLabel ?? null,
     };
-    // A stream stopped before any words is nothing to keep.
-    const keep = content.trim().length > 0;
+    // A stream stopped before any words is nothing to keep, nor is one NexQ
+    // stopped and asked to drop.
+    const dropped = state.streamRequestId !== null && discarded.delete(state.streamRequestId);
+    const keep = !dropped && content.trim().length > 0;
 
     set((s) => ({
       isStreaming: false,
-      currentContent: content,
+      currentContent: dropped ? "" : content,
       latencyMs,
       ...IDLE_PROGRESS,
       currentId: keep ? response.id : null,
@@ -259,6 +281,7 @@ export const useStreamStore = create<StreamState>((set, get) => ({
     })),
 
   resetForMeeting: () => {
+    discarded.clear();
     get().clearCurrent();
     set({ isStreaming: false, responseHistory: [], pinnedResponses: [], lastUserRequest: NO_USER_REQUESTS });
   },

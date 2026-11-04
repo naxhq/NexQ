@@ -110,6 +110,28 @@ describe("streamStore", () => {
     expect(s().currentId).toBeNull();
   });
 
+  it("knows which request is running, from sending until it ends", () => {
+    s().setPending("Assist", "req-1");
+    expect(s().isRunning("req-1")).toBe(true);
+    s().startStream("Assist", "m", "p", { requestId: "req-1" });
+    expect([s().isRunning("req-1"), s().isRunning("req-2")]).toEqual([true, false]);
+    s().endStream(10);
+    expect(s().isRunning("req-1")).toBe(false);
+  });
+
+  it("an answer marked to discard is neither kept nor left on screen when it ends", () => {
+    answer("Assist", "kept");
+    s().startStream("Assist", "m", "p", { requestId: "early" });
+    s().appendToken("Half an ans");
+    s().discardRequest("early");
+    s().endStream(0);
+    expect(s().responseHistory.map((r) => r.content)).toEqual(["kept"]);
+    expect([s().currentContent, s().currentId]).toEqual(["", null]);
+    // Only that request: the next answer is kept as usual.
+    answer("Assist", "next");
+    expect(s().responseHistory[0].content).toBe("next");
+  });
+
   it("pins any history item", () => {
     answer("Assist", "first");
     answer("Recap", "second");

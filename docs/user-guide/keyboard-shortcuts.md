@@ -18,7 +18,7 @@ These shortcuts are registered system-wide and work regardless of which applicat
 | `Ctrl+B` | Toggle Overlay | Switches between the launcher (dashboard) and the overlay (meeting) window. Only works when a meeting is active |
 | `Ctrl+,` | Open / Close Settings | Toggles the settings panel |
 | `Ctrl+Shift+H` | Hide from screen share | Turns stealth mode on or off. Change it in Settings > General |
-| `Ctrl+Shift+Space` | Assist from any app | During a meeting, generates AI Assist without switching to NexQ. Change it in Settings > General |
+| `Ctrl+Shift+Space` | Assist from any app | During a meeting, generates AI Assist without switching to NexQ. Stops an automatic answer that's running. Change it in Settings > General |
 
 ## Meeting Shortcuts
 
@@ -26,7 +26,7 @@ These shortcuts work when a meeting is active and the NexQ window (launcher or o
 
 | Shortcut | Action | AI Mode |
 |----------|--------|---------|
-| `Space` | Generate AI Assist | Assist -- analyzes conversation and provides contextual help |
+| `Space` | Generate AI Assist | Assist -- analyzes conversation and provides contextual help. Stops an automatic answer that's running |
 | `1` | What to Say | Suggests what you should say next based on the conversation |
 | `2` | Shorten | Condenses the recent discussion into a brief summary |
 | `3` | Follow-Up | Generates follow-up questions or discussion points |

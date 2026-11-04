@@ -7,7 +7,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useAIActionsStore } from "../stores/aiActionsStore";
 import { isQuitPending } from "../lib/ipc";
-import { runUserAction } from "../lib/userAction";
+import { runYourAction } from "../lib/autoAnswer";
 import { isOverlayVisible, meetingShortcutAction, showLauncherWindow, showMeetingOverlay } from "../lib/windows";
 import { endMeetingFromThisWindow } from "./useUpdater";
 import { showToast } from "../stores/toastStore";
@@ -68,7 +68,7 @@ export function useGlobalShortcut() {
         await register(key, (event) => {
           if (event.state !== "Pressed") return;
           const visible = useAIActionsStore.getState().configs.actions["Assist"]?.visible !== false;
-          if (visible) runUserAction("Assist").catch(() => {});
+          if (visible) runYourAction("Assist").catch(() => {});
         });
         registered = true;
         // The meeting ended (or the key changed) while registering.
@@ -187,35 +187,35 @@ export function useGlobalShortcut() {
         case "Space":
           if (isVisible("Assist")) {
             e.preventDefault();
-            runUserAction("Assist").catch(() => {});
+            runYourAction("Assist").catch(() => {});
           }
           break;
         case "Numpad1":
         case "Digit1":
           if (!e.ctrlKey && !e.metaKey && !e.altKey && isVisible("WhatToSay")) {
             e.preventDefault();
-            runUserAction("WhatToSay").catch(() => {});
+            runYourAction("WhatToSay").catch(() => {});
           }
           break;
         case "Numpad2":
         case "Digit2":
           if (!e.ctrlKey && !e.metaKey && !e.altKey && isVisible("Shorten")) {
             e.preventDefault();
-            runUserAction("Shorten").catch(() => {});
+            runYourAction("Shorten").catch(() => {});
           }
           break;
         case "Numpad3":
         case "Digit3":
           if (!e.ctrlKey && !e.metaKey && !e.altKey && isVisible("FollowUp")) {
             e.preventDefault();
-            runUserAction("FollowUp").catch(() => {});
+            runYourAction("FollowUp").catch(() => {});
           }
           break;
         case "Numpad4":
         case "Digit4":
           if (!e.ctrlKey && !e.metaKey && !e.altKey && isVisible("Recap")) {
             e.preventDefault();
-            runUserAction("Recap").catch(() => {});
+            runYourAction("Recap").catch(() => {});
           }
           break;
         case "Numpad5":

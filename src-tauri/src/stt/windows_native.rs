@@ -539,6 +539,7 @@ fn run_windows_speech_recognizer(
                             segment_id: Some(format!("win_{}", current + 1)),
                             duration_ms: None,
                             speaker_tag: None,
+                            turn: None,
                         };
                         // try_send to avoid blocking the COM STA thread
                         let _ = hypothesis_tx.try_send(transcript);
@@ -589,6 +590,7 @@ fn run_windows_speech_recognizer(
                             segment_id: Some(format!("win_{}", seg)),
                             duration_ms: None,
                             speaker_tag: None,
+                            turn: None,
                         };
 
                         log::info!(
@@ -847,6 +849,7 @@ fn energy_detection_with_accumulation(
                                 segment_id: Some(format!("win_{}", segment_counter)),
                                 duration_ms: None,
                                 speaker_tag: None,
+                                turn: None,
                             });
                         }
                     }
@@ -876,6 +879,7 @@ fn energy_detection_with_accumulation(
                             segment_id: Some(format!("win_{}", segment_counter)),
                             duration_ms: None,
                             speaker_tag: None,
+                            turn: None,
                         });
 
                         utterance_active = false;

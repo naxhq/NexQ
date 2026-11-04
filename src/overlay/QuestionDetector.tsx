@@ -1,10 +1,16 @@
 import { useEffect, useRef, useCallback } from "react";
 import { HelpCircle, Sparkles, Check, Clock, X } from "lucide-react";
-import { onQuestionDetected } from "../lib/events";
+import { onQuestionDetected, onTranscriptFinal, onTranscriptUpdate } from "../lib/events";
 import { runUserAction } from "../lib/userAction";
+import {
+  REFUSED, answerRunning, autoAnswerRunning, decideTurnStep, inTurn, logAutoAnswer, runYourAction, sameQuestion,
+  stopAutoAnswer,
+} from "../lib/autoAnswer";
 import { useTranscriptStore } from "../stores/transcriptStore";
 import { useAIActionsStore } from "../stores/aiActionsStore";
 import { useQuestionStore } from "../stores/questionStore";
+import { showToast } from "../stores/toastStore";
+import type { DetectedQuestion, TranscriptSegment, TranscriptUpdateEvent } from "../lib/types";
 
 /**
  * Quiet time after the other party's last words before Auto-Trigger answers
@@ -72,6 +78,58 @@ export function lastSentence(text: string): string {
   return (sentences[last] ?? "").trim();
 }
 
+/**
+ * Starts an automatic answer to `question` (a line's question), unless another
+ * answer is running: then the question stays a card to click.
+ */
+function startAutoAnswer(question: DetectedQuestion, segmentId: string | undefined, early: boolean, detail?: string) {
+  const store = useQuestionStore.getState();
+  if (answerRunning()) {
+    store.holdBack(segmentId, question.text);
+    logAutoAnswer("held");
+    return;
+  }
+  if (segmentId !== undefined) store.answerLine(question, segmentId);
+  const requestId = crypto.randomUUID();
+  const done = runUserAction("Assist", question.text, { requestId }).catch((err) => {
+    // Refused: an answer started elsewhere in the meantime.
+    if (!String(err).includes(REFUSED)) return;
+    const now = useQuestionStore.getState();
+    now.holdBack(segmentId, question.text);
+    if (now.autoAnswer?.requestId === requestId) now.setAutoAnswer(null);
+    logAutoAnswer("held");
+  });
+  if (segmentId !== undefined) store.setAutoAnswer({ requestId, segmentId, question: question.text, early, done });
+  logAutoAnswer(early ? "early" : "answered", detail);
+}
+
+/** Auto-Answer for a line that carries the provider's turn signal. */
+async function onTurnSignal(seg: TranscriptSegment, signalAt: number) {
+  if (!seg.turn || !useAIActionsStore.getState().configs.globalDefaults.autoTrigger) return;
+  const store = useQuestionStore.getState();
+  const sentence = lastSentence(seg.text);
+  const question = sentence && looksLikeQuestion(sentence) ? sentence : null;
+  const current = store.autoAnswer;
+  const step = decideTurnStep(seg.turn, seg.id, question, current);
+  if (step.kind === "none") return;
+  if (step.kind === "confirm") {
+    if (current) store.setAutoAnswer({ ...current, early: false });
+    logAutoAnswer("kept");
+    return;
+  }
+  // The early answer was premature: it gives way.
+  if (current && (step.kind === "withdraw" || step.replaces)) {
+    store.setAutoAnswer(null);
+    if (step.kind === "withdraw") store.holdBack(seg.id, current.question);
+    logAutoAnswer("withdrawn");
+    await stopAutoAnswer(current);
+  }
+  if (step.kind === "answer") {
+    const q = { text: step.question, confidence: 0.9, timestamp_ms: seg.timestamp_ms, source: seg.speaker };
+    startAutoAnswer(q, seg.id, step.early, `${seg.turn}, ${Date.now() - signalAt} ms after the signal`);
+  }
+}
+
 /** The overlay's question card, unless question detection is off. */
 export function QuestionPanel() {
   const questionDetection = useAIActionsStore((s) => s.configs.globalDefaults.questionDetection);
@@ -107,14 +165,43 @@ export function QuestionDetector() {
     return () => { p.then((u) => u()); };
   }, [addQuestion]);
 
+  // Providers that detect turns (Cartesia, Deepgram Flux): answer on their
+  // "done", or early on "probably done", instead of waiting for quiet.
   useEffect(() => {
-    const { checkLine, panelSeen, setPanelSeen, holdBackUnanswered } = useQuestionStore.getState();
+    if (!autoTrigger) return;
+    const onLine = ({ segment }: TranscriptUpdateEvent) => {
+      if (!segment.turn || !isOtherParty(segment.speaker)) return;
+      useQuestionStore.getState().markTurnLine(segment.id);
+      const at = Date.now();
+      void inTurn(() => onTurnSignal(segment, at));
+    };
+    const updates = onTranscriptUpdate(onLine);
+    const finals = onTranscriptFinal(onLine);
+    return () => {
+      updates.then((u) => u());
+      finals.then((u) => u());
+    };
+  }, [autoTrigger]);
+
+  useEffect(() => {
+    const store = useQuestionStore.getState();
+    const { checkLine, panelSeen, setPanelSeen, holdBackUnanswered } = store;
     for (const seg of segments) {
       if (!seg.is_final || !checkLine(seg.id, seg.text)) continue;
       if (!isOtherParty(seg.speaker)) continue;
       const sentence = lastSentence(seg.text);
       if (sentence && looksLikeQuestion(sentence)) {
         addQuestion({ text: sentence, confidence: 0.8, timestamp_ms: seg.timestamp_ms, source: seg.speaker }, seg.id);
+        // The line grew into another question after Auto-Answer answered it:
+        // that answer was for an incomplete question and gives way. (Lines
+        // with turn signals are handled on those signals.)
+        const ref = store.autoAnswer;
+        if (autoTrigger && ref && ref.segmentId === seg.id && !sameQuestion(ref.question, sentence) && !store.isTurnLine(seg.id)) {
+          store.setAutoAnswer(null);
+          store.reviseLine(seg.id, sentence);
+          logAutoAnswer("withdrawn");
+          void inTurn(() => stopAutoAnswer(ref));
+        }
       }
     }
     // Back from a layout switch or Settings: what is unanswered now can be
@@ -122,12 +209,20 @@ export function QuestionDetector() {
     if (justMountedRef.current && panelSeen) holdBackUnanswered();
     justMountedRef.current = false;
     setPanelSeen();
-  }, [segments, addQuestion]);
+  }, [segments, addQuestion, autoTrigger]);
 
   const handleAssist = useCallback((index: number) => {
-    const questionText = questions[index]?.text;
-    useQuestionStore.getState().markAssisted(index);
-    runUserAction("Assist", questionText).catch(() => {});
+    const question = questions[index];
+    if (!question) return;
+    // Its automatic answer is on the way: a click doesn't restart it.
+    const store = useQuestionStore.getState();
+    if (autoAnswerRunning() && sameQuestion(store.autoAnswer?.question, question.text)) return;
+    store.markAssisted(index);
+    runYourAction("Assist", question.text).catch((err) => {
+      // No answer came, so it stays a card to click.
+      useQuestionStore.getState().holdBack(question.segmentId, question.text);
+      showToast(String(err).includes(REFUSED) ? "Another answer is still running" : "Couldn't generate AI response", "error");
+    });
   }, [questions]);
 
   const handleDismiss = useCallback((index: number, e: React.MouseEvent) => {
@@ -139,13 +234,21 @@ export function QuestionDetector() {
   const previousQuestions = questions.slice(1, 4);
 
   // Auto-Trigger: answer the newest question once the other party has been
-  // quiet for a moment. More words from them restart the wait.
-  const waiting = autoTrigger && !!latest && !latest.assisted && !latest.heldBack;
+  // quiet for a moment. More words from them restart the wait. Lines from a
+  // provider that detects turns are answered on its signals instead.
+  const waiting = autoTrigger && !!latest && !latest.assisted && !latest.heldBack
+    && !useQuestionStore.getState().isTurnLine(latest.segmentId);
+  const autoAssist = useCallback(() => {
+    const q = useQuestionStore.getState().questions[0];
+    if (!q || q.assisted || q.heldBack) return;
+    useQuestionStore.getState().markAssisted(0);
+    startAutoAnswer(q, q.segmentId, false, "after the quiet wait");
+  }, []);
   useEffect(() => {
     if (!waiting) return;
-    const timer = setTimeout(() => handleAssist(0), AUTO_TRIGGER_DELAY_MS);
+    const timer = setTimeout(() => void inTurn(autoAssist), AUTO_TRIGGER_DELAY_MS);
     return () => clearTimeout(timer);
-  }, [waiting, latest?.text, otherPartyActivity, handleAssist]);
+  }, [waiting, latest?.text, otherPartyActivity, autoAssist]);
 
   return (
     <div className="flex flex-col gap-2.5" role="region" aria-label="Detected questions">

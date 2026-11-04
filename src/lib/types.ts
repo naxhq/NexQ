@@ -60,7 +60,17 @@ export interface TranscriptSegment {
    * `text` keeps the finalized words for persistence.
    */
   pending_text?: string;
+  /**
+   * Live events only (never saved): the STT provider's own turn detection
+   * (Cartesia, Deepgram Flux). "eager_end": the speaker has probably
+   * finished; "resumed": they kept talking after that; "end": they finished.
+   * Absent for providers without turn detection.
+   */
+  turn?: TurnSignal;
 }
+
+/** Mirrors `TurnSignal` in src-tauri/src/stt/provider.rs. */
+export type TurnSignal = "eager_end" | "resumed" | "end";
 
 export type Speaker = "User" | "Interviewer" | "Them" | "Unknown";
 
@@ -423,7 +433,10 @@ export interface AgentSessionStatus {
 // == DEEPGRAM CONFIG ==
 
 export interface DeepgramConfig {
-  /** Model: "nova-3" | "nova-2" | "nova" | "enhanced" | "base" | "whisper-large" | etc. */
+  /**
+   * Model: "nova-3" | "nova-2" | "nova" | "enhanced" | "base" | "whisper-large" | etc.,
+   * or a Flux model ("flux-general-en", "flux-general-multi") with turn detection.
+   */
   model: string;
   smart_format: boolean;
   interim_results: boolean;

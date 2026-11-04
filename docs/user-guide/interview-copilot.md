@@ -74,6 +74,8 @@ Question detection recognizes `?` and `？`, common Chinese question words (such
 
 Detected questions appear as cards in the overlay. Click the card you need to get an answer. To have the newest question answered automatically, turn on **Auto-Answer** in Settings > AI Actions.
 
+For the fastest automatic answers, transcribe the interviewer with Cartesia or Deepgram Flux. Both tell NexQ when the interviewer has finished, so the answer starts right away instead of after 1.5 seconds of quiet. If the interviewer keeps going after a pause, NexQ drops the answer it started and answers the complete question. Press `Space`, or click a question or an action, at any time to get your own answer instead.
+
 **Important**: Do not stare at the overlay. Glance at it naturally, the way you would glance at notes. Maintain eye contact with your camera.
 
 ## After the Interview

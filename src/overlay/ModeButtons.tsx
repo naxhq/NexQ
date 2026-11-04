@@ -3,7 +3,7 @@ import { useStreamStore } from "../stores/streamStore";
 import { useAIActionsStore } from "../stores/aiActionsStore";
 import { useConfigStore } from "../stores/configStore";
 import { cancelGeneration } from "../lib/ipc";
-import { runUserAction } from "../lib/userAction";
+import { runYourAction, useAutoAnswerRunning } from "../lib/autoAnswer";
 import { DEFAULT_CONTEXT_SCOPE, scopeHint } from "../lib/contextScope";
 import { showToast } from "../stores/toastStore";
 import { ContextScopePicker } from "./ContextScopePicker";
@@ -50,6 +50,9 @@ export function ModeButtons() {
   // A clicked action awaiting its start counts as running.
   const sending = useStreamStore((s) => s.phase === "sending");
   const isStreaming = streaming || sending;
+  // An automatic answer gives way to what you ask for; an answer you asked for doesn't.
+  const autoRunning = useAutoAnswerRunning();
+  const locked = isStreaming && !autoRunning;
   const contextScope = useConfigStore((s) => s.contextScope ?? DEFAULT_CONTEXT_SCOPE);
   const actions = useAIActionsStore((s) => s.configs.actions);
   const [askInputText, setAskInputText] = useState("");
@@ -99,28 +102,31 @@ export function ModeButtons() {
   const handleClick = useCallback(
     (mode: string) => {
       if (isStreaming) {
-        if (streaming && currentMode === mode) cancelGeneration().catch(() => showToast("Couldn't cancel generation", "error"));
-        return;
+        if (streaming && currentMode === mode) {
+          cancelGeneration().catch(() => showToast("Couldn't cancel generation", "error"));
+          return;
+        }
+        if (locked) return;
       }
       // AskQuestion mode: toggle ask input instead of direct generation
       if (mode === "AskQuestion") {
         setAskInputVisible((v) => !v);
         return;
       }
-      runUserAction(mode).catch((err) => showToast(err instanceof Error ? err.message : "Couldn't generate AI response", "error"));
+      runYourAction(mode).catch((err) => showToast(err instanceof Error ? err.message : "Couldn't generate AI response", "error"));
     },
-    [isStreaming, streaming, currentMode]
+    [isStreaming, locked, streaming, currentMode]
   );
 
   const handleAskSubmit = useCallback(() => {
     const text = askInputText.trim();
-    if (!text || isStreaming) return;
-    runUserAction("AskQuestion", text).catch((err) =>
+    if (!text || locked) return;
+    runYourAction("AskQuestion", text).catch((err) =>
       showToast(err instanceof Error ? err.message : "Couldn't send question", "error")
     );
     setAskInputText("");
     setAskInputVisible(false);
-  }, [askInputText, isStreaming]);
+  }, [askInputText, locked]);
 
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -134,7 +140,7 @@ export function ModeButtons() {
             <button
               key={mode}
               onClick={() => handleClick(mode)}
-              disabled={isStreaming && !isActive}
+              disabled={locked && !isActive}
               aria-label={shortcut ? `${name} (${shortcut})` : name}
               title={shortcut ? `${name} (${shortcut})` : name}
               aria-pressed={isActive || isAskActive}
@@ -146,7 +152,7 @@ export function ModeButtons() {
                     : isCustom
                       ? "text-warning/60 hover:bg-warning/10 hover:text-warning border border-warning/10"
                       : "text-muted-foreground/60 hover:bg-accent/50 hover:text-foreground"
-              } ${isStreaming && !isActive ? "opacity-40 cursor-not-allowed" : ""}`}
+              } ${locked && !isActive ? "opacity-40 cursor-not-allowed" : ""}`}
             >
               {isActive ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" /> : <Icon className="h-3 w-3" aria-hidden="true" />}
               <span>{label}</span>
@@ -157,7 +163,7 @@ export function ModeButtons() {
       </div>
 
       {/* Inline Ask input */}
-      {askInputVisible && !isStreaming && (
+      {askInputVisible && !locked && (
         <div className="flex items-center gap-1.5 rounded-lg border border-info/20 bg-info/5 px-2 py-1 slide-down-enter">
           <input
             type="text"

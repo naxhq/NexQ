@@ -265,6 +265,7 @@ pub(super) fn run(
                     timestamp_ms: segment_start_ms,
                     speaker: None, language: Some(language.to_owned()), segment_id: Some(format!("ort_{segment}")),
                     duration_ms: Some(duration_ms), speaker_tag: None,
+                    turn: None,
                 }).map_err(|e| e.to_string())?;
                 segment += 1;
             }

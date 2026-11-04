@@ -489,6 +489,7 @@ impl STTProvider for WhisperCppSTT {
                                     segment_id: Some(segment_id),
                                     duration_ms: None,
                                     speaker_tag: None,
+                                    turn: None,
                                 });
                             }
                         }
@@ -524,6 +525,7 @@ impl STTProvider for WhisperCppSTT {
                                 segment_id: Some(segment_id),
                                 duration_ms: None,
                                 speaker_tag: None,
+                                turn: None,
                             });
                         }
                     }
@@ -546,6 +548,7 @@ impl STTProvider for WhisperCppSTT {
                                 segment_id: Some(segment_id),
                                 duration_ms: None,
                                 speaker_tag: None,
+                                turn: None,
                             });
                         }
                     }

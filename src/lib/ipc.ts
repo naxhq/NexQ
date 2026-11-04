@@ -246,8 +246,9 @@ export async function generateAssist(
   });
 }
 
-export async function cancelGeneration(): Promise<void> {
-  return invoke("cancel_generation");
+/** Stops the answer being generated; with `requestId`, only if that one is still running. */
+export async function cancelGeneration(requestId?: string): Promise<void> {
+  return invoke("cancel_generation", requestId ? { requestId } : {});
 }
 
 export async function setAutoTrigger(enabled: boolean): Promise<void> {

@@ -28,6 +28,56 @@ pub struct TranscriptResult {
     /// provider separates speakers. `speaker` stays the party label.
     #[serde(default)]
     pub speaker_tag: Option<String>,
+    /// Where the provider says the speaker is in their turn, for providers
+    /// that detect turns themselves (Cartesia, Deepgram Flux). None for all
+    /// others, whose finals can end mid-sentence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<TurnSignal>,
+}
+
+/// A provider's own end-of-turn detection, carried on a transcript result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSignal {
+    /// The speaker has probably finished; `Resumed` may withdraw it.
+    EagerEnd,
+    /// The speaker kept talking after an `EagerEnd`.
+    Resumed,
+    /// The speaker has finished the turn.
+    End,
+}
+
+impl TurnSignal {
+    /// The value carried in transcript events.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TurnSignal::EagerEnd => "eager_end",
+            TurnSignal::Resumed => "resumed",
+            TurnSignal::End => "end",
+        }
+    }
+}
+
+#[cfg(test)]
+mod turn_signal_tests {
+    use super::*;
+
+    #[test]
+    fn turn_signals_travel_as_snake_case() {
+        assert_eq!(serde_json::to_string(&TurnSignal::EagerEnd).unwrap(), "\"eager_end\"");
+        assert_eq!(serde_json::to_string(&TurnSignal::Resumed).unwrap(), "\"resumed\"");
+        assert_eq!(serde_json::to_string(&TurnSignal::End).unwrap(), "\"end\"");
+    }
+
+    #[test]
+    fn a_result_without_a_turn_signal_has_none_and_writes_none() {
+        let r: TranscriptResult = serde_json::from_str(
+            r#"{"text":"hi","is_final":true,"confidence":1.0,"timestamp_ms":1,"speaker":null,"language":null}"#,
+        )
+        .unwrap();
+        assert_eq!(r.turn, None);
+        assert!(!serde_json::to_string(&r).unwrap().contains("turn"));
+    }
 }
 
 /// The in-person speaker id ("speaker_0") of a diarization tag ("S1").

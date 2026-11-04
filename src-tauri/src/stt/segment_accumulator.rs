@@ -12,7 +12,7 @@
 // - the paragraph already spans MAX_PARAGRAPH_MS (so long monologues still
 //   get fresh timestamps).
 
-use super::provider::TranscriptResult;
+use super::provider::{TranscriptResult, TurnSignal};
 
 /// A paragraph that already spans this long ends at the next final.
 pub const MAX_PARAGRAPH_MS: u64 = 60_000;
@@ -47,6 +47,9 @@ pub struct AccumulatorOutput {
     pub timestamp_ms: u64,
     pub is_final: bool,
     pub confidence: f32,
+    /// The provider's turn signal for the result this output reports. A
+    /// paragraph closed by a new one carries none.
+    pub turn: Option<TurnSignal>,
 }
 
 pub struct SegmentAccumulator {
@@ -98,6 +101,7 @@ impl SegmentAccumulator {
             timestamp_ms: self.current_start_ms,
             is_final,
             confidence,
+            turn: None,
         }
     }
 
@@ -121,6 +125,7 @@ impl SegmentAccumulator {
                 // adding a duplicate line in the UI.
                 let mut out = self.output(false, result.confidence);
                 out.text = format!("{} {}", self.current_text, result.text);
+                out.turn = result.turn;
                 return vec![out];
             }
             return vec![AccumulatorOutput {
@@ -131,6 +136,7 @@ impl SegmentAccumulator {
                 timestamp_ms: result.timestamp_ms,
                 is_final: false,
                 confidence: result.confidence,
+                turn: result.turn,
             }];
         }
 
@@ -152,7 +158,7 @@ impl SegmentAccumulator {
             self.current_text.push_str(&result.text);
             self.last_end_ms = self.last_end_ms.max(end_ms);
             // Updated paragraph as a final (replaces the previous one with the same ID)
-            outputs.push(self.output(true, result.confidence));
+            outputs.push(AccumulatorOutput { turn: result.turn, ..self.output(true, result.confidence) });
             return outputs;
         }
 
@@ -167,7 +173,7 @@ impl SegmentAccumulator {
         self.last_end_ms = end_ms;
         self.has_active = true;
         // The new paragraph as a final (it may get merged with later results)
-        outputs.push(self.output(true, result.confidence));
+        outputs.push(AccumulatorOutput { turn: result.turn, ..self.output(true, result.confidence) });
         outputs
     }
 
@@ -218,6 +224,7 @@ mod tests {
             segment_id: None,
             duration_ms: duration,
             speaker_tag: tag.map(str::to_string),
+            turn: None,
         }
     }
 
@@ -345,6 +352,42 @@ mod tests {
         assert!(!outs[0].is_final);
         assert_eq!(outs[0].timestamp_ms, T0);
         assert_eq!(outs[0].speaker_tag.as_deref(), Some("S1"));
+    }
+
+    fn signal(result: TranscriptResult, turn: TurnSignal) -> TranscriptResult {
+        TranscriptResult { turn: Some(turn), ..result }
+    }
+
+    #[test]
+    fn a_turn_signal_stays_on_the_output_for_its_result() {
+        let mut a = acc();
+        let eager = a.feed_result(signal(interim("What would", T0), TurnSignal::EagerEnd));
+        assert_eq!(eager[0].turn, Some(TurnSignal::EagerEnd));
+
+        let end = a.feed_result(signal(fin("What would you do?", T0, Some(1_000), None), TurnSignal::End));
+        assert_eq!((end.len(), end[0].turn), (1, Some(TurnSignal::End)));
+
+        // An interim extending the paragraph, then a final merged into it.
+        let resumed = a.feed_result(signal(interim("And then", T0 + 1_500), TurnSignal::Resumed));
+        assert_eq!(resumed[0].turn, Some(TurnSignal::Resumed));
+        let merged = a.feed_result(signal(fin("And then?", T0 + 1_500, Some(800), None), TurnSignal::End));
+        assert_eq!((merged.len(), merged[0].text.as_str()), (1, "What would you do? And then?"));
+        assert_eq!(merged[0].turn, Some(TurnSignal::End));
+
+        // Results without a signal carry none.
+        assert_eq!(a.feed_result(interim("so", T0 + 2_500))[0].turn, None);
+        assert_eq!(a.feed_result(fin("So.", T0 + 2_500, Some(300), None))[0].turn, None);
+    }
+
+    #[test]
+    fn the_paragraph_a_new_one_closes_carries_no_signal() {
+        let mut a = acc();
+        a.feed_result(fin("Hello.", T0, Some(500), None));
+        let outs = a.feed_result(signal(fin("New topic?", T0 + 10_000, Some(800), None), TurnSignal::End));
+        assert_eq!(outs.len(), 2);
+        assert_eq!((outs[0].text.as_str(), outs[0].turn), ("Hello.", None));
+        assert_eq!((outs[1].text.as_str(), outs[1].turn), ("New topic?", Some(TurnSignal::End)));
+        assert_eq!(a.flush().unwrap().turn, None);
     }
 
     #[test]

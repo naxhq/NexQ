@@ -250,6 +250,18 @@ impl IntelligenceEngine {
         Some(request_id)
     }
 
+    /// Like `cancel`, but only when `request_id` is the generation in flight,
+    /// so stopping one answer can never stop another that took its place.
+    pub fn cancel_request(&self, request_id: &str) -> Option<String> {
+        let mut slot = self.in_flight.lock().ok()?;
+        if slot.as_ref().map(|(id, _)| id.as_str()) != Some(request_id) {
+            return None;
+        }
+        let (request_id, token) = slot.take()?;
+        token.cancel();
+        Some(request_id)
+    }
+
     /// Check if currently generating.
     pub fn is_generating(&self) -> bool {
         self.is_generating.load(Ordering::SeqCst)
@@ -347,6 +359,19 @@ mod tests {
         assert_eq!(engine.cancel(), Some("req-1".to_string()));
         assert!(token.is_cancelled());
         assert_eq!(engine.cancel(), None);
+    }
+
+    #[test]
+    fn cancelling_a_named_request_leaves_any_other_running() {
+        let engine = IntelligenceEngine::new();
+        assert_eq!(engine.cancel_request("auto-1"), None); // nothing running
+        let guard = engine.begin_generation("yours").unwrap();
+        // An automatic answer that already ended must not stop yours.
+        assert_eq!(engine.cancel_request("auto-1"), None);
+        assert!(!guard.cancel_token().is_cancelled());
+        assert_eq!(engine.cancel_request("yours"), Some("yours".to_string()));
+        assert!(guard.cancel_token().is_cancelled());
+        assert_eq!(engine.cancel_request("yours"), None);
     }
 
     #[test]

@@ -5,6 +5,7 @@ import type { Meeting } from "../lib/types";
 const shortcuts = vi.hoisted(() => new Map<string, (event: { state: string }) => void>());
 const captureFailure = vi.hoisted(() => ({ message: "" }));
 const emitted = vi.hoisted(() => [] as Array<[string, unknown]>);
+const invoked = vi.hoisted(() => [] as Array<[string, Record<string, unknown> | undefined]>);
 vi.mock("@tauri-apps/plugin-global-shortcut", () => ({
   register: async (key: string, handler: (event: { state: string }) => void) => { shortcuts.set(key, handler); },
   unregister: async (key: string) => { shortcuts.delete(key); },
@@ -17,7 +18,8 @@ vi.mock("@tauri-apps/plugin-store", () => ({
   load: async () => ({ set: async () => {}, get: async () => undefined }),
 }));
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: async (command: string) => {
+  invoke: async (command: string, args?: Record<string, unknown>) => {
+    invoked.push([command, args]);
     if (command === "start_capture" && captureFailure.message) throw captureFailure.message;
     if (command === "start_meeting") {
       const meeting: Meeting = {
@@ -51,6 +53,7 @@ async function mountWindow(label: "launcher" | "overlay") {
 }
 
 beforeEach(() => {
+  invoked.length = 0;
   shortcuts.clear();
   captureFailure.message = "";
 });
@@ -83,6 +86,23 @@ it("reports denied audio capture while retaining the created meeting", async () 
     ["capture_warning", expect.stringContaining("System audio recording permission denied")],
   ])));
   expect(launcher.getState().activeMeeting?.id).toBe("shortcut-meeting");
+});
+
+it("a number key stops a running automatic answer and runs what you asked for", async () => {
+  const useMeetingStore = await mountWindow("overlay");
+  useMeetingStore.setState({ activeMeeting: { id: "m" } as Meeting });
+  const { useStreamStore } = await import("../stores/streamStore");
+  const { useQuestionStore } = await import("../stores/questionStore");
+  useStreamStore.getState().startStream("Assist", "m", "p", { requestId: "auto-1" });
+  useQuestionStore.getState().setAutoAnswer({
+    requestId: "auto-1", segmentId: "line", question: "Why?", early: false, done: Promise.resolve(),
+  });
+
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "Digit1" }));
+  });
+  await waitFor(() => expect(invoked.map(([command]) => command)).toContain("generate_assist"));
+  expect(invoked.find(([command]) => command === "cancel_generation")?.[1]).toEqual({ requestId: "auto-1" });
 });
 
 it("holds the Assist shortcut in the overlay only while a meeting runs", async () => {

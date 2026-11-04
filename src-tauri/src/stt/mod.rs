@@ -1,4 +1,5 @@
 pub mod deepgram;
+pub mod deepgram_flux;
 pub mod fbank;
 pub mod local_engines;
 pub mod provider;
@@ -79,6 +80,9 @@ struct TranscriptSegmentPayload {
     timestamp_ms: u64,
     is_final: bool,
     confidence: f32,
+    /// The provider's turn signal ("eager_end", "resumed", "end"), if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    turn: Option<provider::TurnSignal>,
 }
 
 /// Routes audio chunks to the active STT provider and emits IPC events.
@@ -304,6 +308,7 @@ impl STTRouter {
                     timestamp_ms: result.timestamp_ms,
                     is_final: result.is_final,
                     confidence: result.confidence,
+                    turn: result.turn,
                 };
 
                 let payload = TranscriptEventPayload { segment };
@@ -591,5 +596,31 @@ impl STTRouter {
             AudioSource::System => "Interviewer",
             AudioSource::Room => "Room",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn payload(turn: Option<provider::TurnSignal>) -> serde_json::Value {
+        serde_json::to_value(TranscriptSegmentPayload {
+            id: "seg_1".into(),
+            text: "Any questions?".into(),
+            speaker: "Them".into(),
+            speaker_id: None,
+            speaker_tag: None,
+            timestamp_ms: 1,
+            is_final: true,
+            confidence: 1.0,
+            turn,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn router_lines_carry_the_turn_signal_only_when_there_is_one() {
+        assert_eq!(payload(Some(provider::TurnSignal::End))["turn"], "end");
+        assert!(payload(None).get("turn").is_none());
     }
 }
