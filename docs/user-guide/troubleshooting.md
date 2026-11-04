@@ -126,7 +126,8 @@ This only appears the first time you install. Subsequent launches will not trigg
 2. **Test connection**: Click **Test Connection** to verify the LLM provider is reachable
 3. **Check API key**: For cloud providers, ensure your API key is valid
 4. **Ollama**: Verify Ollama is running (`ollama list` in terminal) and has at least one model pulled
-5. **Check model selection**: Ensure a model is selected in the LLM settings dropdown
+5. **Check model selection**: Ensure a model is selected in Settings > LLM. If the provider doesn't list the model you want, type its exact name in the **Model** field and press Enter
+6. **Custom endpoint**: the error names each path NexQ tried (`/chat/completions`, then `/api/chat`) and what the endpoint answered. `401 Unauthorized` means the token or key is wrong: paste it again under Settings > LLM > Custom, and it applies at once. `404` with "model not found" means the model name is wrong. For Ollama Cloud, use the base URL `https://ollama.com/v1`, **Bearer Token** and a model name such as `gemma4:31b`
 
 ### Ollama Not Detected
 
