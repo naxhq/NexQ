@@ -11,7 +11,7 @@ NexQ supports 11 STT providers. Each channel ("You" and "Them") can use a differ
 | Provider | Type | Cost | Accuracy | Speed | Best For |
 |----------|------|------|----------|-------|----------|
 | Web Speech API | Browser | Free | Good | Real-time | Quick setup, long sessions, English |
-| Deepgram | Cloud | Pay per use | Excellent | Real-time | Production use, high accuracy |
+| Deepgram | Cloud | Pay per use | Excellent | Real-time | Production use, high accuracy; Flux knows when a speaker finishes |
 | Groq Whisper | Cloud | Free tier | Very Good | Very Fast | High accuracy at no cost |
 | Cartesia | Cloud | Pay per second | Very Good | Real-time | Lines that end when the speaker finishes (English, French, Hindi, Japanese, Spanish) |
 | Whisper (local) | Local | Free | Excellent | Slow | Privacy, offline use |
@@ -27,6 +27,8 @@ NexQ supports 11 STT providers. Each channel ("You" and "Them") can use a differ
 **Start with Web Speech API** if you want zero-setup transcription. It works out of the box, costs nothing, and handles long sessions well.
 
 **Use Deepgram or Groq** if you need higher accuracy. Deepgram's Nova-3 model is the most accurate real-time option. Groq offers excellent accuracy on a free tier.
+
+**Use Deepgram Flux** (Settings > STT Providers > Deepgram > Model) if you rely on **Auto-Answer**. Flux decides when a speaker has finished, so NexQ answers a question as soon as it's asked instead of waiting 1.5 seconds of quiet, and can start on a likely finish. Choose **Flux** for English or **Flux Multilingual** for English, Spanish, French, German, Hindi, Russian, Portuguese, Japanese, Italian and Dutch. Flux doesn't tell speakers apart, so in-person meetings on Flux show a single "Room" speaker. NexQ streams silence to Flux, which needs it to hear where a turn ends, so quiet and muted time count toward your Deepgram usage; with Nova, NexQ skips long silence.
 
 **Use Cartesia** if you want each transcript line to end where the speaker actually finishes a thought. Cartesia's ink-2 model decides where each turn ends from what is being said, not only from pauses. It transcribes English, French, Hindi, Japanese and Spanish, and detects which one is spoken. Cartesia bills every second the stream is open, silence and muted time included: about 3 credits per second for each channel that uses it. To halve the cost, use Cartesia for "Them" and Web Speech for "You".
 
