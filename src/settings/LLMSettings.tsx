@@ -13,6 +13,7 @@ import {
 } from "../lib/ipc";
 import type { LLMProviderType, ModelInfo, OpenRouterModel } from "../lib/types";
 import { OpenRouterModelCatalog } from "./openrouter/OpenRouterModelCatalog";
+import { ModelCombobox } from "./ModelCombobox";
 import { ClaudeCliSettings, claudeTierLabel } from "./ClaudeCliSettings";
 import { useAgentStore } from "../stores/agentStore";
 import {
@@ -543,25 +544,15 @@ export function LLMSettings() {
           <h3 className="mb-3 text-sm font-semibold text-primary/80">Model</h3>
           {selectedProvider === "openrouter" && openRouterModels.length > 0 ? (
             <OpenRouterModelCatalog models={openRouterModels} />
-          ) : models.length > 0 ? (
-            <select
-              value={selectedModel}
-              onChange={(e) => handleModelSelect(e.target.value)}
-              className="w-full rounded-lg border border-border/50 bg-background px-3.5 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20 cursor-pointer"
-            >
-              <option value="">Select a model...</option>
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}{m.context_window ? ` (${Math.round(m.context_window / 1000)}K ctx)` : ""}
-                </option>
-              ))}
-            </select>
           ) : (
-            <div className="rounded-lg border border-border/30 bg-accent/20 px-4 py-3">
-              <p className="text-xs text-muted-foreground">
-                {modelsError || (modelsLoading ? "Loading models..." : 'Click "Load Models" to fetch available models')}
-              </p>
-            </div>
+            <>
+              <ModelCombobox value={selectedModel} models={models} onCommit={handleModelSelect} />
+              {models.length === 0 && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {modelsError || (modelsLoading ? "Loading models..." : 'Type the model name, or click "Load Models" to pick from the list')}
+                </p>
+              )}
+            </>
           )}
         </div>
       )}
