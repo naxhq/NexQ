@@ -875,6 +875,18 @@ fn needs_default_mic_override(config: &crate::audio::PartyAudioConfig, stt_skipp
         && config.device_id != "default"
 }
 
+/// How often the audio loop re-checks the mute flags when no audio arrives (200 ms).
+const MUTE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// Pass a party's mute flag on to its provider when it changed.
+fn sync_mute(provider: &mut Option<Box<dyn STTProvider>>, applied: &mut bool, flag: &AtomicBool) {
+    if crate::stt::provider::mute_changed(applied, flag.load(Ordering::Relaxed)) {
+        if let Some(p) = provider.as_mut() {
+            p.set_muted(*applied);
+        }
+    }
+}
+
 /// Start per-party audio capture with independent STT pipelines.
 ///
 /// Each party (You / Them) independently selects:
@@ -1073,9 +1085,15 @@ pub async fn start_capture_per_party(
     let mut you_stt_provider = you_stt;
     let mut them_stt_provider = them_stt;
 
+    // A party that's already muted (hot-swap, in-person) starts muted, so a
+    // provider that bills for an open stream doesn't connect until unmute.
+    let you_muted_at_start = state.you_muted.load(Ordering::Relaxed);
+    let them_muted_at_start = state.them_muted.load(Ordering::Relaxed);
+
     if let Some(ref mut provider) = you_stt_provider {
         crate::stt::emit_stt_debug(&app, "info", "stt",
             &format!("Starting 'You' STT ({})", you.stt_provider));
+        provider.set_muted(you_muted_at_start);
         match provider.start_stream(you_stt_tx).await {
             Ok(()) => {
                 log::info!("'You' party STT started ({})", you.stt_provider);
@@ -1100,6 +1118,7 @@ pub async fn start_capture_per_party(
     if let Some(ref mut provider) = them_stt_provider {
         crate::stt::emit_stt_debug(&app, "info", "stt",
             &format!("Starting 'Them' STT ({})", them.stt_provider));
+        provider.set_muted(them_muted_at_start);
         match provider.start_stream(them_stt_tx).await {
             Ok(()) => {
                 log::info!("'Them' party STT started ({})", them.stt_provider);
@@ -1317,7 +1336,28 @@ pub async fn start_capture_per_party(
         let mut you_feed_error_emitted = false;
         let mut them_feed_error_emitted = false;
 
-        while let Some(mut chunk) = rx.recv().await {
+        // Mute state last passed to each provider. Checked on every chunk and on
+        // a timer: Windows loopback sends no chunks while nothing plays, and a
+        // mute then must still reach the provider.
+        let mut you_muted_applied = you_muted_at_start;
+        let mut them_muted_applied = them_muted_at_start;
+        let mut mute_check = tokio::time::interval(MUTE_CHECK_INTERVAL);
+        mute_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        loop {
+            let mut chunk = tokio::select! {
+                received = rx.recv() => match received {
+                    Some(chunk) => chunk,
+                    None => break,
+                },
+                _ = mute_check.tick() => {
+                    sync_mute(&mut you_stt_provider, &mut you_muted_applied, &you_muted_flag);
+                    sync_mute(&mut them_stt_provider, &mut them_muted_applied, &them_muted_flag);
+                    continue;
+                }
+            };
+            sync_mute(&mut you_stt_provider, &mut you_muted_applied, &you_muted_flag);
+            sync_mute(&mut them_stt_provider, &mut them_muted_applied, &them_muted_flag);
             // Apply VAD from the correct per-source instance
             let vad_result = match chunk.source {
                 AudioSource::Mic | AudioSource::Room => mic_vad.process_chunk(&chunk.pcm_data),

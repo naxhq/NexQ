@@ -177,7 +177,7 @@ export function onTranscriptIndexed(
 export interface STTConnectionStatusEvent {
   provider: string;
   party: string;
-  status: string; // "connecting", "connected", "error", "disconnected", "reconnecting"
+  status: string; // "connecting", "connected", "error", "disconnected", "reconnecting", "paused" (muted)
   message?: string;
 }
 
