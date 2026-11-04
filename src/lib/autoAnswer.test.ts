@@ -4,9 +4,11 @@ vi.mock("./ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./ipc")>()),
   cancelGeneration: vi.fn(() => Promise.resolve()),
 }));
+vi.mock("./userAction", () => ({ runUserAction: vi.fn(() => Promise.resolve()) }));
 
-import { decideTurnStep, makeWayForYou } from "./autoAnswer";
+import { decideTurnStep, makeWayForYou, runYourAction } from "./autoAnswer";
 import { cancelGeneration } from "./ipc";
+import { runUserAction } from "./userAction";
 import { useQuestionStore, type AutoAnswerRef } from "../stores/questionStore";
 import { useStreamStore } from "../stores/streamStore";
 
@@ -78,9 +80,10 @@ describe("decideTurnStep", () => {
   });
 });
 
-describe("an answer you ask for (Space)", () => {
+describe("an answer you ask for", () => {
   afterEach(() => {
     vi.mocked(cancelGeneration).mockReset().mockImplementation(() => Promise.resolve());
+    vi.mocked(runUserAction).mockReset().mockImplementation(() => Promise.resolve());
     useStreamStore.getState().resetForMeeting();
     useQuestionStore.getState().clear();
   });
@@ -98,6 +101,39 @@ describe("an answer you ask for (Space)", () => {
     expect(useStreamStore.getState().responseHistory).toHaveLength(0);
     expect(useStreamStore.getState().isStreaming).toBe(false);
     expect(useQuestionStore.getState().autoAnswer).toBeNull();
+  });
+
+  it("leaves the question it stopped as a card to click, not marked answered", async () => {
+    const question = { text: "What would you do?", confidence: 1, timestamp_ms: 1, source: "Them" as const };
+    useQuestionStore.getState().answerLine(question, "line");
+    useStreamStore.getState().startStream("Assist", "m", "p", { requestId: "auto-1" });
+    useQuestionStore.getState().setAutoAnswer(ref({ requestId: "auto-1" }));
+    vi.mocked(cancelGeneration).mockImplementation(async () => useStreamStore.getState().endStream(0));
+
+    await makeWayForYou();
+    expect(useQuestionStore.getState().questions[0]).toMatchObject({ assisted: false, heldBack: true });
+  });
+
+  it("runs at once when nothing has to stop first", () => {
+    void runYourAction("Recap");
+    expect(runUserAction).toHaveBeenCalledWith("Recap", undefined);
+  });
+
+  it("stops a running automatic answer, then runs yours", async () => {
+    useStreamStore.getState().startStream("Assist", "m", "p", { requestId: "auto-1" });
+    useQuestionStore.getState().setAutoAnswer(ref({ requestId: "auto-1" }));
+    vi.mocked(cancelGeneration).mockImplementation(async () => useStreamStore.getState().endStream(0));
+
+    await runYourAction("WhatToSay");
+    expect(cancelGeneration).toHaveBeenCalledWith("auto-1");
+    expect(runUserAction).toHaveBeenCalledWith("WhatToSay", undefined);
+    expect(vi.mocked(cancelGeneration).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(runUserAction).mock.invocationCallOrder[0]);
+  });
+
+  it("settles with your answer, and passes on its refusal", async () => {
+    vi.mocked(runUserAction).mockRejectedValue("Generation already in progress");
+    await expect(runYourAction("Recap")).rejects.toBe("Generation already in progress");
   });
 
   it("leaves any other answer running", async () => {

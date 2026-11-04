@@ -3,11 +3,13 @@ import { HelpCircle, Sparkles, Check, Clock, X } from "lucide-react";
 import { onQuestionDetected, onTranscriptFinal, onTranscriptUpdate } from "../lib/events";
 import { runUserAction } from "../lib/userAction";
 import {
-  REFUSED, answerRunning, decideTurnStep, inTurn, logAutoAnswer, sameQuestion, stopAutoAnswer,
+  REFUSED, answerRunning, autoAnswerRunning, decideTurnStep, inTurn, logAutoAnswer, runYourAction, sameQuestion,
+  stopAutoAnswer,
 } from "../lib/autoAnswer";
 import { useTranscriptStore } from "../stores/transcriptStore";
 import { useAIActionsStore } from "../stores/aiActionsStore";
 import { useQuestionStore } from "../stores/questionStore";
+import { showToast } from "../stores/toastStore";
 import type { DetectedQuestion, TranscriptSegment, TranscriptUpdateEvent } from "../lib/types";
 
 /**
@@ -210,9 +212,17 @@ export function QuestionDetector() {
   }, [segments, addQuestion, autoTrigger]);
 
   const handleAssist = useCallback((index: number) => {
-    const questionText = questions[index]?.text;
-    useQuestionStore.getState().markAssisted(index);
-    runUserAction("Assist", questionText).catch(() => {});
+    const question = questions[index];
+    if (!question) return;
+    // Its automatic answer is on the way: a click doesn't restart it.
+    const store = useQuestionStore.getState();
+    if (autoAnswerRunning() && sameQuestion(store.autoAnswer?.question, question.text)) return;
+    store.markAssisted(index);
+    runYourAction("Assist", question.text).catch((err) => {
+      // No answer came, so it stays a card to click.
+      useQuestionStore.getState().holdBack(question.segmentId, question.text);
+      showToast(String(err).includes(REFUSED) ? "Another answer is still running" : "Couldn't generate AI response", "error");
+    });
   }, [questions]);
 
   const handleDismiss = useCallback((index: number, e: React.MouseEvent) => {

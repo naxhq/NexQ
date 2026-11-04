@@ -203,7 +203,7 @@ The AI Actions panel configures how NexQ's AI assistance behaves during meetings
 
 - **Action types** -- enable or disable specific AI modes (Assist, What to Say, Shorten, Follow-Up, Recap, Ask Question)
 - **Question Detection** -- show questions from the other party as cards in the overlay; click a card to get an answer to that question
-- **Auto-Answer** -- answer the newest detected question automatically. Turn it off to keep the cards and choose which questions to answer. With Cartesia or Deepgram Flux, the answer starts as soon as the speaker finishes, or earlier when they have probably finished; if they keep talking, that early answer is dropped and the full question is answered. Other engines wait for 1.5 seconds of quiet, since they can end a line mid-sentence. Pressing `Space` during an automatic answer stops it and answers what you asked for; an automatic answer never interrupts yours
+- **Auto-Answer** -- answer the newest detected question automatically. Turn it off to keep the cards and choose which questions to answer. With Cartesia or Deepgram Flux, the answer starts as soon as the speaker finishes, or earlier when they have probably finished; if they keep talking, that early answer is dropped and the full question is answered. Other engines wait for 1.5 seconds of quiet, since they can end a line mid-sentence. Asking for something yourself during an automatic answer (`Space`, a number key, a button or a question card) stops it and runs what you asked for; an automatic answer never interrupts yours
 - **Response style** -- adjust the tone, length, and format of AI responses
 - **Context window** -- control how much conversation history is sent to the LLM with each request
 

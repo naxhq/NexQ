@@ -1,6 +1,6 @@
 // Auto-Answer on a provider's own turn detection (Cartesia, Deepgram Flux),
 // and the rules for which automatic answer may be stopped:
-// - an answer you asked for (Space) stops a running automatic one;
+// - an answer you asked for (a click or a shortcut) stops a running automatic one;
 // - an automatic answer never stops yours;
 // - an automatic answer to an incomplete question gives way to the
 //   complete one.
@@ -8,6 +8,7 @@
 
 import { cancelGeneration } from "./ipc";
 import { logToFile } from "./logger";
+import { runUserAction } from "./userAction";
 import type { TurnSignal } from "./types";
 import { useQuestionStore, type AutoAnswerRef } from "../stores/questionStore";
 import { useStreamStore } from "../stores/streamStore";
@@ -86,13 +87,41 @@ export async function stopAutoAnswer(ref: AutoAnswerRef): Promise<void> {
   await Promise.race([ref.done, new Promise((resolve) => setTimeout(resolve, RELEASE_WAIT_MS))]);
 }
 
+/** Whether the newest automatic answer is still being sent or streamed. */
+export function autoAnswerRunning(): boolean {
+  const ref = useQuestionStore.getState().autoAnswer;
+  return !!ref && useStreamStore.getState().isRunning(ref.requestId);
+}
+
+/** The same, for a component: an automatic answer doesn't lock your actions. */
+export function useAutoAnswerRunning(): boolean {
+  const requestId = useQuestionStore((s) => s.autoAnswer?.requestId);
+  return useStreamStore((s) => requestId !== undefined && s.isRunning(requestId));
+}
+
 /** Before an answer you asked for: stop a running automatic one. */
 export async function makeWayForYou(): Promise<void> {
-  const ref = useQuestionStore.getState().autoAnswer;
+  const store = useQuestionStore.getState();
+  const ref = store.autoAnswer;
   if (!ref || !useStreamStore.getState().isRunning(ref.requestId)) return;
-  useQuestionStore.getState().setAutoAnswer(null);
+  store.setAutoAnswer(null);
+  // Its answer is dropped, so the question goes back to a card to click.
+  store.holdBack(ref.segmentId, ref.question);
   logAutoAnswer("stoppedForYou");
   await stopAutoAnswer(ref);
+}
+
+/**
+ * An answer you asked for (a click or a shortcut). A running automatic answer
+ * stops for it; an answer you asked for earlier doesn't, so this one is refused.
+ * Settles with your answer, without holding up the Auto-Answer steps meanwhile.
+ */
+export function runYourAction(mode: string, question?: string): Promise<void> {
+  let answer: Promise<void> = Promise.resolve();
+  return inTurn(async () => {
+    if (autoAnswerRunning()) await makeWayForYou();
+    answer = runUserAction(mode, question);
+  }).then(() => answer);
 }
 
 // Decisions run one at a time, so one never starts while another's stop is

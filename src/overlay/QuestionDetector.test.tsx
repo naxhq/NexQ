@@ -29,6 +29,7 @@ import { cancelGeneration } from "../lib/ipc";
 import { useStreamStore } from "../stores/streamStore";
 import { useAIActionsStore } from "../stores/aiActionsStore";
 import { useQuestionStore } from "../stores/questionStore";
+import { useToastStore } from "../stores/toastStore";
 import { resetMeetingScopedStores } from "../stores/resetMeeting";
 import { useTranscriptStore } from "../stores/transcriptStore";
 import type { GlobalDefaults, TranscriptSegment, TurnSignal } from "../lib/types";
@@ -158,6 +159,55 @@ describe("Auto-Answer with the provider's turn signals (Cartesia, Deepgram Flux)
     expect(cancelGeneration).not.toHaveBeenCalled();
     expect(screen.getByText(/What would you do first\?/)).toBeTruthy();
     expect(screen.queryByText("Answered")).toBeNull();
+  });
+
+  it("clicking another question during an automatic answer stops it and answers yours", async () => {
+    vi.useFakeTimers();
+    setAutoTrigger(true);
+    answersRunUntilStopped();
+    useQuestionStore.getState().addQuestion(
+      { text: "Which database did you pick?", confidence: 1, timestamp_ms: 1, source: "Them" }, "them_old");
+    useQuestionStore.getState().markAssisted(0);
+    useQuestionStore.getState().holdBack("them_old", "Which database did you pick?");
+    render(<QuestionDetector />);
+    send(turnLine("What would you do first?", "end"));
+    await settle();
+    const automatic = requestOf(0);
+
+    fireEvent.click(screen.getByText(/Which database did you pick\?/));
+    await settle();
+    expect(cancelGeneration).toHaveBeenCalledWith(automatic);
+    expect(askedFor()).toEqual(["What would you do first?", "Which database did you pick?"]);
+    // The question it stopped goes back to a card to click.
+    expect(useQuestionStore.getState().questions[0]).toMatchObject({ assisted: false, heldBack: true });
+  });
+
+  it("clicking the question being answered doesn't restart its answer", async () => {
+    vi.useFakeTimers();
+    setAutoTrigger(true);
+    answersRunUntilStopped();
+    render(<QuestionDetector />);
+    send(turnLine("What would you do first?", "end"));
+    await settle();
+
+    fireEvent.click(screen.getByRole("button", { name: /Question: What would you do first\?/ }));
+    await settle();
+    expect(cancelGeneration).not.toHaveBeenCalled();
+    expect(runUserAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("a click that gets no answer stays a card to click, and says why", async () => {
+    vi.useFakeTimers();
+    setAutoTrigger(false);
+    vi.mocked(runUserAction).mockRejectedValue("Generation already in progress");
+    useQuestionStore.getState().addQuestion(
+      { text: "What would you do first?", confidence: 1, timestamp_ms: 1, source: "Them" }, "them_1");
+    render(<QuestionDetector />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Question: What would you do first\?/ }));
+    await settle();
+    expect(screen.queryByText("Answered")).toBeNull();
+    expect(useToastStore.getState().toasts.map((t) => t.message)).toContain("Another answer is still running");
   });
 
   it("answers nothing on turn signals with Auto-Answer off", async () => {

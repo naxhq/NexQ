@@ -91,7 +91,7 @@ const HELP: Record<string, { title: string; body: string }> = {
   },
   autoTrigger: {
     title: "Auto-Answer",
-    body: "When enabled, NexQ answers the newest detected question on its own, once the other party has been quiet for a moment. With Cartesia or Deepgram Flux it answers as soon as they finish speaking.\n\nPress Space to stop an automatic answer and get your own. Turn OFF to keep the question cards and choose which ones to answer. Needs Question Detection.",
+    body: "When enabled, NexQ answers the newest detected question on its own, once the other party has been quiet for a moment. With Cartesia or Deepgram Flux it answers as soon as they finish speaking.\n\nAsk for anything yourself to stop an automatic answer and get yours instead. Turn OFF to keep the question cards and choose which ones to answer. Needs Question Detection.",
   },
   temperature: {
     title: "Temperature",
