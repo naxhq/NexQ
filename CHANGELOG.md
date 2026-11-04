@@ -1,3 +1,15 @@
+# [2.33.0](https://github.com/naxhq/NexQ/compare/v2.32.0...v2.33.0) (2026-11-04)
+
+
+### Bug Fixes
+
+* **overlay:** question cards are back for anyone with saved AI settings ([2e0c258](https://github.com/naxhq/NexQ/commit/2e0c258473854bc3473db6d95f2afe6be95a988f))
+
+
+### Features
+
+* **overlay:** Auto-Answer is off by default ([e5d85d4](https://github.com/naxhq/NexQ/commit/e5d85d48e89bb517688c42632afc851fb5c89573))
+* **stt:** Cartesia isn't billed while a party is muted ([#75](https://github.com/naxhq/NexQ/issues/75)) ([4951b8c](https://github.com/naxhq/NexQ/commit/4951b8ced5481f3719d0bc1cb208e5edf4d166d6)), closes [#74](https://github.com/naxhq/NexQ/issues/74)
 # [2.32.0](https://github.com/naxhq/NexQ/compare/v2.31.0...v2.32.0) (2026-11-04)
 
 

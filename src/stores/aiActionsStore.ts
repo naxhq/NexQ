@@ -61,7 +61,7 @@ function createDefaultConfigs(): AllActionConfigs {
       transcriptWindowSeconds: 300,
       temperature: 0.3,
       questionDetection: true,
-      autoTrigger: true,
+      autoTrigger: false,
     },
     customInstructions: "",
     instructionPresets: { tone: null, format: null, length: null, opinion: null },
@@ -180,12 +180,13 @@ export const useAIActionsStore = create<AIActionsState>((set, get) => ({
       const store = await getStore();
       const saved = await store.get<AllActionConfigs>(STORE_KEY);
       if (saved) {
-        // Merge saved configs with defaults to handle new built-in actions
+        // Merge saved configs with defaults to handle new built-in actions and settings
         const defaults = createDefaultConfigs();
         const merged: AllActionConfigs = {
           ...defaults,
           ...saved,
           actions: { ...defaults.actions, ...saved.actions },
+          globalDefaults: { ...defaults.globalDefaults, ...saved.globalDefaults },
         };
         set({ configs: merged, isLoaded: true });
         // Sync to backend (action configs + composed instructions)

@@ -72,7 +72,7 @@ When the meeting starts, the overlay window (500x700, always-on-top, transparent
 
 Question detection recognizes `?` and `？`, common Chinese question words (such as 什么 / 什麼, 怎么 / 怎麼 and 哪), Chinese sentence endings 吗 / 嗎 and 呢, and Japanese question endings such as ですか, ますか and でしょうか. Suggestions ending in 吧 ("let's…"), phrases such as 没什么 or 无论如何, and a bare tag such as "Right?" or "You know?" are not treated as questions. These are heuristic signals: an ambiguous phrase can still be marked as a question.
 
-Detected questions appear as cards in the overlay. By default the newest one is answered automatically; to choose which questions get an answer, turn off **Auto-Answer** in Settings > AI Actions and click the card you need.
+Detected questions appear as cards in the overlay. Click the card you need to get an answer. To have the newest question answered automatically, turn on **Auto-Answer** in Settings > AI Actions.
 
 For the fastest automatic answers, transcribe the interviewer with Cartesia or Deepgram Flux. Both tell NexQ when the interviewer has finished, so the answer starts right away instead of after 1.5 seconds of quiet. If the interviewer keeps going after a pause, NexQ drops the answer it started and answers the complete question. Press `Space`, or click a question or an action, at any time to get your own answer instead.
 
