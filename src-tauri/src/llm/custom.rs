@@ -42,10 +42,10 @@ fn describe_auth(config: &CustomConfig) -> String {
         CustomAuthType::Bearer => "bearer".to_string(),
         CustomAuthType::ApiKey => format!("API key in header '{}'", config.auth_header.as_deref().unwrap_or("x-api-key")),
     };
-    let credential = match config.auth_value.as_deref() {
-        None | Some("") => "no credential (nothing is sent)".to_string(),
-        Some(v) if v.trim() != v => format!("{}-character credential with spaces around it", v.chars().count()),
-        Some(v) => format!("{}-character credential", v.chars().count()),
+    let credential = match config.auth_value.as_deref().map(|v| (v, v.trim())) {
+        None | Some((_, "")) => "no credential (nothing is sent)".to_string(),
+        Some((v, t)) if t != v => format!("{}-character credential (spaces around it removed)", t.chars().count()),
+        Some((_, t)) => format!("{}-character credential", t.chars().count()),
     };
     format!("auth {}, {}", kind, credential)
 }
@@ -138,12 +138,13 @@ impl CustomClient {
     }
 
     /// Apply authentication to a request based on the configured auth type.
+    /// Spaces around the credential (a pasted key often has some) aren't sent.
     fn apply_auth(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         match &self.config.auth_type {
             CustomAuthType::None => builder,
             CustomAuthType::Bearer => {
                 if let Some(ref token) = self.config.auth_value {
-                    builder.header("Authorization", format!("Bearer {}", token))
+                    builder.header("Authorization", format!("Bearer {}", token.trim()))
                 } else {
                     builder
                 }
@@ -155,7 +156,7 @@ impl CustomClient {
                     .as_deref()
                     .unwrap_or("x-api-key");
                 if let Some(ref key) = self.config.auth_value {
-                    builder.header(header, key.as_str())
+                    builder.header(header, key.trim())
                 } else {
                     builder
                 }
@@ -560,10 +561,11 @@ mod tests {
         assert_eq!(paths, ["/v1/chat/completions", "/v1/api/chat"]);
     }
 
+    /// Reported: a key pasted with spaces around it was refused (401).
     #[tokio::test]
-    async fn a_bearer_token_is_sent_on_the_request() {
+    async fn a_bearer_token_is_sent_without_spaces_around_it() {
         let (base, seen) = server(vec![("/v1/chat/completions", 200, "{}")]).await;
-        client(&base, CustomAuthType::Bearer, Some("tok"))
+        client(&base, CustomAuthType::Bearer, Some("  tok "))
             .open_chat_stream(&hi(), "m", &GenerationParams::default())
             .await
             .unwrap();
@@ -583,7 +585,7 @@ mod tests {
         assert_eq!(describe_auth(&config(CustomAuthType::Bearer, Some("secret"))), "auth bearer, 6-character credential");
         assert_eq!(
             describe_auth(&config(CustomAuthType::ApiKey, Some(" secret "))),
-            "auth API key in header 'x-api-key', 8-character credential with spaces around it"
+            "auth API key in header 'x-api-key', 6-character credential (spaces around it removed)"
         );
     }
 

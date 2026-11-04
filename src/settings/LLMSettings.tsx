@@ -5,13 +5,14 @@ import {
   getLLMProviders,
   listModels,
   setActiveModel,
+  setLLMProvider,
   testLLMConnection,
   storeApiKey,
   getApiKey,
   hasApiKey,
   listOpenRouterModels,
 } from "../lib/ipc";
-import type { LLMProviderType, ModelInfo, OpenRouterModel } from "../lib/types";
+import type { CustomLlmAuthType as CustomAuthType, LLMProviderType, ModelInfo, OpenRouterModel } from "../lib/types";
 import { OpenRouterModelCatalog } from "./openrouter/OpenRouterModelCatalog";
 import { ModelCombobox } from "./ModelCombobox";
 import { ClaudeCliSettings, claudeTierLabel } from "./ClaudeCliSettings";
@@ -214,18 +215,37 @@ export function LLMSettings() {
   }, [selectedProvider, customBaseUrl, customAuthType, setCustomLlmConfig]);
 
   // Build the provider config JSON for backend calls
-  const buildProviderConfig = useCallback(() => {
+  // `custom` overrides a Custom field changed in this same event (its state isn't updated yet).
+  const buildProviderConfig = useCallback((custom: { authType?: CustomAuthType; authValue?: string } = {}) => {
     const config: Record<string, unknown> = { provider_type: selectedProvider };
     if (apiKey) config.api_key = apiKey;
     if (selectedProvider === "custom") {
+      const authType = custom.authType ?? customAuthType;
       if (customBaseUrl) config.base_url = customBaseUrl;
-      if (customAuthType !== "none") {
-        config.auth_type = customAuthType;
-        config.auth_value = customAuthValue;
+      if (authType !== "none") {
+        config.auth_type = authType;
+        config.auth_value = (custom.authValue ?? customAuthValue).trim();
       }
     }
     return JSON.stringify(config);
   }, [selectedProvider, apiKey, customBaseUrl, customAuthType, customAuthValue]);
+
+  // Custom is the provider in use: a changed base URL, auth type or token
+  // applies to it at once, not only after a restart or a provider switch.
+  const applyCustomIfActive = (custom: { authType?: CustomAuthType; authValue?: string } = {}) => {
+    if (selectedProvider !== "custom" || useConfigStore.getState().llmProvider !== "custom" || !customBaseUrl.trim()) return;
+    setLLMProvider(buildProviderConfig(custom)).catch((e) =>
+      showToast(`Couldn't apply the custom endpoint: ${e instanceof Error ? e.message : String(e)}`, "error"),
+    );
+  };
+
+  // The token is saved without spaces around it (a pasted key often has some).
+  const saveCustomToken = async () => {
+    const token = customAuthValue.trim();
+    if (token !== customAuthValue) setCustomAuthValue(token);
+    await storeApiKey("custom", token).catch(() => {});
+    applyCustomIfActive({ authValue: token });
+  };
 
   const handleProviderChange = (provider: LLMProviderType) => {
     setSelectedProvider(provider);
@@ -451,6 +471,7 @@ export function LLMSettings() {
               type="text"
               value={customBaseUrl}
               onChange={(e) => setCustomBaseUrl(e.target.value)}
+              onBlur={() => applyCustomIfActive()}
               placeholder="http://localhost:8080/v1"
               maxLength={512}
               className="w-full rounded-lg border border-border/50 bg-background px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
@@ -461,7 +482,11 @@ export function LLMSettings() {
               <label className="mb-1.5 block text-xs font-medium text-foreground">Auth Type</label>
               <select
                 value={customAuthType}
-                onChange={(e) => setCustomAuthType(e.target.value as "none" | "bearer" | "api_key")}
+                onChange={(e) => {
+                  const authType = e.target.value as CustomAuthType;
+                  setCustomAuthType(authType);
+                  applyCustomIfActive({ authType });
+                }}
                 className="w-full rounded-lg border border-border/50 bg-background px-3.5 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
               >
                 <option value="none">None</option>
@@ -478,7 +503,7 @@ export function LLMSettings() {
                   type="password"
                   value={customAuthValue}
                   onChange={(e) => setCustomAuthValue(e.target.value)}
-                  onBlur={() => { storeApiKey("custom", customAuthValue).catch(() => {}); }}
+                  onBlur={() => { void saveCustomToken(); }}
                   placeholder={customAuthType === "bearer" ? "Bearer token..." : "API key..."}
                   maxLength={256}
                   className="w-full rounded-lg border border-border/50 bg-background px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
