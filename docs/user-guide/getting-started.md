@@ -72,7 +72,7 @@ NexQ uses an LLM to generate AI assistance during meetings. The easiest local op
 1. Open Settings > LLM
 2. Select your provider
 3. Enter your API key
-4. Pick a model from the list, or type its name
+4. Select a model from the dropdown
 5. Click **Test Connection** to verify
 
 ## Start Your First Meeting

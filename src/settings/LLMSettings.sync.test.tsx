@@ -115,16 +115,6 @@ describe("Settings ↔ footer sync of the active LLM", () => {
     expect(useConfigStore.getState().verifiedCloudProviders).toContain("claude_cli");
   });
 
-  it("a model name typed in Settings is used by the active provider, without loading the list", async () => {
-    render(<LLMSettings />);
-    const field = screen.getByRole("combobox", { name: "Model" });
-    expect(field).toHaveValue("llama3.2");
-    fireEvent.change(field, { target: { value: "gemma4:31b-cloud" } });
-    fireEvent.keyDown(field, { key: "Enter" });
-    await waitFor(() => expect(ipc.setActiveModel).toHaveBeenCalledWith("ollama", "gemma4:31b-cloud"));
-    expect(useConfigStore.getState().llmModel).toBe("gemma4:31b-cloud");
-  });
-
   describe("Custom endpoint", () => {
     const OLLAMA_CLOUD = { provider_type: "custom", base_url: "https://ollama.com/v1" };
 
