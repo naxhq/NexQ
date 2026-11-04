@@ -93,7 +93,7 @@ impl CustomClient {
             Ok(resp) if resp.status().is_success() => return Ok(resp),
             Ok(resp) => {
                 log::warn!("CustomLLM: /chat/completions answered {}; trying /api/chat", resp.status());
-                Self::failure(resp).await
+                cancellable(params, Self::failure(resp)).await?
             }
             Err(e) => {
                 log::warn!("CustomLLM: /chat/completions couldn't be reached; trying /api/chat");
@@ -105,7 +105,7 @@ impl CustomClient {
         let body = json!({ "model": model, "messages": msgs, "stream": true });
         let (second, unreachable) = match self.post_json("/api/chat", &body, params).await? {
             Ok(resp) if resp.status().is_success() => return Ok(resp),
-            Ok(resp) => (Self::failure(resp).await, false),
+            Ok(resp) => (cancellable(params, Self::failure(resp)).await?, false),
             Err(e) => (format!("couldn't be reached ({})", e), true),
         };
         let message = format!("Custom endpoint request failed: /chat/completions {}; /api/chat {}", first, second);
@@ -138,29 +138,16 @@ impl CustomClient {
     }
 
     /// Apply authentication to a request based on the configured auth type.
-    /// Spaces around the credential (a pasted key often has some) aren't sent.
+    /// Spaces around the credential (a pasted key often has some) aren't sent,
+    /// and a blank credential sends no header at all.
     fn apply_auth(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        match &self.config.auth_type {
-            CustomAuthType::None => builder,
-            CustomAuthType::Bearer => {
-                if let Some(ref token) = self.config.auth_value {
-                    builder.header("Authorization", format!("Bearer {}", token.trim()))
-                } else {
-                    builder
-                }
+        let credential = self.config.auth_value.as_deref().map(str::trim).filter(|v| !v.is_empty());
+        match (&self.config.auth_type, credential) {
+            (CustomAuthType::Bearer, Some(token)) => builder.header("Authorization", format!("Bearer {}", token)),
+            (CustomAuthType::ApiKey, Some(key)) => {
+                builder.header(self.config.auth_header.as_deref().unwrap_or("x-api-key"), key)
             }
-            CustomAuthType::ApiKey => {
-                let header = self
-                    .config
-                    .auth_header
-                    .as_deref()
-                    .unwrap_or("x-api-key");
-                if let Some(ref key) = self.config.auth_value {
-                    builder.header(header, key.trim())
-                } else {
-                    builder
-                }
-            }
+            _ => builder,
         }
     }
 
@@ -570,6 +557,47 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(seen.lock().unwrap()[0], ("/v1/chat/completions".to_string(), Some("Bearer tok".to_string())));
+    }
+
+    /// A token cleared in Settings applies at once, as it does after a restart:
+    /// no header at all, not "Bearer " with nothing after it.
+    #[tokio::test]
+    async fn a_blank_credential_sends_no_auth_header() {
+        let (base, seen) = server(vec![("/v1/chat/completions", 200, "{}")]).await;
+        client(&base, CustomAuthType::Bearer, Some("   "))
+            .open_chat_stream(&hi(), "m", &GenerationParams::default())
+            .await
+            .unwrap();
+        assert_eq!(seen.lock().unwrap()[0], ("/v1/chat/completions".to_string(), None));
+    }
+
+    /// The first failure's body is read now, so a server that stalls while
+    /// sending it must not hold up Stop.
+    #[tokio::test]
+    async fn stop_works_while_an_error_body_stalls() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/v1", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = socket.read(&mut buf).await;
+            socket.write_all(b"HTTP/1.1 401 X\r\nContent-Length: 100\r\n\r\n").await.unwrap();
+            std::future::pending::<()>().await;
+            drop(socket);
+        });
+        let token = Arc::new(crate::llm::provider::CancelToken::new());
+        let params = GenerationParams { cancel: Some(Arc::clone(&token)), ..GenerationParams::default() };
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            token.cancel();
+        });
+        let custom = client(&base, CustomAuthType::None, None);
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            custom.open_chat_stream(&hi(), "m", &params),
+        )
+        .await;
+        assert!(matches!(outcome, Ok(Err(LLMError::Cancelled))), "{:?}", outcome.map(|r| r.map(|resp| resp.status())));
     }
 
     #[test]
