@@ -2,6 +2,7 @@ import { useEffect, useCallback, useState } from "react";
 import { useMeetingStore } from "./stores/meetingStore";
 import { useConfigStore } from "./stores/configStore";
 import { useAIActionsStore } from "./stores/aiActionsStore";
+import { useScenarioStore } from "./stores/scenarioStore";
 import { LauncherView } from "./launcher/LauncherView";
 import { OverlayView } from "./overlay/OverlayView";
 import { SettingsOverlay } from "./settings/SettingsOverlay";
@@ -86,9 +87,7 @@ function App() {
       }
     });
     // Load scenario config (custom scenarios, overrides, active scenario)
-    import("./stores/scenarioStore").then(({ useScenarioStore }) => {
-      useScenarioStore.getState().loadScenarioConfig();
-    }).catch(() => { /* non-critical */ });
+    useScenarioStore.getState().loadScenarioConfig();
   }, [loadConfig]);
 
   // Load recent meetings on app start
@@ -212,6 +211,10 @@ function App() {
         } catch (err) {
           console.warn("[App] Failed to reset meeting stores in overlay:", err);
         }
+        // This window read the scenarios at startup; the launcher may have changed
+        // them since, and only it saves the meeting's scenario as the active one.
+        await useScenarioStore.getState().loadScenarioConfig();
+        useScenarioStore.setState({ activeScenarioId: aiScenario });
         useMeetingStore.setState({
           activeMeeting: meeting,
           currentView: "overlay",
