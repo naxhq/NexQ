@@ -71,11 +71,11 @@ export function initMeetingSpeakers(mode: AudioMode): boolean {
     return true;
   }
   const config = useConfigStore.getState();
+  const provider = config.meetingAudioConfig?.you?.stt_provider ?? config.sttProvider;
+  // Deepgram's Flux models detect turns but don't tell speakers apart.
+  const fluxRoom = provider === "deepgram" && config.deepgramConfig.model.startsWith("flux-");
   const hasDiarization =
-    config.diarizationEnabled &&
-    ["deepgram", "azure_speech"].includes(
-      config.meetingAudioConfig?.you?.stt_provider ?? config.sttProvider
-    );
+    config.diarizationEnabled && ["deepgram", "azure_speech"].includes(provider) && !fluxRoom;
   useSpeakerStore.getState().initForInPerson(hasDiarization);
   return hasDiarization;
 }

@@ -12,6 +12,7 @@ import { initMeetingSpeakers, resetMeetingScopedStores } from "./resetMeeting";
 import { useTranscriptStore } from "./transcriptStore";
 import { useSpeakerStore } from "./speakerStore";
 import { useStreamStore } from "./streamStore";
+import { useConfigStore } from "./configStore";
 
 describe("resetMeetingScopedStores", () => {
   it("clears the previous meeting's transcript, speakers and answers", async () => {
@@ -34,5 +35,27 @@ describe("resetMeetingScopedStores", () => {
     expect(useStreamStore.getState().currentContent).toBe("");
     expect(useStreamStore.getState().responseHistory).toEqual([]);
     expect(useSpeakerStore.getState().speakerOrder).toEqual(["you", "them"]);
+  });
+});
+
+describe("initMeetingSpeakers in person", () => {
+  const room = (stt_provider: string, model: string) => {
+    const config = useConfigStore.getState();
+    useConfigStore.setState({
+      diarizationEnabled: true,
+      sttProvider: stt_provider as never,
+      meetingAudioConfig: undefined as never,
+      deepgramConfig: { ...config.deepgramConfig, model },
+    });
+  };
+
+  it("tells speakers apart with Deepgram Nova", () => {
+    room("deepgram", "nova-3");
+    expect(initMeetingSpeakers("in_person")).toBe(true);
+  });
+
+  it("uses a single Room with Deepgram Flux, which can't tell speakers apart", () => {
+    room("deepgram", "flux-general-en");
+    expect(initMeetingSpeakers("in_person")).toBe(false);
   });
 });

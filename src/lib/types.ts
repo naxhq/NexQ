@@ -433,7 +433,10 @@ export interface AgentSessionStatus {
 // == DEEPGRAM CONFIG ==
 
 export interface DeepgramConfig {
-  /** Model: "nova-3" | "nova-2" | "nova" | "enhanced" | "base" | "whisper-large" | etc. */
+  /**
+   * Model: "nova-3" | "nova-2" | "nova" | "enhanced" | "base" | "whisper-large" | etc.,
+   * or a Flux model ("flux-general-en", "flux-general-multi") with turn detection.
+   */
   model: string;
   smart_format: boolean;
   interim_results: boolean;

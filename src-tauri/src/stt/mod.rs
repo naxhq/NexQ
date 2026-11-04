@@ -1,4 +1,5 @@
 pub mod deepgram;
+pub mod deepgram_flux;
 pub mod fbank;
 pub mod local_engines;
 pub mod provider;

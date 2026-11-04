@@ -158,13 +158,15 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
 interface DeepgramModelInfo {
   id: string;
   label: string;
-  tier: "latest" | "standard" | "economy" | "whisper";
+  tier: "latest" | "flux" | "standard" | "economy" | "whisper";
   description: string;
   costPerMin: number;
 }
 
 const DEEPGRAM_MODELS: DeepgramModelInfo[] = [
   { id: "nova-3", label: "Nova 3", tier: "latest", description: "Best accuracy, latest model", costPerMin: 0.0059 },
+  { id: "flux-general-en", label: "Flux", tier: "flux", description: "Knows when a speaker is done, so Auto-Answer replies at once (English)", costPerMin: 0.0077 },
+  { id: "flux-general-multi", label: "Flux Multilingual", tier: "flux", description: "Turn detection in 10 languages", costPerMin: 0.0078 },
   { id: "nova-2", label: "Nova 2", tier: "standard", description: "Great accuracy, widely used", costPerMin: 0.0043 },
   { id: "nova", label: "Nova", tier: "standard", description: "Previous generation", costPerMin: 0.0043 },
   { id: "enhanced", label: "Enhanced", tier: "standard", description: "High accuracy, conservative", costPerMin: 0.0043 },
@@ -974,6 +976,9 @@ function DeepgramAdvancedSettings() {
   };
 
   const activeModel = DEEPGRAM_MODELS.find((m) => m.id === deepgramConfig.model);
+  // Flux (/v2/listen) detects turns itself and has none of Nova's formatting,
+  // endpointing, diarization or dictation options.
+  const isFlux = deepgramConfig.model.startsWith("flux-");
 
   return (
     <div className="rounded-xl border border-border/30 bg-card/50 overflow-hidden">
@@ -1030,6 +1035,7 @@ function DeepgramAdvancedSettings() {
           {DEEPGRAM_MODELS.map((model) => {
             const tierColors: Record<string, string> = {
               latest: "text-success",
+              flux: "text-info",
               standard: "text-info",
               economy: "text-warning",
               whisper: "text-purple-400",
@@ -1062,7 +1068,21 @@ function DeepgramAdvancedSettings() {
         </div>
       </div>
 
-      {/* Core Feature Toggles */}
+      {isFlux && (
+        <div className="px-5 py-3 border-b border-border/20 bg-info/5">
+          <p className="text-xs text-foreground/90">
+            Flux tells NexQ when each speaker has finished, so Auto-Answer replies right away instead of
+            waiting 1.5 s, and can start on a likely finish.
+          </p>
+          <p className="mt-1 text-meta text-muted-foreground/80">
+            It doesn&apos;t tell speakers apart. NexQ streams silence to it, so quiet and muted time count
+            toward Deepgram usage.
+          </p>
+        </div>
+      )}
+
+      {/* Core Feature Toggles (Nova only) */}
+      {!isFlux && (<>
       <div className="px-5 py-3 border-b border-border/20">
         <label className="mb-2 block text-meta font-medium text-muted-foreground uppercase tracking-wider">Features</label>
         <div className="space-y-2">
@@ -1143,6 +1163,7 @@ function DeepgramAdvancedSettings() {
           <p className="text-meta text-muted-foreground/60">Disabled — server default endpointing used</p>
         )}
       </div>
+      </>)}
 
       {/* Advanced toggle */}
       <button
@@ -1157,13 +1178,15 @@ function DeepgramAdvancedSettings() {
         <div className="border-t border-border/20">
           {/* Advanced Feature Toggles */}
           <div className="px-5 py-3 border-b border-border/20 space-y-2">
-            <DeepgramToggle
-              label="Tell remote speakers apart"
-              param="diarize"
-              description="Labels each person on the other side of the call (Speaker 1, 2…). Never applied to your mic."
-              checked={deepgramConfig.diarize}
-              onChange={(v) => updateField("diarize", v)}
-            />
+            {!isFlux && (
+              <DeepgramToggle
+                label="Tell remote speakers apart"
+                param="diarize"
+                description="Labels each person on the other side of the call (Speaker 1, 2…). Never applied to your mic."
+                checked={deepgramConfig.diarize}
+                onChange={(v) => updateField("diarize", v)}
+              />
+            )}
             <DeepgramToggle
               label="Numerals"
               param="numerals"
@@ -1178,13 +1201,15 @@ function DeepgramAdvancedSettings() {
               checked={deepgramConfig.profanity_filter}
               onChange={(v) => updateField("profanity_filter", v)}
             />
-            <DeepgramToggle
-              label="Dictation"
-              param="dictation"
-              description='Format spoken punctuation commands ("period" → ".")'
-              checked={deepgramConfig.dictation}
-              onChange={(v) => updateField("dictation", v)}
-            />
+            {!isFlux && (
+              <DeepgramToggle
+                label="Dictation"
+                param="dictation"
+                description='Format spoken punctuation commands ("period" → ".")'
+                checked={deepgramConfig.dictation}
+                onChange={(v) => updateField("dictation", v)}
+              />
+            )}
           </div>
 
           {/* Keyterm Prompting */}
