@@ -56,7 +56,7 @@ export function OverlayView() {
   const audioMode = useMeetingStore((s) => s.audioMode);
   const endMeetingFlow = useMeetingStore((s) => s.endMeetingFlow);
   const setCurrentView = useMeetingStore((s) => s.setCurrentView);
-  const scenarioTemplate = useScenarioStore((s) => s.getActiveTemplate());
+  const scenarioName = useScenarioStore((s) => s.getActiveTemplate().name);
   const [askInputVisible, setAskInputVisible] = useState(false);
   const [devLogOpen, setDevLogOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
@@ -192,7 +192,7 @@ export function OverlayView() {
           </span>
           {/* Scenario chip */}
           <span className="text-[10px] text-muted-foreground px-1.5 py-0.5 rounded bg-white/5">
-            {scenarioTemplate.name}
+            {scenarioName}
           </span>
           <span className="text-xs text-muted-foreground/60 tabular-nums font-medium">
             {elapsedMs > 0 ? formatDuration(elapsedMs) : "00:00"}
