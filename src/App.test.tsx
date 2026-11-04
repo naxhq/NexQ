@@ -79,7 +79,7 @@ describe("the overlay's scenario chip", () => {
   it("shows a custom scenario the launcher saved after launch", async () => {
     await launchOverlayOn("lecture");
     savedConfig.customScenarios = [{ id: "custom_1", name: "Board review", is_custom: true }];
-    await launcherStartsMeeting("custom_1" as AIScenario);
+    await launcherStartsMeeting("custom_1");
     expect(await screen.findByText("Board review")).toBeTruthy();
   });
 });

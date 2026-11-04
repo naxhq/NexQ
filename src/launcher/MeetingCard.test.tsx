@@ -2,7 +2,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import { MeetingCard } from "./MeetingCard";
-import type { MeetingSummary } from "../lib/types";
+import { useScenarioStore } from "../stores/scenarioStore";
+import type { MeetingSummary, ScenarioTemplate } from "../lib/types";
 
 const TITLE = "Meeting 2026-10-19 13:00";
 
@@ -31,6 +32,25 @@ function setup() {
   );
   return { onRename, user };
 }
+
+describe("MeetingCard scenario", () => {
+  const renderWith = (ai_scenario: MeetingSummary["ai_scenario"]) =>
+    render(<MeetingCard meeting={{ ...makeMeeting(), ai_scenario }} onSelect={vi.fn()} onDelete={vi.fn()} onRename={vi.fn()} />);
+
+  it("shows a custom scenario's name instead of its id", () => {
+    useScenarioStore.setState({
+      customScenarios: [{ id: "custom_1", name: "Board review", is_custom: true } as ScenarioTemplate],
+    });
+    renderWith("custom_1");
+    expect(screen.getByText("Board review")).toBeInTheDocument();
+    useScenarioStore.setState({ customScenarios: [] });
+  });
+
+  it("doesn't show the id of a custom scenario that was deleted", () => {
+    renderWith("custom_1");
+    expect(screen.getByText("custom scenario")).toBeInTheDocument();
+  });
+});
 
 describe("MeetingCard rename", () => {
   it("clicking save commits the edited title once", async () => {

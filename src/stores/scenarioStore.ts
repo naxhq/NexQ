@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { create } from "zustand";
 import { load, Store } from "@tauri-apps/plugin-store";
 import type { AIScenario, ScenarioTemplate } from "../lib/types";
@@ -32,6 +33,8 @@ interface ScenarioState {
   // Actions
   setActiveScenario: (id: AIScenario) => void;
   getActiveTemplate: () => ScenarioTemplate;
+  /** `id` if that scenario still exists, otherwise Team Meeting (custom ones can be deleted). */
+  resolveScenario: (id: AIScenario) => AIScenario;
   updatePrompt: (
     scenarioId: string,
     field: keyof Pick<ScenarioTemplate, "system_prompt" | "summary_prompt" | "question_detection_prompt">,
@@ -75,6 +78,9 @@ export const useScenarioStore = create<ScenarioState>((set, get) => ({
 
     return { ...builtIn, ...overrides };
   },
+
+  resolveScenario: (id) =>
+    getScenarioById(id) || get().customScenarios.some((s) => s.id === id) ? id : "team_meeting",
 
   updatePrompt: (scenarioId, field, value) => {
     set((s) => {
@@ -167,3 +173,15 @@ export const useScenarioStore = create<ScenarioState>((set, get) => ({
     }
   },
 }));
+
+/** The scenarios a meeting can use, in the order the pickers list them. */
+export function useMeetingScenarios(): ScenarioTemplate[] {
+  const customScenarios = useScenarioStore((s) => s.customScenarios);
+  return useMemo(() => [...BUILT_IN_SCENARIOS, ...customScenarios], [customScenarios]);
+}
+
+/** How a saved meeting's scenario reads: "team meeting", or a custom scenario's name. */
+export function scenarioLabel(id: string, customScenarios: ScenarioTemplate[]): string {
+  if (!id.startsWith("custom_")) return id.replace(/_/g, " ");
+  return customScenarios.find((s) => s.id === id)?.name ?? "custom scenario";
+}

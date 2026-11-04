@@ -10,7 +10,7 @@ export type AudioSource = "Mic" | "System" | "Room";
 // == MEETING MODE TYPES ==
 
 export type AudioMode = "online" | "in_person";
-export type AIScenario = "team_meeting" | "lecture" | "interview" | "webinar" | "oral_exam" | "custom";
+export type AIScenario = "team_meeting" | "lecture" | "interview" | "webinar" | "oral_exam" | "custom" | `custom_${string}`;
 /** "remote_tag": a person on the other side of an online call (id `them:S1`). */
 export type SpeakerSource = "fixed" | "diarization" | "room" | "remote_tag";
 

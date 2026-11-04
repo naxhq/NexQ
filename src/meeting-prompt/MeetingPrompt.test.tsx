@@ -1,12 +1,47 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MeetingPrompt } from "./MeetingPrompt";
-import type { MeetingPromptInfo } from "../lib/types";
+
+// The prompt window's own connections: a call arriving, and config.json on disk.
+const window_ = vi.hoisted(() => ({
+  onCall: (_info: unknown) => {},
+  saved: {} as Record<string, unknown>,
+}));
+vi.mock("../lib/events", () => ({
+  emitStartDetectedMeeting: () => Promise.resolve(),
+  onDetectedMeetingEnded: () => Promise.resolve(() => {}),
+  onMeetingDetected: (handler: (info: unknown) => void) => {
+    window_.onCall = handler;
+    return Promise.resolve(() => {});
+  },
+}));
+vi.mock("../lib/ipc", () => ({
+  dismissMeetingPrompt: () => Promise.resolve(),
+  getDetectedMeeting: () => Promise.resolve(null),
+}));
+vi.mock("@tauri-apps/plugin-store", () => ({
+  load: async () => ({ get: async (key: string) => window_.saved[key], set: async () => {} }),
+}));
+
+import { MeetingPrompt, MeetingPromptWindow } from "./MeetingPrompt";
+import { useScenarioStore } from "../stores/scenarioStore";
+import type { MeetingPromptInfo, ScenarioTemplate } from "../lib/types";
+
+const boardReview = {
+  id: "custom_1",
+  name: "Board review",
+  description: "Custom scenario",
+  is_custom: true,
+} as ScenarioTemplate;
 
 const info = (over: Partial<MeetingPromptInfo["meeting"]> = {}, secs = 60): MeetingPromptInfo => ({
   meeting: { app: "zoom", app_name: "Zoom", title: null, ...over },
   auto_dismiss_secs: secs,
   default_scenario: "interview",
+});
+
+afterEach(() => {
+  useScenarioStore.setState({ customScenarios: [] });
+  window_.saved = {};
 });
 
 describe("MeetingPrompt", () => {
@@ -15,6 +50,35 @@ describe("MeetingPrompt", () => {
     vi.setSystemTime(new Date(2026, 9, 23, 15, 2));
   });
   afterEach(() => vi.useRealTimers());
+
+  it("offers custom scenarios after the built-ins, by keyboard too", () => {
+    useScenarioStore.setState({ customScenarios: [boardReview] });
+    const onStart = vi.fn();
+    render(<MeetingPrompt info={info()} onStart={onStart} onDismiss={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: /Meeting type/ }));
+    const options = screen.getAllByRole("option");
+    expect(options[options.length - 1]).toHaveTextContent("Board review");
+
+    fireEvent.keyDown(window, { key: "End" });
+    fireEvent.keyDown(window, { key: "Enter" });
+    expect(screen.getByRole("button", { name: "Meeting type: Board review" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Start NexQ/ }));
+    expect(onStart).toHaveBeenCalledWith(expect.any(String), "custom_1");
+  });
+
+  it("opens on a custom default scenario", () => {
+    useScenarioStore.setState({ customScenarios: [boardReview] });
+    render(<MeetingPrompt info={{ ...info(), default_scenario: "custom_1" }} onStart={() => {}} onDismiss={() => {}} />);
+    expect(screen.getByRole("button", { name: "Meeting type: Board review" })).toBeInTheDocument();
+  });
+
+  it("starts as Team Meeting when its default scenario was deleted", () => {
+    const onStart = vi.fn();
+    render(<MeetingPrompt info={{ ...info(), default_scenario: "custom_deleted" }} onStart={onStart} onDismiss={() => {}} />);
+    expect(screen.getByRole("button", { name: "Meeting type: Team Meeting" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Start NexQ/ }));
+    expect(onStart).toHaveBeenCalledWith(expect.any(String), "team_meeting");
+  });
 
   it("starts a meeting named after the call, with the default scenario", () => {
     const onStart = vi.fn();
@@ -89,5 +153,16 @@ describe("MeetingPrompt", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
     expect(onDismiss).not.toHaveBeenCalled();
+  });
+});
+
+describe("MeetingPromptWindow", () => {
+  it("reads the saved scenarios again for each call, since it stays open between calls", async () => {
+    render(<MeetingPromptWindow />);
+    window_.saved.customScenarios = [boardReview];
+    await act(async () => {
+      window_.onCall({ ...info(), default_scenario: "custom_1" });
+    });
+    expect(await screen.findByRole("button", { name: "Meeting type: Board review" })).toBeInTheDocument();
   });
 });

@@ -144,14 +144,18 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     try {
       // Resolve mode and scenario (fall back to current state if not provided)
       const resolvedMode: AudioMode = audioMode ?? get().audioMode;
-      const resolvedScenario: AIScenario = scenario ?? get().aiScenario;
+      let resolvedScenario: AIScenario = scenario ?? get().aiScenario;
 
       // 0. Set active scenario in scenarioStore + push prompts to Rust backend.
       // Before start_meeting: a Claude CLI live session starts there with the
       // scenario prompt as its system prompt.
       try {
         const { useScenarioStore } = await import("./scenarioStore");
-        useScenarioStore.getState().setActiveScenario(resolvedScenario);
+        const scenarios = useScenarioStore.getState();
+        // A custom scenario can come from another window's list, or be gone by now.
+        await scenarios.loadScenarioConfig();
+        resolvedScenario = scenarios.resolveScenario(resolvedScenario);
+        scenarios.setActiveScenario(resolvedScenario);
 
         // Push scenario prompts to Rust backend for scenario-aware intelligence
         const template = useScenarioStore.getState().getActiveTemplate();

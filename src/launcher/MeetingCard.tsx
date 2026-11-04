@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { MeetingSummary } from "../lib/types";
 import { formatRelativeTime, formatDurationLong } from "../lib/utils";
+import { scenarioLabel, useScenarioStore } from "../stores/scenarioStore";
 import {
   Trash2,
   Pencil,
@@ -37,6 +38,9 @@ export function MeetingCard({
   isLive = false,
   staggerIndex = 0,
 }: MeetingCardProps) {
+  const scenario = useScenarioStore((s) =>
+    meeting.ai_scenario ? scenarioLabel(meeting.ai_scenario, s.customScenarios) : null
+  );
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(meeting.title);
   const [isSaving, setIsSaving] = useState(false);
@@ -273,9 +277,9 @@ export function MeetingCard({
               </span>
             )}
 
-            {meeting.ai_scenario && (
-              <span className="text-[9px] font-medium text-muted-foreground/50 truncate max-w-[80px]">
-                {meeting.ai_scenario.replace("_", " ")}
+            {scenario && (
+              <span className="text-[9px] font-medium text-muted-foreground/50 truncate max-w-[80px]" title={scenario}>
+                {scenario}
               </span>
             )}
 

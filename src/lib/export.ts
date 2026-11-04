@@ -5,6 +5,7 @@
 import type { Meeting, TranscriptSegment, AIScenario, SpeakerIdentity } from "./types";
 import { formatTimestamp, formatDurationLong, getSpeakerLabel, getModeLabel } from "./utils";
 import { showToast } from "../stores/toastStore";
+import { scenarioLabel, useScenarioStore } from "../stores/scenarioStore";
 import { defaultRemoteSpeakerName, remoteKeyOf } from "./speakerLabels";
 
 /** Strip LLM thinking tags from text (Qwen3, DeepSeek, etc.) */
@@ -71,7 +72,7 @@ export function exportToMarkdown(meeting: Meeting): string {
     md += `**Mode:** ${meeting.audio_mode === "online" ? "Online" : "In-Person"}\n`;
   }
   if (meeting.ai_scenario) {
-    md += `**Scenario:** ${meeting.ai_scenario.replace(/_/g, " ")}\n`;
+    md += `**Scenario:** ${scenarioLabel(meeting.ai_scenario, useScenarioStore.getState().customScenarios)}\n`;
   }
   md += `**Segments:** ${meeting.transcript.length}\n\n`;
 
