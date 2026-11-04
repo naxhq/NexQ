@@ -150,7 +150,7 @@ This only appears the first time you install. Subsequent launches will not trigg
 3. **Check your internet connection.** Cloud providers require a stable connection. Slow or intermittent connections cause delayed responses.
 4. **Reduce the context window.** In Settings, reduce the amount of transcript data sent to the LLM. Less input means faster responses.
 5. **Close other resource-intensive applications.** Local LLMs compete with other apps for CPU/RAM.
-6. **Automatic answers start 1.5 seconds after the question?** That's the quiet wait for engines that can end a line mid-sentence. Transcribe the other party with Cartesia or Deepgram Flux (Settings > STT Providers): both say when the speaker has finished, so Auto-Answer starts at once. With Flux, quiet and muted time count toward Deepgram usage, since NexQ streams silence to it.
+6. **Automatic answers start 1.5 seconds after the question?** That's the quiet wait for engines that can end a line mid-sentence. Transcribe the other party with Cartesia or Deepgram Flux (Settings > STT Providers): both say when the speaker has finished, so Auto-Answer starts at once. With Flux, quiet time counts toward Deepgram usage, since NexQ streams silence to it; muted time doesn't.
 
 ## Overlay Issues
 

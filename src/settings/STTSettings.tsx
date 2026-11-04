@@ -1075,8 +1075,8 @@ function DeepgramAdvancedSettings() {
             waiting 1.5 s, and can start on a likely finish.
           </p>
           <p className="mt-1 text-meta text-muted-foreground/80">
-            It doesn&apos;t tell speakers apart. NexQ streams silence to it, so quiet and muted time count
-            toward Deepgram usage.
+            It doesn&apos;t tell speakers apart. NexQ streams silence to it, so quiet time counts toward
+            Deepgram usage. Muted time doesn&apos;t: muting closes the stream.
           </p>
         </div>
       )}

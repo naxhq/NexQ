@@ -8,6 +8,9 @@
 // - Auto-reconnect in the background for the whole meeting (1, 2, 4, 8, then every 15 s);
 //   audio captured while offline (up to 30 s) is replayed after reconnecting
 // - Keepalive ping frames every 8s (Deepgram disconnects after 10s idle)
+// - Flux (no KeepAlive): muting a party closes its stream, so muted time isn't
+//   streamed or billed; unmuting reconnects at once and replays the audio
+//   captured while connecting. Nova keeps its connection while muted.
 // - Connection status events emitted to frontend
 // - Graceful close via {"type":"CloseStream"} message
 // - Improved API key validation error messages
@@ -194,8 +197,8 @@ pub struct DeepgramSTT {
     connection_state: Arc<AtomicU8>,
     /// Reader of the current connection; stop_stream waits for its last results.
     reader_task: Option<tokio::task::JoinHandle<()>>,
-    /// Background reconnect attempt while the meeting goes on.
-    reconnect_task: Option<tokio::task::JoinHandle<Result<DeepgramSocket, String>>>,
+    /// Background reconnect attempt while the meeting goes on (socket, when connected).
+    reconnect_task: Option<tokio::task::JoinHandle<Result<(DeepgramSocket, Instant), String>>>,
     reconnect_attempt: u32,
     next_reconnect_at: Option<Instant>,
     /// Audio captured while offline (or while the writer was busy), oldest first.
@@ -203,6 +206,13 @@ pub struct DeepgramSTT {
     pending_samples: usize,
     /// Digital silence still needed after the latest non-silent chunk.
     silence_tail_samples: usize,
+    /// Flux only: the party is muted, so no stream is open and nothing is sent.
+    paused: bool,
+    /// Set by an unmute until the new stream is ready (for the log).
+    resuming_since: Option<Instant>,
+    /// The stream closed by the latest mute, delivering its last turn
+    /// (at most FINAL_RESULTS_WAIT). stop_stream waits for it.
+    closing_reader: Option<tokio::task::JoinHandle<()>>,
     /// Tests point the provider at a local WebSocket server.
     url_override: Option<String>,
 }
@@ -262,6 +272,9 @@ impl DeepgramSTT {
             pending_audio: VecDeque::new(),
             pending_samples: 0,
             silence_tail_samples: 0,
+            paused: false,
+            resuming_since: None,
+            closing_reader: None,
             url_override: None,
         }
     }
@@ -748,6 +761,13 @@ impl STTProvider for DeepgramSTT {
         if self.api_key.is_empty() {
             return Err("Deepgram API key not configured. Get a free API key at https://console.deepgram.com/signup ($200 free credit, no credit card required).".into());
         }
+        if self.paused {
+            // Flux, muted from the start: connect on the first unmute, not now.
+            self.result_tx = Some(result_tx);
+            log::info!("DeepgramSTT: muted at start ({}); Flux connects on unmute", self.party);
+            Self::emit_status(&self.app_handle, &self.party, "paused", Some("Muted: not streaming to Deepgram".to_string()));
+            return Ok(());
+        }
 
         log::info!(
             "DeepgramSTT: Connecting to Deepgram {} (language: {}, smart_format: {}, diarize: {}, endpointing: {:?})",
@@ -814,6 +834,10 @@ impl STTProvider for DeepgramSTT {
         &mut self,
         chunk: AudioChunk,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Muted Flux: no stream is open (the audio loop doesn't feed a muted party anyway).
+        if self.paused {
+            return Ok(());
+        }
         // Deepgram needs audio containing a pause to detect an endpoint. Send a
         // bounded tail after speech, then suppress prolonged digital silence.
         if !self.should_forward_audio(&chunk) {
@@ -862,7 +886,13 @@ impl STTProvider for DeepgramSTT {
         if let Some(task) = self.reconnect_task.take() {
             task.abort();
         }
+        self.resuming_since = None;
         if !self.is_streaming {
+            // Muted just before the stop: the closed Flux stream still
+            // delivers its last turn (its task ends within FINAL_RESULTS_WAIT).
+            if let Some(closing) = self.closing_reader.take() {
+                let _ = closing.await;
+            }
             // Offline at the end: no reconnect after the meeting stopped.
             self.pending_audio.clear();
             self.pending_samples = 0;
@@ -942,6 +972,19 @@ impl STTProvider for DeepgramSTT {
             );
         }
     }
+
+    fn set_muted(&mut self, muted: bool) {
+        // Flux only: it has no KeepAlive, so an open stream gets silence (billed).
+        // Nova keeps its connection as before, with KeepAlive and no audio.
+        if !self.is_flux() || muted == self.paused {
+            return;
+        }
+        if muted {
+            self.pause();
+        } else {
+            self.resume();
+        }
+    }
 }
 
 impl DeepgramSTT {
@@ -1010,6 +1053,58 @@ impl DeepgramSTT {
         Self::emit_status(&self.app_handle, &self.party, "reconnecting", Some("Connection lost — reconnecting".to_string()));
     }
 
+    /// Flux, muted: close the stream so nothing is sent or billed. The closed
+    /// stream still delivers the turn in progress, and nothing reconnects
+    /// until unmute.
+    fn pause(&mut self) {
+        self.paused = true;
+        self.resuming_since = None;
+        if let Some(task) = self.reconnect_task.take() {
+            task.abort();
+        }
+        self.reconnect_attempt = 0;
+        self.next_reconnect_at = None;
+        if self.is_streaming {
+            // Audio captured before the mute goes out first.
+            self.flush_pending_nonblocking();
+            // Dropping the audio sender makes the writer send CloseStream. The
+            // old tasks keep their own stop flag and connection state: they
+            // finish the last turn, and can't cut short or mark as lost the
+            // stream an unmute opens.
+            self.audio_tx = None;
+            self.stop_flag = Arc::new(AtomicBool::new(false));
+            self.connection_state = Arc::new(AtomicU8::new(0));
+            if let Some(mut reader) = self.reader_task.take() {
+                self.closing_reader = Some(tokio::spawn(async move {
+                    if tokio::time::timeout(FINAL_RESULTS_WAIT, &mut reader).await.is_err() {
+                        reader.abort();
+                    }
+                }));
+            }
+            self.is_streaming = false;
+            log::info!("DeepgramSTT: paused ({}): Flux stream closed while muted", self.party);
+        } else {
+            log::info!("DeepgramSTT: paused ({}) while not connected", self.party);
+        }
+        self.pending_audio.clear();
+        self.pending_samples = 0;
+        Self::emit_status(&self.app_handle, &self.party, "paused", Some("Muted: not streaming to Deepgram".to_string()));
+    }
+
+    /// Flux, unmuted: reconnect right away. Audio fed until the stream is
+    /// ready is kept and replayed first, so the first words aren't lost.
+    fn resume(&mut self) {
+        self.paused = false;
+        // Not started yet, or already stopped.
+        if self.result_tx.is_none() || self.is_streaming {
+            return;
+        }
+        self.resuming_since = Some(Instant::now());
+        self.reconnect_attempt = 0;
+        self.next_reconnect_at = None;
+        self.drive_reconnect();
+    }
+
     /// Advance the background reconnect without waiting: pick up a finished
     /// attempt, or start the next one when its backoff has passed.
     fn drive_reconnect(&mut self) {
@@ -1021,22 +1116,44 @@ impl DeepgramSTT {
             // Unconstrained: with the task's coop budget used up, polling a
             // finished JoinHandle can still return Pending (and drop the socket).
             let outcome = self.reconnect_task.take().and_then(|t| tokio::task::unconstrained(t).now_or_never());
-            match outcome {
-                Some(Ok(Ok(ws))) => {
-                    log::info!("DeepgramSTT: reconnected ({}) after {} attempt(s)", self.party, self.reconnect_attempt + 1);
+            let failed = match outcome {
+                Some(Ok(Ok((_, connected_at))))
+                    if self.is_flux() && connected_at.elapsed() > deepgram_flux::UNUSED_CONNECTION_MAX =>
+                {
+                    // No audio came for a while (idle loopback), so Deepgram
+                    // may have closed it: connect again now.
+                    log::info!("DeepgramSTT: Flux connection unused for {} s ({}), connecting again",
+                        connected_at.elapsed().as_secs(), self.party);
+                    false
+                }
+                Some(Ok(Ok((ws, _)))) => {
+                    if let Some(since) = self.resuming_since.take() {
+                        log::info!("DeepgramSTT: resumed ({}): connected {} ms after unmute, replaying {} ms of audio",
+                            self.party, since.elapsed().as_millis(), self.pending_samples as u64 * 1000 / SAMPLE_RATE);
+                    } else {
+                        log::info!("DeepgramSTT: reconnected ({}) after {} attempt(s)", self.party, self.reconnect_attempt + 1);
+                    }
                     self.install_session(ws, result_tx);
                     return;
                 }
-                Some(Ok(Err(e))) => log::warn!("DeepgramSTT: reconnect failed: {}", e),
-                other => log::warn!("DeepgramSTT: reconnect task ended: {:?}", other.map(|r| r.map(|_| ()))),
+                Some(Ok(Err(e))) => {
+                    log::warn!("DeepgramSTT: reconnect failed: {}", e);
+                    true
+                }
+                other => {
+                    log::warn!("DeepgramSTT: reconnect task ended: {:?}", other.map(|r| r.map(|_| ())));
+                    true
+                }
+            };
+            if failed {
+                self.reconnect_attempt += 1;
+                let wait = reconnect_backoff(self.reconnect_attempt);
+                self.next_reconnect_at = Some(Instant::now() + wait);
+                self.connection_state.store(3, Ordering::SeqCst);
+                Self::emit_status(&self.app_handle, &self.party, "reconnecting",
+                    Some(format!("Reconnect attempt {} failed, retrying in {} s", self.reconnect_attempt, wait.as_secs())));
+                return;
             }
-            self.reconnect_attempt += 1;
-            let wait = reconnect_backoff(self.reconnect_attempt);
-            self.next_reconnect_at = Some(Instant::now() + wait);
-            self.connection_state.store(3, Ordering::SeqCst);
-            Self::emit_status(&self.app_handle, &self.party, "reconnecting",
-                Some(format!("Reconnect attempt {} failed, retrying in {} s", self.reconnect_attempt, wait.as_secs())));
-            return;
         }
         if self.next_reconnect_at.is_some_and(|at| Instant::now() < at) {
             return;
@@ -1045,7 +1162,7 @@ impl DeepgramSTT {
         self.connection_state.store(1, Ordering::SeqCst);
         self.reconnect_task = Some(tokio::spawn(async move {
             match tokio::time::timeout(Duration::from_secs(10), Self::connect(&key, &url)).await {
-                Ok(Ok(ws)) => Ok(ws),
+                Ok(Ok(ws)) => Ok((ws, Instant::now())),
                 Ok(Err(e)) => Err(e.to_string()),
                 Err(_) => Err("connect timed out after 10 s".to_string()),
             }
@@ -1671,6 +1788,257 @@ mod tests {
         server.abort();
     }
 
+    /// A TurnInfo message as Flux sends it.
+    fn flux_event(event: &str, transcript: &str) -> String {
+        serde_json::json!({
+            "type": "TurnInfo", "request_id": "r", "sequence_id": 1, "event": event, "turn_index": 0,
+            "audio_window_start": 0.0, "audio_window_end": 1.0, "transcript": transcript,
+            "words": [{"word": "w", "start": 0.0, "end": 0.6, "confidence": 0.95}],
+            "end_of_turn_confidence": 0.5,
+        })
+        .to_string()
+    }
+
+    /// How the local stand-in for Flux behaves in each session.
+    #[derive(Clone, Default)]
+    struct FluxStandIn {
+        /// Sent after a session's first non-silent audio: (event, transcript).
+        reply: Option<(&'static str, &'static str)>,
+        /// Sent 200 ms after CloseStream, before closing (Flux decoding the last audio).
+        last_words: Option<&'static str>,
+        /// Wait before completing each handshake.
+        handshake_delay: Duration,
+        /// Close a session that gets no audio for this long (Deepgram's idle timeout).
+        idle_close: Option<Duration>,
+    }
+
+    struct FluxServer {
+        address: std::net::SocketAddr,
+        /// Sessions accepted.
+        sessions: Arc<std::sync::atomic::AtomicUsize>,
+        /// CloseStream messages received.
+        closes: Arc<std::sync::atomic::AtomicUsize>,
+        /// (session, first sample) of each non-silent audio frame.
+        frames: mpsc::Receiver<(usize, i16)>,
+    }
+
+    async fn flux_server(stand_in: FluxStandIn) -> FluxServer {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let sessions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let closes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (frames_tx, frames) = mpsc::channel(1024);
+        let (counted, closed) = (Arc::clone(&sessions), Arc::clone(&closes));
+        tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                let session = counted.fetch_add(1, Ordering::SeqCst) + 1;
+                let (stand_in, frames_tx, closed) = (stand_in.clone(), frames_tx.clone(), Arc::clone(&closed));
+                tokio::spawn(async move {
+                    tokio::time::sleep(stand_in.handshake_delay).await;
+                    let Ok(mut ws) = tokio_tungstenite::accept_async(socket).await else { return };
+                    let mut replied = false;
+                    loop {
+                        let next = match stand_in.idle_close {
+                            Some(idle) => match tokio::time::timeout(idle, ws.next()).await {
+                                Ok(next) => next,
+                                Err(_) => {
+                                    let _ = ws.close(None).await;
+                                    return;
+                                }
+                            },
+                            None => ws.next().await,
+                        };
+                        match next {
+                            Some(Ok(Message::Binary(bytes))) => {
+                                if bytes.iter().all(|b| *b == 0) {
+                                    continue;
+                                }
+                                let _ = frames_tx.send((session, i16::from_le_bytes([bytes[0], bytes[1]]))).await;
+                                if let (false, Some((event, text))) = (replied, stand_in.reply) {
+                                    replied = true;
+                                    let _ = ws.send(Message::Text(flux_event(event, text).into())).await;
+                                }
+                            }
+                            Some(Ok(Message::Text(text))) if text.contains("CloseStream") => {
+                                closed.fetch_add(1, Ordering::SeqCst);
+                                if let Some(text) = stand_in.last_words {
+                                    tokio::time::sleep(Duration::from_millis(200)).await;
+                                    let _ = ws.send(Message::Text(flux_event("Update", text).into())).await;
+                                }
+                                let _ = ws.close(None).await;
+                                return;
+                            }
+                            Some(Ok(_)) => {}
+                            _ => return,
+                        }
+                    }
+                });
+            }
+        });
+        FluxServer { address, sessions, closes, frames }
+    }
+
+    /// Results received so far: (text, is_final, turn).
+    fn drain(rx: &mut mpsc::Receiver<TranscriptResult>) -> Vec<(String, bool, Option<TurnSignal>)> {
+        std::iter::from_fn(|| rx.try_recv().ok()).map(|r| (r.text, r.is_final, r.turn)).collect()
+    }
+
+    /// Feeds chunks of `value` until the provider streams again (at most 5 s).
+    async fn feed_until_streaming(provider: &mut DeepgramSTT, value: i16) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !provider.is_streaming && Instant::now() < deadline {
+            provider.feed_audio(chunk(value, epoch_now_ms())).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(provider.is_streaming, "the stream didn't come back");
+    }
+
+    /// Muting Flux closes its stream, so no silence goes out while muted. The
+    /// turn in progress still arrives as a final, and nothing reconnects.
+    #[tokio::test]
+    async fn muting_flux_closes_the_stream_and_keeps_the_turn_in_progress() {
+        let mut server = flux_server(FluxStandIn { reply: Some(("Update", "said before mute")), ..Default::default() }).await;
+        let mut provider = flux_provider(server.address);
+        let (result_tx, mut result_rx) = mpsc::channel(8);
+        provider.start_stream(result_tx).await.unwrap();
+        provider.feed_audio(chunk(500, 1_000)).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), server.frames.recv()).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        provider.set_muted(true);
+        assert!(!provider.is_streaming && provider.paused);
+        for _ in 0..5 {
+            provider.feed_audio(chunk(500, epoch_now_ms())).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert_eq!(drain(&mut result_rx), vec![
+            ("said before mute".to_string(), false, None),
+            ("said before mute".to_string(), true, None),
+        ]);
+        assert_eq!(server.closes.load(Ordering::SeqCst), 1, "no CloseStream on mute");
+        assert_eq!(server.sessions.load(Ordering::SeqCst), 1, "reconnected while muted");
+        provider.stop_stream().await.unwrap();
+    }
+
+    /// Muted right before the meeting stops: the stop waits for the last words
+    /// of the stream the mute closed.
+    #[tokio::test]
+    async fn stopping_just_after_a_flux_mute_keeps_the_last_words() {
+        let server = flux_server(FluxStandIn { last_words: Some("last words"), ..Default::default() }).await;
+        let mut provider = flux_provider(server.address);
+        let (result_tx, mut result_rx) = mpsc::channel(8);
+        provider.start_stream(result_tx).await.unwrap();
+        provider.feed_audio(chunk(500, 1_000)).await.unwrap();
+        provider.set_muted(true);
+        provider.stop_stream().await.unwrap();
+        assert_eq!(drain(&mut result_rx).last(), Some(&("last words".to_string(), true, None)));
+    }
+
+    /// Unmuting reconnects at once, and the first words, fed while Deepgram is
+    /// still connecting, reach the new stream before later audio.
+    #[tokio::test]
+    async fn unmuting_flux_reconnects_and_sends_the_first_words_first() {
+        let mut server = flux_server(FluxStandIn { handshake_delay: Duration::from_millis(150), ..Default::default() }).await;
+        let mut provider = flux_provider(server.address);
+        let (result_tx, _result_rx) = mpsc::channel(8);
+        provider.start_stream(result_tx).await.unwrap();
+        provider.set_muted(true);
+        provider.set_muted(false);
+        provider.feed_audio(chunk(3, 1_000)).await.unwrap();
+        provider.feed_audio(chunk(4, 1_100)).await.unwrap();
+        assert!(!provider.is_streaming, "connected before the handshake finished");
+        feed_until_streaming(&mut provider, 5).await;
+
+        let mut first = Vec::new();
+        for _ in 0..2 {
+            first.push(tokio::time::timeout(Duration::from_secs(2), server.frames.recv()).await.unwrap().unwrap());
+        }
+        assert_eq!(first, vec![(2, 3), (2, 4)]);
+        provider.stop_stream().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn flux_muted_at_start_connects_only_on_unmute() {
+        let server = flux_server(FluxStandIn::default()).await;
+        let mut provider = flux_provider(server.address);
+        provider.set_muted(true);
+        let (result_tx, _result_rx) = mpsc::channel(8);
+        provider.start_stream(result_tx).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(server.sessions.load(Ordering::SeqCst), 0, "connected while muted");
+
+        provider.set_muted(false);
+        feed_until_streaming(&mut provider, 7).await;
+        assert_eq!(server.sessions.load(Ordering::SeqCst), 1);
+        provider.stop_stream().await.unwrap();
+    }
+
+    /// Nova keeps its connection while muted, as before.
+    #[tokio::test]
+    async fn muting_nova_keeps_its_connection() {
+        let server = flux_server(FluxStandIn::default()).await;
+        let mut provider = DeepgramSTT::with_api_key("test");
+        provider.url_override = Some(format!("ws://{}/v1/listen", server.address));
+        let (result_tx, _result_rx) = mpsc::channel(8);
+        provider.start_stream(result_tx).await.unwrap();
+        provider.set_muted(true);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(provider.is_streaming && !provider.paused);
+        assert_eq!(server.closes.load(Ordering::SeqCst), 0);
+        provider.set_muted(false);
+        assert_eq!(server.sessions.load(Ordering::SeqCst), 1);
+        provider.stop_stream().await.unwrap();
+    }
+
+    /// Fast mute/unmute toggling ends with one live stream: audio reaches
+    /// only it, so a turn arrives once.
+    #[tokio::test]
+    async fn rapid_flux_mute_toggling_leaves_one_live_stream() {
+        let mut server = flux_server(FluxStandIn { reply: Some(("EndOfTurn", "once")), ..Default::default() }).await;
+        let mut provider = flux_provider(server.address);
+        let (result_tx, mut result_rx) = mpsc::channel(64);
+        provider.start_stream(result_tx).await.unwrap();
+        for _ in 0..3 {
+            provider.set_muted(true);
+            provider.set_muted(false);
+        }
+        feed_until_streaming(&mut provider, 9).await;
+        for _ in 0..20 {
+            provider.feed_audio(chunk(9, epoch_now_ms())).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let finals: Vec<_> = drain(&mut result_rx).into_iter().filter(|r| r.1).collect();
+        assert_eq!(finals, vec![("once".to_string(), true, Some(TurnSignal::End))]);
+        let streams: std::collections::HashSet<usize> =
+            std::iter::from_fn(|| server.frames.try_recv().ok()).map(|(session, _)| session).collect();
+        assert_eq!(streams.len(), 1, "audio reached more than one stream: {streams:?}");
+        provider.stop_stream().await.unwrap();
+    }
+
+    /// Unmuted while no audio comes (idle loopback): the connection made then
+    /// sits unused, and Deepgram closes it. When audio comes, a new connection
+    /// is made, and it gets the first words.
+    #[tokio::test]
+    async fn an_unused_flux_connection_is_replaced_before_audio_goes_to_it() {
+        let mut server = flux_server(FluxStandIn { idle_close: Some(Duration::from_secs(1)), ..Default::default() }).await;
+        let mut provider = flux_provider(server.address);
+        let (result_tx, _result_rx) = mpsc::channel(8);
+        provider.start_stream(result_tx).await.unwrap();
+        provider.set_muted(true);
+        provider.set_muted(false);
+        tokio::time::sleep(deepgram_flux::UNUSED_CONNECTION_MAX + Duration::from_millis(300)).await;
+        assert_eq!(server.sessions.load(Ordering::SeqCst), 2);
+
+        provider.feed_audio(chunk(9, epoch_now_ms())).await.unwrap();
+        feed_until_streaming(&mut provider, 10).await;
+        let first = tokio::time::timeout(Duration::from_secs(2), server.frames.recv()).await.unwrap().unwrap();
+        assert_eq!(first, (3, 9), "the first words went to a closed connection");
+        provider.stop_stream().await.unwrap();
+    }
+
     /// Samples of a 16-bit PCM WAV file (its `data` chunk).
     fn wav_samples(wav: &[u8]) -> Vec<i16> {
         let mut pos = 12;
@@ -1735,6 +2103,51 @@ mod tests {
         }
         assert!(finals.iter().filter(|f| f.turn == Some(TurnSignal::End)).count() >= 2, "expected a turn end in each pass");
         let all = finals.iter().map(|f| f.text.to_lowercase()).collect::<Vec<_>>().join(" ");
+        assert!(all.contains("meeting"), "unexpected transcript");
+    }
+
+    /// Mutes a real Flux stream 3 s into the test clip (mid-sentence): the
+    /// stream closes and the sentence is kept as a final. After 5 s muted
+    /// (nothing sent), unmute and stream the whole clip on a new connection.
+    /// Needs DEEPGRAM_API_KEY and DEEPGRAM_TEST_WAV. Flux bills about 16 s of audio.
+    #[tokio::test]
+    #[ignore = "calls the Deepgram API; needs DEEPGRAM_API_KEY and DEEPGRAM_TEST_WAV"]
+    async fn live_flux_mute_closes_the_stream_and_unmute_resumes() {
+        let key = std::env::var("DEEPGRAM_API_KEY").expect("DEEPGRAM_API_KEY");
+        let wav = std::fs::read(std::env::var("DEEPGRAM_TEST_WAV").expect("DEEPGRAM_TEST_WAV")).unwrap();
+        let samples = wav_samples(&wav);
+
+        let mut stt = DeepgramSTT::with_api_key(&key);
+        stt.config = DeepgramConfig { model: "flux-general-en".into(), ..DeepgramConfig::default() };
+        let (tx, mut rx) = mpsc::channel(4096);
+        stt.start_stream(tx).await.expect("start");
+        feed_clip(&mut stt, &samples[..3 * SAMPLE_RATE as usize]).await;
+        stt.set_muted(true);
+        assert!(!stt.is_streaming);
+        let closed_at = Instant::now();
+        let closing = stt.closing_reader.take().expect("no stream was closing");
+        closing.await.unwrap();
+        println!("closed stream ended {} ms after the mute", closed_at.elapsed().as_millis());
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let before_unmute = drain(&mut rx);
+
+        stt.set_muted(false);
+        let unmuted_at = Instant::now();
+        feed_clip(&mut stt, &samples).await;
+        assert!(stt.is_streaming, "no stream after the unmute");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        stt.stop_stream().await.unwrap();
+        let after_unmute = drain(&mut rx);
+
+        let finals = |results: &[(String, bool, Option<TurnSignal>)]| {
+            results.iter().filter(|r| r.1).map(|r| (r.2, r.0.chars().count())).collect::<Vec<_>>()
+        };
+        println!("before unmute: {} results, finals (signal, chars) {:?}", before_unmute.len(), finals(&before_unmute));
+        println!("after unmute ({} ms of clip fed): {} results, finals {:?}",
+            unmuted_at.elapsed().as_millis(), after_unmute.len(), finals(&after_unmute));
+        assert!(before_unmute.iter().any(|r| r.1 && r.2.is_none()), "the sentence cut by the mute wasn't kept");
+        assert!(after_unmute.iter().filter(|r| r.1 && r.2 == Some(TurnSignal::End)).count() >= 2, "expected both turns after the unmute");
+        let all = after_unmute.iter().filter(|r| r.1).map(|r| r.0.to_lowercase()).collect::<Vec<_>>().join(" ");
         assert!(all.contains("meeting"), "unexpected transcript");
     }
 }

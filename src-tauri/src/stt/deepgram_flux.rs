@@ -36,6 +36,11 @@ pub const GAP_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 /// The most silence sent in one frame, so a delayed writer doesn't burst.
 const MAX_SILENCE_FILL: Duration = Duration::from_secs(1);
 
+/// A connection made in the background (reconnect, unmute) is put to use only
+/// when audio arrives. Deepgram closes a connection that gets no audio for
+/// 10 s, so a Flux connection left unused for longer than 5 s is replaced.
+pub const UNUSED_CONNECTION_MAX: Duration = Duration::from_secs(5);
+
 const SAMPLE_RATE: usize = 16_000;
 
 /// Whether `model` is a Flux model (served on /v2/listen).
