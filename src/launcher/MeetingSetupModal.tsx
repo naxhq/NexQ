@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useConfigStore } from "../stores/configStore";
 import { setRecordingEnabled } from "../lib/ipc";
-import { BUILT_IN_SCENARIOS } from "../lib/scenarios";
+import { useMeetingScenarios, useScenarioStore } from "../stores/scenarioStore";
 import { MODE_COLORS } from "../lib/speakerColors";
 import type { AudioMode, AIScenario } from "../lib/types";
 import {
@@ -21,11 +21,6 @@ interface MeetingSetupModalProps {
   onCancel: () => void;
 }
 
-// ── Scenario label lookup ──
-function getScenarioName(id: AIScenario): string {
-  return BUILT_IN_SCENARIOS.find((s) => s.id === id)?.name ?? id;
-}
-
 export function MeetingSetupModal({ open, onStart, onCancel }: MeetingSetupModalProps) {
   const rememberedSetup = useConfigStore((s) => s.rememberedMeetingSetup);
   const setRememberedMeetingSetup = useConfigStore((s) => s.setRememberedMeetingSetup);
@@ -36,9 +31,12 @@ export function MeetingSetupModal({ open, onStart, onCancel }: MeetingSetupModal
   const [audioMode, setAudioMode] = useState<AudioMode>(
     rememberedSetup?.audioMode ?? "online"
   );
-  const [scenario, setScenario] = useState<AIScenario>(
+  const [pickedScenario, setScenario] = useState<AIScenario>(
     rememberedSetup?.scenario ?? "team_meeting"
   );
+  const scenarios = useMeetingScenarios();
+  const scenario = useScenarioStore((s) => s.resolveScenario(pickedScenario));
+  const scenarioName = scenarios.find((s) => s.id === scenario)?.name ?? scenario;
   const [remember, setRemember] = useState(rememberedSetup !== null);
   const [showScenarioPicker, setShowScenarioPicker] = useState(false);
   // When remembered setup exists, start in compact view; user can expand
@@ -167,7 +165,7 @@ export function MeetingSetupModal({ open, onStart, onCancel }: MeetingSetupModal
                 </span>
                 {/* Scenario badge */}
                 <span className="rounded-full border border-border/30 bg-accent/20 px-2.5 py-1 text-xs font-medium text-foreground/80">
-                  {getScenarioName(scenario)}
+                  {scenarioName}
                 </span>
                 {/* REC badge */}
                 {recordingEnabled && (
@@ -297,15 +295,15 @@ export function MeetingSetupModal({ open, onStart, onCancel }: MeetingSetupModal
                   onClick={() => setShowScenarioPicker((v) => !v)}
                   className="flex w-full items-center justify-between rounded-xl border border-border/30 bg-secondary/10 px-3.5 py-2.5 text-sm font-medium text-foreground transition-all duration-150 hover:bg-secondary/20 hover:border-border/50 cursor-pointer"
                 >
-                  <span>{getScenarioName(scenario)}</span>
+                  <span>{scenarioName}</span>
                   <ChevronDown
                     className={`h-4 w-4 text-muted-foreground/60 transition-transform duration-150 ${showScenarioPicker ? "rotate-180" : ""}`}
                   />
                 </button>
 
                 {showScenarioPicker && (
-                  <div className="absolute left-0 right-0 top-full z-10 mt-1 rounded-xl border border-border/40 bg-card shadow-xl overflow-hidden">
-                    {BUILT_IN_SCENARIOS.map((s) => (
+                  <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-[224px] overflow-y-auto rounded-xl border border-border/40 bg-card shadow-xl">
+                    {scenarios.map((s) => (
                       <button
                         key={s.id}
                         onClick={() => {

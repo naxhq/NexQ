@@ -2,6 +2,7 @@
 // Shows per-speaker talk time %, word count, last spoke.
 
 import { useState, useRef, useEffect } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { useSpeakerStore } from "../stores/speakerStore";
 import { BarChart3, Pencil, Check, X } from "lucide-react";
 
@@ -73,7 +74,7 @@ function InlineRename({ speakerId, displayName, color }: { speakerId: string; di
 }
 
 export function SpeakerStatsPanel({ isOpen }: SpeakerStatsPanelProps) {
-  const speakers = useSpeakerStore((s) => s.getAllSpeakers());
+  const speakers = useSpeakerStore(useShallow((s) => s.getAllSpeakers()));
 
   if (!isOpen) return null;
 

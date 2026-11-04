@@ -1,3 +1,21 @@
+# [2.32.0](https://github.com/naxhq/NexQ/compare/v2.31.0...v2.32.0) (2026-11-04)
+
+
+### Bug Fixes
+
+* **intelligence:** a bare "Right?" is no longer treated as a question ([441c771](https://github.com/naxhq/NexQ/commit/441c77159c217985c05495d03ca52cdcc3971f66))
+* **meetings:** in-person meetings no longer run a muted "You" transcriber ([#73](https://github.com/naxhq/NexQ/issues/73)) ([d78f182](https://github.com/naxhq/NexQ/commit/d78f182168bf14e7bbbf47124cf696695df17f25))
+* **overlay:** coming back to the overlay no longer re-answers old questions ([559956f](https://github.com/naxhq/NexQ/commit/559956f3ef505ec9b91ab2c76d9536601f0730da))
+* **overlay:** edited scenario prompts and Speaker Stats no longer crash the overlay ([5a60c9e](https://github.com/naxhq/NexQ/commit/5a60c9efaf545472571901f3798a13f06a3cab23)), closes [#185](https://github.com/naxhq/NexQ/issues/185) [#72](https://github.com/naxhq/NexQ/issues/72)
+* **overlay:** the scenario chip shows the running meeting's scenario ([506b44f](https://github.com/naxhq/NexQ/commit/506b44f6dab1f307d0853a0cad9dbea2acfab89a))
+* **scenarios:** an edit in one window no longer overwrites the other's ([3dc69de](https://github.com/naxhq/NexQ/commit/3dc69deccf283998a9a6900a57d15a542ccc90db))
+* **transcript:** an interim no final follows no longer hangs in the transcript ([17e4770](https://github.com/naxhq/NexQ/commit/17e4770439d58b768dc4eb3dc18d6638e70cc56f))
+
+
+### Features
+
+* **overlay:** separate question detection from auto-answer ([7da5ee7](https://github.com/naxhq/NexQ/commit/7da5ee7674cc9dbec3a7ee39726580f963da580b))
+* **scenarios:** meetings can use custom scenarios ([63e0371](https://github.com/naxhq/NexQ/commit/63e037188bd42d31683faf559702d601f7dc4263))
 # [2.31.0](https://github.com/naxhq/NexQ/compare/v2.30.0...v2.31.0) (2026-11-02)
 
 

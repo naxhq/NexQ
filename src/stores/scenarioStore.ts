@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { create } from "zustand";
 import { load, Store } from "@tauri-apps/plugin-store";
 import type { AIScenario, ScenarioTemplate } from "../lib/types";
@@ -32,6 +33,8 @@ interface ScenarioState {
   // Actions
   setActiveScenario: (id: AIScenario) => void;
   getActiveTemplate: () => ScenarioTemplate;
+  /** `id` if that scenario still exists, otherwise Team Meeting (custom ones can be deleted). */
+  resolveScenario: (id: AIScenario) => AIScenario;
   updatePrompt: (
     scenarioId: string,
     field: keyof Pick<ScenarioTemplate, "system_prompt" | "summary_prompt" | "question_detection_prompt">,
@@ -39,6 +42,7 @@ interface ScenarioState {
   ) => void;
   resetScenarioOverrides: (scenarioId: string) => void;
   createCustomScenario: (template: ScenarioTemplate) => void;
+  updateCustomScenario: (template: ScenarioTemplate) => void;
   deleteCustomScenario: (id: string) => void;
   cloneScenario: (sourceId: string, newName: string) => ScenarioTemplate | null;
 
@@ -76,6 +80,9 @@ export const useScenarioStore = create<ScenarioState>((set, get) => ({
     return { ...builtIn, ...overrides };
   },
 
+  resolveScenario: (id) =>
+    getScenarioById(id) || get().customScenarios.some((s) => s.id === id) ? id : "team_meeting",
+
   updatePrompt: (scenarioId, field, value) => {
     set((s) => {
       const existing = s.scenarioOverrides[scenarioId] ?? {};
@@ -100,6 +107,14 @@ export const useScenarioStore = create<ScenarioState>((set, get) => ({
   createCustomScenario: (template) => {
     set((s) => {
       const updated = [...s.customScenarios, template];
+      persistValue("customScenarios", updated);
+      return { customScenarios: updated };
+    });
+  },
+
+  updateCustomScenario: (template) => {
+    set((s) => {
+      const updated = s.customScenarios.map((c) => (c.id === template.id ? template : c));
       persistValue("customScenarios", updated);
       return { customScenarios: updated };
     });
@@ -167,3 +182,33 @@ export const useScenarioStore = create<ScenarioState>((set, get) => ({
     }
   },
 }));
+
+/**
+ * Cross-window sync: when another window saves scenarios, update this window's
+ * copy, so an edit here can't overwrite them with old ones. The active scenario
+ * stays per window: the overlay's is the running meeting's.
+ */
+export async function watchSavedScenarios(): Promise<() => void> {
+  const store = await getStore();
+  const stop = await Promise.all([
+    store.onKeyChange<ScenarioTemplate[]>("customScenarios", (value) => {
+      useScenarioStore.setState({ customScenarios: value ?? [] });
+    }),
+    store.onKeyChange<ScenarioState["scenarioOverrides"]>("scenarioOverrides", (value) => {
+      useScenarioStore.setState({ scenarioOverrides: value ?? {} });
+    }),
+  ]);
+  return () => stop.forEach((fn) => fn());
+}
+
+/** The scenarios a meeting can use, in the order the pickers list them. */
+export function useMeetingScenarios(): ScenarioTemplate[] {
+  const customScenarios = useScenarioStore((s) => s.customScenarios);
+  return useMemo(() => [...BUILT_IN_SCENARIOS, ...customScenarios], [customScenarios]);
+}
+
+/** How a saved meeting's scenario reads: "team meeting", or a custom scenario's name. */
+export function scenarioLabel(id: string, customScenarios: ScenarioTemplate[]): string {
+  if (!id.startsWith("custom_")) return id.replace(/_/g, " ");
+  return customScenarios.find((s) => s.id === id)?.name ?? "custom scenario";
+}
