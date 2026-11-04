@@ -653,6 +653,8 @@ impl DeepgramSTT {
             gap_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             let mut last_sent = Instant::now();
             let mut silence_samples: usize = 0;
+            // Flux gets 80 ms frames; Nova gets audio as it comes.
+            let mut frames = deepgram_flux::FrameBatcher::default();
 
             loop {
                 if stop_flag.load(Ordering::SeqCst) {
@@ -663,7 +665,9 @@ impl DeepgramSTT {
                     audio = audio_rx.recv() => {
                         match audio {
                             Some(audio_bytes) => {
-                                if let Err(e) = write_half.send(Message::Binary(audio_bytes.into())).await {
+                                let frame = if flux { frames.push(audio_bytes, Instant::now()) } else { Some(audio_bytes) };
+                                let Some(frame) = frame else { continue };
+                                if let Err(e) = write_half.send(Message::Binary(frame.into())).await {
                                     log::error!("DeepgramSTT: WebSocket write error: {}", e);
                                     if !stop_flag.load(Ordering::SeqCst) {
                                         connection_state.store(3, Ordering::SeqCst);
@@ -676,6 +680,9 @@ impl DeepgramSTT {
                             None => {
                                 // Audio channel closed — send CloseStream for graceful shutdown
                                 log::info!("DeepgramSTT: Audio channel closed, sending CloseStream");
+                                if let Some(last) = frames.take() {
+                                    let _ = write_half.send(Message::Binary(last.into())).await;
+                                }
                                 let close_msg = serde_json::json!({"type": "CloseStream"});
                                 let _ = write_half.send(Message::Text(close_msg.to_string().into())).await;
                                 // No close frame: Deepgram sends its last results, then closes.
@@ -691,11 +698,14 @@ impl DeepgramSTT {
                         }
                     }
                     _ = gap_check.tick(), if flux => {
-                        let samples = deepgram_flux::silence_samples_for(last_sent.elapsed());
-                        if samples == 0 {
+                        // Audio paused: what's held goes out first, then silence fills the gap.
+                        let held = frames.take_if_paused(Instant::now());
+                        let samples = if held.is_some() { 0 } else { deepgram_flux::silence_samples_for(last_sent.elapsed()) };
+                        if held.is_none() && samples == 0 {
                             continue;
                         }
-                        if let Err(e) = write_half.send(Message::Binary(vec![0u8; samples * 2].into())).await {
+                        let frame = held.unwrap_or_else(|| vec![0u8; samples * 2]);
+                        if let Err(e) = write_half.send(Message::Binary(frame.into())).await {
                             log::error!("DeepgramSTT: WebSocket write error: {}", e);
                             if !stop_flag.load(Ordering::SeqCst) {
                                 connection_state.store(3, Ordering::SeqCst);
@@ -703,8 +713,10 @@ impl DeepgramSTT {
                             }
                             break;
                         }
-                        if let Some(ref timeline) = flux_timeline {
-                            timeline.lock().unwrap_or_else(|e| e.into_inner()).sent(samples as u64, epoch_now_ms());
+                        if samples > 0 {
+                            if let Some(ref timeline) = flux_timeline {
+                                timeline.lock().unwrap_or_else(|e| e.into_inner()).sent(samples as u64, epoch_now_ms());
+                            }
                         }
                         silence_samples += samples;
                         last_sent = Instant::now();
@@ -1728,6 +1740,61 @@ mod tests {
         assert!((12_000..=22_000).contains(&samples), "{samples} samples in 1.2 s");
         provider.stop_stream().await.ok();
         server.abort();
+    }
+
+    /// Capture delivers 10 ms chunks, and Deepgram strongly recommends 80 ms
+    /// frames for Flux. Audio left over goes out when it pauses or the stream closes.
+    #[tokio::test]
+    async fn flux_gets_capture_audio_in_80_ms_frames() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (frames_tx, mut frames_rx) = mpsc::channel::<Message>(1024);
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+            while let Some(Ok(message)) = ws.next().await {
+                if frames_tx.send(message).await.is_err() { return; }
+            }
+        });
+        let ten_ms = |value: i16| AudioChunk {
+            pcm_data: vec![value; 160],
+            source: crate::audio::AudioSource::Mic,
+            timestamp_ms: 1_000,
+            is_speech: true,
+        };
+
+        let mut provider = flux_provider(address);
+        let (result_tx, _result_rx) = mpsc::channel(8);
+        provider.start_stream(result_tx).await.unwrap();
+        // 16 chunks: two whole frames. 3 more: a partial frame, sent once audio pauses.
+        for _ in 0..19 {
+            provider.feed_audio(ten_ms(500)).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let spoken = |frames: &mut mpsc::Receiver<Message>| -> Vec<usize> {
+            std::iter::from_fn(|| frames.try_recv().ok())
+                .filter_map(|m| match m {
+                    Message::Binary(bytes) if bytes.iter().any(|b| *b != 0) => Some(bytes.len()),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(spoken(&mut frames_rx), vec![2560, 2560, 960]);
+
+        // Audio held when the stream closes still goes out, before CloseStream.
+        for _ in 0..3 {
+            provider.feed_audio(ten_ms(500)).await.unwrap();
+        }
+        provider.set_muted(true);
+        let mut sent = Vec::new();
+        while !sent.iter().any(|m| matches!(m, Message::Text(t) if t.contains("CloseStream"))) {
+            sent.push(tokio::time::timeout(Duration::from_secs(2), frames_rx.recv()).await.unwrap().unwrap());
+        }
+        let held = sent.iter().position(|m| matches!(m, Message::Binary(b) if b.len() == 960 && b.iter().any(|x| *x != 0)));
+        let close = sent.iter().position(|m| matches!(m, Message::Text(_)));
+        assert!(held.is_some() && held < close, "the held audio wasn't sent before CloseStream");
+        provider.stop_stream().await.unwrap();
     }
 
     /// Turn events come through with their signals, and on stop the turn

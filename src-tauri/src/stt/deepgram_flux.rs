@@ -10,10 +10,12 @@
 //   the final with the End signal
 // - Flux has no KeepAlive and detects turns from the audio itself, so gaps are
 //   filled with silence (idle system loopback sends none)
+// - Audio goes out in 80 ms frames, as Deepgram strongly recommends for Flux;
+//   capture delivers 10 ms chunks
 // - CloseStream doesn't end the open turn: its latest text is kept as a final,
 //   without a turn signal
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
@@ -88,6 +90,42 @@ fn encode_query_value(value: &str) -> String {
         .replace('&', "%26")
         .replace('=', "%3D")
         .replace('+', "%2B")
+}
+
+/// Bytes in an 80 ms frame of 16-bit audio, the size Deepgram strongly recommends for Flux.
+pub const FRAME_BYTES: usize = SAMPLE_RATE * 2 * 80 / 1000;
+/// With no new audio for this long, a partly filled frame goes out as it is.
+pub const PARTIAL_FRAME_WAIT: Duration = Duration::from_millis(50);
+
+/// Collects capture's small chunks into frames of at least FRAME_BYTES.
+#[derive(Default)]
+pub struct FrameBatcher {
+    pending: Vec<u8>,
+    last_push: Option<Instant>,
+}
+
+impl FrameBatcher {
+    /// Adds audio; returns a frame once there is enough for one.
+    pub fn push(&mut self, bytes: Vec<u8>, now: Instant) -> Option<Vec<u8>> {
+        self.last_push = Some(now);
+        if self.pending.is_empty() {
+            self.pending = bytes;
+        } else {
+            self.pending.extend_from_slice(&bytes);
+        }
+        (self.pending.len() >= FRAME_BYTES).then(|| std::mem::take(&mut self.pending))
+    }
+
+    /// Whatever is held, for when the stream is closing.
+    pub fn take(&mut self) -> Option<Vec<u8>> {
+        (!self.pending.is_empty()).then(|| std::mem::take(&mut self.pending))
+    }
+
+    /// Whatever is held, once audio has paused for PARTIAL_FRAME_WAIT.
+    pub fn take_if_paused(&mut self, now: Instant) -> Option<Vec<u8>> {
+        let paused = self.last_push.is_some_and(|at| now.duration_since(at) >= PARTIAL_FRAME_WAIT);
+        if paused { self.take() } else { None }
+    }
 }
 
 /// Samples of silence to send after `idle` with nothing sent.
@@ -240,6 +278,39 @@ fn mean_confidence(words: &[FluxWord]) -> f32 {
         return 0.9;
     }
     (values.iter().sum::<f64>() / values.len() as f64) as f32
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+
+    #[test]
+    fn small_chunks_become_80_ms_frames_in_order() {
+        let (mut frames, now) = (FrameBatcher::default(), Instant::now());
+        for _ in 0..7 {
+            assert_eq!(frames.push(vec![1; 320], now), None);
+        }
+        let frame = frames.push(vec![2; 320], now).expect("a full frame");
+        assert_eq!(frame.len(), FRAME_BYTES);
+        assert_eq!((frame[0], frame[FRAME_BYTES - 1]), (1, 2));
+        assert_eq!(frames.take(), None);
+    }
+
+    #[test]
+    fn a_chunk_of_a_full_frame_or_more_goes_straight_out() {
+        let (mut frames, now) = (FrameBatcher::default(), Instant::now());
+        assert_eq!(frames.push(vec![3; 3200], now).map(|f| f.len()), Some(3200));
+    }
+
+    #[test]
+    fn a_partial_frame_waits_for_more_audio_then_goes_out_when_audio_pauses() {
+        let (mut frames, now) = (FrameBatcher::default(), Instant::now());
+        assert_eq!(frames.take_if_paused(now), None);
+        assert_eq!(frames.push(vec![4; 320], now), None);
+        assert_eq!(frames.take_if_paused(now + PARTIAL_FRAME_WAIT / 2), None);
+        assert_eq!(frames.take_if_paused(now + PARTIAL_FRAME_WAIT).map(|f| f.len()), Some(320));
+        assert_eq!(frames.take_if_paused(now + PARTIAL_FRAME_WAIT * 2), None);
+    }
 }
 
 #[cfg(test)]
