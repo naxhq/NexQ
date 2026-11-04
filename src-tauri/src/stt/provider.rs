@@ -58,6 +58,28 @@ impl TurnSignal {
     }
 }
 
+#[cfg(test)]
+mod turn_signal_tests {
+    use super::*;
+
+    #[test]
+    fn turn_signals_travel_as_snake_case() {
+        assert_eq!(serde_json::to_string(&TurnSignal::EagerEnd).unwrap(), "\"eager_end\"");
+        assert_eq!(serde_json::to_string(&TurnSignal::Resumed).unwrap(), "\"resumed\"");
+        assert_eq!(serde_json::to_string(&TurnSignal::End).unwrap(), "\"end\"");
+    }
+
+    #[test]
+    fn a_result_without_a_turn_signal_has_none_and_writes_none() {
+        let r: TranscriptResult = serde_json::from_str(
+            r#"{"text":"hi","is_final":true,"confidence":1.0,"timestamp_ms":1,"speaker":null,"language":null}"#,
+        )
+        .unwrap();
+        assert_eq!(r.turn, None);
+        assert!(!serde_json::to_string(&r).unwrap().contains("turn"));
+    }
+}
+
 /// The in-person speaker id ("speaker_0") of a diarization tag ("S1").
 pub fn diarized_speaker_id(tag: &str) -> Option<String> {
     let n: u32 = tag.strip_prefix('S')?.parse().ok()?;
@@ -434,26 +456,4 @@ pub fn list_available_providers() -> Vec<STTProviderInfo> {
             ],
         },
     ]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn turn_signals_travel_as_snake_case() {
-        assert_eq!(serde_json::to_string(&TurnSignal::EagerEnd).unwrap(), "\"eager_end\"");
-        assert_eq!(serde_json::to_string(&TurnSignal::Resumed).unwrap(), "\"resumed\"");
-        assert_eq!(serde_json::to_string(&TurnSignal::End).unwrap(), "\"end\"");
-    }
-
-    #[test]
-    fn a_result_without_a_turn_signal_has_none_and_writes_none() {
-        let r: TranscriptResult = serde_json::from_str(
-            r#"{"text":"hi","is_final":true,"confidence":1.0,"timestamp_ms":1,"speaker":null,"language":null}"#,
-        )
-        .unwrap();
-        assert_eq!(r.turn, None);
-        assert!(!serde_json::to_string(&r).unwrap().contains("turn"));
-    }
 }
