@@ -55,6 +55,7 @@ When the meeting starts, the overlay window (500x700, always-on-top, transparent
 - Place it **near your webcam** but slightly to the side, so glancing at it looks natural
 - Resize it to a comfortable reading size -- you should be able to read suggestions without squinting
 - The overlay is transparent -- **only you can see it**. It will not appear in screen shares
+- Turn on **Hide from screen share** (`Ctrl+Shift+H`, `⌘⇧H` on macOS) before the call. Besides keeping NexQ out of the share, the overlay's cursor stays a plain arrow, and NexQ leaves the taskbar (Windows) or the Dock and Cmd+Tab (macOS). On macOS 14 and later, run a test share first: some recorders can still capture NexQ. Turn it off afterwards from the dashboard header
 - Use `Ctrl+B` to toggle between the launcher and overlay windows
 
 ## During the Interview

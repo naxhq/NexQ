@@ -45,7 +45,7 @@ import {
   ScreenShareOff,
 } from "lucide-react";
 import { toggleStealthMode } from "../hooks/useGlobalShortcut";
-import { formatShortcut } from "../lib/shortcutLabel";
+import { formatShortcut, isMacPlatform } from "../lib/shortcutLabel";
 import { formatDuration } from "../lib/utils";
 
 // ════════════════════════════════════════════════════════════════
@@ -154,9 +154,26 @@ export function OverlayView() {
 
   // Hide the overlay and show the dashboard; the overlay keeps its meeting
   // view, so RETURN, Ctrl+B or the tray bring it straight back.
-  const handleMinimizeToDashboard = useCallback(() => {
+  // Under stealth mode AND an active meeting, hide the overlay to the tray
+  // instead of revealing the launcher — showing the dashboard full-size
+  // during a meeting would leak NexQ to anyone looking at the screen.
+  const stealthHide = stealthMode && !!activeMeeting;
+  const handleMinimizeToDashboard = useCallback(async () => {
+    if (stealthHide) {
+      // Hide the overlay without revealing the launcher. If the window API
+      // isn't available (should not happen inside Tauri), do nothing: under
+      // stealth a silent click is better than a visible launcher.
+      try {
+        const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+        const overlay = await WebviewWindow.getByLabel("overlay");
+        await overlay?.hide();
+      } catch (e) {
+        console.warn("[overlay] stealth-hide fell through, overlay stays visible:", e);
+      }
+      return;
+    }
     showLauncherWindow().catch(() => {});
-  }, []);
+  }, [stealthHide]);
 
   const meetingTitle = activeMeeting?.title || "NexQ";
 
@@ -246,7 +263,7 @@ export function OverlayView() {
           />
           <HeaderBtn icon={<Eye className="h-3.5 w-3.5" />} onClick={cycleOpacity} tooltip={`Transparency: ${Math.round(overlayOpacity * 100)}% (click to cycle)`} />
           <HeaderBtn icon={<Settings className="h-3.5 w-3.5" />} onClick={() => setCurrentView("settings")} tooltip="Settings" />
-          <HeaderBtn icon={<Minus className="h-3.5 w-3.5" />} onClick={handleMinimizeToDashboard} tooltip="Minimize to Dashboard (Ctrl+B brings it back)" />
+          <HeaderBtn icon={<Minus className="h-3.5 w-3.5" />} onClick={handleMinimizeToDashboard} tooltip={stealthHide ? `Hide to ${isMacPlatform() ? "menu bar" : "tray"} (${formatShortcut("CmdOrCtrl+B")} brings it back)` : `Minimize to Dashboard (${formatShortcut("CmdOrCtrl+B")} brings it back)`} />
 
           {/* Translation controls */}
           <button

@@ -15,11 +15,13 @@ import { useTheme } from "./hooks/useTheme";
 import { useGlobalShortcut } from "./hooks/useGlobalShortcut";
 import { useTranslation } from "./hooks/useTranslation";
 import { useTraySync } from "./hooks/useTraySync";
+import { useStealthCursor } from "./hooks/useStealthCursor";
 import { useUpdater } from "./hooks/useUpdater";
 import { useAgentFallbackToast } from "./hooks/useAgentFallbackToast";
 import { refreshClaudeModelsOnStart } from "./stores/agentStore";
 import { useTranslationStore } from "./stores/translationStore";
 import { CallLogPanel } from "./calllog";
+import { OverlayResizeHandles } from "./overlay/OverlayResizeHandles";
 import { SelectionToolbar } from "./components/SelectionToolbar";
 import { ActiveMeetingProvider } from "./components/ActiveMeetingProvider";
 import { initMeetingSpeakers, resetMeetingScopedStores } from "./stores/resetMeeting";
@@ -115,6 +117,8 @@ function App() {
       }
     });
   }, []);
+  // OVERLAY window: stealth mode keeps the arrow cursor across the whole window.
+  useStealthCursor(windowLabel);
 
   // LAUNCHER window: the meeting runs in the overlay window. When a meeting
   // starts (or anything asks this window for the meeting view), bring the
@@ -397,6 +401,8 @@ function App() {
         </ErrorBoundary>
         <ActiveMeetingProvider isLauncherWindow={false} />
         <ToastContainer />
+        {/* macOS + stealth only: resize the overlay without macOS's resize cursors */}
+        <OverlayResizeHandles />
       </div>
     );
   }

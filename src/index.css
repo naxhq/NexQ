@@ -118,6 +118,16 @@
 /* Overlay window transparent background — background + backdrop-filter applied inline */
 .overlay-bg {}
 
+/* Stealth mode: the overlay window keeps the plain arrow cursor everywhere,
+   so it doesn't change shape over buttons, text and the drag strip.
+   useStealthCursor sets the attribute on the overlay window's <html> only;
+   !important beats the per-element cursor-* utilities. The resize cursors at
+   the window's edges come from Windows (handled in stealth_commands.rs). */
+html[data-stealth-cursor="true"],
+html[data-stealth-cursor="true"] * {
+  cursor: default !important;
+}
+
 /* Transcript interim text */
 .transcript-interim {
   font-style: italic;
