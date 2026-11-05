@@ -4,6 +4,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { OverlayView } from "./OverlayView";
 import { CallLogPanel } from "../calllog";
+import { useConfigStore } from "../stores/configStore";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useScenarioStore } from "../stores/scenarioStore";
 import { useSpeakerStore } from "../stores/speakerStore";
@@ -79,6 +80,23 @@ describe("OverlayView", () => {
     });
     renderOverlay("online", "interview");
     expect(screen.getByText("My interview")).toBeTruthy();
+  });
+
+  it('marks the root with data-stealth="false" when stealth mode is off', () => {
+    useConfigStore.setState({ stealthMode: false });
+    const { container } = renderOverlay("online", "team_meeting");
+    const root = container.querySelector(".overlay-root");
+    expect(root).toBeTruthy();
+    expect(root?.getAttribute("data-stealth")).toBe("false");
+  });
+
+  it('marks the root with data-stealth="true" when stealth mode is on', () => {
+    useConfigStore.setState({ stealthMode: true });
+    const { container } = renderOverlay("online", "team_meeting");
+    const root = container.querySelector(".overlay-root");
+    expect(root).toBeTruthy();
+    expect(root?.getAttribute("data-stealth")).toBe("true");
+    useConfigStore.setState({ stealthMode: false });
   });
 
   it("opens Speaker Stats and shows the speakers", () => {
