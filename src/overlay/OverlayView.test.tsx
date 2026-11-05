@@ -99,6 +99,19 @@ describe("OverlayView", () => {
     useConfigStore.setState({ stealthMode: false });
   });
 
+  it("Minus button tooltip says 'Minimize to Dashboard' when stealth is off", () => {
+    useConfigStore.setState({ stealthMode: false });
+    renderOverlay("online", "team_meeting");
+    expect(screen.getByRole("button", { name: "Minimize to Dashboard (Ctrl+B brings it back)" })).toBeTruthy();
+  });
+
+  it("Minus button tooltip switches to 'Hide to tray' when stealth is on during a meeting", () => {
+    useConfigStore.setState({ stealthMode: true });
+    renderOverlay("online", "team_meeting");
+    expect(screen.getByRole("button", { name: "Hide to tray (Ctrl+B brings it back)" })).toBeTruthy();
+    useConfigStore.setState({ stealthMode: false });
+  });
+
   it("opens Speaker Stats and shows the speakers", () => {
     useSpeakerStore.setState({
       speakers: { you: { id: "you", display_name: "You", stats: { word_count: 3 } } as SpeakerIdentity },

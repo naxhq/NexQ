@@ -154,9 +154,24 @@ export function OverlayView() {
 
   // Hide the overlay and show the dashboard; the overlay keeps its meeting
   // view, so RETURN, Ctrl+B or the tray bring it straight back.
-  const handleMinimizeToDashboard = useCallback(() => {
-    showLauncherWindow().catch(() => {});
-  }, []);
+  // Under stealth mode AND an active meeting, hide the overlay to the tray
+  // instead of revealing the launcher — showing the dashboard full-size
+  // during a meeting would leak NexQ to anyone looking at the screen.
+  const stealthHide = stealthMode && !!activeMeeting;
+  const handleMinimizeToDashboard = useCallback(async () => {
+    if (stealthHide) {
+      try {
+        const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+        const overlay = await WebviewWindow.getByLabel("overlay");
+        await overlay?.hide();
+      } catch {
+        // Fall back to the non-stealth path if the window API is unavailable.
+        showLauncherWindow().catch(() => {});
+      }
+    } else {
+      showLauncherWindow().catch(() => {});
+    }
+  }, [stealthHide]);
 
   const meetingTitle = activeMeeting?.title || "NexQ";
 
@@ -246,7 +261,7 @@ export function OverlayView() {
           />
           <HeaderBtn icon={<Eye className="h-3.5 w-3.5" />} onClick={cycleOpacity} tooltip={`Transparency: ${Math.round(overlayOpacity * 100)}% (click to cycle)`} />
           <HeaderBtn icon={<Settings className="h-3.5 w-3.5" />} onClick={() => setCurrentView("settings")} tooltip="Settings" />
-          <HeaderBtn icon={<Minus className="h-3.5 w-3.5" />} onClick={handleMinimizeToDashboard} tooltip="Minimize to Dashboard (Ctrl+B brings it back)" />
+          <HeaderBtn icon={<Minus className="h-3.5 w-3.5" />} onClick={handleMinimizeToDashboard} tooltip={stealthHide ? "Hide to tray (Ctrl+B brings it back)" : "Minimize to Dashboard (Ctrl+B brings it back)"} />
 
           {/* Translation controls */}
           <button
