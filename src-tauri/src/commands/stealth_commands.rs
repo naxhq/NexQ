@@ -129,6 +129,7 @@ pub async fn set_stealth_mode(app: AppHandle, enabled: bool) -> Result<(), Strin
             for (_, window) in &windows {
                 sync_taskbar(window);
             }
+            sync_macos(&app);
         }
         result
     };
@@ -246,6 +247,86 @@ fn track_visibility<R: Runtime>(window: &Window<R>) {
 
 #[cfg(not(target_os = "windows"))]
 fn track_visibility<R: Runtime>(_window: &Window<R>) {}
+
+/// macOS counterpart of the Windows taskbar and edge-cursor handling. While
+/// stealth is on:
+/// - NexQ leaves the Dock. macOS ties the Dock icon to Cmd+Tab and the menu
+///   bar, so those go too; the menu-bar icon and the shortcuts still work.
+/// - The overlay's native resizing is off, so macOS doesn't show its resize
+///   cursors at the edges; the overlay's own invisible edge handles resize
+///   it instead (`OverlayResizeHandles.tsx`).
+#[cfg(target_os = "macos")]
+fn sync_macos(app: &AppHandle) {
+    let on = stealth_enabled();
+    if let Err(e) = app.set_dock_visibility(!on) {
+        log::warn!("Stealth mode: couldn't change the Dock icon: {e}");
+    }
+    if let Some(overlay) = app.get_webview_window("overlay") {
+        if let Err(e) = overlay.set_resizable(!on) {
+            log::warn!("Stealth mode: couldn't change overlay resizing: {e}");
+        }
+    }
+    // tao skips a Dock hide that comes within 1 s of a Dock show (it works
+    // around a macOS bug that leaves duplicate Dock icons), so turning
+    // stealth off and quickly on again would leave the icon up. Hide it again
+    // once that second has passed.
+    if on {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(1100));
+            if stealth_enabled() {
+                let _ = app.set_dock_visibility(false);
+            }
+        });
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn sync_macos(_app: &AppHandle) {}
+
+/// macOS: let the overlay float over full-screen apps. A meeting in full
+/// screen gets its own Space, which other apps' windows don't join by
+/// default, so the overlay vanished there. Not tied to stealth. Windows needs
+/// nothing: always-on-top already covers full-screen apps.
+#[cfg(target_os = "macos")]
+pub fn float_over_full_screen<R: Runtime>(window: &Window<R>) {
+    let target = window.clone();
+    // AppKit must only be touched from the main thread.
+    let queued = window.run_on_main_thread(move || match target.ns_window() {
+        // SAFETY: `ptr` is the live NSWindow backing this Tauri window.
+        Ok(ptr) if !ptr.is_null() => unsafe { macos_spaces::join_all_spaces(ptr) },
+        Ok(_) => log::warn!("Full screen: NSWindow pointer was null for '{}'", target.label()),
+        Err(e) => log::warn!("Full screen: no NSWindow for '{}': {e}", target.label()),
+    });
+    if let Err(e) = queued {
+        log::warn!("Full screen: couldn't reach the main thread: {e}");
+    }
+}
+
+/// NSWindow collection behavior (AppKit), set through the Objective-C
+/// runtime like `setSharingType` above.
+#[cfg(target_os = "macos")]
+mod macos_spaces {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+
+    // NSWindowCollectionBehavior bits.
+    const CAN_JOIN_ALL_SPACES: usize = 1 << 0;
+    const MOVE_TO_ACTIVE_SPACE: usize = 1 << 1;
+    const FULL_SCREEN_AUXILIARY: usize = 1 << 8;
+
+    /// Show the window on every Space, including a full-screen app's.
+    /// CanJoinAllSpaces and MoveToActiveSpace are exclusive.
+    ///
+    /// # Safety
+    /// `ns_window` must point to a live NSWindow, on the main thread.
+    pub unsafe fn join_all_spaces(ns_window: *mut std::ffi::c_void) {
+        let ns_window: &AnyObject = &*(ns_window as *const AnyObject);
+        let current: usize = msg_send![ns_window, collectionBehavior];
+        let wanted = (current & !MOVE_TO_ACTIVE_SPACE) | CAN_JOIN_ALL_SPACES | FULL_SCREEN_AUXILIARY;
+        let _: () = msg_send![ns_window, setCollectionBehavior: wanted];
+    }
+}
 
 /// Live blur of the desktop behind `window` (the overlay's glass), only while
 /// it is on screen. Windows keeps drawing an accent blur for a hidden window
@@ -603,6 +684,7 @@ pub fn restore_on_startup(app: &AppHandle) {
             for (_, window) in &windows {
                 sync_taskbar(window);
             }
+            sync_macos(app);
         }
         Err(e) => {
             STEALTH.store(false, Ordering::SeqCst);

@@ -21,6 +21,7 @@ import { useAgentFallbackToast } from "./hooks/useAgentFallbackToast";
 import { refreshClaudeModelsOnStart } from "./stores/agentStore";
 import { useTranslationStore } from "./stores/translationStore";
 import { CallLogPanel } from "./calllog";
+import { OverlayResizeHandles } from "./overlay/OverlayResizeHandles";
 import { SelectionToolbar } from "./components/SelectionToolbar";
 import { ActiveMeetingProvider } from "./components/ActiveMeetingProvider";
 import { initMeetingSpeakers, resetMeetingScopedStores } from "./stores/resetMeeting";
@@ -400,6 +401,8 @@ function App() {
         </ErrorBoundary>
         <ActiveMeetingProvider isLauncherWindow={false} />
         <ToastContainer />
+        {/* macOS + stealth only: resize the overlay without macOS's resize cursors */}
+        <OverlayResizeHandles />
       </div>
     );
   }
