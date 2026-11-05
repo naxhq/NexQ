@@ -46,7 +46,7 @@ Live two-party transcription, instant AI answers grounded in your own documents,
 
 > **v2.25**
 > - **macOS support (Apple Silicon, beta).** Native macOS build, Keychain credential storage and the transparent overlay. A community contribution by [@visitek](https://github.com/visitek).
-> - **Stealth Mode: "Hide from screen share".** NexQ stays visible to you but is left out of screen sharing, recordings and screenshots (`WDA_EXCLUDEFROMCAPTURE` on Windows, `NSWindowSharingNone` on macOS). Toggle it in Settings, from the overlay header or the tray, or with <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> (<kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> on macOS).
+> - **Stealth Mode: "Hide from screen share".** NexQ stays visible to you but is left out of screen sharing, recordings and screenshots (`WDA_EXCLUDEFROMCAPTURE` on Windows, `NSWindowSharingNone` on macOS). While it's on, the overlay keeps a plain arrow cursor, and its minimize button hides it to the tray during a meeting instead of opening the dashboard. On Windows, both NexQ windows also leave the taskbar; <kbd>Alt</kbd>+<kbd>Tab</kbd>, the tray and the shortcuts still reach them. Toggle it in Settings, from the dashboard or overlay header, from the tray, or with <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> (<kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> on macOS).
 > - **Czech transcription.**
 >
 > **Recently shipped:** transcript paragraphs with separated remote speakers, a transcript scope picker and answer history (v2.24); a Claude model picker read from the CLI with per-model effort (v2.23); Claude via your own subscription, silent background updates, and "Ask a past meeting" (v2.22). See the full [CHANGELOG](CHANGELOG.md).
