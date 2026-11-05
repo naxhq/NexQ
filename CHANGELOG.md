@@ -1,3 +1,14 @@
+# [2.34.0](https://github.com/naxhq/NexQ/compare/v2.33.0...v2.34.0) (2026-11-05)
+
+
+### Bug Fixes
+
+* **llm:** a custom endpoint shows its real error and uses a new token at once ([#79](https://github.com/naxhq/NexQ/issues/79)) ([010a632](https://github.com/naxhq/NexQ/commit/010a6325b76f64eaaa3e58deefddd33104cc6f67)), closes [#78](https://github.com/naxhq/NexQ/issues/78)
+
+
+### Features
+
+* **stt:** Auto-Answer replies as soon as Cartesia or Deepgram Flux says the speaker finished ([#77](https://github.com/naxhq/NexQ/issues/77)) ([7127c1b](https://github.com/naxhq/NexQ/commit/7127c1bff827d893f3076f489843981e4bb497a9)), closes [#76](https://github.com/naxhq/NexQ/issues/76)
 # [2.33.0](https://github.com/naxhq/NexQ/compare/v2.32.0...v2.33.0) (2026-11-04)
 
 
