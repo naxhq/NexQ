@@ -6,5 +6,5 @@ LangString appRunning ${LANG_ENGLISH} "{{product_name}} is still open. Close it,
 LangString appRunningOkKill ${LANG_ENGLISH} "{{product_name}} is open.$\nClick OK to close it and continue."
 LangString failedToKillApp ${LANG_ENGLISH} "Couldn't close {{product_name}}. Please close it yourself, then try again."
 LangString ^Extract ${LANG_ENGLISH} "Copying "
-LangString ^Output ${LANG_ENGLISH} "Preparing "
+LangString ^OutputFolder ${LANG_ENGLISH} "Preparing "
 !pragma warning pop
