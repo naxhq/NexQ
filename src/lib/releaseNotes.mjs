@@ -44,7 +44,8 @@ export function parseChangelog(markdown) {
       releases.push(release);
       section = null;
     } else if (release && line.startsWith("### ")) {
-      const name = line.slice(4).trim();
+      // Some changelog presets decorate headings, as in "⚠ BREAKING CHANGES".
+      const name = line.slice(4).replace(/^[^A-Za-z]+/, "").trim();
       section = { title: SECTION_TITLES[name] ?? name, items: [] };
       release.sections.push(section);
     } else if (section && line.startsWith("* ")) {
@@ -54,7 +55,9 @@ export function parseChangelog(markdown) {
   }
 
   for (const r of releases) {
-    r.sections.sort((a, b) => sectionRank(a.title) - sectionRank(b.title));
+    r.sections = r.sections
+      .filter((s) => s.items.length > 0)
+      .sort((a, b) => sectionRank(a.title) - sectionRank(b.title));
   }
   return releases;
 }

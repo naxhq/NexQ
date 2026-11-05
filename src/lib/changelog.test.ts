@@ -59,6 +59,18 @@ describe("parseChangelog", () => {
     expect(parseChangelog("404: Not Found")).toEqual([]);
   });
 
+  it("leaves out a section with nothing in it", () => {
+    const [release] = parseChangelog("# [1.0.0](x) (2026-01-01)\n\n### Features\n\n### Bug Fixes\n\n* a fix\n");
+    expect(release.sections.map((s) => s.title)).toEqual(["Fixed"]);
+  });
+
+  it("understands breaking changes however the heading is decorated", () => {
+    for (const heading of ["### BREAKING CHANGES", "### ⚠ BREAKING CHANGES"]) {
+      const [release] = parseChangelog(`# [1.0.0](x) (2026-01-01)\n\n${heading}\n\n* a change\n`);
+      expect(release.sections[0].title).toBe("Changed");
+    }
+  });
+
   it("handles Windows line endings", () => {
     expect(parseChangelog(SAMPLE.replace(/\n/g, "\r\n")).map((r) => r.version)).toEqual([
       "2.34.0",

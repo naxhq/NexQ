@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUpRight } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
 import { useUpdaterStore } from "../stores/updaterStore";
@@ -22,8 +22,8 @@ function ReleaseWave({ version, progress }: { version: string; progress: number 
 
   useEffect(() => {
     setRevealed(false);
-    const frame = requestAnimationFrame(() => setRevealed(true));
-    return () => cancelAnimationFrame(frame);
+    const timer = setTimeout(() => setRevealed(true), 40);
+    return () => clearTimeout(timer);
   }, [version]);
 
   const filledBars = revealed ? Math.round(progress * wave.length) : 0;
@@ -46,7 +46,12 @@ function ReleaseWave({ version, progress }: { version: string; progress: number 
   );
 }
 
+/** A long jump shows the newest releases first; older notes are a click away. */
+const NEWEST_RELEASES_SHOWN = 5;
+
 function ReleaseNotes({ notes, version }: { notes: Notes; version: string }) {
+  const [showAll, setShowAll] = useState(false);
+
   if (notes.status === "loading") {
     return (
       <div aria-label="Loading release notes" className="space-y-3 py-1">
@@ -65,17 +70,26 @@ function ReleaseNotes({ notes, version }: { notes: Notes; version: string }) {
     );
   }
 
-  if (notes.releases.length === 0) {
-    return <p className="text-sm text-muted-foreground">No notes for v{version}.</p>;
+  // A release can have nothing to list, for example when it only changed the docs.
+  const listed = notes.releases.filter((r) => r.sections.length > 0);
+
+  if (listed.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Small improvements, with nothing new to call out.
+      </p>
+    );
   }
 
-  const several = notes.releases.length > 1;
+  const nameVersions = listed.length > 1 || listed[0].version !== version;
+  const shown = showAll ? listed : listed.slice(0, NEWEST_RELEASES_SHOWN);
+  const hidden = listed.length - shown.length;
 
   return (
     <div className="space-y-6">
-      {notes.releases.map((release) => (
+      {shown.map((release) => (
         <section key={release.version} className="space-y-3">
-          {several && (
+          {nameVersions && (
             <div className="flex items-baseline gap-2 text-xs">
               <span className="font-semibold tabular-nums text-foreground/90">
                 {release.version}
@@ -84,11 +98,11 @@ function ReleaseNotes({ notes, version }: { notes: Notes; version: string }) {
             </div>
           )}
           {release.sections.map((section) => (
-            <div key={section.title} className="grid grid-cols-[52px_1fr] gap-x-3">
+            <div key={section.title} className="grid grid-cols-[56px_minmax(0,1fr)] gap-x-3">
               <span className="pt-px text-xs font-medium text-primary">{section.title}</span>
               <ul className="space-y-1.5">
-                {section.items.map((item) => (
-                  <li key={item} className="text-sm leading-snug text-foreground/85">
+                {section.items.map((item, i) => (
+                  <li key={`${i}-${item}`} className="break-words text-sm leading-snug text-foreground/85">
                     {item}
                   </li>
                 ))}
@@ -97,6 +111,51 @@ function ReleaseNotes({ notes, version }: { notes: Notes; version: string }) {
           ))}
         </section>
       ))}
+      {hidden > 0 && (
+        <button
+          onClick={() => setShowAll(true)}
+          className="text-xs font-medium text-primary transition-colors hover:text-primary/80"
+        >
+          Show {hidden} older {hidden === 1 ? "release" : "releases"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** The notes' scrolling area. A fade along the bottom says there's more below. */
+function ScrollingNotes({ children }: { children: React.ReactNode }) {
+  const scroller = useRef<HTMLDivElement>(null);
+  const [more, setMore] = useState(false);
+
+  const measure = useCallback(() => {
+    const el = scroller.current;
+    if (el) setMore(el.scrollHeight - el.scrollTop - el.clientHeight > 4);
+  }, []);
+
+  // Runs after every render: the notes arrive late, and the window can be resized.
+  useEffect(measure);
+  useEffect(() => {
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [measure]);
+
+  return (
+    <div className="relative flex min-h-[96px] flex-1 flex-col overflow-hidden">
+      <div
+        ref={scroller}
+        data-update-notes
+        onScroll={measure}
+        className="flex-1 overflow-y-auto px-6 py-5"
+      >
+        {children}
+      </div>
+      <div
+        aria-hidden="true"
+        className={`pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-card to-transparent transition-opacity duration-200 ${
+          more ? "opacity-100" : "opacity-0"
+        }`}
+      />
     </div>
   );
 }
@@ -149,10 +208,15 @@ export function UpdateDialog() {
 
   if (!visible || !version) return null;
 
-  const released =
-    notes.status === "loaded"
-      ? formatReleaseDate(notes.releases.find((r) => r.version === version)?.date)
-      : null;
+  const releases = notes.status === "loaded" ? notes.releases : [];
+  const released = formatReleaseDate(releases.find((r) => r.version === version)?.date);
+  const facts = [
+    `You're on ${NEXQ_VERSION}`,
+    releases.length > 1 ? `${releases.length} releases since yours` : null,
+    released ? `Released ${released}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   const fetching = refresh === "downloading";
   const pct =
@@ -200,10 +264,7 @@ export function UpdateDialog() {
               >
                 {version}
               </h2>
-              <p className="text-xs text-muted-foreground">
-                You're on {NEXQ_VERSION}
-                {released ? ` · Released ${released}` : ""}
-              </p>
+              <p className="text-xs text-muted-foreground">{facts}</p>
             </div>
           </div>
           <ReleaseWave
@@ -212,9 +273,9 @@ export function UpdateDialog() {
           />
         </header>
 
-        <div className="min-h-[96px] flex-1 overflow-y-auto px-6 py-5">
-          <ReleaseNotes notes={notes} version={version} />
-        </div>
+        <ScrollingNotes>
+          <ReleaseNotes key={version} notes={notes} version={version} />
+        </ScrollingNotes>
 
         <footer className="flex items-center gap-2 border-t border-border/30 px-6 py-4">
           <button
