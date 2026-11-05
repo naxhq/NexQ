@@ -7,6 +7,12 @@ import type { UpdateInfo } from "../lib/types";
  */
 export type UpdatePhase = "idle" | "checking" | "downloading" | "ready" | "error";
 
+/**
+ * Looking for a newer release while one is already downloaded. Separate from
+ * the phase because the waiting update stays ready and installable meanwhile.
+ */
+export type UpdateRefresh = "idle" | "checking" | "downloading";
+
 export interface UpdateProgress {
   received: number;
   total: number | null;
@@ -21,6 +27,11 @@ interface UpdaterState {
   progress: UpdateProgress;
   error?: string;
   lastChecked?: number;
+  refresh: UpdateRefresh;
+  /** The newer version being downloaded. */
+  refreshVersion?: string;
+  /** The "what's new" dialog shown before installing. */
+  dialogOpen: boolean;
 
   // Persisted preferences (hydrated by useUpdater)
   autoUpdate: boolean;
@@ -42,6 +53,8 @@ interface UpdaterState {
    */
   setReady: (version: string, notes?: string | null, opts?: { explicit?: boolean }) => void;
   failDownload: (error: string) => void;
+  setRefresh: (refresh: UpdateRefresh, version?: string) => void;
+  setDialogOpen: (open: boolean) => void;
   setAutoUpdate: (enabled: boolean) => void;
   setSkippedVersion: (version: string | undefined) => void;
   /** Skip a version and drop it from view unless it is mid-download. */
@@ -56,6 +69,9 @@ const initialState = {
   progress: { received: 0, total: null } as UpdateProgress,
   error: undefined as string | undefined,
   lastChecked: undefined as number | undefined,
+  refresh: "idle" as UpdateRefresh,
+  refreshVersion: undefined as string | undefined,
+  dialogOpen: false,
 };
 
 export const useUpdaterStore = create<UpdaterState>((set, get) => ({
@@ -86,7 +102,8 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
 
   addProgress: (chunkLength, contentLength) =>
     set((s) => ({
-      phase: "downloading",
+      // A newer version downloading doesn't take away the one that's ready.
+      phase: s.phase === "ready" ? "ready" : "downloading",
       progress: {
         received: s.progress.received + chunkLength,
         total: contentLength ?? s.progress.total,
@@ -107,6 +124,15 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
   },
 
   failDownload: (error) => set({ phase: "error", error }),
+
+  setRefresh: (refresh, version) =>
+    set((s) => ({
+      refresh,
+      refreshVersion: version,
+      progress: refresh === "downloading" ? { received: 0, total: null } : s.progress,
+    })),
+
+  setDialogOpen: (open) => set({ dialogOpen: open }),
 
   setAutoUpdate: (enabled) => set({ autoUpdate: enabled }),
 

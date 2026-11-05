@@ -20,7 +20,7 @@ import { useAgentStore } from "../stores/agentStore";
 import { AgentStatusChip } from "./AgentStatusChip";
 import { StreamLatency } from "./StreamLatency";
 import { claudeTierLabel } from "../settings/ClaudeCliSettings";
-import { restartToUpdate } from "../hooks/useUpdater";
+import { openUpdateDialog } from "../hooks/useUpdater";
 
 // ── Human-friendly provider labels ──
 const LLM_LABELS: Record<string, string> = {
@@ -379,36 +379,24 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
 
 // ── Update Pill ────────────────────────────────────────────────────
 
-function UpdatePill() {
+export function UpdatePill() {
   const phase = useUpdaterStore((s) => s.phase);
   const version = useUpdaterStore((s) => s.version);
-  const [installing, setInstalling] = useState(false);
 
   if (phase !== "ready" || !version) return null;
-
-  const handleClick = async () => {
-    setInstalling(true);
-    try {
-      await restartToUpdate();
-    } finally {
-      // Only reached if the user cancelled or the install failed.
-      setInstalling(false);
-    }
-  };
 
   return (
     <>
       <Divider />
       <button
-        onClick={handleClick}
-        disabled={installing}
-        title={`Restart NexQ to install v${version}`}
-        className="flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-60"
+        onClick={openUpdateDialog}
+        title={`See what's new in v${version} and install it`}
+        className="flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15"
       >
         <ArrowUpCircle className="h-3 w-3" />
         <span>Update ready · v{version}</span>
         <span className="text-primary/50">—</span>
-        <span className="font-semibold">{installing ? "Restarting…" : "Restart"}</span>
+        <span className="font-semibold">What's new</span>
       </button>
     </>
   );

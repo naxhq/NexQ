@@ -11,6 +11,7 @@ import { ToastContainer } from "./components/Toast";
 import { showToast } from "./stores/toastStore";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { UpdateReadyToast } from "./components/UpdateToast";
+import { UpdateDialog } from "./components/UpdateDialog";
 import { useTheme } from "./hooks/useTheme";
 import { useGlobalShortcut } from "./hooks/useGlobalShortcut";
 import { useTranslation } from "./hooks/useTranslation";
@@ -397,6 +398,8 @@ function App() {
         </ErrorBoundary>
         <ActiveMeetingProvider isLauncherWindow={false} />
         <ToastContainer />
+        {/* Settings -> About can open here too */}
+        <UpdateDialog />
       </div>
     );
   }
@@ -428,6 +431,7 @@ function App() {
 
       {/* One-time "update ready" notice (the footer pill stays) */}
       <UpdateReadyToast />
+      <UpdateDialog />
 
       {/* Demo mode — scenario picker modal + floating exit badge */}
       <DemoPicker />
