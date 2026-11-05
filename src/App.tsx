@@ -4,7 +4,6 @@ import { useConfigStore } from "./stores/configStore";
 import { useAIActionsStore } from "./stores/aiActionsStore";
 import { useScenarioStore, watchSavedScenarios } from "./stores/scenarioStore";
 import { LauncherView } from "./launcher/LauncherView";
-import { LauncherTitleBar } from "./launcher/LauncherTitleBar";
 import { OverlayView } from "./overlay/OverlayView";
 import { SettingsOverlay } from "./settings/SettingsOverlay";
 import { FirstRunWizard } from "./components/wizard/FirstRunWizard";
@@ -403,28 +402,25 @@ function App() {
   }
 
   return (
-    <div className={`flex h-screen w-screen flex-col overflow-hidden text-foreground ${resolvedView === "overlay" ? "bg-transparent" : "bg-background"}`}>
-      <LauncherTitleBar />
-      <div className="flex-1 min-h-0 overflow-hidden">
-        <ErrorBoundary fallbackMessage="NexQ encountered an error">
-          {(resolvedView === "launcher" || resolvedView === "overlay") && (
-            <ErrorBoundary fallbackMessage="Failed to load launcher">
-              <LauncherView />
-            </ErrorBoundary>
-          )}
-          {resolvedView === "wizard" && (
-            <ErrorBoundary fallbackMessage="Failed to load setup wizard">
-              <FirstRunWizard />
-            </ErrorBoundary>
-          )}
-          {resolvedView === "settings" && (
-            <ErrorBoundary fallbackMessage="Failed to load settings">
-              <SettingsOverlay />
-            </ErrorBoundary>
-          )}
-          {settingsOpen && resolvedView === "overlay" && <SettingsOverlay isModal />}
-        </ErrorBoundary>
-      </div>
+    <div className={`h-screen w-screen overflow-hidden text-foreground ${resolvedView === "overlay" ? "bg-transparent" : "bg-background"}`}>
+      <ErrorBoundary fallbackMessage="NexQ encountered an error">
+        {(resolvedView === "launcher" || resolvedView === "overlay") && (
+          <ErrorBoundary fallbackMessage="Failed to load launcher">
+            <LauncherView />
+          </ErrorBoundary>
+        )}
+        {resolvedView === "wizard" && (
+          <ErrorBoundary fallbackMessage="Failed to load setup wizard">
+            <FirstRunWizard />
+          </ErrorBoundary>
+        )}
+        {resolvedView === "settings" && (
+          <ErrorBoundary fallbackMessage="Failed to load settings">
+            <SettingsOverlay />
+          </ErrorBoundary>
+        )}
+        {settingsOpen && resolvedView === "overlay" && <SettingsOverlay isModal />}
+      </ErrorBoundary>
       <ActiveMeetingProvider isLauncherWindow={isLauncherWindow} />
       <ToastContainer />
       <SelectionToolbar />
