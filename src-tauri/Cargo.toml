@@ -47,6 +47,9 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "tracing", "api-24", "load-dynamic"] }
 ndarray = "0.17"  # Must match ort's ndarray version
 rustfft = "6"
+# WebRTC's echo canceller (AEC3), pure Rust: removes the other side's voice
+# that the microphone picks up from the speakers (src/audio/echo_cancel.rs).
+sonora = "0.2"
 tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
 tar = "0.4"
 bzip2 = "0.5"

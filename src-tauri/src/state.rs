@@ -87,6 +87,9 @@ pub struct AppState {
     /// Audio levels + recording continue unaffected.
     pub you_muted: Arc<AtomicBool>,
     pub them_muted: Arc<AtomicBool>,
+    /// Remove the other side's voice that the mic picks up from the speakers
+    /// (audio::echo_cancel). Read per chunk, so it applies mid-meeting.
+    pub echo_cancellation: Arc<AtomicBool>,
     /// Original default capture endpoint ID saved before IPolicyConfig override.
     /// Set when Web Speech / Windows Speech uses a non-default device; restored on stop.
     pub original_default_device: Arc<Mutex<Option<String>>>,
@@ -165,6 +168,7 @@ impl AppState {
             device_monitor_running: Arc::new(AtomicBool::new(false)),
             you_muted: Arc::new(AtomicBool::new(false)),
             them_muted: Arc::new(AtomicBool::new(false)),
+            echo_cancellation: Arc::new(AtomicBool::new(true)),
             original_default_device: Arc::new(Mutex::new(None)),
             ipolicy_target_endpoint: Arc::new(Mutex::new(None)),
             active_scenario: Arc::new(RwLock::new(ActiveScenario::default())),
