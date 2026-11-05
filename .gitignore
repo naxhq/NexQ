@@ -4,6 +4,7 @@ target/
 
 # Build output
 dist/
+src-tauri/nsis/release-info.nsh
 .astro/
 
 # Environment & secrets

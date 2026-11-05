@@ -1,4 +1,7 @@
 ; NexQ NSIS installer hooks
+; Where the installer template (nsis/installer.nsi) finds the rest of its files
+!define NEXQ_NSIS_DIR "${__FILEDIR__}\nsis"
+
 ; Installs Visual C++ 2015-2022 Redistributable if not present (first install only)
 
 !macro NSIS_HOOK_PREINSTALL

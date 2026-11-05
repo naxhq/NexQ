@@ -124,7 +124,7 @@ export const RELEASES_HIGHLIGHTS: Release[] = [
       },
       {
         title: 'Quiet automatic updates',
-        body: 'Updates download in the background, a Restart pill appears when ready, and they install when you quit, never mid-meeting.',
+        body: 'Updates download in the background, a pill shows what\'s new when one is ready, and they install when you quit, never mid-meeting.',
       },
       {
         title: 'Ask a past meeting',
@@ -169,6 +169,6 @@ export const FAQ: { q: string; a: string }[] = [
   },
   {
     q: 'How do updates work?',
-    a: 'NexQ checks GitHub Releases in the background and downloads new versions silently. When one is ready, a Restart pill appears; otherwise it installs the next time you quit. It never installs during a meeting. You can turn automatic updates off or skip a version in Settings → About.',
+    a: 'NexQ checks GitHub Releases in the background and downloads new versions silently. When one is ready, a pill shows what\'s new with an Install button; otherwise it installs the next time you quit. It never installs during a meeting. You can turn automatic updates off or skip a version in Settings → About.',
   },
 ];
