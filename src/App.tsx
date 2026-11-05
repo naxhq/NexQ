@@ -15,6 +15,7 @@ import { useTheme } from "./hooks/useTheme";
 import { useGlobalShortcut } from "./hooks/useGlobalShortcut";
 import { useTranslation } from "./hooks/useTranslation";
 import { useTraySync } from "./hooks/useTraySync";
+import { useStealthCursor } from "./hooks/useStealthCursor";
 import { useUpdater } from "./hooks/useUpdater";
 import { useAgentFallbackToast } from "./hooks/useAgentFallbackToast";
 import { refreshClaudeModelsOnStart } from "./stores/agentStore";
@@ -115,6 +116,8 @@ function App() {
       }
     });
   }, []);
+  // OVERLAY window: stealth mode keeps the arrow cursor across the whole window.
+  useStealthCursor(windowLabel);
 
   // LAUNCHER window: the meeting runs in the overlay window. When a meeting
   // starts (or anything asks this window for the meeting view), bring the

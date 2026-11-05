@@ -103,23 +103,6 @@ describe("OverlayView", () => {
     expect(screen.getByText("My interview")).toBeTruthy();
   });
 
-  it('marks the root with data-stealth="false" when stealth mode is off', () => {
-    useConfigStore.setState({ stealthMode: false });
-    const { container } = renderOverlay("online", "team_meeting");
-    const root = container.querySelector(".overlay-root");
-    expect(root).toBeTruthy();
-    expect(root?.getAttribute("data-stealth")).toBe("false");
-  });
-
-  it('marks the root with data-stealth="true" when stealth mode is on', () => {
-    useConfigStore.setState({ stealthMode: true });
-    const { container } = renderOverlay("online", "team_meeting");
-    const root = container.querySelector(".overlay-root");
-    expect(root).toBeTruthy();
-    expect(root?.getAttribute("data-stealth")).toBe("true");
-    useConfigStore.setState({ stealthMode: false });
-  });
-
   it("Minus button tooltip says 'Minimize to Dashboard' when stealth is off", () => {
     useConfigStore.setState({ stealthMode: false });
     renderOverlay("online", "team_meeting");

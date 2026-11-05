@@ -178,7 +178,7 @@ export function OverlayView() {
   const meetingTitle = activeMeeting?.title || "NexQ";
 
   return (
-    <div className="overlay-root overlay-bg flex h-full flex-col rounded-xl border border-border/20 shadow-xl" data-stealth={stealthMode ? "true" : "false"} style={{ background: `hsl(var(--background) / ${overlayOpacity})`, backdropFilter: overlayOpacity > 0.7 ? "blur(12px) saturate(1.1)" : "none" }}>
+    <div className="overlay-bg flex h-full flex-col rounded-xl border border-border/20 shadow-xl" style={{ background: `hsl(var(--background) / ${overlayOpacity})`, backdropFilter: overlayOpacity > 0.7 ? "blur(12px) saturate(1.1)" : "none" }}>
 
       {/* ═══ HEADER ═══ */}
       <div

@@ -118,13 +118,13 @@
 /* Overlay window transparent background — background + backdrop-filter applied inline */
 .overlay-bg {}
 
-/* Stealth mode: pin the cursor to the system arrow across the overlay, so
-   per-element cursor utilities (cursor-pointer, cursor-move, cursor-text,
-   cursor-not-allowed) stop flickering as the user moves across controls.
-   Scoped to data-stealth="true" on OverlayView's root so stealth-off keeps
-   today's per-element cursors. See docs/development/SPEC-overlay-stealth-cursor.md. */
-.overlay-root[data-stealth="true"],
-.overlay-root[data-stealth="true"] * {
+/* Stealth mode: the overlay window keeps the plain arrow cursor everywhere,
+   so it doesn't change shape over buttons, text and the drag strip.
+   useStealthCursor sets the attribute on the overlay window's <html> only;
+   !important beats the per-element cursor-* utilities. The resize cursors at
+   the window's edges come from Windows (handled in stealth_commands.rs). */
+html[data-stealth-cursor="true"],
+html[data-stealth-cursor="true"] * {
   cursor: default !important;
 }
 

@@ -185,11 +185,17 @@ fn apply_setting<R: Runtime>(window: &Window<R>, on: bool) -> Result<(), String>
 fn track_visibility<R: Runtime>(window: &Window<R>) {
     let Ok(hwnd) = window.hwnd() else { return };
     let hwnd = hwnd.0 as isize;
+    // The overlay's resize edges keep the arrow cursor under stealth, like
+    // the rest of the overlay (useStealthCursor covers the page).
+    let arrow_edges = window.label() == "overlay";
     let target = window.clone();
     // A subclass must be installed from the thread that owns the window.
     let installed = window.run_on_main_thread(move || {
         if let Err(e) = visibility_hook::install(hwnd) {
             log::warn!("Stealth mode: can't follow visibility of '{}': {e}", target.label());
+        }
+        if arrow_edges {
+            visibility_hook::keep_arrow_at_edges(hwnd);
         }
     });
     if let Err(e) = installed {
@@ -233,8 +239,9 @@ mod visibility_hook {
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
     use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowDisplayAffinity, SWP_HIDEWINDOW, SWP_SHOWWINDOW, WINDOWPOS, WINDOW_DISPLAY_AFFINITY,
-        WM_NCDESTROY, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING,
+        LoadCursorW, SetCursor, SetWindowDisplayAffinity, HTBOTTOMRIGHT, HTLEFT, IDC_ARROW, SWP_HIDEWINDOW,
+        SWP_SHOWWINDOW, WINDOWPOS, WINDOW_DISPLAY_AFFINITY, WM_NCDESTROY, WM_SETCURSOR, WM_WINDOWPOSCHANGED,
+        WM_WINDOWPOSCHANGING,
     };
 
     const SUBCLASS_ID: usize = 0x4E58_5153; // "NXQS"
@@ -247,6 +254,21 @@ mod visibility_hook {
     static EXCLUDED: Mutex<Vec<isize>> = Mutex::new(Vec::new());
     /// Windows whose desktop blur follows their visibility.
     static BLURRED: Mutex<Vec<isize>> = Mutex::new(Vec::new());
+    /// Windows whose resize edges show the arrow while stealth is on.
+    static ARROW_EDGES: Mutex<Vec<isize>> = Mutex::new(Vec::new());
+
+    /// Show the arrow instead of the resize cursors at `hwnd`'s edges while
+    /// stealth is on (main thread only). Resizing itself still works.
+    pub fn keep_arrow_at_edges(hwnd: isize) {
+        let mut edges = ARROW_EDGES.lock().unwrap_or_else(|e| e.into_inner());
+        if !edges.contains(&hwnd) {
+            edges.push(hwnd);
+        }
+    }
+
+    fn keeps_arrow_at_edges(hwnd: HWND) -> bool {
+        ARROW_EDGES.lock().unwrap_or_else(|e| e.into_inner()).contains(&(hwnd.0 as isize))
+    }
 
     /// Turn blur-behind on for `hwnd` while it's visible (main thread only).
     pub fn blur_while_visible(hwnd: isize, visible_now: bool) {
@@ -382,6 +404,23 @@ mod visibility_hook {
                     set_blur(hwnd, true);
                 }
             }
+            WM_SETCURSOR => {
+                // The hit-test code is the low word of lParam. Over the
+                // window's resize border (HTLEFT..=HTBOTTOMRIGHT) Windows
+                // would show a two-headed arrow: keep the plain arrow under
+                // stealth. Tauri's undecorated-resize border is a child
+                // window, and its WM_SETCURSOR reaches this parent first.
+                let hit = (lparam.0 as u32) & 0xFFFF;
+                if (HTLEFT..=HTBOTTOMRIGHT).contains(&hit)
+                    && super::stealth_enabled()
+                    && keeps_arrow_at_edges(hwnd)
+                {
+                    if let Ok(arrow) = LoadCursorW(None, IDC_ARROW) {
+                        SetCursor(Some(arrow));
+                        return LRESULT(1);
+                    }
+                }
+            }
             WM_NCDESTROY => {
                 let _ = RemoveWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID);
                 let mut hooked = HOOKED.lock().unwrap_or_else(|e| e.into_inner());
@@ -389,6 +428,7 @@ mod visibility_hook {
                 drop(hooked);
                 BLURRED.lock().unwrap_or_else(|e| e.into_inner()).retain(|&h| h != hwnd.0 as isize);
                 EXCLUDED.lock().unwrap_or_else(|e| e.into_inner()).retain(|&h| h != hwnd.0 as isize);
+                ARROW_EDGES.lock().unwrap_or_else(|e| e.into_inner()).retain(|&h| h != hwnd.0 as isize);
             }
             _ => {}
         }
