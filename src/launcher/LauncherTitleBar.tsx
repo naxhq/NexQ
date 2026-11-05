@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { platform } from "@tauri-apps/plugin-os";
 
 /**
  * Custom title bar for the launcher window. The launcher runs with
@@ -8,30 +7,26 @@ import { platform } from "@tauri-apps/plugin-os";
  * the Windows `WS_EX_TOOLWINDOW` style (set by stealth mode) has no OS
  * title bar to repaint.
  *
- * Windows: 32px bar, NexQ icon + title on the left, three 46x32 control
- * buttons on the right. Glyph proportions match Segoe MDL2; close hover
- * is Windows 11's close-red. Focused vs unfocused dim mirrors the native
- * title-bar behavior.
+ * 32px bar, NexQ icon + title on the left, three 46x32 control buttons on
+ * the right. Glyph proportions match Segoe MDL2; close hover is Windows
+ * 11's close-red. Focused vs unfocused dim mirrors the native title-bar
+ * behavior.
  *
- * macOS: 28px drag region with the native traffic lights showing through
- * via `titleBarStyle: "Overlay"` in tauri.conf.json.
+ * macOS currently gets the same chrome as Windows rather than native
+ * traffic lights: `titleBarStyle: Overlay` requires `decorations: true`
+ * (per tauri-utils TitleBarStyle), which would reintroduce the OS title
+ * bar we want gone. The user accepted (2026-11-05) that functionality
+ * matters more than native macOS styling while macOS is still beta.
  *
  * Close routes through `CloseRequested`, which is already intercepted in
  * Rust ([lib.rs:494]) to call `hide_all()` → minimize-to-tray, identical
  * to today's X-click behavior.
  */
 export function LauncherTitleBar() {
-  const [isMac, setIsMac] = useState(false);
   const [maximized, setMaximized] = useState(false);
   const [focused, setFocused] = useState(true);
 
   useEffect(() => {
-    try {
-      setIsMac(platform() === "macos");
-    } catch {
-      // platform() reads a global set by the Tauri runtime; in test or
-      // dev-without-tauri contexts it may throw. Default: Windows chrome.
-    }
     const win = getCurrentWebviewWindow();
     win.isMaximized().then(setMaximized).catch(() => {});
     win.isFocused().then(setFocused).catch(() => {});
@@ -46,29 +41,6 @@ export function LauncherTitleBar() {
   }, []);
 
   const win = getCurrentWebviewWindow();
-
-  if (isMac) {
-    // macOS keeps native traffic lights via titleBarStyle: "Overlay".
-    // The bar is a drag region; the native lights are drawn on top by the OS.
-    return (
-      <div
-        className="flex h-7 shrink-0 items-center select-none"
-        style={{ background: "hsl(var(--background))" }}
-        data-tauri-drag-region
-        role="toolbar"
-        aria-label="Window controls"
-      >
-        <div
-          className="pl-20 text-[12px] text-foreground/80"
-          data-tauri-drag-region
-          style={{ fontFamily: "-apple-system, 'Segoe UI', system-ui" }}
-        >
-          NexQ
-        </div>
-      </div>
-    );
-  }
-
   const dim = focused ? "" : "opacity-60";
   return (
     <div

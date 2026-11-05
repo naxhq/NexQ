@@ -160,17 +160,19 @@ export function OverlayView() {
   const stealthHide = stealthMode && !!activeMeeting;
   const handleMinimizeToDashboard = useCallback(async () => {
     if (stealthHide) {
+      // Hide the overlay without revealing the launcher. If the window API
+      // isn't available (should not happen inside Tauri), do nothing: under
+      // stealth a silent click is better than a visible launcher.
       try {
         const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
         const overlay = await WebviewWindow.getByLabel("overlay");
         await overlay?.hide();
-      } catch {
-        // Fall back to the non-stealth path if the window API is unavailable.
-        showLauncherWindow().catch(() => {});
+      } catch (e) {
+        console.warn("[overlay] stealth-hide fell through, overlay stays visible:", e);
       }
-    } else {
-      showLauncherWindow().catch(() => {});
+      return;
     }
+    showLauncherWindow().catch(() => {});
   }, [stealthHide]);
 
   const meetingTitle = activeMeeting?.title || "NexQ";
