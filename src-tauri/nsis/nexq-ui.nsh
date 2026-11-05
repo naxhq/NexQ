@@ -510,7 +510,7 @@ FunctionEnd
 
 !macroend
 
-; Called from the install section, on its own thread, around the slow file copy.
+; Called from the install section, on its own thread, around slow steps.
 !macro NqPulseStart
   ${IfNot} ${Silent}
     System::Call 'user32::GetWindowLongW(p $NqWave, i -16) i .r0'
@@ -526,7 +526,6 @@ FunctionEnd
     System::Call 'user32::GetWindowLongW(p $NqWave, i -16) i .r0'
     IntOp $0 $0 & 0xFFFFFFF7
     System::Call 'user32::SetWindowLongW(p $NqWave, i -16, i r0)'
-    SendMessage $NqWave ${NQ_PBM_SETPOS} 30000 0
   ${EndIf}
 !macroend
 

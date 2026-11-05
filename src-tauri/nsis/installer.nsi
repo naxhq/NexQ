@@ -353,12 +353,15 @@ Section WebView2
       !if "${INSTALLWEBVIEW2MODE}" == "downloadBootstrapper"
         Delete "$TEMP\MicrosoftEdgeWebview2Setup.exe"
         DetailPrint "$(webview2Downloading)"
-        NSISdl::download "https://go.microsoft.com/fwlink/p/?LinkId=2124703" "$TEMP\MicrosoftEdgeWebview2Setup.exe"
+        ; NEXQ: quiet, because NSISdl's own progress panel doesn't fit these screens
+        !insertmacro NqPulseStart
+        NSISdl::download_quiet "https://go.microsoft.com/fwlink/p/?LinkId=2124703" "$TEMP\MicrosoftEdgeWebview2Setup.exe"
         Pop $0
         ${If} $0 == "success"
           DetailPrint "$(webview2DownloadSuccess)"
         ${Else}
           DetailPrint "$(webview2DownloadError)"
+          !insertmacro NqPulseStop
           Abort "$(webview2AbortError)"
         ${EndIf}
         StrCpy $6 "$TEMP\MicrosoftEdgeWebview2Setup.exe"
@@ -391,9 +394,11 @@ Section WebView2
           DetailPrint "$(webview2InstallSuccess)"
         ${Else}
           DetailPrint "$(webview2InstallError)"
+          !insertmacro NqPulseStop
           Abort "$(webview2AbortError)"
         ${EndIf}
       webview2_done:
+      !insertmacro NqPulseStop
     ${EndIf}
   ${Else}
     !if "${MINIMUMWEBVIEW2VERSION}" != ""

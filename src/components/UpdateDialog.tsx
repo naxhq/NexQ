@@ -107,7 +107,7 @@ function ReleaseNotes({ notes, version }: { notes: Notes; version: string }) {
  * version in one step and sees the notes for what they actually get.
  */
 export function UpdateDialog() {
-  const open_ = useUpdaterStore((s) => s.dialogOpen);
+  const dialogOpen = useUpdaterStore((s) => s.dialogOpen);
   const phase = useUpdaterStore((s) => s.phase);
   const version = useUpdaterStore((s) => s.version);
   const refresh = useUpdaterStore((s) => s.refresh);
@@ -116,7 +116,7 @@ export function UpdateDialog() {
   const autoUpdate = useUpdaterStore((s) => s.autoUpdate);
   const setDialogOpen = useUpdaterStore((s) => s.setDialogOpen);
 
-  const visible = open_ && phase === "ready" && !!version;
+  const visible = dialogOpen && phase === "ready" && !!version;
 
   const [notes, setNotes] = useState<Notes>({ status: "loading" });
   const [installing, setInstalling] = useState(false);
