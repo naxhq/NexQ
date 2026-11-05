@@ -37,6 +37,11 @@ describe("nsisString", () => {
     expect(nsisString('costs $5 and "more"')).toBe('costs $$5 and $\\"more$\\"');
   });
 
+  it("never leaves a sequence the compiler would expand", () => {
+    expect(nsisString("the ${VERSION} define")).toBe("the $$ {VERSION} define");
+    expect(nsisString("$${VERSION}")).not.toContain("${");
+  });
+
   it("keeps notes on one line", () => {
     expect(nsisString("one\r\ntwo\tthree")).toBe("one two three");
   });

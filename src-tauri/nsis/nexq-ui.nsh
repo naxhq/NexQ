@@ -35,6 +35,8 @@
 !define NQ_WAVE_H 60
 !define NQ_STATUS_Y 258
 !define NQ_INFO_Y 296
+!define NQ_TEXT_X 104
+!define NQ_TEXT_W 362
 !define NQ_PLATE_X 496
 !define NQ_PLATE_VALUE_X 572
 !define NQ_ACTION_Y 484
@@ -556,9 +558,9 @@ Function NqPaintNote
   Pop $R7
   Pop $R8
   Pop $R9
-  !insertmacro NqText "" $0 ${NQ_LEFT} $NqNoteY 48 20 "$R7" $NqFontBold ${NQ_ACCENT_TEXT}
+  !insertmacro NqLabel "" $0 STATIC ${NQ_STATIC} ${NQ_LEFT} $NqNoteY 60 20 "$R7" $NqFontBold ${NQ_ACCENT_TEXT} ${NQ_BG}
   IntOp $1 $R9 * 19
-  !insertmacro NqLabel "" $0 STATIC ${NQ_STATIC} 92 $NqNoteY 370 $1 "$R8" $NqFontBody ${NQ_TEXT} ${NQ_BG}
+  !insertmacro NqLabel "" $0 STATIC ${NQ_STATIC} ${NQ_TEXT_X} $NqNoteY ${NQ_TEXT_W} $1 "$R8" $NqFontBody ${NQ_TEXT} ${NQ_BG}
   IntOp $1 $R9 * 19
   IntOp $NqNoteY $NqNoteY + $1
   IntOp $NqNoteY $NqNoteY + 10
@@ -568,12 +570,12 @@ Function NqPaintNotes
   !insertmacro NqText "" $0 ${NQ_LEFT} ${NQ_INFO_Y} 400 18 "What's new" $NqFontSmall ${NQ_TEXT3}
   IntOp $NqNoteY ${NQ_INFO_Y} + 26
   !if ${NQ_NOTES_TOTAL} = 0
-    !insertmacro NqLabel "" $0 STATIC ${NQ_STATIC} ${NQ_LEFT} $NqNoteY 420 38 "Improvements across NexQ. The release notes on GitHub have the details." $NqFontBody ${NQ_TEXT2} ${NQ_BG}
+    !insertmacro NqLabel "" $0 STATIC ${NQ_STATIC} ${NQ_LEFT} $NqNoteY 420 38 "Small improvements, with nothing new to call out." $NqFontBody ${NQ_TEXT2} ${NQ_BG}
   !else
     !insertmacro NQ_RELEASE_NOTES
   !endif
   !if ${NQ_NOTES_MORE} > 0
-    !insertmacro NqText "" $0 92 $NqNoteY 370 18 "and ${NQ_NOTES_MORE} more" $NqFontSmall ${NQ_TEXT3}
+    !insertmacro NqText "" $0 ${NQ_TEXT_X} $NqNoteY ${NQ_TEXT_W} 18 "and ${NQ_NOTES_MORE} more" $NqFontSmall ${NQ_TEXT3}
   !endif
 FunctionEnd
 
@@ -581,6 +583,25 @@ FunctionEnd
   !insertmacro NqText "" $0 ${NQ_PLATE_X} ${Y} 72 18 "${LABEL}" $NqFontSmall ${NQ_TEXT3}
   !insertmacro NqText "" $0 ${NQ_PLATE_VALUE_X} ${Y} 148 18 "${VALUE}" $NqFontSmall ${NQ_TEXT2}
 !macroend
+
+; For someone who has never used NexQ, "what's new" means nothing yet: tell them what
+; it does. The wording comes from the README's own description.
+Function NqPaintIntro
+  !insertmacro NqText "" $0 ${NQ_LEFT} ${NQ_INFO_Y} 400 18 "What ${PRODUCTNAME} does" $NqFontSmall ${NQ_TEXT3}
+  IntOp $NqNoteY ${NQ_INFO_Y} + 26
+  !insertmacro NqNote "Listen" "A live transcript of both sides of the conversation" 1
+  !insertmacro NqNote "Answer" "Instant AI answers, grounded in your own documents" 1
+  !insertmacro NqNote "Private" "An overlay only you can see" 1
+FunctionEnd
+
+; What's under the version: what it does for a first install, what changed otherwise.
+Function NqPaintInfo
+  ${If} $NqCompare == ""
+    Call NqPaintIntro
+  ${Else}
+    Call NqPaintNotes
+  ${EndIf}
+FunctionEnd
 
 ; Facts about this build, like the plate on an instrument.
 Function NqPaintPlate
@@ -680,21 +701,21 @@ Function NqHomeShow
   Call NqPaintPrimary
   ${NSD_OnClick} $NqPrimary NqGoNext
 
-  Call NqPaintNotes
+  Call NqPaintInfo
   Call NqPaintPlate
 
   ; Where it goes. The folder only changes on a first install.
   !insertmacro NqText "" $0 ${NQ_LEFT} ${NQ_FOLDER_Y} 50 18 "Folder" $NqFontSmall ${NQ_TEXT3}
   ${If} $NqCompare == ""
-    !insertmacro NqLabel "" $NqFolderLabel STATIC ${NQ_STATIC_PATH} 92 ${NQ_FOLDER_Y} 240 18 "$INSTDIR" $NqFontSmall ${NQ_TEXT2} ${NQ_BG}
+    !insertmacro NqLabel "" $NqFolderLabel STATIC ${NQ_STATIC_PATH} ${NQ_TEXT_X} ${NQ_FOLDER_Y} 222 18 "$INSTDIR" $NqFontSmall ${NQ_TEXT2} ${NQ_BG}
     !insertmacro NqText "" $0 340 ${NQ_FOLDER_Y} 56 18 "Change" $NqFontBold ${NQ_ACCENT_TEXT}
     ${NSD_OnClick} $0 NqChooseFolder
   ${ElseIf} $NqCompare = 0
-    !insertmacro NqLabel "" $NqFolderLabel STATIC ${NQ_STATIC_PATH} 92 ${NQ_FOLDER_Y} 180 18 "$INSTDIR" $NqFontSmall ${NQ_TEXT2} ${NQ_BG}
+    !insertmacro NqLabel "" $NqFolderLabel STATIC ${NQ_STATIC_PATH} ${NQ_TEXT_X} ${NQ_FOLDER_Y} 168 18 "$INSTDIR" $NqFontSmall ${NQ_TEXT2} ${NQ_BG}
     !insertmacro NqText "" $0 280 ${NQ_FOLDER_Y} 116 18 "Uninstall instead" $NqFontBold ${NQ_TEXT2}
     ${NSD_OnClick} $0 NqUninstallClicked
   ${Else}
-    !insertmacro NqLabel "" $NqFolderLabel STATIC ${NQ_STATIC_PATH} 92 ${NQ_FOLDER_Y} 300 18 "$INSTDIR" $NqFontSmall ${NQ_TEXT2} ${NQ_BG}
+    !insertmacro NqLabel "" $NqFolderLabel STATIC ${NQ_STATIC_PATH} ${NQ_TEXT_X} ${NQ_FOLDER_Y} 288 18 "$INSTDIR" $NqFontSmall ${NQ_TEXT2} ${NQ_BG}
   ${EndIf}
 
   !insertmacro NqLabel "" $0 STATIC ${NQ_STATIC_BUTTON} 400 ${NQ_ACTION_Y} 88 ${NQ_ACTION_H} "Cancel" $NqFontButton ${NQ_TEXT2} ${NQ_BG}
@@ -799,7 +820,7 @@ Function NqProgressShow
     StrCpy $NqKicker "Installing the older version"
   ${EndIf}
   Call NqKickerAccent
-  Call NqPaintNotes
+  Call NqPaintInfo
   Call NqPaintPlate
 FunctionEnd
 
@@ -825,7 +846,14 @@ Function NqDoneShow
   Call NqPaintPrimary
   ${NSD_OnClick} $NqPrimary NqGoNext
 
-  Call NqPaintNotes
+  ${If} $NqCompare == ""
+    ; What comes next, for someone opening NexQ for the first time
+    !insertmacro NqText "" $0 ${NQ_LEFT} ${NQ_INFO_Y} 400 18 "What happens next" $NqFontSmall ${NQ_TEXT3}
+    !define /math NQ_NEXT_Y ${NQ_INFO_Y} + 26
+    !insertmacro NqLabel "" $0 STATIC ${NQ_STATIC} ${NQ_LEFT} ${NQ_NEXT_Y} 420 76 "${PRODUCTNAME} opens with a short setup: your microphone and call audio, then the speech and AI services you'd like to use. They can run on this PC or in the cloud." $NqFontBody ${NQ_TEXT} ${NQ_BG}
+  ${Else}
+    Call NqPaintNotes
+  ${EndIf}
   Call NqPaintPlate
 
   StrCpy $NqShortcutCheck 0
@@ -905,7 +933,7 @@ Function un.NqConfirmShow
 
   !insertmacro NqLabel "un." $0 STATIC ${NQ_STATIC} ${NQ_LEFT} ${NQ_INFO_Y} 620 44 "This removes ${PRODUCTNAME} from this PC. Your meetings, recordings and settings stay, so reinstalling picks up where you left off." $NqFontBody ${NQ_TEXT} ${NQ_BG}
   !insertmacro NqText "un." $0 ${NQ_LEFT} 344 60 18 "Folder" $NqFontSmall ${NQ_TEXT3}
-  !insertmacro NqLabel "un." $0 STATIC ${NQ_STATIC_PATH} 92 344 500 18 "$INSTDIR" $NqFontSmall ${NQ_TEXT2} ${NQ_BG}
+  !insertmacro NqLabel "un." $0 STATIC ${NQ_STATIC_PATH} ${NQ_TEXT_X} 344 500 18 "$INSTDIR" $NqFontSmall ${NQ_TEXT2} ${NQ_BG}
 
   !insertmacro NqPx $1 ${NQ_LEFT}
   !insertmacro NqPx $2 388

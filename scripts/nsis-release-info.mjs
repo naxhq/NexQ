@@ -14,10 +14,15 @@ const MAX_NOTES = 3;
 const CHARS_PER_LINE = 50;
 const MAX_LINES = 2;
 
-/** Text as a safe NSIS string: `$` and `"` are special, and notes are one line. */
+/**
+ * Text as a safe NSIS string: `$` and `"` are special, and notes are one line. A
+ * "${" can't be escaped (the compiler expands it whatever comes before), so it gets
+ * a space: release notes must never be able to change what the installer compiles.
+ */
 export function nsisString(text) {
   return text
     .replace(/[\r\n\t]+/g, " ")
+    .replace(/\$\{/g, "$ {")
     .replace(/\$/g, "$$$$")
     .replace(/"/g, '$\\"');
 }
