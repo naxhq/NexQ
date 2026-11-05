@@ -21,6 +21,14 @@ pub fn stealth_enabled() -> bool {
     STEALTH.load(Ordering::SeqCst)
 }
 
+/// Which window labels follow the stealth taskbar-skip flag on Windows. The
+/// meeting-prompt window already uses `.skip_taskbar(true)` at build time,
+/// and the dev-log window is a developer-only surface, so neither is listed
+/// here.
+fn is_taskbar_managed_label(label: &str) -> bool {
+    matches!(label, "overlay" | "launcher")
+}
+
 /// What this platform offers, for the Settings note.
 #[derive(Debug, Clone, Serialize)]
 pub struct StealthSupport {
@@ -85,6 +93,18 @@ pub async fn set_stealth_mode(app: AppHandle, enabled: bool) -> Result<(), Strin
                 "Stealth mode {}",
                 if enabled { "on: windows hidden from screen capture" } else { "off" }
             );
+
+            // Overlay + launcher: drop their Windows taskbar entry while
+            // stealth is on. macOS has no per-window Dock entry, so
+            // set_skip_taskbar is a no-op there. A failure here only warns —
+            // the screen-share concealment above is the main contract.
+            for (label, window) in &windows {
+                if is_taskbar_managed_label(label) {
+                    if let Err(e) = window.set_skip_taskbar(enabled) {
+                        log::warn!("Stealth mode: set_skip_taskbar failed for '{label}': {e}");
+                    }
+                }
+            }
         }
         result
     };
@@ -133,6 +153,14 @@ pub fn apply_to_new_window<R: Runtime>(window: &Window<R>) {
     if stealth_enabled() {
         if let Err(e) = apply_setting(window, true) {
             log::warn!("Stealth mode: couldn't hide window '{}': {e}", window.label());
+        }
+        // Keep the overlay and launcher out of the Windows taskbar when
+        // they come back during a stealth-on session.
+        let label = window.label();
+        if is_taskbar_managed_label(label) {
+            if let Err(e) = window.set_skip_taskbar(true) {
+                log::warn!("Stealth mode: set_skip_taskbar failed for new '{label}': {e}");
+            }
         }
     }
 }
@@ -501,5 +529,18 @@ mod tests {
         assert!(!saved_stealth(r#"{"stealthMode":false}"#));
         assert!(!saved_stealth("{}"));
         assert!(!saved_stealth("not json"));
+    }
+
+    #[test]
+    fn only_the_overlay_and_launcher_follow_the_taskbar_skip() {
+        // The two NexQ windows the user sees in the taskbar today.
+        assert!(is_taskbar_managed_label("overlay"));
+        assert!(is_taskbar_managed_label("launcher"));
+        // The meeting-prompt window uses .skip_taskbar(true) at build
+        // time already; the dev-log window is a developer-only surface.
+        // Neither should be touched by the stealth taskbar-skip loop.
+        assert!(!is_taskbar_managed_label("meeting-prompt"));
+        assert!(!is_taskbar_managed_label("devlog"));
+        assert!(!is_taskbar_managed_label("something-else"));
     }
 }
