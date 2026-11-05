@@ -116,6 +116,20 @@ describe("OverlayView", () => {
     useConfigStore.setState({ stealthMode: false });
   });
 
+  it("Minus button tooltip uses the menu bar and ⌘B on macOS", () => {
+    const userAgent = Object.getOwnPropertyDescriptor(window.navigator, "userAgent");
+    Object.defineProperty(window.navigator, "userAgent", { value: "Mozilla/5.0 (Macintosh)", configurable: true });
+    try {
+      useConfigStore.setState({ stealthMode: true });
+      renderOverlay("online", "team_meeting");
+      expect(screen.getByRole("button", { name: "Hide to menu bar (⌘B brings it back)" })).toBeTruthy();
+    } finally {
+      if (userAgent) Object.defineProperty(window.navigator, "userAgent", userAgent);
+      else delete (window.navigator as { userAgent?: string }).userAgent;
+      useConfigStore.setState({ stealthMode: false });
+    }
+  });
+
   it("Minus click shows the launcher when stealth is off", async () => {
     vi.mocked(showLauncherWindow).mockClear();
     overlayHide.mockClear();

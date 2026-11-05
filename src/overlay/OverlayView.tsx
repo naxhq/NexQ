@@ -45,7 +45,7 @@ import {
   ScreenShareOff,
 } from "lucide-react";
 import { toggleStealthMode } from "../hooks/useGlobalShortcut";
-import { formatShortcut } from "../lib/shortcutLabel";
+import { formatShortcut, isMacPlatform } from "../lib/shortcutLabel";
 import { formatDuration } from "../lib/utils";
 
 // ════════════════════════════════════════════════════════════════
@@ -263,7 +263,7 @@ export function OverlayView() {
           />
           <HeaderBtn icon={<Eye className="h-3.5 w-3.5" />} onClick={cycleOpacity} tooltip={`Transparency: ${Math.round(overlayOpacity * 100)}% (click to cycle)`} />
           <HeaderBtn icon={<Settings className="h-3.5 w-3.5" />} onClick={() => setCurrentView("settings")} tooltip="Settings" />
-          <HeaderBtn icon={<Minus className="h-3.5 w-3.5" />} onClick={handleMinimizeToDashboard} tooltip={stealthHide ? "Hide to tray (Ctrl+B brings it back)" : "Minimize to Dashboard (Ctrl+B brings it back)"} />
+          <HeaderBtn icon={<Minus className="h-3.5 w-3.5" />} onClick={handleMinimizeToDashboard} tooltip={stealthHide ? `Hide to ${isMacPlatform() ? "menu bar" : "tray"} (${formatShortcut("CmdOrCtrl+B")} brings it back)` : `Minimize to Dashboard (${formatShortcut("CmdOrCtrl+B")} brings it back)`} />
 
           {/* Translation controls */}
           <button
