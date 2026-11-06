@@ -1,3 +1,9 @@
+## [2.35.1](https://github.com/naxhq/NexQ/compare/v2.35.0...v2.35.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* **release:** Mac updates are back after GitHub retired the macOS 14 build machines ([ccc0f6d](https://github.com/naxhq/NexQ/commit/ccc0f6dd12455877fa1eaec24a5dc67141b7494d))
 # [2.35.0](https://github.com/naxhq/NexQ/compare/v2.34.0...v2.35.0) (2026-11-06)
 
 
