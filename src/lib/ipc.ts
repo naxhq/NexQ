@@ -139,6 +139,11 @@ export async function setSourceMuted(source: "you" | "them", muted: boolean): Pr
   return invoke("set_source_muted", { source, muted });
 }
 
+/** Echo cancellation for "You" (the speakers' sound removed from the mic). */
+export async function setEchoCancellation(enabled: boolean): Promise<void> {
+  return invoke("set_echo_cancellation", { enabled });
+}
+
 /** Get current mute status for both sources. */
 export async function getMuteStatus(): Promise<{ you: boolean; them: boolean }> {
   const result = await invoke<string>("get_mute_status");

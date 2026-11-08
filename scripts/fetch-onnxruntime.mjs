@@ -20,6 +20,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFile
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
+import { fetchWithRetry } from "./fetch-retry.mjs";
 
 // Must be >= the ONNX Runtime minor version the `ort` crate targets (ort 2.0.0-rc.12 → 1.24).
 const ORT_VERSION = "1.24.2";
@@ -45,8 +46,7 @@ const isCurrent = (fileName) =>
 
 async function download(url, expectedSha) {
   console.log(`[fetch-onnxruntime] downloading ${url}`);
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`download failed: HTTP ${res.status}`);
+  const res = await fetchWithRetry(url);
   const buf = Buffer.from(await res.arrayBuffer());
   const actual = sha256(buf);
   if (actual !== expectedSha) {
