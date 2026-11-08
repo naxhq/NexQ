@@ -504,6 +504,12 @@ pub fn run() {
                 stealth_commands::blur_behind_while_visible(&overlay.as_ref().window());
             }
 
+            // -- macOS: the overlay floats over full-screen apps (their own Space) too --
+            #[cfg(target_os = "macos")]
+            if let Some(overlay) = app.get_webview_window("overlay") {
+                stealth_commands::float_over_full_screen(&overlay.as_ref().window());
+            }
+
             log::info!("NexQ initialized successfully");
             Ok(())
         })

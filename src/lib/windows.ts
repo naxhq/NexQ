@@ -24,19 +24,33 @@ export async function showLauncherWindow(): Promise<void> {
  * Show the overlay window and hide the launcher. Only the overlay window's
  * own view decides what it renders, so callers outside it should use
  * {@link showMeetingOverlay}.
+ *
+ * Non-stealth: show the overlay first, then hide the launcher. A slow
+ * `overlay.show()` otherwise leaves a blank screen frame.
+ *
+ * Stealth: hide the launcher first, then show the overlay. Under stealth
+ * we don't want to leak the launcher on screen between the two calls; the
+ * brief blank frame is preferable to a visible launcher-flash.
  */
 export async function showOverlayWindow(): Promise<void> {
   logToFile("info", "windows", "Showing the overlay window");
+  const { useConfigStore } = await import("../stores/configStore");
+  const stealth = useConfigStore.getState().stealthMode;
   const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
   const overlay = await WebviewWindow.getByLabel("overlay");
   const launcher = await WebviewWindow.getByLabel("launcher");
 
+  if (stealth) {
+    await launcher?.hide().catch(() => {});
+  }
   if (overlay) {
     await overlay.show().catch(() => {});
     await overlay.unminimize().catch(() => {});
     await overlay.setFocus().catch(() => {});
   }
-  await launcher?.hide().catch(() => {});
+  if (!stealth) {
+    await launcher?.hide().catch(() => {});
+  }
 }
 
 /** Window -> overlay window: bring back the floating meeting overlay. */
