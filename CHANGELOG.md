@@ -1,3 +1,10 @@
+# [2.36.0](https://github.com/naxhq/NexQ/compare/v2.35.1...v2.36.0) (2026-11-08)
+
+
+### Features
+
+* **audio:** echo cancellation keeps the speakers' sound from being transcribed as you ([#83](https://github.com/naxhq/NexQ/issues/83)) ([e877dc8](https://github.com/naxhq/NexQ/commit/e877dc8b924c0f73c9d7c8105218598338f6dca9)), closes [#82](https://github.com/naxhq/NexQ/issues/82)
+* **stealth:** stealth mode also hides NexQ from the taskbar and keeps the overlay cursor still ([#81](https://github.com/naxhq/NexQ/issues/81)) ([0939d6c](https://github.com/naxhq/NexQ/commit/0939d6cd464b4436fc0a06dc9e4adb0fb87d0b56)), closes [#80](https://github.com/naxhq/NexQ/issues/80)
 ## [2.35.1](https://github.com/naxhq/NexQ/compare/v2.35.0...v2.35.1) (2026-11-06)
 
 
