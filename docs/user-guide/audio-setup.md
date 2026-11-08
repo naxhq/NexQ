@@ -129,10 +129,11 @@ NexQ can record meeting audio alongside the live transcript.
 
 ### Echo or Feedback
 
-**Problem**: Your own voice appears in the "Them" transcript, or you hear echo.
+**Problem**: The other side's words also appear under "You", your own voice appears in the "Them" transcript, or you hear echo.
 
 **Solution**:
 
+- **Keep Echo cancellation on** (Settings > Audio, on by default). With speakers, your microphone also hears the other side; NexQ removes what it plays through the "Them" output from the microphone before transcribing it. It works when "Them" is an output device.
 - **Use headphones.** This is the most effective fix. Speakers feed your voice back into the system audio loopback.
 - Select an **input** for "You" and an **output** for "Them". Both may belong to the same audio interface; choosing its input twice intentionally duplicates the microphone.
 - Enable echo cancellation in your meeting app (Zoom, Teams, etc.)

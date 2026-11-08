@@ -56,10 +56,11 @@ This only appears the first time you install. Subsequent launches will not trigg
 
 ### Microphone Echo or Feedback
 
-**Problem**: Your own voice appears in the "Them" transcript, or there is echo.
+**Problem**: The other side's words also appear under "You", your own voice appears in the "Them" transcript, or there is echo.
 
 **Solution**:
 
+- Keep **Echo cancellation** on in Settings > Audio (on by default). It removes the speakers' sound from the microphone when "Them" is an output device
 - Use headphones to prevent your speakers from feeding back into the microphone
 - Ensure "You" and "Them" are using different physical devices
 - Check that your meeting app has echo cancellation enabled

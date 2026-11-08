@@ -257,6 +257,8 @@ interface ConfigState {
   // In-person meeting mode settings
   rememberedMeetingSetup: { audioMode: AudioMode; scenario: AIScenario } | null;
   diarizationEnabled: boolean;
+  /** Remove the other side's voice that "You" picks up from the speakers. */
+  echoCancellation: boolean;
   noisePreset: string | null;
   confidenceThreshold: number;
   confidenceHighlightEnabled: boolean;
@@ -369,6 +371,7 @@ interface ConfigState {
   setVerifiedCloudProviders: (providers: string[]) => void;
   setRememberedMeetingSetup: (setup: { audioMode: AudioMode; scenario: AIScenario } | null) => void;
   setDiarizationEnabled: (enabled: boolean) => void;
+  setEchoCancellation: (enabled: boolean) => void;
   setNoisePreset: (preset: string | null) => void;
   setConfidenceThreshold: (threshold: number) => void;
   setConfidenceHighlightEnabled: (enabled: boolean) => void;
@@ -452,6 +455,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
   hotkeys: DEFAULT_HOTKEYS,
   rememberedMeetingSetup: null,
   diarizationEnabled: true,
+  echoCancellation: true,
   noisePreset: null,
   confidenceThreshold: 0.7,
   confidenceHighlightEnabled: true,
@@ -795,6 +799,15 @@ export const useConfigStore = create<ConfigState>((set) => ({
     set({ diarizationEnabled: enabled });
     persistValue("diarizationEnabled", enabled);
   },
+  setEchoCancellation: (enabled) => {
+    set({ echoCancellation: enabled });
+    persistValue("echoCancellation", enabled);
+    // Applies mid-meeting: the capture loop reads it per chunk.
+    import("../lib/ipc").then(({ setEchoCancellation }) =>
+      setEchoCancellation(enabled)
+        .catch((e) => console.warn("[configStore] Failed to update echo cancellation:", e))
+    );
+  },
   setNoisePreset: (preset) => {
     set({ noisePreset: preset });
     persistValue("noisePreset", preset);
@@ -968,6 +981,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
       const activeModelPerEngine = await store.get<Record<string, string>>("activeModelPerEngine");
       const rememberedMeetingSetup = await store.get<{ audioMode: AudioMode; scenario: AIScenario } | null>("rememberedMeetingSetup");
       const diarizationEnabled = await store.get<boolean>("diarizationEnabled");
+      const echoCancellation = await store.get<boolean>("echoCancellation");
       const noisePreset = await store.get<string | null>("noisePreset");
       const confidenceThreshold = await store.get<number>("confidenceThreshold");
       const confidenceHighlightEnabled = await store.get<boolean>("confidenceHighlightEnabled");
@@ -1147,6 +1161,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
         ...(pauseThresholdMs != null && { pauseThresholdMs }),
         ...(rememberedMeetingSetup !== undefined && { rememberedMeetingSetup: rememberedMeetingSetup ?? null }),
         ...(diarizationEnabled != null && { diarizationEnabled }),
+        ...(echoCancellation != null && { echoCancellation }),
         ...(noisePreset !== undefined && { noisePreset: noisePreset ?? null }),
         ...(confidenceThreshold != null && { confidenceThreshold }),
         ...(confidenceHighlightEnabled != null && { confidenceHighlightEnabled }),
@@ -1320,6 +1335,12 @@ export const useConfigStore = create<ConfigState>((set) => ({
       import("../lib/ipc").then(({ setPauseThreshold }) =>
         setPauseThreshold(loadedPauseThreshold)
           .catch((e) => console.warn("[configStore] Failed to sync pause threshold on load:", e))
+      );
+
+      // Sync echo cancellation to the backend (it starts on).
+      import("../lib/ipc").then(({ setEchoCancellation }) =>
+        setEchoCancellation(echoCancellation ?? true)
+          .catch((e) => console.warn("[configStore] Failed to sync echo cancellation on load:", e))
       );
 
       // Sync the Claude CLI config to the backend (it starts with the defaults

@@ -524,6 +524,7 @@ pub fn run() {
             audio_commands::stop_device_monitor,
             audio_commands::set_source_muted,
             audio_commands::get_mute_status,
+            audio_commands::set_echo_cancellation,
             audio_commands::ensure_ipolicy_override,
             // == COMMANDS: stt ==
             stt_commands::set_stt_provider,

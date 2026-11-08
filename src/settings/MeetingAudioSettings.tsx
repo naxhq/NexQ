@@ -185,6 +185,8 @@ export function MeetingAudioSettings() {
   } = useConfigStore();
   const diarizationEnabled = useConfigStore((s) => s.diarizationEnabled);
   const setDiarizationEnabled = useConfigStore((s) => s.setDiarizationEnabled);
+  const echoCancellation = useConfigStore((s) => s.echoCancellation);
+  const setEchoCancellation = useConfigStore((s) => s.setEchoCancellation);
   const sttLanguage = useConfigStore((s) => s.sttLanguage);
   const setSTTLanguage = useConfigStore((s) => s.setSTTLanguage);
 
@@ -482,6 +484,33 @@ export function MeetingAudioSettings() {
           />
         </button>
       </div>
+
+      {/* ── Echo Cancellation — needs the other side's output as the reference ── */}
+      {!config.them.is_input_device && (
+        <div className="flex items-center justify-between rounded-xl border border-border/20 bg-card/40 px-4 py-3">
+          <div>
+            <p className="text-xs font-medium text-foreground">Echo cancellation</p>
+            <p className="mt-0.5 text-meta text-muted-foreground/70">
+              Remove the other side's voice that your microphone picks up from the speakers, so it isn't transcribed as you
+            </p>
+          </div>
+          <button
+            onClick={() => setEchoCancellation(!echoCancellation)}
+            role="switch"
+            aria-checked={echoCancellation}
+            aria-label="Toggle echo cancellation"
+            className={`relative h-5 w-9 shrink-0 cursor-pointer rounded-full transition-all duration-200 ${
+              echoCancellation ? "bg-primary shadow-[0_0_0_3px_hsl(var(--primary)/0.12)]" : "bg-muted"
+            }`}
+          >
+            <span
+              className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-all duration-200 ${
+                echoCancellation ? "translate-x-4 scale-105" : "translate-x-0"
+              }`}
+            />
+          </button>
+        </div>
+      )}
 
       {/* ── Bottom row: Live Monitor | Audio Sessions ── */}
       <div className="grid grid-cols-2 gap-4">
