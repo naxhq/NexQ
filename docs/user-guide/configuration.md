@@ -11,7 +11,7 @@ The General settings panel controls app-wide behavior and preferences. Here you 
 - **App behavior** -- startup options, system tray behavior, and window preferences
 - **Theme and appearance** -- light/dark mode and visual customization
 - **Language** -- interface language selection
-- **Update preferences** -- NexQ downloads updates quietly in the background and shows an "Update ready" button in the footer; click Restart when convenient, or it installs when you quit (never during a meeting). Turn this off under Settings > About > Automatic updates
+- **Update preferences** -- NexQ downloads updates quietly in the background and shows an "Update ready" button in the footer. Click it to see what's new and install when convenient, or it installs when you quit (never during a meeting). You always get the newest version, even if several came out since your last update. Turn this off under Settings > About > Automatic updates
 - **Data management** -- storage location and cleanup options
 
 ## Speech-to-Text (STT) Providers

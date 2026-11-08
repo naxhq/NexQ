@@ -1,7 +1,11 @@
 // Discord-style updates: a single owner (the launcher window) checks 10 s after
 // launch and every 4 h, downloads silently when automatic updates are on, and
-// the footer pill restarts into the new version. Rust installs a downloaded
-// update on quit (see updater_commands::on_exit_requested).
+// the footer pill opens the "what's new" dialog that installs it. Rust installs
+// a downloaded update on quit (see updater_commands::on_exit_requested).
+//
+// The checks continue after a download, and opening the dialog checks again, so
+// a newer release replaces the waiting one and people land on the latest version
+// in one step instead of going through each release.
 //
 // The action functions below work from any window (Settings -> About can open
 // in the overlay); only the check loop is launcher-only. Preference changes are
@@ -15,6 +19,7 @@ import { useUpdaterStore } from "../stores/updaterStore";
 import { useMeetingStore } from "../stores/meetingStore";
 import { showToast } from "../stores/toastStore";
 import { meetingEndRoute } from "../lib/windows";
+import { compareVersions } from "../lib/changelog";
 import {
   checkForUpdate,
   downloadUpdate,
@@ -42,6 +47,10 @@ const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
 /** Windows that each run endMeetingFlow and hold part of the meeting's data. */
 const MEETING_WINDOWS = ["launcher", "overlay"];
 export const MEETING_END_TIMEOUT_MS = 60_000;
+
+/** Never hold up an install for longer than this waiting on GitHub. */
+export const UPDATE_CHECK_LIMIT_MS = 8_000;
+export const UPDATE_DOWNLOAD_LIMIT_MS = 120_000;
 
 export const RELEASES_URL = "https://github.com/naxhq/NexQ/releases";
 
@@ -107,7 +116,11 @@ export async function hydrateUpdater(): Promise<void> {
  */
 export async function checkForUpdates(opts?: { manual?: boolean }): Promise<void> {
   const { phase, startCheck } = useUpdaterStore.getState();
-  if (phase === "checking" || phase === "downloading" || phase === "ready") return;
+  if (phase === "checking" || phase === "downloading") return;
+  if (phase === "ready") {
+    await refreshReadyUpdate();
+    return;
+  }
 
   startCheck();
   let update;
@@ -122,6 +135,48 @@ export async function checkForUpdates(opts?: { manual?: boolean }): Promise<void
   if (update && useUpdaterStore.getState().autoUpdate) {
     await downloadUpdateNow({ explicit: opts?.manual });
   }
+}
+
+function withinLimit<T>(work: Promise<T>, limitMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const limit = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("Timed out")), limitMs);
+  });
+  return Promise.race([work, limit]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * With an update already downloaded, look for a newer one and swap it in. The
+ * waiting update stays ready throughout and is kept if anything goes wrong.
+ * `explicit` means the user is about to install, which counts even with
+ * automatic updates off. A skipped version is never fetched.
+ */
+export async function refreshReadyUpdate(opts?: { explicit?: boolean }): Promise<void> {
+  const { phase, refresh, setRefresh } = useUpdaterStore.getState();
+  if (phase !== "ready" || refresh !== "idle") return;
+
+  setRefresh("checking");
+  try {
+    const found = await withinLimit(checkForUpdate(), UPDATE_CHECK_LIMIT_MS);
+    const { version, skippedVersion, autoUpdate } = useUpdaterStore.getState();
+    if (!found || !version || compareVersions(found.version, version) <= 0) return;
+    if (found.version === skippedVersion) return;
+    if (!autoUpdate && !opts?.explicit) return;
+
+    setRefresh("downloading", found.version);
+    const info = await withinLimit(downloadUpdate(), UPDATE_DOWNLOAD_LIMIT_MS);
+    useUpdaterStore.getState().setReady(info.version, info.body);
+  } catch (err) {
+    console.warn("[updater] Keeping the downloaded update:", err);
+  } finally {
+    useUpdaterStore.getState().setRefresh("idle");
+  }
+}
+
+/** Show what's in the update, and make sure it's the newest one. */
+export function openUpdateDialog(): void {
+  useUpdaterStore.getState().setDialogOpen(true);
+  void refreshReadyUpdate({ explicit: true });
 }
 
 /**

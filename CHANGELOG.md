@@ -1,3 +1,23 @@
+## [2.35.1](https://github.com/naxhq/NexQ/compare/v2.35.0...v2.35.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* **release:** Mac updates are back after GitHub retired the macOS 14 build machines ([ccc0f6d](https://github.com/naxhq/NexQ/commit/ccc0f6dd12455877fa1eaec24a5dc67141b7494d))
+# [2.35.0](https://github.com/naxhq/NexQ/compare/v2.34.0...v2.35.0) (2026-11-06)
+
+
+### Bug Fixes
+
+* **installer:** first-time downloads pulse the waveform instead of opening a gray panel ([4c1f3a5](https://github.com/naxhq/NexQ/commit/4c1f3a5b5a05b5e4a12c64555b6dbe64a340e632))
+* **updater:** the changelog copes with long jumps and releases with nothing listed ([4a4c234](https://github.com/naxhq/NexQ/commit/4a4c234ef5df85f6315e46f7f0b3db1b0f6f2d3b))
+
+
+### Features
+
+* **installer:** first installs say what NexQ does and what happens next ([942785a](https://github.com/naxhq/NexQ/commit/942785aba2d69b3b63c72411d892ff9b4a0e7ebd))
+* **installer:** NexQ's own install, update and uninstall screens ([2c7a8cd](https://github.com/naxhq/NexQ/commit/2c7a8cd18776871202889581f8f68a694e54fef7))
+* **updater:** show what's new before installing, and always install the newest version ([308165c](https://github.com/naxhq/NexQ/commit/308165c3959c389db9975b2fbc459f115d7e0ec8))
 # [2.34.0](https://github.com/naxhq/NexQ/compare/v2.33.0...v2.34.0) (2026-11-05)
 
 

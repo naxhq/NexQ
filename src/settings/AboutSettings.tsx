@@ -18,7 +18,7 @@ import {
   checkForUpdates,
   downloadUpdateNow,
   hydrateUpdater,
-  restartToUpdate,
+  openUpdateDialog,
   setAutoUpdate,
   skipVersion,
 } from "../hooks/useUpdater";
@@ -175,8 +175,8 @@ export function AboutSettings() {
   } else if (phase === "ready" && version) {
     dotClass = "bg-primary";
     title = `v${version} ready to install`;
-    detail = autoUpdate ? "Installs when you quit NexQ" : "Restart to install";
-    action = { label: "Restart now", onClick: () => restartToUpdate(), primary: true };
+    detail = autoUpdate ? "Installs when you quit NexQ" : "Open it to install";
+    action = { label: "What's new", onClick: () => openUpdateDialog(), primary: true };
   } else if (phase === "error") {
     dotClass = "bg-destructive";
     title = version ? "Download failed" : "Update check failed";

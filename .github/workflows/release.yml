@@ -62,7 +62,7 @@ jobs:
     # After Windows: both jobs merge into the release's latest.json, so they
     # must not upload at the same time.
     needs: windows
-    runs-on: macos-14 # Apple Silicon
+    runs-on: macos-15 # Apple Silicon
     steps:
       - uses: actions/checkout@v7
 

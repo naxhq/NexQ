@@ -3267,7 +3267,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "nexq"
-version = "2.34.0"
+version = "2.35.1"
 dependencies = [
  "async-trait",
  "bzip2",

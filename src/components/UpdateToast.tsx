@@ -1,15 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowUpCircle, X } from "lucide-react";
-import { open } from "@tauri-apps/plugin-shell";
 import { useUpdaterStore } from "../stores/updaterStore";
-import { releaseNotesUrl } from "../hooks/useUpdater";
+import { openUpdateDialog } from "../hooks/useUpdater";
 
 const AUTO_DISMISS_MS = 12_000;
 
 /**
  * One-time notice when an update has finished downloading. The footer pill
- * stays as the persistent way to restart; this only announces it once per
- * version, with a link to the release notes.
+ * stays as the persistent way in; this only announces it once per version.
  */
 export function UpdateReadyToast() {
   const phase = useUpdaterStore((s) => s.phase);
@@ -47,11 +45,14 @@ export function UpdateReadyToast() {
           </p>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {autoUpdate
-              ? "Restart from the footer, or it installs when you quit."
-              : "Restart from the footer to install."}
+              ? "Install it from the footer, or it installs when you quit."
+              : "Install it from the footer."}
           </p>
           <button
-            onClick={() => open(releaseNotesUrl(visibleVersion)).catch(() => {})}
+            onClick={() => {
+              setVisibleVersion(null);
+              openUpdateDialog();
+            }}
             className="mt-1.5 text-xs font-medium text-primary hover:underline"
           >
             What's new
