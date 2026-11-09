@@ -41,8 +41,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: TypeScript check
-        run: npx tsc --noEmit
+      # tsc plus the production bundle, so a dependency that breaks the
+      # build (like Tailwind 4's PostCSS change) fails here
+      - name: TypeScript check and build
+        run: npm run build
 
       - name: Frontend tests
         run: npm test
