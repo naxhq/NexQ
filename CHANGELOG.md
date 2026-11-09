@@ -1,3 +1,4 @@
+## [2.36.1](https://github.com/naxhq/NexQ/compare/v2.36.0...v2.36.1) (2026-11-09)
 # [2.36.0](https://github.com/naxhq/NexQ/compare/v2.35.1...v2.36.0) (2026-11-08)
 
 
