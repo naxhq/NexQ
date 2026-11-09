@@ -52,7 +52,7 @@ rustfft = "6"
 sonora = "0.2"
 tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
 tar = "0.4"
-bzip2 = "0.5"
+bzip2 = "0.6"
 ogg = "0.9"
 libopus_sys = { version = "0.4", features = ["static", "bundled"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
