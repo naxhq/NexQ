@@ -59,7 +59,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 encoding_rs = "0.8"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-cpal = "0.15"
+cpal = "0.16"
 
 # Windows-specific
 [target.'cfg(windows)'.dependencies]
