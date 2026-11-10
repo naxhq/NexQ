@@ -1,3 +1,9 @@
+# [2.37.0](https://github.com/naxhq/NexQ/compare/v2.36.1...v2.37.0) (2026-11-10)
+
+
+### Features
+
+* **tray:** click the tray icon to bring NexQ back; the menu opens the dashboard ([e1d10f1](https://github.com/naxhq/NexQ/commit/e1d10f179cc8702b56d32e28c7484a2a4f73d0ab))
 ## [2.36.1](https://github.com/naxhq/NexQ/compare/v2.36.0...v2.36.1) (2026-11-09)
 # [2.36.0](https://github.com/naxhq/NexQ/compare/v2.35.1...v2.36.0) (2026-11-08)
 
