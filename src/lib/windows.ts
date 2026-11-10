@@ -105,6 +105,16 @@ export function meetingShortcutAction(hasMeeting: boolean, quitPending: boolean)
 }
 
 /**
+ * Where Ctrl+B goes: from the overlay to the dashboard, back to the meeting
+ * overlay during a meeting, and otherwise to the dashboard, so the shortcut
+ * always brings NexQ back (it has no taskbar button under stealth mode).
+ */
+export function switchShortcutTarget(overlayVisible: boolean, hasMeeting: boolean): "launcher" | "overlay" {
+  if (overlayVisible) return "launcher";
+  return hasMeeting ? "overlay" : "launcher";
+}
+
+/**
  * Whether the user can see a window right now (shown and not minimized).
  * An unknown window or a failed query counts as not shown.
  */

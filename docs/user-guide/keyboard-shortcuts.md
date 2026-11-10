@@ -15,7 +15,7 @@ These shortcuts are registered system-wide and work regardless of which applicat
 | Shortcut | Action | Description |
 |----------|--------|-------------|
 | `Ctrl+M` | Start / End Meeting | Starts a new meeting if none is active; ends the current meeting if one is running |
-| `Ctrl+B` | Toggle Overlay | Switches between the launcher (dashboard) and the overlay (meeting) window. Only works when a meeting is active |
+| `Ctrl+B` | Toggle Overlay | Switches between the launcher (dashboard) and the overlay (meeting) window. With no meeting running, it brings the dashboard back |
 | `Ctrl+,` | Open / Close Settings | Toggles the settings panel |
 | `Ctrl+Shift+H` | Hide from screen share | Turns stealth mode on or off. Change it in Settings > General |
 | `Ctrl+Shift+Space` | Assist from any app | During a meeting, generates AI Assist without switching to NexQ. Stops an automatic answer that's running. Change it in Settings > General |
@@ -41,9 +41,11 @@ NexQ lives in the Windows system tray. Interaction patterns:
 
 | Action | Result |
 |--------|--------|
-| Double-click tray icon | Show / toggle the main window |
+| Click tray icon | Bring NexQ back: the meeting overlay during a meeting, otherwise the dashboard |
 | Middle-click tray icon | Toggle microphone mute |
-| Right-click tray icon | Open the context menu (start/stop meeting, settings, quick copy, recent meetings, quit) |
+| Right-click tray icon | Open the context menu: Open Dashboard (and Show Overlay during a meeting) first, then start/stop meeting, quick copy, settings and quit |
+
+With **Hide from screen share** on, NexQ has no taskbar button, so the tray icon and `Ctrl+B` are the way back to it. On macOS, clicking the menu-bar icon opens the menu.
 
 ## Tips
 

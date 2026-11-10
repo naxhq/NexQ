@@ -17,7 +17,7 @@ pub mod tray;
 use state::AppState;
 use std::sync::{Arc, Mutex};
 use tauri::{
-    tray::{TrayIconEvent, MouseButton},
+    tray::{MouseButton, MouseButtonState, TrayIconEvent},
     Emitter, Manager,
 };
 
@@ -61,7 +61,7 @@ use commands::updater_commands;
 use commands::claude_cli_commands;
 
 /// Show the launcher window and hide the overlay window.
-fn show_launcher(app: &tauri::AppHandle) {
+pub(crate) fn show_launcher(app: &tauri::AppHandle) {
     if let Some(launcher) = app.get_webview_window("launcher") {
         let _ = launcher.show();
         let _ = launcher.unminimize();
@@ -419,6 +419,9 @@ pub fn run() {
                             }
                         });
                     }
+                    "open_dashboard" => {
+                        show_launcher(&app_handle);
+                    }
                     "show_overlay" => {
                         // The overlay window switches to the meeting view, then
                         // shows itself (showing it first flashed an empty window).
@@ -453,31 +456,43 @@ pub fn run() {
                 }
             });
 
-            // -- Handle tray icon click events (single/double/middle) --
             // -- Handle tray icon click events --
-            // Windows fires Click on EVERY mouse-up, including both ups in a double-click.
-            // This makes Click unreliable for toggle. Standard Windows UX:
-            //   Left double-click → show/toggle window
-            //   Middle click → mute toggle
-            //   Right-click → context menu (handled by Tauri menu system)
+            //   Left click (Windows) or double-click: bring NexQ back (the
+            //   meeting overlay during a meeting, else the dashboard)
+            //   Middle click: mute toggle
+            //   Right-click: context menu (handled by Tauri's menu system)
+            // Windows fires Click on every mouse-up, both ups of a double-click
+            // included, so the left click only ever shows (see handle_left_click).
             let tray_app = app.handle().clone();
             if let Some(tray_icon) = app.tray_by_id("main") {
-                tray_icon.on_tray_icon_event(move |_tray, event| {
-                    match event {
-                        TrayIconEvent::DoubleClick { button, .. } => match button {
-                            MouseButton::Left => {
-                                tray::click::handle_single_click(&tray_app);
-                            }
-                            _ => {}
-                        },
-                        TrayIconEvent::Click { button, .. } => match button {
-                            MouseButton::Middle => {
-                                tray::click::handle_middle_click(&tray_app);
-                            }
-                            _ => {} // Ignore left-click — use double-click instead
-                        },
-                        _ => {}
+                // Windows: the menu is for right-click. The `menuOnLeftClick`
+                // config key stopped working in Tauri 2.2, so a left click opened
+                // the menu and swallowed the double-click. macOS keeps the menu
+                // on click, as menu-bar icons do there.
+                #[cfg(windows)]
+                let _ = tray_icon.set_show_menu_on_left_click(false);
+                tray_icon.on_tray_icon_event(move |_tray, event| match event {
+                    TrayIconEvent::DoubleClick { button: MouseButton::Left, .. } => {
+                        tray::click::handle_left_click(&tray_app);
                     }
+                    #[cfg(windows)]
+                    TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } => {
+                        tray::click::handle_left_click(&tray_app);
+                    }
+                    // Press and release both arrive as Click: act once, on release
+                    // (acting on both muted and unmuted in one click).
+                    TrayIconEvent::Click {
+                        button: MouseButton::Middle,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } => {
+                        tray::click::handle_middle_click(&tray_app);
+                    }
+                    _ => {}
                 });
             }
 

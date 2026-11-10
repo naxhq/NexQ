@@ -8,7 +8,7 @@ import { useMeetingStore } from "../stores/meetingStore";
 import { useAIActionsStore } from "../stores/aiActionsStore";
 import { isQuitPending } from "../lib/ipc";
 import { runYourAction } from "../lib/autoAnswer";
-import { isOverlayVisible, meetingShortcutAction, showLauncherWindow, showMeetingOverlay } from "../lib/windows";
+import { isOverlayVisible, meetingShortcutAction, showLauncherWindow, showMeetingOverlay, switchShortcutTarget } from "../lib/windows";
 import { endMeetingFromThisWindow } from "./useUpdater";
 import { showToast } from "../stores/toastStore";
 import { useConfigStore } from "../stores/configStore";
@@ -131,8 +131,9 @@ export function useGlobalShortcut() {
           handler: (event) => {
             if (event.state === "Pressed") {
               (async () => {
-                if (await isOverlayVisible()) await showLauncherWindow();
-                else if (useMeetingStore.getState().activeMeeting) await showMeetingOverlay();
+                const target = switchShortcutTarget(await isOverlayVisible(), !!useMeetingStore.getState().activeMeeting);
+                if (target === "launcher") await showLauncherWindow();
+                else await showMeetingOverlay();
               })().catch(() => {});
             }
           },

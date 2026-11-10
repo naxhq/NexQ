@@ -31,7 +31,7 @@ The installer uses NSIS and installs per-user (no admin rights required). The de
 After installation, NexQ starts automatically. You will see:
 
 - **Launcher window** (900x650) -- the main dashboard for managing meetings, settings, and history
-- **System tray icon** -- NexQ lives in your taskbar tray; closing the window hides it to tray rather than quitting
+- **System tray icon** -- NexQ lives in your taskbar tray; closing the window hides it to tray rather than quitting. Click the icon to bring NexQ back
 
 ## Quick Setup
 

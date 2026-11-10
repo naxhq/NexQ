@@ -47,8 +47,7 @@
       "id": "main",
       "iconPath": "icons/icon.png",
       "iconAsTemplate": false,
-      "tooltip": "NexQ — AI Meeting Assistant",
-      "menuOnLeftClick": false
+      "tooltip": "NexQ — AI Meeting Assistant"
     },
     "security": {
       "csp": null,

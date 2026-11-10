@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { meetingEndRoute, meetingShortcutAction, shouldPersistOverlayData } from "./windows";
+import { meetingEndRoute, meetingShortcutAction, shouldPersistOverlayData, switchShortcutTarget } from "./windows";
 
 describe("shouldPersistOverlayData", () => {
   it("the overlay window persists overlay-edited data", () => {
@@ -56,5 +56,19 @@ describe("meetingShortcutAction", () => {
 
   it("never starts a meeting while a deferred quit is pending", () => {
     expect(meetingShortcutAction(false, true)).toBe("ignore");
+  });
+});
+
+describe("switchShortcutTarget (Ctrl+B)", () => {
+  it("goes from the overlay to the dashboard", () => {
+    expect(switchShortcutTarget(true, true)).toBe("launcher");
+  });
+
+  it("brings the meeting overlay back during a meeting", () => {
+    expect(switchShortcutTarget(false, true)).toBe("overlay");
+  });
+
+  it("opens the dashboard when no meeting is running, so NexQ is never out of reach", () => {
+    expect(switchShortcutTarget(false, false)).toBe("launcher");
   });
 });
