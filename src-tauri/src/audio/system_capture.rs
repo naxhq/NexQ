@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 #[cfg(not(target_os = "macos"))]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-use super::resampler::resample;
+use super::resampler::StreamResampler;
 use super::{AudioChunk, AudioSource};
 
 const TARGET_SAMPLE_RATE: u32 = 16000;
@@ -127,6 +127,8 @@ fn run_cpal_loopback(
 
     let stop = stop_flag.clone();
     let tx2 = tx.clone();
+    // Lives in the stream callback: keeps its place across chunks.
+    let mut resampler = StreamResampler::new(sample_rate, TARGET_SAMPLE_RATE, channels);
 
     // Build INPUT stream on OUTPUT device = loopback capture
     let stream = match sample_format {
@@ -137,7 +139,7 @@ fn run_cpal_loopback(
                 let pcm: Vec<i16> = data.iter()
                     .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
                     .collect();
-                send_system_chunk(&pcm, sample_rate, channels, &tx2);
+                send_system_chunk(&pcm, &mut resampler, &tx2);
             },
             err_fn,
             None,
@@ -146,7 +148,7 @@ fn run_cpal_loopback(
             &config.into(),
             move |data: &[i16], _: &cpal::InputCallbackInfo| {
                 if stop.load(Ordering::Relaxed) { return; }
-                send_system_chunk(data, sample_rate, channels, &tx2);
+                send_system_chunk(data, &mut resampler, &tx2);
             },
             err_fn,
             None,
@@ -158,7 +160,7 @@ fn run_cpal_loopback(
                 let pcm: Vec<i16> = data.iter()
                     .map(|&s| (s as i32 - 32768) as i16)
                     .collect();
-                send_system_chunk(&pcm, sample_rate, channels, &tx2);
+                send_system_chunk(&pcm, &mut resampler, &tx2);
             },
             err_fn,
             None,
@@ -181,17 +183,18 @@ fn run_cpal_loopback(
     Ok(())
 }
 
+/// One capture stream's chunk: resampled to 16 kHz mono by that stream's own
+/// `resampler` (one per stream, kept across its chunks) and sent on.
 fn send_system_chunk(
     i16_data: &[i16],
-    sample_rate: u32,
-    channels: u16,
+    resampler: &mut StreamResampler,
     tx: &mpsc::Sender<AudioChunk>,
 ) {
     if i16_data.is_empty() {
         return;
     }
 
-    let pcm_data = resample(i16_data, sample_rate, TARGET_SAMPLE_RATE, channels);
+    let pcm_data = resampler.process(i16_data);
 
     let timestamp_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
