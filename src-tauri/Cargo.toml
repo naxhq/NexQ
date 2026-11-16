@@ -59,7 +59,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 encoding_rs = "0.8"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-cpal = "0.16"
+cpal = "0.18"
 
 # Windows-specific
 [target.'cfg(windows)'.dependencies]
@@ -93,7 +93,7 @@ windows = { version = "0.62", features = [
 
 # macOS-specific
 [target.'cfg(target_os = "macos")'.dependencies]
-cpal = "0.16"
+cpal = "0.18"
 # Used by src/commands/stealth_commands.rs to set the overlay NSWindow's
 # `sharingType` to NSWindowSharingNone (equivalent of Windows' WDA_EXCLUDEFROMCAPTURE).
 objc2 = "0.6"
