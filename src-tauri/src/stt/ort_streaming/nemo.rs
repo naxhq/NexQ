@@ -45,7 +45,7 @@ fn decode_tokens(ids: &[i64], vocab: &HashMap<i64, String>) -> String {
     text.trim().to_owned()
 }
 
-fn normalize_features(features: &mut [f32], frames: usize) {
+pub(super) fn normalize_features(features: &mut [f32], frames: usize) {
     for channel in features.chunks_exact_mut(frames) {
         let mean = channel.iter().map(|&x| x as f64).sum::<f64>() / frames as f64;
         let variance = channel.iter().map(|&x| (x as f64 - mean).powi(2)).sum::<f64>() / (frames - 1) as f64;
@@ -56,20 +56,23 @@ fn normalize_features(features: &mut [f32], frames: usize) {
     }
 }
 
-struct Features {
+/// NeMo-family (Slaney mel scale) log-mel feature extractor, parametrized by
+/// mel-channel count: 128 for the TDT encoder, 80 for the CTC encoder.
+pub(super) struct Features {
+    num_mels: usize,
     filters: Vec<Vec<f32>>,
     window: Vec<f32>,
     fft: Arc<dyn rustfft::Fft<f32>>,
 }
 
 impl Features {
-    fn new() -> Self {
+    pub(super) fn new(num_mels: usize) -> Self {
         let mel_max = 15.0 + (8000.0f64 / 1000.0).ln() / (6.4f64.ln() / 27.0);
-        let points: Vec<f64> = (0..130).map(|i| {
-            let mel = mel_max * i as f64 / 129.0;
+        let points: Vec<f64> = (0..num_mels + 2).map(|i| {
+            let mel = mel_max * i as f64 / (num_mels + 1) as f64;
             if mel < 15.0 { mel * 200.0 / 3.0 } else { 1000.0 * ((mel - 15.0) * (6.4f64.ln() / 27.0)).exp() }
         }).collect();
-        let filters = (0..128).map(|m| {
+        let filters = (0..num_mels).map(|m| {
             let (left, center, right) = (points[m], points[m + 1], points[m + 2]);
             (0..257).map(|k| {
                 let hz = k as f64 * 16000.0 / 512.0;
@@ -77,13 +80,17 @@ impl Features {
             }).collect()
         }).collect();
         let window = (0..400).map(|i| (0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / 399.0).cos()) as f32).collect();
-        Self { filters, window, fft: FftPlanner::new().plan_fft_forward(512) }
+        Self { num_mels, filters, window, fft: FftPlanner::new().plan_fft_forward(512) }
     }
 
-    fn extract(&self, samples: &[f32]) -> (usize, Vec<f32>) {
+    /// Extract log-mel features. `normalize` applies the per-feature
+    /// mean/variance normalization most NeMo exports expect; a model whose
+    /// metadata declares no normalization (e.g. `normalize_type: "NA"`)
+    /// wants the raw log-mel energies instead.
+    pub(super) fn extract(&self, samples: &[f32], normalize: bool) -> (usize, Vec<f32>) {
         let frames = samples.len() / 160;
         if frames < 2 { return (0, Vec::new()); }
-        let mut features = vec![0.0; 128 * frames];
+        let mut features = vec![0.0; self.num_mels * frames];
         let mut spectrum = vec![Complex::new(0.0, 0.0); 512];
         let mut scratch = vec![Complex::new(0.0, 0.0); self.fft.get_inplace_scratch_len()];
         let mut power = [0.0f32; 257];
@@ -104,7 +111,9 @@ impl Features {
                 features[m * frames + t] = (energy + 2.0f32.powi(-24)).ln();
             }
         }
-        normalize_features(&mut features, frames);
+        if normalize {
+            normalize_features(&mut features, frames);
+        }
         (frames, features)
     }
 }
@@ -136,7 +145,7 @@ fn recognize(
     encoder: &mut Session, decoder: &mut Session, joiner: &mut Session,
     features: &Features, samples: &[f32], vocab: &HashMap<i64, String>, blank: usize,
 ) -> Result<String, String> {
-    let (frames, features) = features.extract(samples);
+    let (frames, features) = features.extract(samples, true);
     if frames == 0 { return Ok(String::new()); }
     let lengths = [frames as i64];
     let feature_tensor = TensorRef::from_array_view(([1, 128, frames], &features[..])).map_err(|e| e.to_string())?;
@@ -204,7 +213,7 @@ pub(super) fn run(
     }
     drop(metadata);
     debug("info", "NeMo TDT: offline channel-major encoder, per-feature normalized 128-bin Slaney mel, recurrent decoder, five durations");
-    let features = Features::new();
+    let features = Features::new(128);
     let mut samples = Vec::new();
     let mut silence = 0;
     // Whether the buffer holds any speech-energy frame (silent buffers aren't decoded).
@@ -312,7 +321,7 @@ mod tests {
 
     #[test]
     fn silent_features_have_valid_frame_count_and_no_nan() {
-        let (frames, features) = Features::new().extract(&vec![0.0; 16000]);
+        let (frames, features) = Features::new(128).extract(&vec![0.0; 16000], true);
         assert_eq!(frames, 100);
         assert_eq!(features.len(), 12800);
         assert!(features.iter().all(|&x| x == 0.0));

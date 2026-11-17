@@ -20,7 +20,26 @@ use tokio::sync::mpsc;
 use crate::audio::AudioChunk;
 use crate::stt::provider::{STTProvider, STTProviderType, TranscriptResult};
 
+mod ctc;
 mod nemo;
+
+/// Which model layout a model directory holds: a transducer (encoder +
+/// decoder + joiner) or a single-file CTC encoder (no decoder/joiner).
+enum DiscoveredModel {
+    Transducer(crate::stt::local_engines::model_discovery::ModelFiles),
+    Ctc(crate::stt::local_engines::model_discovery::OfflineModelFiles),
+}
+
+fn discover(model_dir: &std::path::Path) -> Result<DiscoveredModel, String> {
+    match crate::stt::local_engines::model_discovery::discover_model_files(model_dir) {
+        Ok(files) => Ok(DiscoveredModel::Transducer(files)),
+        Err(transducer_err) => {
+            crate::stt::local_engines::model_discovery::discover_offline_model_files(model_dir)
+                .map(DiscoveredModel::Ctc)
+                .map_err(|ctc_err| format!("{transducer_err}; {ctc_err}"))
+        }
+    }
+}
 
 /// Audio sample rate expected by the models.
 const SAMPLE_RATE: u32 = 16_000;
@@ -93,18 +112,31 @@ impl STTProvider for OrtStreamingSTT {
             return Err("Stream already active".into());
         }
 
-        // Discover model files by pattern (handles epoch-based naming)
-        let model_files =
-            crate::stt::local_engines::model_discovery::discover_model_files(&self.model_dir)
-                .map_err(|e| format!("Model discovery failed in {}: {}", self.model_dir.display(), e))?;
+        // Discover model files by pattern (handles epoch-based naming):
+        // a transducer (encoder+decoder+joiner) or a single-file CTC encoder.
+        let discovered = discover(&self.model_dir)
+            .map_err(|e| format!("Model discovery failed in {}: {}", self.model_dir.display(), e))?;
 
-        log::info!(
-            "OrtStreamingSTT: Discovered models in {} — encoder={}, decoder={}, joiner={}",
-            self.model_dir.display(),
-            model_files.encoder.file_name().unwrap_or_default().to_string_lossy(),
-            model_files.decoder.file_name().unwrap_or_default().to_string_lossy(),
-            model_files.joiner.file_name().unwrap_or_default().to_string_lossy(),
-        );
+        let (encoder_path, decoder_path, joiner_path, tokens_path) = match &discovered {
+            DiscoveredModel::Transducer(files) => {
+                log::info!(
+                    "OrtStreamingSTT: Discovered models in {} — encoder={}, decoder={}, joiner={}",
+                    self.model_dir.display(),
+                    files.encoder.file_name().unwrap_or_default().to_string_lossy(),
+                    files.decoder.file_name().unwrap_or_default().to_string_lossy(),
+                    files.joiner.file_name().unwrap_or_default().to_string_lossy(),
+                );
+                (files.encoder.clone(), Some(files.decoder.clone()), Some(files.joiner.clone()), files.tokens.clone())
+            }
+            DiscoveredModel::Ctc(files) => {
+                log::info!(
+                    "OrtStreamingSTT: Discovered CTC model in {} — model={}",
+                    self.model_dir.display(),
+                    files.model.file_name().unwrap_or_default().to_string_lossy(),
+                );
+                (files.model.clone(), None, None, files.tokens.clone())
+            }
+        };
 
         self.stop_flag.store(false, AtomicOrdering::SeqCst);
 
@@ -117,10 +149,6 @@ impl STTProvider for OrtStreamingSTT {
         let stop_flag = Arc::clone(&self.stop_flag);
         let seg_start = self.segment_counter;
         let app_handle = self.app_handle.clone();
-        let encoder_path = model_files.encoder.clone();
-        let decoder_path = model_files.decoder.clone();
-        let joiner_path = model_files.joiner.clone();
-        let tokens_path = model_files.tokens.clone();
 
         let thread = std::thread::Builder::new()
             .name("ort-stt-inference".to_string())
@@ -196,7 +224,7 @@ impl STTProvider for OrtStreamingSTT {
     }
 
     async fn test_connection(&self) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        match crate::stt::local_engines::model_discovery::discover_model_files(&self.model_dir) {
+        match discover(&self.model_dir) {
             Ok(_) => Ok(true),
             Err(e) => Err(format!("Model files not found: {}", e).into()),
         }
@@ -586,8 +614,8 @@ impl EncoderStateManager {
 fn inference_thread_main(
     _model_dir: PathBuf,
     encoder_path: PathBuf,
-    decoder_path: PathBuf,
-    joiner_path: PathBuf,
+    decoder_path: Option<PathBuf>,
+    joiner_path: Option<PathBuf>,
     tokens_path: PathBuf,
     language: String,
     stop_flag: Arc<AtomicBool>,
@@ -630,6 +658,19 @@ fn inference_thread_main(
             return;
         }
     };
+
+    // A CTC model directory has no decoder/joiner: a single encoder graph
+    // produces per-frame log-probs directly, decoded by greedy CTC search.
+    let (Some(decoder_path), Some(joiner_path)) = (decoder_path, joiner_path) else {
+        if let Err(error) = ctc::run(
+            &mut encoder, &tokens, &language,
+            &stop_flag, &audio_rx, &result_tx, segment_counter_start, &debug,
+        ) {
+            debug("error", &format!("NeMo CTC inference failed: {error}"));
+        }
+        return;
+    };
+
     let mut decoder = match load_ort_session(&decoder_path) {
         Ok(s) => s,
         Err(e) => {
@@ -1342,7 +1383,10 @@ mod live_tests {
     use crate::audio::AudioSource;
 
     /// Streams a 16 kHz mono WAV through the provider in 100 ms chunks, like a
-    /// meeting does, and prints what comes back. Needs a downloaded model:
+    /// meeting does, and prints what comes back. Needs a downloaded model —
+    /// a transducer directory (encoder/decoder/joiner, e.g. Parakeet TDT
+    /// 0.6B v3) or a single-file CTC directory (e.g. Parakeet CTC 110M)
+    /// both work, since `OrtStreamingSTT` discovers the layout itself:
     ///
     /// `NEXQ_PARAKEET_DIR=<model dir> NEXQ_TEST_WAV=<wav> cargo test --lib transcribes_a_wav -- --ignored --nocapture`
     #[test]

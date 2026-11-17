@@ -1816,52 +1816,18 @@ async fn create_stt_provider_for_party(
                 .or_else(|_| find_any_downloaded_model(state, "parakeet_tdt"));
             match model_result {
                 Ok(model_dir) => {
+                    // OrtStreamingSTT discovers the layout itself at start_stream
+                    // time: transducer (encoder/decoder/joiner, e.g. 0.6B v3) or
+                    // a single-file CTC encoder (e.g. 110M) — both run natively,
+                    // no external sherpa-onnx-offline program needed.
                     let lang = get_stt_language(state);
-                    // Auto-detect model type: transducer (encoder/decoder/joiner) vs CTC (model.onnx)
-                    let transducer = crate::stt::local_engines::model_discovery::discover_model_files(&model_dir);
-                    if transducer.is_ok() {
-                        // Transducer model (e.g., 0.6B v3) → use in-process ORT streaming
-                        crate::stt::emit_stt_debug(app, "info", "stt",
-                            &format!("[{}] Parakeet transducer model from {} (lang={})",
-                                party_role, model_dir.display(), lang));
-                        let mut p = crate::stt::ort_streaming::OrtStreamingSTT::new(model_dir);
-                        p.set_language(&lang);
-                        p.set_app_handle(app.clone());
-                        Ok(Some(Box::new(p)))
-                    } else {
-                        // CTC model (e.g., 110M) → use offline sidecar
-                        let offline_files = crate::stt::local_engines::model_discovery::discover_offline_model_files(&model_dir);
-                        match offline_files {
-                            Ok(offline) => {
-                                let binary = find_offline_binary_for_state(state);
-                                match binary {
-                                    Some(binary_path) => {
-                                        crate::stt::emit_stt_debug(app, "info", "stt",
-                                            &format!("[{}] Parakeet CTC offline model from {} (lang={})",
-                                                party_role, model_dir.display(), lang));
-                                        let mut p = crate::stt::sherpa_offline::SherpaOfflineSTT::new(
-                                            binary_path, offline.model, offline.tokens,
-                                            crate::stt::sherpa_offline::OfflineModelType::NemoCtc,
-                                            STTProviderType::ParakeetTdt,
-                                        );
-                                        p.set_language(&lang);
-                                        p.set_app_handle(app.clone());
-                                        Ok(Some(Box::new(p)))
-                                    }
-                                    None => {
-                                        crate::stt::emit_stt_debug(app, "error", "stt",
-                                            &format!("[{}] {}", party_role, missing_offline_binary(state)));
-                                        Ok(None)
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                crate::stt::emit_stt_debug(app, "error", "stt",
-                                    &format!("[{}] Parakeet model discovery failed: {}", party_role, e));
-                                Ok(None)
-                            }
-                        }
-                    }
+                    crate::stt::emit_stt_debug(app, "info", "stt",
+                        &format!("[{}] Parakeet model from {} (lang={})",
+                            party_role, model_dir.display(), lang));
+                    let mut p = crate::stt::ort_streaming::OrtStreamingSTT::new(model_dir);
+                    p.set_language(&lang);
+                    p.set_app_handle(app.clone());
+                    Ok(Some(Box::new(p)))
                 }
                 Err(e) => {
                     crate::stt::emit_stt_debug(app, "error", "stt",
