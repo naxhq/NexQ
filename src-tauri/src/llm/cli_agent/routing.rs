@@ -22,7 +22,7 @@ use super::manager::{
     tier_for, AgentSessionManager, ClaudeCliConfig, OnDelta, SessionInit, SessionKey,
     SessionScope, Tier,
 };
-use super::protocol::{AgentErrorKind, TurnResult};
+use super::protocol::{AgentErrorKind, ImageAttachment, TurnResult};
 use super::session::AgentError;
 use crate::context::token_counter::count_tokens;
 use crate::llm::provider::{CancelToken, LLMProvider};
@@ -484,6 +484,7 @@ pub async fn ask_meeting_session(
     on_sent: impl FnOnce(&str, &str, usize),
     make_on_delta: impl Fn() -> OnDelta,
     cancel: Arc<CancelToken>,
+    images: &[ImageAttachment],
 ) -> Result<TurnResult, AskFailure> {
     let mut compose = Some(compose);
     let mut on_sent = Some(on_sent);
@@ -532,7 +533,9 @@ pub async fn ask_meeting_session(
                     inner(token)
                 })
             };
-            let result = manager.ask(key, &text, on_delta, cancel.clone()).await;
+            let result = manager
+                .ask_with_images(key, &text, images, on_delta, cancel.clone())
+                .await;
             if delivered(&result) {
                 sessions.record_sent(key, &text, cursor.sent_lines().clone());
             } else {
@@ -1095,6 +1098,8 @@ mod tests {
     struct Script {
         appended: Mutex<Vec<Vec<String>>>,
         prompts: Mutex<Vec<String>>,
+        /// How many images came with each ask.
+        image_counts: Mutex<Vec<usize>>,
         steps: Mutex<Vec<Step>>,
         spawns: AtomicUsize,
         /// Closes this scope's records + sessions mid-turn (meeting ended).
@@ -1155,6 +1160,16 @@ mod tests {
                 self.alive.store(false, Ordering::SeqCst);
             }
             Err(err)
+        }
+        async fn ask_with_images(
+            &self,
+            prompt: &str,
+            images: &[ImageAttachment],
+            on_delta: OnDelta,
+            cancel: Arc<CancelToken>,
+        ) -> Result<TurnResult, AgentError> {
+            self.script.image_counts.lock().unwrap().push(images.len());
+            self.ask(prompt, on_delta, cancel).await
         }
         fn is_alive(&self) -> bool {
             self.alive.load(Ordering::SeqCst)
@@ -1221,6 +1236,7 @@ mod tests {
                 Box::new(move |t: &str| out.lock().unwrap().push_str(t))
             },
             Arc::new(CancelToken::new()),
+            &[],
         )
         .await
     }
@@ -1236,6 +1252,27 @@ mod tests {
 
     fn last_prompt(script: &Script) -> String {
         script.prompts.lock().unwrap().last().cloned().unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn routing_session_sends_the_images_with_the_question() {
+        let (manager, sessions, script, key) = setup(&[]);
+        let images = [ImageAttachment { media_type: "image/png".into(), data: "AAAA".into() }];
+        ask_meeting_session(
+            &manager,
+            &sessions,
+            &key,
+            &[seg("a", 0)],
+            |new| compose_delta(new, &[], "Help.", Some("What is this?"), None),
+            |_, _, _| {},
+            || Box::new(|_: &str| {}),
+            Arc::new(CancelToken::new()),
+            &images,
+        )
+        .await
+        .unwrap();
+        ask(&manager, &sessions, &key, &[seg("a", 0), seg("b", 1)]).await.unwrap();
+        assert_eq!(*script.image_counts.lock().unwrap(), vec![1, 0], "only the question that had images");
     }
 
     #[tokio::test]
@@ -1561,6 +1598,7 @@ mod tests {
             |_, _, _| panic!("nothing is sent once cancelled"),
             || Box::new(|_: &str| {}),
             cancel,
+            &[],
         )
         .await
         .unwrap_err();

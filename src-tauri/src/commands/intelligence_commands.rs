@@ -7,7 +7,7 @@ use crate::intelligence::context_scope::{self, ResolvedScope, TranscriptWindow};
 use crate::intelligence::IntelligenceEngine;
 use crate::llm::cli_agent::context::Seg;
 use crate::llm::cli_agent::manager::{OnDelta, SessionKey, SessionScope};
-use crate::llm::cli_agent::protocol::{AgentErrorKind, TurnResult};
+use crate::llm::cli_agent::protocol::{AgentErrorKind, ImageAttachment, TurnResult};
 use crate::llm::cli_agent::routing::{
     self, choose_route, AgentFallbackPayload, AskFailure, ClaudeHealth, Route,
 };
@@ -390,6 +390,8 @@ pub(crate) struct SessionAssist<'a> {
     pub temperature: f64,
     pub params: GenerationParams,
     pub cancel: Arc<CancelToken>,
+    /// Images pasted into Ask, sent with the question.
+    pub images: &'a [ImageAttachment],
 }
 
 /// A request a Claude session answered: what was sent, which model
@@ -550,6 +552,7 @@ pub(crate) async fn session_assist(state: &AppState, app: &AppHandle, req: Sessi
         on_sent,
         make_on_delta,
         cancel.clone(),
+        req.images,
     )
     .await;
 
@@ -708,11 +711,13 @@ pub async fn generate_assist(
     request_id: Option<String>,
     past_meeting_id: Option<String>,
     scope: Option<ResolvedScope>,
+    images: Option<Vec<ImageAttachment>>,
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     // The user's transcript scope (`scope` names the session scope below).
     let user_scope = scope;
+    let images = images.unwrap_or_default();
     // Every stream carries a request id so listeners can tell streams apart.
     let request_id = request_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
@@ -842,6 +847,7 @@ pub async fn generate_assist(
                 cancel: Some(cancel_token.clone()),
             },
             cancel: cancel_token.clone(),
+            images: &images,
         };
         match session_assist(&state, &app_handle, req).await {
             SessionOutcome::Done(result) => {
@@ -862,6 +868,16 @@ pub async fn generate_assist(
     }
 
     // ── Today's stateless full-prompt path (active or fallback provider) ──
+
+    // Only a Claude session carries images; no other route can send them, and
+    // answering without the image would silently ignore what the user attached.
+    if !images.is_empty() {
+        let message = "Attached images can only be sent through a Claude (subscription) session. \
+            Check that Claude is the active provider and connected, or send the question without the image."
+            .to_string();
+        drop(generation_guard);
+        return Err(message);
+    }
 
     // Determine transcript window: per-action override or global default,
     // unless the user picked a scope for this request.

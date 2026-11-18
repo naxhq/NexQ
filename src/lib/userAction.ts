@@ -7,7 +7,7 @@
 import { generateAssist } from "./ipc";
 import { resolveScope, DEFAULT_CONTEXT_SCOPE } from "./contextScope";
 import { getModeLabel } from "./utils";
-import type { IntelligenceMode } from "./types";
+import type { ImageAttachment, IntelligenceMode } from "./types";
 import { useConfigStore } from "../stores/configStore";
 import { useStreamStore } from "../stores/streamStore";
 import { useAIActionsStore } from "../stores/aiActionsStore";
@@ -27,7 +27,7 @@ export function actionLabel(mode: string): string {
 export async function runUserAction(
   mode: string,
   customQuestion?: string,
-  opts: { requestId?: string } = {},
+  opts: { requestId?: string; images?: ImageAttachment[] } = {},
 ): Promise<void> {
   const config = useConfigStore.getState();
   const setting = config.contextScope ?? DEFAULT_CONTEXT_SCOPE;
@@ -45,7 +45,7 @@ export async function runUserAction(
   }
 
   try {
-    await generateAssist(mode, customQuestion, { requestId, scope });
+    await generateAssist(mode, customQuestion, { requestId, scope, images: opts.images });
   } catch (err) {
     useStreamStore.getState().clearPending(requestId);
     throw err;

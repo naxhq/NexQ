@@ -18,7 +18,7 @@ use super::command::SessionConfig;
 use super::context::DeltaCursor;
 use super::detect::find_claude_binary;
 use super::models::{effective_effort, ModelCatalog};
-use super::protocol::{AgentErrorKind, TurnResult};
+use super::protocol::{AgentErrorKind, ImageAttachment, TurnResult};
 use super::session::{AgentError, ClaudeSession};
 use crate::llm::provider::CancelToken;
 use async_trait::async_trait;
@@ -251,6 +251,17 @@ pub trait SessionHandle: Send + Sync {
         on_delta: OnDelta,
         cancel: Arc<CancelToken>,
     ) -> Result<TurnResult, AgentError>;
+    /// [`SessionHandle::ask`] with images sent along. A handle that can't
+    /// carry images asks the text alone.
+    async fn ask_with_images(
+        &self,
+        prompt: &str,
+        _images: &[ImageAttachment],
+        on_delta: OnDelta,
+        cancel: Arc<CancelToken>,
+    ) -> Result<TurnResult, AgentError> {
+        self.ask(prompt, on_delta, cancel).await
+    }
     fn is_alive(&self) -> bool;
     async fn close(&self);
     fn model(&self) -> String;
@@ -269,6 +280,16 @@ impl SessionHandle for ClaudeSession {
         cancel: Arc<CancelToken>,
     ) -> Result<TurnResult, AgentError> {
         ClaudeSession::ask(self, prompt, on_delta, cancel).await
+    }
+
+    async fn ask_with_images(
+        &self,
+        prompt: &str,
+        images: &[ImageAttachment],
+        on_delta: OnDelta,
+        cancel: Arc<CancelToken>,
+    ) -> Result<TurnResult, AgentError> {
+        ClaudeSession::ask_with_images(self, prompt, images, on_delta, cancel).await
     }
 
     fn is_alive(&self) -> bool {
@@ -500,6 +521,18 @@ impl AgentSessionManager {
         on_delta: OnDelta,
         cancel: Arc<CancelToken>,
     ) -> Result<TurnResult, AgentError> {
+        self.ask_with_images(key, prompt, &[], on_delta, cancel).await
+    }
+
+    /// [`AgentSessionManager::ask`] with `images` sent along with `prompt`.
+    pub async fn ask_with_images(
+        &self,
+        key: &SessionKey,
+        prompt: &str,
+        images: &[ImageAttachment],
+        on_delta: OnDelta,
+        cancel: Arc<CancelToken>,
+    ) -> Result<TurnResult, AgentError> {
         let handle = {
             let mut entries = self.entries.lock().unwrap();
             let entry = entries.get_mut(key).ok_or_else(|| {
@@ -532,7 +565,7 @@ impl AgentSessionManager {
                 on_delta(token)
             })
         };
-        let mut result = handle.ask(prompt, on_delta, cancel).await;
+        let mut result = handle.ask_with_images(prompt, images, on_delta, cancel).await;
 
         if let Ok(done) = &mut result {
             done.latency_ms = started.elapsed().as_millis() as u64;

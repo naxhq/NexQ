@@ -4,6 +4,7 @@ import { useAIActionsStore } from "../stores/aiActionsStore";
 import { useConfigStore } from "../stores/configStore";
 import { cancelGeneration } from "../lib/ipc";
 import { runYourAction, useAutoAnswerRunning } from "../lib/autoAnswer";
+import { AskImageChips, DEFAULT_IMAGE_QUESTION, useAskImages } from "./AskImages";
 import { DEFAULT_CONTEXT_SCOPE, scopeHint } from "../lib/contextScope";
 import { showToast } from "../stores/toastStore";
 import { ContextScopePicker } from "./ContextScopePicker";
@@ -118,15 +119,26 @@ export function ModeButtons() {
     [isStreaming, locked, streaming, currentMode]
   );
 
+  const { images: askImages, onPaste: onAskPaste, remove: removeAskImage, clear: clearAskImages } = useAskImages();
+
   const handleAskSubmit = useCallback(() => {
-    const text = askInputText.trim();
+    const text = askInputText.trim() || (askImages.length > 0 ? DEFAULT_IMAGE_QUESTION : "");
     if (!text || locked) return;
-    runYourAction("AskQuestion", text).catch((err) =>
-      showToast(err instanceof Error ? err.message : "Couldn't send question", "error")
+    const withImages = askImages.length > 0;
+    runYourAction("AskQuestion", text, askImages).catch((err) =>
+      showToast(
+        err instanceof Error
+          ? err.message
+          : withImages && typeof err === "string"
+            ? err
+            : "Couldn't send question",
+        "error"
+      )
     );
     setAskInputText("");
+    clearAskImages();
     setAskInputVisible(false);
-  }, [askInputText, locked]);
+  }, [askInputText, askImages, locked, clearAskImages]);
 
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -164,17 +176,20 @@ export function ModeButtons() {
 
       {/* Inline Ask input */}
       {askInputVisible && !locked && (
-        <div className="flex items-center gap-1.5 rounded-lg border border-info/20 bg-info/5 px-2 py-1 slide-down-enter">
+        <div className="flex flex-col gap-1 rounded-lg border border-info/20 bg-info/5 px-2 py-1 slide-down-enter">
+          <AskImageChips images={askImages} onRemove={removeAskImage} />
+          <div className="flex items-center gap-1.5">
           <input
             type="text"
             value={askInputText}
             onChange={(e) => setAskInputText(e.target.value)}
+            onPaste={onAskPaste}
             onKeyDown={(e) => {
               e.stopPropagation();
               if (e.key === "Enter") { e.preventDefault(); handleAskSubmit(); }
               if (e.key === "Escape") { e.preventDefault(); setAskInputVisible(false); }
             }}
-            placeholder="Ask about the meeting..."
+            placeholder="Ask about the meeting... (Ctrl+V to attach a screenshot)"
             aria-label="Ask a question"
             autoFocus
             maxLength={2000}
@@ -182,7 +197,7 @@ export function ModeButtons() {
           />
           <button
             onClick={handleAskSubmit}
-            disabled={!askInputText.trim()}
+            disabled={!askInputText.trim() && askImages.length === 0}
             className="rounded-md p-1 text-info/60 hover:bg-info/10 hover:text-info disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             aria-label="Send question"
           >
@@ -195,6 +210,7 @@ export function ModeButtons() {
           >
             <X className="h-3 w-3" aria-hidden="true" />
           </button>
+          </div>
         </div>
       )}
     </div>

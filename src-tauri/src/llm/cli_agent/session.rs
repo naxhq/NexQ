@@ -14,7 +14,8 @@
 
 use super::command::{build_args, configure_session_command, sandbox_dir, SessionConfig};
 use super::protocol::{
-    classify_error, parse_line, user_message, AgentErrorKind, AgentEvent, TurnResult,
+    classify_error, parse_line, user_message, user_message_with_images, AgentErrorKind, AgentEvent,
+    ImageAttachment, TurnResult,
 };
 use crate::llm::provider::CancelToken;
 use std::collections::VecDeque;
@@ -258,7 +259,7 @@ impl ClaudeSession {
     /// Append `text` to the session context without a model call
     /// (`shouldQuery:false`) and wait for its empty `result`.
     pub async fn append_context(&self, text: &str) -> Result<(), AgentError> {
-        let mut rx = self.start_turn(text, false, None).await?;
+        let mut rx = self.start_turn(text, false, &[], None).await?;
         let wait = async {
             loop {
                 match rx.recv().await {
@@ -292,7 +293,18 @@ impl ClaudeSession {
         on_delta: Box<dyn Fn(&str) + Send + Sync>,
         cancel: Arc<CancelToken>,
     ) -> Result<TurnResult, AgentError> {
-        let mut rx = self.start_turn(prompt, true, Some(&cancel)).await?;
+        self.ask_with_images(prompt, &[], on_delta, cancel).await
+    }
+
+    /// [`ClaudeSession::ask`] with `images` sent along with the question.
+    pub async fn ask_with_images(
+        &self,
+        prompt: &str,
+        images: &[ImageAttachment],
+        on_delta: Box<dyn Fn(&str) + Send + Sync>,
+        cancel: Arc<CancelToken>,
+    ) -> Result<TurnResult, AgentError> {
+        let mut rx = self.start_turn(prompt, true, images, Some(&cancel)).await?;
         // Thinking is reported once, and only before any text.
         let mut quiet = false;
         loop {
@@ -401,6 +413,7 @@ impl ClaudeSession {
         &self,
         text: &str,
         query: bool,
+        images: &[ImageAttachment],
         cancel: Option<&CancelToken>,
     ) -> Result<mpsc::UnboundedReceiver<TurnMsg>, AgentError> {
         let guard = match cancel {
@@ -417,7 +430,7 @@ impl ClaudeSession {
         if !self.is_alive() {
             return Err(AgentError::Crashed(self.shared.crash_reason()));
         }
-        self.send_line(user_message(text, query))?;
+        self.send_line(user_message_with_images(text, query, images))?;
         let (tx, rx) = mpsc::unbounded_channel();
         tokio::spawn(drive_turn(guard, tx, self.shared.clone(), self.timeouts));
         Ok(rx)
