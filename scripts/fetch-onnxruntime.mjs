@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Stages the ONNX Runtime shared library into src-tauri/ort/ so Tauri can bundle
 // it with the app (see bundle.resources in tauri.windows.conf.json / tauri.macos.conf.json).
 //
@@ -16,7 +15,7 @@
 
 import { createHash } from "crypto";
 import { execFileSync } from "child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
@@ -33,6 +32,8 @@ const VC_RUNTIME_DLLS = ["msvcp140.dll", "msvcp140_1.dll", "vcruntime140.dll", "
 // macOS (Microsoft publishes arm64 only for 1.24.2 — Apple Silicon)
 const MAC_ARM64_TGZ_URL = `https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-osx-arm64-${ORT_VERSION}.tgz`;
 const MAC_ARM64_TGZ_SHA256 = "0af4fa503e8ea285245b47ee42d0a7461b8156a81270857da0c1d4ecf858abde";
+const NUGET_URL = `https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/${ORT_VERSION}/microsoft.ml.onnxruntime.${ORT_VERSION}.nupkg`;
+const NUGET_SHA256 = "782564d3d68e87269ea1812cc94710ad06fe014faf093f01a6f89d0bd58719d3";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const outDir = join(root, "src-tauri", "ort");
@@ -44,10 +45,7 @@ const isCurrent = (fileName) =>
   existsSync(stampPath) &&
   readFileSync(stampPath, "utf8").trim() === ORT_VERSION;
 
-async function download(url, expectedSha) {
-  console.log(`[fetch-onnxruntime] downloading ${url}`);
-  const res = await fetchWithRetry(url);
-  const buf = Buffer.from(await res.arrayBuffer());
+function verifyChecksum(url, buf, expectedSha) {
   const actual = sha256(buf);
   if (actual !== expectedSha) {
     throw new Error(`checksum mismatch for ${url}\n  expected ${expectedSha}\n  got      ${actual}`);
@@ -55,21 +53,64 @@ async function download(url, expectedSha) {
   return buf;
 }
 
+async function downloadBytes(url, fetchImpl) {
+  console.log(`[fetch-onnxruntime] downloading ${url}`);
+  const response = await fetchImpl(url);
+  return Buffer.from(await response.arrayBuffer());
+}
+
+/** Download a primary archive, using Microsoft's official NuGet package only for transport/HTTP failures. */
+export async function downloadRuntimeArchive({
+  primaryUrl,
+  primarySha256,
+  fallbackUrl = NUGET_URL,
+  fallbackSha256 = NUGET_SHA256,
+  fetchImpl = fetchWithRetry,
+}) {
+  let primaryBytes;
+  try {
+    primaryBytes = await downloadBytes(primaryUrl, fetchImpl);
+  } catch (error) {
+    console.warn(`[fetch-onnxruntime] primary download failed (${error.message}); trying official NuGet package`);
+    const fallbackBytes = await downloadBytes(fallbackUrl, fetchImpl);
+    return { bytes: verifyChecksum(fallbackUrl, fallbackBytes, fallbackSha256), source: "fallback" };
+  }
+  // A checksum mismatch is an integrity failure, so verify outside the fallback catch.
+  return { bytes: verifyChecksum(primaryUrl, primaryBytes, primarySha256), source: "primary" };
+}
+
+export function getNugetRuntimeMember(platform) {
+  if (platform === "win32") return "runtimes/win-x64/native/onnxruntime.dll";
+  if (platform === "darwin") return "runtimes/osx-arm64/native/libonnxruntime.dylib";
+  throw new Error(`unsupported platform for NuGet ONNX Runtime package: ${platform}`);
+}
+
+/** Extract one exact archive member using the system tar implementation. */
+export function extractArchiveMember({ archivePath, destination, member, format = "zip", platform = process.platform, extractionDir = dirname(destination), execFileSyncImpl = execFileSync }) {
+  // Use Windows' system bsdtar so Git Bash's GNU tar cannot intercept ZIP extraction.
+  const tar = platform === "win32"
+    ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe")
+    : "tar";
+  const formatArgs = format === "tgz" ? ["-xzf"] : ["-xf"];
+  execFileSyncImpl(tar, [...formatArgs, archivePath, "-C", extractionDir, member], { stdio: "inherit" });
+  const extractedPath = join(extractionDir, ...member.split("/"));
+  copyFileSync(extractedPath, destination);
+}
+
 async function stageWindows() {
   const dll = "onnxruntime.dll";
   if (isCurrent(dll)) {
     console.log(`[fetch-onnxruntime] ${dll} ${ORT_VERSION} already staged`);
   } else {
-    const zip = await download(WIN_ZIP_URL, WIN_ZIP_SHA256);
+    const { bytes, source } = await downloadRuntimeArchive({ primaryUrl: WIN_ZIP_URL, primarySha256: WIN_ZIP_SHA256 });
     const tmp = mkdtempSync(join(tmpdir(), "nexq-ort-"));
     try {
-      const zipPath = join(tmp, "ort.zip");
-      writeFileSync(zipPath, zip);
-      // Windows' bsdtar extracts zip archives; call it by full path so a GNU tar
-      // from Git Bash / MSYS on PATH (which can't) isn't picked up instead.
-      const tar = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
-      execFileSync(tar, ["-xf", zipPath, "-C", tmp], { stdio: "inherit" });
-      copyFileSync(join(tmp, `onnxruntime-win-x64-${ORT_VERSION}`, "lib", "onnxruntime.dll"), join(outDir, dll));
+      const zipPath = join(tmp, source === "fallback" ? "ort.nupkg" : "ort.zip");
+      writeFileSync(zipPath, bytes);
+      const member = source === "fallback"
+        ? getNugetRuntimeMember("win32")
+        : `onnxruntime-win-x64-${ORT_VERSION}/lib/onnxruntime.dll`;
+      extractArchiveMember({ archivePath: zipPath, destination: join(outDir, dll), member, format: "zip", platform: "win32", extractionDir: tmp });
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -91,17 +132,16 @@ async function stageMac() {
         "An Apple Silicon (arm64) Mac is required (or build without local ONNX features)."
     );
   }
-  const tgz = await download(MAC_ARM64_TGZ_URL, MAC_ARM64_TGZ_SHA256);
+  const { bytes, source } = await downloadRuntimeArchive({ primaryUrl: MAC_ARM64_TGZ_URL, primarySha256: MAC_ARM64_TGZ_SHA256 });
   const tmp = mkdtempSync(join(tmpdir(), "nexq-ort-"));
   try {
-    const tgzPath = join(tmp, "ort.tgz");
-    writeFileSync(tgzPath, tgz);
-    // macOS ships bsdtar, which handles .tgz (gzip) natively.
-    execFileSync("tar", ["-xzf", tgzPath, "-C", tmp], { stdio: "inherit" });
-    copyFileSync(
-      join(tmp, `onnxruntime-osx-arm64-${ORT_VERSION}`, "lib", `libonnxruntime.${ORT_VERSION}.dylib`),
-      join(outDir, dylib)
-    );
+    const archivePath = join(tmp, source === "fallback" ? "ort.nupkg" : "ort.tgz");
+    writeFileSync(archivePath, bytes);
+    // macOS tar handles both the upstream tgz and NuGet's zip package.
+    const member = source === "fallback"
+      ? getNugetRuntimeMember("darwin")
+      : `onnxruntime-osx-arm64-${ORT_VERSION}/lib/libonnxruntime.${ORT_VERSION}.dylib`;
+    extractArchiveMember({ archivePath, destination: join(outDir, dylib), member, format: source === "fallback" ? "zip" : "tgz", platform: "darwin", extractionDir: tmp });
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -150,16 +190,23 @@ function stageVcRuntime() {
   console.log(`[fetch-onnxruntime] staged MSVC runtime ${redist.ver}`);
 }
 
-mkdirSync(outDir, { recursive: true });
-try {
-  if (process.platform === "win32") {
-    await stageWindows();
-  } else if (process.platform === "darwin") {
-    await stageMac();
-  } else {
-    console.log(`[fetch-onnxruntime] ${process.platform} — skipping (no bundled ONNX Runtime)`);
+async function main() {
+  mkdirSync(outDir, { recursive: true });
+  try {
+    if (process.platform === "win32") {
+      await stageWindows();
+    } else if (process.platform === "darwin") {
+      await stageMac();
+    } else {
+      console.log(`[fetch-onnxruntime] ${process.platform} — skipping (no bundled ONNX Runtime)`);
+    }
+  } catch (e) {
+    console.error(`[fetch-onnxruntime] ${e.message}`);
+    process.exitCode = 1;
   }
-} catch (e) {
-  console.error(`[fetch-onnxruntime] ${e.message}`);
-  process.exit(1);
+}
+
+if (process.argv[1] && existsSync(process.argv[1]) &&
+    realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])) {
+  await main();
 }
