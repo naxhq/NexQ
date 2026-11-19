@@ -4,7 +4,9 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useConfigStore } from "../stores/configStore";
-import { STT_LANGUAGES } from "../lib/sttLanguages";
+import { useMeetingStore } from "../stores/meetingStore";
+import { skipYouStt } from "../lib/audioMode";
+import { AUTO_STT_LANGUAGE, STT_LANGUAGES, supportsSTTAutoDetection } from "../lib/sttLanguages";
 import {
   listAudioDevices,
   setRecordingEnabled,
@@ -200,6 +202,9 @@ export function MeetingAudioSettings() {
   const [apiKeyStatus, setApiKeyStatus] = useState<Record<string, boolean>>({});
   const [localEngines, setLocalEngines] = useState<LocalSTTEngineInfo[]>([]);
   const activeWhisperModel = useConfigStore((s) => s.activeWhisperModel);
+  const activeParakeetModel = useConfigStore((s) => s.activeModelPerEngine.parakeet_tdt);
+  const deepgramModel = useConfigStore((s) => s.deepgramConfig.model);
+  const inPerson = useMeetingStore((s) => skipYouStt(s.audioMode));
 
   const [deviceLevels, setDeviceLevels] = useState<Record<string, number>>({});
   const [devicePeaks, setDevicePeaks] = useState<Record<string, number>>({});
@@ -220,6 +225,17 @@ export function MeetingAudioSettings() {
     recording_enabled: recordingEnabled,
     preset_name: null,
   };
+
+  const unsupportedAutoChannels = sttLanguage === AUTO_STT_LANGUAGE
+    ? (inPerson ? [config.them] : [config.you, config.them])
+        .filter(({ stt_provider: provider, local_model_id: localModel }) => {
+          const model = provider === "deepgram"
+            ? deepgramModel
+            : localModel ?? (provider === "whisper_cpp" ? activeWhisperModel : activeParakeetModel);
+          return !supportsSTTAutoDetection(provider, model);
+        })
+        .map(({ role }) => inPerson ? "Room" : role)
+    : [];
 
   useEffect(() => {
     if (!meetingAudioConfig) {
@@ -377,6 +393,7 @@ export function MeetingAudioSettings() {
           <select
             value={sttLanguage}
             onChange={(e) => setSTTLanguage(e.target.value)}
+            aria-describedby={sttLanguage === AUTO_STT_LANGUAGE ? "audio-stt-auto-description" : undefined}
             className="h-8 cursor-pointer rounded-lg border border-border/40 bg-background/60 px-2 text-xs font-medium normal-case tracking-normal text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
           >
             {STT_LANGUAGES.map((lang) => (
@@ -387,6 +404,14 @@ export function MeetingAudioSettings() {
           </select>
         </label>
       </div>
+
+      {sttLanguage === AUTO_STT_LANGUAGE && (
+        <p id="audio-stt-auto-description" className={`mb-3 text-xs ${unsupportedAutoChannels.length ? "text-warning" : "text-muted-foreground"}`}>
+          {unsupportedAutoChannels.length
+            ? `For ${unsupportedAutoChannels.join(" and ")}, choose an STT model that supports Auto-detect or select a specific language.`
+            : "For speech that switches languages within a sentence, use Deepgram Nova-3 on that audio channel."}
+        </p>
+      )}
 
       {/* ── Main two-panel: YOU | THEM ── */}
       <div className="grid grid-cols-2 gap-4">
@@ -706,8 +731,7 @@ function PartyPanel({
         ?? activeWhisperModel;
       if (engineModel) updates.local_model_id = engineModel;
     } else {
-      // Clear local_model_id for non-local providers to prevent cross-engine contamination
-      updates.local_model_id = undefined;
+      updates.local_model_id = newProvider === "whisper_cpp" ? activeWhisperModel ?? undefined : undefined;
     }
     // Dev log: provider change
     import("../stores/devLogStore").then(({ useDevLogStore }) => {

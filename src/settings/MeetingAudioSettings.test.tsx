@@ -46,6 +46,30 @@ it("allows Vietnamese to be selected in Audio & Devices", async () => {
   expect(within(select).getByRole<HTMLOptionElement>("option", { name: "Vietnamese" }).selected).toBe(true);
 });
 
+it("selects Auto-detect and identifies the channel that needs a different STT engine", async () => {
+  useConfigStore.setState({
+    sttLanguage: "en-US",
+    meetingAudioConfig: {
+      ...initialConfig,
+      you: { ...initialConfig.you, stt_provider: "web_speech" },
+      them: { ...initialConfig.them, stt_provider: "groq_whisper" },
+    },
+  });
+  const user = userEvent.setup();
+  render(<MeetingAudioSettings />);
+  const select = screen.getByRole("combobox", { name: /STT Language/i });
+
+  await user.selectOptions(select, screen.getByRole("option", { name: "Auto-detect" }));
+  expect(useConfigStore.getState().sttLanguage).toBe("auto");
+  expect(select).toHaveAccessibleDescription(
+    "For You, choose an STT model that supports Auto-detect or select a specific language."
+  );
+
+  await user.selectOptions(select, "en-US");
+  expect(useConfigStore.getState().sttLanguage).toBe("en-US");
+  expect(select).not.toHaveAccessibleDescription();
+});
+
 describe.each([
   { surface: "settings", Component: MeetingAudioSettings },
   { surface: "wizard", Component: AudioSetupStep },

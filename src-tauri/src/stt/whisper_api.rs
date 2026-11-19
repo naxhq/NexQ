@@ -125,7 +125,7 @@ impl WhisperApiSTT {
             .part("file", file_part);
 
         // Only add language if it's not empty
-        if !language.is_empty() {
+        if !language.is_empty() && !language.eq_ignore_ascii_case("auto") {
             // Whisper API uses ISO 639-1 codes (e.g., "en", "es", "fr")
             let lang_code = language.split('-').next().unwrap_or(language);
             form = form.text("language", lang_code.to_string());
@@ -152,7 +152,8 @@ impl WhisperApiSTT {
                                         confidence: 0.95, // Whisper doesn't return confidence
                                         timestamp_ms,
                                         speaker: None,
-                                        language: Some(language.to_string()),
+                                        language: (!language.eq_ignore_ascii_case("auto"))
+                                            .then(|| language.to_string()),
                                         segment_id: None,
                                         duration_ms: None,
                                         speaker_tag: None,
@@ -261,7 +262,8 @@ impl STTProvider for WhisperApiSTT {
                     confidence: 0.0,
                     timestamp_ms,
                     speaker: None,
-                    language: Some(self.language.clone()),
+                    language: (!self.language.eq_ignore_ascii_case("auto"))
+                        .then(|| self.language.clone()),
                     segment_id: None,
                     duration_ms: None,
                     speaker_tag: None,

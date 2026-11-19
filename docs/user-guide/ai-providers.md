@@ -34,6 +34,10 @@ NexQ supports 11 STT providers. Each channel ("You" and "Them") can use a differ
 
 **For Vietnamese transcription**, select **Vietnamese** under Settings > STT Providers > Language. Deepgram Nova-3, Azure Speech, and multilingual Whisper models support Vietnamese; choose a model that supports the language for each channel. The included Parakeet models do not support Vietnamese. A language change takes effect when the STT provider reconnects, so start a new meeting after changing it.
 
+**To detect the spoken language**, choose **Auto-detect** under Settings > STT Providers > Language or Audio & Devices > STT Language. Choose a compatible model for each active channel, such as multilingual Whisper.cpp, Parakeet TDT 0.6B v3, Deepgram Nova-3 or Flux Multilingual, Groq Whisper, OpenAI Whisper API, or Cartesia. The detected languages depend on the model. Start a new meeting after changing the language.
+
+**For speech that switches languages mid-sentence**, such as Ukrainian with English technical terms, use **Deepgram Nova-3** with **Auto-detect**. This combination enables [Nova-3 multilingual transcription](https://developers.deepgram.com/docs/nova-3-language-prompting).
+
 ## LLM Provider Comparison
 
 ![LLM Providers settings panel](../../website/public/screenshots/Setting/Setting-LLM%20Providers.png)

@@ -15,6 +15,7 @@ import { emit } from "@tauri-apps/api/event";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useTranscriptStore } from "../stores/transcriptStore";
 import { useConfigStore } from "../stores/configStore";
+import { AUTO_STT_LANGUAGE } from "../lib/sttLanguages";
 import { pushTranscript, ensureIpolicyOverride } from "../lib/ipc";
 
 // Web Speech API types (not in all TS libs)
@@ -121,7 +122,7 @@ export function useSpeechRecognition() {
       recognitionRef.current = null;
     }
 
-    if (!isRecording || !usesWebSpeech) return;
+    if (!isRecording || !usesWebSpeech || sttLanguage === AUTO_STT_LANGUAGE) return;
 
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -265,11 +266,15 @@ export function useSpeechRecognition() {
               } catch {
                 // proceed anyway
               }
+              const language = useConfigStore.getState().sttLanguage;
+              if (language === AUTO_STT_LANGUAGE) return;
+              if (instanceIdRef.current !== myInstanceId || !shouldRestartRef.current || !recognitionRef.current) return;
+
               const fresh = new SpeechRecognition();
               fresh.continuous = true;
               fresh.interimResults = true;
               fresh.maxAlternatives = 1;
-              fresh.lang = useConfigStore.getState().sttLanguage || currentLanguage;
+              fresh.lang = language || currentLanguage;
               // Copy handlers from old instance
               fresh.onresult = recognitionRef.current!.onresult;
               fresh.onerror = recognitionRef.current!.onerror;

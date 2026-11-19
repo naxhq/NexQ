@@ -5,7 +5,13 @@
 import { useState, useEffect, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useConfigStore } from "../stores/configStore";
-import { STT_LANGUAGES, cartesiaSupportsLanguage } from "../lib/sttLanguages";
+import {
+  AUTO_STT_LANGUAGE,
+  STT_LANGUAGES,
+  cartesiaSupportsLanguage,
+  isDeepgramNova3,
+  supportsSTTAutoDetection,
+} from "../lib/sttLanguages";
 import {
   setSTTProvider,
   testSTTConnection,
@@ -273,6 +279,7 @@ export function STTSettings() {
   const sttLanguage = useConfigStore((s) => s.sttLanguage);
   const setSTTLanguage = useConfigStore((s) => s.setSTTLanguage);
   const activeWhisperModel = useConfigStore((s) => s.activeWhisperModel);
+  const deepgramModel = useConfigStore((s) => s.deepgramConfig.model);
   // Persisted: providers whose key has been saved + tested successfully
   const verifiedCloudProviders = useConfigStore((s) => s.verifiedCloudProviders);
   const setVerifiedCloudProviders = useConfigStore((s) => s.setVerifiedCloudProviders);
@@ -297,6 +304,15 @@ export function STTSettings() {
   );
   const parakeetCtcEnglishOnly =
     activeParakeetModel.includes("ctc-110m") && !sttLanguage.toLowerCase().startsWith("en");
+
+  const localModel = meetingAudioConfig?.you.stt_provider === selectedProvider
+    ? meetingAudioConfig.you.local_model_id
+    : undefined;
+  const selectedModel = selectedProvider === "deepgram"
+    ? deepgramModel
+    : localModel ?? (selectedProvider === "whisper_cpp" ? activeWhisperModel : activeParakeetModel);
+  const autoDetectionSelected = sttLanguage === AUTO_STT_LANGUAGE;
+  const showAutoDetectionWarning = autoDetectionSelected && !supportsSTTAutoDetection(selectedProvider, selectedModel);
 
   const currentProviderOption = PROVIDER_OPTIONS.find(
     (p) => p.value === selectedProvider
@@ -420,10 +436,13 @@ export function STTSettings() {
         await setSTTProvider(provider);
         setConfigSTTProvider(provider);
         // Sync meetingAudioConfig so useAudioConfigSync hot-swaps the live capture.
-        if (meetingAudioConfig) {
+        if (meetingAudioConfig && meetingAudioConfig.you.stt_provider !== provider) {
+          const { activeModelPerEngine, activeWhisperModel } = useConfigStore.getState();
+          const model = activeModelPerEngine[provider]
+            ?? (provider === "whisper_cpp" ? activeWhisperModel ?? undefined : undefined);
           setMeetingAudioConfig({
             ...meetingAudioConfig,
-            you: { ...meetingAudioConfig.you, stt_provider: provider },
+            you: { ...meetingAudioConfig.you, stt_provider: provider, local_model_id: model },
           });
         }
       } catch (e) {
@@ -744,6 +763,7 @@ export function STTSettings() {
           value={sttLanguage}
           onChange={(e) => setSTTLanguage(e.target.value)}
           aria-label="STT language"
+          aria-describedby={autoDetectionSelected ? "provider-stt-auto-description" : undefined}
           className="w-full rounded-lg border border-border/50 bg-background px-3.5 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
         >
           {STT_LANGUAGES.map((lang) => (
@@ -752,6 +772,15 @@ export function STTSettings() {
             </option>
           ))}
         </select>
+        {autoDetectionSelected && (
+          <p id="provider-stt-auto-description" className={`mt-2 text-xs ${showAutoDetectionWarning ? "text-warning" : "text-muted-foreground"}`}>
+            {showAutoDetectionWarning
+              ? "Choose an STT model that supports Auto-detect or select a specific language."
+              : selectedProvider === "deepgram" && isDeepgramNova3(deepgramModel)
+                ? "Nova-3 can transcribe multiple languages within the same sentence."
+                : "For speech that switches languages within a sentence, choose Deepgram Nova-3."}
+          </p>
+        )}
         {sttLanguage === "vi-VN" && selectedProvider === "parakeet_tdt" && (
           <p className="mt-2 text-xs text-warning">
             The included Parakeet models do not support Vietnamese. Choose a multilingual Whisper model, Deepgram Nova-3, or Azure Speech.
@@ -762,13 +791,13 @@ export function STTSettings() {
             Select a Deepgram model that supports Vietnamese, such as Nova-3.
           </p>
         )}
-        {selectedProvider === "parakeet_tdt" && parakeetCtcEnglishOnly && sttLanguage !== "vi-VN" && (
+        {selectedProvider === "parakeet_tdt" && parakeetCtcEnglishOnly && !autoDetectionSelected && sttLanguage !== "vi-VN" && (
           <p className="mt-2 text-xs text-warning">
             Parakeet CTC 110M is English-only. Use Parakeet TDT 0.6B v3 for Russian and other supported languages.
           </p>
         )}
         {selectedProvider === "cartesia" && (
-          cartesiaSupportsLanguage(sttLanguage) ? (
+          autoDetectionSelected || cartesiaSupportsLanguage(sttLanguage) ? (
             <p className="mt-2 text-xs text-muted-foreground">
               Cartesia detects English, French, Hindi, Japanese and Spanish on its own.
             </p>

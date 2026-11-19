@@ -11,15 +11,15 @@ import { useConfigStore } from "../stores/configStore";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useDevLogStore } from "../stores/devLogStore";
 import { useTranscriptStore } from "../stores/transcriptStore";
-import { stopCapture, startCapturePerParty } from "../lib/ipc";
+import { startCapturePerParty } from "../lib/ipc";
 import { skipYouStt } from "../lib/audioMode";
 
 export function useAudioConfigSync() {
   const isRecording = useMeetingStore((s) => s.isRecording);
   const meetingAudioConfig = useConfigStore((s) => s.meetingAudioConfig);
 
-  // What Rust currently has running — only updated after successful restart
-  const appliedConfigRef = useRef<string | null>(null);
+  // null starts a new session, undefined means the last restart failed.
+  const appliedConfigRef = useRef<string | null | undefined>(null);
   // What we've already scheduled a restart for — prevents duplicate debounces
   const pendingConfigRef = useRef<string | null>(null);
   // Guard against concurrent restart attempts
@@ -88,41 +88,21 @@ export function useAudioConfigSync() {
         return;
       }
 
-      log("info", "config", "Hot-swap: stopping current capture...");
-
       try {
-        // Finalize any interim (non-final) transcript segments before restarting,
-        // so they don't stay stuck as gray italic after the new provider takes over.
+        // Rust checks the new STT configuration before replacing the active capture.
         useTranscriptStore.getState().finalizeAllInterim();
-
-        // Stop current capture and wait for full cleanup. The recording stays
-        // open: the new capture keeps writing the meeting's audio to it.
-        await stopCapture(true);
-        log("info", "config", "Hot-swap: capture stopped, waiting for resource release...");
-
-        // Let Rust fully release WASAPI/audio resources
-        await new Promise((r) => setTimeout(r, 200));
-
-        // Re-read config in case it changed during the stop
-        const freshConfig = useConfigStore.getState().meetingAudioConfig;
-        if (!freshConfig) {
-          log("warn", "config", "Hot-swap: no config available after stop");
-          return;
-        }
-
         log("info", "config", "Hot-swap: starting new capture pipeline...");
-        await startCapturePerParty(freshConfig.you, freshConfig.them, {
+        await startCapturePerParty(latestConfig.you, latestConfig.them, {
           skipYouStt: skipYouStt(useMeetingStore.getState().audioMode),
         });
-        const freshKey = JSON.stringify(freshConfig);
-        appliedConfigRef.current = freshKey;
-        pendingConfigRef.current = freshKey;
+        appliedConfigRef.current = latestKey;
+        pendingConfigRef.current = latestKey;
         log("info", "config", "Hot-swap complete — new STT pipeline active");
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log("error", "config", `Hot-swap FAILED: ${msg}`);
-        // Reset both refs so next config change retries
-        appliedConfigRef.current = null;
+        // Allow the next config change to retry, including a return to the prior config.
+        appliedConfigRef.current = undefined;
         pendingConfigRef.current = null;
       } finally {
         restartingRef.current = false;

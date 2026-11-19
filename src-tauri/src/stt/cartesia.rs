@@ -873,6 +873,9 @@ impl STTProvider for CartesiaSTT {
 
     fn set_language(&mut self, language: &str) {
         self.language = language.to_string();
+        if language.eq_ignore_ascii_case("auto") {
+            return;
+        }
         let base = language.split(['-', '_']).next().unwrap_or("").to_lowercase();
         if !SUPPORTED_LANGUAGES.contains(&base.as_str()) {
             log::warn!(

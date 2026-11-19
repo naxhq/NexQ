@@ -329,9 +329,11 @@ impl DeepgramSTT {
             "encoding=linear16".to_string(),
             "sample_rate=16000".to_string(),
             "channels=1".to_string(),
-            format!("language={}", self.language),
             format!("model={}", self.config.model),
         ];
+        if let Some(language) = deepgram_language_parameter(&self.config.model, &self.language) {
+            params.push(format!("language={}", language));
+        }
 
         if self.config.smart_format {
             params.push("smart_format=true".to_string());
@@ -1298,6 +1300,9 @@ fn dominant_speaker(words: &[DeepgramWord]) -> Option<u32> {
 
 fn normalize_deepgram_language(language: &str) -> String {
     let trimmed = language.trim();
+    if trimmed.eq_ignore_ascii_case("auto") {
+        return "auto".to_string();
+    }
     if trimmed.is_empty() {
         return "en".to_string();
     }
@@ -1306,6 +1311,16 @@ fn normalize_deepgram_language(language: &str) -> String {
         // Deepgram accepts English locale subtags; other UI locales map to base codes.
         "en-US" | "en-GB" => trimmed.to_string(),
         _ => trimmed.split('-').next().unwrap_or(trimmed).to_string(),
+    }
+}
+
+fn deepgram_language_parameter(model: &str, language: &str) -> Option<String> {
+    if matches!(model, "nova-3" | "nova-3-general")
+        && language.trim().eq_ignore_ascii_case("auto")
+    {
+        Some("multi".to_string())
+    } else {
+        Some(normalize_deepgram_language(language))
     }
 }
 
@@ -1352,6 +1367,28 @@ mod tests {
         assert_eq!(r.duration_ms, Some(4_230));
         assert_eq!(r.speaker.as_deref(), Some("Them"), "speaker stays the party label");
         assert_eq!(r.speaker_tag.as_deref(), Some("S2"));
+    }
+
+    #[test]
+    fn parse_keeps_ukrainian_and_english_terms_in_a_mixed_language_segment() {
+        let response = serde_json::json!({
+            "type": "Results",
+            "is_final": true,
+            "start": 0.0,
+            "duration": 2.0,
+            "channel": {"alternatives": [{
+                "transcript": "Так, let's review the proposal",
+                "confidence": 0.98,
+                "words": []
+            }]}
+        });
+        let result = DeepgramSTT::parse_response(
+            &response.to_string(),
+            "Them",
+            &AudioTimeline::new(),
+        )
+        .unwrap();
+        assert_eq!(result.text, "Так, let's review the proposal");
     }
 
     /// 0.1 s of 16 kHz audio.
@@ -1445,6 +1482,17 @@ mod tests {
         let mut off = DeepgramSTT::new();
         off.set_config(DeepgramConfig { diarize: false, ..DeepgramConfig::default() });
         assert!(!off.build_ws_url().contains("diarize"));
+    }
+
+    #[test]
+    fn nova_three_auto_detection_uses_deepgrams_multilingual_mode() {
+        let mut provider = DeepgramSTT::new();
+        provider.set_language("auto");
+        let url = provider.build_ws_url();
+        assert!(url.contains("model=nova-3"));
+        assert!(url.contains("language=multi"));
+        assert!(!url.contains("language_hint"));
+        assert_eq!(normalize_deepgram_language("auto"), "auto");
     }
 
     #[test]

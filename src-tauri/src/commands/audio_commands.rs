@@ -111,6 +111,20 @@ pub async fn start_capture(
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
 
+    // The legacy single-provider route also uses browser Web Speech for the
+    // microphone and may use providers/models that cannot honor `auto`.
+    // Require per-party configuration before changing capture state.
+    let auto_language_selected = state.stt.as_ref().is_some_and(|stt| {
+        stt.lock()
+            .map(|router| router.language.eq_ignore_ascii_case("auto"))
+            .unwrap_or(false)
+    });
+    if auto_language_selected {
+        return Err(
+            "Automatic language detection requires per-party STT configuration. Configure both channels in Audio & Devices, then start capture again.".to_string(),
+        );
+    }
+
     // Check if already capturing
     {
         let guard = state
@@ -914,7 +928,18 @@ pub async fn start_capture_per_party(
 
     let state = app.state::<AppState>();
 
-    // If already capturing, stop first (allows mid-meeting hot-swap)
+    // Validate provider/model combinations before stopping an existing meeting,
+    // switching the default microphone, or starting new audio capture.
+    let you_stt = if skip_you_stt {
+        crate::stt::emit_stt_debug(&app, "info", "stt", "'You' STT skipped (in-person meeting)");
+        None
+    } else {
+        create_stt_provider_for_party(&you, &state, &app, "You").await?
+    };
+    let them_stt = create_stt_provider_for_party(&them, &state, &app, "Them").await?;
+
+    // If already capturing, stop first (allows mid-meeting hot-swap).
+    let mut stopped_existing_capture = false;
     {
         // Restore any previous IPolicyConfig override before hot-swap
         restore_default_device_if_overridden(&state, &app);
@@ -925,12 +950,17 @@ pub async fn start_capture_per_party(
             .map_err(|_| "Audio state lock poisoned".to_string())?;
         if let Some(ref mut mgr) = *guard {
             if mgr.is_capturing() {
+                stopped_existing_capture = true;
                 log::info!("start_capture_per_party: stopping existing capture for hot-swap");
                 crate::stt::emit_stt_debug(&app, "info", "stt",
                     "Hot-swap: stopping existing audio capture + STT providers");
                 mgr.stop_capture(true);
             }
         }
+    }
+    if stopped_existing_capture {
+        // Give WASAPI time to release the previous stream before reopening the devices.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 
     log::info!(
@@ -1064,17 +1094,6 @@ pub async fn start_capture_per_party(
             let _ = app.emit("capture_warning", warning);
         }
     }
-
-    // ── Create STT provider for "You" party (if not web_speech or skipped) ──
-    let you_stt = if skip_you_stt {
-        crate::stt::emit_stt_debug(&app, "info", "stt", "'You' STT skipped (in-person meeting)");
-        None
-    } else {
-        create_stt_provider_for_party(&you, &state, &app, "You").await?
-    };
-
-    // ── Create STT provider for "Them" party (if not web_speech) ──
-    let them_stt = create_stt_provider_for_party(&them, &state, &app, "Them").await?;
 
     // Start STT streams
     let (you_stt_tx, mut you_stt_rx) =
@@ -1592,6 +1611,33 @@ async fn create_stt_provider_for_party(
     let stt_type = STTProviderType::from_str(&config.stt_provider)
         .ok_or_else(|| format!("Unknown STT provider: {}", config.stt_provider))?;
     let stt_language = get_stt_language(state);
+    let deepgram_config = matches!(&stt_type, STTProviderType::Deepgram)
+        .then(|| get_deepgram_config(state));
+
+    if stt_language.eq_ignore_ascii_case("auto") {
+        let model = match &stt_type {
+            STTProviderType::Deepgram => deepgram_config
+                .as_ref()
+                .map(|config| config.model.clone())
+                .unwrap_or_default(),
+            STTProviderType::WhisperCpp => config
+                .local_model_id
+                .clone()
+                .unwrap_or_else(|| "base".to_string()),
+            STTProviderType::ParakeetTdt => config
+                .local_model_id
+                .as_deref()
+                .map(resolve_parakeet_model_id)
+                .unwrap_or_else(|| "parakeet-tdt-0.6b-v3-int8".to_string()),
+            STTProviderType::GroqWhisper => state
+                .shared_groq_config
+                .read()
+                .map(|config| config.model.clone())
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
+        validate_auto_language_provider(&stt_type, &model)?;
+    }
 
     crate::stt::emit_stt_debug(app, "info", "stt",
         &format!("[{}] Creating provider: {} (lang: {}, model: {})",
@@ -1607,7 +1653,19 @@ async fn create_stt_provider_for_party(
                 .or_else(|_| find_any_downloaded_model(state, "whisper_cpp"));
             match model_result {
                 Ok(model_path) => {
-                    let lang = get_stt_language(state);
+                    if stt_language.eq_ignore_ascii_case("auto") {
+                        let resolved_model = model_path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or_default();
+                        if !is_multilingual_whisper_model(resolved_model) {
+                            return Err(format!(
+                                "Whisper.cpp model '{}' does not support automatic language detection. Choose Tiny, Base, Small, Medium, or Large v3 Turbo.",
+                                resolved_model
+                            ));
+                        }
+                    }
+                    let lang = stt_language.clone();
                     let whisper_config = state.whisper_config.clone();
                     let mut p = crate::stt::whisper_cpp::WhisperCppSTT::new(model_path, whisper_config);
                     p.set_language(&lang);
@@ -1625,7 +1683,7 @@ async fn create_stt_provider_for_party(
         }
         STTProviderType::WindowsNative => {
             use crate::stt::windows_native::WindowsNativeSTT;
-            let lang = get_stt_language(state);
+            let lang = stt_language.clone();
             let mut provider = if config.is_input_device {
                 // IPolicyConfig already overrides system default to the selected device,
                 // so DirectMic mode correctly captures from non-default devices too
@@ -1640,10 +1698,10 @@ async fn create_stt_provider_for_party(
             Ok(Some(Box::new(provider)))
         }
         STTProviderType::Deepgram => {
-            let lang = get_stt_language(state);
+            let lang = stt_language.clone();
             let key = get_credential_key(state, "deepgram");
             log::info!("Deepgram key for '{}': {}", party_role, if key.is_some() { "present" } else { "MISSING" });
-            let dg_config = get_deepgram_config(state);
+            let dg_config = deepgram_config.unwrap_or_default();
             let mut p = match key.as_deref() {
                 Some(k) => crate::stt::deepgram::DeepgramSTT::with_api_key(k),
                 None => crate::stt::deepgram::DeepgramSTT::new(),
@@ -1655,7 +1713,7 @@ async fn create_stt_provider_for_party(
             Ok(Some(Box::new(p)))
         }
         STTProviderType::WhisperApi => {
-            let lang = get_stt_language(state);
+            let lang = stt_language.clone();
             let key = get_credential_key(state, "whisper_api");
             log::info!("WhisperApi key for '{}': {}", party_role, if key.is_some() { "present" } else { "MISSING" });
             let mut p = match key.as_deref() {
@@ -1666,7 +1724,7 @@ async fn create_stt_provider_for_party(
             Ok(Some(Box::new(p)))
         }
         STTProviderType::AzureSpeech => {
-            let lang = get_stt_language(state);
+            let lang = stt_language.clone();
             let key = get_credential_key(state, "azure_speech");
             let region = get_credential_key(state, "azure_speech_region");
             log::info!("Azure key for '{}': {}, region: {}", party_role,
@@ -1680,7 +1738,7 @@ async fn create_stt_provider_for_party(
             Ok(Some(Box::new(p)))
         }
         STTProviderType::GroqWhisper => {
-            let lang = get_stt_language(state);
+            let lang = stt_language.clone();
             let key = get_credential_key(state, "groq_whisper");
             log::info!("Groq key for '{}': {}", party_role, if key.is_some() { "present" } else { "MISSING" });
             let mut p = match key.as_deref() {
@@ -1696,7 +1754,7 @@ async fn create_stt_provider_for_party(
             Ok(Some(Box::new(p)))
         }
         STTProviderType::Cartesia => {
-            let lang = get_stt_language(state);
+            let lang = stt_language.clone();
             let key = get_credential_key(state, "cartesia");
             log::info!("Cartesia key for '{}': {}", party_role, if key.is_some() { "present" } else { "MISSING" });
             let mut p = match key.as_deref() {
@@ -1722,7 +1780,7 @@ async fn create_stt_provider_for_party(
             let model_result = get_local_model_path(state, "sherpa_onnx", model_id);
             match model_result {
                 Ok(model_dir) => {
-                    let lang = get_stt_language(state);
+                    let lang = stt_language.clone();
                     // Check if this is a non-transducer model (SenseVoice, etc.)
                     // by trying offline discovery first.
                     let offline_files = crate::stt::local_engines::model_discovery::discover_offline_model_files(&model_dir);
@@ -1781,7 +1839,7 @@ async fn create_stt_provider_for_party(
             let model_result = get_local_model_path(state, "ort_streaming", model_id);
             match model_result {
                 Ok(model_dir) => {
-                    let lang = get_stt_language(state);
+                    let lang = stt_language.clone();
                     crate::stt::emit_stt_debug(app, "info", "stt",
                         &format!("[{}] ORT loading model '{}' from {} (lang={})",
                             party_role, model_id, model_dir.display(), lang));
@@ -1800,25 +1858,34 @@ async fn create_stt_provider_for_party(
         }
         STTProviderType::ParakeetTdt => {
             // Guard: ignore model_id from a different engine (e.g., sense-voice-small from sherpa_onnx)
-            let raw_model_id = config.local_model_id.as_deref();
-            let model_id = match raw_model_id {
-                Some(id) if id.contains("parakeet") || id.contains("nemo") => id,
-                Some(id) => {
-                    log::warn!("ParakeetTdt: ignoring cross-engine model_id '{}', using default", id);
-                    "parakeet-tdt-0.6b-v3-int8"
-                }
-                None => "parakeet-tdt-0.6b-v3-int8",
-            };
+            let model_id = config
+                .local_model_id
+                .as_deref()
+                .map(resolve_parakeet_model_id)
+                .unwrap_or_else(|| "parakeet-tdt-0.6b-v3-int8".to_string());
+            if config
+                .local_model_id
+                .as_deref()
+                .is_some_and(|id| id != model_id && !id.contains("parakeet") && !id.contains("nemo"))
+            {
+                log::warn!(
+                    "ParakeetTdt: ignoring cross-engine model_id, using default '{}'",
+                    model_id
+                );
+            }
             crate::stt::emit_stt_debug(app, "info", "stt",
                 &format!("[{}] Parakeet TDT: looking for model '{}' (local_model_id={:?})",
                     party_role, model_id, config.local_model_id));
-            let model_result = get_local_model_path(state, "parakeet_tdt", model_id)
+            let model_result = get_local_model_path(state, "parakeet_tdt", &model_id)
                 .or_else(|_| find_any_downloaded_model(state, "parakeet_tdt"));
             match model_result {
                 Ok(model_dir) => {
-                    let lang = get_stt_language(state);
+                    let lang = stt_language.clone();
                     // Auto-detect model type: transducer (encoder/decoder/joiner) vs CTC (model.onnx)
                     let transducer = crate::stt::local_engines::model_discovery::discover_model_files(&model_dir);
+                    if stt_language.eq_ignore_ascii_case("auto") && transducer.is_err() {
+                        return Err("Parakeet automatic language detection requires the multilingual TDT 0.6B v3 model. CTC 110M supports English only.".to_string());
+                    }
                     if transducer.is_ok() {
                         // Transducer model (e.g., 0.6B v3) → use in-process ORT streaming
                         crate::stt::emit_stt_debug(app, "info", "stt",
@@ -1946,6 +2013,58 @@ fn get_stt_language(state: &AppState) -> String {
         .as_ref()
         .and_then(|stt| stt.lock().ok().map(|r| r.language.clone()))
         .unwrap_or_else(|| "en-US".to_string())
+}
+
+fn validate_auto_language_provider(
+    provider: &crate::stt::provider::STTProviderType,
+    model: &str,
+) -> Result<(), String> {
+    use crate::stt::provider::STTProviderType;
+
+    let supported = match provider {
+        STTProviderType::Deepgram => {
+            matches!(model, "nova-3" | "nova-3-general" | "flux-general-multi")
+        }
+        STTProviderType::WhisperCpp => is_multilingual_whisper_model(model),
+        STTProviderType::GroqWhisper | STTProviderType::WhisperApi | STTProviderType::Cartesia => true,
+        STTProviderType::ParakeetTdt => model.starts_with("parakeet-tdt-0.6b-v3"),
+        _ => false,
+    };
+
+    if supported {
+        return Ok(());
+    }
+
+    let provider_name = match provider {
+        STTProviderType::Deepgram => "Deepgram Nova-3 or Flux Multilingual",
+        STTProviderType::WhisperCpp => "a multilingual Whisper.cpp model",
+        STTProviderType::ParakeetTdt => "Parakeet TDT 0.6B v3",
+        STTProviderType::Cartesia => "Cartesia",
+        STTProviderType::GroqWhisper => "Groq Whisper",
+        STTProviderType::WhisperApi => "OpenAI Whisper API",
+        _ => "a provider that supports automatic language detection",
+    };
+    Err(format!(
+        "Automatic language detection is not supported by this STT provider/model. Choose {} or select a specific language.",
+        provider_name
+    ))
+}
+
+fn resolve_parakeet_model_id(model: &str) -> String {
+    if model.contains("parakeet") || model.contains("nemo") {
+        model.to_string()
+    } else {
+        "parakeet-tdt-0.6b-v3-int8".to_string()
+    }
+}
+
+fn is_multilingual_whisper_model(model: &str) -> bool {
+    matches!(
+        model,
+        "tiny" | "base" | "small" | "medium" | "large-v3-turbo"
+            | "ggml-tiny.bin" | "ggml-base.bin" | "ggml-small.bin" | "ggml-medium.bin"
+            | "ggml-large-v3-turbo.bin"
+    )
 }
 
 /// Read an API key directly from the credential store (Windows Credential Manager).
@@ -2171,6 +2290,36 @@ mod tests {
         assert_eq!(seg["text"], "What would you do?");
         let plain = accumulator_segment_json("them_x_acc_1", "Them", &output(None));
         assert!(plain.get("turn").is_none());
+    }
+
+    #[test]
+    fn automatic_language_detection_is_limited_to_compatible_providers_and_models() {
+        use crate::stt::provider::STTProviderType;
+
+        assert!(validate_auto_language_provider(&STTProviderType::Deepgram, "nova-3").is_ok());
+        assert!(validate_auto_language_provider(&STTProviderType::Deepgram, "nova-3-general").is_ok());
+        assert!(validate_auto_language_provider(&STTProviderType::Deepgram, "flux-general-multi").is_ok());
+        assert!(validate_auto_language_provider(&STTProviderType::Deepgram, "flux-general-en").is_err());
+        assert!(validate_auto_language_provider(&STTProviderType::WhisperCpp, "small").is_ok());
+        assert!(validate_auto_language_provider(&STTProviderType::WhisperCpp, "distil-large-v3").is_err());
+        assert!(validate_auto_language_provider(&STTProviderType::ParakeetTdt, "parakeet-tdt-0.6b-v3-int8").is_ok());
+        assert!(validate_auto_language_provider(&STTProviderType::ParakeetTdt, "parakeet-tdt-ctc-110m-int8").is_err());
+        assert!(validate_auto_language_provider(&STTProviderType::AzureSpeech, "").is_err());
+        assert_eq!(resolve_parakeet_model_id("small"), "parakeet-tdt-0.6b-v3-int8");
+        assert_eq!(
+            resolve_parakeet_model_id("parakeet-tdt-ctc-110m-int8"),
+            "parakeet-tdt-ctc-110m-int8"
+        );
+    }
+
+    #[test]
+    fn whisper_auto_support_includes_multilingual_models_only() {
+        assert!(is_multilingual_whisper_model("tiny"));
+        assert!(is_multilingual_whisper_model("ggml-small.bin"));
+        assert!(is_multilingual_whisper_model("large-v3-turbo"));
+        assert!(!is_multilingual_whisper_model("distil-large-v3"));
+        assert!(!is_multilingual_whisper_model("ggml-distil-large-v3.bin"));
+        assert!(!is_multilingual_whisper_model("ggml-base.en.bin"));
     }
 
     #[test]

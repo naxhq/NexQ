@@ -1,5 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { STT_LANGUAGES, cartesiaSupportsLanguage } from "./sttLanguages";
+import { STT_LANGUAGES, cartesiaSupportsLanguage, supportsSTTAutoDetection } from "./sttLanguages";
+
+describe("supportsSTTAutoDetection", () => {
+  it("checks the selected model for model-dependent engines", () => {
+    expect(supportsSTTAutoDetection("deepgram", "nova-3")).toBe(true);
+    expect(supportsSTTAutoDetection("deepgram", "flux-general-multi")).toBe(true);
+    expect(supportsSTTAutoDetection("deepgram", "flux-general-en")).toBe(false);
+    expect(supportsSTTAutoDetection("whisper_cpp", "small")).toBe(true);
+    expect(supportsSTTAutoDetection("whisper_cpp", "distil-large-v3")).toBe(false);
+    expect(supportsSTTAutoDetection("parakeet_tdt", "parakeet-tdt-0.6b-v3-int8")).toBe(true);
+    expect(supportsSTTAutoDetection("parakeet_tdt", "parakeet-tdt-ctc-110m-int8")).toBe(false);
+    expect(supportsSTTAutoDetection("web_speech")).toBe(false);
+  });
+});
 
 describe("cartesiaSupportsLanguage", () => {
   it("accepts the five languages ink-2 detects", () => {
