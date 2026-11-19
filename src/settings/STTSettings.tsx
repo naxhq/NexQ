@@ -303,7 +303,9 @@ export function STTSettings() {
     s.activeModelPerEngine.parakeet_tdt ?? "parakeet-tdt-0.6b-v3-int8"
   );
   const parakeetCtcEnglishOnly =
-    activeParakeetModel.includes("ctc-110m") && !sttLanguage.toLowerCase().startsWith("en");
+    sttLanguage !== AUTO_STT_LANGUAGE &&
+    activeParakeetModel.includes("ctc-110m") &&
+    !sttLanguage.toLowerCase().startsWith("en");
 
   const localModel = meetingAudioConfig?.you.stt_provider === selectedProvider
     ? meetingAudioConfig.you.local_model_id
@@ -791,7 +793,7 @@ export function STTSettings() {
             Select a Deepgram model that supports Vietnamese, such as Nova-3.
           </p>
         )}
-        {selectedProvider === "parakeet_tdt" && parakeetCtcEnglishOnly && !autoDetectionSelected && sttLanguage !== "vi-VN" && (
+        {selectedProvider === "parakeet_tdt" && parakeetCtcEnglishOnly && sttLanguage !== "vi-VN" && (
           <p className="mt-2 text-xs text-warning">
             Parakeet CTC 110M is English-only. Use Parakeet TDT 0.6B v3 for Russian and other supported languages.
           </p>
