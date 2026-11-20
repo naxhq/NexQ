@@ -1407,8 +1407,14 @@ pub async fn start_capture_per_party(
                     if last_mic_stats.elapsed() >= stats_interval {
                         let rms = calculate_rms(&chunk.pcm_data);
                         let label = if chunk.source == AudioSource::Room { "Room" } else { "Mic" };
+                        let echo_queue = match (chunk.source == AudioSource::Mic, echo.queue_stats()) {
+                            (true, Some((refills, trims))) => {
+                                format!(", echo queue: {} refills, {} trims", refills, trims)
+                            }
+                            _ => String::new(),
+                        };
                         crate::stt::emit_stt_debug_ex(&app_handle, "info", "audio",
-                            &format!("{}: {} chunks, speech={}, rms={:.0}", label, mic_chunk_count, chunk.is_speech, rms),
+                            &format!("{}: {} chunks, speech={}, rms={:.0}{}", label, mic_chunk_count, chunk.is_speech, rms, echo_queue),
                             Some("audio_mic_stats"));
                         last_mic_stats = std::time::Instant::now();
                     }

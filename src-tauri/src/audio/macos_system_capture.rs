@@ -279,6 +279,7 @@ fn run(
         name.as_deref().unwrap_or("default"), uid, format.mSampleRate, format.mChannelsPerFrame,
     );
     let mut mono = Vec::with_capacity(frames.max(4096) as usize);
+    let mut resampler = super::StreamResampler::new(format.mSampleRate as u32, super::TARGET_SAMPLE_RATE, 1);
     while !stop.load(Ordering::Relaxed) && !tx.is_closed() {
         if queue.invalid.load(Ordering::Acquire) {
             return Err("CoreAudio output-tap buffer layout changed or exceeded capacity".into());
@@ -290,7 +291,7 @@ fn run(
         }
         downmix(unsafe { &*queue.blocks[read].get() }, &pcm_format, &mut mono);
         queue.read.store((read + 1) % queue.blocks.len(), Ordering::Release);
-        super::send_system_chunk(&mono, format.mSampleRate as u32, 1, &tx);
+        super::send_system_chunk(&mono, &mut resampler, &tx);
     }
     Ok(())
 }
