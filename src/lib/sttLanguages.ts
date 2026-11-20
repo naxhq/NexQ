@@ -144,9 +144,14 @@ export function autoDetectProblem(
   return `${AUTO_DETECT_REFUSAL_PREFIX} ${name}, used for ${label}. ${advice}`;
 }
 
+const REFUSAL_SENTENCE = new RegExp(
+  `${AUTO_DETECT_REFUSAL_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} .+?, used for (?:You|Them|Room)\\.`,
+  "g",
+);
+
 /** The "Auto-detect doesn't work with X, used for Y." sentences of a refusal (without the advice). */
 export function autoDetectRefusalSentences(message: string): string[] {
-  return message.match(/Auto-detect doesn't work with .+?, used for (?:You|Them|Room)\./g) ?? [];
+  return message.match(REFUSAL_SENTENCE) ?? [];
 }
 
 /** Languages Cartesia ink-2 detects on its own (it has no language setting). */

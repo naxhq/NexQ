@@ -57,7 +57,7 @@ it("tells the user when Auto-detect silences a running Web Speech side", async (
   expect(emit).toHaveBeenCalledTimes(1);
   expect(emit).toHaveBeenCalledWith(
     "capture_warning",
-    "You isn't being transcribed: Web Speech can't detect the language. " +
+    "Stopped transcribing You: Web Speech can't detect the language. " +
     "Pick a language (it applies right away) or choose another provider for You.",
   );
 

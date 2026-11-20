@@ -38,7 +38,7 @@ describe("refusal wording (shared with Rust)", () => {
     expect(AUTO_DETECT_REFUSAL_PREFIX).toBe(cases.refusalPrefix);
     expect(AUTO_DETECT_ADVICE).toBe(cases.advice);
     expect(AUTO_DETECT_WHISPER_ADVICE).toBe(cases.whisperAdvice);
-    expect(DEEPGRAM_MODEL_LABELS).toMatchObject(cases.deepgramLabels);
+    expect(DEEPGRAM_MODEL_LABELS).toEqual(cases.deepgramLabels);
     expect(WHISPER_MODEL_LABELS).toEqual(cases.whisperLabels);
   });
 

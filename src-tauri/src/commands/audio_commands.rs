@@ -434,8 +434,8 @@ pub async fn stop_capture(app: AppHandle, keep_recording: Option<bool>) -> Resul
             Some(mgr) => {
                 let info = mgr.stop_capture(keep_recording.unwrap_or(false));
                 log::info!("Audio capture stopped via command");
-                // A device change keeps the meeting going; only a real stop forgets
-                // which sides run without speech-to-text.
+                // `keep_recording` means the meeting goes on (a device change), so the
+                // sides running without speech-to-text stay remembered; a real stop forgets them.
                 if !keep_recording.unwrap_or(false) {
                     if let Ok(mut refusals) = state.auto_refusals.lock() {
                         *refusals = [None, None];
@@ -2071,7 +2071,7 @@ fn validate_auto_language_provider(
 }
 
 /// Start of every message that refuses Auto-detect for one side. The frontend
-/// recognises it (`AUTO_DETECT_REFUSAL_PREFIX` in useAudioConfigSync.ts).
+/// recognises it (`AUTO_DETECT_REFUSAL_PREFIX` in sttLanguages.ts).
 const AUTO_DETECT_REFUSAL: &str = "Auto-detect doesn't work with";
 const AUTO_DETECT_ADVICE: &str =
     "Choose Deepgram Nova-3, Parakeet TDT 0.6B v3, Groq Whisper or Whisper API for that side, or pick a language.";

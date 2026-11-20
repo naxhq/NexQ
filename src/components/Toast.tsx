@@ -53,6 +53,13 @@ function ToastItem({ toast, onDismiss }: { toast: ToastData; onDismiss: () => vo
   const paused = hovered || focused;
   const remainingRef = useRef(duration);
 
+  // A pointer or focus left behind when the window loses focus must not freeze the toast.
+  useEffect(() => {
+    const release = () => { setHovered(false); setFocused(false); };
+    window.addEventListener("blur", release);
+    return () => window.removeEventListener("blur", release);
+  }, []);
+
   // Auto-dismiss with exit animation (component-driven)
   useEffect(() => {
     if (paused) return;

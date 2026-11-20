@@ -54,6 +54,18 @@ describe("ToastContainer", () => {
     expect(screen.queryByText(message)).toBeNull();
   });
 
+  it("resumes when the window loses focus while the pointer is on the toast", async () => {
+    const message = "Heads up";
+    render(<ToastContainer />);
+    show(message);
+    fireEvent.mouseEnter(screen.getByRole("alert"));
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(screen.getByText(message)).toBeInTheDocument();
+    act(() => { window.dispatchEvent(new Event("blur")); });
+    await act(() => vi.advanceTimersByTimeAsync(toastDurationMs(message) + 300));
+    expect(screen.queryByText(message)).toBeNull();
+  });
+
   it("stops the countdown while the toast has keyboard focus", async () => {
     const message = "Heads up";
     render(<ToastContainer />);

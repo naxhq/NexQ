@@ -139,7 +139,7 @@ export function useSpeechRecognition() {
           : "You";
         emit(
           "capture_warning",
-          `${side} isn't being transcribed: Web Speech can't detect the language. ` +
+          `Stopped transcribing ${side}: Web Speech can't detect the language. ` +
           `Pick a language (it applies right away) or choose another provider for ${side}.`,
         ).catch(() => {});
       }

@@ -323,15 +323,14 @@ export function STTSettings() {
   const autoDetectionSelected = sttLanguage === AUTO_STT_LANGUAGE;
   const inPerson = useMeetingStore((s) => skipYouStt(s.audioMode));
   // This page picks the "You" provider; the "Them" side is set in Audio & Devices.
-  const withSetIn = (problem: string | null) => (problem ? `${problem} (set in Audio & Devices)` : null);
   const autoProblems = !autoDetectionSelected ? [] : [
     inPerson ? null : autoDetectProblem(youSide, autoModels, "You"),
     meetingAudioConfig
-      ? withSetIn(autoDetectProblem(
+      ? autoDetectProblem(
           { provider: meetingAudioConfig.them.stt_provider, localModel: meetingAudioConfig.them.local_model_id },
           autoModels,
-          inPerson ? "Room" : "Them",
-        ))
+          `${inPerson ? "Room" : "Them"} (set in Audio & Devices)`,
+        )
       : null,
   ].filter((p): p is string => p !== null);
   const showAutoDetectionWarning = autoProblems.length > 0;
