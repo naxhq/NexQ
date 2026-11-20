@@ -89,9 +89,8 @@ pub const MCP_MAX_OUTPUT_TOKENS: &str = "10000";
 ///
 /// A plain session (`cfg.sources == None`) is `--safe-mode`, no tools, every
 /// tool denied. A with-sources session swaps `--safe-mode` for `--restricted`
-/// (safe mode drops `--mcp-config` servers and does not confine `Read`; see
-/// `docs/superpowers/specs/2026-11-20-personal-sources-cli-findings.md`) and
-/// adds the sources flags. Each value is its own argv entry.
+/// (safe mode drops `--mcp-config` servers and does not confine `Read`; see the
+/// table in `sources/mod.rs`) and adds the sources flags. Each value is its own argv entry.
 pub fn build_args(
     cfg: &SessionConfig,
     system_prompt_file: &Path,

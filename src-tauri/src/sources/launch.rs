@@ -5,8 +5,9 @@
 //! Secrets: stdio servers inherit the whole `claude.exe` environment, so a
 //! secret must not go in the process env (servers would see each other's
 //! keys). Each server's own secret values are written inline into the session's
-//! private mcp-config file instead (`private_files`), which is deleted when the
-//! session closes. Findings: `docs/superpowers/specs/2026-11-20-personal-sources-cli-findings.md`.
+//! private mcp-config file instead (`private_files`), which is deleted once the
+//! session has started. What the CLI does with these flags: see the table in
+//! `sources/mod.rs`.
 
 use super::config::{is_valid_tool_full_name, McpServer, McpTransport, NotesFolder, PersonalSourcesConfig};
 use super::mcp_json::{credential_id, header_credential_id};
