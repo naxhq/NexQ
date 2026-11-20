@@ -237,15 +237,20 @@ export const useAIActionsStore = create<AIActionsState>((set, get) => ({
   saveConfigs: async () => {
     const { configs } = get();
     const mine = fingerprint(configs);
+    let recorded = false;
     try {
       const store = await getStore();
       ownSaves.push(mine);
+      recorded = true;
       if (ownSaves.length > OWN_SAVES_KEPT) ownSaves.shift();
       await store.set(STORE_KEY, configs);
     } catch (e) {
-      // Nothing was saved, so no notice of it will come back.
-      const at = ownSaves.lastIndexOf(mine);
-      if (at >= 0) ownSaves.splice(at, 1);
+      // Nothing was saved, so no notice of it will come back. Only take back
+      // the entry this call recorded: an equal one may belong to another save.
+      if (recorded) {
+        const at = ownSaves.lastIndexOf(mine);
+        if (at >= 0) ownSaves.splice(at, 1);
+      }
       console.error("[aiActionsStore] Failed to persist:", e);
     }
     // Sync to backend
