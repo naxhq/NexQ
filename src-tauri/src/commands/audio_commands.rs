@@ -2129,6 +2129,7 @@ struct SideOutcome<T> {
 /// - during a swap, the refusal the side already runs under (`running_refusal`)
 ///   is tolerated silently, while a new one is an error that keeps the running
 ///   capture untouched.
+///
 /// Any other error is an error.
 fn resolve_side<T>(
     result: Result<Option<T>, String>,
