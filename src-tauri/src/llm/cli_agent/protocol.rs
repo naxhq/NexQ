@@ -135,12 +135,78 @@ fn str_field(v: &Value, key: &str) -> String {
     v.get(key).and_then(Value::as_str).unwrap_or("").to_string()
 }
 
+/// One image sent with a question (pasted into Ask). Mirrors the TypeScript
+/// `ImageAttachment` in `src/lib/types.ts`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ImageAttachment {
+    /// `image/png`, `image/jpeg`, `image/gif` or `image/webp`.
+    pub media_type: String,
+    /// Base64 of the file, without a `data:` prefix.
+    pub data: String,
+}
+
+/// Most images one question can carry. Keep in step with `MAX_IMAGES` in
+/// `src/lib/imageAttachments.ts`.
+pub const MAX_IMAGES: usize = 3;
+/// Longest base64 body accepted for one image: the API's 5 MB limit
+/// (5_242_880). The frontend downsizes pasted images well below it
+/// (`src/lib/imageAttachments.ts`); this is the safety net.
+pub const MAX_IMAGE_BASE64_LEN: usize = 5_242_880;
+/// Image types the Claude API takes. Keep in step with `ALLOWED_IMAGE_TYPES`
+/// in `src/lib/imageAttachments.ts`.
+pub const ALLOWED_IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/// Checks the images pasted into Ask before anything is sent: the frontend
+/// checks the same limits, but the backend never trusts it.
+pub fn validate_images(images: &[ImageAttachment]) -> Result<(), String> {
+    if images.len() > MAX_IMAGES {
+        return Err(format!("You can attach up to {MAX_IMAGES} images"));
+    }
+    for image in images {
+        if !ALLOWED_IMAGE_TYPES.contains(&image.media_type.as_str()) {
+            return Err("Only PNG, JPEG, GIF and WebP images can be attached".to_string());
+        }
+        if image.data.is_empty() {
+            return Err("An attached image is empty".to_string());
+        }
+        if image.data.len() > MAX_IMAGE_BASE64_LEN {
+            return Err("An attached image is larger than 5 MB".to_string());
+        }
+    }
+    Ok(())
+}
+
 /// Build one stdin JSON line (no trailing newline). With `query == false` the
 /// message is appended to the session context without triggering a model call.
 pub fn user_message(text: &str, query: bool) -> String {
+    user_message_with_images(text, query, &[])
+}
+
+/// [`user_message`] with images. Without images `content` stays a plain string;
+/// with them it is a list of blocks: the images first, then the text.
+pub fn user_message_with_images(text: &str, query: bool, images: &[ImageAttachment]) -> String {
+    let content = if images.is_empty() {
+        Value::String(text.to_string())
+    } else {
+        let mut blocks: Vec<Value> = images
+            .iter()
+            .map(|image| {
+                json!({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": image.media_type,
+                        "data": image.data,
+                    },
+                })
+            })
+            .collect();
+        blocks.push(json!({ "type": "text", "text": text }));
+        Value::Array(blocks)
+    };
     let mut msg = json!({
         "type": "user",
-        "message": { "role": "user", "content": text },
+        "message": { "role": "user", "content": content },
         "parent_tool_use_id": null,
     });
     if !query {
@@ -297,6 +363,53 @@ pub(crate) mod tests {
         assert!(!user_message("x", false).contains('\n'));
         let q: Value = serde_json::from_str(&user_message("x", true)).unwrap();
         assert!(q.get("shouldQuery").is_none());
+    }
+
+    #[test]
+    fn user_message_with_images_sends_image_blocks_before_the_text() {
+        let images = [
+            ImageAttachment { media_type: "image/png".into(), data: "AAAA".into() },
+            ImageAttachment { media_type: "image/jpeg".into(), data: "BBBB".into() },
+        ];
+        let line = user_message_with_images("What is this?", true, &images);
+        assert!(!line.contains('\n'));
+        let v: Value = serde_json::from_str(&line).unwrap();
+        let blocks = v["message"]["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0]["type"], "image");
+        assert_eq!(blocks[0]["source"]["type"], "base64");
+        assert_eq!(blocks[0]["source"]["media_type"], "image/png");
+        assert_eq!(blocks[0]["source"]["data"], "AAAA");
+        assert_eq!(blocks[1]["source"]["media_type"], "image/jpeg");
+        assert_eq!(blocks[2], json!({ "type": "text", "text": "What is this?" }));
+        assert!(v.get("shouldQuery").is_none());
+    }
+
+    #[test]
+    fn validate_images_enforces_count_type_and_size() {
+        let png = |data: &str| ImageAttachment { media_type: "image/png".into(), data: data.into() };
+        assert!(validate_images(&[]).is_ok());
+        assert!(validate_images(&[png("AAAA"), png("AAAA"), png("AAAA")]).is_ok());
+        assert!(validate_images(&[png("A"), png("A"), png("A"), png("A")])
+            .unwrap_err()
+            .contains("up to 3"));
+        let bmp = ImageAttachment { media_type: "image/bmp".into(), data: "AAAA".into() };
+        assert!(validate_images(&[bmp]).unwrap_err().contains("PNG, JPEG"));
+        let svg = ImageAttachment { media_type: "image/svg+xml".into(), data: "AAAA".into() };
+        assert!(validate_images(&[svg]).is_err());
+        assert!(validate_images(&[png("")]).unwrap_err().contains("empty"));
+        let at_limit = "A".repeat(MAX_IMAGE_BASE64_LEN);
+        assert!(validate_images(&[png(&at_limit)]).is_ok());
+        let over = "A".repeat(MAX_IMAGE_BASE64_LEN + 1);
+        assert!(validate_images(&[png(&over)]).unwrap_err().contains("5 MB"));
+    }
+
+    #[test]
+    fn user_message_without_images_is_unchanged() {
+        let plain = user_message_with_images("x", true, &[]);
+        assert_eq!(plain, user_message("x", true));
+        let v: Value = serde_json::from_str(&plain).unwrap();
+        assert_eq!(v["message"]["content"], "x");
     }
 
     #[test]

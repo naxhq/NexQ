@@ -747,6 +747,16 @@ export interface GenerateAssistOptions {
   pastMeetingId?: string;
   /** Transcript scope picked by the user; omitted (or `default`) keeps the action's own window. */
   scope?: ResolvedScope | null;
+  /** Images pasted into Ask; only a Claude (subscription) answer can use them. */
+  images?: ImageAttachment[];
+}
+
+/** One image sent with a question. Mirrors Rust `cli_agent::protocol::ImageAttachment`. */
+export interface ImageAttachment {
+  /** `image/png`, `image/jpeg`, `image/gif` or `image/webp`. */
+  media_type: string;
+  /** Base64 of the file, without a `data:` prefix. */
+  data: string;
 }
 
 // == CONTEXT SCOPE (which part of the meeting a user action focuses on) ==

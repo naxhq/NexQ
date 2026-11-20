@@ -248,6 +248,7 @@ export async function generateAssist(
     ...(opts.pastMeetingId ? { pastMeetingId: opts.pastMeetingId } : {}),
     // No scope (or `default`): the backend keeps the action's own window.
     ...(opts.scope && opts.scope.kind !== "default" ? { scope: opts.scope } : {}),
+    ...(opts.images && opts.images.length > 0 ? { images: opts.images } : {}),
   });
 }
 

@@ -29,6 +29,21 @@ Each tier also has an **Extended thinking** switch. With thinking off (the defau
 
 The **context chip** next to the action buttons in the meeting view sets which part of the transcript an action works on: the action's own default, everything since the last answer, since the last answer of the same action, the last 2, 5, 10 or 15 minutes (or a custom number), or the whole meeting. Turn on **Keep for next actions** to keep your choice; otherwise it goes back to the default after one action. A Claude session already holds the whole meeting, so each request only sends the transcript that is new since the previous one, plus a note about the scope you picked.
 
+## Asking about something on screen
+
+When the thing you need help with is only visible on screen (an exercise, a question in a chat or slide, a diagram), send a picture of it instead of retyping it:
+
+1. Copy a screenshot of just the part you need, for example with `Win+Shift+S`.
+2. Open **Ask** in the meeting view.
+3. Press `Ctrl+V` in the Ask box. The picture shows as a small thumbnail.
+4. Press Enter.
+
+- You can attach up to 3 images (PNG, JPEG, GIF or WebP). NexQ shrinks large ones before sending, so a full-screen screenshot works. Click the **x** on a thumbnail to remove it.
+- With an empty box, the image itself is the question: Claude reads it and answers or solves it, rather than describing it.
+- This works only with **Claude (subscription)**. With another provider, NexQ doesn't attach the image and tells you images need Claude. When Claude is unavailable and NexQ would answer with the fallback provider, it asks you to try again or remove the image, instead of answering without it.
+- If the send fails, your text and images stay in the Ask box so you can send again.
+- Images are not replayed if NexQ has to restart the Claude session; only the text is.
+
 ## How sessions work
 
 NexQ keeps a Claude session open and sends it only what is new, so answers stay fast and you do not pay to re-send the whole meeting every time.
@@ -53,6 +68,7 @@ Hovering the Claude chip in the footer shows the models, the number of requests 
 - NexQ never reads your `~/.claude` folder, your credentials, or any tokens. Sign-in happens only in Claude's own tool.
 - NexQ runs the unmodified `claude` program with all tools disabled, in an empty private folder. Claude cannot read your files, run commands, or browse on NexQ's behalf.
 - Claude API environment variables (such as `ANTHROPIC_API_KEY`) are removed from the process, so NexQ never passes an API key to Claude. The session uses whatever account you logged in with: if that login bills an API account rather than a Pro or Max plan, Settings and the footer show "This Claude login bills an API account, not your subscription." (amber, never "Connected"). It still works, at API prices; log in with your Claude account to use your subscription instead.
+- Images you paste into Ask go to Anthropic with your question, like the transcript. NexQ doesn't save them; the AI Log keeps only the text.
 - Transcript and context text you send is processed by Anthropic under your Claude account's terms, like any Claude conversation. Choose a local provider (Ollama, local Whisper) if audio and text must stay on your machine.
 
 ## Troubleshooting
