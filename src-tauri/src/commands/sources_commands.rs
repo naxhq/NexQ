@@ -112,21 +112,38 @@ pub fn is_valid_key(key: &str) -> bool {
     !key.is_empty() && key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
-/// What a stored secret is tied to: where the server starts (command and
-/// arguments, or URL) and its plain environment. A changed target must not
-/// receive the old secrets.
-fn launch_target(transport: &McpTransport, env: &[EnvVar]) -> (McpTransport, Vec<(String, String)>) {
+/// Everything a stored secret is tied to: where the server starts (command
+/// and arguments, or URL), its plain environment, and which secret variables
+/// and headers it takes (by name). A changed target must not receive the old
+/// secrets, so adding, removing or renaming a secret variable or header counts.
+#[derive(Debug, PartialEq)]
+struct LaunchTarget {
+    transport: McpTransport,
+    plain_env: Vec<(String, String)>,
+    secret_names: Vec<String>,
+    header_names: Vec<String>,
+}
+
+fn launch_target(transport: &McpTransport, env: &[EnvVar]) -> LaunchTarget {
+    let mut headers: Vec<String> = Vec::new();
     let transport = match transport {
-        McpTransport::Http { url, .. } => McpTransport::Http { url: url.clone(), header_names: Vec::new() },
+        McpTransport::Http { url, header_names } => {
+            headers = header_names.iter().map(|h| h.to_ascii_uppercase()).collect();
+            McpTransport::Http { url: url.clone(), header_names: Vec::new() }
+        }
         other => other.clone(),
     };
-    let mut plain: Vec<(String, String)> = env
+    let mut plain_env: Vec<(String, String)> = env
         .iter()
         .filter(|v| !v.secret)
         .map(|v| (v.name.to_ascii_uppercase(), v.value.clone().unwrap_or_default()))
         .collect();
-    plain.sort();
-    (transport, plain)
+    let mut secret_names: Vec<String> =
+        env.iter().filter(|v| v.secret).map(|v| v.name.to_ascii_uppercase()).collect();
+    plain_env.sort();
+    secret_names.sort();
+    headers.sort();
+    LaunchTarget { transport, plain_env, secret_names, header_names: headers }
 }
 
 /// Does `new` start somewhere other than the saved `old`?
@@ -135,7 +152,7 @@ fn target_changed(old: &McpServer, new_transport: &McpTransport, new_env: &[EnvV
 }
 
 /// Shown when an edit moved a server and its secrets must be typed again.
-const SECRETS_RESET: &str = "Enter the secrets again: the server's command, URL or environment changed";
+const SECRETS_RESET: &str = "Enter the secrets again: the server's command, URL, environment or secret names changed";
 
 /// The saved server with this id (backend state, never the frontend's copy).
 fn saved_server(state: &AppState, id: &str) -> Option<McpServer> {
@@ -883,13 +900,14 @@ mod tests {
             key: Some("mira".into()),
             label: "Mira 2".into(),
             transport: old.transport.clone(),
-            env: vec![FormPair { name: "API_KEY".into(), value: "".into() }],
+            env: vec![FormPair { name: "API_KEY".into(), value: "typed".into() }],
             headers: vec![],
         };
         let FormBuild { server, secrets, target_changed } =
             build_form_server(&form, &["other".into()], Some(&old), &|id| id == "mcp:mira:API_KEY").unwrap();
-        assert!(!target_changed);
-        assert!(secrets.is_empty());
+        // OLD_TOKEN was dropped: the secret names changed, so API_KEY was typed again.
+        assert!(target_changed);
+        assert_eq!(secrets.len(), 1);
         assert_eq!((server.key.as_str(), server.id.as_str(), server.enabled), ("mira", "id1", false));
         assert_eq!(server.tools, old.tools);
         assert!(server.last_check.is_none(), "an edited server is unchecked again");
@@ -1146,5 +1164,62 @@ mod tests {
 
         // Without a draft the server must be a saved one.
         assert!(plan_check(None, None, &[], &stored).is_err());
+    }
+
+    #[test]
+    fn secret_names_are_part_of_the_servers_identity() {
+        let old = saved_mira();
+        let stored = |_: &str| true;
+        let moved = |f: McpServerForm| build_form_server(&f, &[], Some(&old), &stored).unwrap_err();
+
+        // Same command, but a new secret variable (blank, "keep what is stored"): refused.
+        let mut added = mira_form("node", None, "");
+        added.env.push(FormPair { name: "EXTRA_TOKEN".into(), value: "".into() });
+        assert!(moved(added).contains("Enter the secrets again"));
+
+        // A secret variable renamed.
+        let mut renamed = mira_form("node", None, "");
+        renamed.env[0].name = "OTHER_KEY".into();
+        assert!(moved(renamed).contains("Enter the secrets again"));
+
+        // A secret variable dropped: nothing left to type, but it counts as a change.
+        let mut dropped = mira_form("node", None, "");
+        dropped.env.remove(0);
+        assert!(build_form_server(&dropped, &[], Some(&old), &stored).unwrap().target_changed);
+
+        // Typing the values again is how it goes through.
+        let mut typed = mira_form("node", None, "typed");
+        typed.env.push(FormPair { name: "EXTRA_TOKEN".into(), value: "x".into() });
+        assert!(build_form_server(&typed, &[], Some(&old), &stored).unwrap().target_changed);
+
+        // A secret moved to a different header, same URL.
+        let http = McpServer {
+            transport: McpTransport::Http { url: "https://a/mcp".into(), header_names: vec!["Authorization".into()] },
+            env: vec![],
+            ..saved_mira()
+        };
+        let form = |header: &str, value: &str| McpServerForm {
+            id: Some("id1".into()),
+            key: None,
+            label: "Mira".into(),
+            transport: McpTransport::Http { url: "https://a/mcp".into(), header_names: vec![] },
+            env: vec![],
+            headers: vec![FormPair { name: header.into(), value: value.into() }],
+        };
+        assert!(!build_form_server(&form("authorization", ""), &[], Some(&http), &stored).unwrap().target_changed);
+        let err = build_form_server(&form("X-Api-Key", ""), &[], Some(&http), &stored).unwrap_err();
+        assert!(err.contains("Enter the secrets again"), "{err}");
+
+        // A check of such a draft never reads the stored values.
+        let store = store_with_mira_secret();
+        let has = |id: &str| store.get(id).is_some();
+        let mut draft = mira_form("node", None, "typed");
+        draft.env.push(FormPair { name: "EXTRA_TOKEN".into(), value: "x".into() });
+        let plan = plan_check(Some(&old), Some(&draft), &["mira".into()], &has).unwrap();
+        assert!(!plan.use_stored);
+        assert_eq!(check_secret(&plan, &store, "mcp:mira:API_KEY").as_deref(), Some("typed"));
+        let mut blank = mira_form("node", None, "");
+        blank.env.push(FormPair { name: "EXTRA_TOKEN".into(), value: "".into() });
+        assert!(plan_check(Some(&old), Some(&blank), &["mira".into()], &has).is_err());
     }
 }
