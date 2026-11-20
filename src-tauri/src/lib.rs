@@ -40,6 +40,8 @@ use commands::meeting_commands;
 use commands::meeting_chat_commands;
 // == MODULE COMMANDS: settings ==
 use commands::settings_commands;
+// == MODULE COMMANDS: personal sources ==
+use commands::sources_commands;
 // == MODULE COMMANDS: models ==
 use commands::model_commands;
 // == MODULE COMMANDS: screen capture ==
@@ -701,6 +703,14 @@ pub fn run() {
             claude_cli_commands::claude_cli_models,
             claude_cli_commands::seed_claude_cli_models,
             claude_cli_commands::get_agent_sessions,
+            sources_commands::inspect_notes_folder,
+            sources_commands::import_mcp_servers_json,
+            sources_commands::save_mcp_server_form,
+            sources_commands::list_claude_code_mcp_servers,
+            sources_commands::import_claude_code_mcp_servers,
+            sources_commands::check_mcp_server,
+            sources_commands::delete_mcp_secrets,
+            sources_commands::open_source_file,
             claude_cli_commands::open_claude_login_terminal,
         ])
         .build(tauri::generate_context!())

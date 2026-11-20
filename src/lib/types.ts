@@ -1165,3 +1165,108 @@ export interface OverlayMeetingReadyEvent {
 export interface WindowMeetingEndedEvent {
   window: string;
 }
+
+// == PERSONAL SOURCES (notes folders + MCP servers) ==
+// Mirror `src-tauri/src/sources/config.rs` and `commands/sources_commands.rs`
+// field for field. Secret values never live in these: a secret env var or
+// header has no value here and sits in Windows Credential Manager.
+
+/** Which sources one answer may use: the two overlay pills. */
+export interface SourceToggles {
+  notes: boolean;
+  tools: boolean;
+}
+
+export interface NotesFolder {
+  id: string;
+  label: string;
+  path: string;
+  enabled: boolean;
+}
+
+export type McpTransport =
+  | { type: "stdio"; command: string; args: string[] }
+  | { type: "http"; url: string; header_names: string[] };
+
+export interface EnvVar {
+  name: string;
+  /** `null` exactly when `secret`. */
+  value: string | null;
+  secret: boolean;
+}
+
+export interface McpTool {
+  /** The server's own tool name, e.g. `kb_search`. */
+  name: string;
+  /** `mcp__<key>__<name>`. */
+  full_name: string;
+  allowed: boolean;
+}
+
+export interface McpCheckStatus {
+  ok: boolean;
+  tool_count: number;
+  error: string | null;
+  checked_at_ms: number;
+}
+
+export interface McpServer {
+  id: string;
+  /** Fixed at creation: the server's name in the generated mcp-config. */
+  key: string;
+  label: string;
+  transport: McpTransport;
+  enabled: boolean;
+  env: EnvVar[];
+  tools: McpTool[];
+  last_check: McpCheckStatus | null;
+  needs_sign_in: boolean;
+}
+
+export interface PersonalSourcesConfig {
+  notes_folders: NotesFolder[];
+  mcp_servers: McpServer[];
+  /** The one-time note about tool permissions was shown. */
+  mcp_notice_seen: boolean;
+}
+
+export interface NotesFolderInfo {
+  exists: boolean;
+  md_count: number;
+  /** The walk stopped at its entry limit: `md_count` is a lower bound. */
+  truncated: boolean;
+  /** Why this folder can't be a notes folder (a whole drive, NexQ's private files, the user's home). */
+  problem: string | null;
+}
+
+/** One name/value row of the server form (an env var or an HTTP header). */
+export interface FormPair {
+  name: string;
+  /** A secret left blank on an existing server keeps its saved value. */
+  value: string;
+}
+
+export interface McpServerForm {
+  /** `null` for a new server. */
+  id: string | null;
+  /** The existing server's key; `null` for a new server. */
+  key: string | null;
+  label: string;
+  /** For HTTP only the `url` is read: header names come from `headers`. */
+  transport: McpTransport;
+  env: FormPair[];
+  headers: FormPair[];
+}
+
+/** A server in Claude Code's own config, for the import picker. */
+export interface ClaudeCodeMcpServer {
+  name: string;
+  /** `node s.js`, or the URL. */
+  summary: string;
+  /** `"stdio"` | `"http"`; `"unsupported"` when it can't be imported. */
+  transport: string;
+  /** An OAuth server Claude Code signs in to itself: imported off. */
+  needs_sign_in: boolean;
+  /** Why it can't be imported at all (SSE, a malformed entry). */
+  unsupported: string | null;
+}

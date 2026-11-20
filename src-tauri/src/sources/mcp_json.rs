@@ -65,6 +65,25 @@ pub fn read_claude_code_servers(claude_json: &str) -> Result<Vec<(String, RawSer
     Ok(servers)
 }
 
+/// Every user-scope server of `~/.claude.json` by name, sorted, each with the
+/// reason it cannot be imported (SSE, a malformed entry) instead of failing
+/// the whole list.
+pub fn read_claude_code_entries(
+    claude_json: &str,
+) -> Result<Vec<(String, Result<RawServer, String>)>, String> {
+    let root: Value = serde_json::from_str(claude_json)
+        .map_err(|e| format!("Claude Code's config is not valid JSON ({e})"))?;
+    let Some(map) = root.get("mcpServers").and_then(Value::as_object) else {
+        return Ok(Vec::new());
+    };
+    let mut entries: Vec<_> = map
+        .iter()
+        .map(|(name, entry)| (name.clone(), parse_server(name, entry, true)))
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(entries)
+}
+
 /// `claude_code`: an HTTP server without headers (or with an `oauth` block) is
 /// one Claude Code signs in to itself, which NexQ cannot do.
 fn parse_server(name: &str, entry: &Value, claude_code: bool) -> Result<RawServer, String> {

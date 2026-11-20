@@ -40,6 +40,10 @@ import type {
   ClaudeCliStatus,
   ClaudeModelInfo,
   MeetingChatMessage,
+  ClaudeCodeMcpServer,
+  McpServer,
+  McpServerForm,
+  NotesFolderInfo,
 } from "./types";
 
 // == IPC: Audio (Sub-PRD 3) ==
@@ -879,6 +883,56 @@ export async function startPastMeetingSession(meetingId: string): Promise<void> 
 /** Close the Claude session of a past meeting (meeting view left). */
 export async function closePastMeetingSession(meetingId: string): Promise<void> {
   return invoke("close_past_meeting_session", { meetingId });
+}
+
+// == IPC: Personal sources (notes folders + MCP servers) ==
+
+/** Whether a folder exists, how many notes it holds, and why it can't be a notes folder (`problem`). */
+export async function inspectNotesFolder(path: string): Promise<NotesFolderInfo> {
+  return invoke<NotesFolderInfo>("inspect_notes_folder", { path });
+}
+
+/**
+ * Add the servers in pasted `mcpServers` JSON. Secret values are stored in
+ * Credential Manager and are not in the returned servers. `takenKeys` are the
+ * keys of the servers already saved.
+ */
+export async function importMcpServersJson(json: string, takenKeys: string[]): Promise<McpServer[]> {
+  return invoke<McpServer[]>("import_mcp_servers_json", { json, takenKeys });
+}
+
+/** Save the add/edit server form; secrets go to Credential Manager, the result holds names only. */
+export async function saveMcpServerForm(form: McpServerForm, takenKeys: string[]): Promise<McpServer> {
+  return invoke<McpServer>("save_mcp_server_form", { form, takenKeys });
+}
+
+/** The user-scope MCP servers in Claude Code's config (read only when called). */
+export async function listClaudeCodeMcpServers(): Promise<ClaudeCodeMcpServer[]> {
+  return invoke<ClaudeCodeMcpServer[]>("list_claude_code_mcp_servers");
+}
+
+/** Copy the named Claude Code servers into NexQ (OAuth ones come back off, `needs_sign_in`). */
+export async function importClaudeCodeMcpServers(names: string[], takenKeys: string[]): Promise<McpServer[]> {
+  return invoke<McpServer[]>("import_claude_code_mcp_servers", { names, takenKeys });
+}
+
+/**
+ * Start the server like a session would and list its tools (up to 60 s). A
+ * failing server does not reject: the result's `last_check` has `ok: false`
+ * and the `error`.
+ */
+export async function checkMcpServer(server: McpServer): Promise<McpServer> {
+  return invoke<McpServer>("check_mcp_server", { server });
+}
+
+/** Forget the saved secrets of a server that is being removed. */
+export async function deleteMcpSecrets(server: McpServer): Promise<void> {
+  return invoke("delete_mcp_secrets", { server });
+}
+
+/** Open a note with the default app; only a file inside an enabled notes folder. */
+export async function openSourceFile(path: string): Promise<void> {
+  return invoke("open_source_file", { path });
 }
 
 // == IPC: Ask this meeting ==

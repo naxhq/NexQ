@@ -13,13 +13,17 @@ pub struct NotesFolderInfo {
     pub md_count: usize,
     /// The walk stopped at the entry limit; `md_count` is a lower bound.
     pub truncated: bool,
+    /// Why this folder can't be a notes folder (a whole drive, NexQ's private
+    /// files, the user's home); set by the command, not by [`inspect_folder`].
+    #[serde(default)]
+    pub problem: Option<String>,
 }
 
 /// Count `.md` files (any case) below `path`, skipping names that start with `.`
 /// (`.obsidian`, `.git`, ...). Symlinked folders are not followed.
 pub fn inspect_folder(path: &Path) -> NotesFolderInfo {
     if !path.is_dir() {
-        return NotesFolderInfo { exists: false, md_count: 0, truncated: false };
+        return NotesFolderInfo { exists: false, md_count: 0, truncated: false, problem: None };
     }
     let mut md_count = 0;
     let mut visited = 0;
@@ -29,7 +33,7 @@ pub fn inspect_folder(path: &Path) -> NotesFolderInfo {
         for entry in entries.flatten() {
             visited += 1;
             if visited > MAX_ENTRIES {
-                return NotesFolderInfo { exists: true, md_count, truncated: true };
+                return NotesFolderInfo { exists: true, md_count, truncated: true, problem: None };
             }
             if entry.file_name().to_string_lossy().starts_with('.') {
                 continue;
@@ -47,7 +51,7 @@ pub fn inspect_folder(path: &Path) -> NotesFolderInfo {
             }
         }
     }
-    NotesFolderInfo { exists: true, md_count, truncated: false }
+    NotesFolderInfo { exists: true, md_count, truncated: false, problem: None }
 }
 
 #[cfg(test)]
@@ -71,11 +75,11 @@ mod tests {
         std::fs::write(dir.join(".obsidian").join("x.md"), "x").unwrap();
         std::fs::write(dir.join(".hidden.md"), "x").unwrap();
         let info = inspect_folder(&dir);
-        assert_eq!(info, NotesFolderInfo { exists: true, md_count: 2, truncated: false });
+        assert_eq!(info, NotesFolderInfo { exists: true, md_count: 2, truncated: false, problem: None });
         let _ = std::fs::remove_dir_all(&dir);
 
         let gone = inspect_folder(&dir);
-        assert_eq!(gone, NotesFolderInfo { exists: false, md_count: 0, truncated: false });
+        assert_eq!(gone, NotesFolderInfo { exists: false, md_count: 0, truncated: false, problem: None });
     }
 
     #[test]

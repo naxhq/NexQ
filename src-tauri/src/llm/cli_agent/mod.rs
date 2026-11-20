@@ -7,6 +7,7 @@ pub mod command;
 pub mod context;
 pub mod detect;
 pub mod manager;
+pub mod mcp_check;
 pub mod models;
 pub mod protocol;
 pub mod provider;

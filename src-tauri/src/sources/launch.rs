@@ -191,6 +191,23 @@ pub fn build_sources_launch(
     }))
 }
 
+/// The launch for checking one server (no model call): only that server in
+/// the mcp-config, no notes folders. Which of its tools are allowed does not
+/// matter: the check only reads the tool list the CLI reports at start.
+pub fn single_server_launch(
+    server: &McpServer,
+    secret: &dyn Fn(&str) -> Option<String>,
+) -> Result<SourcesLaunch, String> {
+    let entry = server_entry(server, secret)?;
+    let mut entries = Map::new();
+    entries.insert(server.key.clone(), entry);
+    Ok(SourcesLaunch {
+        mcp_config_json: Some(json!({ "mcpServers": Value::Object(entries) }).to_string()),
+        server_labels: vec![(server.key.clone(), server.label.clone())],
+        ..Default::default()
+    })
+}
+
 /// One server's entry in the mcp-config, with its own secret values inline.
 fn server_entry(
     server: &McpServer,
