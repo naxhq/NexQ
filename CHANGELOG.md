@@ -1,3 +1,14 @@
+# [2.41.0](https://github.com/naxhq/NexQ/compare/v2.40.0...v2.41.0) (2026-11-20)
+
+
+### Bug Fixes
+
+* **settings:** show which LLM provider is in use, which one you're viewing, and which are ready ([#127](https://github.com/naxhq/NexQ/issues/127)) ([bff1fc6](https://github.com/naxhq/NexQ/commit/bff1fc65355d7c4ecf49d95ae5bd75421e70c2ca))
+
+
+### Features
+
+* **sources:** notes folders and MCP servers for Claude answers ([#129](https://github.com/naxhq/NexQ/issues/129)) ([6adb9c2](https://github.com/naxhq/NexQ/commit/6adb9c2b843808dd01258a994f9ab7bd9abdb979))
 # [2.40.0](https://github.com/naxhq/NexQ/compare/v2.39.0...v2.40.0) (2026-11-20)
 
 
