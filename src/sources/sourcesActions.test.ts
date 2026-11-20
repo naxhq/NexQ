@@ -47,6 +47,21 @@ describe("applyCheckResult", () => {
     expect(now.last_check).toEqual(ok);
   });
 
+  it("takes the answer when the saved copy has the same settings in another key order", async () => {
+    // A config read back from disk has its keys sorted; the backend's answer doesn't.
+    const fromDisk = {
+      ...server(),
+      transport: { args: ["m.js"], command: "node", type: "stdio" },
+      env: [{ name: "A", secret: false, value: "1" }],
+    } as unknown as McpServer;
+    useSourcesStore.setState({ config: { ...DEFAULT_SOURCES_CONFIG, mcp_servers: [fromDisk] } });
+    await applyCheckResult(
+      server({ env: [{ name: "A", value: "1", secret: false }], tools: [tool("get", true)], last_check: ok }),
+    );
+    expect(saved()[0].last_check).toEqual(ok);
+    expect(saved()[0].tools.map((t) => t.name)).toEqual(["get"]);
+  });
+
   it("drops tools that vanished and keeps the tools of a failed Check", async () => {
     await patchMcpServer("s1", (s) => ({ ...s, tools: [tool("old", true), tool("get", true)] }));
     await applyCheckResult(server({ tools: [tool("get", true)], last_check: ok }));
