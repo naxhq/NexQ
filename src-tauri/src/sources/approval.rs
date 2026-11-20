@@ -82,7 +82,16 @@ fn command_line(command: &str, args: &[String]) -> String {
 }
 
 pub fn prompt_for(server: &McpServer) -> ApprovalPrompt {
-    let mut env_names: Vec<&str> = server.env.iter().map(|v| v.name.as_str()).collect();
+    // Plain values are shown (they change what runs, e.g. NODE_OPTIONS);
+    // secret values never are.
+    let mut env_names: Vec<String> = server
+        .env
+        .iter()
+        .map(|v| match (&v.value, v.secret) {
+            (Some(value), false) => shown(&format!("{}={}", v.name, value)),
+            _ => v.name.clone(),
+        })
+        .collect();
     env_names.sort();
     let env_line = if env_names.is_empty() {
         String::new()
@@ -322,6 +331,10 @@ mod tests {
         let p = prompt_for(&http("https://x.test/mcp", &["Authorization"]));
         assert!(p.body.starts_with("NexQ will connect to:\nhttps://x.test/mcp\n\nfor the server \"Web\"."));
         assert!(p.body.contains("sends the headers"));
+        let leaked = EnvVar { name: "API_KEY".into(), value: Some("hunter2".into()), secret: true };
+        let p = prompt_for(&stdio("node", &[], vec![plain("NODE_OPTIONS", "--require x.js"), leaked]));
+        assert!(p.body.contains("NODE_OPTIONS=--require x.js"), "a plain value changes what runs, so it is shown");
+        assert!(p.body.contains("API_KEY") && !p.body.contains("hunter2"), "a secret value never is");
     }
 
     #[test]
