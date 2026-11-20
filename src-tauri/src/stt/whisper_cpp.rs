@@ -403,9 +403,7 @@ impl STTProvider for WhisperCppSTT {
                     }
                     Err(e) => {
                         log::error!("WhisperCppSTT: Inference failed: {}", e);
-                        let detected_language = (!lang_code.eq_ignore_ascii_case("auto"))
-                            .then(|| lang.to_string());
-                        (String::new(), detected_language)
+                        (String::new(), crate::stt::provider::reported_language(lang))
                     }
                 }
             };
@@ -557,11 +555,7 @@ impl STTProvider for WhisperCppSTT {
                                 confidence: 0.92,
                                 timestamp_ms,
                                 speaker: None,
-                                language: if language.eq_ignore_ascii_case("auto") {
-                                    None
-                                } else {
-                                    Some(language.clone())
-                                },
+                                language: crate::stt::provider::reported_language(&language),
                                 segment_id: Some(segment_id),
                                 duration_ms: None,
                                 speaker_tag: None,

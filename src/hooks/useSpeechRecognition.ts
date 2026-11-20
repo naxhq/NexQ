@@ -114,7 +114,14 @@ export function useSpeechRecognition() {
   // Track consecutive restart failures for backoff
   const restartFailCountRef = useRef(0);
 
+  // True from the moment an instance starts until the next run of the effect below
+  // (whose cleanup has already stopped it by then).
+  const instanceStartedRef = useRef(false);
+
   useEffect(() => {
+    const hadInstance = instanceStartedRef.current;
+    instanceStartedRef.current = false;
+
     // Always clean up any existing recognition first
     if (recognitionRef.current) {
       shouldRestartRef.current = false;
@@ -122,7 +129,22 @@ export function useSpeechRecognition() {
       recognitionRef.current = null;
     }
 
-    if (!isRecording || !usesWebSpeech || sttLanguage === AUTO_STT_LANGUAGE) return;
+    if (!isRecording || !usesWebSpeech) return;
+    if (sttLanguage === AUTO_STT_LANGUAGE) {
+      // Web Speech can't detect the language, so Auto-detect silences it. Say so
+      // only when it was running a moment ago (Rust already told the user at a start).
+      if (hadInstance) {
+        const side = getSpeakerLabel(useConfigStore.getState().meetingAudioConfig) === "Them"
+          ? (useMeetingStore.getState().audioMode === "in_person" ? "Room" : "Them")
+          : "You";
+        emit(
+          "capture_warning",
+          `${side} isn't being transcribed: Web Speech can't detect the language. ` +
+          `Pick a language (it applies right away) or choose another provider for ${side}.`,
+        ).catch(() => {});
+      }
+      return;
+    }
 
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -152,6 +174,7 @@ export function useSpeechRecognition() {
     recognition.lang = currentLanguage;
 
     recognitionRef.current = recognition;
+    instanceStartedRef.current = true;
     shouldRestartRef.current = true;
     sessionPrefixRef.current = Date.now().toString(36).slice(-4);
     restartFailCountRef.current = 0;

@@ -930,13 +930,42 @@ pub async fn start_capture_per_party(
 
     // Validate provider/model combinations before stopping an existing meeting,
     // switching the default microphone, or starting new audio capture.
+    //
+    // A side that can't detect the language in an Auto-detect meeting that is
+    // just starting goes without STT instead of blocking the meeting, and the
+    // user is told once capture is up. While a capture runs (a swap), the
+    // refusal is returned and the running capture is left alone.
+    let was_capturing = state
+        .audio
+        .lock()
+        .map(|guard| guard.as_ref().is_some_and(|mgr| mgr.is_capturing()))
+        .unwrap_or(false);
+    let mut refusals: Vec<String> = Vec::new();
+    let mut you_refused = false;
+    let mut them_refused = false;
     let you_stt = if skip_you_stt {
         crate::stt::emit_stt_debug(&app, "info", "stt", "'You' STT skipped (in-person meeting)");
         None
     } else {
-        create_stt_provider_for_party(&you, &state, &app, "You").await?
+        let (provider, refusal) = apply_auto_refusal(
+            create_stt_provider_for_party(&you, &state, &app, "You").await,
+            was_capturing,
+        )?;
+        if let Some(message) = refusal {
+            you_refused = true;
+            refusals.push(format!("You won't be transcribed in this meeting. {message}"));
+        }
+        provider
     };
-    let them_stt = create_stt_provider_for_party(&them, &state, &app, "Them").await?;
+    let (them_stt, them_refusal) = apply_auto_refusal(
+        create_stt_provider_for_party(&them, &state, &app, "Them").await,
+        was_capturing,
+    )?;
+    if let Some(message) = them_refusal {
+        them_refused = true;
+        let side = if skip_you_stt { "Room" } else { "Them" };
+        refusals.push(format!("{side} won't be transcribed in this meeting. {message}"));
+    }
 
     // If already capturing, stop first (allows mid-meeting hot-swap).
     let mut stopped_existing_capture = false;
@@ -994,8 +1023,8 @@ pub async fn start_capture_per_party(
     // The override must happen before capture starts so that Web Speech API
     // picks up the correct device when recognition.start() is called.
     {
-        let you_needs_override = needs_default_mic_override(&you, skip_you_stt);
-        let them_needs_override = needs_default_mic_override(&them, false);
+        let you_needs_override = needs_default_mic_override(&you, skip_you_stt || you_refused);
+        let them_needs_override = needs_default_mic_override(&them, them_refused);
         log::info!(
             "IPolicyConfig check: You needs_override={} (provider='{}', stt_skipped={}), Them needs_override={} (provider='{}')",
             you_needs_override, you.stt_provider, skip_you_stt, them_needs_override, them.stt_provider
@@ -1591,6 +1620,13 @@ pub async fn start_capture_per_party(
     });
 
     log::info!("Per-party audio capture started");
+    if !refusals.is_empty() {
+        let warning = format!(
+            "{} Change it now in Audio & Devices, or pick a language before your next meeting.",
+            refusals.join(" ")
+        );
+        let _ = app.emit("capture_warning", warning);
+    }
     Ok(())
 }
 
@@ -1659,10 +1695,7 @@ async fn create_stt_provider_for_party(
                             .and_then(|name| name.to_str())
                             .unwrap_or_default();
                         if !is_multilingual_whisper_model(resolved_model) {
-                            return Err(format!(
-                                "Auto-detect doesn't work with the {} Whisper model, used for {}. Choose Deepgram Nova-3, Whisper (Tiny, Base, Small, Medium or Large v3 Turbo) or Parakeet TDT 0.6B v3 for that side, or pick a language.",
-                                resolved_model, party_role
-                            ));
+                            return Err(whisper_auto_refusal(resolved_model, party_role));
                         }
                     }
                     let lang = stt_language.clone();
@@ -1884,7 +1917,7 @@ async fn create_stt_provider_for_party(
                     // Auto-detect model type: transducer (encoder/decoder/joiner) vs CTC (model.onnx)
                     let transducer = crate::stt::local_engines::model_discovery::discover_model_files(&model_dir);
                     if stt_language.eq_ignore_ascii_case("auto") && transducer.is_err() {
-                        return Err(format!("Auto-detect doesn't work with Parakeet CTC 110M, used for {}. Choose Parakeet TDT 0.6B v3, Deepgram Nova-3 or Whisper for that side, or pick a language.", party_role));
+                        return Err(parakeet_ctc_auto_refusal(party_role));
                     }
                     if transducer.is_ok() {
                         // Transducer model (e.g., 0.6B v3) → use in-process ORT streaming
@@ -2045,21 +2078,72 @@ fn validate_auto_language_provider(
         return Ok(());
     }
 
-    let provider_name = match provider {
-        STTProviderType::Deepgram => format!("Deepgram {}", model),
-        STTProviderType::WhisperCpp => format!("the {} Whisper model", model),
-        STTProviderType::ParakeetTdt => "Parakeet CTC 110M".to_string(),
-        STTProviderType::WebSpeech => "Web Speech".to_string(),
-        STTProviderType::WindowsNative => "Windows speech recognition".to_string(),
-        STTProviderType::AzureSpeech => "Azure Speech".to_string(),
-        STTProviderType::SherpaOnnx => "Sherpa-ONNX".to_string(),
-        STTProviderType::OrtStreaming => "ORT Streaming".to_string(),
-        _ => "this speech-to-text provider".to_string(),
-    };
-    Err(format!(
-        "Auto-detect doesn't work with {}, used for {}. Choose Deepgram Nova-3, Whisper or Parakeet TDT 0.6B v3 for that side, or pick a language.",
-        provider_name, party_role
-    ))
+    Err(match provider {
+        STTProviderType::WhisperCpp => whisper_auto_refusal(model, party_role),
+        STTProviderType::ParakeetTdt => parakeet_ctc_auto_refusal(party_role),
+        STTProviderType::Deepgram => {
+            auto_refusal(&format!("Deepgram {}", deepgram_model_label(model)), party_role, AUTO_DETECT_ADVICE)
+        }
+        STTProviderType::WebSpeech => auto_refusal("Web Speech", party_role, AUTO_DETECT_ADVICE),
+        STTProviderType::WindowsNative => auto_refusal("Windows Speech", party_role, AUTO_DETECT_ADVICE),
+        STTProviderType::AzureSpeech => auto_refusal("Azure Speech", party_role, AUTO_DETECT_ADVICE),
+        STTProviderType::SherpaOnnx => auto_refusal("Sherpa-ONNX", party_role, AUTO_DETECT_ADVICE),
+        STTProviderType::OrtStreaming => auto_refusal("ORT Streaming", party_role, AUTO_DETECT_ADVICE),
+        _ => auto_refusal("this speech-to-text provider", party_role, AUTO_DETECT_ADVICE),
+    })
+}
+
+/// Start of every message that refuses Auto-detect for one side. The frontend
+/// recognises it (`AUTO_DETECT_REFUSAL_PREFIX` in useAudioConfigSync.ts).
+const AUTO_DETECT_REFUSAL: &str = "Auto-detect doesn't work with";
+const AUTO_DETECT_ADVICE: &str =
+    "Choose Deepgram Nova-3, Parakeet TDT 0.6B v3, Groq Whisper or Whisper API for that side, or pick a language.";
+const AUTO_DETECT_WHISPER_ADVICE: &str =
+    "Choose a multilingual Whisper model (Tiny, Base, Small, Medium or Large v3 Turbo), or pick a language.";
+
+fn auto_refusal(name: &str, party_role: &str, advice: &str) -> String {
+    format!("{AUTO_DETECT_REFUSAL} {name}, used for {party_role}. {advice}")
+}
+
+/// A Whisper.cpp model that can't detect the language ("ggml-base.en.bin", "distil-large-v3").
+fn whisper_auto_refusal(model: &str, party_role: &str) -> String {
+    let shown = model.trim_start_matches("ggml-").trim_end_matches(".bin");
+    auto_refusal(&format!("the {shown} Whisper model"), party_role, AUTO_DETECT_WHISPER_ADVICE)
+}
+
+fn parakeet_ctc_auto_refusal(party_role: &str) -> String {
+    auto_refusal("Parakeet CTC 110M", party_role, AUTO_DETECT_ADVICE)
+}
+
+/// The Deepgram model's name as the STT Providers picker shows it.
+fn deepgram_model_label(model: &str) -> &str {
+    match model {
+        "nova-3" | "nova-3-general" => "Nova 3",
+        "flux-general-en" => "Flux",
+        "flux-general-multi" => "Flux Multilingual",
+        "nova-2" => "Nova 2",
+        "nova" => "Nova",
+        "enhanced" => "Enhanced",
+        other => other,
+    }
+}
+
+/// A side whose provider can't detect the language during a start (nothing is
+/// running yet) is left without speech-to-text rather than blocking the whole
+/// meeting. A refusal while a capture runs (a mid-meeting swap), or any other
+/// error, stays an error so the running capture is kept. The second value is
+/// the refusal to tell the user about.
+fn apply_auto_refusal<T>(
+    result: Result<Option<T>, String>,
+    was_capturing: bool,
+) -> Result<(Option<T>, Option<String>), String> {
+    match result {
+        Ok(provider) => Ok((provider, None)),
+        Err(message) if !was_capturing && message.starts_with(AUTO_DETECT_REFUSAL) => {
+            Ok((None, Some(message)))
+        }
+        Err(message) => Err(message),
+    }
 }
 
 fn resolve_parakeet_model_id(model: &str) -> String {
@@ -2308,46 +2392,68 @@ mod tests {
     fn automatic_language_detection_is_limited_to_compatible_providers_and_models() {
         use crate::stt::provider::STTProviderType;
 
-        // Keep in step with AUTO_DETECT_CASES in src/lib/sttLanguages.test.ts.
-        let cases: [(&str, &str, bool); 24] = [
-            ("deepgram", "nova-3", true),
-            ("deepgram", "nova-3-general", true),
-            ("deepgram", "flux-general-multi", true),
-            ("deepgram", "flux-general-en", false),
-            ("deepgram", "nova-2", false),
-            ("whisper_cpp", "tiny", true),
-            ("whisper_cpp", "base", true),
-            ("whisper_cpp", "small", true),
-            ("whisper_cpp", "medium", true),
-            ("whisper_cpp", "large-v3-turbo", true),
-            ("whisper_cpp", "distil-large-v3", false),
-            ("parakeet_tdt", "parakeet-tdt-0.6b-v3-int8", true),
-            ("parakeet_tdt", "parakeet-tdt-ctc-110m-int8", false),
-            ("whisper_api", "", true),
-            ("groq_whisper", "", true),
-            ("cartesia", "", true),
-            ("web_speech", "", false),
-            ("windows_native", "", false),
-            ("azure_speech", "", false),
-            ("sherpa_onnx", "", false),
-            ("ort_streaming", "", false),
-            ("deepgram", "", false),
-            ("whisper_cpp", "ggml-small.bin", true),
-            ("whisper_cpp", "ggml-base.en.bin", false),
-        ];
-        for (provider, model, expected) in cases {
+        // The same table src/lib/sttLanguages.test.ts reads.
+        let table: serde_json::Value =
+            serde_json::from_str(include_str!("../../../src/lib/autoDetectCases.json")).unwrap();
+        let cases = table["cases"].as_array().unwrap();
+        assert!(cases.len() > 20);
+        for case in cases {
+            let provider = case["provider"].as_str().unwrap();
+            let model = case["model"].as_str().unwrap();
+            let expected = case["supported"].as_bool().unwrap();
             let kind = STTProviderType::from_str(provider).expect(provider);
             assert_eq!(supports_auto_language(&kind, model), expected, "{provider} / {model}");
-            assert_eq!(validate_auto_language_provider(&kind, model, "You").is_ok(), expected);
+            let result = validate_auto_language_provider(&kind, model, "You");
+            assert_eq!(result.is_ok(), expected, "{provider} / {model}");
+            if let Err(message) = result {
+                let name = case["name"].as_str().unwrap();
+                assert!(
+                    message.starts_with(&format!("{AUTO_DETECT_REFUSAL} {name}, used for You. ")),
+                    "{message}"
+                );
+            }
         }
 
-        let message = validate_auto_language_provider(&STTProviderType::WebSpeech, "", "You").unwrap_err();
-        assert!(message.contains("Web Speech") && message.contains("used for You"), "{message}");
+        // Advice never points a failing Whisper model at "Whisper" in general.
+        let whisper = validate_auto_language_provider(&STTProviderType::WhisperCpp, "distil-large-v3", "Them")
+            .unwrap_err();
+        assert!(whisper.ends_with("Choose a multilingual Whisper model (Tiny, Base, Small, Medium or Large v3 Turbo), or pick a language."), "{whisper}");
+        let web = validate_auto_language_provider(&STTProviderType::WebSpeech, "", "You").unwrap_err();
+        assert!(web.ends_with("Choose Deepgram Nova-3, Parakeet TDT 0.6B v3, Groq Whisper or Whisper API for that side, or pick a language."), "{web}");
         assert_eq!(resolve_parakeet_model_id("small"), "parakeet-tdt-0.6b-v3-int8");
         assert_eq!(
             resolve_parakeet_model_id("parakeet-tdt-ctc-110m-int8"),
             "parakeet-tdt-ctc-110m-int8"
         );
+    }
+
+    #[test]
+    fn every_auto_detect_refusal_starts_with_the_shared_prefix() {
+        for message in [
+            validate_auto_language_provider(&crate::stt::provider::STTProviderType::AzureSpeech, "", "You")
+                .unwrap_err(),
+            whisper_auto_refusal("ggml-base.en.bin", "Them"),
+            parakeet_ctc_auto_refusal("You"),
+        ] {
+            assert!(message.starts_with(AUTO_DETECT_REFUSAL), "{message}");
+        }
+        assert!(whisper_auto_refusal("ggml-base.en.bin", "Them").contains("the base.en Whisper model, used for Them"));
+    }
+
+    #[test]
+    fn a_refused_side_goes_without_stt_only_when_nothing_is_running() {
+        let refusal = parakeet_ctc_auto_refusal("You");
+        // Fine providers pass through untouched.
+        assert!(matches!(apply_auto_refusal(Ok(Some(1)), false), Ok((Some(1), None))));
+        // Refusal at a start: the side gets no provider and the reason is kept.
+        match apply_auto_refusal::<u8>(Err(refusal.clone()), false) {
+            Ok((None, Some(message))) => assert_eq!(message, refusal),
+            _ => panic!("a refusal at a start should leave the side without STT"),
+        }
+        // Refusal while a capture runs (a swap): stays an error.
+        assert_eq!(apply_auto_refusal::<u8>(Err(refusal.clone()), true).unwrap_err(), refusal);
+        // Any other error stays an error, running or not.
+        assert!(apply_auto_refusal::<u8>(Err("Deepgram key missing".into()), false).is_err());
     }
 
     #[test]

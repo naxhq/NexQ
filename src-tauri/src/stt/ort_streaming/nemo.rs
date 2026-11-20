@@ -263,7 +263,7 @@ pub(super) fn run(
                 result_tx.blocking_send(TranscriptResult {
                     text, is_final: true, confidence: 0.9,
                     timestamp_ms: segment_start_ms,
-                    speaker: None, language: Some(language.to_owned()), segment_id: Some(format!("ort_{segment}")),
+                    speaker: None, language: crate::stt::provider::reported_language(language), segment_id: Some(format!("ort_{segment}")),
                     duration_ms: Some(duration_ms), speaker_tag: None,
                     turn: None,
                 }).map_err(|e| e.to_string())?;

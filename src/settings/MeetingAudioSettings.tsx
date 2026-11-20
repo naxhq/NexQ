@@ -410,8 +410,8 @@ export function MeetingAudioSettings() {
       {sttLanguage === AUTO_STT_LANGUAGE && (
         <p id="audio-stt-auto-description" className={`mb-3 text-xs ${unsupportedAutoChannels.length ? "text-warning" : "text-muted-foreground"}`}>
           {unsupportedAutoChannels.length
-            ? `Auto-detect won't work for ${unsupportedAutoChannels.join(" and ")} yet. See the warning on ${unsupportedAutoChannels.length > 1 ? "each card" : "its card"} below, or pick a language.`
-            : "For speech that switches languages within a sentence, use Deepgram Nova-3 on that audio channel."}
+            ? `Auto-detect won't work for ${unsupportedAutoChannels.join(" and ")}. See ${unsupportedAutoChannels.length > 1 ? "their cards" : "its card"} below, or pick a language.`
+            : "For speech that switches languages mid-sentence, use Deepgram Nova-3."}
         </p>
       )}
 

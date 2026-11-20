@@ -868,8 +868,7 @@ fn inference_thread_main(
                             confidence: 0.80,
                             timestamp_ms: epoch_ms(),
                             speaker: None,
-                            language: (!language.eq_ignore_ascii_case("auto"))
-                                .then(|| language.clone()),
+                            language: crate::stt::provider::reported_language(&language),
                             segment_id: Some(seg_id),
                             duration_ms: None,
                             speaker_tag: None,
@@ -891,8 +890,7 @@ fn inference_thread_main(
                                 confidence: 0.90,
                                 timestamp_ms: epoch_ms(),
                                 speaker: None,
-                                language: (!language.eq_ignore_ascii_case("auto"))
-                                    .then(|| language.clone()),
+                                language: crate::stt::provider::reported_language(&language),
                                 segment_id: Some(seg_id),
                                 duration_ms: None,
                                 speaker_tag: None,
@@ -922,7 +920,7 @@ fn inference_thread_main(
                 confidence: 0.85,
                 timestamp_ms: epoch_ms(),
                 speaker: None,
-                language: (!language.eq_ignore_ascii_case("auto")).then_some(language),
+                language: crate::stt::provider::reported_language(&language),
                 segment_id: Some(seg_id),
                 duration_ms: None,
                 speaker_tag: None,

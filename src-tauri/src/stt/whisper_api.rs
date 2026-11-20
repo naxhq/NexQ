@@ -152,8 +152,7 @@ impl WhisperApiSTT {
                                         confidence: 0.95, // Whisper doesn't return confidence
                                         timestamp_ms,
                                         speaker: None,
-                                        language: (!language.eq_ignore_ascii_case("auto"))
-                                            .then(|| language.to_string()),
+                                        language: crate::stt::provider::reported_language(language),
                                         segment_id: None,
                                         duration_ms: None,
                                         speaker_tag: None,
@@ -262,8 +261,7 @@ impl STTProvider for WhisperApiSTT {
                     confidence: 0.0,
                     timestamp_ms,
                     speaker: None,
-                    language: (!self.language.eq_ignore_ascii_case("auto"))
-                        .then(|| self.language.clone()),
+                    language: crate::stt::provider::reported_language(&self.language),
                     segment_id: None,
                     duration_ms: None,
                     speaker_tag: None,

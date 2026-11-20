@@ -77,17 +77,47 @@ export interface AutoDetectSide {
 
 /** The model that will actually run for a side, as far as the settings know. */
 export function autoDetectModelFor(side: AutoDetectSide, models: AutoDetectModels): string | null | undefined {
-  if (side.provider === "deepgram") return models.deepgram;
-  return side.localModel ?? (side.provider === "whisper_cpp" ? models.whisperCpp : models.parakeet);
+  switch (side.provider) {
+    case "deepgram":
+      return models.deepgram;
+    case "whisper_cpp":
+      return side.localModel ?? models.whisperCpp;
+    case "parakeet_tdt":
+      return side.localModel ?? models.parakeet;
+    default:
+      return undefined;
+  }
 }
 
 const PROVIDER_NAMES: Partial<Record<STTProviderType, string>> = {
   web_speech: "Web Speech",
-  windows_native: "Windows speech recognition",
+  windows_native: "Windows Speech",
   azure_speech: "Azure Speech",
   sherpa_onnx: "Sherpa-ONNX",
   ort_streaming: "ORT Streaming",
 };
+
+/** Deepgram models as the STT Providers picker names them. */
+const DEEPGRAM_MODEL_LABELS: Record<string, string> = {
+  "nova-3": "Nova 3",
+  "nova-3-general": "Nova 3",
+  "flux-general-en": "Flux",
+  "flux-general-multi": "Flux Multilingual",
+  "nova-2": "Nova 2",
+  nova: "Nova",
+  enhanced: "Enhanced",
+};
+
+/**
+ * How Rust starts every message that refuses Auto-detect for a side
+ * (AUTO_DETECT_REFUSAL in src-tauri/src/commands/audio_commands.rs).
+ */
+export const AUTO_DETECT_REFUSAL_PREFIX = "Auto-detect doesn't work with";
+
+const AUTO_DETECT_ADVICE =
+  "Choose Deepgram Nova-3, Parakeet TDT 0.6B v3, Groq Whisper or Whisper API for that side, or pick a language.";
+const AUTO_DETECT_WHISPER_ADVICE =
+  "Choose a multilingual Whisper model (Tiny, Base, Small, Medium or Large v3 Turbo), or pick a language.";
 
 /**
  * Plain-language reason Auto-detect won't work for one side, or null when it
@@ -101,11 +131,11 @@ export function autoDetectProblem(
   const model = autoDetectModelFor(side, models);
   if (supportsSTTAutoDetection(side.provider, model)) return null;
   let name = PROVIDER_NAMES[side.provider] ?? "this speech-to-text provider";
-  if (side.provider === "deepgram") name = `Deepgram ${model ?? "with this model"}`;
+  if (side.provider === "deepgram") name = `Deepgram ${(model && DEEPGRAM_MODEL_LABELS[model]) || model || "(this model)"}`;
   if (side.provider === "whisper_cpp") name = `the ${model ? whisperModelId(model) : "selected"} Whisper model`;
   if (side.provider === "parakeet_tdt") name = "Parakeet CTC 110M";
-  return `Auto-detect doesn't work with ${name}, used for ${label}. ` +
-    "Choose Deepgram Nova-3, Whisper or Parakeet TDT 0.6B v3 for that side, or pick a language.";
+  const advice = side.provider === "whisper_cpp" ? AUTO_DETECT_WHISPER_ADVICE : AUTO_DETECT_ADVICE;
+  return `${AUTO_DETECT_REFUSAL_PREFIX} ${name}, used for ${label}. ${advice}`;
 }
 
 /** Languages Cartesia ink-2 detects on its own (it has no language setting). */

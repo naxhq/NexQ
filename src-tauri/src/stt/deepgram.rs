@@ -331,9 +331,10 @@ impl DeepgramSTT {
             "channels=1".to_string(),
             format!("model={}", self.config.model),
         ];
-        if let Some(language) = deepgram_language_parameter(&self.config.model, &self.language) {
-            params.push(format!("language={}", language));
-        }
+        params.push(format!(
+            "language={}",
+            deepgram_language_parameter(&self.config.model, &self.language)
+        ));
 
         if self.config.smart_format {
             params.push("smart_format=true".to_string());
@@ -1314,13 +1315,13 @@ fn normalize_deepgram_language(language: &str) -> String {
     }
 }
 
-fn deepgram_language_parameter(model: &str, language: &str) -> Option<String> {
+fn deepgram_language_parameter(model: &str, language: &str) -> String {
     if matches!(model, "nova-3" | "nova-3-general")
         && language.trim().eq_ignore_ascii_case("auto")
     {
-        Some("multi".to_string())
+        "multi".to_string()
     } else {
-        Some(normalize_deepgram_language(language))
+        normalize_deepgram_language(language)
     }
 }
 

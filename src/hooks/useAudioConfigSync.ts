@@ -6,16 +6,14 @@
 // - appliedConfigRef: what Rust currently has running (only set after successful restart)
 // - pendingConfigRef: set immediately to prevent duplicate debounce scheduling
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useConfigStore } from "../stores/configStore";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useDevLogStore } from "../stores/devLogStore";
 import { useTranscriptStore } from "../stores/transcriptStore";
 import { startCapturePerParty } from "../lib/ipc";
 import { skipYouStt } from "../lib/audioMode";
-
-/** How Rust words a refusal made before any capture is stopped (audio_commands.rs). */
-const AUTO_DETECT_REFUSAL_PREFIX = "Auto-detect doesn't work with";
+import { AUTO_DETECT_REFUSAL_PREFIX } from "../lib/sttLanguages";
 
 export function useAudioConfigSync() {
   const isRecording = useMeetingStore((s) => s.isRecording);
@@ -27,6 +25,9 @@ export function useAudioConfigSync() {
   const pendingConfigRef = useRef<string | null>(null);
   // Guard against concurrent restart attempts
   const restartingRef = useRef(false);
+  // A change arrived while a swap was running: look at the config again once it ends
+  const retryQueuedRef = useRef(false);
+  const [retryTick, setRetryTick] = useState(0);
   // Debounce timer to batch rapid config changes
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -66,10 +67,12 @@ export function useAudioConfigSync() {
     debounceRef.current = setTimeout(async () => {
       debounceRef.current = null;
 
-      // If already restarting, clear pending so next effect re-schedules
+      // If already restarting, clear pending and retry as soon as the current swap ends
+      // (the effect only re-runs when the config changes, so it has to be nudged).
       if (restartingRef.current) {
         log("warn", "config", "Hot-swap already in progress — queued for retry");
         pendingConfigRef.current = null;
+        retryQueuedRef.current = true;
         return;
       }
 
@@ -119,9 +122,13 @@ export function useAudioConfigSync() {
           .catch(() => {});
       } finally {
         restartingRef.current = false;
+        if (retryQueuedRef.current) {
+          retryQueuedRef.current = false;
+          setRetryTick((tick) => tick + 1);
+        }
       }
     }, 300);
-  }, [isRecording, meetingAudioConfig]);
+  }, [isRecording, meetingAudioConfig, retryTick]);
 
   // Reset when meeting ends
   useEffect(() => {
@@ -129,6 +136,7 @@ export function useAudioConfigSync() {
       appliedConfigRef.current = null;
       pendingConfigRef.current = null;
       restartingRef.current = false;
+      retryQueuedRef.current = false;
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
         debounceRef.current = null;

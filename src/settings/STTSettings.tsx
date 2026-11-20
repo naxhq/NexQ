@@ -286,8 +286,13 @@ export function STTSettings() {
   const verifiedCloudProviders = useConfigStore((s) => s.verifiedCloudProviders);
   const setVerifiedCloudProviders = useConfigStore((s) => s.setVerifiedCloudProviders);
 
+  // Starts on the provider "You" actually uses (Audio & Devices can change it).
+  const youProvider = meetingAudioConfig?.you.stt_provider;
   const [selectedProvider, setSelectedProvider] =
-    useState<STTProviderType>(sttProvider);
+    useState<STTProviderType>(youProvider ?? sttProvider);
+  useEffect(() => {
+    if (youProvider) setSelectedProvider(youProvider);
+  }, [youProvider]);
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
   const [hasStoredKey, setHasStoredKey] = useState(false);
@@ -309,15 +314,16 @@ export function STTSettings() {
     activeParakeetModel.includes("ctc-110m") &&
     !sttLanguage.toLowerCase().startsWith("en");
 
-  const localModel = meetingAudioConfig?.you.stt_provider === selectedProvider
-    ? meetingAudioConfig.you.local_model_id
-    : undefined;
+  // The "You" side as meetings will run it; before the audio setup exists, the picker's choice.
+  const youSide = meetingAudioConfig
+    ? { provider: meetingAudioConfig.you.stt_provider, localModel: meetingAudioConfig.you.local_model_id }
+    : { provider: selectedProvider, localModel: undefined };
   const autoModels = { deepgram: deepgramModel, whisperCpp: activeWhisperModel, parakeet: activeParakeetModel };
   const autoDetectionSelected = sttLanguage === AUTO_STT_LANGUAGE;
   const inPerson = useMeetingStore((s) => skipYouStt(s.audioMode));
   // This page picks the "You" provider; the "Them" side is set in Audio & Devices.
   const autoProblems = !autoDetectionSelected ? [] : [
-    inPerson ? null : autoDetectProblem({ provider: selectedProvider, localModel }, autoModels, "You"),
+    inPerson ? null : autoDetectProblem(youSide, autoModels, "You"),
     meetingAudioConfig
       ? autoDetectProblem(
           { provider: meetingAudioConfig.them.stt_provider, localModel: meetingAudioConfig.them.local_model_id },
@@ -793,7 +799,7 @@ export function STTSettings() {
               : <p>
                   {selectedProvider === "deepgram" && isDeepgramNova3(deepgramModel)
                     ? "Nova-3 can transcribe multiple languages within the same sentence."
-                    : "For speech that switches languages within a sentence, choose Deepgram Nova-3."}
+                    : "For speech that switches languages mid-sentence, use Deepgram Nova-3."}
                 </p>}
           </div>
         )}

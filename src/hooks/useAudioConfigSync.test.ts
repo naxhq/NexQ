@@ -80,6 +80,26 @@ it("can switch again after a refusal", async () => {
   expect(startCapturePerParty).toHaveBeenLastCalledWith(other.you, other.them, { skipYouStt: false });
 });
 
+it("applies a change made while a swap is running once that swap ends", async () => {
+  let finishFirst!: () => void;
+  vi.mocked(startCapturePerParty)
+    .mockImplementationOnce(() => new Promise<void>((resolve) => { finishFirst = resolve; }))
+    .mockResolvedValue(undefined);
+  renderHook(() => useAudioConfigSync());
+
+  await change(changed);
+  expect(startCapturePerParty).toHaveBeenCalledTimes(1);
+
+  const later: MeetingAudioConfig = { ...config, you: { ...config.you, stt_provider: "groq_whisper" } };
+  await change(later);
+  expect(startCapturePerParty).toHaveBeenCalledTimes(1); // first swap still running
+
+  await act(async () => finishFirst());
+  await act(() => vi.advanceTimersByTimeAsync(300));
+  expect(startCapturePerParty).toHaveBeenCalledTimes(2);
+  expect(startCapturePerParty).toHaveBeenLastCalledWith(later.you, later.them, { skipYouStt: false });
+});
+
 it("retries a failure that may have stopped the capture, and says so", async () => {
   vi.mocked(startCapturePerParty).mockRejectedValueOnce("Audio device busy").mockResolvedValue(undefined);
   renderHook(() => useAudioConfigSync());
