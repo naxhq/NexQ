@@ -9,6 +9,7 @@ pub mod rag;
 pub mod sources;
 pub mod llm;
 pub mod meeting_detect;
+pub mod nav_guard;
 pub mod ort_runtime;
 pub mod state;
 pub mod stt;
@@ -135,6 +136,8 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             show_for_second_launch(app);
         }))
+        // Both windows stay on the app's own pages; links open in the browser.
+        .plugin(nav_guard::plugin())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
