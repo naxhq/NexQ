@@ -126,12 +126,28 @@ pub fn is_secret_name(name: &str) -> bool {
     ["KEY", "TOKEN", "SECRET", "PASSWORD"].iter().any(|w| upper.contains(w))
 }
 
-/// Verbs that mean a tool changes something somewhere.
-const WRITE_VERBS: [&str; 38] = [
+/// Verbs that mean a tool changes something somewhere, or does something that
+/// cannot be undone. Any one of them in a name keeps the tool off.
+const WRITE_VERBS: &[&str] = &[
     "add", "create", "insert", "update", "edit", "modify", "patch", "put", "set", "write", "save",
     "store", "delete", "remove", "archive", "move", "rename", "complete", "close", "send", "post",
     "reply", "forward", "draft", "invite", "schedule", "cancel", "approve", "assign", "mark",
-    "upload", "publish", "merge", "run", "execute", "apply", "remember", "log",
+    "upload", "publish", "merge", "run", "execute", "apply", "remember", "log", "transfer", "pay",
+    "charge", "buy", "order", "submit", "nuke", "drop", "truncate", "wipe", "purge", "destroy",
+    "kill", "stop", "start", "restart", "reset", "clear", "revoke", "grant", "deploy", "import",
+    "sync", "trigger", "call", "invoke", "exec", "shell", "enable", "disable", "install",
+    "uninstall", "push", "replace", "overwrite", "append", "attach", "share", "tag", "label",
+    "pin", "subscribe", "unsubscribe", "ban", "block", "lock", "unlock", "rotate", "restore",
+    "revert", "commit", "rollback", "migrate", "flush", "terminate", "abort", "retry", "confirm",
+    "reject", "accept", "decline", "snooze", "dismiss", "undo", "redo", "copy", "clone", "fork",
+    "duplicate", "rebase", "fire", "launch", "open",
+];
+
+/// Verbs that clearly mean "look something up". `query` is deliberately not one:
+/// a query tool can be a SQL console.
+const READ_VERBS: &[&str] = &[
+    "get", "list", "search", "read", "find", "fetch", "lookup", "show", "describe", "status",
+    "brief", "view", "count", "check",
 ];
 
 /// Lowercase words of a tool name, split on `_`, `-`, `.` and camelCase.
@@ -159,9 +175,13 @@ fn name_words(name: &str) -> Vec<String> {
     words
 }
 
-/// On by default only when no word of the name looks like a write.
+/// Fails closed: a tool starts on only when its name has a read verb and no
+/// write verb. A name with no verb (`inbox`, `tasks`, `calendar`) or an unknown
+/// one (`nuke_db`, `transfer_funds`) starts off, and the user can switch it on.
 pub fn tool_allowed_by_default(tool_name: &str) -> bool {
-    !name_words(tool_name).iter().any(|w| WRITE_VERBS.contains(&w.as_str()))
+    let words = name_words(tool_name);
+    let has = |list: &[&str]| words.iter().any(|w| list.contains(&w.as_str()));
+    has(READ_VERBS) && !has(WRITE_VERBS)
 }
 
 /// The tool list after a Check: the user's earlier switches stay, a new tool
@@ -309,10 +329,16 @@ mod tests {
 
     #[test]
     fn read_only_heuristic_defaults() {
-        for t in ["kb_search", "kb_read", "person_brief", "list_tasks", "get_calendar", "find_email", "read_thread", "inbox", "free_slots", "status"] {
+        for t in ["kb_search", "kb_read", "person_brief", "list_tasks", "get_calendar", "find_email", "read_email", "read_thread", "status", "getNote", "search-notes"] {
             assert!(tool_allowed_by_default(t), "{t}");
         }
-        for t in ["add_task", "update_task", "complete_task", "delete_note", "send_email", "create_event", "draft_reply", "remember", "writeFile", "moveItem", "set_status", "post_message"] {
+        for t in [
+            "add_task", "update_task", "complete_task", "add_history", "delete_note", "send_email",
+            "create_event", "draft_email", "draft_reply", "remember", "writeFile", "moveItem",
+            "set_status", "post_message", "transfer_funds", "nuke_db", "run_query", "execute_sql",
+            // No verb at all, or a name that does not clearly read: off until the user says so.
+            "calendar", "free_slots", "tasks", "inbox", "query", "get_and_delete",
+        ] {
             assert!(!tool_allowed_by_default(t), "{t}");
         }
     }
