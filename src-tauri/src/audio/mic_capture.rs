@@ -329,3 +329,18 @@ fn handle_mic_data_u16(
         log::trace!("Mic audio channel full, dropping chunk");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_chunk_too_short_for_a_sample_sends_nothing() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let mut resampler = StreamResampler::new(48_000, TARGET_SAMPLE_RATE, 1);
+        handle_mic_data_i16(&[1000], &mut resampler, &tx, &AudioSource::Mic);
+        assert!(rx.try_recv().is_err(), "an empty chunk was sent");
+        handle_mic_data_i16(&[1000; 480], &mut resampler, &tx, &AudioSource::Mic);
+        assert_eq!(rx.try_recv().unwrap().pcm_data.len(), 160);
+    }
+}

@@ -19,6 +19,11 @@
 //! reference runs out, silence stands in until the cushion has refilled; when
 //! it keeps more than it should, the excess goes. Either way the alignment
 //! returns to the same place, where AEC3 already expects the echo.
+//!
+//! That re-aligning happens in steps, and AEC3 tracks slow drift in between.
+//! It holds with the two clocks up to ±300 ppm apart (the tests). At about
+//! 1000 ppm the delay moves faster than AEC3 follows and the echo comes
+//! back; that would need the reference resampled to the mic's clock.
 
 use std::collections::VecDeque;
 
@@ -36,7 +41,6 @@ const CUSHION: usize = 4;
 /// A queue that never fell below this for `CHECK_EVERY` frames holds more
 /// than the cushion: the reference runs ahead.
 const TOO_MANY: usize = CUSHION + 3;
-/// Clock drift beyond ~500 ppm between the streams is not compensated (the queue only re-aligns in whole frames).
 /// Mic frames between checks of the queue (0.5 s).
 const CHECK_EVERY: u64 = 50;
 /// With no mic audio coming at all, the reference stops piling up here.
@@ -421,6 +425,34 @@ mod tests {
         pcm: Vec<i16>,
     }
 
+    /// How the two capture streams deliver: chunk sizes in frames, the mic's
+    /// nominal rate, and whether the output sends nothing while it is silent
+    /// (WASAPI loopback).
+    struct Devices {
+        tap_chunk: usize,
+        mic_rate: u32,
+        mic_chunk: fn(usize) -> usize,
+        drop_silent: bool,
+    }
+
+    /// The MacBook: a 48 kHz output tap in 512-frame chunks, a 96 kHz mic in
+    /// chunks of ~953 frames.
+    const MACBOOK: Devices = Devices {
+        tap_chunk: 512,
+        mic_rate: 96_000,
+        mic_chunk: |j| if j % 7 < 4 { 953 } else { 952 },
+        drop_silent: false,
+    };
+
+    /// A Windows PC: 48 kHz WASAPI loopback in 480-frame packets, none while
+    /// nothing plays, and a 48 kHz mic in 480-frame chunks.
+    const WINDOWS: Devices = Devices {
+        tap_chunk: 480,
+        mic_rate: 48_000,
+        mic_chunk: |_| 480,
+        drop_silent: true,
+    };
+
     /// The two capture streams as chunks in order of arrival. The mic hears
     /// the speaker `delay_ms` later with a reflection; its clock runs
     /// `mic_ppm` fast. `resample(rate, channels)` makes each stream's
@@ -431,22 +463,35 @@ mod tests {
         mic_ppm: f64,
         resample: impl Fn(u32, u16) -> R,
     ) -> Vec<Chunk> {
+        capture_on(&MACBOOK, far, delay_ms, mic_ppm, resample)
+    }
+
+    fn capture_on<R: FnMut(&[i16]) -> Vec<i16>>(
+        devices: &Devices,
+        far: &[f32],
+        delay_ms: f64,
+        mic_ppm: f64,
+        resample: impl Fn(u32, u16) -> R,
+    ) -> Vec<Chunk> {
         let mut chunks = Vec::new();
         let mut tap = resample(48_000, 2);
-        for (k, block) in far.chunks(512).enumerate() {
+        for (k, block) in far.chunks(devices.tap_chunk).enumerate() {
             let stereo: Vec<i16> = block.iter().flat_map(|&s| [s as i16, s as i16]).collect();
+            if devices.drop_silent && stereo.iter().all(|&s| s == 0) {
+                continue; // loopback sends no packet while nothing plays
+            }
             chunks.push(Chunk {
-                arrives: ((k + 1) * 512) as f64 / 48_000.0 + 0.001,
+                arrives: ((k + 1) * devices.tap_chunk) as f64 / 48_000.0 + 0.001,
                 system: true,
                 pcm: tap(&stereo),
             });
         }
-        let mic_rate = 96_000.0 * (1.0 + mic_ppm * 1e-6);
+        let mic_rate = devices.mic_rate as f64 * (1.0 + mic_ppm * 1e-6);
         let len = (far.len() as f64 / 48_000.0 * mic_rate) as usize;
-        let mut mic = resample(96_000, 1);
+        let mut mic = resample(devices.mic_rate, 1);
         let (mut start, mut j) = (0, 0);
         while start < len {
-            let end = (start + if j % 7 < 4 { 953 } else { 952 }).min(len);
+            let end = (start + (devices.mic_chunk)(j)).min(len);
             let pcm: Vec<i16> = (start..end)
                 .map(|n| {
                     let p = n as f64 / mic_rate * 48_000.0 - delay_ms * 48.0;
@@ -513,6 +558,10 @@ mod tests {
             let per_10s = reduction_over_time(capture(&far, 15.0, ppm, streaming), 10);
             let weak = per_10s.iter().skip(1).filter(|&&r| r < 20.0).count();
             assert!(weak <= 1, "mic clock {ppm:+} ppm: {per_10s:.1?}");
+            assert!(
+                per_10s.iter().skip(1).all(|&r| r > 12.0),
+                "mic clock {ppm:+} ppm: a window fell below 12 dB ({per_10s:.1?})"
+            );
         }
     }
 
@@ -574,6 +623,56 @@ mod tests {
             "streaming, mic clock -300 ppm",
             reduction_over_time(capture(&far, 15.0, -300.0, streaming), 20),
         );
+    }
+
+    /// A Windows PC: loopback packets only while something plays (none in the
+    /// pauses, nor in a 12 s outage), mic and loopback both at 48 kHz in
+    /// 480-frame chunks, ~20 ms of echo. Every 10 s stretch after the first,
+    /// the one after the outage included, has the echo down.
+    #[test]
+    fn windows_loopback_with_pauses_and_an_outage_stays_cancelled() {
+        let mut far = far_end_48k(70);
+        far[25 * 48_000..37 * 48_000].fill(0.0);
+        let chunks = capture_on(&WINDOWS, &far, 20.0, 0.0, streaming);
+        let sent = chunks.iter().filter(|c| c.system).count();
+        assert!(sent < far.len() / 480 * 3 / 4, "silent packets were dropped");
+        let per_10s = reduction_over_time(chunks, 10);
+        for (i, reduction) in per_10s.iter().enumerate().skip(1) {
+            assert!(
+                *reduction > 15.0,
+                "{}–{} s: echo only reduced by {reduction:.1} dB ({per_10s:.1?})",
+                i * 10,
+                i * 10 + 10
+            );
+        }
+    }
+
+    /// Reference with no mic audio at all piles up only to `MAX_QUEUED`; once
+    /// the mic runs one frame for one frame of reference, the queue settles
+    /// within `TOO_MANY` after the first check.
+    #[test]
+    fn the_reference_queue_is_bounded() {
+        let mut aec = EchoCanceller::new();
+        let reference = speechlike(3, SAMPLE_RATE * 5, 8000.0);
+        for chunk in reference.chunks(FRAME) {
+            aec.push_reference(chunk);
+            assert!(aec.reference.len() <= MAX_QUEUED, "{}", aec.reference.len());
+        }
+
+        let mic = speechlike(4, SAMPLE_RATE * 5, 3000.0);
+        let mut settled = None;
+        for (i, (r, m)) in reference.chunks(FRAME).zip(mic.chunks(FRAME)).enumerate() {
+            aec.push_reference(r);
+            aec.process_mic(m);
+            let queued = aec.reference.len() / FRAME;
+            if aec.mic_frames > CHECK_EVERY && settled.is_none() {
+                settled = Some(i);
+            }
+            if settled.is_some() {
+                assert!(queued <= TOO_MANY, "{queued} frames queued at step {i}");
+            }
+        }
+        assert!(settled.is_some(), "ran past the first check");
     }
 
     #[test]

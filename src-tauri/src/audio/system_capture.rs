@@ -215,3 +215,20 @@ fn send_system_chunk(
         // Channel full — drop chunk silently
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_chunk_too_short_for_a_sample_sends_nothing() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let mut resampler = StreamResampler::new(48_000, TARGET_SAMPLE_RATE, 1);
+        send_system_chunk(&[1000], &mut resampler, &tx);
+        assert!(rx.try_recv().is_err(), "an empty chunk was sent");
+
+        let mut resampler = StreamResampler::new(48_000, TARGET_SAMPLE_RATE, 1);
+        send_system_chunk(&[1000; 480], &mut resampler, &tx);
+        assert_eq!(rx.try_recv().unwrap().pcm_data.len(), 160);
+    }
+}
