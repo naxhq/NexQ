@@ -603,6 +603,7 @@ pub fn run() {
             // == COMMANDS: meetings ==
             meeting_commands::start_meeting,
             meeting_commands::end_meeting,
+            meeting_commands::retry_sources_session,
             meeting_commands::list_meetings,
             meeting_commands::get_meeting,
             meeting_commands::delete_meeting,

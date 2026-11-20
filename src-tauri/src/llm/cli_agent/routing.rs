@@ -115,6 +115,87 @@ pub fn choose_route(
     }
 }
 
+/// How long answers skip a with-sources session that just failed to start.
+pub const SOURCES_COOLDOWN: Duration = Duration::from_secs(120);
+
+#[derive(Debug, Clone)]
+struct SourcesFailure {
+    at: Instant,
+    reason: String,
+    generation: u64,
+}
+
+/// A with-sources session that just failed to start. For [`SOURCES_COOLDOWN`]
+/// after the failure, requests that ask for sources go straight to the plain
+/// session (no waiting on a server that hangs); then one background retry runs.
+/// Cleared when the sources or their secrets change, by the user's retry, or
+/// when a start works.
+pub struct SourcesCooldown {
+    cooldown: Duration,
+    failure: Mutex<Option<SourcesFailure>>,
+    generation: std::sync::atomic::AtomicU64,
+}
+
+impl Default for SourcesCooldown {
+    fn default() -> Self {
+        Self::with_duration(SOURCES_COOLDOWN)
+    }
+}
+
+impl SourcesCooldown {
+    pub fn with_duration(cooldown: Duration) -> Self {
+        Self { cooldown, failure: Mutex::new(None), generation: Default::default() }
+    }
+
+    pub fn duration(&self) -> Duration {
+        self.cooldown
+    }
+
+    /// A with-sources start failed. Returns this failure's generation, for the
+    /// retry timer ([`begin_retry`](Self::begin_retry)).
+    pub fn fail(&self, reason: &str, now: Instant) -> u64 {
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        *self.failure.lock().unwrap() = Some(SourcesFailure { at: now, reason: reason.to_string(), generation });
+        generation
+    }
+
+    /// Sources changed, a start worked or the user asked to retry: forget the
+    /// failure (and make its pending retry timer stale).
+    pub fn clear(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        *self.failure.lock().unwrap() = None;
+    }
+
+    /// `None`: try the with-sources session. `Some(text)`: don't, answer on the
+    /// plain session and show this notice (the failure's reason, and when the
+    /// next try is).
+    pub fn gate(&self, now: Instant) -> Option<String> {
+        let failure = self.failure.lock().unwrap().clone()?;
+        let wait = (failure.at + self.cooldown).saturating_duration_since(now);
+        let when = if wait.is_zero() {
+            "Retrying now.".to_string()
+        } else {
+            format!("Retrying in {} s.", wait.as_secs() + u64::from(wait.subsec_nanos() > 0))
+        };
+        Some(format!(
+            "Your sources couldn't be loaded, so this answer didn't use them. {}. {when}",
+            failure.reason.trim_end_matches('.')
+        ))
+    }
+
+    /// The cooldown of failure `generation` ended: true once, if it is still
+    /// the current failure (not cleared or replaced since), meaning the caller
+    /// runs the background retry.
+    pub fn begin_retry(&self, generation: u64) -> bool {
+        self.failure.lock().unwrap().as_ref().is_some_and(|f| f.generation == generation)
+            && self.generation.load(Ordering::SeqCst) == generation
+    }
+
+    pub fn is_failed(&self) -> bool {
+        self.failure.lock().unwrap().is_some()
+    }
+}
+
 /// Modes that run by themselves, never because the user asked: they never use
 /// sources, whatever the pills say.
 pub const BACKGROUND_MODES: [&str; 3] = ["MeetingSummary", "ActionItemsExtraction", "BookmarkSuggestions"];
@@ -1269,6 +1350,10 @@ mod tests {
         image_counts: Mutex<Vec<usize>>,
         steps: Mutex<Vec<Step>>,
         spawns: AtomicUsize,
+        /// Starting a session with sources fails while set.
+        fail_sources: AtomicBool,
+        /// Starts tried for sessions with sources.
+        sources_spawns: AtomicUsize,
         /// Closes this scope's records + sessions mid-turn (meeting ended).
         close_on_ask: Mutex<Option<Arc<MeetingSessions>>>,
     }
@@ -1353,7 +1438,13 @@ mod tests {
 
     #[async_trait]
     impl SessionSpawner for FakeSpawner {
-        async fn spawn(&self, _cfg: SessionConfig) -> Result<Arc<dyn SessionHandle>, AgentError> {
+        async fn spawn(&self, cfg: SessionConfig) -> Result<Arc<dyn SessionHandle>, AgentError> {
+            if cfg.sources.is_some() {
+                self.0.sources_spawns.fetch_add(1, Ordering::SeqCst);
+                if self.0.fail_sources.load(Ordering::SeqCst) {
+                    return Err(AgentError::Spawn("MCP server mira failed to start".into()));
+                }
+            }
             let index = self.0.spawns.fetch_add(1, Ordering::SeqCst);
             self.0.appended.lock().unwrap().push(Vec::new());
             Ok(Arc::new(FakeSession { script: self.0.clone(), index, alive: AtomicBool::new(true) }))
@@ -1945,6 +2036,67 @@ mod tests {
         sessions.set_last_answer(&live(), true);
         sessions.remove_scope(&live());
         assert!(!sessions.last_answer_with_sources(&live()));
+    }
+
+    // ── the cooldown after a failed sources start ───────────────────────────
+
+    #[test]
+    fn cooldown_gate_counts_down_then_says_retrying() {
+        let cd = SourcesCooldown::with_duration(Duration::from_secs(120));
+        let t0 = Instant::now();
+        assert_eq!(cd.gate(t0), None);
+        cd.fail("MCP server mira failed to start", t0);
+        let text = cd.gate(t0 + Duration::from_secs(20)).unwrap();
+        assert!(text.contains("didn't use them") && text.contains("mira failed to start"), "{text}");
+        assert!(text.ends_with("Retrying in 100 s."), "{text}");
+        assert!(cd.gate(t0 + Duration::from_secs(130)).unwrap().ends_with("Retrying now."));
+        cd.clear();
+        assert_eq!(cd.gate(t0), None);
+    }
+
+    #[test]
+    fn a_retry_timer_only_fires_for_the_current_failure() {
+        let cd = SourcesCooldown::default();
+        let first = cd.fail("a", Instant::now());
+        assert!(cd.begin_retry(first));
+        let second = cd.fail("b", Instant::now());
+        assert!(!cd.begin_retry(first), "replaced by a newer failure");
+        assert!(cd.begin_retry(second));
+        cd.clear();
+        assert!(!cd.begin_retry(second), "cleared (config or secrets changed, or a retry)");
+        assert!(!cd.is_failed());
+    }
+
+    #[tokio::test]
+    async fn a_failed_sources_start_is_not_retried_by_the_next_requests() {
+        // Mirror of run_session_assist's gate: ask the cooldown, and only
+        // start the with-sources session when it allows.
+        let (manager, sessions, script, plain) = setup(&[]);
+        script.fail_sources.store(true, Ordering::SeqCst);
+        let key = plain.sibling();
+        sessions.insert_if_absent(
+            key.clone(),
+            SessionRecord { sources: Some(SourcesLaunch::default()), ..Default::default() },
+        );
+        let cd = SourcesCooldown::default();
+        let mut started = 0;
+        for _ in 0..3 {
+            if cd.gate(Instant::now()).is_none() {
+                let init = sessions.restart_init(&key).unwrap();
+                if manager.ensure(&key, init).await.is_err() {
+                    cd.fail("failed", Instant::now());
+                }
+                started += 1;
+            } else {
+                // The plain session answers instead.
+                ask(&manager, &sessions, &plain, &[seg("a", 0)]).await.unwrap();
+            }
+        }
+        assert_eq!(started, 1, "only the first request tried the sources");
+        assert_eq!(script.sources_spawns.load(Ordering::SeqCst), 1);
+        // A config change clears it: the next request tries again.
+        cd.clear();
+        assert!(cd.gate(Instant::now()).is_none());
     }
 
     #[test]

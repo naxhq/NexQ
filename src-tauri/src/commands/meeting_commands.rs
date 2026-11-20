@@ -239,6 +239,9 @@ pub(crate) fn start_session_in_background(
             Ok(Ok(record)) => record,
             Ok(Err(e)) => {
                 log::warn!("Claude session {label} not prepared: {e}");
+                if key.with_sources {
+                    note_sources_failure(&app, &key, &e);
+                }
                 return;
             }
             Err(e) => {
@@ -262,6 +265,9 @@ pub(crate) fn start_session_in_background(
         };
         match state.agent_sessions.ensure(&key, init).await {
             Ok(_) => {
+                if key.with_sources {
+                    state.sources_cooldown.clear();
+                }
                 // Closed (and not reopened) while it was starting: close it
                 // now; live sessions are never reaped.
                 let closed = state.meeting_sessions.epoch(&key.scope) != epoch
@@ -274,6 +280,9 @@ pub(crate) fn start_session_in_background(
             }
             Err(e) => {
                 log::warn!("Claude session {label} did not start: {e}");
+                if key.with_sources && crate::commands::intelligence_commands::is_sources_start_failure(&e) {
+                    note_sources_failure(&app, &key, &e.to_string());
+                }
                 if let Some(kind @ (AgentErrorKind::NotInstalled | AgentErrorKind::NotLoggedIn)) =
                     routing::unavailable_kind(&e)
                 {
@@ -284,12 +293,61 @@ pub(crate) fn start_session_in_background(
     });
 }
 
+/// A with-sources session failed to start: answers that ask for sources use
+/// the plain session for [`routing::SOURCES_COOLDOWN`], then one background
+/// retry runs (unless the failure was cleared or replaced meanwhile).
+pub(crate) fn note_sources_failure(app: &AppHandle, key: &SessionKey, reason: &str) {
+    let state = app.state::<AppState>();
+    let generation = state.sources_cooldown.fail(reason, std::time::Instant::now());
+    let wait = state.sources_cooldown.duration();
+    // A Live retry is the Fast session; other scopes retry their own key.
+    let retry_key = match &key.scope {
+        SessionScope::Live(_) => SessionKey::sources(key.scope.clone(), Tier::Fast),
+        _ => key.clone(),
+    };
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(wait).await;
+        let state = app.state::<AppState>();
+        if !state.sources_cooldown.begin_retry(generation) {
+            return;
+        }
+        retry_sources_key(&app, retry_key);
+    });
+}
+
+/// Start the with-sources session `key` again in the background (the result
+/// clears or renews the cooldown).
+fn retry_sources_key(app: &AppHandle, key: SessionKey) {
+    let state = app.state::<AppState>();
+    state.meeting_sessions.clear_sources(&key.scope);
+    match key.scope.clone() {
+        SessionScope::Live(_) => {
+            start_session_in_background(app, key.clone(), move |state| live_session_record(state, key.tier, &[], true))
+        }
+        SessionScope::Past(id) => {
+            start_session_in_background(app, key, move |state| past_session_record(state, &id, true))
+        }
+        SessionScope::Utility => {}
+    }
+}
+
+/// The user asked to try the sources again (from the error state): forget the
+/// failure and restart the with-sources sessions now.
+#[command]
+pub fn retry_sources_session(app: AppHandle) -> Result<(), String> {
+    restart_sources_sessions(&app);
+    Ok(())
+}
+
 /// The sources changed: forget and close every with-sources session (their
 /// records are rebuilt from the new settings on the next request), and start
 /// the running meeting's Fast one again when sources are still enabled. All in
 /// the background; plain sessions are untouched.
 pub(crate) fn restart_sources_sessions(app: &AppHandle) {
     let state = app.state::<AppState>();
+    // A new try: sources or secrets changed, or the user asked.
+    state.sources_cooldown.clear();
     let mut scopes = state.meeting_sessions.scopes_with_sources();
     for status in state.agent_sessions.snapshot().into_iter().filter(|s| s.with_sources) {
         let scope = match (status.scope.as_str(), status.meeting_id) {

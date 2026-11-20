@@ -488,10 +488,20 @@ pub(crate) async fn run_session_assist<'a>(
     loop {
         let req = make(key.clone());
         let params = req.params.clone();
+        // A with-sources session that just failed is not tried again at once:
+        // the plain session answers, with the reason and when it retries.
+        if key.with_sources {
+            if let Some(text) = state.sources_cooldown.gate(std::time::Instant::now()) {
+                emit_activity(app, &params, notice(text));
+                key = key.sibling();
+                continue;
+            }
+        }
         match session_assist(state, app, req).await {
             SessionOutcome::SourcesFailed(reason) if key.with_sources => {
                 log::warn!("with-sources session failed ({reason}); answering on the plain session");
                 emit_activity(app, &params, sources_failure_notice(&reason));
+                crate::commands::meeting_commands::note_sources_failure(app, &key, &reason);
                 key = key.sibling();
             }
             SessionOutcome::SourcesFailed(reason) => return SessionOutcome::Done(Err(reason)),

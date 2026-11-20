@@ -14,6 +14,7 @@ import {
   inspectNotesFolder,
   listClaudeCodeMcpServers,
   openSourceFile,
+  retrySourcesSession,
   saveMcpServerForm,
   setPersonalSources,
 } from "./ipc";
@@ -84,6 +85,8 @@ describe("personal sources ipc", () => {
     expect(invoke).toHaveBeenLastCalledWith("list_claude_code_mcp_servers");
     await deleteMcpSecrets("i");
     expect(invoke).toHaveBeenLastCalledWith("delete_mcp_secrets", { serverId: "i" });
+    await retrySourcesSession();
+    expect(invoke).toHaveBeenLastCalledWith("retry_sources_session");
     await openSourceFile("D:/v/a.md");
     expect(invoke).toHaveBeenLastCalledWith("open_source_file", { path: "D:/v/a.md" });
   });

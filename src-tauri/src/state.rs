@@ -152,6 +152,9 @@ pub struct AppState {
     /// The sources (and secrets revision) the with-sources sessions were last
     /// started or restarted for.
     pub sources_applied: Arc<Mutex<(PersonalSourcesConfig, u64)>>,
+    /// A with-sources session that just failed to start: answers skip it for
+    /// a while instead of waiting on it again.
+    pub sources_cooldown: Arc<crate::llm::cli_agent::routing::SourcesCooldown>,
 }
 
 /// The meeting between `start_meeting` and `end_meeting`.
@@ -213,6 +216,7 @@ impl AppState {
             personal_sources: Arc::new(RwLock::new(PersonalSourcesConfig::default())),
             sources_secrets_rev: Arc::new(AtomicU64::new(0)),
             sources_applied: Arc::new(Mutex::new((PersonalSourcesConfig::default(), 0))),
+            sources_cooldown: Arc::new(Default::default()),
         }
     }
 }

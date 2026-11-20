@@ -956,6 +956,16 @@ export async function setPersonalSources(config: PersonalSourcesConfig): Promise
   return invoke("set_personal_sources", { config });
 }
 
+/**
+ * Try the with-sources Claude session again now (from its error state). After
+ * a failed start, answers with a pill on use the plain session for about 2
+ * minutes (their notice says when the next try is), then one retry runs on its
+ * own. This forgets the failure and restarts the session at once.
+ */
+export async function retrySourcesSession(): Promise<void> {
+  return invoke("retry_sources_session");
+}
+
 /** Open a note with the default app; only a file inside an enabled notes folder. */
 export async function openSourceFile(path: string): Promise<void> {
   return invoke("open_source_file", { path });
