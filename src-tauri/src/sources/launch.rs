@@ -8,7 +8,7 @@
 //! private mcp-config file instead (`private_files`), which is deleted when the
 //! session closes. Findings: `docs/superpowers/specs/2026-11-20-personal-sources-cli-findings.md`.
 
-use super::config::{McpServer, McpTransport, NotesFolder, PersonalSourcesConfig};
+use super::config::{is_valid_tool_full_name, McpServer, McpTransport, NotesFolder, PersonalSourcesConfig};
 use super::mcp_json::{credential_id, header_credential_id};
 use super::private_files::private_dir;
 use crate::llm::cli_agent::command::{SourcesLaunch, SOURCES_BUILTIN_TOOLS};
@@ -88,7 +88,9 @@ fn resolve(path: &Path, lower: bool) -> PathBuf {
                     rest.push(name.to_os_string());
                     cur = parent;
                 }
-                _ => break path.to_path_buf(),
+                // No ancestor exists: what is left of the path (a root, or a
+                // `..`) is the base, and `rest` goes back on top of it.
+                _ => break cur,
             },
         }
     };
@@ -116,8 +118,9 @@ fn private_deny_rules(private: &Path) -> Vec<String> {
 /// - A server with a missing secret is left out, with the reason in
 ///   [`SourcesLaunch::left_out`]: the CLI would start it with an unset value
 ///   and no error.
-/// - `Ok(None)`: nothing usable is enabled. `Err`: something was enabled but
-///   every source was left out for a missing secret.
+/// - `Ok(None)`: nothing is enabled. `Err`: something was enabled but every
+///   source was left out (a missing folder, a refused folder, a missing secret);
+///   the text says why for each.
 pub fn build_sources_launch(
     cfg: &PersonalSourcesConfig,
     secret: &dyn Fn(&str) -> Option<String>,
@@ -138,7 +141,6 @@ pub fn build_sources_launch(
 
     let mut servers: Vec<&McpServer> = Vec::new();
     let mut entries = Map::new();
-    let mut secret_problems: Vec<String> = Vec::new();
     for server in cfg.usable_servers() {
         match server_entry(server, secret) {
             Ok(entry) => {
@@ -146,18 +148,13 @@ pub fn build_sources_launch(
                 servers.push(server);
             }
             Err(reason) => {
-                secret_problems.push(reason.clone());
                 left_out.push(reason);
             }
         }
     }
 
     if folders.is_empty() && servers.is_empty() {
-        return if secret_problems.is_empty() {
-            Ok(None)
-        } else {
-            Err(secret_problems.join("; "))
-        };
+        return if left_out.is_empty() { Ok(None) } else { Err(left_out.join("; ")) };
     }
 
     let mut allowed_tools: Vec<String> = Vec::new();
@@ -169,7 +166,8 @@ pub fn build_sources_launch(
         disallowed_tools.extend(private_deny_rules(&protected.private));
     }
     for server in &servers {
-        for tool in &server.tools {
+        // A tool name that is not `mcp__<key>__<name>` never reaches the command line.
+        for tool in server.tools.iter().filter(|t| is_valid_tool_full_name(&server.key, &t.full_name)) {
             if tool.allowed {
                 allowed_tools.push(tool.full_name.clone());
             } else {
@@ -403,8 +401,41 @@ mod tests {
             mcp_servers: vec![stdio("m", "M", vec![], vec![tool("m", "add_task", false)])],
             ..Default::default()
         };
-        assert_eq!(build_sources_launch(&cfg, &no_secrets), Ok(None));
+        // The enabled folder is gone: the reason comes back, not "nothing enabled".
+        let err = build_sources_launch(&cfg, &no_secrets).unwrap_err();
+        assert!(err.contains("Gone") && err.contains("folder not found"), "{err}");
         assert_eq!(build_sources_launch(&PersonalSourcesConfig::default(), &no_secrets), Ok(None));
+    }
+
+    #[test]
+    fn a_tool_name_that_is_not_this_servers_mcp_name_is_never_launched() {
+        let cfg = PersonalSourcesConfig {
+            mcp_servers: vec![stdio(
+                "m",
+                "M",
+                vec![],
+                vec![
+                    tool("m", "kb_read", true),
+                    McpTool { name: "x".into(), full_name: "--add-dir".into(), allowed: true },
+                    McpTool { name: "y".into(), full_name: "--add-dir=C:\\".into(), allowed: false },
+                    McpTool { name: "z".into(), full_name: "mcp__other__z".into(), allowed: true },
+                ],
+            )],
+            ..Default::default()
+        };
+        let launch = build_sources_launch(&cfg, &no_secrets).unwrap().unwrap();
+        assert_eq!(launch.allowed_tools, ["mcp__m__kb_read"]);
+        assert!(launch.disallowed_tools.is_empty(), "{:?}", launch.disallowed_tools);
+    }
+
+    #[test]
+    fn resolve_keeps_a_path_whose_ancestors_do_not_exist_once() {
+        // No ancestor exists: the path must not be appended to itself.
+        let path = Path::new(r"Q:\nexq-no\such\dir");
+        let got = resolve(path, false).to_string_lossy().into_owned();
+        assert!(got.ends_with(r"nexq-no\such\dir") && got.matches("nexq-no").count() == 1, "{got}");
+        let rel = resolve(Path::new("nexq-no-such-a/nexq-no-such-b"), false);
+        assert_eq!(rel.components().filter(|c| c.as_os_str() == "nexq-no-such-b").count(), 1, "{rel:?}");
     }
 
     #[test]
@@ -507,7 +538,8 @@ mod tests {
             notes_folders: vec![folder("Home", &home), folder("Local", &super::super::private_files::private_dir())],
             ..Default::default()
         };
-        assert_eq!(build_sources_launch(&cfg, &no_secrets), Ok(None));
+        let err = build_sources_launch(&cfg, &no_secrets).unwrap_err();
+        assert!(err.contains("Home") && err.contains("Local") && err.contains("private files"), "{err}");
     }
 
     #[test]

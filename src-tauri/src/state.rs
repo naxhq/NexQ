@@ -18,7 +18,7 @@ use crate::llm::gemini_cache::CachedContent;
 use crate::llm::openrouter_models::OpenRouterModelCache;
 use crate::llm::LLMRouter;
 use crate::rag::RagManager;
-use crate::sources::config::PersonalSourcesConfig;
+use crate::sources::config::{McpServer, PersonalSourcesConfig};
 use crate::translation::TranslationRouter;
 use crate::translation::opus_mt_manager::OpusMtManager;
 use crate::stt::groq_whisper::GroqConfig;
@@ -149,6 +149,11 @@ pub struct AppState {
     /// Bumped when the saved secrets of an enabled MCP server change (they
     /// are not in `personal_sources`, so its fingerprint can't see them).
     pub sources_secrets_rev: Arc<AtomicU64>,
+    /// Servers an import or the form returned that the webview has not saved
+    /// yet (newest last, at most `PENDING_SERVERS_MAX`). A Check or an edit
+    /// finds them here by id; they do not reserve their key, so one the user
+    /// discards doesn't push the real server to `name-2`.
+    pub pending_servers: Arc<Mutex<Vec<McpServer>>>,
     /// The sources (and secrets revision) the with-sources sessions were last
     /// started or restarted for.
     pub sources_applied: Arc<Mutex<(PersonalSourcesConfig, u64)>>,
@@ -217,6 +222,7 @@ impl AppState {
             sources_secrets_rev: Arc::new(AtomicU64::new(0)),
             sources_applied: Arc::new(Mutex::new((PersonalSourcesConfig::default(), 0))),
             sources_cooldown: Arc::new(Default::default()),
+            pending_servers: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }

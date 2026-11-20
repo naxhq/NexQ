@@ -710,6 +710,7 @@ pub fn run() {
             sources_commands::list_claude_code_mcp_servers,
             sources_commands::import_claude_code_mcp_servers,
             sources_commands::check_mcp_server,
+            sources_commands::classify_secret_names,
             sources_commands::delete_mcp_secrets,
             sources_commands::open_source_file,
             sources_commands::set_personal_sources,

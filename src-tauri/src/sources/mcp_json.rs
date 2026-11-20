@@ -1,7 +1,7 @@
 //! Reading MCP server definitions (pasted JSON, Claude Code's `~/.claude.json`),
 //! splitting secrets out of them, and the read-only default for tool switches.
 
-use super::config::{EnvVar, McpServer, McpTool, McpTransport};
+use super::config::{is_valid_tool_full_name, EnvVar, McpServer, McpTool, McpTransport};
 use serde_json::Value;
 
 /// One server as written in someone's JSON, before secrets are split out.
@@ -50,19 +50,13 @@ pub fn parse_mcp_json(text: &str) -> Result<Vec<(String, RawServer)>, String> {
 }
 
 /// The user-scope servers (top-level `mcpServers`) of Claude Code's
-/// `~/.claude.json`, sorted by name. Per-project servers are ignored.
+/// `~/.claude.json`, sorted by name; the first entry that cannot be read fails
+/// the whole call. Per-project servers are ignored.
 pub fn read_claude_code_servers(claude_json: &str) -> Result<Vec<(String, RawServer)>, String> {
-    let root: Value = serde_json::from_str(claude_json)
-        .map_err(|e| format!("Claude Code's config is not valid JSON ({e})"))?;
-    let Some(map) = root.get("mcpServers").and_then(Value::as_object) else {
-        return Ok(Vec::new());
-    };
-    let mut servers = map
-        .iter()
-        .map(|(name, entry)| Ok((name.clone(), parse_server(name, entry, true)?)))
-        .collect::<Result<Vec<_>, String>>()?;
-    servers.sort_by(|a, b| a.0.cmp(&b.0));
-    Ok(servers)
+    read_claude_code_entries(claude_json)?
+        .into_iter()
+        .map(|(name, entry)| entry.map(|raw| (name, raw)))
+        .collect()
 }
 
 /// Every user-scope server of `~/.claude.json` by name, sorted, each with the
@@ -163,9 +157,10 @@ const WRITE_VERBS: &[&str] = &[
 ];
 
 /// Verbs that clearly mean "look something up". `query` is deliberately not one:
-/// a query tool can be a SQL console.
+/// a query tool can be a SQL console. Neither is `fetch`: a fetch tool can send
+/// a request out (a URL fetcher is also a way to leak what it was given).
 const READ_VERBS: &[&str] = &[
-    "get", "list", "search", "read", "find", "fetch", "lookup", "show", "describe", "status",
+    "get", "list", "search", "read", "find", "lookup", "show", "describe", "status",
     "brief", "view", "count", "check",
 ];
 
@@ -205,13 +200,16 @@ pub fn tool_allowed_by_default(tool_name: &str) -> bool {
 
 /// The tool list after a Check: the user's earlier switches stay, a new tool
 /// takes the read-only default, a tool the server no longer has is dropped.
-/// Only names under `mcp__<key>__` count.
+/// Only valid names under `mcp__<key>__` count (see `is_valid_tool_full_name`).
 pub fn merge_checked_tools(old: &[McpTool], found_full_names: &[String], key: &str) -> Vec<McpTool> {
     let prefix = format!("mcp__{key}__");
     let mut merged: Vec<McpTool> = Vec::new();
     for full in found_full_names {
-        let Some(name) = full.strip_prefix(&prefix) else { continue };
-        if name.is_empty() || merged.iter().any(|t| t.name == name) {
+        if !is_valid_tool_full_name(key, full) {
+            continue;
+        }
+        let name = &full[prefix.len()..];
+        if merged.iter().any(|t| t.name == name) {
             continue;
         }
         let allowed = old
@@ -263,7 +261,8 @@ pub fn header_credential_id(server_key: &str, header: &str) -> String {
 }
 
 /// Turn a raw server into a config entry plus the secrets to store. Secret env
-/// values and every header value leave the entry. OAuth servers come back off.
+/// values and every header value leave the entry. A new server comes back off
+/// (the user switches it on after a successful Check).
 pub fn into_server(name: &str, raw: RawServer, taken_keys: &[String]) -> (McpServer, Vec<SecretValue>) {
     let key = unique_key(name, taken_keys);
     let mut secrets = Vec::new();
@@ -284,7 +283,8 @@ pub fn into_server(name: &str, raw: RawServer, taken_keys: &[String]) -> (McpSer
         key,
         label: name.to_string(),
         transport: raw.transport,
-        enabled: !raw.oauth,
+        // Every new server starts off: the user turns it on after a Check.
+        enabled: false,
         env,
         tools: Vec::new(),
         last_check: None,
@@ -357,6 +357,8 @@ mod tests {
             "set_status", "post_message", "transfer_funds", "nuke_db", "run_query", "execute_sql",
             // No verb at all, or a name that does not clearly read: off until the user says so.
             "calendar", "free_slots", "tasks", "inbox", "query", "get_and_delete",
+            // A fetcher can send a request out.
+            "fetch", "fetch_url", "web_fetch",
         ] {
             assert!(!tool_allowed_by_default(t), "{t}");
         }
@@ -369,6 +371,9 @@ mod tests {
             McpTool { name: "gone".into(), full_name: "mcp__m__gone".into(), allowed: true },
         ];
         let found = vec!["mcp__m__kb_search".into(), "mcp__m__delete_note".into(), "mcp__m__kb_read".into(), "mcp__other__x".into()];
+        let mut found = found;
+        found.push("mcp__m__--add-dir".into());
+        found.push("mcp__m__a b".into());
         let merged = merge_checked_tools(&old, &found, "m");
         let get = |n: &str| merged.iter().find(|t| t.name == n).map(|t| t.allowed);
         assert_eq!((get("kb_search"), get("delete_note"), get("kb_read"), get("gone"), get("x")), (Some(false), Some(false), Some(true), None, None));
@@ -392,6 +397,20 @@ mod tests {
         let (name, raw) = read_claude_code_servers(json).unwrap().remove(0);
         let (server, secrets) = into_server(&name, raw, &[]);
         assert!(server.needs_sign_in && !server.enabled && secrets.is_empty());
+    }
+
+    #[test]
+    fn every_new_server_starts_off() {
+        let (name, raw) = parse_mcp_json(r#"{"a":{"command":"node","args":["s.js"]}}"#).unwrap().remove(0);
+        assert!(!into_server(&name, raw, &[]).0.enabled);
+    }
+
+    #[test]
+    fn claude_code_entries_keep_the_unreadable_ones_apart() {
+        let json = r#"{"mcpServers":{"ok":{"command":"x"},"sse":{"type":"sse","url":"https://h"}}}"#;
+        let entries = read_claude_code_entries(json).unwrap();
+        assert_eq!(entries.iter().map(|(n, e)| (n.as_str(), e.is_ok())).collect::<Vec<_>>(), [("ok", true), ("sse", false)]);
+        assert!(read_claude_code_servers(json).unwrap_err().contains("SSE"));
     }
 
     #[test]

@@ -103,6 +103,21 @@ pub struct SourceToggles {
     pub tools: bool,
 }
 
+/// A tool's full name as it may go into `--allowedTools` and
+/// `--disallowedTools`: exactly `mcp__<key>__<name>` for this server, with a
+/// name of letters, digits, `_` and `-` only. Anything else (an `--add-dir`
+/// style string, a bare `Bash`, another server's tool) is not a tool of this
+/// server, and never reaches the command line.
+pub fn is_valid_tool_full_name(key: &str, full_name: &str) -> bool {
+    let Some(name) = full_name.strip_prefix("mcp__").and_then(|r| r.strip_prefix(key)).and_then(|r| r.strip_prefix("__"))
+    else {
+        return false;
+    };
+    !key.is_empty()
+        && !name.is_empty()
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
 impl McpServer {
     /// Tools the user left switched on.
     pub fn allowed_tools(&self) -> impl Iterator<Item = &McpTool> {
@@ -212,6 +227,34 @@ mod tests {
         assert_eq!(keys, ["ok"]);
         assert!(cfg.has_enabled());
         assert!(!PersonalSourcesConfig::default().has_enabled());
+    }
+
+    #[test]
+    fn tool_full_names_must_be_this_servers_mcp_names() {
+        for ok in ["mcp__mira__kb_search", "mcp__my-wiki__Get-Note_2"] {
+            let key = ok.split("__").nth(1).unwrap();
+            assert!(is_valid_tool_full_name(key, ok), "{ok}");
+        }
+        for bad in [
+            "--add-dir",
+            r"--add-dir=C:\Users",
+            "-x",
+            "Bash",
+            "mcp__mira__",
+            "mcp__mira__a b",
+            "mcp__mira__a;b",
+            "mcp__mira__a(*)",
+            "mcp__mira__../x",
+            "mcp__mira__*",
+            "mcp__other__kb_search",
+            "mcp__mira2__kb_search",
+            "mcp__mira__a
+b",
+            "",
+        ] {
+            assert!(!is_valid_tool_full_name("mira", bad), "{bad}");
+        }
+        assert!(!is_valid_tool_full_name("", "mcp____x"));
     }
 
     #[test]
