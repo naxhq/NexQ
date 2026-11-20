@@ -21,6 +21,22 @@ describe("toastDurationMs", () => {
 });
 
 describe("ToastContainer", () => {
+  it("keeps a sticky toast until its key is dismissed, and replaces one with the same key", async () => {
+    render(<ToastContainer />);
+    const { setStickyToast, dismissByKey } = useToastStore.getState();
+    act(() => setStickyToast("capture-you", "Reconnecting your microphone…", "warning"));
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(screen.getByText("Reconnecting your microphone…")).toBeInTheDocument();
+
+    act(() => setStickyToast("capture-you", "Your microphone disconnected.", "warning"));
+    expect(screen.queryByText("Reconnecting your microphone…")).toBeNull();
+    expect(screen.getByText("Your microphone disconnected.")).toBeInTheDocument();
+    expect(useToastStore.getState().toasts).toHaveLength(1);
+
+    act(() => dismissByKey("capture-you"));
+    expect(screen.queryByText("Your microphone disconnected.")).toBeNull();
+  });
+
   const show = (message: string) => act(() => useToastStore.getState().addToast(message, "error"));
 
   it("keeps a long message on screen longer than a short one", async () => {

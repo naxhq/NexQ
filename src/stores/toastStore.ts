@@ -7,6 +7,9 @@ export interface Toast {
   message: string;
   type: ToastType;
   createdAt: number;
+  /** A sticky toast stays until it is replaced or dismissed by its `key`, or the user closes it. */
+  key?: string;
+  sticky?: boolean;
 }
 
 /** How long a toast stays: 4 s plus about 60 ms per character, at most 10 s, so a long message can be read. */
@@ -17,6 +20,9 @@ export function toastDurationMs(message: string): number {
 interface ToastState {
   toasts: Toast[];
   addToast: (message: string, type: ToastType) => void;
+  /** Show a toast that stays, replacing the one with the same key. */
+  setStickyToast: (key: string, message: string, type: ToastType) => void;
+  dismissByKey: (key: string) => void;
   removeToast: (id: string) => void;
 }
 
@@ -37,6 +43,14 @@ export const useToastStore = create<ToastState>((set) => ({
       toasts: [...state.toasts, toast],
     }));
   },
+
+  setStickyToast: (key, message, type) => {
+    const toast: Toast = { id: crypto.randomUUID(), message, type, createdAt: Date.now(), key, sticky: true };
+    set((state) => ({ toasts: [...state.toasts.filter((t) => t.key !== key), toast] }));
+  },
+
+  dismissByKey: (key) =>
+    set((state) => ({ toasts: state.toasts.filter((t) => t.key !== key) })),
 
   removeToast: (id) =>
     set((state) => ({

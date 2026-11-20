@@ -54,6 +54,20 @@ This only appears the first time you install. Subsequent launches will not trigg
 5. If using a virtual audio cable or routing software, ensure it is configured correctly
 6. See the [Audio Setup Guide](audio-setup.md) for detailed WASAPI loopback troubleshooting
 
+### A Device Disconnects Mid-Meeting
+
+**Problem**: A headset is switched off, a USB microphone is unplugged, or Windows changes the default device while a meeting is running.
+
+**What NexQ does**:
+
+- Reconnects that side by itself within about a second. The meeting, the recording and the other side keep going, and nothing opens on screen
+- If the device you chose is gone, the default microphone or output stands in for it. NexQ goes back to your device by itself when it returns
+- If nothing comes back after a minute, it tells you once and keeps trying every few seconds, so a device plugged back in later is picked up. You can also pick another device in Audio & Devices
+- Shows a message only when the device changes or a side doesn't come back. A reconnect to the same device is silent
+- Counts reconnects and audio glitches for each side in the audio stats line in the log, which is how to check how often it happened
+
+If a side stays silent after you reconnected the device, pick the device again in Audio & Devices, or end the meeting and start a new one.
+
 ### Microphone Echo or Feedback
 
 **Problem**: The other side's words also appear under "You", your own voice appears in the "Them" transcript, or there is echo.

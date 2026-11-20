@@ -62,7 +62,7 @@ function ToastItem({ toast, onDismiss }: { toast: ToastData; onDismiss: () => vo
 
   // Auto-dismiss with exit animation (component-driven)
   useEffect(() => {
-    if (paused) return;
+    if (paused || toast.sticky) return;
     const startedAt = Date.now();
     timerRef.current = setTimeout(() => {
       setExiting(true);
@@ -72,7 +72,7 @@ function ToastItem({ toast, onDismiss }: { toast: ToastData; onDismiss: () => vo
       clearTimeout(timerRef.current);
       remainingRef.current -= Date.now() - startedAt;
     };
-  }, [onDismiss, paused]);
+  }, [onDismiss, paused, toast.sticky]);
 
   const handleDismiss = useCallback(() => {
     if (exiting) return;
@@ -121,13 +121,15 @@ function ToastItem({ toast, onDismiss }: { toast: ToastData; onDismiss: () => vo
         <X className="h-3.5 w-3.5" />
       </button>
 
-      {/* Progress bar — visual countdown to auto-dismiss */}
-      <div className="absolute bottom-0 left-0 right-0 h-[2px] overflow-hidden">
-        <div
-          className={`h-full ${progressMap[toast.type]} toast-progress-bar`}
-          style={{ animationDuration: `${duration}ms`, animationPlayState: paused ? "paused" : "running" }}
-        />
-      </div>
+      {/* Progress bar — visual countdown to auto-dismiss (a sticky toast has none) */}
+      {!toast.sticky && (
+        <div className="absolute bottom-0 left-0 right-0 h-[2px] overflow-hidden">
+          <div
+            className={`h-full ${progressMap[toast.type]} toast-progress-bar`}
+            style={{ animationDuration: `${duration}ms`, animationPlayState: paused ? "paused" : "running" }}
+          />
+        </div>
+      )}
     </div>
   );
 }

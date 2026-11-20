@@ -18,7 +18,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::audio::capture_supervisor::{
-    CaptureCounters, CaptureKind, SideHandle, StatusSink, SystemClock, START_TIMEOUT,
+    CaptureCounters, CaptureKind, SideHandle, SideSpec, StatusSink, SystemClock, START_TIMEOUT,
 };
 use crate::audio::recorder::SharedRecorder;
 use crate::audio::vad::VoiceActivityDetector;
@@ -233,14 +233,16 @@ impl AudioCaptureManager {
             let (messages_tx, messages_rx) = capture_supervisor::side_channel();
             let opener = system_capture::OutputOpener { tx: tx.clone(), errors: messages_tx.clone() };
             match capture_supervisor::spawn_side(
-                CaptureKind::Output,
-                system_device_id,
-                opener,
-                SystemClock,
-                Arc::clone(&self.counters.1),
-                Arc::clone(&on_status),
+                SideSpec {
+                    kind: CaptureKind::Output,
+                    device_id: system_device_id.to_string(),
+                    opener: opener,
+                    clock: SystemClock,
+                    counters: Arc::clone(&self.counters.1),
+                    sink: Arc::clone(&on_status),
+                    start_timeout: START_TIMEOUT,
+                },
                 (messages_tx, messages_rx),
-                START_TIMEOUT,
             ) {
                 Ok((side, started)) => {
                     self.sides.push(side);
@@ -305,14 +307,16 @@ impl AudioCaptureManager {
             capture_supervisor::CaptureSide::Them => &self.counters.1,
         };
         let (side, started) = capture_supervisor::spawn_side(
-            kind,
-            device_id,
-            opener,
-            SystemClock,
-            Arc::clone(counters),
-            Arc::clone(on_status),
+            SideSpec {
+                kind: kind,
+                device_id: device_id.to_string(),
+                opener: opener,
+                clock: SystemClock,
+                counters: Arc::clone(counters),
+                sink: Arc::clone(on_status),
+                start_timeout: START_TIMEOUT,
+            },
             (messages_tx, messages_rx),
-            START_TIMEOUT,
         )?;
         if let Some(reason) = started.as_ref().and_then(|s| s.replaced.as_ref()) {
             log::warn!("Input '{device_id}' failed ({reason}); using the default input instead");
@@ -824,7 +828,7 @@ mod tests {
     }
 
     use capture_supervisor::tests::Rig;
-    use capture_supervisor::{side_channel, spawn_side, CaptureSide, SideMessage};
+    use capture_supervisor::{side_channel, spawn_side, SideSpec, CaptureSide, SideMessage};
 
     /// A side on a fake device, as `start_capture` would add it. Returns the
     /// sender its stream's error callback would use.
@@ -837,14 +841,16 @@ mod tests {
         let (tx, rx) = side_channel();
         let errors = tx.clone();
         let (side, started) = spawn_side(
-            kind,
-            device,
-            rig.opener(kind.side(), device),
-            SystemClock,
-            Arc::clone(&rig.counters),
-            rig.sink(),
+            SideSpec {
+                kind: kind,
+                device_id: device.to_string(),
+                opener: rig.opener(kind.side(), device),
+                clock: SystemClock,
+                counters: Arc::clone(&rig.counters),
+                sink: rig.sink(),
+                start_timeout: START_TIMEOUT,
+            },
             (tx, rx),
-            START_TIMEOUT,
         )
         .unwrap();
         assert!(started.is_some());
@@ -1004,14 +1010,16 @@ mod tests {
         let sink_statuses = Arc::clone(&statuses);
         let counters = Arc::new(CaptureCounters::default());
         let (side, _) = spawn_side(
-            CaptureKind::Mic,
-            "default",
-            opener,
-            SystemClock,
-            Arc::clone(&counters),
-            Arc::new(move |s: capture_supervisor::CaptureStatus| sink_statuses.lock().unwrap().push(s.state)),
+            SideSpec {
+                kind: CaptureKind::Mic,
+                device_id: "default".to_string(),
+                opener: opener,
+                clock: SystemClock,
+                counters: Arc::clone(&counters),
+                sink: Arc::new(move |s: capture_supervisor::CaptureStatus| sink_statuses.lock().unwrap().push(s.state)),
+                start_timeout: START_TIMEOUT,
+            },
             (side_tx, side_rx),
-            START_TIMEOUT,
         )
         .expect("the default mic opens");
         let count = |rx: &mut mpsc::Receiver<AudioChunk>, secs: u64| {
