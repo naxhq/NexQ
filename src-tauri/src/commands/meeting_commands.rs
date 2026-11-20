@@ -36,7 +36,9 @@ pub(crate) fn current_sources_launch(state: &AppState) -> Result<Option<SourcesL
         .read()
         .map_err(|_| "Couldn't read your sources".to_string())?
         .clone();
-    build_sources_launch(&cfg, &crate::commands::sources_commands::saved_secret)
+    // Never asks: a launch can happen mid-meeting. A server not approved yet is
+    // left out until the user runs its Check.
+    build_sources_launch(&cfg, &crate::commands::sources_commands::saved_secret, &|s| state.mcp_approvals.is_approved(s))
 }
 
 /// `record` as a with-sources session starts it: the sources launch, and the

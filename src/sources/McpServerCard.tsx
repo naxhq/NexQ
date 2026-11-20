@@ -11,11 +11,15 @@ interface McpServerCardProps {
   onEdit: () => void;
   onRemove: () => void;
   onToolToggle: (toolName: string, allowed: boolean) => void;
+  /** The backend has not been told yes to running this server yet: its Check asks. */
+  needsApproval?: boolean;
   /** Open the tool list (a new server's first successful Check). */
   autoOpen?: boolean;
 }
 
 export const NEEDS_SIGN_IN_TEXT = "Needs sign-in, not supported yet";
+export const NEEDS_APPROVAL_TEXT = "Needs your OK. Run Check.";
+export const NOT_APPROVED_TEXT = "Not approved. Run Check to review it again.";
 
 /** `node s.js` or the URL. */
 function summaryOf(server: McpServer): string {
@@ -23,24 +27,41 @@ function summaryOf(server: McpServer): string {
   return t.type === "stdio" ? [t.command, ...t.args].join(" ") : t.url;
 }
 
-function statusOf(server: McpServer, checking: boolean): { text: string; tone: "ok" | "bad" | "quiet" } {
+function statusOf(
+  server: McpServer,
+  checking: boolean,
+  needsApproval: boolean,
+): { text: string; tone: "ok" | "bad" | "quiet" } {
   if (checking) return { text: "Checking…", tone: "quiet" };
   if (server.needs_sign_in) return { text: NEEDS_SIGN_IN_TEXT, tone: "bad" };
   const c = server.last_check;
+  // Asked and refused: the Check is the way back (it asks again).
+  if (c?.not_approved) return { text: NOT_APPROVED_TEXT, tone: "bad" };
+  if (needsApproval) return { text: NEEDS_APPROVAL_TEXT, tone: "bad" };
   if (!c) return { text: server.enabled ? "Not checked" : "Not checked yet. Check it to switch it on", tone: "quiet" };
   if (c.ok) return { text: `Ready with ${c.tool_count} ${c.tool_count === 1 ? "tool" : "tools"}`, tone: "ok" };
   return { text: `Failed: ${c.error ?? "the server did not start"}`, tone: "bad" };
 }
 
-export function McpServerCard({ server, checking, onToggle, onCheck, onEdit, onRemove, onToolToggle, autoOpen = false }: McpServerCardProps) {
+export function McpServerCard({
+  server,
+  checking,
+  needsApproval = false,
+  onToggle,
+  onCheck,
+  onEdit,
+  onRemove,
+  onToolToggle,
+  autoOpen = false,
+}: McpServerCardProps) {
   const [open, setOpen] = useState(false);
   useEffect(() => {
     if (autoOpen) setOpen(true);
   }, [autoOpen]);
   const statusId = useId();
   const [confirmRemove, setConfirmRemove] = useState(false);
-  const status = statusOf(server, checking);
-  const ready = !!server.last_check?.ok && !server.needs_sign_in;
+  const status = statusOf(server, checking, needsApproval);
+  const ready = !!server.last_check?.ok && !server.needs_sign_in && !needsApproval;
   // Off until a Check works; one that is on can always be switched off.
   const cantEnable = !server.enabled && !ready;
   const allowed = server.tools.filter((t) => t.allowed).length;

@@ -461,7 +461,7 @@ describe("Personal sources and automatic answers", () => {
             id: "s1", key: "mira", label: "Mira", enabled: true, needs_sign_in: false, env: [],
             transport: { type: "stdio", command: "node", args: [] },
             tools: [{ name: "person_brief", full_name: "mcp__mira__person_brief", allowed: true }],
-            last_check: { ok: true, tool_count: 1, error: null, checked_at_ms: 1 },
+            last_check: { ok: true, tool_count: 1, error: null, checked_at_ms: 1, not_approved: false },
           },
         ],
       },

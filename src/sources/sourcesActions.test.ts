@@ -14,7 +14,7 @@ import { applyCheckResult, patchMcpServer } from "./sourcesActions";
 import { DEFAULT_SOURCES_CONFIG, useSourcesStore } from "../stores/sourcesStore";
 
 const tool = (name: string, allowed: boolean) => ({ name, full_name: `mcp__m__${name}`, allowed });
-const ok = { ok: true, tool_count: 2, error: null, checked_at_ms: 5 };
+const ok = { ok: true, tool_count: 2, error: null, checked_at_ms: 5, not_approved: false };
 const server = (over: Partial<McpServer> = {}): McpServer => ({
   id: "s1",
   key: "m",
@@ -51,7 +51,7 @@ describe("applyCheckResult", () => {
     await patchMcpServer("s1", (s) => ({ ...s, tools: [tool("old", true), tool("get", true)] }));
     await applyCheckResult(server({ tools: [tool("get", true)], last_check: ok }));
     expect(saved()[0].tools.map((t) => t.name)).toEqual(["get"]);
-    const failed = { ok: false, tool_count: 0, error: "The server failed to start.", checked_at_ms: 6 };
+    const failed = { ok: false, tool_count: 0, error: "The server failed to start.", checked_at_ms: 6, not_approved: false };
     await applyCheckResult(server({ tools: [], last_check: failed }));
     expect(saved()[0].tools.map((t) => t.name)).toEqual(["get"]);
     expect(saved()[0].last_check).toEqual(failed);

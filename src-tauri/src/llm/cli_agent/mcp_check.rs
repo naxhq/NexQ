@@ -9,6 +9,7 @@ use super::command::SessionConfig;
 use super::detect::find_claude_binary;
 use super::mcp_diagnose::diagnose_start;
 use super::session::{AgentError, ClaudeSession, InitInfo, SessionTimeouts};
+use crate::sources::approval::ApprovedServer;
 use crate::sources::config::McpServer;
 use crate::sources::launch::single_server_launch;
 use std::time::Duration;
@@ -55,14 +56,16 @@ pub fn check_launch(
     Ok(launch)
 }
 
-/// Start `server` alone and list its tools. `secret` looks a saved value up by
-/// credential id. Takes up to [`CHECK_INIT_TIMEOUT`] (a hung server holds
+/// Start `server` alone and list its tools. It takes an [`ApprovedServer`]: the
+/// user's OK to run it is the caller's to get, and can't be skipped. `secret`
+/// looks a saved value up by credential id. Takes up to [`CHECK_INIT_TIMEOUT`] (a hung server holds
 /// `system/init` back for [`CHECK_MCP_TIMEOUT_MS`]), then up to
 /// [`super::mcp_diagnose::DIAGNOSE_LIMIT`] more to find the cause.
 pub async fn list_server_tools(
-    server: &McpServer,
+    approved: &ApprovedServer<'_>,
     secret: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Vec<String>, String> {
+    let server = approved.server();
     let launch = check_launch(server, secret)?;
     let bin = tokio::task::spawn_blocking(find_claude_binary)
         .await
@@ -165,7 +168,7 @@ mod tests {
         };
         let secret = |id: &str| (id == "mcp:my-server:API_KEY").then(|| "s3cret".to_string());
         let started = std::time::Instant::now();
-        let tools = list_server_tools(&server, &secret).await.unwrap();
+        let tools = list_server_tools(&ApprovedServer::for_test(&server), &secret).await.unwrap();
         eprintln!("tools after {:?}: {tools:?}", started.elapsed());
         assert!(tools.contains(&"mcp__my-server__get_note".to_string()), "{tools:?}");
 
@@ -173,7 +176,7 @@ mod tests {
             transport: McpTransport::Stdio { command: "no-such-command-xyz".into(), args: vec![] },
             ..server
         };
-        let err = list_server_tools(&broken, &secret).await.unwrap_err();
+        let err = list_server_tools(&ApprovedServer::for_test(&broken), &secret).await.unwrap_err();
         assert!(err.contains("failed"), "{err}");
     }
 }

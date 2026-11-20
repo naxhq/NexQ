@@ -112,10 +112,15 @@ fn private_deny_rules(private: &Path) -> Vec<String> {
     ["Read", "Grep", "Glob"].iter().map(|t| format!("{t}({text}/**)")).collect()
 }
 
+/// Why a server that isn't approved is left out of a launch.
+pub const NEEDS_APPROVAL_REASON: &str = "needs your OK. Run Check in Settings";
+
 /// The launch inputs for the enabled, reachable sources. `secret` looks a
 /// value up by credential id (`mcp:<key>:<NAME>`).
 ///
 /// - A notes folder that is missing is left out.
+/// - A server the user has not approved (`approved`) is left out: a launch
+///   never asks, it can happen mid-meeting. The Check asks.
 /// - A server with a missing secret is left out, with the reason in
 ///   [`SourcesLaunch::left_out`]: the CLI would start it with an unset value
 ///   and no error.
@@ -125,6 +130,7 @@ fn private_deny_rules(private: &Path) -> Vec<String> {
 pub fn build_sources_launch(
     cfg: &PersonalSourcesConfig,
     secret: &dyn Fn(&str) -> Option<String>,
+    approved: &dyn Fn(&McpServer) -> bool,
 ) -> Result<Option<SourcesLaunch>, String> {
     let mut left_out: Vec<String> = Vec::new();
 
@@ -143,6 +149,10 @@ pub fn build_sources_launch(
     let mut servers: Vec<&McpServer> = Vec::new();
     let mut entries = Map::new();
     for server in cfg.usable_servers() {
+        if !approved(server) {
+            left_out.push(format!("{}: {NEEDS_APPROVAL_REASON}", server.label));
+            continue;
+        }
         match server_entry(server, secret) {
             Ok(entry) => {
                 entries.insert(server.key.clone(), entry);
@@ -314,6 +324,10 @@ mod tests {
         None
     }
 
+    fn all_approved(_: &McpServer) -> bool {
+        true
+    }
+
     fn config_of(launch: &SourcesLaunch) -> Value {
         serde_json::from_str(launch.mcp_config_json.as_deref().unwrap()).unwrap()
     }
@@ -332,7 +346,7 @@ mod tests {
             "mcp:b:API_KEY" => Some("vb".to_string()),
             _ => None,
         };
-        let launch = build_sources_launch(&cfg, &lookup).unwrap().unwrap();
+        let launch = build_sources_launch(&cfg, &lookup, &all_approved).unwrap().unwrap();
         let json = config_of(&launch);
         assert_eq!(json["mcpServers"]["a"]["env"]["API_KEY"], "va");
         assert_eq!(json["mcpServers"]["b"]["env"]["API_KEY"], "vb");
@@ -345,7 +359,7 @@ mod tests {
             mcp_servers: vec![stdio("a", "A", env, vec![tool("a", "kb_search", true)])],
             ..Default::default()
         };
-        let launch = build_sources_launch(&cfg, &no_secrets).unwrap().unwrap();
+        let launch = build_sources_launch(&cfg, &no_secrets, &all_approved).unwrap().unwrap();
         let json = config_of(&launch);
         assert_eq!(json["mcpServers"]["a"]["env"]["MODE"], "ro");
         assert_eq!(json["mcpServers"]["a"]["command"], "node");
@@ -361,7 +375,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let launch = build_sources_launch(&cfg, &no_secrets).unwrap().unwrap();
+        let launch = build_sources_launch(&cfg, &no_secrets, &all_approved).unwrap().unwrap();
         let json = config_of(&launch);
         assert!(json["mcpServers"].get("mira").is_none());
         assert!(json["mcpServers"].get("ok").is_some());
@@ -377,7 +391,7 @@ mod tests {
             mcp_servers: vec![stdio("mira", "Mira", vec![secret_env("API_KEY")], vec![tool("mira", "kb_search", true)])],
             ..Default::default()
         };
-        let err = build_sources_launch(&cfg, &no_secrets).unwrap_err();
+        let err = build_sources_launch(&cfg, &no_secrets, &all_approved).unwrap_err();
         assert!(err.contains("Mira") && err.contains("API_KEY"), "{err}");
     }
 
@@ -388,7 +402,7 @@ mod tests {
             notes_folders: vec![folder("Here", &here), folder("Gone", &here.join("gone"))],
             ..Default::default()
         };
-        let launch = build_sources_launch(&cfg, &no_secrets).unwrap().unwrap();
+        let launch = build_sources_launch(&cfg, &no_secrets, &all_approved).unwrap().unwrap();
         assert_eq!(launch.add_dirs, vec![here.clone()]);
         assert!(launch.mcp_config_json.is_none());
         assert_eq!(launch.allowed_tools, ["Read", "Grep", "Glob"]);
@@ -404,9 +418,9 @@ mod tests {
             ..Default::default()
         };
         // The enabled folder is gone: the reason comes back, not "nothing enabled".
-        let err = build_sources_launch(&cfg, &no_secrets).unwrap_err();
+        let err = build_sources_launch(&cfg, &no_secrets, &all_approved).unwrap_err();
         assert!(err.contains("Gone") && err.contains("folder not found"), "{err}");
-        assert_eq!(build_sources_launch(&PersonalSourcesConfig::default(), &no_secrets), Ok(None));
+        assert_eq!(build_sources_launch(&PersonalSourcesConfig::default(), &no_secrets, &all_approved), Ok(None));
     }
 
     #[test]
@@ -425,7 +439,7 @@ mod tests {
             )],
             ..Default::default()
         };
-        let launch = build_sources_launch(&cfg, &no_secrets).unwrap().unwrap();
+        let launch = build_sources_launch(&cfg, &no_secrets, &all_approved).unwrap().unwrap();
         assert_eq!(launch.allowed_tools, ["mcp__m__kb_read"]);
         assert!(launch.disallowed_tools.is_empty(), "{:?}", launch.disallowed_tools);
     }
@@ -453,7 +467,7 @@ mod tests {
             )],
             ..Default::default()
         };
-        let launch = build_sources_launch(&cfg, &no_secrets).unwrap().unwrap();
+        let launch = build_sources_launch(&cfg, &no_secrets, &all_approved).unwrap().unwrap();
         assert_eq!(launch.allowed_tools, ["Read", "Grep", "Glob", "mcp__mira__kb_search", "mcp__mira__kb_read"]);
         let mcp: Vec<&String> = launch.disallowed_tools.iter().filter(|t| t.starts_with("mcp__")).collect();
         assert_eq!(mcp, ["mcp__mira__add_task"]);
@@ -464,7 +478,7 @@ mod tests {
     fn private_folder_is_denied_to_the_file_tools_when_notes_are_on() {
         let here = real_dir("deny");
         let cfg = PersonalSourcesConfig { notes_folders: vec![folder("N", &here)], ..Default::default() };
-        let launch = build_sources_launch(&cfg, &no_secrets).unwrap().unwrap();
+        let launch = build_sources_launch(&cfg, &no_secrets, &all_approved).unwrap().unwrap();
         let rules = &launch.disallowed_tools;
         assert_eq!(rules.len(), 3, "{rules:?}");
         for (rule, tool) in rules.iter().zip(["Read", "Grep", "Glob"]) {
@@ -476,7 +490,7 @@ mod tests {
             mcp_servers: vec![stdio("m", "M", vec![], vec![tool("m", "kb_read", true)])],
             ..Default::default()
         };
-        assert!(build_sources_launch(&tools_only, &no_secrets).unwrap().unwrap().disallowed_tools.is_empty());
+        assert!(build_sources_launch(&tools_only, &no_secrets, &all_approved).unwrap().unwrap().disallowed_tools.is_empty());
         let _ = std::fs::remove_dir_all(&here);
     }
 
@@ -540,7 +554,7 @@ mod tests {
             notes_folders: vec![folder("Home", &home), folder("Local", &super::super::private_files::private_dir())],
             ..Default::default()
         };
-        let err = build_sources_launch(&cfg, &no_secrets).unwrap_err();
+        let err = build_sources_launch(&cfg, &no_secrets, &all_approved).unwrap_err();
         assert!(err.contains("Home") && err.contains("Local") && err.contains("private files"), "{err}");
     }
 
@@ -550,7 +564,7 @@ mod tests {
             mcp_servers: vec![stdio("m", "M", vec![], vec![tool("m", "kb_read", true)])],
             ..Default::default()
         };
-        let launch = build_sources_launch(&cfg, &no_secrets).unwrap().unwrap();
+        let launch = build_sources_launch(&cfg, &no_secrets, &all_approved).unwrap().unwrap();
         assert!(launch.add_dirs.is_empty());
         assert_eq!(launch.allowed_tools, ["mcp__m__kb_read"]);
     }
@@ -562,7 +576,50 @@ mod tests {
         let mut auth = stdio("auth", "Auth", vec![], vec![tool("auth", "kb_read", true)]);
         auth.needs_sign_in = true;
         let cfg = PersonalSourcesConfig { mcp_servers: vec![off, auth], ..Default::default() };
-        assert_eq!(build_sources_launch(&cfg, &no_secrets), Ok(None));
+        assert_eq!(build_sources_launch(&cfg, &no_secrets, &all_approved), Ok(None));
+    }
+
+    #[test]
+    fn a_server_that_is_not_approved_is_left_out_and_an_approved_one_stays() {
+        let cfg = PersonalSourcesConfig {
+            mcp_servers: vec![
+                stdio("ok", "Ok", vec![], vec![tool("ok", "kb_read", true)]),
+                stdio("new", "New", vec![], vec![tool("new", "kb_read", true)]),
+            ],
+            ..Default::default()
+        };
+        let only_ok = |s: &McpServer| s.key == "ok";
+        let launch = build_sources_launch(&cfg, &no_secrets, &only_ok).unwrap().unwrap();
+        let json = config_of(&launch);
+        assert!(json["mcpServers"].get("ok").is_some() && json["mcpServers"].get("new").is_none());
+        assert_eq!(launch.allowed_tools, ["mcp__ok__kb_read"]);
+        assert_eq!(launch.server_labels, [("ok".to_string(), "Ok".to_string())]);
+        assert_eq!(launch.left_out, ["New: needs your OK. Run Check in Settings"]);
+    }
+
+    #[test]
+    fn notes_folders_do_not_need_approval() {
+        let here = real_dir("approval-notes");
+        let cfg = PersonalSourcesConfig {
+            notes_folders: vec![folder("Here", &here)],
+            mcp_servers: vec![stdio("new", "New", vec![], vec![tool("new", "kb_read", true)])],
+            ..Default::default()
+        };
+        let launch = build_sources_launch(&cfg, &no_secrets, &|_| false).unwrap().unwrap();
+        assert_eq!(launch.add_dirs.len(), 1);
+        assert!(launch.mcp_config_json.is_none());
+        assert_eq!(launch.left_out.len(), 1);
+        let _ = std::fs::remove_dir_all(&here);
+    }
+
+    #[test]
+    fn only_an_unapproved_server_is_an_error_that_says_why() {
+        let cfg = PersonalSourcesConfig {
+            mcp_servers: vec![stdio("new", "New", vec![], vec![tool("new", "kb_read", true)])],
+            ..Default::default()
+        };
+        let err = build_sources_launch(&cfg, &no_secrets, &|_| false).unwrap_err();
+        assert!(err.contains("New") && err.contains("needs your OK"), "{err}");
     }
 
     #[test]
@@ -577,7 +634,7 @@ mod tests {
         };
         let cfg = PersonalSourcesConfig { mcp_servers: vec![server], ..Default::default() };
         let lookup = |id: &str| (id == "mcp:h:header:Authorization").then(|| "Bearer tok".to_string());
-        let launch = build_sources_launch(&cfg, &lookup).unwrap().unwrap();
+        let launch = build_sources_launch(&cfg, &lookup, &all_approved).unwrap().unwrap();
         let json = config_of(&launch);
         assert_eq!(json["mcpServers"]["h"]["type"], "http");
         assert_eq!(json["mcpServers"]["h"]["url"], "https://h/mcp");

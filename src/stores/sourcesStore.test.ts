@@ -8,7 +8,7 @@ import type { McpServer, PersonalSourcesConfig } from "../lib/types";
 const saved = vi.hoisted(() => new Map<string, unknown>());
 const keyListeners = vi.hoisted(() => [] as Array<{ key: string; cb: (v: unknown) => void }>);
 const invokeCalls = vi.hoisted(() => [] as Array<{ cmd: string; args: unknown }>);
-const backend = vi.hoisted(() => ({ reject: null as string | null }));
+const backend = vi.hoisted(() => ({ reject: null as string | null, needsApproval: [] as string[] }));
 const writes = vi.hoisted(() => ({ count: 0 }));
 
 vi.mock("@tauri-apps/plugin-store", () => ({
@@ -35,6 +35,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string, args: unknown) => {
     invokeCalls.push({ cmd, args });
     if (cmd === "set_personal_sources" && backend.reject) throw new Error(backend.reject);
+    if (cmd === "mcp_servers_needing_approval") return backend.needsApproval;
     return null;
   }),
 }));
@@ -63,7 +64,7 @@ const server = (over: Partial<McpServer> = {}): McpServer => ({
   enabled: true,
   env: [{ name: "API_TOKEN", value: null, secret: true }],
   tools: [{ name: "person_brief", full_name: "mcp__mira__person_brief", allowed: true }],
-  last_check: { ok: true, tool_count: 1, error: null, checked_at_ms: 1 },
+  last_check: { ok: true, tool_count: 1, error: null, checked_at_ms: 1, not_approved: false },
   needs_sign_in: false,
   ...over,
 });
@@ -82,6 +83,7 @@ beforeEach(() => {
   keyListeners.length = 0;
   invokeCalls.length = 0;
   backend.reject = null;
+  backend.needsApproval = [];
   writes.count = 0;
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -126,6 +128,20 @@ describe("sourcesStore", () => {
     expect(c.mcp_servers[0].env[0].value).toBeNull();
     expect(c.mcp_servers[0].transport).toEqual({ type: "stdio", command: "n", args: [] });
     expect(w.useSourcesStore.getState().toggles).toEqual({ notes: false, tools: false });
+  });
+
+  it("which servers still need the user's OK comes from the backend after every push, and a saved not_approved is kept", async () => {
+    saved.set("personalSources", config({
+      mcp_servers: [{ ...server(), last_check: { ok: false, tool_count: 0, error: "Not approved. Run Check to review it again.", checked_at_ms: 1, not_approved: true } }],
+    }));
+    backend.needsApproval = ["s1"];
+    const w = await openWindow();
+    expect(w.useSourcesStore.getState().needsApproval).toEqual(["s1"]);
+    expect(w.useSourcesStore.getState().config.mcp_servers[0].last_check?.not_approved).toBe(true);
+
+    backend.needsApproval = [];
+    await w.useSourcesStore.getState().setConfig(w.useSourcesStore.getState().config);
+    expect(w.useSourcesStore.getState().needsApproval).toEqual([]);
   });
 
   it("pushes the config to the backend on load and on every change", async () => {

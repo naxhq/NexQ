@@ -166,7 +166,7 @@ describe("AddMcpServerDialog", () => {
   });
 
   it("Check these settings checks the unsaved form as a draft", async () => {
-    ipc.checkMcpServer.mockResolvedValue(server({ last_check: { ok: true, tool_count: 4, error: null, checked_at_ms: 1 } }));
+    ipc.checkMcpServer.mockResolvedValue(server({ last_check: { ok: true, tool_count: 4, error: null, checked_at_ms: 1, not_approved: false } }));
     render(<AddMcpServerDialog onClose={() => {}} />);
     fireEvent.click(screen.getByRole("tab", { name: "Form" }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Mira" } });
@@ -175,6 +175,18 @@ describe("AddMcpServerDialog", () => {
     expect(await screen.findByText("Ready with 4 tools")).toBeInTheDocument();
     expect(screen.getByText("Ready with 4 tools")).toHaveAttribute("role", "status");
     expect(ipc.checkMcpServer).toHaveBeenCalledWith(null, expect.objectContaining({ label: "Mira" }));
+  });
+
+  it("a refused Check of the form reads Not approved, not Failed", async () => {
+    ipc.checkMcpServer.mockResolvedValue(
+      server({ last_check: { ok: false, tool_count: 0, error: "Not approved. Run Check to review it again.", checked_at_ms: 1, not_approved: true } }),
+    );
+    render(<AddMcpServerDialog onClose={() => {}} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Form" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Mira" } });
+    fireEvent.change(screen.getByLabelText("Command"), { target: { value: "node" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check these settings" }));
+    expect(await screen.findByText("Not approved. Run Check to review it again.")).toBeInTheDocument();
   });
 
   it("Claude Code import lists servers, disables the ones that can't be imported and imports the picked ones", async () => {

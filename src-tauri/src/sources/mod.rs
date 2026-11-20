@@ -44,6 +44,7 @@
 //! The plain session is unchanged: `--safe-mode`, `--tools ""`, `--disallowedTools *`.
 
 pub mod activity;
+pub mod approval;
 pub mod config;
 pub mod launch;
 pub mod mcp_json;

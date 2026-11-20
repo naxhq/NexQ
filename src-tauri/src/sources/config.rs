@@ -93,6 +93,8 @@ pub struct McpCheckStatus {
     pub tool_count: usize,
     pub error: Option<String>,
     pub checked_at_ms: u64,
+    /// The user said no to running the server, so nothing was started.
+    pub not_approved: bool,
 }
 
 /// The two overlay pills: which sources this one answer may use.
@@ -292,7 +294,7 @@ b",
         assert_eq!(
             base,
             changed(&|c| c.mcp_servers[0].last_check =
-                Some(McpCheckStatus { ok: true, tool_count: 2, error: None, checked_at_ms: 9 }))
+                Some(McpCheckStatus { ok: true, tool_count: 2, error: None, checked_at_ms: 9, not_approved: false }))
         );
     }
 }
