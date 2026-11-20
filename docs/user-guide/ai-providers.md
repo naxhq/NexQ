@@ -32,6 +32,8 @@ NexQ supports 11 STT providers. Each channel ("You" and "Them") can use a differ
 
 **Use a local provider** if privacy is critical or you need offline capability. Whisper with the large-v3 model provides the best local accuracy, but requires significant CPU/RAM. Smaller models (tiny, base) are faster but less accurate.
 
+**For Ukrainian transcription**, select **Ukrainian** under Settings > STT Providers > Language. For offline transcription, use Parakeet TDT 0.6B v3 or a multilingual Whisper.cpp model such as Whisper Small. Cloud options include Deepgram Nova-3, Azure Speech, Groq Whisper, and the OpenAI Whisper API. Start a new meeting after changing the language.
+
 **For Vietnamese transcription**, select **Vietnamese** under Settings > STT Providers > Language. Deepgram Nova-3, Azure Speech, and multilingual Whisper models support Vietnamese; choose a model that supports the language for each channel. The included Parakeet models do not support Vietnamese. A language change takes effect when the STT provider reconnects, so start a new meeting after changing it.
 
 **To detect the spoken language**, choose **Auto-detect** under Settings > STT Providers > Language or Audio & Devices > STT Language. Choose a provider that can detect the language for both You and Them: Deepgram Nova-3 or Flux Multilingual, Parakeet TDT 0.6B v3, Groq Whisper, Whisper API, Cartesia, or a multilingual Whisper.cpp model (Tiny, Base, Small, Medium or Large v3 Turbo; Whisper.cpp is available under STT Providers only). The languages detected depend on the model. Start a new meeting after changing the language.

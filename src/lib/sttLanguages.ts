@@ -17,6 +17,7 @@ export const STT_LANGUAGES = [
   { value: "nl-NL", label: "Dutch" },
   { value: "hi-IN", label: "Hindi" },
   { value: "ru-RU", label: "Russian" },
+  { value: "uk-UA", label: "Ukrainian" },
   { value: "ar-SA", label: "Arabic" },
   { value: "tr-TR", label: "Turkish" },
   { value: "pl-PL", label: "Polish" },

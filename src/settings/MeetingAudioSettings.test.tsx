@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -5,7 +6,7 @@ import type { MeetingAudioConfig } from "../lib/types";
 import type * as IPC from "../lib/ipc";
 
 vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: async () => null }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
 vi.mock("@tauri-apps/plugin-store", () => ({
   load: async () => ({ set: async () => {}, get: async () => undefined, onKeyChange: async () => () => {} }),
 }));
@@ -37,13 +38,17 @@ const initialConfig: MeetingAudioConfig = {
 beforeEach(() => useConfigStore.setState({ meetingAudioConfig: initialConfig }));
 afterEach(cleanup);
 
-it("allows Vietnamese to be selected in Audio & Devices", async () => {
+it.each([
+  ["Vietnamese", "vi-VN"],
+  ["Ukrainian", "uk-UA"],
+])("allows %s to be selected in Audio & Devices", async (label, locale) => {
   useConfigStore.setState({ sttLanguage: "en-US" });
   render(<MeetingAudioSettings />);
   const select = screen.getByRole("combobox", { name: /STT Language/i });
-  await userEvent.setup().selectOptions(select, "vi-VN");
-  expect(useConfigStore.getState().sttLanguage).toBe("vi-VN");
-  expect(within(select).getByRole<HTMLOptionElement>("option", { name: "Vietnamese" }).selected).toBe(true);
+  await userEvent.setup().selectOptions(select, locale);
+  expect(useConfigStore.getState().sttLanguage).toBe(locale);
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("set_stt_language", { language: locale }));
+  expect(within(select).getByRole<HTMLOptionElement>("option", { name: label }).selected).toBe(true);
 });
 
 it("selects Auto-detect and identifies the channel that needs a different STT engine", async () => {

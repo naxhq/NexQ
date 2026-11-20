@@ -49,6 +49,12 @@ jobs:
       - name: Frontend tests
         run: npm test
 
+      - name: Cache ONNX Runtime
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/ort
+          key: ort-${{ runner.os }}-${{ hashFiles('scripts/fetch-onnxruntime.mjs') }}
+
       - name: Stage ONNX Runtime
         run: node scripts/fetch-onnxruntime.mjs
 
@@ -78,6 +84,12 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Cache ONNX Runtime
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/ort
+          key: ort-${{ runner.os }}-${{ hashFiles('scripts/fetch-onnxruntime.mjs') }}
 
       - name: Stage ONNX Runtime
         run: node scripts/fetch-onnxruntime.mjs
