@@ -718,6 +718,8 @@ pub async fn generate_assist(
     // The user's transcript scope (`scope` names the session scope below).
     let user_scope = scope;
     let images = images.unwrap_or_default();
+    // The frontend checks these too; the backend doesn't rely on it.
+    crate::llm::cli_agent::protocol::validate_images(&images)?;
     // Every stream carries a request id so listeners can tell streams apart.
     let request_id = request_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 

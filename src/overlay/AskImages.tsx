@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { X } from "lucide-react";
 import type { ImageAttachment } from "../lib/types";
-import { imageFilesFrom, imageProblem, previewSrc, readImage } from "../lib/imageAttachments";
+import { clipboardHasText, imageFilesFrom, imageProblem, previewSrc, readImage } from "../lib/imageAttachments";
 import { showToast } from "../stores/toastStore";
 
 /**
@@ -17,25 +17,35 @@ export const DEFAULT_IMAGE_QUESTION =
  */
 export function useAskImages() {
   const [images, setImages] = useState<ImageAttachment[]>([]);
-  // The count a quick second paste must see, before React re-renders.
+  // Slots taken so far, including images still being read. A slot is reserved
+  // before the (async) read starts, so a quick second paste sees it.
   const count = useRef(0);
 
   const onPaste = useCallback((e: React.ClipboardEvent) => {
+    // Text wins: a copy from Excel, Word or a web page also carries a picture.
+    if (clipboardHasText(e.clipboardData)) return;
     const files = imageFilesFrom(e.clipboardData);
     if (files.length === 0) return;
     e.preventDefault();
+    const accepted: File[] = [];
+    for (const file of files) {
+      const problem = imageProblem(file, count.current);
+      if (problem) {
+        showToast(problem, "error");
+        break;
+      }
+      count.current += 1;
+      accepted.push(file);
+    }
+    if (accepted.length === 0) return;
     void (async () => {
+      const read = await Promise.allSettled(accepted.map(readImage));
       const added: ImageAttachment[] = [];
-      for (const file of files) {
-        const problem = imageProblem(file, count.current);
-        if (problem) {
-          showToast(problem, "error");
-          break;
-        }
-        try {
-          added.push(await readImage(file));
-          count.current += 1;
-        } catch {
+      for (const result of read) {
+        if (result.status === "fulfilled") {
+          added.push(result.value);
+        } else {
+          count.current -= 1;
           showToast("Couldn't read the image", "error");
         }
       }
@@ -44,11 +54,9 @@ export function useAskImages() {
   }, []);
 
   const remove = useCallback((index: number) => {
-    setImages((prev) => {
-      const next = prev.filter((_, i) => i !== index);
-      count.current = next.length;
-      return next;
-    });
+    // One slot back; reads still in flight keep theirs.
+    count.current = Math.max(0, count.current - 1);
+    setImages((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
   const clear = useCallback(() => {
@@ -63,18 +71,18 @@ export function useAskImages() {
 export function AskImageChips({ images, onRemove }: { images: ImageAttachment[]; onRemove: (index: number) => void }) {
   if (images.length === 0) return null;
   return (
-    <div className="flex flex-wrap items-center gap-1.5" aria-label="Attached images">
+    <div role="group" className="flex flex-wrap items-center gap-1.5" aria-label="Attached images">
       {images.map((image, i) => (
         <div key={i} className="relative h-8 w-12 overflow-hidden rounded-md border border-border/30 bg-black/20">
           <img src={previewSrc(image)} alt={`Attached image ${i + 1}`} className="h-full w-full object-cover" />
           <button
             type="button"
             onClick={() => onRemove(i)}
-            className="absolute right-0 top-0 rounded-bl-md bg-black/60 p-0.5 text-white/80 transition-colors hover:bg-black/80 hover:text-white"
+            className="absolute right-0 top-0 flex h-6 w-6 items-start justify-end rounded-bl-md p-0.5 text-white/80 transition-colors hover:text-white"
             title="Remove image"
             aria-label={`Remove image ${i + 1}`}
           >
-            <X className="h-2.5 w-2.5" aria-hidden="true" />
+            <X className="h-3 w-3 rounded-bl-md bg-black/60 p-px hover:bg-black/80" aria-hidden="true" />
           </button>
         </div>
       ))}

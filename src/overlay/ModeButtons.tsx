@@ -125,7 +125,8 @@ export function ModeButtons() {
     const text = askInputText.trim() || (askImages.length > 0 ? DEFAULT_IMAGE_QUESTION : "");
     if (!text || locked) return;
     const withImages = askImages.length > 0;
-    runYourAction("AskQuestion", text, askImages).catch((err) =>
+    // A failed send keeps the images, so they don't have to be pasted again.
+    runYourAction("AskQuestion", text, askImages).then(clearAskImages, (err) =>
       showToast(
         err instanceof Error
           ? err.message
@@ -136,7 +137,6 @@ export function ModeButtons() {
       )
     );
     setAskInputText("");
-    clearAskImages();
     setAskInputVisible(false);
   }, [askInputText, askImages, locked, clearAskImages]);
 

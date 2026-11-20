@@ -3,6 +3,7 @@ import {
   ALLOWED_IMAGE_TYPES,
   MAX_IMAGES,
   MAX_IMAGE_BYTES,
+  clipboardHasText,
   imageFilesFrom,
   imageProblem,
   previewSrc,
@@ -47,5 +48,16 @@ describe("readImage", () => {
     const image = await readImage(file);
     expect(image).toEqual({ media_type: "image/png", data: btoa("hello") });
     expect(previewSrc(image)).toBe(`data:image/png;base64,${btoa("hello")}`);
+  });
+});
+
+describe("clipboardHasText", () => {
+  const clip = (text: string) => ({ getData: () => text }) as unknown as DataTransfer;
+
+  it("is true for a clipboard with text, false for none or blank", () => {
+    expect(clipboardHasText(clip("A1\tB1"))).toBe(true);
+    expect(clipboardHasText(clip(""))).toBe(false);
+    expect(clipboardHasText(clip("  \n"))).toBe(false);
+    expect(clipboardHasText(null)).toBe(false);
   });
 });

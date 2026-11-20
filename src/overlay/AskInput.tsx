@@ -34,7 +34,8 @@ export function AskInput({ visible, onClose }: AskInputProps) {
 
     // Send question in AskQuestion mode (with the picked transcript scope)
     const withImages = images.length > 0;
-    runYourAction("AskQuestion", text, images).catch((err) => {
+    runYourAction("AskQuestion", text, images).then(clear, (err) => {
+      // A failed send keeps the images, so they don't have to be pasted again.
       // Tauri rejects with plain text. With an image, say why it couldn't go
       // (e.g. the provider can't take images) instead of a generic failure.
       const msg =
@@ -42,7 +43,6 @@ export function AskInput({ visible, onClose }: AskInputProps) {
       showToast(msg, "error");
     });
     setInputText("");
-    clear();
     onClose();
   }, [inputText, images, locked, onClose, clear]);
 

@@ -145,6 +145,36 @@ pub struct ImageAttachment {
     pub data: String,
 }
 
+/// Most images one question can carry. Keep in step with `MAX_IMAGES` in
+/// `src/lib/imageAttachments.ts`.
+pub const MAX_IMAGES: usize = 3;
+/// Longest base64 body accepted for one image: a 5 MB file (`MAX_IMAGE_BYTES`
+/// in `src/lib/imageAttachments.ts`) is about 6.7 MB of base64.
+pub const MAX_IMAGE_BASE64_LEN: usize = 7_000_000;
+/// Image types the Claude API takes. Keep in step with `ALLOWED_IMAGE_TYPES`
+/// in `src/lib/imageAttachments.ts`.
+pub const ALLOWED_IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/// Checks the images pasted into Ask before anything is sent: the frontend
+/// checks the same limits, but the backend never trusts it.
+pub fn validate_images(images: &[ImageAttachment]) -> Result<(), String> {
+    if images.len() > MAX_IMAGES {
+        return Err(format!("You can attach up to {MAX_IMAGES} images"));
+    }
+    for image in images {
+        if !ALLOWED_IMAGE_TYPES.contains(&image.media_type.as_str()) {
+            return Err("Only PNG, JPEG, GIF and WebP images can be attached".to_string());
+        }
+        if image.data.is_empty() {
+            return Err("An attached image is empty".to_string());
+        }
+        if image.data.len() > MAX_IMAGE_BASE64_LEN {
+            return Err("An attached image is larger than 5 MB".to_string());
+        }
+    }
+    Ok(())
+}
+
 /// Build one stdin JSON line (no trailing newline). With `query == false` the
 /// message is appended to the session context without triggering a model call.
 pub fn user_message(text: &str, query: bool) -> String {
@@ -352,6 +382,25 @@ pub(crate) mod tests {
         assert_eq!(blocks[1]["source"]["media_type"], "image/jpeg");
         assert_eq!(blocks[2], json!({ "type": "text", "text": "What is this?" }));
         assert!(v.get("shouldQuery").is_none());
+    }
+
+    #[test]
+    fn validate_images_enforces_count_type_and_size() {
+        let png = |data: &str| ImageAttachment { media_type: "image/png".into(), data: data.into() };
+        assert!(validate_images(&[]).is_ok());
+        assert!(validate_images(&[png("AAAA"), png("AAAA"), png("AAAA")]).is_ok());
+        assert!(validate_images(&[png("A"), png("A"), png("A"), png("A")])
+            .unwrap_err()
+            .contains("up to 3"));
+        let bmp = ImageAttachment { media_type: "image/bmp".into(), data: "AAAA".into() };
+        assert!(validate_images(&[bmp]).unwrap_err().contains("PNG, JPEG"));
+        let svg = ImageAttachment { media_type: "image/svg+xml".into(), data: "AAAA".into() };
+        assert!(validate_images(&[svg]).is_err());
+        assert!(validate_images(&[png("")]).unwrap_err().contains("empty"));
+        let at_limit = "A".repeat(MAX_IMAGE_BASE64_LEN);
+        assert!(validate_images(&[png(&at_limit)]).is_ok());
+        let over = "A".repeat(MAX_IMAGE_BASE64_LEN + 1);
+        assert!(validate_images(&[png(&over)]).unwrap_err().contains("5 MB"));
     }
 
     #[test]
