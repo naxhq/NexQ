@@ -67,8 +67,9 @@ describe("useAskImages", () => {
     expect(useToastStore.getState().toasts).toHaveLength(0);
   });
 
-  it("names the paste shortcut in the placeholder only when images can be attached", () => {
-    expect(askPlaceholder(true)).toMatch(/Ctrl\+V to attach a screenshot|⌘V to attach a screenshot/);
+  it("mentions screenshots in the placeholder only when images can be attached", () => {
+    expect(askPlaceholder(true)).toBe("Ask or paste a screenshot");
+    expect(askPlaceholder(true).length).toBeLessThanOrEqual(26);
     expect(askPlaceholder(false)).toBe("Ask about the meeting...");
   });
 

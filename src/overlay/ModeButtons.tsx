@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useStreamStore } from "../stores/streamStore";
 import { useAIActionsStore } from "../stores/aiActionsStore";
 import { useConfigStore } from "../stores/configStore";
+import { useMeetingStore } from "../stores/meetingStore";
 import { cancelGeneration } from "../lib/ipc";
 import { runYourAction, useAutoAnswerRunning } from "../lib/autoAnswer";
 import { AskImageChips, askPlaceholder, useAskImages } from "./AskImages";
@@ -131,6 +132,15 @@ export function ModeButtons() {
     clear: clearAskImages,
   } = useAskImages();
 
+  // The overlay stays mounted between meetings: each meeting starts with an
+  // empty Ask box (no leftover text or screenshots from the last one).
+  const meetingId = useMeetingStore((s) => s.activeMeeting?.id ?? "");
+  useEffect(() => {
+    setAskInputText("");
+    setAskInputVisible(false);
+    clearAskImages();
+  }, [meetingId, clearAskImages]);
+
   const handleAskSubmit = useCallback(() => {
     if (locked) return;
     const sent = sendAsk({
@@ -183,7 +193,18 @@ export function ModeButtons() {
 
       {/* Inline Ask input */}
       {askInputVisible && !locked && (
-        <div className="flex flex-col gap-1 rounded-lg border border-info/20 bg-info/5 px-2 py-1 slide-down-enter">
+        <div
+          className="flex flex-col gap-1 rounded-lg border border-info/20 bg-info/5 px-2 py-1 slide-down-enter"
+          // Keys pressed on the thumbnails' remove buttons (Space, digits) must not
+          // reach the meeting shortcuts; Escape closes the box from anywhere in it.
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Escape") {
+              e.preventDefault();
+              setAskInputVisible(false);
+            }
+          }}
+        >
           <AskImageChips images={askSending ? [] : askImages} onRemove={removeAskImage} announcement={askAnnouncement} />
           <div className="flex items-center gap-1.5">
           <input

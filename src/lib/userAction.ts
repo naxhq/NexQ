@@ -47,7 +47,13 @@ export async function runUserAction(
   try {
     await generateAssist(mode, customQuestion, { requestId, scope, images: opts.images });
   } catch (err) {
-    useStreamStore.getState().clearPending(requestId);
+    const store = useStreamStore.getState();
+    store.clearPending(requestId);
+    // The request failed after its stream started, and the backend's error event
+    // didn't end it: don't leave the answer panel streaming forever.
+    if (store.isStreaming && store.streamRequestId === requestId) {
+      store.setError(typeof err === "string" ? err : err instanceof Error ? err.message : "Request failed");
+    }
     throw err;
   }
 }

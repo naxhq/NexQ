@@ -16,6 +16,7 @@ import { runUserAction } from "../lib/userAction";
 import { useQuestionStore } from "../stores/questionStore";
 import { useStreamStore } from "../stores/streamStore";
 import { useConfigStore } from "../stores/configStore";
+import { useMeetingStore } from "../stores/meetingStore";
 import { useToastStore } from "../stores/toastStore";
 import { DEFAULT_IMAGE_QUESTION } from "./sendAsk";
 
@@ -122,10 +123,37 @@ describe("ModeButtons Ask box with a pasted image", () => {
     expect(chips()).toBeNull();
   });
 
+  it("starts each meeting with an empty Ask box", async () => {
+    useMeetingStore.setState({ activeMeeting: { id: "m1" } as never });
+    render(<ModeButtons />);
+    openAsk();
+    fireEvent.change(input(), { target: { value: "left over" } });
+    await pasteImage();
+    act(() => useMeetingStore.setState({ activeMeeting: { id: "m2" } as never }));
+    expect(screen.queryByLabelText("Ask a question")).toBeNull();
+    openAsk();
+    expect(input().value).toBe("");
+    expect(chips()).toBeNull();
+    act(() => useMeetingStore.setState({ activeMeeting: null }));
+  });
+
+  it("keeps keys pressed on a thumbnail's remove button from the meeting shortcuts", async () => {
+    render(<ModeButtons />);
+    openAsk();
+    await pasteImage();
+    const onWindowKey = vi.fn();
+    window.addEventListener("keydown", onWindowKey);
+    fireEvent.keyDown(screen.getByRole("button", { name: "Remove image 1" }), { key: " ", code: "Space" });
+    expect(onWindowKey).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByRole("button", { name: "Remove image 1" }), { key: "Escape" });
+    expect(screen.queryByLabelText("Ask a question")).toBeNull();
+    window.removeEventListener("keydown", onWindowKey);
+  });
+
   it("names the paste shortcut only with Claude (subscription)", () => {
     const { unmount } = render(<ModeButtons />);
     openAsk();
-    expect(input().placeholder).toMatch(/to attach a screenshot/);
+    expect(input().placeholder).toBe("Ask or paste a screenshot");
     unmount();
     useConfigStore.setState({ llmProvider: "openai" });
     render(<ModeButtons />);

@@ -890,8 +890,21 @@ pub async fn generate_assist(
             .as_ref()
             .and_then(|l| l.lock().ok())
             .and_then(|r| r.active_provider_type().cloned());
+        let message = images_refusal(active.as_ref()).to_string();
+        // End the stream too: a session attempt above may already have started
+        // it, and the frontend ignores errors for streams it never started, so
+        // this is harmless otherwise (the rejection below reports it then).
+        emit_error(
+            &app_handle,
+            &GenerationParams {
+                request_id: Some(request_id.clone()),
+                cancel: Some(cancel_token.clone()),
+                ..GenerationParams::default()
+            },
+            &message,
+        );
         drop(generation_guard);
-        return Err(images_refusal(active.as_ref()).to_string());
+        return Err(message);
     }
 
     // Determine transcript window: per-action override or global default,

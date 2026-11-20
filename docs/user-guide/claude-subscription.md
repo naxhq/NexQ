@@ -33,14 +33,14 @@ The **context chip** next to the action buttons in the meeting view sets which p
 
 When the thing you need help with is only visible on screen (an exercise, a question in a chat or slide, a diagram), send a picture of it instead of retyping it:
 
-1. Copy a screenshot, for example with `Win+Shift+S`.
+1. Copy a screenshot of just the part you need, for example with `Win+Shift+S`.
 2. Open **Ask** in the meeting view.
 3. Press `Ctrl+V` in the Ask box. The picture shows as a small thumbnail.
 4. Press Enter.
 
 - You can attach up to 3 images (PNG, JPEG, GIF or WebP). NexQ shrinks large ones before sending, so a full-screen screenshot works. Click the **x** on a thumbnail to remove it.
 - With an empty box, the image itself is the question: Claude reads it and answers or solves it, rather than describing it.
-- This works only with **Claude (subscription)**. With another provider, or when Claude is unavailable and NexQ would use the fallback provider, NexQ asks you to remove the image instead of answering without it.
+- This works only with **Claude (subscription)**. With another provider, NexQ doesn't attach the image and tells you images need Claude. When Claude is unavailable and NexQ would answer with the fallback provider, it asks you to try again or remove the image, instead of answering without it.
 - If the send fails, your text and images stay in the Ask box so you can send again.
 - Images are not replayed if NexQ has to restart the Claude session; only the text is.
 

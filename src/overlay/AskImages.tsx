@@ -9,18 +9,18 @@ import {
   prepareImage,
   previewSrc,
 } from "../lib/imageAttachments";
-import { formatShortcut } from "../lib/shortcutLabel";
 import { showToast } from "../stores/toastStore";
 import { useConfigStore } from "../stores/configStore";
 
 /** Why a pasted image is refused when the provider can't read images. */
 export const IMAGES_NEED_CLAUDE = "Images work only with Claude (subscription). Choose it in Settings > LLM.";
 
-/** The Ask box placeholder: names the paste shortcut only where it works. */
+/**
+ * The Ask box placeholder. Short enough to show whole in the overlay's Ask box
+ * (about 24 characters); it mentions screenshots only where they can be pasted.
+ */
 export function askPlaceholder(canAttach: boolean): string {
-  return canAttach
-    ? `Ask about the meeting... (${formatShortcut("CmdOrCtrl+V")} to attach a screenshot)`
-    : "Ask about the meeting...";
+  return canAttach ? "Ask or paste a screenshot" : "Ask about the meeting...";
 }
 
 /**
