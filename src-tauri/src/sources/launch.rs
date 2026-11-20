@@ -10,9 +10,104 @@
 
 use super::config::{McpServer, McpTransport, NotesFolder, PersonalSourcesConfig};
 use super::mcp_json::{credential_id, header_credential_id};
+use super::private_files::private_dir;
 use crate::llm::cli_agent::command::{SourcesLaunch, SOURCES_BUILTIN_TOOLS};
 use serde_json::{json, Map, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Places a notes folder must not be, or contain: NexQ's private session
+/// files, the user's home, and the folders that hold Claude's sign-in.
+#[derive(Debug, Clone)]
+pub struct Protected {
+    pub private: PathBuf,
+    pub home: Option<PathBuf>,
+    pub credentials: Vec<PathBuf>,
+}
+
+impl Protected {
+    pub fn current() -> Self {
+        let home = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(PathBuf::from);
+        let mut credentials = Vec::new();
+        if let Some(h) = &home {
+            credentials.push(h.join(".claude"));
+            credentials.push(h.join(".claude.json"));
+        }
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            credentials.push(PathBuf::from(appdata).join("Claude"));
+        }
+        Self { private: private_dir(), home, credentials }
+    }
+}
+
+/// Why this folder can't be a notes folder, or `None` if it can. Used when a
+/// folder is added and again at every launch. A folder that does not exist has
+/// no problem here (it shows as "Folder not found" instead).
+pub fn folder_problem(path: &Path) -> Option<String> {
+    folder_problem_with(path, &Protected::current())
+}
+
+pub fn folder_problem_with(path: &Path, protected: &Protected) -> Option<String> {
+    let folder = resolve(path, true);
+    if folder.parent().is_none() {
+        return Some("A whole drive can't be a notes folder. Choose the folder that holds your notes.".into());
+    }
+    let private = resolve(&protected.private, true);
+    if private.starts_with(&folder) || folder.starts_with(&private) {
+        return Some("This folder holds NexQ's private files, so it can't be a notes folder.".into());
+    }
+    if let Some(home) = protected.home.as_deref().map(|h| resolve(h, true)) {
+        if folder == home {
+            return Some("Your whole user folder can't be a notes folder. Choose the folder that holds your notes.".into());
+        }
+        if home.starts_with(&folder) {
+            return Some("This folder contains your whole user folder, so it can't be a notes folder.".into());
+        }
+    }
+    for cred in &protected.credentials {
+        let cred = resolve(cred, true);
+        if cred.starts_with(&folder) || folder.starts_with(&cred) {
+            return Some("This folder holds your account's sign-in files, so it can't be a notes folder.".into());
+        }
+    }
+    None
+}
+
+/// A comparable form of `path`: real case and no `..` where it exists (through
+/// its nearest existing ancestor otherwise) and no `\\?\` prefix. `lower` also
+/// lowercases it on Windows, for comparing.
+fn resolve(path: &Path, lower: bool) -> PathBuf {
+    let mut rest: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = path.to_path_buf();
+    let mut full = loop {
+        match std::fs::canonicalize(&cur) {
+            Ok(real) => break real,
+            Err(_) => match (cur.parent().map(Path::to_path_buf), cur.file_name()) {
+                (Some(parent), Some(name)) => {
+                    rest.push(name.to_os_string());
+                    cur = parent;
+                }
+                _ => break path.to_path_buf(),
+            },
+        }
+    };
+    for name in rest.iter().rev() {
+        full.push(name);
+    }
+    let text = full.to_string_lossy().into_owned();
+    let text = text.strip_prefix(r"\\?\").unwrap_or(&text).to_string();
+    PathBuf::from(if lower && cfg!(windows) { text.to_lowercase() } else { text })
+}
+
+/// Deny rules for the private folder on the file tools. The CLI takes the
+/// drive letter and forward slashes: `Read(C:/dir/**)` (checked against the
+/// installed CLI, and it covers Grep and Glob too). Defense in depth next to
+/// [`folder_problem`].
+fn private_deny_rules(private: &Path) -> Vec<String> {
+    let text = resolve(private, false).to_string_lossy().replace('\\', "/");
+    ["Read", "Grep", "Glob"].iter().map(|t| format!("{t}({text}/**)")).collect()
+}
 
 /// The launch inputs for the enabled, reachable sources. `secret` looks a
 /// value up by credential id (`mcp:<key>:<NAME>`).
@@ -29,12 +124,15 @@ pub fn build_sources_launch(
 ) -> Result<Option<SourcesLaunch>, String> {
     let mut left_out: Vec<String> = Vec::new();
 
+    let protected = Protected::current();
     let mut folders: Vec<&NotesFolder> = Vec::new();
     for folder in cfg.enabled_folders() {
-        if std::path::Path::new(&folder.path).is_dir() {
-            folders.push(folder);
-        } else {
+        if !Path::new(&folder.path).is_dir() {
             left_out.push(format!("{}: folder not found", folder.label));
+        } else if let Some(problem) = folder_problem_with(Path::new(&folder.path), &protected) {
+            left_out.push(format!("{}: {problem}", folder.label));
+        } else {
+            folders.push(folder);
         }
     }
 
@@ -67,6 +165,9 @@ pub fn build_sources_launch(
         allowed_tools.extend(SOURCES_BUILTIN_TOOLS.split(',').map(str::to_string));
     }
     let mut disallowed_tools = Vec::new();
+    if !folders.is_empty() {
+        disallowed_tools.extend(private_deny_rules(&protected.private));
+    }
     for server in &servers {
         for tool in &server.tools {
             if tool.allowed {
@@ -304,8 +405,92 @@ mod tests {
         };
         let launch = build_sources_launch(&cfg, &no_secrets).unwrap().unwrap();
         assert_eq!(launch.allowed_tools, ["Read", "Grep", "Glob", "mcp__mira__kb_search", "mcp__mira__kb_read"]);
-        assert_eq!(launch.disallowed_tools, ["mcp__mira__add_task"]);
+        let mcp: Vec<&String> = launch.disallowed_tools.iter().filter(|t| t.starts_with("mcp__")).collect();
+        assert_eq!(mcp, ["mcp__mira__add_task"]);
         let _ = std::fs::remove_dir_all(&here);
+    }
+
+    #[test]
+    fn private_folder_is_denied_to_the_file_tools_when_notes_are_on() {
+        let here = real_dir("deny");
+        let cfg = PersonalSourcesConfig { notes_folders: vec![folder("N", &here)], ..Default::default() };
+        let launch = build_sources_launch(&cfg, &no_secrets).unwrap().unwrap();
+        let rules = &launch.disallowed_tools;
+        assert_eq!(rules.len(), 3, "{rules:?}");
+        for (rule, tool) in rules.iter().zip(["Read", "Grep", "Glob"]) {
+            assert!(rule.starts_with(&format!("{tool}(")) && rule.ends_with("/agent-private/**)"), "{rule}");
+            assert!(!rule.contains('\\'), "{rule}");
+        }
+        // Tools only: the file tools are off, so no path rules.
+        let tools_only = PersonalSourcesConfig {
+            mcp_servers: vec![stdio("m", "M", vec![], vec![tool("m", "kb_read", true)])],
+            ..Default::default()
+        };
+        assert!(build_sources_launch(&tools_only, &no_secrets).unwrap().unwrap().disallowed_tools.is_empty());
+        let _ = std::fs::remove_dir_all(&here);
+    }
+
+    fn protected(base: &Path) -> Protected {
+        let home = base.join("home");
+        Protected {
+            private: base.join("local").join("NexQ").join("agent-private"),
+            credentials: vec![home.join(".claude"), home.join(".claude.json"), base.join("roaming").join("Claude")],
+            home: Some(home),
+        }
+    }
+
+    fn mk(base: &Path, rel: &str) -> PathBuf {
+        let p = base.join(rel);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn folder_problem_accepts_a_normal_vault_and_refuses_the_dangerous_ones() {
+        let base = real_dir("problem");
+        let prot = protected(&base);
+        mk(&base, "home/.claude");
+        mk(&base, "local/NexQ/agent-private");
+        mk(&base, "roaming/Claude");
+        let vault = mk(&base, "home/Documents/@ObsidianVault/DePaul notes");
+
+        assert_eq!(folder_problem_with(&vault, &prot), None);
+        // A folder that does not exist yet has no problem of its own.
+        assert_eq!(folder_problem_with(&base.join("home/Documents/new"), &prot), None);
+
+        let refused = |p: &Path| folder_problem_with(p, &prot).unwrap_or_else(|| panic!("accepted {p:?}"));
+        // Contains the private folder (an ancestor), or is inside it.
+        assert!(refused(&base.join("local")).contains("private files"));
+        assert!(refused(&base.join("local/NexQ")).contains("private files"));
+        assert!(refused(&base.join("local/NexQ/agent-private")).contains("private files"));
+        assert!(refused(&base.join("local/NexQ/agent-private/x")).contains("private files"));
+        // The home folder itself, and anything above it.
+        assert!(refused(&base.join("home")).contains("user folder"));
+        let _ = refused(&base); // holds both the private folder and home
+        // Credential folders, or a folder holding them.
+        assert!(refused(&base.join("home/.claude")).contains("sign-in"));
+        assert!(refused(&base.join("roaming")).contains("sign-in"));
+        // A `..` path cannot sneak past.
+        assert!(refused(&vault.join("..").join("..").join("..")).contains("user folder"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn folder_problem_refuses_a_drive_root() {
+        let root = std::env::current_dir().unwrap().ancestors().last().unwrap().to_path_buf();
+        let prot = Protected { private: PathBuf::from("Z:/none/private"), home: None, credentials: vec![] };
+        assert!(folder_problem_with(&root, &prot).unwrap().contains("whole drive"));
+        assert!(folder_problem(&root).is_some());
+    }
+
+    #[test]
+    fn a_folder_that_holds_the_private_folder_is_left_out_of_the_launch() {
+        let home = std::env::var_os("USERPROFILE").map(PathBuf::from).expect("USERPROFILE");
+        let cfg = PersonalSourcesConfig {
+            notes_folders: vec![folder("Home", &home), folder("Local", &super::super::private_files::private_dir())],
+            ..Default::default()
+        };
+        assert_eq!(build_sources_launch(&cfg, &no_secrets), Ok(None));
     }
 
     #[test]
