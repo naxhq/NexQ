@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tauri::{command, AppHandle, Emitter, Manager};
 use tokio::sync::mpsc;
 
+use crate::audio::capture_supervisor::{CaptureCounters, CaptureStatus, StatusSink};
 use crate::audio::device_manager;
 use crate::audio::session_monitor;
 use crate::audio::vad::{calculate_peak, calculate_rms, VoiceActivityDetector};
@@ -148,7 +149,7 @@ pub async fn start_capture(
             .lock()
             .map_err(|_| "Audio state lock poisoned".to_string())?;
         let mgr = guard.get_or_insert_with(AudioCaptureManager::new);
-        mgr.start_capture(&mic_device_id, &system_device_id, false, tx)?;
+        mgr.start_capture(&mic_device_id, &system_device_id, false, tx, capture_status_sink(&app))?;
         for warning in mgr.take_warnings() {
             let _ = app.emit("capture_warning", warning);
         }
@@ -899,6 +900,32 @@ fn needs_default_mic_override(config: &crate::audio::PartyAudioConfig, stt_skipp
 /// How often the audio loop re-checks the mute flags when no audio arrives (200 ms).
 const MUTE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
 
+/// Where a capture side's reconnect statuses go: the log, the debug panel and
+/// the `audio_capture_status` event (the toast decides what to show).
+fn capture_status_sink(app: &AppHandle) -> StatusSink {
+    let app = app.clone();
+    Arc::new(move |status: CaptureStatus| {
+        let line = format!(
+            "{:?} capture {:?} on '{}'{}",
+            status.side,
+            status.state,
+            status.device,
+            if status.message.is_empty() { String::new() } else { format!(": {}", status.message) }
+        );
+        let level = match status.state {
+            crate::audio::capture_supervisor::CaptureState::Lost => "warn",
+            _ => "info",
+        };
+        crate::stt::emit_stt_debug(&app, level, "audio", &line);
+        let _ = app.emit("audio_capture_status", &status);
+    })
+}
+
+/// The stats line's xrun and rebuild counts for one side.
+fn capture_counts(counters: &CaptureCounters) -> String {
+    format!(", xruns: {}, rebuilds: {}", counters.xruns(), counters.rebuilds())
+}
+
 /// Pass a party's mute flag on to its provider when it changed.
 fn sync_mute(provider: &mut Option<Box<dyn STTProvider>>, applied: &mut bool, flag: &AtomicBool) {
     if crate::stt::provider::mute_changed(applied, flag.load(Ordering::Relaxed)) {
@@ -1123,7 +1150,7 @@ pub async fn start_capture_per_party(
             "AudioCaptureManager::start_capture mic='{}', system='{}'",
             mic_device, system_device
         );
-        mgr.start_capture(&mic_device, &system_device, system_is_input, tx)?;
+        mgr.start_capture(&mic_device, &system_device, system_is_input, tx, capture_status_sink(&app))?;
         for warning in mgr.take_warnings() {
             let _ = app.emit("capture_warning", warning);
         }
@@ -1354,10 +1381,12 @@ pub async fn start_capture_per_party(
         });
     }
 
-    // Grab the recorder handle for WAV recording (with mic/system mixing)
-    let recorder = {
+    // Grab the recorder handle for WAV recording (with mic/system mixing), and
+    // each side's xrun/rebuild counts for the stats line.
+    let (recorder, (you_counters, them_counters)) = {
         let guard = state.audio.lock().map_err(|_| "lock poisoned".to_string())?;
-        guard.as_ref().and_then(|mgr| mgr.get_recorder())
+        let mgr = guard.as_ref().ok_or("No audio manager initialized")?;
+        (mgr.get_recorder(), mgr.capture_counters())
     };
 
     // Grab mute flags so the audio loop can check them lock-free
@@ -1467,7 +1496,10 @@ pub async fn start_capture_per_party(
                             _ => String::new(),
                         };
                         crate::stt::emit_stt_debug_ex(&app_handle, "info", "audio",
-                            &format!("{}: {} chunks, speech={}, rms={:.0}{}", label, mic_chunk_count, chunk.is_speech, rms, echo_queue),
+                            &format!(
+                                "{}: {} chunks, speech={}, rms={:.0}{}{}",
+                                label, mic_chunk_count, chunk.is_speech, rms, echo_queue, capture_counts(&you_counters)
+                            ),
                             Some("audio_mic_stats"));
                         last_mic_stats = std::time::Instant::now();
                     }
@@ -1482,7 +1514,10 @@ pub async fn start_capture_per_party(
                     if last_sys_stats.elapsed() >= stats_interval {
                         let rms = calculate_rms(&chunk.pcm_data);
                         crate::stt::emit_stt_debug_ex(&app_handle, "info", "audio",
-                            &format!("System: {} chunks, speech={}, rms={:.0}", system_chunk_count, chunk.is_speech, rms),
+                            &format!(
+                                "System: {} chunks, speech={}, rms={:.0}{}",
+                                system_chunk_count, chunk.is_speech, rms, capture_counts(&them_counters)
+                            ),
                             Some("audio_sys_stats"));
                         last_sys_stats = std::time::Instant::now();
                     }

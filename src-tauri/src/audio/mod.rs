@@ -1,5 +1,6 @@
 pub mod device_default;
 pub mod capture_common;
+pub mod capture_supervisor;
 pub mod device_manager;
 pub mod echo_cancel;
 pub mod encoder;
@@ -16,6 +17,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+use crate::audio::capture_supervisor::{
+    CaptureCounters, CaptureKind, SideHandle, StatusSink, SystemClock, START_TIMEOUT,
+};
 use crate::audio::recorder::SharedRecorder;
 use crate::audio::vad::VoiceActivityDetector;
 
@@ -57,14 +61,11 @@ pub struct AudioSessionInfo {
 pub struct AudioCaptureManager {
     pub is_capturing: bool,
     pub recording_enabled: bool,
-    /// Stop flag for the system capture thread
-    stop_flag: Arc<AtomicBool>,
-    /// The cpal stream handle for mic capture (dropping stops the stream)
-    mic_stream: Option<cpal::Stream>,
-    /// The system capture thread handle (WASAPI loopback)
-    system_thread: Option<std::thread::JoinHandle<()>>,
-    /// System capture via input device (cpal stream, for virtual cables tagged as System)
-    system_input_stream: Option<cpal::Stream>,
+    /// One thread per capture side, each owning its stream and reopening it
+    /// when its device goes away (see `capture_supervisor`).
+    sides: Vec<SideHandle>,
+    /// Xruns and rebuilds of "You" and "Them" in this capture, for the stats line.
+    counters: (Arc<CaptureCounters>, Arc<CaptureCounters>),
     /// What didn't start as chosen (a missing device replaced by the default,
     /// or one side not captured at all). Taken by the caller to warn the user.
     warnings: Vec<String>,
@@ -103,10 +104,8 @@ impl AudioCaptureManager {
         Self {
             is_capturing: false,
             recording_enabled: false,
-            stop_flag: Arc::new(AtomicBool::new(false)),
-            mic_stream: None,
-            system_thread: None,
-            system_input_stream: None,
+            sides: Vec::new(),
+            counters: Default::default(),
             warnings: Vec::new(),
             recorder: None,
             recording_paused_at: None,
@@ -132,12 +131,16 @@ impl AudioCaptureManager {
     /// When `system_is_input` is true, the system device is an input device
     /// (e.g. a virtual cable like AudienceMix) — capture it via standard
     /// mic capture tagged as AudioSource::System instead of WASAPI loopback.
+    ///
+    /// Each side runs on its own thread, which reconnects it on its own when
+    /// its device goes away and reports that through `on_status`.
     pub fn start_capture(
         &mut self,
         mic_device_id: &str,
         system_device_id: &str,
         system_is_input: bool,
         tx: mpsc::Sender<AudioChunk>,
+        on_status: StatusSink,
     ) -> Result<(), String> {
         if self.is_capturing {
             return Err("Capture already in progress".to_string());
@@ -145,13 +148,11 @@ impl AudioCaptureManager {
 
         log::info!("Starting audio capture pipeline");
         self.warnings.clear();
+        self.counters = Default::default();
         // Why "You" isn't captured, if the mic (and the default mic) failed.
         let mut mic_error: Option<String> = None;
         // Why "Them" isn't captured, if their device failed.
         let mut system_error: Option<String> = None;
-
-        // Reset stop flag
-        self.stop_flag.store(false, Ordering::SeqCst);
 
         // Same-device optimization: when both parties use the same input device,
         // open ONE capture and duplicate chunks with both Mic + System tags.
@@ -167,26 +168,35 @@ impl AudioCaptureManager {
                 mic_device_id
             );
             // Single capture that produces both Mic and System chunks
-            let dual_tx = tx.clone();
-            match mic_capture::start_mic_capture_dual(mic_device_id, dual_tx) {
-                Ok(stream) => {
-                    self.mic_stream = Some(stream);
-                    log::info!("Dual-tagged capture started on shared device");
-                }
-                Err(e) => {
-                    log::error!("Failed to start dual capture: {}", e);
-                    return Err(format!("Dual capture failed: {}", e));
-                }
-            }
+            let (side, _) = self
+                .spawn_input(CaptureKind::Dual, mic_device_id, mic_capture::InputTags::Both, &tx, &on_status)
+                .map_err(|errors| format!("Dual capture failed: {}", errors.join("; ")))?;
+            self.sides.push(side);
+            log::info!("Dual-tagged capture started on shared device");
         } else {
-            // Standard: separate mic capture
-            match self.start_mic_or_default(mic_device_id, tx.clone()) {
-                Ok(stream) => {
-                    self.mic_stream = Some(stream);
+            // Standard: separate mic capture, or the default mic when the chosen one fails.
+            match self.spawn_input(
+                CaptureKind::Mic,
+                mic_device_id,
+                mic_capture::InputTags::One(AudioSource::Mic),
+                &tx,
+                &on_status,
+            ) {
+                Ok((side, replaced)) => {
+                    self.sides.push(side);
+                    if replaced {
+                        self.warnings.push(format!(
+                            "Your microphone '{mic_device_id}' isn't available, so NexQ is using the default microphone."
+                        ));
+                    }
                     log::info!("Mic capture started");
                 }
-                Err(e) => {
+                Err(errors) => {
                     // Keep going: the other side may still be captured.
+                    let e = match errors.as_slice() {
+                        [chosen, default] => format!("{chosen}; the default microphone failed too: {default}"),
+                        _ => errors.join("; "),
+                    };
                     log::error!("Failed to start mic capture: {e}");
                     mic_error = Some(e);
                 }
@@ -198,42 +208,52 @@ impl AudioCaptureManager {
             // Already handled above — both Mic and System chunks from single stream
         } else if system_is_input {
             // "Them" is a different input device — capture tagged as System
-            let system_tx = tx.clone();
-            match mic_capture::start_mic_capture(system_device_id, system_tx, AudioSource::System) {
-                Ok(stream) => {
-                    self.system_input_stream = Some(stream);
+            match self.spawn_input(
+                CaptureKind::InputThem,
+                system_device_id,
+                mic_capture::InputTags::One(AudioSource::System),
+                &tx,
+                &on_status,
+            ) {
+                Ok((side, _)) => {
+                    self.sides.push(side);
                     log::info!("System audio capture started via input device (tagged as System)");
                 }
-                Err(e) => {
+                Err(errors) => {
                     // Keep "You" running; the caller warns about the other side.
+                    let e = errors.join("; ");
                     log::error!("System input capture failed: {e}. The other party won't be captured.");
                     system_error = Some(e);
                 }
             }
         } else {
-            let device_name = if system_device_id.is_empty() || system_device_id == "default" {
-                None
-            } else {
-                Some(system_device_id.to_string())
-            };
-            let mut started = system_capture::start_system_capture_device(tx.clone(), Arc::clone(&self.stop_flag), device_name.clone());
             // A chosen output that isn't connected falls back to the default output.
-            if let (Err(e), Some(name)) = (&started, &device_name) {
-                log::warn!("Output '{name}' failed ({e}); capturing the default output instead");
-                started = system_capture::start_system_capture_device(tx.clone(), Arc::clone(&self.stop_flag), None);
-                if started.is_ok() {
-                    self.warnings.push(format!(
-                        "The other side's device '{name}' isn't available, so NexQ is capturing your default output instead."
-                    ));
-                }
-            }
-            match started {
-                Ok(handle) => {
-                    self.system_thread = Some(handle);
+            let (messages_tx, messages_rx) = capture_supervisor::side_channel();
+            let opener = system_capture::OutputOpener { tx: tx.clone(), errors: messages_tx.clone() };
+            match capture_supervisor::spawn_side(
+                CaptureKind::Output,
+                system_device_id,
+                opener,
+                SystemClock,
+                Arc::clone(&self.counters.1),
+                Arc::clone(&on_status),
+                (messages_tx, messages_rx),
+                START_TIMEOUT,
+            ) {
+                Ok((side, started)) => {
+                    self.sides.push(side);
+                    if let Some(reason) = started.and_then(|s| s.replaced) {
+                        log::warn!("Output '{system_device_id}' failed ({reason}); capturing the default output instead");
+                        self.warnings.push(format!(
+                            "The other side's device '{system_device_id}' isn't available, so NexQ is capturing your default output instead."
+                        ));
+                    }
                     log::info!("System output audio capture started");
                 }
-                Err(e) => {
+                Err(errors) => {
                     // Keep "You" running; the caller warns about the other side.
+                    // The last error is the last device tried (the default output).
+                    let e = errors.last().cloned().unwrap_or_default();
                     log::error!("System output capture failed: {e}. The other party won't be captured.");
                     system_error = Some(e);
                 }
@@ -242,9 +262,7 @@ impl AudioCaptureManager {
 
         match (mic_error, system_error) {
             (Some(mic), Some(system)) => {
-                self.stop_flag.store(true, Ordering::SeqCst);
-                self.mic_stream.take();
-                self.system_input_stream.take();
+                self.stop_sides();
                 return Err(format!("Couldn't capture any audio. Microphone: {mic}. Other side: {system}"));
             }
             (Some(mic), None) => self.warnings.push(format!(
@@ -263,26 +281,52 @@ impl AudioCaptureManager {
         Ok(())
     }
 
+    /// Start a supervised input-device side. Ok: its handle, and whether the
+    /// default device stands in for the chosen one. Err: each device's error.
+    fn spawn_input(
+        &self,
+        kind: CaptureKind,
+        device_id: &str,
+        tags: mic_capture::InputTags,
+        tx: &mpsc::Sender<AudioChunk>,
+        on_status: &StatusSink,
+    ) -> Result<(SideHandle, bool), Vec<String>> {
+        let (messages_tx, messages_rx) = capture_supervisor::side_channel();
+        let opener = mic_capture::InputOpener {
+            tx: tx.clone(),
+            tags,
+            side: kind.side(),
+            errors: messages_tx.clone(),
+        };
+        let counters = match kind.side() {
+            capture_supervisor::CaptureSide::You => &self.counters.0,
+            capture_supervisor::CaptureSide::Them => &self.counters.1,
+        };
+        let (side, started) = capture_supervisor::spawn_side(
+            kind,
+            device_id,
+            opener,
+            SystemClock,
+            Arc::clone(counters),
+            Arc::clone(on_status),
+            (messages_tx, messages_rx),
+            START_TIMEOUT,
+        )?;
+        if let Some(reason) = started.as_ref().and_then(|s| s.replaced.as_ref()) {
+            log::warn!("Input '{device_id}' failed ({reason}); using the default input instead");
+        }
+        let replaced = started.is_some_and(|s| s.replaced.is_some());
+        Ok((side, replaced))
+    }
+
     /// What didn't start as chosen, once (see `warnings`).
     pub fn take_warnings(&mut self) -> Vec<String> {
         std::mem::take(&mut self.warnings)
     }
 
-    /// Open `device_id` as the microphone, or the default microphone when the
-    /// chosen one fails (a headset that's switched off).
-    fn start_mic_or_default(&mut self, device_id: &str, tx: mpsc::Sender<AudioChunk>) -> Result<cpal::Stream, String> {
-        match mic_capture::start_mic_capture(device_id, tx.clone(), AudioSource::Mic) {
-            Err(e) if !device_id.is_empty() && device_id != "default" => {
-                log::warn!("Microphone '{device_id}' failed ({e}); trying the default microphone");
-                let stream = mic_capture::start_mic_capture("default", tx, AudioSource::Mic)
-                    .map_err(|default_err| format!("{e}; the default microphone failed too: {default_err}"))?;
-                self.warnings.push(format!(
-                    "Your microphone '{device_id}' isn't available, so NexQ is using the default microphone."
-                ));
-                Ok(stream)
-            }
-            result => result,
-        }
+    /// Xruns and rebuilds per side ("You", "Them") for the current capture.
+    pub fn capture_counters(&self) -> (Arc<CaptureCounters>, Arc<CaptureCounters>) {
+        (Arc::clone(&self.counters.0), Arc::clone(&self.counters.1))
     }
 
     /// Stop all audio capture.
@@ -309,20 +353,8 @@ impl AudioCaptureManager {
     fn stop_streams(&mut self) {
         log::info!("Stopping audio capture pipeline");
 
-        // Signal system capture thread to stop
-        self.stop_flag.store(true, Ordering::SeqCst);
-
-        // Drop the mic stream (this stops cpal capture)
-        self.mic_stream.take();
-
-        // Drop system input stream (if using input device capture for "Them")
-        self.system_input_stream.take();
-
-        // Wait for system capture thread to finish (with timeout)
-        if let Some(thread) = self.system_thread.take() {
-            // Give the thread a moment to stop, then move on
-            let _ = thread.join();
-        }
+        // Each side drops its stream and cancels any pending reconnect.
+        self.stop_sides();
 
         // Reset VADs
         self.mic_vad.reset();
@@ -330,6 +362,16 @@ impl AudioCaptureManager {
 
         self.is_capturing = false;
         log::info!("Audio capture pipeline stopped");
+    }
+
+    /// Stop every side's thread (all asked first, then joined).
+    fn stop_sides(&mut self) {
+        for side in &self.sides {
+            side.request_stop();
+        }
+        for side in self.sides.drain(..) {
+            side.join();
+        }
     }
 
     /// Check if capture is active.
@@ -777,6 +819,221 @@ mod tests {
         assert!(mgr.stop_capture(false).is_some());
         assert!(mgr.recorder.is_none() && mgr.recording_paused_at.is_none());
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    use capture_supervisor::tests::Rig;
+    use capture_supervisor::{side_channel, spawn_side, CaptureSide, SideMessage};
+
+    /// A side on a fake device, as `start_capture` would add it. Returns the
+    /// sender its stream's error callback would use.
+    fn fake_side(
+        mgr: &mut AudioCaptureManager,
+        rig: &Rig,
+        kind: CaptureKind,
+        device: &str,
+    ) -> std::sync::mpsc::SyncSender<SideMessage> {
+        let (tx, rx) = side_channel();
+        let errors = tx.clone();
+        let (side, started) = spawn_side(
+            kind,
+            device,
+            rig.opener(kind.side(), device),
+            SystemClock,
+            Arc::clone(&rig.counters),
+            rig.sink(),
+            (tx, rx),
+            START_TIMEOUT,
+        )
+        .unwrap();
+        assert!(started.is_some());
+        mgr.sides.push(side);
+        mgr.is_capturing = true;
+        errors
+    }
+
+    fn invalidated(side: CaptureSide) -> SideMessage {
+        // A device id that is a single choice opens once at start: generation 1.
+        SideMessage::StreamError { side, generation: 1, error: cpal::Error::new(cpal::ErrorKind::StreamInvalidated) }
+    }
+
+    fn wait_until(what: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !what() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    /// (h) A side reconnecting mid-meeting never finalizes or replaces the recording.
+    #[test]
+    fn a_rebuild_keeps_the_recording_open() {
+        let path = temp_wav("rebuild");
+        let mut mgr = AudioCaptureManager::new();
+        let rec = SharedRecorder::new(recorder::start_recording_at(path.clone()).unwrap());
+        mgr.recorder = Some(rec.clone());
+        let rig = Rig::new(&["Mic"]);
+        let errors = fake_side(&mut mgr, &rig, CaptureKind::Mic, "Mic");
+
+        rec.write_samples(&[100; 16_000]);
+        errors.send(invalidated(CaptureSide::You)).unwrap();
+        wait_until(|| rig.attempts(CaptureSide::You) == 2);
+        assert_eq!(rig.attempts(CaptureSide::You), 2, "the mic was reopened");
+        assert_eq!(rig.live(CaptureSide::You), 1);
+        assert!(mgr.recording_paused_at.is_none());
+        rec.write_samples(&[100; 16_000]);
+
+        let (saved, _) = mgr.stop_capture(false).expect("one recording at End");
+        assert_eq!(saved, path);
+        let reader = hound::WavReader::open(&path).unwrap();
+        let samples: Vec<i16> = reader.into_samples::<i16>().map(Result::unwrap).collect();
+        assert_eq!(samples.len(), 32_000, "before and after the rebuild, in one file");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// (i) A Settings hot-swap while a rebuild is pending: the old sides stop
+    /// without reopening, the new ones start, one stream per side.
+    #[test]
+    fn a_hot_swap_cancels_pending_rebuilds() {
+        let mut mgr = AudioCaptureManager::new();
+        let rig = Rig::new(&["Mic", "Speakers"]);
+        let you = fake_side(&mut mgr, &rig, CaptureKind::Mic, "Mic");
+        let them = fake_side(&mut mgr, &rig, CaptureKind::Output, "Speakers");
+        you.send(invalidated(CaptureSide::You)).unwrap();
+        them.send(invalidated(CaptureSide::Them)).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50)); // both rebuilds pending
+
+        mgr.stop_capture(true);
+        assert_eq!((rig.live(CaptureSide::You), rig.live(CaptureSide::Them)), (0, 0));
+        fake_side(&mut mgr, &rig, CaptureKind::Mic, "Mic");
+        fake_side(&mut mgr, &rig, CaptureKind::Output, "Speakers");
+        std::thread::sleep(std::time::Duration::from_millis(800)); // past the debounce
+
+        assert_eq!((rig.live(CaptureSide::You), rig.live(CaptureSide::Them)), (1, 1));
+        assert_eq!(rig.attempts(CaptureSide::You), 2, "two starts, no rebuild");
+        assert_eq!(rig.attempts(CaptureSide::Them), 2, "two starts, no rebuild");
+        assert!(!rig.states().contains(&capture_supervisor::CaptureState::Recovered));
+        mgr.stop_capture(false);
+        assert_eq!((rig.live(CaptureSide::You), rig.live(CaptureSide::Them)), (0, 0));
+    }
+
+    /// Samples per source over `secs` of real capture through `start_capture`
+    /// on the default devices, while a silent output stream keeps the
+    /// loopback fed (Windows loopback sends nothing while nothing plays).
+    fn capture_default_devices(secs: u64) -> (usize, usize, Vec<String>) {
+        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+        let output = cpal::default_host().default_output_device().expect("a default output");
+        let config = output.default_output_config().expect("an output config");
+        let silence = output
+            .build_output_stream_raw(
+                config.config(),
+                config.sample_format(),
+                |data: &mut cpal::Data, _: &cpal::OutputCallbackInfo| data.bytes_mut().fill(0),
+                |e| log::warn!("silence stream: {e}"),
+                None,
+            )
+            .expect("a silent output stream");
+        silence.play().unwrap();
+
+        let (tx, mut rx) = mpsc::channel::<AudioChunk>(4096);
+        let mut mgr = AudioCaptureManager::new();
+        let statuses = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink_statuses = Arc::clone(&statuses);
+        mgr.start_capture(
+            "default",
+            "default",
+            false,
+            tx,
+            Arc::new(move |s: capture_supervisor::CaptureStatus| sink_statuses.lock().unwrap().push(s.message)),
+        )
+        .expect("capture starts");
+        let warnings = mgr.take_warnings();
+        let (mut mic, mut system) = (0, 0);
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        while std::time::Instant::now() < end {
+            while let Ok(chunk) = rx.try_recv() {
+                match chunk.source {
+                    AudioSource::Mic => mic += chunk.pcm_data.len(),
+                    AudioSource::System => system += chunk.pcm_data.len(),
+                    AudioSource::Room => {}
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        mgr.stop_capture(false);
+        drop(silence);
+        let mut notes = warnings;
+        notes.extend(statuses.lock().unwrap().iter().cloned());
+        (mic, system, notes)
+    }
+
+    /// Hardware probe: the default mic delivers 16 kHz through the supervised side.
+    /// `cargo test --lib -- --ignored hardware_default_mic`
+    #[test]
+    #[ignore = "needs a microphone"]
+    fn hardware_default_mic_delivers_16k() {
+        let (mic, _, notes) = capture_default_devices(3);
+        assert!(mic >= 3 * 14_000, "mic: {mic} samples in 3 s ({notes:?})");
+    }
+
+    /// Hardware probe: default-output loopback delivers 16 kHz through the supervised side.
+    /// `cargo test --lib -- --ignored hardware_default_output_loopback`
+    #[test]
+    #[ignore = "needs an output device"]
+    fn hardware_default_output_loopback_delivers_16k() {
+        let (_, system, notes) = capture_default_devices(3);
+        assert!(system >= 3 * 14_000, "loopback: {system} samples in 3 s ({notes:?})");
+    }
+
+    /// Hardware probe: a real mic stream dropped and reopened by its side after
+    /// a StreamInvalidated keeps delivering on the same channel.
+    /// `cargo test --lib -- --ignored hardware_default_mic_reopens`
+    #[test]
+    #[ignore = "needs a microphone"]
+    fn hardware_default_mic_reopens_after_stream_invalidated() {
+        let (tx, mut rx) = mpsc::channel::<AudioChunk>(4096);
+        let (side_tx, side_rx) = side_channel();
+        let errors = side_tx.clone();
+        let opener = mic_capture::InputOpener {
+            tx,
+            tags: mic_capture::InputTags::One(AudioSource::Mic),
+            side: CaptureSide::You,
+            errors: side_tx.clone(),
+        };
+        let statuses = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink_statuses = Arc::clone(&statuses);
+        let counters = Arc::new(CaptureCounters::default());
+        let (side, _) = spawn_side(
+            CaptureKind::Mic,
+            "default",
+            opener,
+            SystemClock,
+            Arc::clone(&counters),
+            Arc::new(move |s: capture_supervisor::CaptureStatus| sink_statuses.lock().unwrap().push(s.state)),
+            (side_tx, side_rx),
+            START_TIMEOUT,
+        )
+        .expect("the default mic opens");
+        let count = |rx: &mut mpsc::Receiver<AudioChunk>, secs: u64| {
+            let mut n = 0;
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+            while std::time::Instant::now() < end {
+                while let Ok(chunk) = rx.try_recv() {
+                    n += chunk.pcm_data.len();
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            n
+        };
+        let before = count(&mut rx, 2);
+        errors.send(invalidated(CaptureSide::You)).unwrap();
+        let _ = count(&mut rx, 1); // debounce + reopen
+        let after = count(&mut rx, 2);
+        side.join();
+        assert_eq!(
+            *statuses.lock().unwrap(),
+            vec![capture_supervisor::CaptureState::Recovering, capture_supervisor::CaptureState::Recovered]
+        );
+        assert_eq!(counters.rebuilds(), 1);
+        assert!(before >= 2 * 14_000 && after >= 2 * 14_000, "before {before}, after {after}");
     }
 
     #[test]

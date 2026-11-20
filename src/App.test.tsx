@@ -18,7 +18,8 @@ import App from "./App";
 import { useMeetingStore } from "./stores/meetingStore";
 import { useScenarioStore } from "./stores/scenarioStore";
 import { useAIActionsStore } from "./stores/aiActionsStore";
-import type { AIScenario } from "./lib/types";
+import { useToastStore } from "./stores/toastStore";
+import type { AIScenario, AudioCaptureStatus } from "./lib/types";
 
 /** config.json, which both windows read and the launcher writes. */
 let savedConfig: Record<string, unknown> = {};
@@ -121,5 +122,29 @@ describe("the overlay's scenario chip", () => {
     savedConfig.customScenarios = [{ id: "custom_1", name: "Board review", is_custom: true }];
     await launcherStartsMeeting("custom_1");
     expect(await screen.findByText("Board review")).toBeTruthy();
+  });
+});
+
+describe("a capture side reconnecting mid-meeting", () => {
+  it("toasts a switch to another device and a lost side, nothing while reconnecting", async () => {
+    await launchOverlayOn("team_meeting");
+    useToastStore.setState({ toasts: [] });
+    const deliver = (payload: AudioCaptureStatus) =>
+      act(async () => {
+        await listeners.get("audio_capture_status")?.({ payload });
+      });
+
+    await deliver({ side: "you", state: "recovering", device: "Headset", message: "" });
+    await deliver({ side: "you", state: "recovered", device: "Headset", message: "" });
+    expect(useToastStore.getState().toasts).toEqual([]);
+
+    const switched = "Your microphone disconnected. Using Microphone (Realtek) for now.";
+    await deliver({ side: "you", state: "recovered", device: "Microphone (Realtek)", message: switched });
+    const lost = "The other side's audio device disconnected and didn't come back. Pick a device in Audio & Devices to continue.";
+    await deliver({ side: "them", state: "lost", device: "Speakers", message: lost });
+    expect(useToastStore.getState().toasts.map((t) => [t.message, t.type])).toEqual([
+      [switched, "info"],
+      [lost, "warning"],
+    ]);
   });
 });
