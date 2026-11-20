@@ -17,10 +17,13 @@ vi.mock("@tauri-apps/api/event", async (importOriginal) => ({
 import App from "./App";
 import { useMeetingStore } from "./stores/meetingStore";
 import { useScenarioStore } from "./stores/scenarioStore";
+import { useAIActionsStore } from "./stores/aiActionsStore";
 import type { AIScenario } from "./lib/types";
 
 /** config.json, which both windows read and the launcher writes. */
 let savedConfig: Record<string, unknown> = {};
+
+const defaultAIConfigs = useAIActionsStore.getState().configs;
 
 async function launchOverlayOn(activeScenarioId: AIScenario) {
   savedConfig = { firstRunCompleted: true, activeScenarioId };
@@ -66,6 +69,7 @@ afterEach(() => {
   useMeetingStore.getState().stopTimer();
   useMeetingStore.setState({ activeMeeting: null, currentView: "launcher", isRecording: false });
   useScenarioStore.setState({ activeScenarioId: "team_meeting", customScenarios: [], scenarioOverrides: {} });
+  useAIActionsStore.setState({ configs: defaultAIConfigs });
 });
 
 describe("scenarios saved by another window", () => {
@@ -81,6 +85,26 @@ describe("scenarios saved by another window", () => {
       });
       expect(useScenarioStore.getState().resolveScenario("custom_1")).toBe("custom_1");
     });
+  });
+});
+
+describe("AI settings saved by another window", () => {
+  it("Auto-Answer switched on in the launcher's Settings reaches the overlay", async () => {
+    await launchOverlayOn("team_meeting");
+    expect(useAIActionsStore.getState().configs.globalDefaults.autoTrigger).toBe(false);
+    const { emit } = await vi.importActual<typeof import("@tauri-apps/api/event")>("@tauri-apps/api/event");
+    await vi.waitFor(async () => {
+      await emit("store://change", {
+        resourceId: 1,
+        key: "ai_action_configs",
+        value: { actions: {}, globalDefaults: { autoTrigger: true } },
+        exists: true,
+      });
+      expect(useAIActionsStore.getState().configs.globalDefaults.autoTrigger).toBe(true);
+    });
+    // Settings saved before a newer one existed still get its default.
+    expect(useAIActionsStore.getState().configs.actions.Assist).toBeTruthy();
+    expect(useAIActionsStore.getState().configs.globalDefaults.questionDetection).toBe(true);
   });
 });
 
