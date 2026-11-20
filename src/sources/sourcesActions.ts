@@ -58,6 +58,18 @@ export function removeMcpServer(id: string): Promise<void> {
   return update((c) => ({ ...c, mcp_servers: c.mcp_servers.filter((s) => s.id !== id) }));
 }
 
+/**
+ * Remove a server and save that for good first: rejects, and the server stays,
+ * when the save fails. `afterSave` (forgetting its secrets) runs only then,
+ * before the backend is told.
+ */
+export function removeMcpServerDurably(id: string, afterSave?: () => Promise<void>): Promise<void> {
+  const c = current();
+  return useSourcesStore
+    .getState()
+    .setConfigDurably({ ...c, mcp_servers: c.mcp_servers.filter((s) => s.id !== id) }, afterSave);
+}
+
 export function addNotesFolder(folder: NotesFolder): Promise<void> {
   return update((c) => ({ ...c, notes_folders: [...c.notes_folders, folder] }));
 }

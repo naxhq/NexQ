@@ -165,6 +165,13 @@ interface SourcesState {
   /** Set, save and give to the backend. Resolves once the backend has answered; never rejects. */
   setConfig: (c: PersonalSourcesConfig) => Promise<void>;
   /**
+   * Like `setConfig` for a change that must not be lost (a removal): rejects when
+   * the save fails, then nothing reaches the backend and the config goes back to
+   * what it was. `afterSave` runs once the save is done, before the backend gets
+   * the new config (it still has the old one then); it must not throw.
+   */
+  setConfigDurably: (c: PersonalSourcesConfig, afterSave?: () => Promise<void>) => Promise<void>;
+  /**
    * Set and save. A pill flipped here applies to the next answer. Pass a
    * function to change the latest value (two quick clicks each see the other's
    * result).
@@ -188,7 +195,8 @@ function forgetOwnSave(key: string, mine: string): void {
   if (at >= 0) ownSaves[key].splice(at, 1);
 }
 
-async function persist(key: string, value: unknown): Promise<void> {
+/** Save `value`. A failed write is logged and swallowed, unless `strict`: then it is thrown too. */
+async function persist(key: string, value: unknown, strict = false): Promise<void> {
   let mine: string | null = null;
   try {
     const store = await getStore();
@@ -197,6 +205,7 @@ async function persist(key: string, value: unknown): Promise<void> {
   } catch (e) {
     if (mine) forgetOwnSave(key, mine);
     console.error(`[sourcesStore] Failed to persist ${key}:`, e);
+    if (strict) throw e;
   }
 }
 
@@ -257,7 +266,7 @@ async function watchSaved(): Promise<void> {
   );
 }
 
-export const useSourcesStore = create<SourcesState>((set) => ({
+export const useSourcesStore = create<SourcesState>((set, get) => ({
   config: DEFAULT_SOURCES_CONFIG,
   toggles: DEFAULT_SOURCE_TOGGLES,
   loaded: false,
@@ -285,6 +294,21 @@ export const useSourcesStore = create<SourcesState>((set) => ({
     set({ config });
     // Save first so a window that opens next sees it, then tell the backend.
     return persist(CONFIG_KEY, config).then(() => pushToBackend(config));
+  },
+
+  setConfigDurably: async (c, afterSave) => {
+    const config = normalizeSourcesConfig(c);
+    const previous = get().config;
+    set({ config });
+    try {
+      await persist(CONFIG_KEY, config, true);
+    } catch (e) {
+      // Put the old config back, unless something else has changed it meanwhile.
+      if (get().config === config) set({ config: previous });
+      throw e;
+    }
+    await afterSave?.();
+    await pushToBackend(config);
   },
 
   setToggles: (t) => {

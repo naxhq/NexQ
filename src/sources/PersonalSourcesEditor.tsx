@@ -18,7 +18,7 @@ import {
   markMcpNoticeSeen,
   patchMcpServer,
   patchNotesFolder,
-  removeMcpServer,
+  removeMcpServerDurably,
   removeNotesFolder,
   applyCheckResult,
 } from "./sourcesActions";
@@ -139,12 +139,19 @@ export function PersonalSourcesEditor({ variant }: PersonalSourcesEditorProps) {
   };
 
   const removeServer = async (server: McpServer) => {
+    // The removal is saved first; the secrets go only after that (and the backend,
+    // which forgets them too, hears of it last). A failed save keeps the server.
     try {
-      await deleteMcpSecrets(server.id);
+      await removeMcpServerDurably(server.id, async () => {
+        try {
+          await deleteMcpSecrets(server.id);
+        } catch (e) {
+          showToast(`Couldn't forget the saved secrets of ${server.label}: ${errorText(e)}`, "warning");
+        }
+      });
     } catch (e) {
-      showToast(`Couldn't forget the saved secrets of ${server.label}: ${errorText(e)}`, "warning");
+      showToast(`Couldn't remove ${server.label}: ${errorText(e)}`, "error");
     }
-    await removeMcpServer(server.id);
   };
 
   const compact = variant === "compact";
