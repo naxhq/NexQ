@@ -311,7 +311,7 @@ pub(crate) fn request_route(state: &AppState, mode: &str, scope: &SessionScope) 
         .read()
         .map(|c| c.clone())
         .unwrap_or_default();
-    choose_route(&active, state.claude_health.get(), scope, mode, &cfg)
+    choose_route(&active, state.claude_health.get(), scope, mode, &cfg, false)
 }
 
 /// Why a request with images can't be answered statelessly: another provider

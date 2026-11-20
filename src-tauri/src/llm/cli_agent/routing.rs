@@ -13,6 +13,7 @@
 //!   it once on a crash, timeout, logout or rate limit, and say how a failed
 //!   request should be handled ([`AskFailure`]).
 
+use super::command::SourcesLaunch;
 use super::context::{
     build_delta_prompt, build_document_preload, pack_messages, transcript_lines, DeltaCursor, Seg,
     SentLine,
@@ -27,6 +28,7 @@ use super::session::AgentError;
 use crate::context::token_counter::count_tokens;
 use crate::llm::provider::{CancelToken, LLMProvider};
 use crate::llm::{ProviderConfig, ProviderType};
+use crate::sources::config::SourceToggles;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -78,15 +80,18 @@ pub enum Route {
 
 /// Pick the route of one request. Only the Claude CLI provider has sessions,
 /// and only meeting scopes (live or past) use them; Utility requests go
-/// through the provider's own `stream_completion`. When Claude is unavailable
-/// the request goes to the fallback provider, or, with none configured, down
-/// the stateless path, where the Claude provider reports the reason.
+/// through the provider's own `stream_completion`, never with sources. With
+/// `with_sources` a meeting request goes to the with-sources session of its
+/// tier. When Claude is unavailable the request goes to the fallback
+/// provider, or, with none configured, down the stateless path, where the
+/// Claude provider reports the reason.
 pub fn choose_route(
     active: &ProviderType,
     claude_health: ClaudeHealth,
     scope: &SessionScope,
     mode: &str,
     cfg: &ClaudeCliConfig,
+    with_sources: bool,
 ) -> Route {
     if *active != ProviderType::ClaudeCli {
         return Route::Stateless;
@@ -99,10 +104,53 @@ pub fn choose_route(
         ClaudeHealth::Healthy => match scope {
             SessionScope::Utility => Route::Stateless,
             SessionScope::Live(_) | SessionScope::Past(_) => {
-                Route::ClaudeSession(SessionKey::plain(scope.clone(), tier_for(mode, scope, cfg)))
+                let tier = tier_for(mode, scope, cfg);
+                Route::ClaudeSession(if with_sources {
+                    SessionKey::sources(scope.clone(), tier)
+                } else {
+                    SessionKey::plain(scope.clone(), tier)
+                })
             }
         },
     }
+}
+
+/// Modes that run by themselves, never because the user asked: they never use
+/// sources, whatever the pills say.
+pub const BACKGROUND_MODES: [&str; 3] = ["MeetingSummary", "ActionItemsExtraction", "BookmarkSuggestions"];
+
+/// First line of the per-request sources note.
+pub const SOURCES_NOTE_HEADER: &str = "## Sources for this answer";
+
+/// Whether one request may use sources. `toggles` is what the user's pills
+/// said when they asked, or `None` for an automatic answer (a detected
+/// question's Auto-Answer sends none). In order:
+/// 1. a background mode: never;
+/// 2. no toggles (automatic): never;
+/// 3. Shorten and FollowUp: whatever produced the answer they work on used;
+/// 4. any other request: when a pill is on.
+pub fn wants_sources(mode: &str, toggles: Option<SourceToggles>, last_answer_with_sources: bool) -> bool {
+    if BACKGROUND_MODES.contains(&mode) {
+        return false;
+    }
+    let Some(toggles) = toggles else {
+        return false;
+    };
+    match mode {
+        "Shorten" | "FollowUp" => last_answer_with_sources,
+        _ => toggles.notes || toggles.tools,
+    }
+}
+
+/// The per-request note saying which sources this answer may use. It is an
+/// instruction, not a lock (the user enabled both kinds in settings).
+pub fn sources_note(t: SourceToggles) -> String {
+    let word = |on: bool| if on { "on" } else { "off" };
+    format!(
+        "{SOURCES_NOTE_HEADER}\nNotes: {}. Tools: {}. Use only the sources marked on.",
+        word(t.notes),
+        word(t.tools)
+    )
 }
 
 /// A provider config naming only the type; the caller adds the API key.
@@ -225,6 +273,9 @@ pub struct SessionRecord {
     /// The preload alone overflows the context: requests skip the session
     /// and go down the stateless path.
     pub stateless_only: bool,
+    /// What a with-sources session launches with (also on a restart); `None`
+    /// for a plain session.
+    pub sources: Option<SourcesLaunch>,
 }
 
 impl SessionRecord {
@@ -236,7 +287,7 @@ impl SessionRecord {
         SessionInit {
             system_prompt: self.system_prompt.clone(),
             preload,
-            sources: None,
+            sources: self.sources.clone(),
         }
     }
 }
@@ -249,6 +300,9 @@ pub struct MeetingSessions {
     /// Lock order: `epochs`, then `records`.
     epochs: Mutex<HashMap<SessionScope, u64>>,
     records: Mutex<HashMap<SessionKey, SessionRecord>>,
+    /// Whether the latest answer of each scope came from a with-sources
+    /// session: Shorten and FollowUp follow it.
+    last_answer_sources: Mutex<HashMap<SessionScope, bool>>,
 }
 
 impl MeetingSessions {
@@ -322,6 +376,30 @@ impl MeetingSessions {
         let mut epochs = self.epochs.lock().unwrap();
         *epochs.entry(scope.clone()).or_insert(0) += 1;
         self.records.lock().unwrap().retain(|key, _| key.scope != *scope);
+        self.last_answer_sources.lock().unwrap().remove(scope);
+    }
+
+    /// Note whether the latest answer of `scope` used sources.
+    pub fn set_last_answer(&self, scope: &SessionScope, with_sources: bool) {
+        self.last_answer_sources.lock().unwrap().insert(scope.clone(), with_sources);
+    }
+
+    /// Whether the latest answer of `scope` came from a with-sources session.
+    pub fn last_answer_with_sources(&self, scope: &SessionScope) -> bool {
+        self.last_answer_sources.lock().unwrap().get(scope).copied().unwrap_or(false)
+    }
+
+    /// Put `message` (an answer the sibling session gave) on `key`'s replay,
+    /// so a restart of that session still knows it. False when `key` has no
+    /// record.
+    pub fn record_shared(&self, key: &SessionKey, message: &str) -> bool {
+        match self.records.lock().unwrap().get_mut(key) {
+            Some(record) => {
+                record.replay.push(message.to_string());
+                true
+            }
+            None => false,
+        }
     }
 
     fn restart_init(&self, key: &SessionKey) -> Option<SessionInit> {
@@ -642,6 +720,33 @@ pub fn answered_turn(prompt: &str, reply: &str) -> String {
     format!("{prompt}\n\n{ANSWER_HEADER}\n{}", reply.trim())
 }
 
+/// An answer one Fast session gave, as the other one is told it: both keep
+/// the same conversation, so either can take a follow-up.
+pub fn shared_answer(action_label: &str, question: Option<&str>, answer: &str) -> String {
+    let mut out = format!("## Answer given earlier in this meeting ({action_label})");
+    if let Some(q) = question.map(str::trim).filter(|q| !q.is_empty()) {
+        out.push_str(&format!("\nQuestion: {q}"));
+    }
+    out.push_str(&format!("\n\n{ANSWER_HEADER}\n{}", answer.trim()));
+    out
+}
+
+/// Tell the session `target` about an answer its sibling gave: appended to
+/// its context when it is running (it is never started for this), and kept on
+/// its record's replay so a (re)start knows it too. Failures are only logged:
+/// the answer is out already.
+pub async fn share_answer(
+    manager: &AgentSessionManager,
+    sessions: &MeetingSessions,
+    target: &SessionKey,
+    message: String,
+) {
+    if let Err(e) = manager.append_if_running(target, &message).await {
+        log::warn!("could not share an answer with {}: {e}", session_key_label(target));
+    }
+    sessions.record_shared(target, &message);
+}
+
 /// A saved "Ask this meeting" exchange, as replayed into a fresh session.
 pub fn earlier_exchange(question: &str, answer: &str) -> String {
     format!(
@@ -881,6 +986,7 @@ mod tests {
             &live(),
             "Assist",
             &ClaudeCliConfig::default(),
+            false,
         );
         match route {
             Route::ClaudeSession(key) => {
@@ -902,6 +1008,7 @@ mod tests {
             &live(),
             "Assist",
             &cfg,
+            false,
         );
         match route {
             Route::Fallback(p) => {
@@ -920,6 +1027,7 @@ mod tests {
             &live(),
             "Assist",
             &ClaudeCliConfig::default(),
+            false,
         );
         assert!(matches!(route, Route::Stateless), "{route:?}");
     }
@@ -932,6 +1040,7 @@ mod tests {
             &live(),
             "Assist",
             &ClaudeCliConfig::default(),
+            false,
         );
         assert!(matches!(route, Route::Stateless), "{route:?}");
     }
@@ -940,7 +1049,7 @@ mod tests {
     fn routing_recap_deep_past_deep_utility_stateless() {
         let cfg = ClaudeCliConfig::default();
         let key = |scope: &SessionScope, mode: &str| {
-            match choose_route(&ProviderType::ClaudeCli, ClaudeHealth::Healthy, scope, mode, &cfg) {
+            match choose_route(&ProviderType::ClaudeCli, ClaudeHealth::Healthy, scope, mode, &cfg, false) {
                 Route::ClaudeSession(k) => Some(k.tier),
                 _ => None,
             }
@@ -1444,7 +1553,7 @@ mod tests {
         };
         assert_eq!(kind, AgentErrorKind::Crashed);
         let cfg = ClaudeCliConfig { fallback_provider: Some("ollama".into()), ..Default::default() };
-        let route = choose_route(&ProviderType::ClaudeCli, ClaudeHealth::Unavailable(kind), &key.scope, "Assist", &cfg);
+        let route = choose_route(&ProviderType::ClaudeCli, ClaudeHealth::Unavailable(kind), &key.scope, "Assist", &cfg, false);
         assert!(matches!(&route, Route::Fallback(p) if p.provider_type == "ollama"), "{route:?}");
     }
 
@@ -1726,5 +1835,150 @@ mod tests {
         let last = last_prompt(&script);
         assert!(last.contains("Them: b") && !last.contains("Them: a"), "{last}");
         assert_eq!(script.appended.lock().unwrap()[1].len(), 2);
+    }
+
+    // ── sources: routing, note, shared history ──────────────────────────────
+
+    #[test]
+    fn wants_sources_table() {
+        let on = Some(SourceToggles { notes: true, tools: false });
+        let off = Some(SourceToggles::default());
+        assert!(wants_sources("Assist", on, false));
+        assert!(wants_sources("AskQuestion", on, false));
+        assert!(wants_sources("MeetingAsk", on, false));
+        assert!(!wants_sources("Assist", None, false)); // Auto-Answer
+        assert!(!wants_sources("Assist", off, true));
+        for m in BACKGROUND_MODES {
+            assert!(!wants_sources(m, on, true), "{m}");
+        }
+        assert!(wants_sources("Shorten", off, true)); // follows the producing session
+        assert!(!wants_sources("FollowUp", on, false));
+        assert!(!wants_sources("Shorten", None, true));
+    }
+
+    #[test]
+    fn route_with_sources_only_for_meeting_scopes_on_claude() {
+        let cfg = ClaudeCliConfig::default();
+        let route = |provider: &ProviderType, health, scope: &SessionScope| {
+            choose_route(provider, health, scope, "Assist", &cfg, true)
+        };
+        match route(&ProviderType::ClaudeCli, ClaudeHealth::Healthy, &live()) {
+            Route::ClaudeSession(key) => assert_eq!(key, SessionKey::sources(live(), Tier::Fast)),
+            other => panic!("{other:?}"),
+        }
+        let past = SessionScope::Past("p".into());
+        match route(&ProviderType::ClaudeCli, ClaudeHealth::Healthy, &past) {
+            Route::ClaudeSession(key) => assert_eq!(key, SessionKey::sources(past, Tier::Deep)),
+            other => panic!("{other:?}"),
+        }
+        let r = route(&ProviderType::ClaudeCli, ClaudeHealth::Healthy, &SessionScope::Utility);
+        assert!(matches!(r, Route::Stateless), "{r:?}");
+        let r = route(&ProviderType::Ollama, ClaudeHealth::Healthy, &live());
+        assert!(matches!(r, Route::Stateless), "{r:?}");
+        let with_fallback = ClaudeCliConfig { fallback_provider: Some("ollama".into()), ..Default::default() };
+        let r = choose_route(
+            &ProviderType::ClaudeCli,
+            ClaudeHealth::Unavailable(AgentErrorKind::NotLoggedIn),
+            &live(),
+            "Assist",
+            &with_fallback,
+            true,
+        );
+        assert!(matches!(r, Route::Fallback(_)), "{r:?}");
+    }
+
+    #[test]
+    fn sources_note_exact() {
+        assert_eq!(
+            sources_note(SourceToggles { notes: true, tools: false }),
+            "## Sources for this answer\nNotes: on. Tools: off. Use only the sources marked on."
+        );
+        assert!(sources_note(SourceToggles::default()).contains("Notes: off. Tools: off."));
+        assert!(sources_note(SourceToggles { notes: false, tools: true }).starts_with(SOURCES_NOTE_HEADER));
+    }
+
+    #[test]
+    fn last_answer_is_per_scope_and_cleared_on_close() {
+        let sessions = MeetingSessions::default();
+        let other = SessionScope::Live("m2".into());
+        assert!(!sessions.last_answer_with_sources(&live()));
+        sessions.set_last_answer(&live(), true);
+        assert!(sessions.last_answer_with_sources(&live()));
+        assert!(!sessions.last_answer_with_sources(&other));
+        sessions.set_last_answer(&live(), false);
+        assert!(!sessions.last_answer_with_sources(&live()));
+        sessions.set_last_answer(&live(), true);
+        sessions.remove_scope(&live());
+        assert!(!sessions.last_answer_with_sources(&live()));
+    }
+
+    #[test]
+    fn shared_answer_format() {
+        assert_eq!(
+            shared_answer("Assist", Some(" Who owns it? "), " Dana.\n"),
+            "## Answer given earlier in this meeting (Assist)\nQuestion: Who owns it?\n\n## Your answer\nDana."
+        );
+        assert_eq!(
+            shared_answer("Shorten", None, "Dana."),
+            "## Answer given earlier in this meeting (Shorten)\n\n## Your answer\nDana."
+        );
+    }
+
+    #[test]
+    fn restart_init_carries_the_sources_launch() {
+        let launch = SourcesLaunch { add_dirs: vec!["D:/v".into()], ..Default::default() };
+        let record = SessionRecord { sources: Some(launch.clone()), ..Default::default() };
+        assert_eq!(record.restart_init().sources, Some(launch));
+        assert_eq!(SessionRecord::default().restart_init().sources, None);
+    }
+
+    #[tokio::test]
+    async fn share_answer_appends_to_a_running_sibling_and_records_it() {
+        let (manager, sessions, script, key) = setup(&[]);
+        ask(&manager, &sessions, &key, &[seg("a", 0)]).await.unwrap();
+        let sibling = key.sibling();
+        // The sibling has a record but is not running: nothing is spawned.
+        sessions.insert_if_absent(sibling.clone(), SessionRecord { system_prompt: "sp".into(), ..Default::default() });
+        share_answer(&manager, &sessions, &sibling, "msg-1".into()).await;
+        assert_eq!(script.spawns.load(Ordering::SeqCst), 1, "never starts the sibling");
+        assert_eq!(sessions.get(&sibling).unwrap().replay, vec!["msg-1"]);
+
+        // Running: the live session is told, no query is made.
+        manager.ensure(&sibling, sessions.restart_init(&sibling).unwrap()).await.unwrap();
+        let asks = script.prompts.lock().unwrap().len();
+        share_answer(&manager, &sessions, &sibling, "msg-2".into()).await;
+        assert_eq!(script.prompts.lock().unwrap().len(), asks, "an append is not a query");
+        assert_eq!(script.appended.lock().unwrap()[1].last().unwrap(), "msg-2");
+        assert_eq!(sessions.get(&sibling).unwrap().replay, vec!["msg-1", "msg-2"]);
+    }
+
+    #[tokio::test]
+    async fn share_answer_without_session_or_record_does_nothing() {
+        let (manager, sessions, script, key) = setup(&[]);
+        share_answer(&manager, &sessions, &key.sibling(), "lost".into()).await;
+        assert_eq!(script.spawns.load(Ordering::SeqCst), 0);
+        assert!(!sessions.contains(&key.sibling()));
+    }
+
+    #[tokio::test]
+    async fn sources_session_gets_catch_up_delta_on_first_answer() {
+        let (manager, sessions, script, plain) = setup(&[]);
+        let sources = plain.sibling();
+        sessions.insert_if_absent(sources.clone(), SessionRecord { system_prompt: "sp".into(), ..Default::default() });
+        let finals = vec![seg("s1", 0), seg("s2", 1), seg("s3", 2)];
+        ask(&manager, &sessions, &plain, &finals).await.unwrap();
+        // The with-sources session has its own cursor: it gets everything.
+        ask(&manager, &sessions, &sources, &finals).await.unwrap();
+        let first = last_prompt(&script);
+        assert!(first.contains("Them: s1") && first.contains("Them: s2") && first.contains("Them: s3"), "{first}");
+        // Then only what is new since.
+        let finals = vec![seg("s1", 0), seg("s2", 1), seg("s3", 2), seg("s4", 3)];
+        ask(&manager, &sessions, &sources, &finals).await.unwrap();
+        let second = last_prompt(&script);
+        assert!(second.contains("Them: s4") && !second.contains("Them: s1"), "{second}");
+        // The plain session was not advanced by the other one.
+        ask(&manager, &sessions, &plain, &finals).await.unwrap();
+        let plain_prompt = last_prompt(&script);
+        assert!(plain_prompt.contains("Them: s4") && !plain_prompt.contains("Them: s3"), "{plain_prompt}");
     }
 }
