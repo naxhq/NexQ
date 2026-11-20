@@ -100,6 +100,56 @@ describe("captureScreenIntoAsk", () => {
     expect(takePendingScreenshots()).toHaveLength(0);
   });
 
+  it("drops a capture quietly when the meeting changes while it is in flight", async () => {
+    let finish!: () => void;
+    capture.mockImplementation(() => new Promise((resolve) => (finish = () => resolve(bytes()))));
+    const delivered = vi.fn();
+    window.addEventListener(SCREENSHOT_EVENT, delivered);
+    const press = captureScreenIntoAsk();
+    useMeetingStore.setState({ activeMeeting: { id: "other" } as Meeting });
+    finish();
+    await press;
+    window.removeEventListener(SCREENSHOT_EVENT, delivered);
+    expect(delivered).not.toHaveBeenCalled();
+    expect(overlay.shown).toBe(0);
+    expect(messages()).toEqual([]);
+    expect(takePendingScreenshots()).toHaveLength(0);
+  });
+
+  it("drops a capture quietly when the AI stops reading images while it is in flight", async () => {
+    let finish!: () => void;
+    capture.mockImplementation(() => new Promise((resolve) => (finish = () => resolve(bytes()))));
+    const press = captureScreenIntoAsk();
+    useConfigStore.setState({ llmProvider: "openai" });
+    finish();
+    await press;
+    expect(overlay.shown).toBe(0);
+    expect(messages()).toEqual([]);
+  });
+
+  it("drops it too when the meeting ends while the overlay is being shown", async () => {
+    const delivered = vi.fn();
+    window.addEventListener(SCREENSHOT_EVENT, delivered);
+    const press = captureScreenIntoAsk();
+    await Promise.resolve();
+    useMeetingStore.setState({ activeMeeting: null });
+    await press;
+    window.removeEventListener(SCREENSHOT_EVENT, delivered);
+    expect(delivered).not.toHaveBeenCalled();
+    expect(messages()).toEqual([]);
+  });
+
+  it("says nothing about a failed capture of a meeting that is over", async () => {
+    let fail!: () => void;
+    capture.mockImplementation(() => new Promise((_, reject) => (fail = () => reject("nope"))));
+    const press = captureScreenIntoAsk();
+    useMeetingStore.setState({ activeMeeting: null });
+    fail();
+    await press;
+    expect(messages()).toEqual([]);
+    expect(overlay.shown).toBe(0);
+  });
+
   it("does nothing without a meeting or when the AI can't read images", async () => {
     useMeetingStore.setState({ activeMeeting: null });
     await captureScreenIntoAsk();

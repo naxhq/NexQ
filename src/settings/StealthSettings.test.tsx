@@ -70,6 +70,25 @@ describe("StealthSettings capture shortcut row", () => {
     vi.restoreAllMocks();
   });
 
+  it("Reset applies the same collision check: a default another action took is refused, nothing saved", () => {
+    useConfigStore.setState({ captureShortcut: "CmdOrCtrl+Alt+K", assistShortcut: "CmdOrCtrl+Shift+S" });
+    render(<StealthSettings />);
+    // Assist's own Reset comes first (it is off its default too); Capture's is the last one.
+    const resets = screen.getAllByRole("button", { name: "Reset" });
+    fireEvent.click(resets[resets.length - 1]);
+    expect(useConfigStore.getState().captureShortcut).toBe("CmdOrCtrl+Alt+K");
+    expect(useToastStore.getState().toasts).toEqual([
+      expect.objectContaining({ message: expect.stringContaining('"Assist"'), type: "error" }),
+    ]);
+  });
+
+  it("Reset restores the default when it is free", () => {
+    useConfigStore.setState({ captureShortcut: "CmdOrCtrl+Alt+K" });
+    render(<StealthSettings />);
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    expect(useConfigStore.getState().captureShortcut).toBe("CmdOrCtrl+Shift+S");
+  });
+
   it("rebinds the capture shortcut to a free combination", () => {
     render(<StealthSettings />);
     fireEvent.click(screen.getByRole("button", { name: /currently Ctrl\+Shift\+S$/ }));

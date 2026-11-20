@@ -43,13 +43,14 @@ export function useAskImages() {
   /**
    * Attaches image files: from a paste, or the screen-capture shortcut. The
    * provider check, the 3-image limit, the type and size checks and the
-   * downscaling are the same for both.
+   * downscaling are the same for both. Returns whether at least one file was
+   * accepted; otherwise a toast already says why.
    */
-  const attach = useCallback((files: File[]) => {
-    if (files.length === 0) return;
+  const attach = useCallback((files: File[]): boolean => {
+    if (files.length === 0) return false;
     if (!providerReadsImages(useConfigStore.getState().llmProvider)) {
       showToast(IMAGES_NEED_CLAUDE, "warning");
-      return;
+      return false;
     }
     const accepted: File[] = [];
     for (const file of files) {
@@ -61,7 +62,7 @@ export function useAskImages() {
       count.current += 1;
       accepted.push(file);
     }
-    if (accepted.length === 0) return;
+    if (accepted.length === 0) return false;
     void (async () => {
       const prepared = await Promise.allSettled(accepted.map(prepareImage));
       const added: ImageAttachment[] = [];
@@ -78,6 +79,7 @@ export function useAskImages() {
         setAnnouncement(`Image attached (${count.current} of ${MAX_IMAGES})`);
       }
     })();
+    return true;
   }, []);
 
   const onPaste = useCallback(

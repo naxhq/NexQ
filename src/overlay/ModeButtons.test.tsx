@@ -137,6 +137,31 @@ describe("ModeButtons Ask box with a pasted image", () => {
     await waitFor(() => expect(document.activeElement).toBe(input()));
   });
 
+  it("refuses a screenshot when the running Ask request holds every image slot, with no false 'added'", async () => {
+    const { deliverScreenshot } = await import("../lib/screenCapture");
+    let resolveAnswer!: () => void;
+    vi.mocked(runUserAction).mockImplementationOnce(() => new Promise<void>((resolve) => (resolveAnswer = resolve)));
+    render(<ModeButtons />);
+    openAsk();
+    fireEvent.change(input(), { target: { value: "what are these?" } });
+    for (const name of ["a", "b", "c"]) await pasteImage(name);
+    await waitFor(() => expect(chips()!.querySelectorAll("img")).toHaveLength(3));
+    fireEvent.click(button(/^Send question/));
+    await waitFor(() => expect(runUserAction).toHaveBeenCalled());
+
+    useToastStore.setState({ toasts: [] });
+    act(() => deliverScreenshot(new File(["shot"], "screen.png", { type: "image/png" })));
+    const messages = useToastStore.getState().toasts.map((t) => t.message);
+    expect(messages).toEqual(["You can attach up to 3 images"]);
+    expect(messages.join()).not.toMatch(/Screenshot added/);
+
+    // Once the answer is in, its slots are free again.
+    await act(async () => resolveAnswer());
+    expect(chips()).toBeNull();
+    act(() => deliverScreenshot(new File(["shot2"], "screen.png", { type: "image/png" })));
+    expect(await screen.findByRole("group", { name: "Attached images" })).toBeTruthy();
+  });
+
   it("an empty box with an image sends the default question with the image", async () => {
     render(<ModeButtons />);
     openAsk();

@@ -158,9 +158,11 @@ export function ModeButtons() {
       const files = takePendingScreenshots();
       if (files.length === 0) return;
       e?.preventDefault(); // taken: nobody else needs to make room for it
-      if (lockedRef.current) showToast("Screenshot added. Ask opens when this answer finishes.", "info");
       setAskInputVisible(true);
-      attachAskImages(files);
+      // A refused screenshot (no free slot, wrong provider) is explained by the
+      // attach itself; only an accepted one is announced.
+      const accepted = attachAskImages(files);
+      if (accepted && lockedRef.current) showToast("Screenshot added. Ask opens when this answer finishes.", "info");
       wantsFocus.current = true;
       setFocusAsk((n) => n + 1);
     };

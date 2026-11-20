@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { showToast } from "../stores/toastStore";
 import { acceleratorFromEvent, formatShortcut, normalizeAccelerator, reservedShortcutAction } from "../lib/shortcutLabel";
 
@@ -17,6 +17,14 @@ interface ShortcutButtonProps {
 export function ShortcutButton({ value, defaultValue, onChange, others = {} }: ShortcutButtonProps) {
   const [recording, setRecording] = useState(false);
 
+  /** The action that already uses `accel`, if any (a built-in shortcut or another binding). */
+  const takenBy = useCallback(
+    (accel: string) =>
+      reservedShortcutAction(accel) ??
+      Object.entries(others).find(([other]) => normalizeAccelerator(other) === normalizeAccelerator(accel))?.[1],
+    [others],
+  );
+
   useEffect(() => {
     if (!recording) return;
     const onKey = (e: KeyboardEvent) => {
@@ -28,9 +36,7 @@ export function ShortcutButton({ value, defaultValue, onChange, others = {} }: S
       }
       const accel = acceleratorFromEvent(e);
       if (!accel) return;
-      const taken =
-        reservedShortcutAction(accel) ??
-        Object.entries(others).find(([other]) => normalizeAccelerator(other) === normalizeAccelerator(accel))?.[1];
+      const taken = takenBy(accel);
       if (taken) {
         // Keep listening: the current binding (and the other action) stay as they are.
         showToast(`${formatShortcut(accel)} is already used by "${taken}"`, "error");
@@ -42,13 +48,21 @@ export function ShortcutButton({ value, defaultValue, onChange, others = {} }: S
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [recording, onChange, others]);
+  }, [recording, onChange, takenBy]);
 
   return (
     <div className="flex items-center gap-2">
       {value !== defaultValue && !recording && (
         <button
-          onClick={() => onChange(defaultValue)}
+          onClick={() => {
+            // Same rule as recording: the default may be in use by another action by now.
+            const taken = takenBy(defaultValue);
+            if (taken) {
+              showToast(`${formatShortcut(defaultValue)} is already used by "${taken}"`, "error");
+              return;
+            }
+            onChange(defaultValue);
+          }}
           className="rounded-md px-2 py-1 text-meta text-muted-foreground hover:bg-accent hover:text-foreground cursor-pointer"
         >
           Reset

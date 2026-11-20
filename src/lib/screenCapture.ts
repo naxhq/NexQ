@@ -105,21 +105,30 @@ let capturing = false;
  */
 export async function captureScreenIntoAsk(): Promise<void> {
   if (capturing) return;
+  const meetingId = useMeetingStore.getState().activeMeeting?.id;
   // The shortcut is registered only for these, but a press can race the change.
-  if (!useMeetingStore.getState().activeMeeting || !providerReadsImages(useConfigStore.getState().llmProvider)) return;
+  if (!meetingId || !providerReadsImages(useConfigStore.getState().llmProvider)) return;
+  // The meeting ended or changed, or the AI no longer reads images, while we waited:
+  // whatever came back belongs to a state the user has left. Drop it quietly.
+  const stale = () =>
+    useMeetingStore.getState().activeMeeting?.id !== meetingId ||
+    !providerReadsImages(useConfigStore.getState().llmProvider);
   capturing = true;
   try {
     let png: ArrayBuffer;
     try {
       png = await captureScreenUnderCursor();
     } catch (error) {
+      if (stale()) return;
       // The toast shows in the overlay: bring it back first.
       await showMeetingOverlay().catch(() => {});
-      showToast(captureErrorText(error), "error");
+      if (!stale()) showToast(captureErrorText(error), "error");
       return;
     }
+    if (stale()) return;
     const file = new File([png], "screen.png", { type: "image/png" });
     await showMeetingOverlay().catch(() => {});
+    if (stale()) return;
     deliverScreenshot(file);
   } finally {
     capturing = false;
