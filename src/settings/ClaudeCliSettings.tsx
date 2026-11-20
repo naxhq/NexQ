@@ -15,6 +15,7 @@ import type { ClaudeCliConfig, ClaudeCliStatus, ClaudeModelInfo } from "../lib/t
 import { isSessionRunning, useAgentStore } from "../stores/agentStore";
 import { CLAUDE_FALLBACK_PROVIDERS, useConfigStore } from "../stores/configStore";
 import { showToast } from "../stores/toastStore";
+import { ProviderCard, STATUS_DOT_CLASS, type StatusTone } from "./ProviderCard";
 
 export const CLAUDE_INSTALL_URL = "https://code.claude.com/docs/en/setup";
 
@@ -78,15 +79,15 @@ function connectionState(status: ClaudeCliStatus | undefined, failed: boolean): 
 }
 
 // Color carries the state: green ok, amber needs the user, neutral absent.
-const DOT_CLASS: Record<ConnectionState, string> = {
-  checking: "bg-muted-foreground/40 animate-pulse",
-  failed: "bg-warning",
-  connected: "bg-success",
-  api_billed: "bg-warning",
-  logged_out: "bg-warning",
-  unknown: "bg-warning",
-  not_installed: "bg-muted-foreground/40",
-  npm_only: "bg-warning",
+const STATE_TONE: Record<ConnectionState, StatusTone> = {
+  checking: "checking",
+  failed: "warn",
+  connected: "ok",
+  api_billed: "warn",
+  logged_out: "warn",
+  unknown: "warn",
+  not_installed: "neutral",
+  npm_only: "warn",
 };
 
 function planLabel(plan: string | null): string | null {
@@ -100,7 +101,7 @@ const ROW_LABEL: Record<ConnectionState, string> = {
   failed: "Couldn't check",
   connected: "Connected",
   api_billed: "API account",
-  logged_out: "Not logged in",
+  logged_out: "Logged out",
   unknown: "Login state unknown",
   not_installed: "Not installed",
   npm_only: "Needs native install",
@@ -177,8 +178,10 @@ const BUTTON_CLASS =
 interface ClaudeCliSettingsProps {
   /** The Claude row is the provider being viewed (shows its details). */
   selected: boolean;
-  /** Claude CLI is the active provider. */
+  /** Claude CLI is the provider in use. */
   active: boolean;
+  /** Name of the provider in use, for the "Viewing Claude" line while another one is. */
+  inUseLabel?: string;
   onSelect: () => void;
 }
 
@@ -187,7 +190,7 @@ interface ClaudeCliSettingsProps {
  * driven through the user's own login (Beta), plus placeholder rows for
  * Gemini CLI and Codex CLI.
  */
-export function ClaudeCliSettings({ selected, active, onSelect }: ClaudeCliSettingsProps) {
+export function ClaudeCliSettings({ selected, active, inUseLabel, onSelect }: ClaudeCliSettingsProps) {
   const status = useAgentStore((s) => s.status);
   const checking = useAgentStore((s) => s.checking);
   const statusFailed = useAgentStore((s) => !!s.statusError);
@@ -214,32 +217,16 @@ export function ClaudeCliSettings({ selected, active, onSelect }: ClaudeCliSetti
       </p>
 
       <div className="mt-4 grid grid-cols-3 gap-2.5">
-        <button
-          type="button"
+        <ProviderCard
+          name="Claude"
+          icon={<Terminal className="h-3.5 w-3.5 text-muted-foreground" />}
+          status={{ label: ROW_LABEL[state], tone: STATE_TONE[state] }}
+          inUse={active}
+          viewing={selected}
           onClick={onSelect}
-          aria-pressed={selected}
-          aria-label={`Claude, ${ROW_LABEL[state]}${active ? ", active" : ""}`}
-          className={`relative flex flex-col items-start rounded-xl border p-3 text-left transition-all duration-150 cursor-pointer ${
-            selected
-              ? "border-primary bg-primary/5 ring-1 ring-primary/20"
-              : "border-border/50 hover:border-border hover:bg-accent/50"
-          }`}
-        >
-          <div className="flex w-full items-center gap-1.5">
-            <Terminal className="h-3.5 w-3.5 text-muted-foreground" />
-            <span className="text-xs font-medium">Claude</span>
-            {active && <span className="ml-auto text-meta font-medium text-primary/80">Active</span>}
-          </div>
-          <span className="mt-1.5 flex w-full items-center gap-1.5 text-meta text-muted-foreground">
-            <span
-              data-testid="claude-status-dot"
-              data-state={state}
-              aria-hidden="true"
-              className={`h-1.5 w-1.5 shrink-0 rounded-full ${DOT_CLASS[state]}`}
-            />
-            <span className="truncate">{ROW_LABEL[state]}</span>
-          </span>
-        </button>
+          dotTestId="claude-status-dot"
+          dotState={state}
+        />
         {["Gemini CLI", "Codex CLI"].map((label) => (
           <button
             key={label}
@@ -251,7 +238,10 @@ export function ClaudeCliSettings({ selected, active, onSelect }: ClaudeCliSetti
               <Terminal className="h-3.5 w-3.5 text-muted-foreground/60" />
               <span className="text-xs font-medium text-muted-foreground">{label}</span>
             </div>
-            <span className="mt-1.5 text-meta text-muted-foreground/70">Coming soon</span>
+            <span className="mt-1.5 flex items-center gap-1.5 text-meta text-muted-foreground/70">
+              <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT_CLASS.neutral}`} />
+              Coming soon
+            </span>
           </button>
         ))}
       </div>
@@ -262,6 +252,7 @@ export function ClaudeCliSettings({ selected, active, onSelect }: ClaudeCliSetti
           state={state}
           checking={checking}
           active={active}
+          inUseLabel={inUseLabel}
           refreshStatus={refreshStatus}
         />
       )}
@@ -274,12 +265,14 @@ function ClaudeDetails({
   state,
   checking,
   active,
+  inUseLabel,
   refreshStatus,
 }: {
   status: ClaudeCliStatus | undefined;
   state: ConnectionState;
   checking: boolean;
   active: boolean;
+  inUseLabel?: string;
   refreshStatus: () => Promise<void>;
 }) {
   const [awaitingLogin, setAwaitingLogin] = useState(false);
@@ -349,7 +342,7 @@ function ClaudeDetails({
       {!active && (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3">
           <p className="text-xs text-muted-foreground">
-            Not in use — answers come from your current provider until you switch.
+            Viewing Claude. NexQ is using {inUseLabel ?? "another provider"}.
           </p>
           <button
             type="button"

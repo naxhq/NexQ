@@ -16,6 +16,7 @@ import type { CustomLlmAuthType as CustomAuthType, LLMProviderType, ModelInfo, O
 import { OpenRouterModelCatalog } from "./openrouter/OpenRouterModelCatalog";
 import { ClaudeCliSettings, claudeTierLabel } from "./ClaudeCliSettings";
 import { ThinkingSettings } from "./ThinkingSettings";
+import { ProviderCard, type StatusTone } from "./ProviderCard";
 import { requestOptionFields } from "../lib/llmRequestOptions";
 import { useAgentStore } from "../stores/agentStore";
 import {
@@ -67,58 +68,44 @@ function filterChatModels(models: ModelInfo[]): ModelInfo[] {
   );
 }
 
-// ── Badge state logic ──
-// Uses verifiedCloudProviders (persisted after successful test) for accurate readiness.
-type BadgeVariant = "ready" | "has-key" | "no-key" | "local" | "not-configured";
-interface BadgeState {
-  text: string;
-  variant: BadgeVariant;
+// ── Provider status ──
+// One word per card, always about the provider itself and never about whether
+// it is the one in use. Local servers are probed once when the panel opens.
+type LocalReach = "checking" | "up" | "down";
+interface ProviderStatus {
+  label: string;
+  tone: StatusTone;
 }
 
-function getBadgeState(
+const LOCAL_PROVIDERS: LLMProviderType[] = ["ollama", "lm_studio"];
+/** A local server that doesn't answer this fast is treated as not running. */
+const REACH_TIMEOUT_MS = 3000;
+
+function getProviderStatus(
   providerType: LLMProviderType,
   verifiedProviders: string[],
   keyExists: boolean,
-): BadgeState {
+  reach: LocalReach,
+  customConfigured: boolean,
+): ProviderStatus {
   const info = PROVIDER_DISPLAY[providerType];
 
-  // Verified providers (test passed) → Ready
-  if (verifiedProviders.includes(providerType)) {
-    return { text: "Ready", variant: "ready" };
-  }
-
-  // Local providers — not verified yet
   if (info.isLocal) {
-    return { text: "Local", variant: "local" };
+    if (reach === "checking") return { label: "Checking…", tone: "checking" };
+    return reach === "up"
+      ? { label: "Ready", tone: "ok" }
+      : { label: "Not running", tone: "warn" };
   }
-
-  // Cloud providers
   if (info.requiresKey) {
-    if (keyExists) {
-      return { text: "Has Key", variant: "has-key" };
-    }
-    return { text: "No Key", variant: "no-key" };
+    return verifiedProviders.includes(providerType) || keyExists
+      ? { label: "Ready", tone: "ok" }
+      : { label: "No key", tone: "warn" };
   }
-
-  // Custom — not configured
-  return { text: "Configure", variant: "not-configured" };
+  // Custom endpoint
+  return verifiedProviders.includes(providerType) || customConfigured
+    ? { label: "Ready", tone: "ok" }
+    : { label: "Not set up", tone: "neutral" };
 }
-
-const BADGE_STYLES: Record<BadgeVariant, string> = {
-  "ready": "bg-success/10 text-success border-success/20",
-  "has-key": "bg-info/10 text-info border-info/20",
-  "no-key": "bg-destructive/10 text-destructive border-destructive/20",
-  "local": "bg-info/10 text-info border-info/20",
-  "not-configured": "bg-muted text-muted-foreground border-border/30",
-};
-
-const DOT_STYLES: Record<BadgeVariant, string> = {
-  "ready": "bg-success",
-  "has-key": "bg-info",
-  "no-key": "bg-destructive",
-  "local": "bg-info",
-  "not-configured": "bg-muted-foreground/30",
-};
 
 // ══════════════════════════════════════════════════════════════
 
@@ -144,6 +131,12 @@ export function LLMSettings() {
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState("");
   const [keyStatusMap, setKeyStatusMap] = useState<Record<string, boolean>>({});
+  // Whether the local servers answer: asked once when the panel opens, kept for its lifetime.
+  const [localReach, setLocalReach] = useState<Record<string, LocalReach>>({
+    ollama: "checking",
+    lm_studio: "checking",
+  });
+  const reachChecked = useRef(false);
 
   // The active provider changed elsewhere (the footer, in this or the other
   // window): show that provider, so Settings never offers to "activate" the
@@ -179,6 +172,31 @@ export function LLMSettings() {
       setKeyStatusMap(status);
     }
     checkAllKeys();
+  }, []);
+
+  // Cheap reachability probe of the local servers (the same call as Test
+  // Connection, short timeout), once per panel.
+  useEffect(() => {
+    if (reachChecked.current) return;
+    reachChecked.current = true;
+    let alive = true;
+    for (const p of LOCAL_PROVIDERS) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), REACH_TIMEOUT_MS);
+      });
+      Promise.race([testLLMConnection(JSON.stringify({ provider_type: p })).catch(() => false), timeout])
+        // A manual Test Connection that finished first wins: only fill in a still-unknown status.
+        .then((ok) =>
+          alive &&
+          setLocalReach((prev) => (prev[p] === "checking" ? { ...prev, [p]: ok ? "up" : "down" } : prev)),
+        )
+        .finally(() => clearTimeout(timer));
+    }
+    return () => {
+      alive = false;
+      reachChecked.current = false;
+    };
   }, []);
 
   // Load API key when provider changes
@@ -281,6 +299,9 @@ export function LLMSettings() {
       if (apiKey) await storeApiKey(selectedProvider, apiKey).catch(() => {});
       const configJson = buildProviderConfig();
       const success = await testLLMConnection(configJson);
+      if (LOCAL_PROVIDERS.includes(selectedProvider)) {
+        setLocalReach((prev) => ({ ...prev, [selectedProvider]: success ? "up" : "down" }));
+      }
       if (success) {
         setConnectionStatus("success");
         setConnectionMessage("Connected successfully");
@@ -294,6 +315,9 @@ export function LLMSettings() {
         setConnectionMessage("Connection failed");
       }
     } catch (err) {
+      if (LOCAL_PROVIDERS.includes(selectedProvider)) {
+        setLocalReach((prev) => ({ ...prev, [selectedProvider]: "down" }));
+      }
       setConnectionStatus("error");
       setConnectionMessage(err instanceof Error ? err.message : "Connection failed");
     }
@@ -355,22 +379,45 @@ export function LLMSettings() {
   const claudeUnusable =
     isClaudeCli && !!claudeStatus && (!claudeStatus.installed || claudeStatus.auth?.logged_in === false);
 
+  // Same path as the footer. Without a pick, the model last used with the
+  // provider; Claude takes its Fast model.
+  const handleActivate = async () => {
+    try {
+      if (selectedProvider === "custom") {
+        if (customAuthValue) await storeApiKey("custom", customAuthValue).catch(() => {});
+        setCustomLlmConfig(customBaseUrl, customAuthType);
+      } else if (apiKey) {
+        await storeApiKey(selectedProvider, apiKey).catch(() => {});
+      }
+      await activateLLMProvider(selectedProvider, {
+        model: selectedModel,
+        providerConfig: buildProviderConfig(),
+      });
+    } catch (e) {
+      showToast(`Couldn't switch the AI provider: ${e instanceof Error ? e.message : String(e)}`, "error");
+    }
+  };
+
+  const inUseLabel = PROVIDER_DISPLAY[llmProvider]?.label || llmProvider;
+  const selectedLabel = info?.label || selectedProvider;
+
   return (
     <div className="space-y-6">
-      {/* Active Provider + Model Banner */}
+      {/* In-use provider + model banner */}
       <div className="flex items-center gap-3 rounded-xl border border-primary/30 bg-primary/5 px-5 py-3.5">
         <Zap className="h-4 w-4 text-primary shrink-0" />
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-foreground">
-            Active: {PROVIDER_DISPLAY[llmProvider]?.label || llmProvider}
-            {llmProvider === "claude_cli" ? "" : llmModel ? ` / ${llmModel}` : " — no model selected"}
+            In use: {inUseLabel}
+            {" · "}
+            {llmProvider === "claude_cli"
+              ? `Fast: ${claudeTierLabel(claudeCliConfig.fast_model, claudeCliConfig.fast_effort, claudeModels)} · Deep: ${claudeTierLabel(claudeCliConfig.deep_model, claudeCliConfig.deep_effort, claudeModels)}`
+              : llmModel || "no model selected"}
           </p>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {llmProvider === "claude_cli"
-              ? `Fast: ${claudeTierLabel(claudeCliConfig.fast_model, claudeCliConfig.fast_effort, claudeModels)} — Deep: ${claudeTierLabel(claudeCliConfig.deep_model, claudeCliConfig.deep_effort, claudeModels)}`
-              : llmModel
-                ? "This provider and model will be used for AI responses"
-                : "Select a provider, test connection, and load models below"}
+            {llmProvider !== "claude_cli" && !llmModel
+              ? "Select a provider, test connection, and load models below"
+              : "NexQ answers with this provider"}
           </p>
         </div>
       </div>
@@ -379,6 +426,7 @@ export function LLMSettings() {
       <ClaudeCliSettings
         selected={isClaudeCli}
         active={llmProvider === "claude_cli"}
+        inUseLabel={inUseLabel}
         onSelect={() => handleProviderChange("claude_cli")}
       />
 
@@ -388,52 +436,52 @@ export function LLMSettings() {
         <div className="grid grid-cols-4 gap-2.5">
           {ALL_PROVIDERS.map((pType) => {
             const display = PROVIDER_DISPLAY[pType];
-            const isSelected = selectedProvider === pType;
-            const isActive = llmProvider === pType;
-            const badge = getBadgeState(pType, verifiedCloudProviders, keyStatusMap[pType] ?? false);
+            const status = getProviderStatus(
+              pType,
+              verifiedCloudProviders,
+              keyStatusMap[pType] ?? false,
+              localReach[pType] ?? "checking",
+              !!storedCustomBaseUrl.trim(),
+            );
             return (
-              <button
+              <ProviderCard
                 key={pType}
-                onClick={() => handleProviderChange(pType)}
-                aria-pressed={isSelected}
-                className={`relative flex flex-col items-start rounded-xl border p-3 text-left transition-all duration-150 cursor-pointer ${
-                  isSelected
-                    ? "border-primary bg-primary/5 ring-1 ring-primary/20"
-                    : "border-border/50 hover:border-border hover:bg-accent/50"
-                }`}
-              >
-                {/* Status badge */}
-                <div className="absolute -top-1 -right-1">
-                  <div
-                    className={`h-2.5 w-2.5 rounded-full ring-2 ring-card ${
-                      isActive && badge.variant === "ready" ? DOT_STYLES["ready"] : DOT_STYLES[badge.variant]
-                    }`}
-                    title={isActive ? `Active — ${badge.text}` : badge.text}
-                    aria-hidden="true"
-                  />
-                </div>
-                <div className="flex w-full items-center gap-1.5">
-                  {display.isLocal ? (
+                name={display.label}
+                icon={
+                  display.isLocal ? (
                     <Server className="h-3.5 w-3.5 text-muted-foreground" />
                   ) : pType === "custom" ? (
                     <Settings2 className="h-3.5 w-3.5 text-muted-foreground" />
                   ) : (
                     <Cloud className="h-3.5 w-3.5 text-muted-foreground" />
-                  )}
-                  <span className="text-xs font-medium truncate">{display.label}</span>
-                </div>
-                <span className="mt-0.5 text-meta text-muted-foreground line-clamp-1">
-                  {display.description}
-                </span>
-                {/* Badge label */}
-                <span className={`mt-1.5 inline-flex items-center rounded-full border px-1.5 py-0.5 text-meta font-medium ${BADGE_STYLES[badge.variant]}`}>
-                  {badge.text}
-                </span>
-              </button>
+                  )
+                }
+                detail={display.description}
+                status={status}
+                inUse={llmProvider === pType}
+                viewing={selectedProvider === pType}
+                onClick={() => handleProviderChange(pType)}
+              />
             );
           })}
         </div>
       </div>
+
+      {/* Viewing a provider that isn't in use: say so, and offer the switch right here */}
+      {!isClaudeCli && selectedProvider !== llmProvider && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3">
+          <p className="text-xs text-muted-foreground">
+            Viewing {selectedLabel}. NexQ is using {inUseLabel}.
+          </p>
+          <button
+            type="button"
+            onClick={handleActivate}
+            className="shrink-0 rounded-lg border border-primary/30 bg-background px-3.5 py-2 text-sm font-medium text-primary transition-all duration-150 hover:bg-primary/10 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          >
+            Use {selectedLabel}
+          </button>
+        </div>
+      )}
 
       {/* API Key Input (for cloud providers) */}
       {requiresApiKey && (
@@ -601,31 +649,14 @@ export function LLMSettings() {
       {/* Thinking (how long the model reasons before answering) + advanced request JSON */}
       {!isClaudeCli && <ThinkingSettings key={selectedProvider} provider={selectedProvider} />}
 
-      {/* Make Active button — only when different from active AND provider is ready */}
+      {/* Use button: only when this is not the provider in use (Claude: disabled while unusable) */}
       {selectedProvider !== llmProvider && (
         <button
           disabled={claudeUnusable}
-          onClick={async () => {
-            try {
-              if (selectedProvider === "custom") {
-                if (customAuthValue) await storeApiKey("custom", customAuthValue).catch(() => {});
-                setCustomLlmConfig(customBaseUrl, customAuthType);
-              } else if (apiKey) {
-                await storeApiKey(selectedProvider, apiKey).catch(() => {});
-              }
-              // Same path as the footer. Without a pick, the model last used
-              // with the provider; Claude takes its Fast model.
-              await activateLLMProvider(selectedProvider, {
-                model: selectedModel,
-                providerConfig: buildProviderConfig(),
-              });
-            } catch (e) {
-              showToast(`Couldn't switch the AI provider: ${e instanceof Error ? e.message : String(e)}`, "error");
-            }
-          }}
-          className="w-full rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 text-sm font-medium text-primary transition-all duration-150 hover:bg-primary/10 hover:-translate-y-px active:translate-y-px active:scale-[0.99] cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:active:scale-100"
+          onClick={handleActivate}
+          className="w-full rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 text-sm font-medium text-primary transition-all duration-150 hover:bg-primary/10 hover:-translate-y-px active:translate-y-px active:scale-[0.99] cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:active:scale-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
         >
-          Set {PROVIDER_DISPLAY[selectedProvider]?.label || selectedProvider} as Active Provider
+          Use {selectedLabel} for AI responses
         </button>
       )}
     </div>
