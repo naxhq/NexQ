@@ -1,3 +1,16 @@
+# [2.39.0](https://github.com/naxhq/NexQ/compare/v2.38.0...v2.39.0) (2026-11-20)
+
+
+### Bug Fixes
+
+* **audio:** report a side's late start reliably after a slow first open ([#122](https://github.com/naxhq/NexQ/issues/122)) ([0bfb26b](https://github.com/naxhq/NexQ/commit/0bfb26b27425454f46eb0bc8cf1526130f327289)), closes [#118](https://github.com/naxhq/NexQ/issues/118)
+* **recording:** keep mic and system audio aligned after a gap ([#121](https://github.com/naxhq/NexQ/issues/121)) ([08a207a](https://github.com/naxhq/NexQ/commit/08a207a0744a97ebdf9b444c9ad0f0869504c593)), closes [#116](https://github.com/naxhq/NexQ/issues/116)
+
+
+### Features
+
+* **overlay:** switch each side's transcription language from the meeting overlay ([#123](https://github.com/naxhq/NexQ/issues/123)) ([8a8db9c](https://github.com/naxhq/NexQ/commit/8a8db9c21a167bb3f6fb3a8071242fffb379ef22)), closes [#108](https://github.com/naxhq/NexQ/issues/108)
+* **stt:** a language change restarts only that side's transcription ([#124](https://github.com/naxhq/NexQ/issues/124)) ([5a476ef](https://github.com/naxhq/NexQ/commit/5a476ef1937d3dd14018812386254b919e9cc129))
 # [2.38.0](https://github.com/naxhq/NexQ/compare/v2.37.0...v2.38.0) (2026-11-20)
 
 
