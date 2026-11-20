@@ -6,6 +6,7 @@ pub mod echo_cancel;
 pub mod encoder;
 pub mod mic_capture;
 pub mod recorder;
+pub mod recording_mixer;
 pub mod resampler;
 pub mod session_monitor;
 pub mod system_capture;

@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 
 use crate::audio::capture_supervisor::{CaptureCounters, CaptureStatus, StatusSink};
 use crate::audio::device_manager;
+use crate::audio::recording_mixer::{wall_clock_ms, CaptureTimes, MixSide, RecordingMixer};
 use crate::audio::session_monitor;
 use crate::audio::vad::{calculate_peak, calculate_rms, VoiceActivityDetector};
 use crate::audio::{AudioCaptureManager, AudioLevel, AudioSource};
@@ -323,11 +324,30 @@ pub async fn start_capture(
         let mut vad = VoiceActivityDetector::new();
         let mut mic_emit_counter: u32 = 0;
         let mut system_emit_counter: u32 = 0;
-        // Mix buffers for proper two-source recording
-        let mut mix_mic: Vec<i16> = Vec::new();
-        let mut mix_sys: Vec<i16> = Vec::new();
+        // Mixer for proper two-source recording: places mic and system on the
+        // wall clock so a stalled side cannot shift the other.
+        let mut recording_mixer = RecordingMixer::new();
+        // While no audio arrives, time still passes: the mixer pads a side that
+        // went quiet as it happens, not all at once when it comes back.
+        let mut mixer_tick = tokio::time::interval(MIXER_TICK_INTERVAL);
+        mixer_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-        while let Some(mut chunk) = rx.recv().await {
+        loop {
+            // Audio first: the tick only runs once the queue is empty, so a
+            // backlog is never mistaken for silence.
+            let mut chunk = tokio::select! {
+                biased;
+                received = rx.recv() => match received {
+                    Some(chunk) => chunk,
+                    None => break,
+                },
+                _ = mixer_tick.tick() => {
+                    if let Some(ref rec) = recorder {
+                        recording_mixer.tick(wall_clock_ms(), &mut |b| rec.write_samples(b));
+                    }
+                    continue;
+                }
+            };
             let vad_result = vad.process_chunk(&chunk.pcm_data);
             chunk.is_speech = vad_result.is_speech;
 
@@ -355,29 +375,22 @@ pub async fn start_capture(
 
             // Recording with mic/system mixing
             if let Some(ref rec) = recorder {
+                // Placed by when it was captured, not when it was dequeued.
+                let sink = &mut |b: &[i16]| rec.write_samples(b);
                 match chunk.source {
-                    AudioSource::Mic => mix_mic.extend_from_slice(&chunk.pcm_data),
-                    AudioSource::System => mix_sys.extend_from_slice(&chunk.pcm_data),
+                    AudioSource::Mic => recording_mixer.push(
+                        MixSide::Mic,
+                        &chunk.pcm_data,
+                        chunk.timestamp_ms,
+                        sink,
+                    ),
+                    AudioSource::System => recording_mixer.push(
+                        MixSide::System,
+                        &chunk.pcm_data,
+                        chunk.timestamp_ms,
+                        sink,
+                    ),
                     AudioSource::Room => rec.write_samples(&chunk.pcm_data),
-                }
-                // Mix when both buffers have data
-                let mix_len = mix_mic.len().min(mix_sys.len());
-                if mix_len > 0 {
-                    let mixed: Vec<i16> = mix_mic[..mix_len].iter()
-                        .zip(&mix_sys[..mix_len])
-                        .map(|(&m, &s)| ((m as i32 + s as i32) * 4).clamp(-32768, 32767) as i16)
-                        .collect();
-                    rec.write_samples(&mixed);
-                    mix_mic.drain(..mix_len);
-                    mix_sys.drain(..mix_len);
-                }
-                // Solo flush if one source has >2s buffered with nothing from the other
-                if mix_mic.len() > 32000 && mix_sys.is_empty() {
-                    rec.write_samples(&mix_mic);
-                    mix_mic.clear();
-                } else if mix_sys.len() > 32000 && mix_mic.is_empty() {
-                    rec.write_samples(&mix_sys);
-                    mix_sys.clear();
                 }
             }
 
@@ -391,18 +404,7 @@ pub async fn start_capture(
 
         // Flush remaining mix buffers on loop exit
         if let Some(ref rec) = recorder {
-            let mix_len = mix_mic.len().min(mix_sys.len());
-            if mix_len > 0 {
-                let mixed: Vec<i16> = mix_mic[..mix_len].iter()
-                    .zip(&mix_sys[..mix_len])
-                    .map(|(&m, &s)| ((m as i32 + s as i32) * 4).clamp(-32768, 32767) as i16)
-                    .collect();
-                rec.write_samples(&mixed);
-                mix_mic.drain(..mix_len);
-                mix_sys.drain(..mix_len);
-            }
-            if !mix_mic.is_empty() { rec.write_samples(&mix_mic); }
-            if !mix_sys.is_empty() { rec.write_samples(&mix_sys); }
+            recording_mixer.finish(&mut |b| rec.write_samples(b));
         }
 
         // Clean shutdown
@@ -902,6 +904,8 @@ fn needs_default_mic_override(config: &crate::audio::PartyAudioConfig, stt_skipp
 
 /// How often the audio loop re-checks the mute flags when no audio arrives (200 ms).
 const MUTE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+/// How often the recording mixer is ticked while no audio arrives.
+const MIXER_TICK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Where a capture side's reconnect statuses go: the log, the debug panel and
 /// the `audio_capture_status` event (the toast decides what to show).
@@ -1433,9 +1437,14 @@ pub async fn start_capture_per_party(
         let mut last_sys_stats = std::time::Instant::now();
         let stats_interval = std::time::Duration::from_secs(120);
 
-        // Mix buffers for proper two-source recording
-        let mut mix_mic: Vec<i16> = Vec::new();
-        let mut mix_sys: Vec<i16> = Vec::new();
+        // Mixer for proper two-source recording: places mic and system on the
+        // wall clock so a stalled side cannot shift the other.
+        let mut recording_mixer = RecordingMixer::new();
+        // Capture times of the mic audio as it passes the echo stage, which
+        // holds some back: the recording places each sample by when it was
+        // captured, not by when the stage let it go.
+        let mut mic_times = CaptureTimes::new();
+        let mut mic_pieces: Vec<(usize, u64)> = Vec::new();
 
         // Track feed_audio errors per provider (emit once, not every chunk)
         let mut you_feed_error_emitted = false;
@@ -1452,7 +1461,10 @@ pub async fn start_capture_per_party(
         mute_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
+            // Audio first: the timer only runs once the queue is empty, so a
+            // backlog is never mistaken for silence by the recording mixer.
             let mut chunk = tokio::select! {
+                biased;
                 received = rx.recv() => match received {
                     Some(chunk) => chunk,
                     None => break,
@@ -1460,6 +1472,11 @@ pub async fn start_capture_per_party(
                 _ = mute_check.tick() => {
                     sync_mute(&mut you_stt_provider, &mut you_muted_applied, &you_muted_flag);
                     sync_mute(&mut them_stt_provider, &mut them_muted_applied, &them_muted_flag);
+                    // Time passes while no audio arrives: the recording pads
+                    // a side that went quiet as it happens.
+                    if let Some(ref rec) = recorder {
+                        recording_mixer.tick(wall_clock_ms(), &mut |b| rec.write_samples(b));
+                    }
                     continue;
                 }
             };
@@ -1472,7 +1489,9 @@ pub async fn start_capture_per_party(
             match chunk.source {
                 AudioSource::System => echo.reference(cancel_echo, &chunk.pcm_data),
                 AudioSource::Mic => {
+                    mic_times.input(chunk.pcm_data.len(), chunk.timestamp_ms);
                     chunk.pcm_data = echo.mic(cancel_echo, std::mem::take(&mut chunk.pcm_data));
+                    mic_pieces = mic_times.output(chunk.pcm_data.len());
                     if chunk.pcm_data.is_empty() {
                         continue; // held back until the reference catches up
                     }
@@ -1559,27 +1578,28 @@ pub async fn start_capture_per_party(
 
             // Recording with mic/system mixing
             if let Some(ref rec) = recorder {
+                // Placed by when it was captured, not when it was dequeued.
+                let sink = &mut |b: &[i16]| rec.write_samples(b);
                 match chunk.source {
-                    AudioSource::Mic => mix_mic.extend_from_slice(&chunk.pcm_data),
-                    AudioSource::System => mix_sys.extend_from_slice(&chunk.pcm_data),
+                    AudioSource::Mic => {
+                        let mut off = 0;
+                        for &(n, end_ms) in &mic_pieces {
+                            recording_mixer.push(
+                                MixSide::Mic,
+                                &chunk.pcm_data[off..off + n],
+                                end_ms,
+                                sink,
+                            );
+                            off += n;
+                        }
+                    }
+                    AudioSource::System => recording_mixer.push(
+                        MixSide::System,
+                        &chunk.pcm_data,
+                        chunk.timestamp_ms,
+                        sink,
+                    ),
                     AudioSource::Room => rec.write_samples(&chunk.pcm_data),
-                }
-                let mix_len = mix_mic.len().min(mix_sys.len());
-                if mix_len > 0 {
-                    let mixed: Vec<i16> = mix_mic[..mix_len].iter()
-                        .zip(&mix_sys[..mix_len])
-                        .map(|(&m, &s)| ((m as i32 + s as i32) * 4).clamp(-32768, 32767) as i16)
-                        .collect();
-                    rec.write_samples(&mixed);
-                    mix_mic.drain(..mix_len);
-                    mix_sys.drain(..mix_len);
-                }
-                if mix_mic.len() > 32000 && mix_sys.is_empty() {
-                    rec.write_samples(&mix_mic);
-                    mix_mic.clear();
-                } else if mix_sys.len() > 32000 && mix_mic.is_empty() {
-                    rec.write_samples(&mix_sys);
-                    mix_sys.clear();
                 }
             }
 
@@ -1633,18 +1653,7 @@ pub async fn start_capture_per_party(
 
         // Flush remaining mix buffers
         if let Some(ref rec) = recorder {
-            let mix_len = mix_mic.len().min(mix_sys.len());
-            if mix_len > 0 {
-                let mixed: Vec<i16> = mix_mic[..mix_len].iter()
-                    .zip(&mix_sys[..mix_len])
-                    .map(|(&m, &s)| ((m as i32 + s as i32) * 4).clamp(-32768, 32767) as i16)
-                    .collect();
-                rec.write_samples(&mixed);
-                mix_mic.drain(..mix_len);
-                mix_sys.drain(..mix_len);
-            }
-            if !mix_mic.is_empty() { rec.write_samples(&mix_mic); }
-            if !mix_sys.is_empty() { rec.write_samples(&mix_sys); }
+            recording_mixer.finish(&mut |b| rec.write_samples(b));
         }
 
         // Clean shutdown, both parties at once: a cloud provider waits for its
