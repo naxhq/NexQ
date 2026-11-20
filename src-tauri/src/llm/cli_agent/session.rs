@@ -17,7 +17,7 @@ use super::command::{
 };
 use super::protocol::{
     classify_error, parse_line, user_message, user_message_with_images, AgentErrorKind, AgentEvent,
-    ImageAttachment, McpServerState, ToolUse, TurnResult,
+    ImageAttachment, McpServerState, ToolResult, ToolUse, TurnResult,
 };
 use crate::llm::provider::CancelToken;
 use crate::sources::private_files::{private_dir, remove_private_file, write_private_file};
@@ -43,6 +43,23 @@ pub const THINKING_SIGNAL: &str = "";
 /// text check [`is_activity`] and skip it.
 pub const ACTIVITY_PREFIX: &str = "\u{1}nexq-tool\u{1}";
 
+/// Starts an `on_delta` token that says how a tool call ended.
+pub const RESULT_PREFIX: &str = "\u{1}nexq-result\u{1}";
+
+/// A tool result as an `on_delta` token.
+pub fn encode_tool_result(r: &ToolResult) -> String {
+    format!("{RESULT_PREFIX}{}", serde_json::json!({ "id": r.tool_use_id, "is_error": r.is_error }))
+}
+
+/// The tool result in an [`encode_tool_result`] token; `None` for anything else.
+pub fn decode_tool_result(token: &str) -> Option<ToolResult> {
+    let v: serde_json::Value = serde_json::from_str(token.strip_prefix(RESULT_PREFIX)?).ok()?;
+    Some(ToolResult {
+        tool_use_id: v["id"].as_str()?.to_string(),
+        is_error: v["is_error"].as_bool().unwrap_or(true),
+    })
+}
+
 /// Model text with the control character U+0001 removed, so it can never
 /// start (or imitate) an [`ACTIVITY_PREFIX`] token.
 pub fn strip_marker(text: String) -> String {
@@ -57,7 +74,7 @@ pub fn strip_marker(text: String) -> String {
 pub fn encode_activity(t: &ToolUse) -> String {
     format!(
         "{ACTIVITY_PREFIX}{}",
-        serde_json::json!({ "name": t.name, "input": t.input })
+        serde_json::json!({ "id": t.id, "name": t.name, "input": t.input })
     )
 }
 
@@ -65,14 +82,16 @@ pub fn encode_activity(t: &ToolUse) -> String {
 pub fn decode_activity(token: &str) -> Option<ToolUse> {
     let v: serde_json::Value = serde_json::from_str(token.strip_prefix(ACTIVITY_PREFIX)?).ok()?;
     Some(ToolUse {
+        id: v["id"].as_str().unwrap_or_default().to_string(),
         name: v["name"].as_str()?.to_string(),
         input: v.get("input").cloned().unwrap_or(serde_json::Value::Null),
     })
 }
 
-/// Is this `on_delta` token a tool use rather than text or a thinking signal?
+/// Is this `on_delta` token a tool use or tool result rather than text or a
+/// thinking signal?
 pub fn is_activity(token: &str) -> bool {
-    token.starts_with(ACTIVITY_PREFIX)
+    token.starts_with(ACTIVITY_PREFIX) || token.starts_with(RESULT_PREFIX)
 }
 
 /// What `system/init` told us: every tool and each MCP server's status.
@@ -271,6 +290,7 @@ impl Shared {
 enum TurnMsg {
     Delta(String),
     Tool(ToolUse),
+    ToolDone(ToolResult),
     Thinking,
     Done(Result<TurnResult, AgentError>),
 }
@@ -399,7 +419,7 @@ impl ClaudeSession {
         let wait = async {
             loop {
                 match rx.recv().await {
-                    Some(TurnMsg::Delta(_)) | Some(TurnMsg::Tool(_)) | Some(TurnMsg::Thinking) => {}
+                    Some(TurnMsg::Delta(_)) | Some(TurnMsg::Tool(_)) | Some(TurnMsg::ToolDone(_)) | Some(TurnMsg::Thinking) => {}
                     Some(TurnMsg::Done(r)) => return r,
                     None => return Err(AgentError::Crashed(self.shared.crash_reason())),
                 }
@@ -463,6 +483,7 @@ impl ClaudeSession {
                         quiet = true;
                         on_delta(&encode_activity(&tool));
                     }
+                    Some(TurnMsg::ToolDone(result)) => on_delta(&encode_tool_result(&result)),
                     Some(TurnMsg::Done(result)) => return into_outcome(result),
                     None => return Err(AgentError::Crashed(self.shared.crash_reason())),
                 },
@@ -651,6 +672,11 @@ async fn drive_turn(
                 Ok(Some(AgentEvent::ToolUses(uses))) => {
                     for tool in uses {
                         let _ = tx.send(TurnMsg::Tool(tool));
+                    }
+                }
+                Ok(Some(AgentEvent::ToolResults(results))) => {
+                    for result in results {
+                        let _ = tx.send(TurnMsg::ToolDone(result));
                     }
                 }
                 Ok(Some(AgentEvent::TurnComplete(result))) => break Ok(shared.settle_cost(result)),
@@ -934,13 +960,19 @@ mod tests {
 
     #[test]
     fn activity_round_trips_and_is_never_text() {
-        let t = ToolUse { name: "Read".into(), input: serde_json::json!({"file_path": "D:\\V\\a b.md"}) };
+        let t = ToolUse { id: "toolu_1".into(), name: "Read".into(), input: serde_json::json!({"file_path": "D:\\V\\a b.md"}) };
         let enc = encode_activity(&t);
         assert!(is_activity(&enc) && !enc.is_empty());
-        assert_eq!(decode_activity(&enc), Some(t));
+        assert_eq!(decode_activity(&enc), Some(t.clone()));
         assert_eq!(decode_activity("plain text"), None);
         assert_eq!(decode_activity(&format!("{ACTIVITY_PREFIX}not json")), None);
         assert!(!is_activity("") && !is_activity("hello"));
+        let done = ToolResult { tool_use_id: "toolu_1".into(), is_error: true };
+        let enc = encode_tool_result(&done);
+        assert!(is_activity(&enc));
+        assert_eq!(decode_tool_result(&enc), Some(done));
+        assert_eq!(decode_tool_result(&encode_activity(&t)), None);
+        assert_eq!(decode_activity(&enc), None);
     }
 
     #[test]

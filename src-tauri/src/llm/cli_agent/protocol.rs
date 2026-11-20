@@ -47,9 +47,19 @@ impl TurnResult {
 /// One tool call the model made (a block of an `assistant` line).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolUse {
+    /// The block's `id`, which its `tool_result` names.
+    pub id: String,
     /// `Read`, `Grep`, `mcp__<key>__<tool>`, ...
     pub name: String,
     pub input: Value,
+}
+
+/// How one tool call ended (a `tool_result` block of a `user` line).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolResult {
+    pub tool_use_id: String,
+    /// The call failed or was refused (not allowed, timed out, a server error).
+    pub is_error: bool,
 }
 
 /// One MCP server in `system/init`: only its name and status (`connected`,
@@ -73,6 +83,8 @@ pub enum AgentEvent {
     /// The `tool_use` blocks of one `assistant` line (the CLI sends one line
     /// per content block).
     ToolUses(Vec<ToolUse>),
+    /// The `tool_result` blocks of one `user` line.
+    ToolResults(Vec<ToolResult>),
     TextDelta(String),
     /// The model is thinking (extended thinking) before it answers.
     ThinkingDelta,
@@ -121,6 +133,7 @@ pub fn parse_line(line: &str) -> Result<AgentEvent, String> {
                         .iter()
                         .filter(|b| b["type"] == "tool_use")
                         .map(|b| ToolUse {
+                            id: str_field(b, "id"),
                             name: str_field(b, "name"),
                             input: b.get("input").cloned().unwrap_or(Value::Null),
                         })
@@ -128,6 +141,22 @@ pub fn parse_line(line: &str) -> Result<AgentEvent, String> {
                 })
                 .unwrap_or_default();
             Ok(if uses.is_empty() { AgentEvent::Other } else { AgentEvent::ToolUses(uses) })
+        }
+        ("user", _) => {
+            let results: Vec<ToolResult> = v["message"]["content"]
+                .as_array()
+                .map(|blocks| {
+                    blocks
+                        .iter()
+                        .filter(|b| b["type"] == "tool_result")
+                        .map(|b| ToolResult {
+                            tool_use_id: str_field(b, "tool_use_id"),
+                            is_error: b["is_error"].as_bool().unwrap_or(false),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            Ok(if results.is_empty() { AgentEvent::Other } else { AgentEvent::ToolResults(results) })
         }
         ("stream_event", _) => {
             let delta = &v["event"]["delta"];
@@ -383,8 +412,26 @@ pub(crate) mod tests {
             panic!("not tool uses");
         };
         assert_eq!(uses.len(), 1);
+        assert_eq!(uses[0].id, "toolu_PLACEHOLDER");
         assert_eq!(uses[0].name, "mcp__My-Server__get_note");
         assert_eq!(uses[0].input["name"], "x");
+    }
+
+    #[test]
+    fn parse_tool_results_with_their_outcome() {
+        let ok = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"x"}]}}"#;
+        assert_eq!(
+            parse_line(ok).unwrap(),
+            AgentEvent::ToolResults(vec![ToolResult { tool_use_id: "toolu_1".into(), is_error: false }])
+        );
+        let denied = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"denied","is_error":true,"tool_use_id":"toolu_2"}]}}"#;
+        assert_eq!(
+            parse_line(denied).unwrap(),
+            AgentEvent::ToolResults(vec![ToolResult { tool_use_id: "toolu_2".into(), is_error: true }])
+        );
+        // A plain user message is nothing to act on.
+        let text = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}"#;
+        assert_eq!(parse_line(text).unwrap(), AgentEvent::Other);
     }
 
     #[test]

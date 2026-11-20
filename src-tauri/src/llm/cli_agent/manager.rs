@@ -1021,6 +1021,7 @@ mod tests {
             if prompt == "activity-slow" {
                 // A tool use first, text 30 ms later.
                 let tool = crate::llm::cli_agent::protocol::ToolUse {
+                    id: "t1".into(),
                     name: "Grep".into(),
                     input: serde_json::json!({"pattern": "x"}),
                 };

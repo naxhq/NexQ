@@ -26,11 +26,22 @@ pub struct SourceActivity {
     pub kind: SourceKind,
     pub label: String,
     pub chip: Option<SourceChip>,
+    /// Only the chip is new (the call it belongs to ended well): no activity
+    /// line of its own.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub chip_only: bool,
+}
+
+impl SourceActivity {
+    /// The chip a successful call leaves behind, as an activity of its own.
+    pub fn chip_only(chip: SourceChip) -> Self {
+        SourceActivity { kind: chip.kind, label: chip.label.clone(), chip: Some(chip), chip_only: true }
+    }
 }
 
 /// A line about the sources themselves (no chip).
 pub fn notice(label: impl Into<String>) -> SourceActivity {
-    SourceActivity { kind: SourceKind::Notice, label: label.into(), chip: None }
+    SourceActivity { kind: SourceKind::Notice, label: label.into(), chip: None, chip_only: false }
 }
 
 /// What a with-sources session came up without: servers that did not start
@@ -87,6 +98,7 @@ pub fn describe_tool_use(t: &ToolUse, server_labels: &[(String, String)]) -> Sou
                     label: name.to_string(),
                     path: Some(path.to_string()),
                 }),
+                chip_only: false,
             }
         }
         other => match other.strip_prefix("mcp__").and_then(|r| r.split_once("__")) {
@@ -101,19 +113,21 @@ pub fn describe_tool_use(t: &ToolUse, server_labels: &[(String, String)]) -> Sou
                     kind: SourceKind::Tool,
                     label: line.clone(),
                     chip: Some(SourceChip { kind: SourceKind::Tool, label: line, path: None }),
+                    chip_only: false,
                 }
             }
             None => SourceActivity {
                 kind: SourceKind::Tool,
                 label: format!("Using {other}"),
                 chip: None,
+                chip_only: false,
             },
         },
     }
 }
 
 fn notes_line(label: String) -> SourceActivity {
-    SourceActivity { kind: SourceKind::Notes, label, chip: None }
+    SourceActivity { kind: SourceKind::Notes, label, chip: None, chip_only: false }
 }
 
 /// Last path component, for `\` and `/` separators alike.
@@ -127,7 +141,7 @@ mod tests {
     use serde_json::json;
 
     fn use_of(name: &str, input: serde_json::Value) -> ToolUse {
-        ToolUse { name: name.into(), input }
+        ToolUse { id: String::new(), name: name.into(), input }
     }
 
     #[test]
@@ -185,6 +199,18 @@ mod tests {
             sources_degraded_notice(&labels, &[], &["Vault: folder not found".into()]).as_deref(),
             Some("Left out: Vault: folder not found")
         );
+    }
+
+    #[test]
+    fn a_chip_only_activity_carries_the_chip_and_is_marked() {
+        let chip = SourceChip { kind: SourceKind::Notes, label: "a.md".into(), path: Some("D:/a.md".into()) };
+        let a = SourceActivity::chip_only(chip.clone());
+        assert!(a.chip_only && a.chip == Some(chip));
+        let v = serde_json::to_value(&a).unwrap();
+        assert_eq!(v["chip_only"], true);
+        // A normal line doesn't carry the flag.
+        let line = describe_tool_use(&use_of("Grep", json!({"pattern": "x"})), &[]);
+        assert!(serde_json::to_value(&line).unwrap().get("chip_only").is_none());
     }
 
     #[test]

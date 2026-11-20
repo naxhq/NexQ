@@ -114,6 +114,7 @@ async fn failed_mcp_servers_fail_the_start_only_when_nothing_is_usable() {
     let sources = |dirs: Vec<PathBuf>| SourcesLaunch {
         add_dirs: dirs,
         mcp_config_json: Some(r#"{"mcpServers":{}}"#.into()),
+        server_labels: vec![("mira".to_string(), "Mira".to_string())],
         ..Default::default()
     };
     let with = |mcp: &str, dirs: Vec<PathBuf>| SessionConfig {

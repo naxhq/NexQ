@@ -7,7 +7,7 @@ use crate::intelligence::context_scope::{self, ResolvedScope, TranscriptWindow};
 use crate::intelligence::IntelligenceEngine;
 use crate::llm::cli_agent::context::Seg;
 use crate::llm::cli_agent::manager::{OnDelta, SessionKey, SessionScope};
-use crate::llm::cli_agent::session::{decode_activity, AgentError};
+use crate::llm::cli_agent::session::{decode_activity, decode_tool_result, AgentError};
 use crate::sources::activity::{describe_tool_use, notice, SourceActivity};
 use crate::sources::config::SourceToggles;
 use crate::llm::cli_agent::protocol::{AgentErrorKind, ImageAttachment, TurnResult};
@@ -331,16 +331,37 @@ pub(crate) fn request_with_sources(
         && state.personal_sources.read().map(|c| c.has_enabled()).unwrap_or(false)
 }
 
+/// The chips of tool calls still running, by tool use id: a call leaves its
+/// chip only when its result says it worked.
+#[derive(Default)]
+pub(crate) struct ToolChips(std::sync::Mutex<std::collections::HashMap<String, crate::sources::activity::SourceChip>>);
+
+impl ToolChips {
+    pub(crate) fn hold(&self, id: &str, chip: Option<crate::sources::activity::SourceChip>) {
+        if let (false, Some(chip)) = (id.is_empty(), chip) {
+            self.0.lock().unwrap().insert(id.to_string(), chip);
+        }
+    }
+
+    /// The chip of the call `done` ends, if it worked.
+    pub(crate) fn settle(&self, done: &crate::llm::cli_agent::protocol::ToolResult) -> Option<crate::sources::activity::SourceChip> {
+        let chip = self.0.lock().unwrap().remove(&done.tool_use_id);
+        if done.is_error { None } else { chip }
+    }
+}
+
 /// The activity line shown when a with-sources attempt fell back to the plain
 /// session.
 pub(crate) fn sources_failure_notice(reason: &str) -> SourceActivity {
     notice(format!("Your sources couldn't be loaded, so this answer didn't use them. {reason}"))
 }
 
-/// The activity line shown when an answer that asked for sources came from
-/// somewhere that has none (another provider, no meeting).
+/// The activity line shown when an answer that asked for sources was written
+/// somewhere that has none: another provider, Claude out for now, or no
+/// meeting open to hold a Claude session. It names no cause because this path
+/// can't tell which one it was.
 pub(crate) fn sources_unavailable_notice() -> SourceActivity {
-    notice("Your sources weren't used: this answer didn't come from the Claude subscription.")
+    notice("Your sources weren't used for this answer. They only work in a Claude subscription session for a meeting.")
 }
 
 /// Does `err`, from a with-sources session, mean its sources could not start
@@ -648,11 +669,24 @@ pub(crate) async fn session_assist(state: &AppState, app: &AppHandle, req: Sessi
         let params = params.clone();
         let timing = timing.clone();
         let server_labels = server_labels.clone();
+        // The chip of each tool call, held until the call ends well.
+        let chips = ToolChips::default();
         Box::new(move |token: &str| {
-            // A tool use is an activity line, never answer text.
+            // A tool use is an activity line, never answer text; its chip waits
+            // for the result, so a denied or failed call leaves none.
             if let Some(tool) = decode_activity(token) {
                 if !is_cancelled(&params) {
-                    emit_activity(&app, &params, describe_tool_use(&tool, &server_labels));
+                    let mut line = describe_tool_use(&tool, &server_labels);
+                    chips.hold(&tool.id, line.chip.take());
+                    emit_activity(&app, &params, line);
+                }
+                return;
+            }
+            if let Some(done) = decode_tool_result(token) {
+                if !is_cancelled(&params) {
+                    if let Some(chip) = chips.settle(&done) {
+                        emit_activity(&app, &params, SourceActivity::chip_only(chip));
+                    }
                 }
                 return;
             }
@@ -1548,6 +1582,35 @@ mod tests {
             "Your sources couldn't be loaded, so this answer didn't use them. MCP server Mira failed to start"
         );
         assert!(n.chip.is_none());
+    }
+
+    #[test]
+    fn the_unavailable_notice_does_not_blame_the_provider() {
+        let text = sources_unavailable_notice().label;
+        assert!(text.starts_with("Your sources weren't used"), "{text}");
+        assert!(!text.contains("didn't come from"), "{text}");
+    }
+
+    #[test]
+    fn a_chip_appears_only_after_its_tool_call_worked() {
+        use crate::llm::cli_agent::protocol::ToolResult;
+        use crate::sources::activity::{SourceChip, SourceKind};
+        let chip = |l: &str| SourceChip { kind: SourceKind::Tool, label: l.into(), path: None };
+        let done = |id: &str, is_error: bool| ToolResult { tool_use_id: id.into(), is_error };
+        let chips = ToolChips::default();
+        chips.hold("a", Some(chip("Mira: person_brief")));
+        chips.hold("b", Some(chip("Mira: add_task")));
+        chips.hold("c", Some(chip("Mira: tasks")));
+        chips.hold("", Some(chip("no id")));
+        chips.hold("d", None);
+        assert_eq!(chips.settle(&done("a", false)), Some(chip("Mira: person_brief")));
+        assert_eq!(chips.settle(&done("b", true)), None, "denied or failed: no chip");
+        assert_eq!(chips.settle(&done("a", false)), None, "settled once");
+        assert_eq!(chips.settle(&done("zzz", false)), None);
+        // Still running: nothing yet.
+        assert_eq!(chips.settle(&done("c", false)), Some(chip("Mira: tasks")));
+        assert_eq!(chips.settle(&done("", false)), None);
+        assert_eq!(chips.settle(&done("d", false)), None);
     }
 
     #[test]

@@ -634,7 +634,7 @@ mod tests {
         use crate::llm::cli_agent::protocol::ToolUse;
         use crate::llm::cli_agent::session::encode_activity;
         let timing = StreamTiming::new(Instant::now());
-        let tool = ToolUse { name: "Grep".into(), input: serde_json::json!({"pattern": "x"}) };
+        let tool = ToolUse { id: "t1".into(), name: "Grep".into(), input: serde_json::json!({"pattern": "x"}) };
         assert!(!timing.on_delta(&encode_activity(&tool)));
         assert_eq!(timing.first_token_ms(), None);
         // A thinking signal after a tool use is still reported.
