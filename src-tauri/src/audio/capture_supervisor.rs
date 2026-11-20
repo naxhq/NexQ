@@ -17,7 +17,7 @@
 //! ([`CaptureOpener`]) and the time ([`Clock`]) are injected, so tests drive it
 //! without hardware or waiting.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -441,7 +441,7 @@ impl<O: CaptureOpener, C: Clock> Supervisor<O, C> {
     /// Start returned before the first open finished, and the default device
     /// opened in place of the chosen one: say so, as a reconnect would.
     fn announce_late_start(&mut self, started: &Started) {
-        if started.replaced.is_some() && !self.stopping() {
+        if started.replaced.is_some() {
             let message = recovered_message(self.kind, &self.device_id, "", &started.device);
             self.emit(CaptureState::Recovered, started.device.clone(), message);
         }
@@ -713,9 +713,35 @@ where
     O: CaptureOpener + Send + 'static,
     C: Clock + Send + 'static,
 {
+    spawn_side_with(spec, messages, None)
+}
+
+/// Who owns the first open's outcome. The thread claims it (WAITING -> DONE)
+/// and sends it, or finds start has given up (ABANDONED) and reports it
+/// itself. Exactly one of the two happens, so an outcome is never sent to a
+/// start that has stopped listening.
+const WAITING: u8 = 0;
+const DONE: u8 = 1;
+const ABANDONED: u8 = 2;
+
+/// Runs after the wait timed out and before start gives up on it. Only tests
+/// pass one, to let the thread claim the outcome in that gap.
+type BeforeAbandon = Box<dyn FnOnce(&AtomicU8) + Send>;
+
+fn spawn_side_with<O, C>(
+    spec: SideSpec<O, C>,
+    messages: (SyncSender<SideMessage>, Receiver<SideMessage>),
+    before_abandon: Option<BeforeAbandon>,
+) -> Result<(SideHandle, Option<Started>), Vec<String>>
+where
+    O: CaptureOpener + Send + 'static,
+    C: Clock + Send + 'static,
+{
     let SideSpec { kind, device_id, opener, clock, counters, sink, start_timeout } = spec;
     let (tx, rx) = messages;
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<Started, Vec<String>>>();
+    let handoff = Arc::new(AtomicU8::new(WAITING));
+    let thread_handoff = Arc::clone(&handoff);
     let stop_requested = Arc::new(AtomicBool::new(false));
     let thread_stop = Arc::clone(&stop_requested);
     let thread_name = match kind.side() {
@@ -727,16 +753,23 @@ where
         .spawn(move || {
             let mut supervisor =
                 Supervisor::new(kind, &device_id, opener, clock, counters, sink).with_stop_flag(thread_stop);
-            match supervisor.start() {
+            let result = supervisor.start();
+            // Claim the outcome for start, or find that start has gone on.
+            let claimed =
+                thread_handoff.compare_exchange(WAITING, DONE, Ordering::SeqCst, Ordering::SeqCst).is_ok();
+            match result {
                 Ok(started) => {
-                    // Nobody waiting any more means start already returned.
-                    if ready_tx.send(Ok(started.clone())).is_err() {
+                    if claimed {
+                        let _ = ready_tx.send(Ok(started));
+                    } else {
                         supervisor.announce_late_start(&started);
                     }
                     run_side(&mut supervisor, &rx);
                 }
                 Err(errors) => {
-                    if ready_tx.send(Err(errors)).is_err() && !supervisor.stopping() {
+                    if claimed {
+                        let _ = ready_tx.send(Err(errors));
+                    } else if !supervisor.stopping() {
                         supervisor.begin_lost_at_start();
                         run_side(&mut supervisor, &rx);
                     }
@@ -746,16 +779,24 @@ where
         .map_err(|e| vec![format!("Failed to start the capture thread: {e}")])?;
     let handle = SideHandle { kind, messages: tx, stop_requested, thread: Some(thread) };
 
-    match ready_rx.recv_timeout(start_timeout) {
+    let outcome = match ready_rx.recv_timeout(start_timeout) {
+        Err(RecvTimeoutError::Timeout) => {
+            if let Some(hook) = before_abandon {
+                hook(&handoff);
+            }
+            if handoff.compare_exchange(WAITING, ABANDONED, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+                log::warn!("{} is slow to start; it keeps opening in the background", kind.label());
+                return Ok((handle, None));
+            }
+            // The thread claimed the outcome just now: it is sending it.
+            ready_rx.recv().map_err(|_| RecvTimeoutError::Disconnected)
+        }
+        other => other,
+    };
+    match outcome {
         Ok(Ok(started)) => Ok((handle, Some(started))),
         Ok(Err(errors)) => Err(errors), // the thread has ended; dropping the handle joins it
-        Err(RecvTimeoutError::Timeout) => {
-            log::warn!("{} is slow to start; it keeps opening in the background", kind.label());
-            Ok((handle, None))
-        }
-        Err(RecvTimeoutError::Disconnected) => {
-            Err(vec!["The capture thread ended before starting".to_string()])
-        }
+        Err(_) => Err(vec!["The capture thread ended before starting".to_string()]),
     }
 }
 
@@ -1617,6 +1658,76 @@ pub(crate) mod tests {
         assert_eq!(rig.attempts(CaptureSide::You), 2);
         handle.join();
         assert_eq!(rig.live(CaptureSide::You), 0, "Stop dropped the stream");
+    }
+
+    /// The chosen device is missing; the default one opens in its place.
+    fn stand_in_outcome(choice: &DeviceChoice) -> Result<Opened<()>, String> {
+        match choice {
+            DeviceChoice::Chosen(_) => Err("not found".to_string()),
+            DeviceChoice::Default => Ok(Opened { stream: (), device: "Realtek".to_string() }),
+        }
+    }
+
+    /// Spawn a side whose first open waits for a gate. `race_the_timeout`
+    /// releases the gate in the gap after start's wait timed out and before it
+    /// gives up, and waits for the thread to claim the outcome there.
+    fn spawn_racing(
+        rig: &Rig,
+        outcome: fn(&DeviceChoice) -> Result<Opened<()>, String>,
+    ) -> Result<(SideHandle, Option<Started>), Vec<String>> {
+        let (gate_tx, gate_rx) = std::sync::mpsc::channel();
+        let hook: BeforeAbandon = Box::new(move |handoff| {
+            gate_tx.send(()).unwrap();
+            wait_for(|| handoff.load(Ordering::SeqCst) == DONE);
+            assert_eq!(handoff.load(Ordering::SeqCst), DONE, "the thread claimed the outcome");
+        });
+        spawn_side_with(
+            SideSpec {
+                kind: CaptureKind::Mic,
+                device_id: "Headset".to_string(),
+                opener: Gated { gate: Some(gate_rx), outcome },
+                clock: SystemClock,
+                counters: Arc::clone(&rig.counters),
+                sink: rig.sink(),
+                start_timeout: Duration::from_millis(30),
+            },
+            side_channel(),
+            Some(hook),
+        )
+    }
+
+    /// Late success, start gave up first: the stand-in is announced, once.
+    #[test]
+    fn a_late_start_on_a_stand_in_is_announced_once() {
+        let rig = Rig::new(&[]);
+        let (handle, release) = spawn_gated(&rig, CaptureKind::Mic, "Headset", stand_in_outcome);
+        release.send(()).unwrap();
+        wait_for(|| rig.states().contains(&CaptureState::Recovered));
+        handle.join();
+        assert_eq!(rig.states(), vec![CaptureState::Recovered]);
+    }
+
+    /// Late success, but the thread claimed the outcome before start gave up:
+    /// start gets it, and the thread says nothing itself.
+    #[test]
+    fn a_start_that_finishes_in_the_timeout_gap_is_returned_not_announced() {
+        let rig = Rig::new(&[]);
+        let (handle, started) = spawn_racing(&rig, stand_in_outcome).unwrap();
+        let started = started.expect("start received the outcome");
+        assert_eq!(started.device, "Realtek");
+        assert!(started.replaced.is_some());
+        handle.join();
+        assert!(rig.states().is_empty(), "the caller announces it, not the thread");
+    }
+
+    /// Late failure, but the thread claimed the outcome before start gave up:
+    /// start returns the errors, and nothing is reported lost.
+    #[test]
+    fn a_failure_in_the_timeout_gap_is_returned_not_reported_lost() {
+        let rig = Rig::new(&[]);
+        let result = spawn_racing(&rig, |_| Err("busy".to_string()));
+        assert_eq!(result.err().unwrap(), vec!["busy", "busy"]);
+        assert!(rig.states().is_empty());
     }
 
     #[test]

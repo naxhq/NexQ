@@ -118,7 +118,7 @@ function ToastItem({ toast, onDismiss }: { toast: ToastData; onDismiss: () => vo
         className={`shrink-0 rounded-lg p-1 transition-all duration-150 hover:bg-accent ${
           toast.sticky
             ? "text-foreground/70 hover:text-foreground"
-            : "text-muted-foreground/30 hover:text-foreground/70 group-hover:text-muted-foreground/60"
+            : "text-muted-foreground/80 hover:text-foreground/70 group-hover:text-muted-foreground"
         }`}
         aria-label="Dismiss notification"
       >

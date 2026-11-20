@@ -30,8 +30,17 @@ interface ToastState {
   /** Show a toast that goes by itself, replacing the one with the same key in place. */
   setKeyedToast: (key: string, message: string, type: ToastType) => void;
   dismissByKey: (key: string) => void;
-  putKeyed: (key: string, message: string, type: ToastType, sticky: boolean) => void;
   removeToast: (id: string) => void;
+}
+
+/** Show a toast under `key`, replacing the one with that key. */
+function putKeyed(key: string, message: string, type: ToastType, sticky: boolean) {
+  const toast: Toast = { id: crypto.randomUUID(), message, type, createdAt: Date.now(), key, sticky };
+  const old = useToastStore.getState().toasts.filter((t) => t.key === key && !t.leaving);
+  useToastStore.setState((state) => ({
+    toasts: [...state.toasts.map((t) => (t.key === key ? { ...t, leaving: true } : t)), toast],
+  }));
+  retire(old.map((t) => t.id));
 }
 
 /** Remove toasts once their exit animation has played. */
@@ -60,17 +69,8 @@ export const useToastStore = create<ToastState>((set, get) => ({
     }));
   },
 
-  setStickyToast: (key, message, type) => get().putKeyed(key, message, type, true),
-  setKeyedToast: (key, message, type) => get().putKeyed(key, message, type, false),
-
-  putKeyed: (key, message, type, sticky) => {
-    const toast: Toast = { id: crypto.randomUUID(), message, type, createdAt: Date.now(), key, sticky };
-    const old = get().toasts.filter((t) => t.key === key && !t.leaving);
-    set((state) => ({
-      toasts: [...state.toasts.map((t) => (t.key === key ? { ...t, leaving: true } : t)), toast],
-    }));
-    retire(old.map((t) => t.id));
-  },
+  setStickyToast: (key, message, type) => putKeyed(key, message, type, true),
+  setKeyedToast: (key, message, type) => putKeyed(key, message, type, false),
 
   dismissByKey: (key) => {
     const old = get().toasts.filter((t) => t.key === key && !t.leaving);
