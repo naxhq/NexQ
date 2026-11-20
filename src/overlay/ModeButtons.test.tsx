@@ -101,6 +101,42 @@ describe("ModeButtons Ask box with a pasted image", () => {
     expect(input()).toBeTruthy();
   });
 
+  it("keeps a screenshot taken while the question is on its way, and drops only what was sent", async () => {
+    const { deliverScreenshot } = await import("../lib/screenCapture");
+    let resolveAnswer!: () => void;
+    vi.mocked(runUserAction).mockImplementationOnce(() => new Promise<void>((resolve) => (resolveAnswer = resolve)));
+    render(<ModeButtons />);
+    openAsk();
+    fireEvent.change(input(), { target: { value: "what is this?" } });
+    await pasteImage("sent");
+    fireEvent.click(button(/^Send question/));
+    await waitFor(() => expect(runUserAction).toHaveBeenCalled());
+    expect(vi.mocked(runUserAction).mock.calls[0][2]).toEqual({ images: [{ media_type: "image/png", data: btoa("sent") }] });
+
+    // A screenshot arrives while the answer is still pending.
+    act(() => deliverScreenshot(new File(["shot"], "screen.png", { type: "image/png" })));
+    await act(async () => resolveAnswer());
+
+    const group = await screen.findByRole("group", { name: "Attached images" });
+    const sources = [...group.querySelectorAll("img")].map((img) => img.getAttribute("src"));
+    expect(sources).toEqual([`data:image/png;base64,${btoa("shot")}`]);
+  });
+
+  it("says the Ask box opens later while the user's own answer is running, then shows the screenshot with the cursor in it", async () => {
+    const { deliverScreenshot } = await import("../lib/screenCapture");
+    useStreamStore.getState().startStream("AskQuestion", "m", "p", { requestId: "mine-1" });
+    render(<ModeButtons />);
+    act(() => deliverScreenshot(new File(["shot"], "screen.png", { type: "image/png" })));
+    expect(useToastStore.getState().toasts).toEqual([
+      expect.objectContaining({ message: "Screenshot added. Ask opens when this answer finishes.", type: "info" }),
+    ]);
+    expect(screen.queryByLabelText("Ask a question")).toBeNull();
+
+    act(() => useStreamStore.getState().endStream(0));
+    expect(await screen.findByRole("group", { name: "Attached images" })).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(input()));
+  });
+
   it("an empty box with an image sends the default question with the image", async () => {
     render(<ModeButtons />);
     openAsk();

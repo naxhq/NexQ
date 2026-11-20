@@ -99,13 +99,24 @@ export function useAskImages() {
     setAnnouncement("Image removed");
   }, []);
 
+  /**
+   * Drops the images that were just sent (by identity) and frees their slots;
+   * one attached while the request was on its way stays.
+   */
+  const removeSent = useCallback((sent: ImageAttachment[]) => {
+    if (sent.length === 0) return;
+    count.current = Math.max(0, count.current - sent.length);
+    setImages((prev) => prev.filter((image) => !sent.includes(image)));
+    setAnnouncement("");
+  }, []);
+
   const clear = useCallback(() => {
     count.current = 0;
     setImages([]);
     setAnnouncement("");
   }, []);
 
-  return { images, sending, setSending, canAttach, announcement, onPaste, attach, remove, clear };
+  return { images, sending, setSending, canAttach, announcement, onPaste, attach, remove, removeSent, clear };
 }
 
 /**

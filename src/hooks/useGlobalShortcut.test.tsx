@@ -242,7 +242,7 @@ describe("capture screen shortcut", () => {
     act(() => overlay.setState({ activeMeeting: { id: "m1" } as Meeting }));
     await waitFor(() => expect(toasts()).toHaveLength(1));
     expect(toasts()[0].message).toContain("Ctrl+Shift+S");
-    expect(toasts()[0].type).toBe("error");
+    expect(toasts()[0].type).toBe("warning");
 
     // A second try (another meeting, the provider switched back) stays quiet.
     useToastStore.setState({ toasts: [] });

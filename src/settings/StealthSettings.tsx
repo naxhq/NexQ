@@ -23,13 +23,15 @@ export function StealthSettings() {
   const captureShortcut = useConfigStore((s) => s.captureShortcut);
   const setCaptureShortcut = useConfigStore((s) => s.setCaptureShortcut);
   const canReadImages = useConfigStore((s) => providerReadsImages(s.llmProvider));
+  // The capture shortcut doesn't exist where capturing isn't supported: its key stays free there.
+  const captureSupported = screenCaptureSupported();
   const stealthTaken = useMemo(
-    () => ({ [assistShortcut]: "Assist", [captureShortcut]: "Capture screen into Ask" }),
-    [assistShortcut, captureShortcut],
+    () => ({ [assistShortcut]: "Assist", ...(captureSupported ? { [captureShortcut]: "Capture screen into Ask" } : {}) }),
+    [assistShortcut, captureShortcut, captureSupported],
   );
   const assistTaken = useMemo(
-    () => ({ [shortcut]: "Hide from screen share", [captureShortcut]: "Capture screen into Ask" }),
-    [shortcut, captureShortcut],
+    () => ({ [shortcut]: "Hide from screen share", ...(captureSupported ? { [captureShortcut]: "Capture screen into Ask" } : {}) }),
+    [shortcut, captureShortcut, captureSupported],
   );
   const captureTaken = useMemo(
     () => ({ [shortcut]: "Hide from screen share", [assistShortcut]: "Assist" }),
@@ -114,21 +116,21 @@ export function StealthSettings() {
         <ShortcutButton value={assistShortcut} defaultValue={DEFAULT_ASSIST_SHORTCUT} onChange={setAssistShortcut} others={assistTaken} />
       </div>
 
-      {screenCaptureSupported() && (
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <span className="text-xs font-medium text-foreground/80">Capture screen into Ask</span>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            During a meeting, attaches the screen your mouse is on to the Ask box. You send it yourself.
-          </p>
-          {!canReadImages && (
-            <p className="mt-0.5 text-xs text-warning">
-              Off: this AI can't read images. Use Claude (subscription).
+      {captureSupported && (
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <span className="text-xs font-medium text-foreground/80">Capture screen into Ask</span>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              During a meeting, attaches the screen your mouse is on to the Ask box. You send it yourself.
             </p>
-          )}
+            {!canReadImages && (
+              <p className="mt-0.5 text-xs text-warning">
+                Off: this AI can't read images. Use Claude (subscription).
+              </p>
+            )}
+          </div>
+          <ShortcutButton value={captureShortcut} defaultValue={DEFAULT_CAPTURE_SHORTCUT} onChange={setCaptureShortcut} others={captureTaken} />
         </div>
-        <ShortcutButton value={captureShortcut} defaultValue={DEFAULT_CAPTURE_SHORTCUT} onChange={setCaptureShortcut} others={captureTaken} />
-      </div>
       )}
 
       {support?.note && <p className="text-meta text-muted-foreground/70">{support.note}</p>}

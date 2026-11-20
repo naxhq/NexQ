@@ -126,8 +126,7 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.fdeflate]
 opt-level = 3
-# png uses this miniz_oxide; the bare name is ambiguous (two versions).
-[profile.dev.package."miniz_oxide@0.8.9"]
+[profile.dev.package.miniz_oxide]
 opt-level = 3
 [profile.dev.package.crc32fast]
 opt-level = 3

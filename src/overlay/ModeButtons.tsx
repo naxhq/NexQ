@@ -131,6 +131,7 @@ export function ModeButtons() {
     onPaste: onAskPaste,
     attach: attachAskImages,
     remove: removeAskImage,
+    removeSent: removeSentImages,
     clear: clearAskImages,
   } = useAskImages();
 
@@ -148,13 +149,19 @@ export function ModeButtons() {
   // open). Also takes one that arrived before this mounted.
   const askInputRef = useRef<HTMLInputElement>(null);
   const [focusAsk, setFocusAsk] = useState(0);
+  const wantsFocus = useRef(false);
+  // The user's own answer is running: the Ask box stays hidden until it ends.
+  const lockedRef = useRef(locked);
+  lockedRef.current = locked;
   useEffect(() => {
     const take = (e?: Event) => {
       const files = takePendingScreenshots();
       if (files.length === 0) return;
       e?.preventDefault(); // taken: nobody else needs to make room for it
+      if (lockedRef.current) showToast("Screenshot added. Ask opens when this answer finishes.", "info");
       setAskInputVisible(true);
       attachAskImages(files);
+      wantsFocus.current = true;
       setFocusAsk((n) => n + 1);
     };
     take();
@@ -162,24 +169,30 @@ export function ModeButtons() {
     return () => window.removeEventListener(SCREENSHOT_EVENT, take);
   }, [attachAskImages]);
   useEffect(() => {
-    if (focusAsk > 0) askInputRef.current?.focus();
-  }, [focusAsk]);
+    // Waits for the Ask box to exist (it is hidden while an answer runs).
+    if (wantsFocus.current && askInputRef.current) {
+      askInputRef.current.focus();
+      wantsFocus.current = false;
+    }
+  }, [focusAsk, locked, askInputVisible]);
 
   const handleAskSubmit = useCallback(() => {
     if (locked) return;
+    // A screenshot taken while this request is on its way is not part of it.
+    const carried = askSending ? [] : askImages;
     const sent = sendAsk({
       typed: askInputText,
-      images: askSending ? [] : askImages,
+      images: carried,
       fallbackError: "Couldn't send question",
       onSending: setAskSending,
-      onSent: clearAskImages,
+      onSent: () => removeSentImages(carried),
       // A failed send keeps the typed text and the images, to send again.
       onFailed: (typed) => setAskInputText((current) => current || typed),
     });
     if (!sent) return;
     setAskInputText("");
     setAskInputVisible(false);
-  }, [askInputText, askImages, askSending, locked, clearAskImages, setAskSending]);
+  }, [askInputText, askImages, askSending, locked, removeSentImages, setAskSending]);
 
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-1">

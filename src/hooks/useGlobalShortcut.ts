@@ -53,8 +53,8 @@ function announceCaptureShortcutFailure(key: string): void {
   if (announcedCaptureKeys.has(key)) return;
   announcedCaptureKeys.add(key);
   showToast(
-    `${formatShortcut(key)} (capture screen into Ask) didn't work, another app may be using it. Choose another shortcut in Settings > General.`,
-    "error",
+    `${formatShortcut(key)} is in use by another app, so Capture screen into Ask is off. Choose another key in Settings > General.`,
+    "warning",
   );
 }
 
