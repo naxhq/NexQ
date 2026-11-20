@@ -1,10 +1,10 @@
-use super::{AudioMessage, TranscriptResult, SAMPLE_RATE};
+use super::segmenter::{argmax, decode_tokens, segment_loop};
+use super::{AudioMessage, TranscriptResult};
 use ort::session::Session;
 use ort::value::{DynValue, Tensor, TensorRef, ValueType};
 use rustfft::{num_complex::Complex, FftPlanner};
 use std::collections::HashMap;
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
-use std::time::{Duration, Instant};
+use std::sync::{atomic::AtomicBool, Arc};
 use tokio::sync::mpsc;
 
 fn joiner_shape(dim: usize) -> [usize; 3] {
@@ -17,10 +17,6 @@ fn gather_encoder_frame(data: &[f32], time: usize, t: usize, frame: &mut [f32]) 
     }
 }
 
-fn argmax(values: &[f32]) -> usize {
-    values.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map(|x| x.0).unwrap_or(0)
-}
-
 fn tdt_step(logits: &[f32], vocab_size: usize, blank: usize, tokens_this_frame: usize) -> Result<(usize, usize), String> {
     if logits.len() != vocab_size + 5 {
         return Err(format!("TDT joiner returned {} logits, expected {} tokens plus five durations", logits.len(), vocab_size));
@@ -31,18 +27,6 @@ fn tdt_step(logits: &[f32], vocab_size: usize, blank: usize, tokens_this_frame: 
         skip = 1;
     }
     Ok((token, skip))
-}
-
-fn decode_tokens(ids: &[i64], vocab: &HashMap<i64, String>) -> String {
-    let mut text = String::new();
-    for id in ids {
-        if let Some(piece) = vocab.get(id) {
-            if !piece.starts_with('<') {
-                text.extend(piece.chars().map(|c| if c == '▁' { ' ' } else { c }));
-            }
-        }
-    }
-    text.trim().to_owned()
 }
 
 fn normalize_features(features: &mut [f32], frames: usize) {
@@ -189,18 +173,11 @@ fn recognize(
     Ok(decode_tokens(&tokens, vocab))
 }
 
-/// Mean power below this is silence (no decoding, counts toward a pause).
-const SILENCE_ENERGY: f64 = 1e-6;
-
-fn epoch_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
-}
-
 pub(super) fn run(
     encoder: &mut Session, decoder: &mut Session, joiner: &mut Session,
     vocab: &HashMap<i64, String>, language: &str, stop: &AtomicBool,
     audio_rx: &std::sync::mpsc::Receiver<AudioMessage>,
-    result_tx: &mpsc::Sender<TranscriptResult>, mut segment: u64,
+    result_tx: &mpsc::Sender<TranscriptResult>, segment: u64,
     debug: &impl Fn(&str, &str),
 ) -> Result<(), String> {
     let metadata = encoder.metadata().map_err(|e| e.to_string())?;
@@ -214,73 +191,9 @@ pub(super) fn run(
     drop(metadata);
     debug("info", "NeMo TDT: offline channel-major encoder, per-feature normalized 128-bin Slaney mel, recurrent decoder, five durations");
     let features = Features::new(128);
-    let mut samples = Vec::new();
-    let mut silence = 0;
-    // Whether the buffer holds any speech-energy frame (silent buffers aren't decoded).
-    let mut heard = false;
-    // Epoch ms of the buffer's first sample.
-    let mut segment_start_ms = 0u64;
-    let mut received = Instant::now();
-    loop {
-        let mut finished = false;
-        let mut flush = false;
-        // A stop request flushes only what is already buffered; queued audio is dropped.
-        let message = if stop.load(Ordering::SeqCst) {
-            Ok(AudioMessage::Stop)
-        } else {
-            audio_rx.recv_timeout(Duration::from_millis(100))
-        };
-        match message {
-            Ok(AudioMessage::Samples(audio)) => {
-                received = Instant::now();
-                // The chunk just arrived: its first sample was captured `len / 16` ms ago.
-                let chunk_start_ms = epoch_ms().saturating_sub(audio.len() as u64 * 1000 / SAMPLE_RATE as u64);
-                for (i, chunk) in audio.chunks(160).enumerate() {
-                    if samples.is_empty() {
-                        segment_start_ms = chunk_start_ms + (i as u64 * 160 * 1000 / SAMPLE_RATE as u64);
-                    }
-                    let energy = chunk.iter().map(|&x| (x as f64 / 32768.0).powi(2)).sum::<f64>() / chunk.len() as f64;
-                    let speech = energy >= SILENCE_ENERGY;
-                    heard |= speech;
-                    silence = if speech { 0 } else { silence + chunk.len() };
-                    samples.extend(chunk.iter().map(|&x| x as f32 / 32768.0));
-                    if (silence >= 12800 && samples.len() >= SAMPLE_RATE as usize) || samples.len() >= SAMPLE_RATE as usize * 20 {
-                        flush = true;
-                    }
-                }
-            }
-            Ok(AudioMessage::Stop) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                finished = true;
-                flush = true;
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                finished = stop.load(Ordering::SeqCst);
-                flush = finished || received.elapsed() >= Duration::from_millis(800);
-            }
-        }
-        if flush && !samples.is_empty() {
-            let text = if heard {
-                recognize(encoder, decoder, joiner, &features, &samples, vocab, blank)?
-            } else {
-                String::new()
-            };
-            let duration_ms = samples.len() as u64 * 1000 / SAMPLE_RATE as u64;
-            samples.clear();
-            silence = 0;
-            heard = false;
-            if !text.is_empty() {
-                result_tx.blocking_send(TranscriptResult {
-                    text, is_final: true, confidence: 0.9,
-                    timestamp_ms: segment_start_ms,
-                    speaker: None, language: Some(language.to_owned()), segment_id: Some(format!("ort_{segment}")),
-                    duration_ms: Some(duration_ms), speaker_tag: None,
-                    turn: None,
-                }).map_err(|e| e.to_string())?;
-                segment += 1;
-            }
-        }
-        if finished { return Ok(()); }
-    }
+    segment_loop(stop, audio_rx, result_tx, segment, language, |samples| {
+        recognize(encoder, decoder, joiner, &features, samples, vocab, blank)
+    })
 }
 
 #[cfg(test)]
@@ -301,12 +214,6 @@ mod tests {
         assert_eq!(tdt_step(&[0.0, 1.0, 3.0, 100.0, 2.0, 0.0, 0.0, 0.0], 3, 2, 0).unwrap(), (2, 1));
         assert_eq!(tdt_step(&[0.0, 3.0, 1.0, 100.0, 2.0, 0.0, 0.0, 0.0], 3, 2, 4).unwrap(), (1, 1));
         assert_eq!(tdt_step(&[0.0, 3.0, 1.0, 2.0, 0.0, 100.0, 0.0, 0.0], 3, 2, 0).unwrap(), (1, 2));
-    }
-
-    #[test]
-    fn sentencepiece_preserves_case_spaces_and_unicode() {
-        let vocab = HashMap::from([(0, "<unk>".into()), (1, "▁Hello".into()), (2, ",".into()), (3, "▁café".into()), (4, "!".into()), (5, "<blk>".into())]);
-        assert_eq!(decode_tokens(&[1, 2, 3, 4], &vocab), "Hello, café!");
     }
 
     #[test]

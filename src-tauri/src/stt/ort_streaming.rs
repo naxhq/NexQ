@@ -23,6 +23,7 @@ use crate::stt::provider::{STTProvider, STTProviderType, TranscriptResult};
 
 mod ctc;
 mod nemo;
+mod segmenter;
 
 /// Which model layout a model directory holds: a transducer (encoder +
 /// decoder + joiner) or a single-file CTC encoder (no decoder/joiner).
@@ -118,7 +119,7 @@ impl STTProvider for OrtStreamingSTT {
         let discovered = discover(&self.model_dir)
             .map_err(|e| format!("Model discovery failed in {}: {}", self.model_dir.display(), e))?;
 
-        let (encoder_path, decoder_path, joiner_path, tokens_path) = match &discovered {
+        match &discovered {
             DiscoveredModel::Transducer(files) => {
                 log::info!(
                     "OrtStreamingSTT: Discovered models in {} — encoder={}, decoder={}, joiner={}",
@@ -127,7 +128,6 @@ impl STTProvider for OrtStreamingSTT {
                     files.decoder.file_name().unwrap_or_default().to_string_lossy(),
                     files.joiner.file_name().unwrap_or_default().to_string_lossy(),
                 );
-                (files.encoder.clone(), Some(files.decoder.clone()), Some(files.joiner.clone()), files.tokens.clone())
             }
             DiscoveredModel::Ctc(files) => {
                 log::info!(
@@ -135,9 +135,8 @@ impl STTProvider for OrtStreamingSTT {
                     self.model_dir.display(),
                     files.model.file_name().unwrap_or_default().to_string_lossy(),
                 );
-                (files.model.clone(), None, None, files.tokens.clone())
             }
-        };
+        }
 
         self.stop_flag.store(false, AtomicOrdering::SeqCst);
 
@@ -145,7 +144,6 @@ impl STTProvider for OrtStreamingSTT {
         self.audio_tx = Some(audio_tx);
         self.result_tx = Some(result_tx.clone());
 
-        let model_dir = self.model_dir.clone();
         let language = self.language.clone();
         let stop_flag = Arc::clone(&self.stop_flag);
         let seg_start = self.segment_counter;
@@ -155,11 +153,7 @@ impl STTProvider for OrtStreamingSTT {
             .name("ort-stt-inference".to_string())
             .spawn(move || {
                 inference_thread_main(
-                    model_dir,
-                    encoder_path,
-                    decoder_path,
-                    joiner_path,
-                    tokens_path,
+                    discovered,
                     language,
                     stop_flag,
                     audio_rx,
@@ -613,11 +607,7 @@ impl EncoderStateManager {
 
 /// Main inference thread function.
 fn inference_thread_main(
-    _model_dir: PathBuf,
-    encoder_path: PathBuf,
-    decoder_path: Option<PathBuf>,
-    joiner_path: Option<PathBuf>,
-    tokens_path: PathBuf,
+    model: DiscoveredModel,
     language: String,
     stop_flag: Arc<AtomicBool>,
     audio_rx: std::sync::mpsc::Receiver<AudioMessage>,
@@ -639,8 +629,13 @@ fn inference_thread_main(
 
     debug("info", "Inference thread started, loading models...");
 
+    let (encoder_path, tokens_path) = match &model {
+        DiscoveredModel::Transducer(files) => (&files.encoder, &files.tokens),
+        DiscoveredModel::Ctc(files) => (&files.model, &files.tokens),
+    };
+
     // Load tokens
-    let tokens = match load_tokens(&tokens_path) {
+    let tokens = match load_tokens(tokens_path) {
         Ok(t) => {
             debug("info", &format!("Loaded {} tokens", t.len()));
             t
@@ -652,7 +647,7 @@ fn inference_thread_main(
     };
 
     // Load ORT sessions (mut required for session.run())
-    let mut encoder = match load_ort_session(&encoder_path) {
+    let mut encoder = match load_ort_session(encoder_path) {
         Ok(s) => s,
         Err(e) => {
             debug("error", &format!("Encoder load failed: {}", e));
@@ -662,24 +657,27 @@ fn inference_thread_main(
 
     // A CTC model directory has no decoder/joiner: a single encoder graph
     // produces per-frame log-probs directly, decoded by greedy CTC search.
-    let (Some(decoder_path), Some(joiner_path)) = (decoder_path, joiner_path) else {
-        if let Err(error) = ctc::run(
-            &mut encoder, &tokens, &language,
-            &stop_flag, &audio_rx, &result_tx, segment_counter_start, &debug,
-        ) {
-            debug("error", &format!("NeMo CTC inference failed: {error}"));
+    let files = match model {
+        DiscoveredModel::Transducer(files) => files,
+        DiscoveredModel::Ctc(_) => {
+            if let Err(error) = ctc::run(
+                &mut encoder, &tokens, &language,
+                &stop_flag, &audio_rx, &result_tx, segment_counter_start, &debug,
+            ) {
+                debug("error", &format!("NeMo CTC inference failed: {error}"));
+            }
+            return;
         }
-        return;
     };
 
-    let mut decoder = match load_ort_session(&decoder_path) {
+    let mut decoder = match load_ort_session(&files.decoder) {
         Ok(s) => s,
         Err(e) => {
             debug("error", &format!("Decoder load failed: {}", e));
             return;
         }
     };
-    let mut joiner = match load_ort_session(&joiner_path) {
+    let mut joiner = match load_ort_session(&files.joiner) {
         Ok(s) => s,
         Err(e) => {
             debug("error", &format!("Joiner load failed: {}", e));

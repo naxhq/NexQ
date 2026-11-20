@@ -8,17 +8,13 @@
 // decoder implements against the same model family.
 
 use super::nemo::Features;
-use super::{AudioMessage, TranscriptResult, SAMPLE_RATE};
+use super::segmenter::{argmax, decode_tokens, segment_loop};
+use super::{AudioMessage, TranscriptResult};
 use ort::session::Session;
 use ort::value::{TensorRef, ValueType};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::AtomicBool;
 use tokio::sync::mpsc;
-
-fn argmax(values: &[f32]) -> usize {
-    values.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map(|x| x.0).unwrap_or(0)
-}
 
 /// Greedy CTC decode over one segment's log-probs: argmax per frame, drop
 /// the blank, collapse a token repeated on consecutive frames into one.
@@ -36,18 +32,6 @@ fn greedy_decode(log_probs: &[f32], valid_frames: usize, num_classes: usize, bla
         prev = id;
     }
     tokens
-}
-
-fn decode_tokens(ids: &[i64], vocab: &HashMap<i64, String>) -> String {
-    let mut text = String::new();
-    for id in ids {
-        if let Some(piece) = vocab.get(id) {
-            if !piece.starts_with('<') {
-                text.extend(piece.chars().map(|c| if c == '▁' { ' ' } else { c }));
-            }
-        }
-    }
-    text.trim().to_owned()
 }
 
 /// The blank class id for a CTC head with `num_classes` outputs. Sherpa-onnx
@@ -85,13 +69,6 @@ fn recognize(
     Ok(decode_tokens(&tokens, vocab))
 }
 
-/// Mean power below this is silence (no decoding, counts toward a pause).
-const SILENCE_ENERGY: f64 = 1e-6;
-
-fn epoch_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
-}
-
 /// Static size of dimension `index` of a tensor type, when the graph fixes it.
 fn static_dim(dtype: &ValueType, index: usize) -> Option<usize> {
     match dtype {
@@ -103,7 +80,7 @@ fn static_dim(dtype: &ValueType, index: usize) -> Option<usize> {
 pub(super) fn run(
     encoder: &mut Session, vocab: &HashMap<i64, String>, language: &str, stop: &AtomicBool,
     audio_rx: &std::sync::mpsc::Receiver<AudioMessage>,
-    result_tx: &mpsc::Sender<TranscriptResult>, mut segment: u64,
+    result_tx: &mpsc::Sender<TranscriptResult>, segment: u64,
     debug: &impl Fn(&str, &str),
 ) -> Result<(), String> {
     // The input contract is NeMo's `audio_signal` [batch, mels, time] plus `length`.
@@ -139,69 +116,9 @@ pub(super) fn run(
     ));
     debug("info", &format!("NeMo CTC: {num_classes} classes, blank {blank}"));
     let features = Features::new(80);
-    let mut samples = Vec::new();
-    let mut silence = 0;
-    let mut heard = false;
-    let mut segment_start_ms = 0u64;
-    let mut received = Instant::now();
-    loop {
-        let mut finished = false;
-        let mut flush = false;
-        let message = if stop.load(Ordering::SeqCst) {
-            Ok(AudioMessage::Stop)
-        } else {
-            audio_rx.recv_timeout(Duration::from_millis(100))
-        };
-        match message {
-            Ok(AudioMessage::Samples(audio)) => {
-                received = Instant::now();
-                let chunk_start_ms = epoch_ms().saturating_sub(audio.len() as u64 * 1000 / SAMPLE_RATE as u64);
-                for (i, chunk) in audio.chunks(160).enumerate() {
-                    if samples.is_empty() {
-                        segment_start_ms = chunk_start_ms + (i as u64 * 160 * 1000 / SAMPLE_RATE as u64);
-                    }
-                    let energy = chunk.iter().map(|&x| (x as f64 / 32768.0).powi(2)).sum::<f64>() / chunk.len() as f64;
-                    let speech = energy >= SILENCE_ENERGY;
-                    heard |= speech;
-                    silence = if speech { 0 } else { silence + chunk.len() };
-                    samples.extend(chunk.iter().map(|&x| x as f32 / 32768.0));
-                    if (silence >= 12800 && samples.len() >= SAMPLE_RATE as usize) || samples.len() >= SAMPLE_RATE as usize * 20 {
-                        flush = true;
-                    }
-                }
-            }
-            Ok(AudioMessage::Stop) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                finished = true;
-                flush = true;
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                finished = stop.load(Ordering::SeqCst);
-                flush = finished || received.elapsed() >= Duration::from_millis(800);
-            }
-        }
-        if flush && !samples.is_empty() {
-            let text = if heard {
-                recognize(encoder, &features, &samples, vocab, num_classes, blank, subsampling_factor, normalize)?
-            } else {
-                String::new()
-            };
-            let duration_ms = samples.len() as u64 * 1000 / SAMPLE_RATE as u64;
-            samples.clear();
-            silence = 0;
-            heard = false;
-            if !text.is_empty() {
-                result_tx.blocking_send(TranscriptResult {
-                    text, is_final: true, confidence: 0.9,
-                    timestamp_ms: segment_start_ms,
-                    speaker: None, language: Some(language.to_owned()), segment_id: Some(format!("ort_{segment}")),
-                    duration_ms: Some(duration_ms), speaker_tag: None,
-                    turn: None,
-                }).map_err(|e| e.to_string())?;
-                segment += 1;
-            }
-        }
-        if finished { return Ok(()); }
-    }
+    segment_loop(stop, audio_rx, result_tx, segment, language, |samples| {
+        recognize(encoder, &features, samples, vocab, num_classes, blank, subsampling_factor, normalize)
+    })
 }
 
 #[cfg(test)]
@@ -235,12 +152,6 @@ mod tests {
             log_probs.extend(frame);
         }
         assert_eq!(greedy_decode(&log_probs, 3, vocab_size + 1, blank), vec![0, 0]);
-    }
-
-    #[test]
-    fn sentencepiece_preserves_case_spaces_and_unicode() {
-        let vocab = HashMap::from([(0, "<unk>".into()), (1, "▁Hello".into()), (2, ",".into()), (3, "▁café".into()), (4, "!".into())]);
-        assert_eq!(decode_tokens(&[1, 2, 3, 4], &vocab), "Hello, café!");
     }
 
     #[test]
