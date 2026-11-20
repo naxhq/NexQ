@@ -9,11 +9,60 @@ use super::provider::{
     cancellable, check_cancelled, is_cancelled, emit_end_with_stats, emit_error, emit_sources, emit_token, StreamSource, TokenSink,
 };
 use super::stream_parser::{LineBuffer, SSEParser};
+use super::thinking::{self, RequestOptions, Sent, ThinkingSetting};
 
 pub struct GeminiClient {
     api_key: String,
     base_url: String,
     client: reqwest::Client,
+    options: RequestOptions,
+}
+
+/// The `streamGenerateContent` request body. `with_thinking` false leaves out
+/// `thinkingConfig` (the retry after a model refused it). Returns the body and
+/// whether `thinkingConfig` is in it.
+pub(crate) fn build_request_body(
+    system_instruction: Option<String>,
+    contents: Vec<serde_json::Value>,
+    model: &str,
+    params: &GenerationParams,
+    thinking: ThinkingSetting,
+    with_thinking: bool,
+) -> (serde_json::Value, bool) {
+    let max_output = params.max_tokens.unwrap_or(4096);
+    let mut gen_config = json!({
+        "maxOutputTokens": max_output
+    });
+    if let Some(temp) = params.temperature {
+        gen_config["temperature"] = json!(temp);
+    }
+    let sent = with_thinking && thinking::apply_gemini(&mut gen_config, model, thinking);
+
+    let mut body = if let Some(cache_name) = &params.cache_name {
+        // Cache active: reference cached content, skip systemInstruction (it's in the cache).
+        // Only dynamic contents (transcript + question) are sent fresh.
+        json!({
+            "cachedContent": cache_name,
+            "contents": contents,
+            "generationConfig": gen_config
+        })
+    } else {
+        let mut b = json!({
+            "contents": contents,
+            "generationConfig": gen_config
+        });
+        if let Some(system) = system_instruction {
+            b["systemInstruction"] = json!({
+                "parts": [{"text": system}]
+            });
+        }
+        b
+    };
+
+    if params.enable_web_search {
+        body["tools"] = json!([{ "google_search": {} }]);
+    }
+    (body, sent)
 }
 
 impl GeminiClient {
@@ -24,7 +73,14 @@ impl GeminiClient {
                 .unwrap_or("https://generativelanguage.googleapis.com")
                 .to_string(),
             client: reqwest::Client::new(),
+            options: RequestOptions::default(),
         }
+    }
+
+    /// Applies the user's thinking setting.
+    pub fn with_options(mut self, options: RequestOptions) -> Self {
+        self.options = options;
+        self
     }
 
     /// Convert standard LLM messages to Gemini format.
@@ -167,72 +223,49 @@ impl LLMProvider for GeminiClient {
 
         let (system_instruction, contents) = Self::convert_messages(&messages);
 
-        let max_output = params.max_tokens.unwrap_or(4096);
-        let mut gen_config = json!({
-            "maxOutputTokens": max_output
-        });
-        if let Some(temp) = params.temperature {
-            gen_config["temperature"] = json!(temp);
-        }
-
-        let mut body = if let Some(cache_name) = &params.cache_name {
-            // Cache active: reference cached content, skip systemInstruction (it's in the cache).
-            // Only dynamic contents (transcript + question) are sent fresh.
-            json!({
-                "cachedContent": cache_name,
-                "contents": contents,
-                "generationConfig": gen_config
-            })
-        } else {
-            let mut b = json!({
-                "contents": contents,
-                "generationConfig": gen_config
-            });
-            if let Some(system) = system_instruction {
-                b["systemInstruction"] = json!({
-                    "parts": [{"text": system}]
-                });
-            }
-            b
-        };
-
-        if params.enable_web_search {
-            body["tools"] = json!([{ "google_search": {} }]);
-        }
+        let setting = thinking::resolve(&params, self.options.thinking);
 
         // NOTE: llm_stream_start is emitted by IntelligenceEngine::generate_assist()
         // with the correct mode. Do NOT emit it here — it would overwrite the mode.
 
-        let response = cancellable(
-            &params,
-            self
+        let (_, would_send) =
+            build_request_body(system_instruction.clone(), contents.clone(), model, &params, setting, true);
+        let send_thinking = would_send && thinking::should_send("gemini", model, setting);
+        let sent = thinking::send_with_fallback("gemini", model, send_thinking, &params, |with_thinking| {
+            let (body, _) =
+                build_request_body(system_instruction.clone(), contents.clone(), model, &params, setting, with_thinking);
+            let request = self
                 .client
                 .post(&url)
                 .header("Content-Type", "application/json")
                 .json(&body)
-                .send(),
-        )
-        .await?
-        .map_err(|e| {
-            if is_cancelled(&params) {
-                return LLMError::Cancelled;
+                .send();
+            let (params, app_handle) = (&params, &app_handle);
+            async move {
+                cancellable(params, request).await?.map_err(|e| {
+                    if is_cancelled(params) {
+                        return LLMError::Cancelled;
+                    }
+                    emit_error(app_handle, params, &e.to_string());
+                    LLMError::HttpError(e)
+                })
             }
-                emit_error(&app_handle, &params, &e.to_string());
-            LLMError::HttpError(e)
-        })?;
+        })
+        .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            let err_msg = format!("Gemini request failed ({}): {}", status, body);
-            check_cancelled(&params)?;
-            emit_error(&app_handle, &params, &err_msg);
+        let response = match sent {
+            Sent::Ok(response) => response,
+            Sent::Failed { status, body } => {
+                let err_msg = format!("Gemini request failed ({}): {}", status, body);
+                check_cancelled(&params)?;
+                emit_error(&app_handle, &params, &err_msg);
 
-            if status.as_u16() == 401 || status.as_u16() == 403 {
-                return Err(LLMError::AuthError(err_msg));
+                if status.as_u16() == 401 || status.as_u16() == 403 {
+                    return Err(LLMError::AuthError(err_msg));
+                }
+                return Err(LLMError::ProviderError(err_msg));
             }
-            return Err(LLMError::ProviderError(err_msg));
-        }
+        };
 
         let mut stream = response.bytes_stream();
         let mut line_buffer = LineBuffer::new();
@@ -339,5 +372,53 @@ impl LLMProvider for GeminiClient {
         emit_end_with_stats(&app_handle, &params, &stats);
 
         Ok(stats)
+    }
+}
+
+#[cfg(test)]
+mod thinking_tests {
+    use super::*;
+    use crate::llm::thinking::ThinkingSetting::*;
+
+    fn body(model: &str, setting: ThinkingSetting, params: GenerationParams, with: bool) -> (serde_json::Value, bool) {
+        let contents = vec![json!({ "role": "user", "parts": [{ "text": "hi" }] })];
+        build_request_body(Some("sys".into()), contents, model, &params, setting, with)
+    }
+
+    #[test]
+    fn auto_has_no_thinking_config() {
+        let (b, sent) = body("gemini-2.5-flash", Auto, GenerationParams::default(), true);
+        assert!(!sent);
+        assert!(b["generationConfig"].get("thinkingConfig").is_none());
+        assert_eq!(b["generationConfig"]["maxOutputTokens"], 4096);
+        assert_eq!(b["systemInstruction"]["parts"][0]["text"], "sys");
+    }
+
+    #[test]
+    fn off_low_high_set_thinking_config() {
+        let p = GenerationParams::default;
+        assert_eq!(body("gemini-2.5-flash", Off, p(), true).0["generationConfig"]["thinkingConfig"]["thinkingBudget"], 0);
+        assert_eq!(body("gemini-2.5-flash", Low, p(), true).0["generationConfig"]["thinkingConfig"]["thinkingBudget"], 1024);
+        assert_eq!(
+            body("gemini-3-pro-preview", High, p(), true).0["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            "high"
+        );
+        assert_eq!(
+            body("gemini-3-flash-preview", Off, p(), true).0["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            "minimal"
+        );
+    }
+
+    #[test]
+    fn it_works_with_a_context_cache_and_the_retry_drops_it() {
+        let cached = GenerationParams { cache_name: Some("cachedContents/abc".into()), ..Default::default() };
+        let (b, sent) = body("gemini-2.5-flash", Off, cached.clone(), true);
+        assert!(sent);
+        assert_eq!(b["cachedContent"], "cachedContents/abc");
+        assert_eq!(b["generationConfig"]["thinkingConfig"]["thinkingBudget"], 0);
+        assert!(b.get("systemInstruction").is_none());
+        let (b, sent) = body("gemini-2.5-flash", Off, cached, false);
+        assert!(!sent);
+        assert!(b["generationConfig"].get("thinkingConfig").is_none());
     }
 }

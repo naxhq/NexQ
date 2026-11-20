@@ -9,10 +9,62 @@ use super::provider::{
     cancellable, check_cancelled, is_cancelled, emit_end_with_stats, emit_error, emit_token, TokenSink,
 };
 use super::stream_parser::{LineBuffer, NDJSONParser};
+use super::thinking::{self, RequestOptions, Sent, ThinkingSetting};
 
 pub struct OllamaClient {
     base_url: String,
     client: reqwest::Client,
+    options: RequestOptions,
+}
+
+/// The `/api/chat` request body. `with_thinking` false leaves out `think`
+/// (the retry after a model refused it). Returns the body and whether `think` is in it.
+pub(crate) fn build_chat_body(
+    messages: &[LLMMessage],
+    model: &str,
+    params: &GenerationParams,
+    thinking: ThinkingSetting,
+    extra: Option<&serde_json::Map<String, serde_json::Value>>,
+    with_thinking: bool,
+) -> (serde_json::Value, bool) {
+    let msgs: Vec<serde_json::Value> = messages
+        .iter()
+        .map(|m| json!({ "role": m.role, "content": m.content }))
+        .collect();
+
+    let mut body = json!({
+        "model": model,
+        "messages": msgs,
+        "stream": true,
+        // Ollama unloads idle models after 5 min by default; questions in a meeting
+        // are often further apart, and reloading from disk on CPU-only machines
+        // adds many seconds before the first token.
+        "keep_alive": "30m"
+    });
+
+    // Apply per-request generation params via Ollama's "options" object
+    let mut options = serde_json::Map::new();
+    if let Some(temp) = params.temperature {
+        options.insert("temperature".to_string(), json!(temp));
+    }
+    if let Some(max_tok) = params.max_tokens {
+        options.insert("num_predict".to_string(), json!(max_tok));
+    }
+    if !options.is_empty() {
+        body["options"] = serde_json::Value::Object(options);
+    }
+
+    let mut sent = false;
+    if with_thinking {
+        if let Some(think) = thinking::ollama_think(model, thinking) {
+            body["think"] = think;
+            sent = true;
+        }
+    }
+    if let Some(extra) = extra {
+        thinking::merge_extra_request(&mut body, extra, true);
+    }
+    (body, sent)
 }
 
 impl OllamaClient {
@@ -20,7 +72,14 @@ impl OllamaClient {
         Self {
             base_url: base_url.unwrap_or("http://localhost:11434").to_string(),
             client: reqwest::Client::new(),
+            options: RequestOptions::default(),
         }
+    }
+
+    /// Applies the user's thinking setting and extra request JSON.
+    pub fn with_options(mut self, options: RequestOptions) -> Self {
+        self.options = options;
+        self
     }
 }
 
@@ -103,7 +162,7 @@ impl LLMProvider for OllamaClient {
 
     async fn stream_completion(
         &self,
-        messages: Vec<LLMMessage>,
+        mut messages: Vec<LLMMessage>,
         model: &str,
         params: GenerationParams,
         app_handle: tauri::AppHandle,
@@ -112,66 +171,44 @@ impl LLMProvider for OllamaClient {
         let url = format!("{}/api/chat", self.base_url);
         let start = Instant::now();
 
-        let msgs: Vec<serde_json::Value> = messages
-            .iter()
-            .map(|m| {
-                json!({
-                    "role": m.role,
-                    "content": m.content
-                })
-            })
-            .collect();
-
-        let mut body = json!({
-            "model": model,
-            "messages": msgs,
-            "stream": true,
-            // Ollama unloads idle models after 5 min by default; questions in a meeting
-            // are often further apart, and reloading from disk on CPU-only machines
-            // adds many seconds before the first token.
-            "keep_alive": "30m"
-        });
-
-        // Apply per-request generation params via Ollama's "options" object
-        let mut options = serde_json::Map::new();
-        if let Some(temp) = params.temperature {
-            options.insert("temperature".to_string(), json!(temp));
-        }
-        if let Some(max_tok) = params.max_tokens {
-            options.insert("num_predict".to_string(), json!(max_tok));
-        }
-        if !options.is_empty() {
-            body["options"] = serde_json::Value::Object(options);
-        }
+        let setting = thinking::resolve(&params, self.options.thinking);
+        thinking::apply_prompt_hint(&mut messages, model, setting);
+        let extra = self.options.extra_request();
 
         // NOTE: llm_stream_start is emitted by IntelligenceEngine::generate_assist()
         // with the correct mode. Do NOT emit it here — it would overwrite the mode.
 
-        let response = cancellable(
-            &params,
-            self.client
+        let send_thinking = thinking::should_send("ollama", model, setting);
+        let sent = thinking::send_with_fallback("ollama", model, send_thinking, &params, |with_thinking| {
+            let (body, _) = build_chat_body(&messages, model, &params, setting, extra.as_ref(), with_thinking);
+            let request = self
+                .client
                 .post(&url)
                 .header("Content-Type", "application/json")
                 .json(&body)
-                .send(),
-        )
-        .await?
-        .map_err(|e| {
-            if is_cancelled(&params) {
-                return LLMError::Cancelled;
+                .send();
+            let (params, app_handle) = (&params, &app_handle);
+            async move {
+                cancellable(params, request).await?.map_err(|e| {
+                    if is_cancelled(params) {
+                        return LLMError::Cancelled;
+                    }
+                    emit_error(app_handle, params, &e.to_string());
+                    LLMError::ConnectionFailed(format!("Failed to connect to Ollama: {}", e))
+                })
             }
-            emit_error(&app_handle, &params, &e.to_string());
-                LLMError::ConnectionFailed(format!("Failed to connect to Ollama: {}", e))
-            })?;
+        })
+        .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            let err_msg = format!("Ollama completion failed ({}): {}", status, body);
-            check_cancelled(&params)?;
-            emit_error(&app_handle, &params, &err_msg);
-            return Err(LLMError::ProviderError(err_msg));
-        }
+        let response = match sent {
+            Sent::Ok(response) => response,
+            Sent::Failed { status, body } => {
+                let err_msg = format!("Ollama completion failed ({}): {}", status, body);
+                check_cancelled(&params)?;
+                emit_error(&app_handle, &params, &err_msg);
+                return Err(LLMError::ProviderError(err_msg));
+            }
+        };
 
         let mut stream = response.bytes_stream();
         let mut line_buffer = LineBuffer::new();
@@ -259,5 +296,60 @@ impl LLMProvider for OllamaClient {
         emit_end_with_stats(&app_handle, &params, &stats);
 
         Ok(stats)
+    }
+}
+
+#[cfg(test)]
+mod thinking_tests {
+    use super::*;
+    use crate::llm::thinking::{parse_extra_request, ThinkingSetting::*};
+
+    fn user() -> Vec<LLMMessage> {
+        vec![LLMMessage { role: "user".into(), content: "hi".into() }]
+    }
+
+    fn body(model: &str, setting: ThinkingSetting, extra: Option<&str>, with: bool) -> (serde_json::Value, bool) {
+        let extra = parse_extra_request(extra);
+        let params = GenerationParams { temperature: Some(0.3), ..Default::default() };
+        build_chat_body(&user(), model, &params, setting, extra.as_ref(), with)
+    }
+
+    #[test]
+    fn auto_sends_no_think_field() {
+        let (b, sent) = body("qwen3:8b", Auto, None, true);
+        assert!(!sent);
+        assert!(b.get("think").is_none());
+        // Everything else is what it always was.
+        assert_eq!(b["stream"], true);
+        assert_eq!(b["keep_alive"], "30m");
+        assert_eq!(b["options"]["temperature"], 0.3);
+    }
+
+    #[test]
+    fn off_low_high_set_think() {
+        assert_eq!(body("qwen3:8b", Off, None, true).0["think"], false);
+        assert_eq!(body("qwen3:8b", Low, None, true).0["think"], true);
+        assert_eq!(body("qwen3:8b", High, None, true).0["think"], true);
+        assert_eq!(body("gpt-oss:20b", Off, None, true).0["think"], "low");
+        assert_eq!(body("gpt-oss:20b", High, None, true).0["think"], "high");
+    }
+
+    #[test]
+    fn the_retry_body_has_no_think() {
+        let (b, sent) = body("llama3.2", Off, None, false);
+        assert!(!sent);
+        assert!(b.get("think").is_none());
+    }
+
+    #[test]
+    fn extra_json_merges_last_with_options_merged_and_protected_keys_kept() {
+        let extra = r#"{"options":{"num_ctx":8192},"think":true,"model":"x","stream":false,"messages":[]}"#;
+        let (b, _) = body("qwen3:8b", Off, Some(extra), true);
+        assert_eq!(b["model"], "qwen3:8b");
+        assert_eq!(b["stream"], true);
+        assert_eq!(b["messages"][0]["content"], "hi");
+        assert_eq!(b["options"]["num_ctx"], 8192);
+        assert_eq!(b["options"]["temperature"], 0.3, "options are merged, not replaced");
+        assert_eq!(b["think"], true, "the user's JSON has the last word");
     }
 }

@@ -346,6 +346,8 @@ pub async fn test_rag_answer(
                 auth_type: None,
                 auth_value: None,
                 auth_header: None,
+                thinking: Default::default(),
+                extra_request_json: None,
             };
 
             match crate::llm::create_provider(&provider_config) {

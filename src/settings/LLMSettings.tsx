@@ -15,6 +15,8 @@ import {
 import type { CustomLlmAuthType as CustomAuthType, LLMProviderType, ModelInfo, OpenRouterModel } from "../lib/types";
 import { OpenRouterModelCatalog } from "./openrouter/OpenRouterModelCatalog";
 import { ClaudeCliSettings, claudeTierLabel } from "./ClaudeCliSettings";
+import { ThinkingSettings } from "./ThinkingSettings";
+import { requestOptionFields } from "../lib/llmRequestOptions";
 import { useAgentStore } from "../stores/agentStore";
 import {
   CheckCircle,
@@ -217,6 +219,11 @@ export function LLMSettings() {
   // `custom` overrides a Custom field changed in this same event (its state isn't updated yet).
   const buildProviderConfig = useCallback((custom: { authType?: CustomAuthType; authValue?: string } = {}) => {
     const config: Record<string, unknown> = { provider_type: selectedProvider };
+    const { llmThinking, llmExtraRequestJson } = useConfigStore.getState();
+    Object.assign(
+      config,
+      requestOptionFields(selectedProvider, llmThinking[selectedProvider], llmExtraRequestJson[selectedProvider]),
+    );
     if (apiKey) config.api_key = apiKey;
     if (selectedProvider === "custom") {
       const authType = custom.authType ?? customAuthType;
@@ -590,6 +597,9 @@ export function LLMSettings() {
           )}
         </div>
       )}
+
+      {/* Thinking (how long the model reasons before answering) + advanced request JSON */}
+      {!isClaudeCli && <ThinkingSettings key={selectedProvider} provider={selectedProvider} />}
 
       {/* Make Active button — only when different from active AND provider is ready */}
       {selectedProvider !== llmProvider && (

@@ -258,6 +258,8 @@ pub fn run() {
                 auth_type: None,
                 auth_value: None,
                 auth_header: None,
+                thinking: Default::default(),
+                extra_request_json: None,
             };
             match llm_router.set_provider(ollama_config) {
                 Ok(()) => {

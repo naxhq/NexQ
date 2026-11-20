@@ -115,6 +115,8 @@ pub fn fallback_config(provider: &str) -> ProviderConfig {
         auth_type: None,
         auth_value: None,
         auth_header: None,
+        thinking: Default::default(),
+        extra_request_json: None,
     }
 }
 

@@ -83,7 +83,6 @@ A 1-2 sentence high-level description of what the meeting covered.\n\
 Be factual, concise, and base everything strictly on the transcript. Do not add speculation or interpretation.";
 
 pub const ACTION_ITEMS_EXTRACTION_PROMPT: &str = "\
-/no_think\n\
 You are an AI assistant that extracts action items from meeting transcripts.\n\
 \n\
 Look broadly for ANY of these:\n\
@@ -106,7 +105,6 @@ Each element must have these fields:\n\
 Example: [{\"text\":\"Evaluate all project options and make a decision\",\"assignee_speaker_id\":null,\"timestamp_ms\":0}]";
 
 pub const BOOKMARK_SUGGESTIONS_PROMPT: &str = "\
-/no_think\n\
 You are an AI assistant that identifies key moments in meeting transcripts.\n\
 \n\
 Each transcript line starts with [SEGMENT_ID] followed by Speaker: text.\n\
@@ -137,3 +135,21 @@ and summary, and from the earlier questions and answers about it. Be direct and 
 mention who said what and roughly when (mm:ss) when it helps. If the meeting does not \
 answer the question, say so plainly. Never mention segment ids. \
 IMPORTANT: Respond in the same language as the user's question.";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Thinking is a per-provider setting now; a prompt must not switch it itself.
+    #[test]
+    fn no_prompt_carries_a_hardcoded_no_think() {
+        for mode in [
+            "Assist", "WhatToSay", "Shorten", "FollowUp", "Recap", "AskQuestion", "MeetingSummary",
+            "ActionItemsExtraction", "BookmarkSuggestions", "MeetingAsk",
+        ] {
+            assert!(!get_system_prompt(mode).contains("no_think"), "{mode}");
+        }
+        assert!(ACTION_ITEMS_EXTRACTION_PROMPT.starts_with("You are an AI assistant that extracts"));
+        assert!(BOOKMARK_SUGGESTIONS_PROMPT.starts_with("You are an AI assistant that identifies"));
+    }
+}

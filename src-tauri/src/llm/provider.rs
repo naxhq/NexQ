@@ -7,6 +7,8 @@ use tauri::{AppHandle, Emitter};
 use thiserror::Error;
 use tokio::sync::Notify;
 
+pub use super::thinking::ThinkingSetting;
+
 /// Per-request generation parameters.
 /// `None` fields mean "use provider default" — they won't be sent in the HTTP body.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,6 +34,15 @@ pub struct GenerationParams {
     /// `LLMError::Cancelled` once it fires. Never serialized.
     #[serde(skip)]
     pub cancel: Option<Arc<CancelToken>>,
+    /// An explicit thinking choice for this request. `Auto` (the default) means
+    /// "the provider's own setting"; anything else overrides it.
+    #[serde(default)]
+    pub thinking: ThinkingSetting,
+    /// Background JSON tasks (action items, bookmarks) want no thinking: with
+    /// no explicit setting anywhere (Auto), they send "off". A user's own
+    /// setting still wins.
+    #[serde(default)]
+    pub thinking_auto_off: bool,
 }
 
 impl Default for GenerationParams {
@@ -44,6 +55,8 @@ impl Default for GenerationParams {
             request_id: None,
             silent: false,
             cancel: None,
+            thinking: ThinkingSetting::Auto,
+            thinking_auto_off: false,
         }
     }
 }

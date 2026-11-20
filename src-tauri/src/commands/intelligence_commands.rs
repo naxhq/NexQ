@@ -858,6 +858,8 @@ pub async fn generate_assist(
                 request_id: Some(request_id.clone()),
                 silent: false,
                 cancel: Some(cancel_token.clone()),
+                thinking: Default::default(),
+                thinking_auto_off: false,
             },
             cancel: cancel_token.clone(),
             images: &images,
@@ -1015,6 +1017,9 @@ pub async fn generate_assist(
         request_id: Some(request_id),
         silent: false,
         cancel: Some(cancel_token.clone()),
+        thinking: Default::default(),
+        // The background JSON tasks want no thinking unless the user chose otherwise.
+        thinking_auto_off: matches!(mode.as_str(), "ActionItemsExtraction" | "BookmarkSuggestions"),
     };
 
     // When Gemini cache is active, skip RAG entirely — no Ollama embed needed.

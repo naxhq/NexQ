@@ -10,6 +10,7 @@ use super::provider::{
     cancellable, check_cancelled, is_cancelled, emit_end, emit_error, emit_token, TokenSink,
 };
 use super::stream_parser::{LineBuffer, NDJSONParser, SSEParser};
+use super::thinking::{self, RequestOptions, ThinkingSetting};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CustomAuthType {
@@ -29,6 +30,32 @@ pub struct CustomConfig {
 pub struct CustomClient {
     config: CustomConfig,
     client: reqwest::Client,
+    options: RequestOptions,
+}
+
+/// The `/chat/completions` body for a custom endpoint (OpenAI-compatible).
+/// `with_thinking` false leaves out `reasoning_effort` (the retry after the
+/// endpoint refused it). Returns the body and whether it carries thinking.
+pub(crate) fn chat_completions_body(
+    msgs: &[serde_json::Value],
+    model: &str,
+    params: &GenerationParams,
+    setting: ThinkingSetting,
+    extra: Option<&serde_json::Map<String, serde_json::Value>>,
+    with_thinking: bool,
+) -> (serde_json::Value, bool) {
+    let mut body = json!({ "model": model, "messages": msgs, "stream": true });
+    if let Some(temp) = params.temperature {
+        body["temperature"] = json!(temp);
+    }
+    if let Some(max_tok) = params.max_tokens {
+        body["max_tokens"] = json!(max_tok);
+    }
+    let sent = with_thinking && thinking::apply_openai_compat(&mut body, "custom", model, setting);
+    if let Some(extra) = extra {
+        thinking::merge_extra_request(&mut body, extra, false);
+    }
+    (body, sent)
 }
 
 /// Longest part of an error body quoted in an error message.
@@ -68,7 +95,14 @@ impl CustomClient {
         Self {
             config,
             client: reqwest::Client::new(),
+            options: RequestOptions::default(),
         }
+    }
+
+    /// Applies the user's thinking setting and extra request JSON.
+    pub fn with_options(mut self, options: RequestOptions) -> Self {
+        self.options = options;
+        self
     }
 
     /// Opens the chat stream: OpenAI-compatible `/chat/completions` first, then
@@ -82,23 +116,10 @@ impl CustomClient {
         model: &str,
         params: &GenerationParams,
     ) -> Result<reqwest::Response, LLMError> {
-        let mut body = json!({ "model": model, "messages": msgs, "stream": true });
-        if let Some(temp) = params.temperature {
-            body["temperature"] = json!(temp);
-        }
-        if let Some(max_tok) = params.max_tokens {
-            body["max_tokens"] = json!(max_tok);
-        }
-        let first = match self.post_json("/chat/completions", &body, params).await? {
-            Ok(resp) if resp.status().is_success() => return Ok(resp),
-            Ok(resp) => {
-                log::warn!("CustomLLM: /chat/completions answered {}; trying /api/chat", resp.status());
-                cancellable(params, Self::failure(resp)).await?
-            }
-            Err(e) => {
-                log::warn!("CustomLLM: /chat/completions couldn't be reached; trying /api/chat");
-                format!("couldn't be reached ({})", e)
-            }
+        let setting = thinking::resolve(params, self.options.thinking);
+        let first = match self.try_chat_completions(msgs, model, params, setting).await? {
+            Ok(resp) => return Ok(resp),
+            Err(failure) => failure,
         };
 
         // Ollama's native API takes no OpenAI options.
@@ -110,6 +131,43 @@ impl CustomClient {
         };
         let message = format!("Custom endpoint request failed: /chat/completions {}; /api/chat {}", first, second);
         Err(if unreachable { LLMError::ConnectionFailed(message) } else { LLMError::ProviderError(message) })
+    }
+
+    /// The OpenAI-compatible attempt. `Ok(Ok(response))` streams; `Ok(Err(text))`
+    /// is why it failed ("answered 400 (...)" or "couldn't be reached (...)").
+    /// A 400 that refuses the thinking parameter is retried once without it, and
+    /// remembered for this endpoint and model.
+    async fn try_chat_completions(
+        &self,
+        msgs: &[serde_json::Value],
+        model: &str,
+        params: &GenerationParams,
+        setting: ThinkingSetting,
+    ) -> Result<Result<reqwest::Response, String>, LLMError> {
+        let extra = self.options.extra_request();
+        let mut with_thinking = thinking::should_send("custom", model, setting);
+        loop {
+            let (body, sent) = chat_completions_body(msgs, model, params, setting, extra.as_ref(), with_thinking);
+            match self.post_json("/chat/completions", &body, params).await? {
+                Ok(resp) if resp.status().is_success() => return Ok(Ok(resp)),
+                Ok(resp) => {
+                    let status = resp.status();
+                    log::warn!("CustomLLM: /chat/completions answered {}; trying /api/chat", status);
+                    let text = cancellable(params, resp.text()).await?.unwrap_or_default();
+                    if sent && thinking::rejects_thinking_param(status.as_u16(), &text) {
+                        log::warn!("CustomLLM: {} rejected the thinking parameter; retrying without it", model);
+                        thinking::remember_unsupported("custom", model);
+                        with_thinking = false;
+                        continue;
+                    }
+                    return Ok(Err(Self::failure_text(status, &text)));
+                }
+                Err(e) => {
+                    log::warn!("CustomLLM: /chat/completions couldn't be reached; trying /api/chat");
+                    return Ok(Err(format!("couldn't be reached ({})", e)));
+                }
+            }
+        }
     }
 
     /// POST `body` as JSON to `path` under the base URL, with the configured auth.
@@ -129,7 +187,11 @@ impl CustomClient {
     /// "answered 401 Unauthorized (reason)" for a failed response.
     async fn failure(resp: reqwest::Response) -> String {
         let status = resp.status();
-        let detail = error_detail(&resp.text().await.unwrap_or_default());
+        Self::failure_text(status, &resp.text().await.unwrap_or_default())
+    }
+
+    fn failure_text(status: reqwest::StatusCode, body: &str) -> String {
+        let detail = error_detail(body);
         if detail.is_empty() {
             format!("answered {}", status)
         } else {
@@ -328,13 +390,15 @@ impl LLMProvider for CustomClient {
 
     async fn stream_completion(
         &self,
-        messages: Vec<LLMMessage>,
+        mut messages: Vec<LLMMessage>,
         model: &str,
         params: GenerationParams,
         app_handle: tauri::AppHandle,
         sink: Option<TokenSink>,
     ) -> Result<CompletionStats, LLMError> {
         let start = Instant::now();
+
+        thinking::apply_prompt_hint(&mut messages, model, thinking::resolve(&params, self.options.thinking));
 
         let msgs: Vec<serde_json::Value> = messages
             .iter()
@@ -573,6 +637,60 @@ mod tests {
 
     /// The first failure's body is read now, so a server that stalls while
     /// sending it must not hold up Stop.
+    fn thinking_client(base: &str, thinking: ThinkingSetting) -> CustomClient {
+        client(base, CustomAuthType::None, None).with_options(RequestOptions { thinking, extra_json: None })
+    }
+
+    #[test]
+    fn custom_body_matches_openai_compatible_mapping() {
+        let msgs = hi();
+        let params = GenerationParams { temperature: Some(0.2), ..Default::default() };
+        let body = |s, extra: Option<&str>, with| {
+            let extra = thinking::parse_extra_request(extra);
+            chat_completions_body(&msgs, "m", &params, s, extra.as_ref(), with)
+        };
+        let (b, sent) = body(ThinkingSetting::Auto, None, true);
+        assert!(!sent);
+        assert!(b.get("reasoning_effort").is_none());
+        assert_eq!(b["temperature"], 0.2);
+        assert_eq!(body(ThinkingSetting::Off, None, true).0["reasoning_effort"], "none");
+        assert_eq!(body(ThinkingSetting::Low, None, true).0["reasoning_effort"], "low");
+        assert_eq!(body(ThinkingSetting::High, None, true).0["reasoning_effort"], "high");
+        assert!(body(ThinkingSetting::High, None, false).0.get("reasoning_effort").is_none());
+        let (b, _) = body(ThinkingSetting::Auto, Some(r#"{"model":"evil","top_p":0.4}"#), true);
+        assert_eq!(b["model"], "m");
+        assert_eq!(b["top_p"], 0.4);
+    }
+
+    #[tokio::test]
+    async fn a_refused_thinking_parameter_is_retried_once_then_remembered() {
+        let (base, seen) = server(vec![(
+            "/v1/chat/completions",
+            400,
+            r#"{"error":{"message":"Unrecognized request argument supplied: reasoning_effort"}}"#,
+        )])
+        .await;
+        let c = thinking_client(&base, ThinkingSetting::Off);
+        let count = || seen.lock().unwrap().iter().filter(|(p, _)| p == "/v1/chat/completions").count();
+
+        let _ = c.open_chat_stream(&hi(), "retry-custom-model", &GenerationParams::default()).await;
+        assert_eq!(count(), 2, "one try with the parameter, one without");
+        assert!(thinking::is_known_unsupported("custom", "retry-custom-model"));
+
+        // The next request does not try the parameter again.
+        let _ = c.open_chat_stream(&hi(), "retry-custom-model", &GenerationParams::default()).await;
+        assert_eq!(count(), 3);
+    }
+
+    #[tokio::test]
+    async fn auto_never_retries() {
+        let (base, seen) = server(vec![("/v1/chat/completions", 400, r#"{"error":"reasoning_effort bad"}"#)]).await;
+        let c = thinking_client(&base, ThinkingSetting::Auto);
+        let _ = c.open_chat_stream(&hi(), "auto-custom-model", &GenerationParams::default()).await;
+        let n = seen.lock().unwrap().iter().filter(|(p, _)| p == "/v1/chat/completions").count();
+        assert_eq!(n, 1);
+    }
+
     #[tokio::test]
     async fn stop_works_while_an_error_body_stalls() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
