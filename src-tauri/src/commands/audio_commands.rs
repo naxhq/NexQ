@@ -2609,6 +2609,12 @@ pub async fn set_party_language(
             log::info!("'{}' STT restarted for a language change", label);
             crate::stt::emit_stt_debug(&app, "info", "stt",
                 &format!("'{}' STT restarted: {}", label, config.stt_provider));
+            // The overlay's language picker waits for a status of this side. Not every
+            // provider reports one when it starts (the batch ones don't), so say it here.
+            let _ = app.emit(
+                "stt_connection_status",
+                swap_status_event(&config.stt_provider, label, muted_flag.load(Ordering::Relaxed)),
+            );
         }
         // The side has no STT now: the caller restarts the whole capture.
         Err(e) => {
@@ -2619,6 +2625,18 @@ pub async fn set_party_language(
         Ok(false) => {}
     }
     answer
+}
+
+/// The `stt_connection_status` event for a side whose provider was just swapped:
+/// connected, or paused while the side is muted (a muted provider holds no stream).
+/// `label` is "You" or "Them" ("Them" is the room in an in-person meeting).
+fn swap_status_event(provider: &str, label: &str, muted: bool) -> serde_json::Value {
+    serde_json::json!({
+        "provider": provider,
+        "party": label,
+        "status": if muted { "paused" } else { "connected" },
+        "message": "Restarted for a language change",
+    })
 }
 
 /// Get the current mute status for both sources.
@@ -2798,6 +2816,15 @@ mod tests {
         let new = whisper_auto_refusal("distil-large-v3", "You");
         assert_eq!(resolve_side::<u8>(Err(new.clone()), true, Some(&old), false).err(), Some(new.clone()));
         assert_eq!(resolve_side::<u8>(Err(new.clone()), true, None, false).err(), Some(new));
+    }
+
+    #[test]
+    fn a_swapped_side_reports_a_status_the_overlay_picker_clears_on() {
+        let event = swap_status_event("deepgram", "Them", false);
+        assert_eq!(event["party"], "Them");
+        assert_eq!(event["status"], "connected");
+        assert_eq!(event["provider"], "deepgram");
+        assert_eq!(swap_status_event("deepgram", "You", true)["status"], "paused");
     }
 
     #[test]
