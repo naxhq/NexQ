@@ -145,7 +145,7 @@ mod tests {
             .flat_map(|n| {
                 let s =
                     (2.0 * std::f64::consts::PI * freq * n as f64 / rate as f64).sin() * 10_000.0;
-                std::iter::repeat(s as i16).take(channels as usize)
+                std::iter::repeat_n(s as i16, channels as usize)
             })
             .collect()
     }
@@ -225,7 +225,7 @@ mod tests {
     }
 
     /// 8 kHz to 16 kHz doubles the samples, the new ones halfway between
-    /// (the stream starts one input frame late, so the first chunk is two
+    /// (the output trails the input by one frame, so the first chunk is two
     /// samples short).
     #[test]
     fn upsampling_8k_to_16k_doubles_the_samples() {
