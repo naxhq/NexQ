@@ -4,6 +4,12 @@ use cpal::traits::{DeviceTrait, HostTrait};
 
 use super::{AudioDevice, AudioDeviceList};
 
+/// Display name of a cpal device (the friendly name on Windows). Device IDs
+/// saved in settings are these names, so keep them stable across cpal upgrades.
+pub fn device_name(device: &cpal::Device) -> Result<String, cpal::Error> {
+    device.description().map(|d| d.name().to_string())
+}
+
 /// Enumerate all available audio input and output devices.
 /// Returns an AudioDeviceList with input devices (microphones) and
 /// output devices (speakers/headphones, relevant for system audio loopback).
@@ -13,18 +19,18 @@ pub fn enumerate_devices() -> Result<AudioDeviceList, String> {
     // Get default devices for marking
     let default_input_name = host
         .default_input_device()
-        .and_then(|d| d.name().ok());
+        .and_then(|d| device_name(&d).ok());
 
     let default_output_name = host
         .default_output_device()
-        .and_then(|d| d.name().ok());
+        .and_then(|d| device_name(&d).ok());
 
     // Enumerate input devices
     let mut inputs = Vec::new();
     match host.input_devices() {
         Ok(devices) => {
             for device in devices {
-                let name = match device.name() {
+                let name = match device_name(&device) {
                     Ok(n) => n,
                     Err(e) => {
                         log::warn!("Failed to get input device name: {}", e);
@@ -55,7 +61,7 @@ pub fn enumerate_devices() -> Result<AudioDeviceList, String> {
     match host.output_devices() {
         Ok(devices) => {
             for device in devices {
-                let name = match device.name() {
+                let name = match device_name(&device) {
                     Ok(n) => n,
                     Err(e) => {
                         log::warn!("Failed to get output device name: {}", e);
@@ -106,7 +112,7 @@ pub fn find_input_device(device_id: &str) -> Result<cpal::Device, String> {
         .map_err(|e| format!("Failed to enumerate input devices: {}", e))?;
 
     for device in devices {
-        if let Ok(name) = device.name() {
+        if let Ok(name) = device_name(&device) {
             if name == device_id {
                 return Ok(device);
             }
@@ -132,7 +138,7 @@ pub fn find_output_device(device_id: &str) -> Result<cpal::Device, String> {
         .map_err(|e| format!("Failed to enumerate output devices: {}", e))?;
 
     for device in devices {
-        if let Ok(name) = device.name() {
+        if let Ok(name) = device_name(&device) {
             if name == device_id {
                 return Ok(device);
             }

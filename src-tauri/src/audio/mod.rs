@@ -1,4 +1,5 @@
 pub mod device_default;
+pub mod capture_common;
 pub mod device_manager;
 pub mod echo_cancel;
 pub mod encoder;

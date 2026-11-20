@@ -42,9 +42,9 @@ pub fn start_system_capture_device(
     let label = device_name.as_deref().unwrap_or("default").to_string();
     log::info!("Starting system audio capture on: {}", label);
 
-    // Everything runs inside the spawned thread because cpal::Stream is !Send.
-    // The stream must be created and kept alive on the same thread; the thread
-    // reports whether it started so the caller can warn the user.
+    // The stream is created, kept alive and dropped on this one thread (cpal::Stream
+    // has been Send since 0.17, so that is for ownership, not a requirement). The
+    // thread reports whether it started so the caller can warn the user.
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
     let handle = std::thread::Builder::new()
         .name("system-audio-capture".into())
@@ -87,7 +87,7 @@ fn run_cpal_loopback(
         let mut found = None;
         if let Ok(devices) = host.output_devices() {
             for d in devices {
-                if let Ok(d_name) = d.name() {
+                if let Ok(d_name) = super::device_manager::device_name(&d) {
                     log::info!("  Output device: {}", d_name);
                     if d_name == *name {
                         found = Some(d);
@@ -109,20 +109,21 @@ fn run_cpal_loopback(
             .ok_or_else(|| "No default output device".to_string())?
     };
 
-    let actual_name = device.name().unwrap_or_else(|_| "unknown".into());
+    let actual_name = super::device_manager::device_name(&device)
+        .unwrap_or_else(|_| "unknown".into());
     log::info!("System loopback device: {}", actual_name);
 
     let config = device
         .default_output_config()
         .map_err(|e| format!("No output config for '{}': {}", actual_name, e))?;
 
-    let sample_rate = config.sample_rate().0;
+    let sample_rate = config.sample_rate();
     let channels = config.channels();
     let sample_format = config.sample_format();
     log::info!("System capture: {}Hz, {}ch, {:?}", sample_rate, channels, sample_format);
 
-    let err_fn = |err: cpal::StreamError| {
-        log::error!("System capture error: {}", err);
+    let err_fn = |err: cpal::Error| {
+        super::capture_common::log_stream_error("System capture error", &err);
     };
 
     let stop = stop_flag.clone();
@@ -133,7 +134,7 @@ fn run_cpal_loopback(
     // Build INPUT stream on OUTPUT device = loopback capture
     let stream = match sample_format {
         cpal::SampleFormat::F32 => device.build_input_stream(
-            &config.into(),
+            config.into(),
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
                 if stop.load(Ordering::Relaxed) { return; }
                 let pcm: Vec<i16> = data.iter()
@@ -145,7 +146,7 @@ fn run_cpal_loopback(
             None,
         ),
         cpal::SampleFormat::I16 => device.build_input_stream(
-            &config.into(),
+            config.into(),
             move |data: &[i16], _: &cpal::InputCallbackInfo| {
                 if stop.load(Ordering::Relaxed) { return; }
                 send_system_chunk(data, &mut resampler, &tx2);
@@ -154,7 +155,7 @@ fn run_cpal_loopback(
             None,
         ),
         cpal::SampleFormat::U16 => device.build_input_stream(
-            &config.into(),
+            config.into(),
             move |data: &[u16], _: &cpal::InputCallbackInfo| {
                 if stop.load(Ordering::Relaxed) { return; }
                 let pcm: Vec<i16> = data.iter()
@@ -165,7 +166,16 @@ fn run_cpal_loopback(
             err_fn,
             None,
         ),
-        _ => return Err(format!("Unsupported format: {:?}", sample_format)),
+        _ => super::capture_common::build_converted_for(
+            &device,
+            config.into(),
+            sample_format,
+            move |pcm| {
+                if stop.load(Ordering::Relaxed) { return; }
+                send_system_chunk(pcm, &mut resampler, &tx2);
+            },
+            err_fn,
+        ),
     }
     .map_err(|e| format!("Failed to build loopback stream on '{}': {}", actual_name, e))?;
 
