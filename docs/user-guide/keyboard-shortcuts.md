@@ -33,6 +33,8 @@ These shortcuts work when a meeting is active and the NexQ window (launcher or o
 | `4` | Recap | Provides a recap of the conversation so far |
 | `5` | Ask Question | Opens the free-form question input for custom AI queries |
 
+> In the Ask box, `Ctrl+V` attaches a copied screenshot (Claude subscription only).
+
 > **Note:** The number keys (`1`--`5`) work with both the main keyboard and the numpad. They only trigger when no modifier keys (Ctrl, Alt, Meta) are held.
 
 ## System Tray
