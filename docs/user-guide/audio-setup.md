@@ -88,7 +88,7 @@ The bundled Parakeet TDT export transcribes utterances after a pause, or splits 
 
 ## Language for Each Side
 
-Each card in **Settings > Audio & Devices** has a **Language** menu. It starts on **Same as transcription language**; pick another to transcribe that side (You, Them, or Room) in its own language, for example you in English and the others in Spanish. See [A different language for each side](ai-providers.md#a-different-language-for-each-side).
+Each card in **Settings > Audio & Devices** has a **Language** menu. It starts on **Default**, which follows the transcription language; pick another to transcribe that side (You, Them, or Room) in its own language, for example you in English and the others in Spanish. See [A different language for each side](ai-providers.md#a-different-language-for-each-side).
 
 ## Recording
 

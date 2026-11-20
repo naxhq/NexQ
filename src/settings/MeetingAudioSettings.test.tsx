@@ -145,7 +145,7 @@ describe.each([
 });
 
 describe("a language for each side", () => {
-  const SAME = /^Same as transcription language: /;
+  const SAME = /^Default: /;
   const side = (name: "You" | "Them" | "Room") =>
     screen.getByRole<HTMLSelectElement>("combobox", { name: `${name} language` });
 
@@ -156,11 +156,11 @@ describe("a language for each side", () => {
     useConfigStore.setState({ sttLanguage: "en-US" });
     render(<MeetingAudioSettings />);
     for (const name of ["You", "Them"] as const) {
-      expect(side(name).selectedOptions[0]).toHaveTextContent("Same as transcription language: English (US)");
+      expect(side(name).selectedOptions[0]).toHaveTextContent("Default: English (US)");
       expect(side(name).value).toBe("");
       // The shared list, Auto-detect included.
       const labels = within(side(name)).getAllByRole("option").map((o) => o.textContent);
-      expect(labels).toEqual(["Same as transcription language: English (US)", ...STT_LANGUAGES.map((l) => l.label)]);
+      expect(labels).toEqual(["Default: English (US)", ...STT_LANGUAGES.map((l) => l.label)]);
     }
     // Showing the pickers saved nothing.
     expect(useConfigStore.getState().meetingAudioConfig).toEqual(initialConfig);
@@ -170,9 +170,9 @@ describe("a language for each side", () => {
   it("names the shared language in the default option", async () => {
     useConfigStore.setState({ sttLanguage: "es-ES" });
     render(<MeetingAudioSettings />);
-    expect(side("You").selectedOptions[0]).toHaveTextContent("Same as transcription language: Spanish");
+    expect(side("You").selectedOptions[0]).toHaveTextContent("Default: Spanish");
     await act(async () => useConfigStore.setState({ sttLanguage: "auto" }));
-    expect(side("Them").selectedOptions[0]).toHaveTextContent("Same as transcription language: Auto-detect");
+    expect(side("Them").selectedOptions[0]).toHaveTextContent("Default: Auto-detect");
   });
 
   it("saves a side's language into meetingAudioConfig and leaves the shared language and the other side alone", async () => {
@@ -190,7 +190,7 @@ describe("a language for each side", () => {
     await user.selectOptions(side("You"), "auto");
     expect(useConfigStore.getState().meetingAudioConfig!.you.language).toBe("auto");
 
-    // Back to "Same as…" drops the field, so the config has its old shape again.
+    // Back to "Default" drops the field, so the config has its old shape again.
     await user.selectOptions(side("Them"), within(side("Them")).getByRole("option", { name: SAME }));
     await user.selectOptions(side("You"), within(side("You")).getByRole("option", { name: SAME }));
     expect(useConfigStore.getState().meetingAudioConfig).toEqual(initialConfig);

@@ -46,9 +46,9 @@ These can't detect the language: Web Speech, Windows Speech, Azure Speech, Sherp
 
 ### A different language for each side
 
-When you and the others speak different languages, give each side its own. Open **Settings > Audio & Devices** and use the **Language** menu on each card: **You**, **Them**, or **Room** in an in-person meeting. The menu starts on **Same as transcription language**, which follows the language in Settings > STT Providers > Language (**Transcription language** at the top of Audio & Devices), so nothing changes until you pick one.
+When you and the others speak different languages, give each side its own. Open **Settings > Audio & Devices** and use the **Language** menu on each card: **You**, **Them**, or **Room** in an in-person meeting. The menu starts on **Default** (it names the current transcription language), which follows the language in Settings > STT Providers > Language (**Transcription language** at the top of Audio & Devices), so nothing changes until you pick one.
 
-For example, if you speak English and the others speak Spanish, leave You on **Same as transcription language** (English) and set Them to **Spanish**. Each side's provider then listens in its own language. A side can also be set to **Auto-detect**, which needs a provider that can detect the language (see the list above); the other side keeps its own language.
+For example, if you speak English and the others speak Spanish, leave You on **Default** (English) and set Them to **Spanish**. Each side's provider then listens in its own language. A side can also be set to **Auto-detect**, which needs a provider that can detect the language (see the list above); the other side keeps its own language.
 
 Changing a side's language during a meeting briefly restarts transcription, the same as changing a provider, so you don't need to start a new meeting. The language hints on each card (for example, Flux doesn't transcribe Ukrainian) follow that side's own language.
 

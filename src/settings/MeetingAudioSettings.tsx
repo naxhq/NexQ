@@ -921,7 +921,7 @@ function PartyPanel({
               onChange={(e) => onChange({ language: e.target.value || undefined })}
               className="w-full cursor-pointer rounded-lg border border-border/40 bg-background/60 px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
             >
-              <option value={SAME_AS_SHARED_LANGUAGE}>Same as transcription language: {sharedLanguageLabel}</option>
+              <option value={SAME_AS_SHARED_LANGUAGE}>Default: {sharedLanguageLabel}</option>
               {STT_LANGUAGES.map((lang) => (
                 <option key={lang.value} value={lang.value}>
                   {lang.label}
