@@ -5,17 +5,31 @@
 
 use crate::sources::config::{McpServer, McpTransport};
 use crate::sources::mcp_json::{credential_id, header_credential_id};
+use super::command::{configure_command, sandbox_dir};
+use super::process_tree::ProcessTree;
 use std::io::BufRead;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// How long a failed server is started on its own to find out why.
 pub const DIAGNOSE_WAIT: Duration = Duration::from_secs(5);
 
-/// Why `server` won't start, or `None` when the attempt shows nothing.
-/// `secret` looks a saved value up by credential id.
+/// The longest a whole diagnosis may take: the wait itself plus ending the
+/// server and reading its last words.
+pub const DIAGNOSE_LIMIT: Duration = Duration::from_secs(DIAGNOSE_WAIT.as_secs() + 3);
+
+/// Why `server` won't start, or `None` when the attempt shows nothing (or took
+/// longer than [`DIAGNOSE_LIMIT`]). `secret` looks a saved value up by
+/// credential id.
 pub async fn diagnose_start(
+    server: &McpServer,
+    secret: &(dyn Fn(&str) -> Option<String> + Sync),
+) -> Option<String> {
+    tokio::time::timeout(DIAGNOSE_LIMIT, diagnose_inner(server, secret)).await.ok().flatten()
+}
+
+async fn diagnose_inner(
     server: &McpServer,
     secret: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Option<String> {
@@ -67,9 +81,43 @@ pub fn redact(text: &str, secrets: &[String]) -> String {
     }
 }
 
-/// Start the command and wait up to `wait`. `Some(cause)` when it could not be
-/// started, stopped by itself, or is still running but printed a message;
-/// `None` when it ran quietly.
+/// How long the last stderr lines are waited for once the server has ended.
+const STDERR_GRACE: Duration = Duration::from_secs(1);
+
+/// The program to run for `command`, found the way the CLI finds it. Rust's
+/// `Command` adds only `.exe`, so `npx` or `uvx` (shims named `npx.cmd`,
+/// `uvx.cmd`) would not start; the CLI resolves them through `PATHEXT`. A name
+/// with an extension, or one nothing matches, is returned unchanged. `path` is
+/// the `PATH` to search (`None`: this process's).
+pub fn resolve_command(command: &str, path: Option<&std::ffi::OsStr>) -> PathBuf {
+    if !cfg!(windows) || Path::new(command).extension().is_some() {
+        return PathBuf::from(command);
+    }
+    let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+    let exts: Vec<&str> = exts.split(';').filter(|e| !e.is_empty()).collect();
+    let dirs: Vec<PathBuf> = if command.contains(['\\', '/']) {
+        vec![PathBuf::new()]
+    } else {
+        let own = std::env::var_os("PATH");
+        std::env::split_paths(path.or(own.as_deref()).unwrap_or_default()).collect()
+    };
+    for dir in dirs {
+        for ext in &exts {
+            let candidate = dir.join(format!("{command}{ext}"));
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    PathBuf::from(command)
+}
+
+/// Start the command like the CLI would (same folder and environment as a
+/// session, shims found through `PATHEXT`) and wait up to `wait`. `Some(cause)`
+/// when it could not be started, stopped by itself, or is still running but
+/// printed a message; `None` when it ran quietly. Whatever it started is ended
+/// too, and nothing here can wait on it for long: stderr is read through a
+/// channel with a short cap.
 pub fn diagnose_stdio(
     command: &str,
     args: &[String],
@@ -77,31 +125,31 @@ pub fn diagnose_stdio(
     secrets: &[String],
     wait: Duration,
 ) -> Option<String> {
-    let mut cmd = Command::new(command);
+    let path = env.iter().find(|(k, _)| k.eq_ignore_ascii_case("PATH")).map(|(_, v)| std::ffi::OsString::from(v));
+    let mut cmd = Command::new(resolve_command(command, path.as_deref()));
+    configure_command(&mut cmd, &sandbox_dir());
     cmd.args(args)
         .envs(env.iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000);
-    }
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(e) => return Some(redact(&format!("It couldn't start {command}: {e}."), secrets)),
     };
-    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
-    let reader = child.stderr.take().map(|stderr| {
-        let lines = lines.clone();
+    let mut tree = Some(ProcessTree::adopt(&child));
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    if let Some(stderr) = child.stderr.take() {
+        // Ends when every holder of the pipe is gone; never joined.
         std::thread::spawn(move || {
             for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
-                lines.lock().unwrap().push(line);
+                if tx.send(line).is_err() {
+                    break;
+                }
             }
-        })
-    });
-    let _stdin = child.stdin.take(); // kept open: a server exits when it reads EOF
+        });
+    }
+    let stdin = child.stdin.take(); // kept open while waiting: a server exits when it reads EOF
     let deadline = Instant::now() + wait;
     let exited = loop {
         match child.try_wait() {
@@ -110,15 +158,22 @@ pub fn diagnose_stdio(
             _ => break None,
         }
     };
+    drop(stdin);
+    let mut lines: Vec<String> = Vec::new();
     if exited.is_none() {
-        let _ = child.kill();
-        let _ = child.wait();
+        if let Some(tree) = tree.take() {
+            tree.kill(&mut child);
+        }
     }
-    if let Some(reader) = reader {
-        let _ = reader.join();
+    let grace = Instant::now() + STDERR_GRACE;
+    while let Some(left) = grace.checked_duration_since(Instant::now()) {
+        match rx.recv_timeout(left) {
+            Ok(line) => lines.push(line),
+            Err(_) => break, // pipe closed, or the grace is over
+        }
     }
-    let last = lines.lock().unwrap().iter().rev().find(|l| !l.trim().is_empty()).cloned();
-    let last = last.map(|l| redact(&l, secrets));
+    drop(tree); // a server that stopped by itself: ends what it left behind
+    let last = lines.iter().rev().find(|l| !l.trim().is_empty()).map(|l| redact(l, secrets));
     match (exited, last) {
         (Some(status), Some(line)) => {
             Some(format!("It stopped right away{}. Its last message: {line}", code_text(status)))
@@ -214,6 +269,85 @@ mod tests {
             ("sleep".to_string(), vec!["3".to_string()])
         };
         assert_eq!(diagnose_stdio(&cmd, &args, &[], &[], Duration::from_millis(400)), None);
+    }
+
+    /// How many `ping.exe` processes run with `-n <count>` (the marker of one test).
+    #[cfg(windows)]
+    fn pings_running(count: u32) -> usize {
+        let script = format!(
+            "(Get-CimInstance Win32_Process | Where-Object {{ $_.Name -eq 'PING.EXE' -and $_.CommandLine -like '*-n {count} *' }} | Measure-Object).Count"
+        );
+        let out = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &script])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().parse().unwrap_or(0)
+    }
+
+    /// A full path: a test run from a Unix-style shell can have no System32 on PATH.
+    #[cfg(windows)]
+    fn system32_ping() -> String {
+        format!(r"{}\System32\PING.EXE", std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into()))
+    }
+
+    #[cfg(windows)]
+    fn wait_until_no_pings(count: u32) -> usize {
+        for _ in 0..20 {
+            if pings_running(count) == 0 {
+                return 0;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        pings_running(count)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_server_with_a_child_that_outlives_the_wait_is_ended_with_its_children() {
+        // cmd starts ping, as `cmd /c npx` starts node. ping keeps stderr open.
+        let args: Vec<String> = ["/c", &system32_ping(), "-n", "37", "127.0.0.1"].iter().map(|s| s.to_string()).collect();
+        let started = Instant::now();
+        let cause = diagnose_stdio("cmd", &args, &[], &[], Duration::from_millis(600));
+        assert!(started.elapsed() < Duration::from_secs(6), "took {:?}", started.elapsed());
+        assert_eq!(cause, None);
+        assert_eq!(wait_until_no_pings(37), 0, "ping survived");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_server_that_stops_but_leaves_a_child_holding_stderr_still_returns() {
+        // cmd exits at once, the background ping keeps the stderr pipe open.
+        let args = vec!["/c".to_string(), format!("start /b {} -n 41 127.0.0.1 & exit 2", system32_ping())];
+        let started = Instant::now();
+        let cause = diagnose_stdio("cmd", &args, &[], &[], Duration::from_secs(5)).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(4), "took {:?}", started.elapsed());
+        assert!(cause.contains("exit code 2"), "{cause}");
+        assert_eq!(wait_until_no_pings(41), 0, "ping survived");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_bare_command_name_is_found_through_pathext_like_the_cli_does() {
+        let dir = std::env::temp_dir().join(format!("nexq-resolve-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("fakenpx.cmd"), "@echo off
+
+echo from the shim 1>&2
+
+exit 4
+
+").unwrap();
+        let path = std::env::join_paths([dir.clone()]).unwrap();
+        let found = resolve_command("fakenpx", Some(&path));
+        assert!(found.to_string_lossy().eq_ignore_ascii_case(&dir.join("fakenpx.cmd").to_string_lossy()), "{found:?}");
+        // Not found: left alone, so the spawn error names it.
+        assert_eq!(resolve_command("nexq-nothing-xyz", Some(&path)), PathBuf::from("nexq-nothing-xyz"));
+        // An explicit extension or path is kept.
+        assert_eq!(resolve_command("fakenpx.cmd", Some(&path)), PathBuf::from("fakenpx.cmd"));
+        let env = vec![("PATH".to_string(), path.to_string_lossy().into_owned())];
+        let cause = diagnose_stdio("fakenpx", &[], &env, &[], Duration::from_secs(5)).unwrap();
+        assert!(cause.contains("exit code 4") && cause.contains("from the shim"), "{cause}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
