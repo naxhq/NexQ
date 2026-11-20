@@ -35,6 +35,8 @@ npx tauri dev
 
 `npx tauri dev` runs the `beforeDevCommand` from `src-tauri/tauri.conf.json`: it stages ONNX Runtime with `scripts/fetch-onnxruntime.mjs` (downloaded once into `src-tauri/ort/`, checksum-verified, skipped when already present), starts Vite on port 5173, then compiles and launches the Rust app. The first build compiles whisper.cpp and takes several minutes; later builds are incremental.
 
+Development builds, release builds, and CI use the same staging script. On Windows x64 and Apple Silicon, it tries the pinned GitHub release archive first. If that download fails, it uses the same version of the official [Microsoft.ML.OnnxRuntime package on NuGet](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime). Each archive has its own pinned SHA-256 checksum, which the script checks before extracting the runtime.
+
 ## Everyday commands
 
 | Command | What it does |
