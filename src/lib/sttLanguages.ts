@@ -1,4 +1,5 @@
 import type { STTProviderType } from "./types";
+import cases from "./autoDetectCases.json";
 
 export const AUTO_STT_LANGUAGE = "auto";
 
@@ -25,6 +26,22 @@ export const STT_LANGUAGES = [
   { value: "sv-SE", label: "Swedish" },
   { value: "vi-VN", label: "Vietnamese" },
 ];
+
+/** The per-side picker's value for "use the shared transcription language". */
+export const SAME_AS_SHARED_LANGUAGE = "";
+
+/**
+ * The language one side (You / Them / Room) is transcribed in: its own when it
+ * has one, otherwise the shared transcription language. Mirrors
+ * `PartyAudioConfig::effective_language` in src-tauri/src/audio/mod.rs.
+ */
+export function sideLanguage(
+  side: { language?: string | null } | null | undefined,
+  sharedLanguage: string,
+): string {
+  const own = side?.language?.trim();
+  return own || sharedLanguage;
+}
 
 export function isDeepgramNova3(model?: string | null): boolean {
   return model === "nova-3" || model === "nova-3-general";
@@ -142,6 +159,140 @@ export function autoDetectProblem(
   if (side.provider === "parakeet_tdt") name = "Parakeet CTC 110M";
   const advice = side.provider === "whisper_cpp" ? AUTO_DETECT_WHISPER_ADVICE : AUTO_DETECT_ADVICE;
   return `${AUTO_DETECT_REFUSAL_PREFIX} ${name}, used for ${label}. ${advice}`;
+}
+
+/**
+ * The 25 languages NVIDIA's model card lists for parakeet-tdt-0.6b-v3
+ * (huggingface.co/nvidia/parakeet-tdt-0.6b-v3): bg hr cs da nl en et fi fr de el
+ * hu it lv lt mt pl pt ro sk sl es sv ru uk.
+ */
+const PARAKEET_V3_LANGUAGES = [
+  "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it",
+  "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk",
+];
+
+/**
+ * The languages Deepgram's Flux Multilingual takes (en es fr de hi ru pt ja it nl).
+ * One list for both sides: `MULTI_LANGUAGES` in src-tauri/src/stt/deepgram_flux.rs is
+ * checked against autoDetectCases.json by a Rust test.
+ */
+export const FLUX_MULTI_LANGUAGES: string[] = cases.fluxMultiLanguages;
+
+/** SenseVoice Small: Chinese, English, Japanese, Korean (and Cantonese, which the app has no entry for). */
+const SENSE_VOICE_LANGUAGES = ["zh", "en", "ja", "ko"];
+
+/** The languages a Sherpa-ONNX model covers; undefined for a model this table doesn't know. */
+function sherpaModelLanguages(model: string): string[] | undefined {
+  if (model.includes("-en-")) return ["en"]; // streaming-zipformer-en-20M, -en-compact
+  if (model === "streaming-zipformer-multi") return ["zh"]; // zh-hans, not English
+  if (model === "sense-voice-small") return SENSE_VOICE_LANGUAGES;
+  return undefined;
+}
+
+const languageCode = (language: string): string => language.split("-")[0].toLowerCase();
+
+export interface SideLanguageHint {
+  /** "warning": the side won't transcribe well. "info": a tip. */
+  tone: "warning" | "info";
+  text: string;
+}
+
+/**
+ * What to tell the person about a side's provider and language together
+ * (the same hints the STT Providers page shows for the shared language), or
+ * null. Auto-detect has its own message, `autoDetectProblem`.
+ */
+export function sideLanguageHint(
+  side: AutoDetectSide,
+  language: string,
+  models: AutoDetectModels,
+): SideLanguageHint | null {
+  if (language === AUTO_STT_LANGUAGE) return null;
+  const model = autoDetectModelFor(side, models);
+  switch (side.provider) {
+    case "parakeet_tdt":
+      if (language === "vi-VN") {
+        return {
+          tone: "warning",
+          text: "The included Parakeet models do not support Vietnamese. Choose a multilingual Whisper model, Deepgram Nova-3, or Azure Speech.",
+        };
+      }
+      if ((model ?? "parakeet-tdt-0.6b-v3-int8").includes("ctc-110m") && !language.toLowerCase().startsWith("en")) {
+        return {
+          tone: "warning",
+          text: "Parakeet CTC 110M is English-only. Choose Parakeet TDT 0.6B v3 for multilingual transcription.",
+        };
+      }
+      if (!PARAKEET_V3_LANGUAGES.includes(languageCode(language))) {
+        return {
+          tone: "warning",
+          text: "Parakeet TDT 0.6B v3 transcribes 25 European languages only. Choose a multilingual Whisper model, Deepgram Nova-3, or Azure Speech for this language.",
+        };
+      }
+      return null;
+    case "deepgram": {
+      // Every language in the app's list is on Deepgram's Nova-3 language page.
+      const inFluxMulti = FLUX_MULTI_LANGUAGES.includes(languageCode(language));
+      if (model === "flux-general-en" && languageCode(language) !== "en") {
+        return {
+          tone: "warning",
+          text: inFluxMulti
+            ? "Flux transcribes English only. Switch to Flux Multilingual or Nova-3 for this language."
+            : "Flux transcribes English only. Switch to Nova-3 for this language.",
+        };
+      }
+      if (model === "flux-general-multi" && !inFluxMulti) {
+        return {
+          tone: "warning",
+          text: language === "uk-UA"
+            ? "Switch from Flux to Nova-3 for Ukrainian transcription."
+            : "Flux Multilingual doesn't cover this language. Switch to Nova-3.",
+        };
+      }
+      if (language === "vi-VN") {
+        return { tone: "info", text: "Select a Deepgram model that supports Vietnamese, such as Nova-3." };
+      }
+      return null;
+    }
+    case "ort_streaming":
+      // Both ORT Streaming models (zipformer-en-20M, zipformer-en-compact) are English.
+      return languageCode(language) === "en"
+        ? null
+        : {
+            tone: "warning",
+            text: "ORT Streaming models are English-only. Choose another provider for this language.",
+          };
+    case "sherpa_onnx": {
+      // What each Sherpa-ONNX model transcribes (model_registry.rs); an unknown model gets no hint.
+      const sherpaModel = side.localModel ?? "streaming-zipformer-en-20M";
+      const covered = sherpaModelLanguages(sherpaModel);
+      const code = languageCode(language);
+      if (!covered || covered.includes(code)) return null;
+      return {
+        tone: "warning",
+        text: SENSE_VOICE_LANGUAGES.includes(code)
+          ? "This Sherpa-ONNX model doesn't cover this language. Choose SenseVoice Small, or another provider for this language."
+          : "This Sherpa-ONNX model doesn't cover this language. Choose another provider for this language.",
+      };
+    }
+    case "whisper_cpp":
+      // The same models that can't detect the language are the English-only ones.
+      return languageCode(language) !== "en" && model && !supportsSTTAutoDetection("whisper_cpp", model)
+        ? {
+            tone: "warning",
+            text: `The ${whisperLabel(whisperModelId(model))} Whisper model is English-only. Choose a multilingual Whisper model (Tiny, Base, Small, Medium or Large v3 Turbo) for this language.`,
+          }
+        : null;
+    case "cartesia":
+      return cartesiaSupportsLanguage(language)
+        ? null
+        : {
+            tone: "warning",
+            text: "Cartesia transcribes only English, French, Hindi, Japanese and Spanish. Choose another provider for this language.",
+          };
+    default:
+      return null;
+  }
 }
 
 const REFUSAL_SENTENCE = new RegExp(

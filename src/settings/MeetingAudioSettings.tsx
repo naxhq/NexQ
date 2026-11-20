@@ -6,7 +6,15 @@ import { listen } from "@tauri-apps/api/event";
 import { useConfigStore } from "../stores/configStore";
 import { useMeetingStore } from "../stores/meetingStore";
 import { skipYouStt } from "../lib/audioMode";
-import { AUTO_STT_LANGUAGE, STT_LANGUAGES, autoDetectProblem } from "../lib/sttLanguages";
+import {
+  AUTO_STT_LANGUAGE,
+  SAME_AS_SHARED_LANGUAGE,
+  STT_LANGUAGES,
+  autoDetectProblem,
+  sideLanguage,
+  sideLanguageHint,
+  type SideLanguageHint,
+} from "../lib/sttLanguages";
 import {
   listAudioDevices,
   setRecordingEnabled,
@@ -227,16 +235,26 @@ export function MeetingAudioSettings() {
   };
 
   const autoModels = { deepgram: deepgramModel, whisperCpp: activeWhisperModel, parakeet: activeParakeetModel };
-  const autoProblemFor = (party: PartyAudioConfig, label: string) =>
-    sttLanguage === AUTO_STT_LANGUAGE
-      ? autoDetectProblem({ provider: party.stt_provider, localModel: party.local_model_id }, autoModels, label)
-      : null;
+  // Each side is judged by its own language: its pick, else the shared one.
+  const youLanguage = sideLanguage(config.you, sttLanguage);
+  const themLanguage = sideLanguage(config.them, sttLanguage);
+  const themLabel = inPerson ? "Room" : "Them";
+  const sharedLanguageLabel = STT_LANGUAGES.find((l) => l.value === sttLanguage)?.label ?? sttLanguage;
+  const sideProblems = (party: PartyAudioConfig, language: string, label: string) => {
+    const side = { provider: party.stt_provider, localModel: party.local_model_id };
+    return {
+      auto: language === AUTO_STT_LANGUAGE ? autoDetectProblem(side, autoModels, label) : null,
+      hint: sideLanguageHint(side, language, autoModels),
+    };
+  };
   // In an in-person meeting only the room microphone ("Them") is transcribed.
-  const youAutoProblem = inPerson ? null : autoProblemFor(config.you, "You");
-  const themAutoProblem = autoProblemFor(config.them, inPerson ? "Room" : "Them");
+  const youProblems = inPerson ? { auto: null, hint: null } : sideProblems(config.you, youLanguage, "You");
+  const themProblems = sideProblems(config.them, themLanguage, themLabel);
+  const youAutoProblem = youProblems.auto;
+  const themAutoProblem = themProblems.auto;
   const unsupportedAutoChannels = [
     youAutoProblem && "You",
-    themAutoProblem && (inPerson ? "Room" : "Them"),
+    themAutoProblem && themLabel,
   ].filter(Boolean) as string[];
 
   useEffect(() => {
@@ -330,9 +348,13 @@ export function MeetingAudioSettings() {
 
   const updateParty = useCallback(
     (party: "you" | "them", updates: Partial<PartyAudioConfig>) => {
+      const merged = { ...config[party], ...updates };
+      // "Default" (the transcription language) is stored as no language at all,
+      // so the config keeps the shape older versions saved.
+      if (!merged.language) delete merged.language;
       const newConfig: MeetingAudioConfig = {
         ...config,
-        [party]: { ...config[party], ...updates },
+        [party]: merged,
         preset_name: null,
       };
       setMeetingAudioConfig(newConfig);
@@ -358,6 +380,11 @@ export function MeetingAudioSettings() {
   function handlePresetSelect(preset: MeetingPreset) {
     const allDevices = [...devices.inputs, ...devices.outputs];
     const resolved = applyPreset(preset, allDevices);
+    // A preset picks devices and providers; the languages people chose stay.
+    for (const side of ["you", "them"] as const) {
+      const language = config[side].language;
+      if (language) resolved[side] = { ...resolved[side], language };
+    }
     setMeetingAudioConfig(resolved);
     showToast(`Preset "${preset.name}" applied`, "success");
   }
@@ -391,7 +418,7 @@ export function MeetingAudioSettings() {
           ))}
         </div>
         <label className="flex shrink-0 items-center gap-2 text-meta font-semibold uppercase tracking-wider text-muted-foreground/60">
-          STT Language
+          Transcription language
           <select
             value={sttLanguage}
             onChange={(e) => setSTTLanguage(e.target.value)}
@@ -434,6 +461,11 @@ export function MeetingAudioSettings() {
           otherPartyProvider={config.them.stt_provider}
           otherPartyLabel="Them"
           autoProblem={youAutoProblem}
+          languageHint={youProblems.hint}
+          // In-person meetings don't transcribe "You": there is nothing to set.
+          showLanguage={!inPerson}
+          sideName="You"
+          sharedLanguageLabel={sharedLanguageLabel}
           onChange={(updates) => updateParty("you", updates)}
         />
         <PartyPanel
@@ -453,6 +485,10 @@ export function MeetingAudioSettings() {
           otherPartyProvider={config.you.stt_provider}
           otherPartyLabel="You"
           autoProblem={themAutoProblem}
+          languageHint={themProblems.hint}
+          showLanguage
+          sideName={themLabel}
+          sharedLanguageLabel={sharedLanguageLabel}
           onChange={(updates) => updateParty("them", updates)}
         />
       </div>
@@ -686,6 +722,10 @@ function PartyPanel({
   otherPartyProvider,
   otherPartyLabel,
   autoProblem,
+  languageHint,
+  showLanguage,
+  sideName,
+  sharedLanguageLabel,
   onChange,
 }: {
   label: string;
@@ -706,6 +746,14 @@ function PartyPanel({
   otherPartyLabel: string;
   /** Why Auto-detect won't work for this side, when it is selected. */
   autoProblem?: string | null;
+  /** What to know about this side's provider and its language, when it isn't Auto-detect. */
+  languageHint?: SideLanguageHint | null;
+  /** Whether this side is transcribed, so its language can be set. */
+  showLanguage?: boolean;
+  /** "You", "Them" or "Room": names the language picker. */
+  sideName: string;
+  /** The shared transcription language's name, which the "Default" option stands for. */
+  sharedLanguageLabel: string;
   onChange: (updates: Partial<PartyAudioConfig>) => void;
 }) {
   const c = PARTY_CONFIG[role];
@@ -856,6 +904,44 @@ function PartyPanel({
             onChange={handleProviderChange}
           />
         </div>
+
+        {/* Language for this side alone; empty follows the shared transcription language */}
+        {showLanguage && (
+          <div>
+            <label
+              htmlFor={`party-language-${role}`}
+              className="mb-1.5 block text-meta font-semibold uppercase tracking-wider text-muted-foreground/60"
+            >
+              Language
+            </label>
+            <select
+              id={`party-language-${role}`}
+              aria-label={`${sideName} language`}
+              value={party.language ?? SAME_AS_SHARED_LANGUAGE}
+              onChange={(e) => onChange({ language: e.target.value || undefined })}
+              className="w-full cursor-pointer rounded-lg border border-border/40 bg-background/60 px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
+            >
+              <option value={SAME_AS_SHARED_LANGUAGE}>Default: {sharedLanguageLabel}</option>
+              {STT_LANGUAGES.map((lang) => (
+                <option key={lang.value} value={lang.value}>
+                  {lang.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* This side's provider can't handle its language well */}
+        {languageHint && (
+          languageHint.tone === "warning" ? (
+            <div role="alert" className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+              <p className="text-meta leading-relaxed text-amber-200/80">{languageHint.text}</p>
+            </div>
+          ) : (
+            <p className="text-meta leading-relaxed text-muted-foreground/70">{languageHint.text}</p>
+          )
+        )}
 
         {/* Auto-detect can't work with this side's provider or model */}
         {autoProblem && (

@@ -317,6 +317,20 @@ mod frame_tests {
 mod tests {
     use super::*;
 
+    /// The list the settings screens warn from (`FLUX_MULTI_LANGUAGES` in sttLanguages.ts).
+    #[test]
+    fn multilingual_languages_match_the_shared_table() {
+        let table: serde_json::Value =
+            serde_json::from_str(include_str!("../../../src/lib/autoDetectCases.json")).unwrap();
+        let shared: Vec<&str> = table["fluxMultiLanguages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|code| code.as_str().unwrap())
+            .collect();
+        assert_eq!(shared, MULTI_LANGUAGES);
+    }
+
     fn config(model: &str) -> DeepgramConfig {
         DeepgramConfig {
             model: model.to_string(),

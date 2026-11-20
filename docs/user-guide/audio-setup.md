@@ -86,6 +86,10 @@ Audio capture and speech recognition are separate. Choose a provider for **each*
 
 The bundled Parakeet TDT export transcribes utterances after a pause, or splits continuous audio at roughly 20 seconds. Model processing adds latency; an active level meter does not imply an immediate transcript.
 
+## Language for Each Side
+
+Each card in **Settings > Audio & Devices** has a **Language** menu. It starts on **Default**, which follows the transcription language; pick another to transcribe that side (You, Them, or Room) in its own language, for example you in English and the others in Spanish. See [A different language for each side](ai-providers.md#a-different-language-for-each-side).
+
 ## Recording
 
 NexQ can record meeting audio alongside the live transcript.
