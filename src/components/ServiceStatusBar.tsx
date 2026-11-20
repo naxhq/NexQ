@@ -21,6 +21,7 @@ import { AgentStatusChip } from "./AgentStatusChip";
 import { StreamLatency } from "./StreamLatency";
 import { claudeTierLabel } from "../settings/ClaudeCliSettings";
 import { openUpdateDialog } from "../hooks/useUpdater";
+import { SideLanguagePicker } from "../overlay/SideLanguagePicker";
 
 // ── Human-friendly provider labels ──
 const LLM_LABELS: Record<string, string> = {
@@ -292,6 +293,7 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
               />
             )}
           </div>
+          {isRecording && compact && <SideLanguagePicker side="them" />}
           <span className="text-xs text-muted-foreground/60">
             {speakerOrder.length > 0
               ? `${speakerOrder.length} speaker${speakerOrder.length !== 1 ? "s" : ""} detected`
@@ -330,6 +332,7 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
             {isRecording && (
               <MuteButton type="mic" muted={mutedYou} onToggle={toggleMuteYou} label="You" />
             )}
+            {isRecording && compact && <SideLanguagePicker side="you" />}
           </div>
 
           <Divider />
@@ -364,6 +367,7 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
             {isRecording && (
               <MuteButton type="speaker" muted={mutedThem} onToggle={toggleMuteThem} label="Them" />
             )}
+            {isRecording && compact && <SideLanguagePicker side="them" />}
           </div>
         </>
       )}

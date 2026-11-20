@@ -10,11 +10,10 @@ import {
   AUTO_STT_LANGUAGE,
   SAME_AS_SHARED_LANGUAGE,
   STT_LANGUAGES,
-  autoDetectProblem,
   sideLanguage,
-  sideLanguageHint,
   type SideLanguageHint,
 } from "../lib/sttLanguages";
+import { sideLanguageProblems, updatePartyConfig } from "../lib/sideLanguage";
 import {
   listAudioDevices,
   setRecordingEnabled,
@@ -240,13 +239,8 @@ export function MeetingAudioSettings() {
   const themLanguage = sideLanguage(config.them, sttLanguage);
   const themLabel = inPerson ? "Room" : "Them";
   const sharedLanguageLabel = STT_LANGUAGES.find((l) => l.value === sttLanguage)?.label ?? sttLanguage;
-  const sideProblems = (party: PartyAudioConfig, language: string, label: string) => {
-    const side = { provider: party.stt_provider, localModel: party.local_model_id };
-    return {
-      auto: language === AUTO_STT_LANGUAGE ? autoDetectProblem(side, autoModels, label) : null,
-      hint: sideLanguageHint(side, language, autoModels),
-    };
-  };
+  const sideProblems = (party: PartyAudioConfig, language: string, label: string) =>
+    sideLanguageProblems(party, language, autoModels, label);
   // In an in-person meeting only the room microphone ("Them") is transcribed.
   const youProblems = inPerson ? { auto: null, hint: null } : sideProblems(config.you, youLanguage, "You");
   const themProblems = sideProblems(config.them, themLanguage, themLabel);
@@ -348,16 +342,8 @@ export function MeetingAudioSettings() {
 
   const updateParty = useCallback(
     (party: "you" | "them", updates: Partial<PartyAudioConfig>) => {
-      const merged = { ...config[party], ...updates };
-      // "Default" (the transcription language) is stored as no language at all,
-      // so the config keeps the shape older versions saved.
-      if (!merged.language) delete merged.language;
-      const newConfig: MeetingAudioConfig = {
-        ...config,
-        [party]: merged,
-        preset_name: null,
-      };
-      setMeetingAudioConfig(newConfig);
+      // Shared with the meeting overlay's language picker.
+      setMeetingAudioConfig(updatePartyConfig(config, party, updates));
     },
     [config, setMeetingAudioConfig]
   );

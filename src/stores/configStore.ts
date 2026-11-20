@@ -1238,6 +1238,12 @@ export const useConfigStore = create<ConfigState>((set) => ({
       store.onKeyChange<string>("activeWhisperModel", (val) => {
         if (val !== undefined) set({ activeWhisperModel: val ?? null });
       });
+      store.onKeyChange<Record<string, string>>("activeModelPerEngine", (val) => {
+        if (val != null) set({ activeModelPerEngine: val });
+      });
+      store.onKeyChange<DeepgramConfig>("deepgramConfig", (val) => {
+        if (val != null) set({ deepgramConfig: { ...DEFAULT_DEEPGRAM_CONFIG, ...val } });
+      });
       store.onKeyChange<STTProviderType>("sttProvider", (val) => {
         if (val != null) set({ sttProvider: val });
       });
