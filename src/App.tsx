@@ -33,7 +33,7 @@ import { DemoPicker } from "./demo/DemoPicker";
 import { DemoBadge } from "./demo/DemoBadge";
 import { SHOW_MEETING_OVERLAY_EVENT, showLauncherWindow, showMeetingOverlay, showOverlayWindow } from "./lib/windows";
 import { logToFile } from "./lib/logger";
-import { emitOverlayMeetingReady, onAudioCaptureStatus, onCaptureWarning, onOverlayMeetingReady, onStartDetectedMeeting, onStealthModeChanged } from "./lib/events";
+import { emitOverlayMeetingReady, onAudioCaptureStatus, onAudioCaptureStopped, onCaptureWarning, onOverlayMeetingReady, onStartDetectedMeeting, onStealthModeChanged } from "./lib/events";
 import { createCaptureStatusHandler } from "./lib/captureStatus";
 
 function App() {
@@ -350,8 +350,10 @@ function App() {
       showToast(message, "warning");
     }).then((unlisten) => unlisteners.push(unlisten));
 
-    const handleCaptureStatus = createCaptureStatusHandler();
-    onAudioCaptureStatus(handleCaptureStatus).then((unlisten) => unlisteners.push(unlisten));
+    const captureStatus = createCaptureStatusHandler();
+    onAudioCaptureStatus(captureStatus.handle).then((unlisten) => unlisteners.push(unlisten));
+    onAudioCaptureStopped(captureStatus.reset).then((unlisten) => unlisteners.push(unlisten));
+    unlisteners.push(captureStatus.reset);
 
     onStealthModeChanged((enabled) => {
       useConfigStore.getState().stealthModeApplied(enabled);

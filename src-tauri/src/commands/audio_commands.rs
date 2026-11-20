@@ -448,6 +448,9 @@ pub async fn stop_capture(app: AppHandle, keep_recording: Option<bool>) -> Resul
         }
     };
 
+    // Every side's thread has stopped: the windows drop what they showed about reconnecting.
+    let _ = app.emit("audio_capture_stopped", ());
+
     // Store recording info for end_meeting to pick up.
     // The frontend calls stopCapture() then endMeeting() in sequence, so
     // we park the info here and end_meeting consumes it.
@@ -1020,6 +1023,8 @@ pub async fn start_capture_per_party(
         }
     }
     if stopped_existing_capture {
+        // The old sides have stopped; the new capture starts with a clean slate.
+        let _ = app.emit("audio_capture_stopped", ());
         // Give WASAPI time to release the previous stream before reopening the devices.
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }

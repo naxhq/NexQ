@@ -140,11 +140,18 @@ describe("a capture side reconnecting mid-meeting", () => {
 
     const switched = "Your microphone disconnected. Using Microphone (Realtek) for now.";
     await deliver({ side: "you", state: "recovered", device: "Microphone (Realtek)", message: switched });
-    const lost = "The other side's audio device disconnected and didn't come back. Pick a device in Audio & Devices to continue.";
+    const lost =
+      "The speakers or headphones you hear the call on disconnected. NexQ reconnects them when they're back, or pick another device in Audio & Devices.";
     await deliver({ side: "them", state: "lost", device: "Speakers", message: lost });
     expect(useToastStore.getState().toasts.map((t) => [t.message, t.type])).toEqual([
       [switched, "info"],
       [lost, "warning"],
     ]);
+
+    // Capture stopping (End, or a device change restarting it) takes the lost toast down.
+    await act(async () => {
+      await listeners.get("audio_capture_stopped")?.({ payload: null });
+    });
+    expect(useToastStore.getState().toasts.find((t) => t.message === lost)?.leaving).toBe(true);
   });
 });

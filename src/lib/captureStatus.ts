@@ -3,8 +3,6 @@ import type { AudioCaptureStatus, CaptureSide } from "./types";
 
 /** A side still reconnecting after this long is shown, so a quiet side isn't a mystery. */
 export const RECONNECT_NOTICE_AFTER_MS = 3000;
-/** At most one "switched to another device" toast per side in this time. */
-export const SWITCH_TOAST_INTERVAL_MS = 10_000;
 
 const reconnectingText: Record<CaptureSide, string> = {
   you: "Reconnecting your microphone…",
@@ -15,14 +13,20 @@ const backText: Record<CaptureSide, string> = {
   them: "The other side's audio is back.",
 };
 
+const SIDES: CaptureSide[] = ["you", "them"];
+const stickyKey = (side: CaptureSide) => `capture-${side}`;
+const switchKey = (side: CaptureSide) => `capture-switch-${side}`;
+
 export interface CaptureToasts {
-  show: (message: string, type: ToastType) => void;
+  /** A toast that goes by itself, replacing the one with the same key. */
+  show: (key: string, message: string, type: ToastType) => void;
+  /** A toast that stays until it is replaced or dismissed by its key. */
   sticky: (key: string, message: string, type: ToastType) => void;
   dismiss: (key: string) => void;
 }
 
 const storeToasts: CaptureToasts = {
-  show: (message, type) => useToastStore.getState().addToast(message, type),
+  show: (key, message, type) => useToastStore.getState().setKeyedToast(key, message, type),
   sticky: (key, message, type) => useToastStore.getState().setStickyToast(key, message, type),
   dismiss: (key) => useToastStore.getState().dismissByKey(key),
 };
@@ -31,24 +35,24 @@ const storeToasts: CaptureToasts = {
  * Turns `audio_capture_status` events into toasts without ever interrupting a
  * live meeting for nothing:
  * - a reconnect to the same device is silent, unless the side was reconnecting
- *   for more than 3 s (then a reconnecting notice is up, and a short "back" replaces it);
- * - a switch to another device shows once per side every 10 s;
+ *   for more than 3 s (then a reconnecting note is up, and a short "back" replaces it);
+ * - a switch to another device shows its message; a later one for the same side
+ *   replaces it in place, so what is on screen is always the latest;
  * - a side that is lost, or reconnecting for a while, keeps one toast up until
- *   its recovery arrives; "lost" and what follows it are always shown.
+ *   its recovery arrives.
+ * `reset` forgets everything and takes the toasts down: capture has stopped.
  */
 export function createCaptureStatusHandler(toasts: CaptureToasts = storeToasts) {
-  const lastSwitch: Partial<Record<CaptureSide, number>> = {};
   const timers: Partial<Record<CaptureSide, ReturnType<typeof setTimeout>>> = {};
   const wasLost: Partial<Record<CaptureSide, boolean>> = {};
   const noticeUp: Partial<Record<CaptureSide, boolean>> = {};
-  const key = (side: CaptureSide) => `capture-${side}`;
 
   const clearTimer = (side: CaptureSide) => {
     clearTimeout(timers[side]);
     delete timers[side];
   };
 
-  return (status: AudioCaptureStatus) => {
+  const handle = (status: AudioCaptureStatus) => {
     const { side } = status;
     switch (status.state) {
       case "recovering": {
@@ -56,7 +60,7 @@ export function createCaptureStatusHandler(toasts: CaptureToasts = storeToasts) 
         timers[side] = setTimeout(() => {
           delete timers[side];
           noticeUp[side] = true;
-          toasts.sticky(key(side), reconnectingText[side], "warning");
+          toasts.sticky(stickyKey(side), reconnectingText[side], "warning");
         }, RECONNECT_NOTICE_AFTER_MS);
         return;
       }
@@ -64,28 +68,33 @@ export function createCaptureStatusHandler(toasts: CaptureToasts = storeToasts) 
         clearTimer(side);
         wasLost[side] = true;
         noticeUp[side] = true;
-        toasts.sticky(key(side), status.message, "warning");
+        toasts.sticky(stickyKey(side), status.message, "warning");
         return;
       }
       case "recovered": {
         clearTimer(side);
         const hadNotice = noticeUp[side] === true;
-        const afterLost = wasLost[side] === true;
-        toasts.dismiss(key(side));
+        toasts.dismiss(stickyKey(side));
         delete noticeUp[side];
         delete wasLost[side];
-        if (!status.message) {
-          if (hadNotice) toasts.show(backText[side], "info");
-          return;
-        }
-        const now = Date.now();
-        const last = lastSwitch[side];
-        if (afterLost || last === undefined || now - last >= SWITCH_TOAST_INTERVAL_MS) {
-          lastSwitch[side] = now;
-          toasts.show(status.message, "info");
+        if (status.message) {
+          toasts.show(switchKey(side), status.message, "info");
+        } else if (hadNotice) {
+          toasts.show(switchKey(side), backText[side], "info");
         }
         return;
       }
     }
   };
+
+  const reset = () => {
+    for (const side of SIDES) {
+      clearTimer(side);
+      delete wasLost[side];
+      delete noticeUp[side];
+      toasts.dismiss(stickyKey(side));
+    }
+  };
+
+  return { handle, reset };
 }

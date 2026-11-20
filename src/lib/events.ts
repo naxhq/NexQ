@@ -358,6 +358,11 @@ export function onAudioCaptureStatus(handler: (status: AudioCaptureStatus) => vo
   return listen<AudioCaptureStatus>("audio_capture_status", (e) => handler(e.payload));
 }
 
+/** Every capture side has stopped (End, or a device change restarting capture): drop what was shown about reconnecting. */
+export function onAudioCaptureStopped(handler: () => void): Promise<UnlistenFn> {
+  return listen("audio_capture_stopped", () => handler());
+}
+
 /** Another app started a call (the meeting prompt shows it). */
 export function onMeetingDetected(handler: (info: MeetingPromptInfo) => void): Promise<UnlistenFn> {
   return listen<MeetingPromptInfo>("meeting_detected", (e) => handler(e.payload));

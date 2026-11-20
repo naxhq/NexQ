@@ -236,7 +236,7 @@ impl AudioCaptureManager {
                 SideSpec {
                     kind: CaptureKind::Output,
                     device_id: system_device_id.to_string(),
-                    opener: opener,
+                    opener,
                     clock: SystemClock,
                     counters: Arc::clone(&self.counters.1),
                     sink: Arc::clone(&on_status),
@@ -308,9 +308,9 @@ impl AudioCaptureManager {
         };
         let (side, started) = capture_supervisor::spawn_side(
             SideSpec {
-                kind: kind,
+                kind,
                 device_id: device_id.to_string(),
-                opener: opener,
+                opener,
                 clock: SystemClock,
                 counters: Arc::clone(counters),
                 sink: Arc::clone(on_status),
@@ -842,7 +842,7 @@ mod tests {
         let errors = tx.clone();
         let (side, started) = spawn_side(
             SideSpec {
-                kind: kind,
+                kind,
                 device_id: device.to_string(),
                 opener: rig.opener(kind.side(), device),
                 clock: SystemClock,
@@ -1013,7 +1013,7 @@ mod tests {
             SideSpec {
                 kind: CaptureKind::Mic,
                 device_id: "default".to_string(),
-                opener: opener,
+                opener,
                 clock: SystemClock,
                 counters: Arc::clone(&counters),
                 sink: Arc::new(move |s: capture_supervisor::CaptureStatus| sink_statuses.lock().unwrap().push(s.state)),

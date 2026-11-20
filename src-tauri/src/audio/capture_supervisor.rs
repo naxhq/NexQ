@@ -583,7 +583,12 @@ impl<O: CaptureOpener, C: Clock> Supervisor<O, C> {
         self.phase = Phase::Stopped;
     }
 
+    /// Report a status, unless the side is stopping: what is still queued from
+    /// before Stop must not show up after it.
     fn emit(&self, state: CaptureState, device: String, message: String) {
+        if self.stopping() {
+            return;
+        }
         (self.sink)(CaptureStatus { side: self.kind.side(), state, device, message });
     }
 }
@@ -1034,7 +1039,7 @@ pub(crate) mod tests {
 
     /// (e)
     #[test]
-    fn when_nothing_opens_it_backs_off_reports_lost_once_and_stops() {
+    fn when_nothing_opens_it_backs_off_reports_lost_once_and_keeps_probing() {
         let rig = Rig::new(&["Headset", "Realtek"]);
         let mut sup = rig.supervisor(CaptureKind::Mic, "Headset", "Realtek");
         sup.start().unwrap();
@@ -1191,80 +1196,97 @@ pub(crate) mod tests {
         assert!(matches!(sup.phase, Phase::Pending { .. }), "still trying");
     }
 
-    /// A first open that fails after start gave up waiting is an outage, not a dead side.
-    #[test]
-    fn a_late_start_failure_is_retried() {
-        struct SlowThenFine(usize);
-        impl CaptureOpener for SlowThenFine {
-            type Stream = ();
-            fn open(&mut self, _: &DeviceChoice, _: u64) -> Result<Opened<()>, String> {
-                self.0 += 1;
-                if self.0 == 1 {
-                    std::thread::sleep(Duration::from_millis(200));
-                    return Err("busy".to_string());
-                }
-                Ok(Opened { stream: (), device: "Mic".into() })
+    /// An opener whose first open waits until the test lets it go, so "start
+    /// stopped waiting" doesn't depend on timing.
+    struct Gated {
+        gate: Option<std::sync::mpsc::Receiver<()>>,
+        outcome: fn(&DeviceChoice) -> Result<Opened<()>, String>,
+    }
+
+    impl CaptureOpener for Gated {
+        type Stream = ();
+        fn open(&mut self, choice: &DeviceChoice, _: u64) -> Result<Opened<()>, String> {
+            if let Some(gate) = self.gate.take() {
+                let _ = gate.recv();
             }
+            (self.outcome)(choice)
         }
-        let rig = Rig::new(&[]);
-        let (tx, rx) = side_channel();
+    }
+
+    fn spawn_gated(
+        rig: &Rig,
+        kind: CaptureKind,
+        device_id: &str,
+        outcome: fn(&DeviceChoice) -> Result<Opened<()>, String>,
+    ) -> (SideHandle, std::sync::mpsc::Sender<()>) {
+        let (gate_tx, gate_rx) = std::sync::mpsc::channel();
         let (handle, started) = spawn_side(
             SideSpec {
-                kind: CaptureKind::InputThem,
-                device_id: "Mic".to_string(),
-                opener: SlowThenFine(0),
+                kind,
+                device_id: device_id.to_string(),
+                opener: Gated { gate: Some(gate_rx), outcome },
                 clock: SystemClock,
                 counters: Arc::clone(&rig.counters),
                 sink: rig.sink(),
-                start_timeout: Duration::from_millis(50),
+                start_timeout: Duration::from_millis(30),
             },
-            (tx, rx),
+            side_channel(),
         )
         .unwrap();
         assert!(started.is_none(), "still opening when start stopped waiting");
-        wait_for(|| rig.states().contains(&CaptureState::Lost));
-        assert_eq!(rig.states(), vec![CaptureState::Lost], "lost, once, as soon as the open failed");
-        handle.join();
+        (handle, gate_tx)
     }
 
     fn wait_for(done: impl Fn() -> bool) {
         let deadline = Instant::now() + Duration::from_secs(10);
         while !done() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(20));
+            std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    /// M2: the first open fails after start stopped waiting: lost, once, at once.
+    #[test]
+    fn a_late_start_failure_is_reported_lost_once() {
+        let rig = Rig::new(&[]);
+        let (handle, release) =
+            spawn_gated(&rig, CaptureKind::InputThem, "Mic", |_| Err("busy".to_string()));
+        release.send(()).unwrap();
+        wait_for(|| rig.states().contains(&CaptureState::Lost));
+        assert_eq!(rig.states(), vec![CaptureState::Lost]);
+        handle.join();
+        assert_eq!(rig.states(), vec![CaptureState::Lost], "Stop adds nothing");
+    }
+
+    /// M2: and the side that is lost from the start retries, and is told when it is back.
+    #[test]
+    fn a_late_start_failure_is_retried() {
+        let rig = Rig::new(&[]);
+        let mut sup = rig.supervisor(CaptureKind::InputThem, "Mic", "Realtek");
+        sup.begin_lost_at_start();
+        assert_eq!(rig.states(), vec![CaptureState::Lost]);
+        rig.run_for(&mut sup, Duration::from_secs(12)); // two probes fail quietly
+        assert_eq!(rig.states(), vec![CaptureState::Lost]);
+
+        rig.present.lock().unwrap().push("Mic".into());
+        rig.run_for(&mut sup, Duration::from_secs(6));
+        let statuses = rig.statuses.lock().unwrap();
+        assert_eq!(statuses.len(), 2);
+        assert_eq!(statuses[1].state, CaptureState::Recovered);
+        assert_eq!(statuses[1].message, "Mic is back. Capturing the other side again.");
+        drop(statuses);
+        assert_eq!(rig.live(CaptureSide::Them), 1);
     }
 
     /// M2: the first open ends on the default device after start stopped
     /// waiting: it is told like a reconnect.
     #[test]
     fn a_late_start_on_the_default_device_is_announced() {
-        struct SlowStandIn;
-        impl CaptureOpener for SlowStandIn {
-            type Stream = ();
-            fn open(&mut self, choice: &DeviceChoice, _: u64) -> Result<Opened<()>, String> {
-                std::thread::sleep(Duration::from_millis(150));
-                match choice {
-                    DeviceChoice::Chosen(_) => Err("not found".to_string()),
-                    DeviceChoice::Default => Ok(Opened { stream: (), device: "Microphone (Realtek)".into() }),
-                }
-            }
-        }
         let rig = Rig::new(&[]);
-        let (tx, rx) = side_channel();
-        let (handle, started) = spawn_side(
-            SideSpec {
-                kind: CaptureKind::Mic,
-                device_id: "Headset".to_string(),
-                opener: SlowStandIn,
-                clock: SystemClock,
-                counters: Arc::clone(&rig.counters),
-                sink: rig.sink(),
-                start_timeout: Duration::from_millis(50),
-            },
-            (tx, rx),
-        )
-        .unwrap();
-        assert!(started.is_none());
+        let (handle, release) = spawn_gated(&rig, CaptureKind::Mic, "Headset", |choice| match choice {
+            DeviceChoice::Chosen(_) => Err("not found".to_string()),
+            DeviceChoice::Default => Ok(Opened { stream: (), device: "Microphone (Realtek)".into() }),
+        });
+        release.send(()).unwrap();
         wait_for(|| rig.states().contains(&CaptureState::Recovered));
         let statuses = rig.statuses.lock().unwrap();
         assert_eq!(statuses.len(), 1);
@@ -1277,32 +1299,27 @@ pub(crate) mod tests {
     /// M2: a late first open on the chosen device itself says nothing.
     #[test]
     fn a_late_start_on_the_chosen_device_says_nothing() {
-        struct Slow;
-        impl CaptureOpener for Slow {
-            type Stream = ();
-            fn open(&mut self, _: &DeviceChoice, _: u64) -> Result<Opened<()>, String> {
-                std::thread::sleep(Duration::from_millis(150));
-                Ok(Opened { stream: (), device: "Headset".into() })
-            }
-        }
         let rig = Rig::new(&[]);
-        let (tx, rx) = side_channel();
-        let (handle, started) = spawn_side(
-            SideSpec {
-                kind: CaptureKind::Mic,
-                device_id: "Headset".to_string(),
-                opener: Slow,
-                clock: SystemClock,
-                counters: Arc::clone(&rig.counters),
-                sink: rig.sink(),
-                start_timeout: Duration::from_millis(50),
-            },
-            (tx, rx),
-        )
-        .unwrap();
-        assert!(started.is_none());
-        std::thread::sleep(Duration::from_millis(400));
-        handle.join();
+        let mut sup = rig.supervisor(CaptureKind::Mic, "Headset", "Realtek");
+        sup.announce_late_start(&Started { device: "Headset".into(), replaced: None });
+        assert!(rig.statuses.lock().unwrap().is_empty());
+        sup.announce_late_start(&Started { device: "Realtek".into(), replaced: Some("gone".into()) });
+        assert_eq!(rig.states(), vec![CaptureState::Recovered]);
+    }
+
+    /// B2: an error queued before Stop reports nothing after it.
+    #[test]
+    fn a_stream_error_queued_before_stop_emits_nothing() {
+        let rig = Rig::new(&["Realtek"]);
+        let mut sup = rig.supervisor(CaptureKind::Mic, "default", "Realtek");
+        sup.start().unwrap();
+        sup.stop_requested.store(true, Ordering::SeqCst);
+        let generation = sup.generation;
+        sup.on_message(SideMessage::StreamError {
+            side: CaptureSide::You,
+            generation,
+            error: err(cpal::ErrorKind::StreamInvalidated),
+        });
         assert!(rig.statuses.lock().unwrap().is_empty());
     }
 
@@ -1581,7 +1598,7 @@ pub(crate) mod tests {
             SideSpec {
                 kind: CaptureKind::Mic,
                 device_id: "default".to_string(),
-                opener: opener,
+                opener,
                 clock: SystemClock,
                 counters: Arc::clone(&rig.counters),
                 sink: rig.sink(),
