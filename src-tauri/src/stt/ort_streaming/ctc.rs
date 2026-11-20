@@ -50,10 +50,22 @@ fn decode_tokens(ids: &[i64], vocab: &HashMap<i64, String>) -> String {
     text.trim().to_owned()
 }
 
+/// The blank class id for a CTC head with `num_classes` outputs. Sherpa-onnx
+/// reads it from the token table (`<blk>`, else `<blank>`, else `<eps>`); the
+/// last class is the fallback, since NeMo appends the blank after the vocabulary.
+fn blank_id(vocab: &HashMap<i64, String>, num_classes: usize) -> Result<usize, String> {
+    let blank = ["<blk>", "<blank>", "<eps>"].iter()
+        .find_map(|name| vocab.iter().find(|(_, piece)| piece.as_str() == *name).map(|(id, _)| *id))
+        .unwrap_or(num_classes as i64 - 1);
+    if blank < 0 || blank as usize >= num_classes {
+        return Err(format!("NeMo CTC blank id {blank} is outside the model's {num_classes} output classes"));
+    }
+    Ok(blank as usize)
+}
+
 fn recognize(
     encoder: &mut Session, features: &Features, samples: &[f32],
-    vocab: &HashMap<i64, String>, vocab_size: usize, blank: usize,
-    subsampling_factor: usize, normalize: bool,
+    vocab: &HashMap<i64, String>, subsampling_factor: usize, normalize: bool,
 ) -> Result<String, String> {
     let (frames, mel) = features.extract(samples, normalize);
     if frames == 0 { return Ok(String::new()); }
@@ -62,12 +74,17 @@ fn recognize(
     let length_tensor = TensorRef::from_array_view(([1], &lengths[..])).map_err(|e| e.to_string())?;
     let outputs = encoder.run(ort::inputs![feature_tensor, length_tensor]).map_err(|e| format!("NeMo CTC encoder: {e}"))?;
     let (shape, data) = outputs[0].try_extract_tensor::<f32>().map_err(|e| e.to_string())?;
-    if shape.len() != 3 || shape[0] != 1 || shape[2] as usize != vocab_size {
-        return Err(format!("Unexpected NeMo CTC output shape {shape:?} for vocab_size {vocab_size}"));
+    if shape.len() != 3 || shape[0] != 1 || shape[2] < 1 {
+        return Err(format!("Unexpected NeMo CTC output shape {shape:?}"));
     }
+    // The class count comes from the output itself: the metadata `vocab_size`
+    // excludes the blank in hybrid TDT/CTC exports (1024 vs. a 1025-wide head)
+    // but includes it in CTC-only exports.
+    let num_classes = shape[2] as usize;
+    let blank = blank_id(vocab, num_classes)?;
     let num_frames = shape[1] as usize;
     let valid = (frames / subsampling_factor.max(1)).min(num_frames);
-    let tokens = greedy_decode(data, valid, vocab_size, blank);
+    let tokens = greedy_decode(data, valid, num_classes, blank);
     Ok(decode_tokens(&tokens, vocab))
 }
 
@@ -85,7 +102,6 @@ pub(super) fn run(
     debug: &impl Fn(&str, &str),
 ) -> Result<(), String> {
     let metadata = encoder.metadata().map_err(|e| e.to_string())?;
-    let vocab_size: usize = metadata.custom("vocab_size").ok_or("NeMo CTC encoder missing vocab_size")?.parse().map_err(|e| format!("NeMo CTC vocab_size: {e}"))?;
     let subsampling_factor: usize = metadata.custom("subsampling_factor").ok_or("NeMo CTC encoder missing subsampling_factor")?.parse().map_err(|e| format!("NeMo CTC subsampling_factor: {e}"))?;
     // "per_feature" is the normalization every published Parakeet CTC export
     // uses; an empty/"NA" value (GigaAM-style exports) means raw features.
@@ -95,9 +111,6 @@ pub(super) fn run(
         return Err(format!("Unsupported NeMo CTC normalize_type {normalize_type:?}"));
     }
     drop(metadata);
-    // The model's full output width is vocab_size (real tokens plus blank);
-    // the blank class is the last index, vocab_size - 1.
-    let blank = vocab_size.checked_sub(1).ok_or("NeMo CTC vocab_size is 0")?;
     debug("info", &format!(
         "NeMo CTC: offline 80-bin Slaney mel encoder, subsampling {subsampling_factor}, normalize_type={normalize_type:?}"
     ));
@@ -144,7 +157,7 @@ pub(super) fn run(
         }
         if flush && !samples.is_empty() {
             let text = if heard {
-                recognize(encoder, &features, &samples, vocab, vocab_size, blank, subsampling_factor, normalize)?
+                recognize(encoder, &features, &samples, vocab, subsampling_factor, normalize)?
             } else {
                 String::new()
             };
@@ -204,5 +217,46 @@ mod tests {
     fn sentencepiece_preserves_case_spaces_and_unicode() {
         let vocab = HashMap::from([(0, "<unk>".into()), (1, "▁Hello".into()), (2, ",".into()), (3, "▁café".into()), (4, "!".into())]);
         assert_eq!(decode_tokens(&[1, 2, 3, 4], &vocab), "Hello, café!");
+    }
+
+    #[test]
+    fn blank_comes_from_the_blk_token_for_a_1025_wide_head() {
+        // Hybrid TDT/CTC 110M export: 1024 vocabulary entries, `<blk>` at id 1024,
+        // a 1025-wide CTC head (metadata vocab_size is 1024, so it is not used).
+        let mut vocab: HashMap<i64, String> = (0..1024).map(|i| (i, format!("t{i}"))).collect();
+        vocab.insert(1024, "<blk>".into());
+        assert_eq!(blank_id(&vocab, 1025), Ok(1024));
+        // `<blk>` wins over the last-class fallback.
+        vocab.insert(3, "<blk>".into());
+        vocab.remove(&1024);
+        assert_eq!(blank_id(&vocab, 1025), Ok(3));
+    }
+
+    #[test]
+    fn blank_falls_back_through_other_names_then_the_last_class() {
+        let vocab = HashMap::from([(0, "a".into()), (1, "<blank>".into()), (2, "<eps>".into())]);
+        assert_eq!(blank_id(&vocab, 3), Ok(1));
+        let vocab = HashMap::from([(0, "a".into()), (2, "<eps>".into())]);
+        assert_eq!(blank_id(&vocab, 3), Ok(2));
+        let vocab = HashMap::from([(0, "a".into()), (1, "b".into())]);
+        assert_eq!(blank_id(&vocab, 3), Ok(2));
+    }
+
+    #[test]
+    fn blank_outside_the_output_classes_is_an_error() {
+        let vocab = HashMap::from([(0, "a".into()), (5, "<blk>".into())]);
+        assert!(blank_id(&vocab, 3).is_err());
+    }
+
+    #[test]
+    fn greedy_decode_uses_the_head_width_not_the_vocab_size() {
+        // 1025-wide frames, blank 1024: token 1023 (the old "blank") must survive.
+        let mut log_probs = Vec::new();
+        for id in [1023usize, 1024, 5] {
+            let mut frame = vec![0.0f32; 1025];
+            frame[id] = 10.0;
+            log_probs.extend(frame);
+        }
+        assert_eq!(greedy_decode(&log_probs, 3, 1025, 1024), vec![1023, 5]);
     }
 }
