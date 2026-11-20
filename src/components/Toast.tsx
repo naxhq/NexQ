@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { toastDurationMs, useToastStore } from "../stores/toastStore";
+import { TOAST_EXIT_MS, toastDurationMs, useToastStore } from "../stores/toastStore";
 import type { Toast as ToastData } from "../stores/toastStore";
 import { CheckCircle, XCircle, Info, AlertTriangle, X } from "lucide-react";
 
@@ -62,23 +62,23 @@ function ToastItem({ toast, onDismiss }: { toast: ToastData; onDismiss: () => vo
 
   // Auto-dismiss with exit animation (component-driven)
   useEffect(() => {
-    if (paused) return;
+    if (paused || toast.sticky || toast.leaving) return;
     const startedAt = Date.now();
     timerRef.current = setTimeout(() => {
       setExiting(true);
-      setTimeout(onDismiss, 280);
+      setTimeout(onDismiss, TOAST_EXIT_MS);
     }, Math.max(0, remainingRef.current));
     return () => {
       clearTimeout(timerRef.current);
       remainingRef.current -= Date.now() - startedAt;
     };
-  }, [onDismiss, paused]);
+  }, [onDismiss, paused, toast.sticky, toast.leaving]);
 
   const handleDismiss = useCallback(() => {
     if (exiting) return;
     clearTimeout(timerRef.current);
     setExiting(true);
-    setTimeout(onDismiss, 280);
+    setTimeout(onDismiss, TOAST_EXIT_MS);
   }, [exiting, onDismiss]);
 
   return (
@@ -92,7 +92,7 @@ function ToastItem({ toast, onDismiss }: { toast: ToastData; onDismiss: () => vo
         bg-card/90 backdrop-blur-md
         px-4 py-3
         shadow-xl shadow-black/10
-        ${exiting ? "toast-exit" : "toast-enter"}
+        ${exiting || toast.leaving ? "toast-exit" : "toast-enter"}
       `}
       style={{ maxWidth: 400, minWidth: 280 }}
       onMouseEnter={() => setHovered(true)}
@@ -115,19 +115,25 @@ function ToastItem({ toast, onDismiss }: { toast: ToastData; onDismiss: () => vo
       {/* Dismiss button — visible on hover or always on touch */}
       <button
         onClick={handleDismiss}
-        className="shrink-0 rounded-lg p-1 text-muted-foreground/30 transition-all duration-150 hover:bg-accent hover:text-foreground/70 group-hover:text-muted-foreground/60"
+        className={`shrink-0 rounded-lg p-1 transition-all duration-150 hover:bg-accent ${
+          toast.sticky
+            ? "text-foreground/70 hover:text-foreground"
+            : "text-muted-foreground/30 hover:text-foreground/70 group-hover:text-muted-foreground/60"
+        }`}
         aria-label="Dismiss notification"
       >
         <X className="h-3.5 w-3.5" />
       </button>
 
-      {/* Progress bar — visual countdown to auto-dismiss */}
-      <div className="absolute bottom-0 left-0 right-0 h-[2px] overflow-hidden">
-        <div
-          className={`h-full ${progressMap[toast.type]} toast-progress-bar`}
-          style={{ animationDuration: `${duration}ms`, animationPlayState: paused ? "paused" : "running" }}
-        />
-      </div>
+      {/* Progress bar — visual countdown to auto-dismiss (a sticky toast has none) */}
+      {!toast.sticky && (
+        <div className="absolute bottom-0 left-0 right-0 h-[2px] overflow-hidden">
+          <div
+            className={`h-full ${progressMap[toast.type]} toast-progress-bar`}
+            style={{ animationDuration: `${duration}ms`, animationPlayState: paused ? "paused" : "running" }}
+          />
+        </div>
+      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { toastDurationMs, useToastStore } from "../stores/toastStore";
+import { TOAST_EXIT_MS, toastDurationMs, useToastStore } from "../stores/toastStore";
 import { ToastContainer } from "./Toast";
 
 beforeEach(() => {
@@ -21,6 +21,27 @@ describe("toastDurationMs", () => {
 });
 
 describe("ToastContainer", () => {
+  it("keeps a sticky toast until its key is dismissed, and replaces one with the same key", async () => {
+    render(<ToastContainer />);
+    const { setStickyToast, dismissByKey } = useToastStore.getState();
+    act(() => setStickyToast("capture-you", "Reconnecting your microphone…", "warning"));
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(screen.getByText("Reconnecting your microphone…")).toBeInTheDocument();
+
+    act(() => setStickyToast("capture-you", "Your microphone disconnected.", "warning"));
+    // The replaced toast plays its exit, then leaves.
+    expect(screen.getByText("Reconnecting your microphone…").closest("[role=alert]")).toHaveClass("toast-exit");
+    await act(() => vi.advanceTimersByTimeAsync(TOAST_EXIT_MS));
+    expect(screen.queryByText("Reconnecting your microphone…")).toBeNull();
+    expect(screen.getByText("Your microphone disconnected.")).toBeInTheDocument();
+    expect(useToastStore.getState().toasts).toHaveLength(1);
+
+    act(() => dismissByKey("capture-you"));
+    expect(screen.getByText("Your microphone disconnected.").closest("[role=alert]")).toHaveClass("toast-exit");
+    await act(() => vi.advanceTimersByTimeAsync(TOAST_EXIT_MS));
+    expect(screen.queryByText("Your microphone disconnected.")).toBeNull();
+  });
+
   const show = (message: string) => act(() => useToastStore.getState().addToast(message, "error"));
 
   it("keeps a long message on screen longer than a short one", async () => {

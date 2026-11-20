@@ -551,6 +551,24 @@ export interface MeetingAudioConfig {
   noise_preset?: string;
 }
 
+/** Which side of a meeting a capture belongs to (`audio_capture_status`). */
+export type CaptureSide = "you" | "them";
+
+/** Rust `CaptureState`: reconnecting, back (maybe on another device), or gone for now (it keeps trying). */
+export type CaptureState = "recovering" | "recovered" | "lost";
+
+/**
+ * A capture side lost its device mid-meeting and reconnects on its own
+ * (Rust `CaptureStatus`, event `audio_capture_status`). `message` is empty
+ * when there is nothing to tell the user.
+ */
+export interface AudioCaptureStatus {
+  side: CaptureSide;
+  state: CaptureState;
+  device: string;
+  message: string;
+}
+
 export interface AudioSessionInfo {
   pid: number;
   process_name: string;

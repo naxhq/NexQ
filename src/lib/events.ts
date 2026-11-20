@@ -8,6 +8,7 @@ import type {
   MeetingPromptInfo,
   AgentSessionStatus,
   AgentFallbackEvent,
+  AudioCaptureStatus,
   AudioLevelEvent,
   BatchTranslationProgress,
   ModelDownloadProgress,
@@ -350,6 +351,16 @@ export function onAgentFallback(
 /** Audio capture started with the mic only: the other party couldn't be captured. */
 export function onCaptureWarning(handler: (message: string) => void): Promise<UnlistenFn> {
   return listen<string>("capture_warning", (e) => handler(e.payload));
+}
+
+/** A capture side is reconnecting its device, got it back, or gave up. */
+export function onAudioCaptureStatus(handler: (status: AudioCaptureStatus) => void): Promise<UnlistenFn> {
+  return listen<AudioCaptureStatus>("audio_capture_status", (e) => handler(e.payload));
+}
+
+/** Every capture side has stopped (End, or a device change restarting capture): drop what was shown about reconnecting. */
+export function onAudioCaptureStopped(handler: () => void): Promise<UnlistenFn> {
+  return listen("audio_capture_stopped", () => handler());
 }
 
 /** Another app started a call (the meeting prompt shows it). */

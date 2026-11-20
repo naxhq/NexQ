@@ -27,10 +27,13 @@ extern "C" {
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
 }
 
+/// `on_failure` runs when the tap ends with an error, a failed start included
+/// (not when `stop` ends it).
 pub(super) fn start(
     tx: mpsc::Sender<AudioChunk>,
     stop: Arc<AtomicBool>,
     device_name: Option<String>,
+    on_failure: Box<dyn FnOnce(String) + Send>,
 ) -> Result<std::thread::JoinHandle<()>, String> {
     let (ready_tx, ready_rx) = sync_mpsc::sync_channel(1);
     let handle = std::thread::Builder::new()
@@ -40,6 +43,7 @@ pub(super) fn start(
                 if let Err(error) = run(tx, stop, device_name, &ready_tx) {
                     let _ = ready_tx.send(Err(error.clone()));
                     log::error!("System audio capture failed: {error}");
+                    on_failure(error);
                 }
             });
         })

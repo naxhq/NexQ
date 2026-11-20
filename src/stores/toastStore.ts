@@ -7,7 +7,15 @@ export interface Toast {
   message: string;
   type: ToastType;
   createdAt: number;
+  /** A sticky toast stays until it is replaced or dismissed by its `key`, or the user closes it. */
+  key?: string;
+  sticky?: boolean;
+  /** Replaced or dismissed by key: playing its exit animation, about to be removed. */
+  leaving?: boolean;
 }
+
+/** How long a toast's exit animation takes before it leaves the store. */
+export const TOAST_EXIT_MS = 280;
 
 /** How long a toast stays: 4 s plus about 60 ms per character, at most 10 s, so a long message can be read. */
 export function toastDurationMs(message: string): number {
@@ -17,10 +25,24 @@ export function toastDurationMs(message: string): number {
 interface ToastState {
   toasts: Toast[];
   addToast: (message: string, type: ToastType) => void;
+  /** Show a toast that stays, replacing the one with the same key. */
+  setStickyToast: (key: string, message: string, type: ToastType) => void;
+  /** Show a toast that goes by itself, replacing the one with the same key in place. */
+  setKeyedToast: (key: string, message: string, type: ToastType) => void;
+  dismissByKey: (key: string) => void;
+  putKeyed: (key: string, message: string, type: ToastType, sticky: boolean) => void;
   removeToast: (id: string) => void;
 }
 
-export const useToastStore = create<ToastState>((set) => ({
+/** Remove toasts once their exit animation has played. */
+function retire(ids: string[]) {
+  if (ids.length === 0) return;
+  setTimeout(() => {
+    useToastStore.setState((state) => ({ toasts: state.toasts.filter((t) => !ids.includes(t.id)) }));
+  }, TOAST_EXIT_MS);
+}
+
+export const useToastStore = create<ToastState>((set, get) => ({
   toasts: [],
 
   addToast: (message, type) => {
@@ -36,6 +58,25 @@ export const useToastStore = create<ToastState>((set) => ({
     set((state) => ({
       toasts: [...state.toasts, toast],
     }));
+  },
+
+  setStickyToast: (key, message, type) => get().putKeyed(key, message, type, true),
+  setKeyedToast: (key, message, type) => get().putKeyed(key, message, type, false),
+
+  putKeyed: (key, message, type, sticky) => {
+    const toast: Toast = { id: crypto.randomUUID(), message, type, createdAt: Date.now(), key, sticky };
+    const old = get().toasts.filter((t) => t.key === key && !t.leaving);
+    set((state) => ({
+      toasts: [...state.toasts.map((t) => (t.key === key ? { ...t, leaving: true } : t)), toast],
+    }));
+    retire(old.map((t) => t.id));
+  },
+
+  dismissByKey: (key) => {
+    const old = get().toasts.filter((t) => t.key === key && !t.leaving);
+    if (old.length === 0) return;
+    set((state) => ({ toasts: state.toasts.map((t) => (t.key === key ? { ...t, leaving: true } : t)) }));
+    retire(old.map((t) => t.id));
   },
 
   removeToast: (id) =>
