@@ -1,3 +1,9 @@
+## [2.41.1](https://github.com/naxhq/NexQ/compare/v2.41.0...v2.41.1) (2026-11-20)
+
+
+### Bug Fixes
+
+* **sources:** a Check's answer is kept after a restart ([#130](https://github.com/naxhq/NexQ/issues/130)) ([521bc51](https://github.com/naxhq/NexQ/commit/521bc515e3e0977f69622bae518fc319f1e70ea3))
 # [2.41.0](https://github.com/naxhq/NexQ/compare/v2.40.0...v2.41.0) (2026-11-20)
 
 
