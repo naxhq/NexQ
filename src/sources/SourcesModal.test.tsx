@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { SourcesModal } from "./SourcesModal";
+import { SourcesGuideModal } from "./SourcesGuideModal";
 
 function Harness({ onClose = () => {} }: { onClose?: () => void }) {
   return (
@@ -37,6 +38,23 @@ describe("SourcesModal", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it("Escape closes only the dialog, not the Settings page behind it", () => {
+    const behind = vi.fn();
+    const onKeyBehind = (e: KeyboardEvent) => e.key === "Escape" && behind();
+    window.addEventListener("keydown", onKeyBehind);
+    const onClose = vi.fn();
+    render(<Harness onClose={onClose} />);
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(behind).not.toHaveBeenCalled();
+    // Other keys still reach it.
+    window.addEventListener("keydown", behind);
+    fireEvent.keyDown(document.body, { key: "a" });
+    expect(behind).toHaveBeenCalled();
+    window.removeEventListener("keydown", onKeyBehind);
+    window.removeEventListener("keydown", behind);
+  });
+
   it("gives focus back to what had it when it closes", () => {
     const { rerender } = render(
       <div>
@@ -59,5 +77,11 @@ describe("SourcesModal", () => {
       </div>,
     );
     expect(screen.getByRole("button", { name: "Opener" })).toHaveFocus();
+  });
+
+  it("the tools guide says a new server is checked right away", () => {
+    render(<SourcesGuideModal kind="tools" onClose={() => {}} />);
+    expect(screen.getByText(/NexQ checks it right away/)).toBeInTheDocument();
+    expect(screen.queryByText(/press Check/)).toBeNull();
   });
 });

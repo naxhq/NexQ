@@ -321,9 +321,13 @@ export function AddMcpServerDialog({ onClose, onAdded, editing }: AddMcpServerDi
               {formError}
             </p>
           )}
-          {checkResult && (
-            <p className={`text-xs ${checkResult.ok ? "text-success" : "text-destructive"}`}>{checkResult.text}</p>
-          )}
+          {/* Always in the page, so a screen reader announces what lands in it. */}
+          <p
+            role="status"
+            className={checkResult ? `text-xs ${checkResult.ok ? "text-success" : "text-destructive"}` : "sr-only"}
+          >
+            {checkResult?.text}
+          </p>
 
           <div className="flex items-center justify-end gap-2">
             <button

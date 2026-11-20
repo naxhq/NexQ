@@ -52,7 +52,7 @@ const TOOLS_TOPICS: Topic[] = [
   },
   {
     title: "How to add one",
-    body: "Open the server's README, copy its mcpServers JSON, choose Add server and paste it. You can also fill in a form, or import a server from Claude Code. Then press Check to see its tools before switching it on.",
+    body: "Open the server's README, copy its mcpServers JSON, choose Add server and paste it. You can also fill in a form, or import a server from Claude Code. NexQ checks it right away and shows its tools, so you can look before switching it on.",
   },
 ];
 

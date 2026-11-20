@@ -192,6 +192,7 @@ describe("PersonalSourcesEditor", () => {
     render(<PersonalSourcesEditor variant="full" />);
     fireEvent.click(screen.getByRole("button", { name: "Check" }));
     expect(await screen.findByText("Failed: spawn node ENOENT")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Failed: spawn node ENOENT");
     expect(screen.getByRole("switch", { name: "Use Mira" })).toBeDisabled();
   });
 

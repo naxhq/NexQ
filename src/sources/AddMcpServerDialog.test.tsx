@@ -173,6 +173,7 @@ describe("AddMcpServerDialog", () => {
     fireEvent.change(screen.getByLabelText("Command"), { target: { value: "node" } });
     fireEvent.click(screen.getByRole("button", { name: "Check these settings" }));
     expect(await screen.findByText("Ready with 4 tools")).toBeInTheDocument();
+    expect(screen.getByText("Ready with 4 tools")).toHaveAttribute("role", "status");
     expect(ipc.checkMcpServer).toHaveBeenCalledWith(null, expect.objectContaining({ label: "Mira" }));
   });
 

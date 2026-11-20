@@ -37,6 +37,8 @@ export function SourcesModal({ title, onClose, children, wide, hideClose }: Sour
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        // Only this dialog closes: Settings behind it listens for Escape too.
+        e.stopPropagation();
         onCloseRef.current();
         return;
       }
@@ -61,9 +63,10 @@ export function SourcesModal({ title, onClose, children, wide, hideClose }: Sour
         first.focus();
       }
     };
-    window.addEventListener("keydown", onKey);
+    // Capture phase, so nothing behind the dialog sees the key first.
+    window.addEventListener("keydown", onKey, true);
     return () => {
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
       if (before && document.contains(before)) before.focus();
     };
   }, []);

@@ -63,6 +63,7 @@ export function McpServerCard({ server, checking, onToggle, onCheck, onEdit, onR
           </div>
           <div
             id={statusId}
+            role="status"
             className={`mt-1 flex items-center gap-1.5 text-xs ${
               status.tone === "ok" ? "text-success" : status.tone === "bad" ? "text-destructive" : "text-muted-foreground/80"
             }`}
