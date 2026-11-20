@@ -70,6 +70,14 @@ pub(crate) fn saved_secret(id: &str) -> Option<String> {
     SystemSecrets::new().get(id)
 }
 
+/// A new server starts with no secrets: whatever an earlier server of the same
+/// key left under these ids goes before the new values are stored.
+fn forget_leftovers(store: &dyn SecretStore, secrets: &[SecretValue]) {
+    for secret in secrets {
+        store.delete(&secret.credential_id);
+    }
+}
+
 /// Store every secret, or none: a failure puts back what this call changed.
 fn store_secrets(store: &dyn SecretStore, secrets: &[SecretValue]) -> Result<(), String> {
     let mut done: Vec<(&str, Option<String>)> = Vec::new();
@@ -162,18 +170,19 @@ const SECRETS_RESET: &str = "Enter the secrets again: the server's command, URL,
 
 /// Most servers kept in `AppState::pending_servers`.
 const PENDING_SERVERS_MAX: usize = 32;
+/// How long a server the webview has not saved yet keeps its key reserved.
+const PENDING_KEY_HOLD: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// The saved server with this id (backend state, never the frontend's copy):
 /// one the webview has saved, else one it was just handed and has not saved yet.
 fn saved_server(state: &AppState, id: &str) -> Option<McpServer> {
     let saved = state.personal_sources.read().ok()?.mcp_servers.iter().find(|s| s.id == id).cloned();
-    saved.or_else(|| state.pending_servers.lock().ok()?.iter().find(|s| s.id == id).cloned())
+    saved.or_else(|| state.pending_servers.lock().ok()?.iter().find(|(s, _)| s.id == id).map(|(s, _)| s.clone()))
 }
 
 /// Make `server` known to backend state before the webview saves its config,
 /// so a Check or an edit finds it. A server already saved is replaced there; a
-/// new one only waits in `pending_servers` and reserves no key until the
-/// webview saves it (a discarded one must not take `mira` from the real one).
+/// new one waits in `pending_servers`, and reserves its key for a short while.
 fn upsert_saved(state: &AppState, server: &McpServer) {
     if let Ok(mut cfg) = state.personal_sources.write() {
         if let Some(slot) = cfg.mcp_servers.iter_mut().find(|s| s.id == server.id) {
@@ -182,20 +191,45 @@ fn upsert_saved(state: &AppState, server: &McpServer) {
         }
     }
     if let Ok(mut pending) = state.pending_servers.lock() {
-        pending.retain(|s| s.id != server.id);
-        pending.push(server.clone());
+        pending.retain(|(s, _)| s.id != server.id);
+        pending.push((server.clone(), std::time::Instant::now()));
         let excess = pending.len().saturating_sub(PENDING_SERVERS_MAX);
         pending.drain(..excess);
     }
 }
 
-/// Keys of the saved servers: what a new key must not collide with.
-fn saved_keys(state: &AppState) -> Vec<String> {
-    state
+/// The webview dropped these servers without saving them: forget them and free
+/// their keys.
+#[command]
+pub fn discard_pending_mcp_servers(ids: Vec<String>, state: State<'_, AppState>) -> Result<(), String> {
+    if let Ok(mut pending) = state.pending_servers.lock() {
+        pending.retain(|(s, _)| !ids.contains(&s.id));
+    }
+    Ok(())
+}
+
+/// Keys a new server must not take: the saved servers' keys, and those of
+/// servers handed to the webview within the last [`PENDING_KEY_HOLD`] (several
+/// added together, before any is saved).
+fn taken_keys_at(state: &AppState, now: std::time::Instant) -> Vec<String> {
+    let mut keys: Vec<String> = state
         .personal_sources
         .read()
         .map(|c| c.mcp_servers.iter().map(|s| s.key.clone()).collect())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if let Ok(pending) = state.pending_servers.lock() {
+        keys.extend(
+            pending
+                .iter()
+                .filter(|(_, at)| now.saturating_duration_since(*at) < PENDING_KEY_HOLD)
+                .map(|(s, _)| s.key.clone()),
+        );
+    }
+    keys
+}
+
+fn saved_keys(state: &AppState) -> Vec<String> {
+    taken_keys_at(state, std::time::Instant::now())
 }
 
 // ── Notes folders ───────────────────────────────────────────────────────────
@@ -298,6 +332,7 @@ fn add_servers(
         secrets.extend(server_secrets);
         servers.push(server);
     }
+    forget_leftovers(store, &secrets);
     store_secrets(store, &secrets)?;
     Ok(servers)
 }
@@ -576,7 +611,9 @@ fn build_form_server(
         ..form.clone()
     };
     let changed = old.is_some_and(|o| target_changed(o, &transport, &env));
-    let secrets = form_secrets(&for_secrets, &key, &|id| !changed && stored(id)).map_err(|e| {
+    // Only the server being edited may keep a stored secret: a new server never
+    // picks up a leftover one under its key.
+    let secrets = form_secrets(&for_secrets, &key, &|id| old.is_some() && !changed && stored(id)).map_err(|e| {
         if changed {
             format!("{SECRETS_RESET} ({e})")
         } else {
@@ -610,6 +647,9 @@ fn save_form(
     old: Option<&McpServer>,
 ) -> Result<McpServer, String> {
     let build = build_form_server(form, taken_keys, old, &|id| store.get(id).is_some())?;
+    if old.is_none() {
+        forget_leftovers(store, &build.secrets);
+    }
     store_secrets(store, &build.secrets)?;
     if let Some(old) = old {
         // After a move every secret was typed again, so what is stale is only
@@ -761,6 +801,9 @@ pub fn delete_mcp_secrets(server_id: String, state: State<'_, AppState>) -> Resu
             store.delete(&id);
         }
     }
+    if let Ok(mut pending) = state.pending_servers.lock() {
+        pending.retain(|(s, _)| s.id != server_id);
+    }
     Ok(())
 }
 
@@ -775,19 +818,20 @@ pub fn needs_sources_restart(applied: &PersonalSourcesConfig, new: &PersonalSour
     applied.launch_fingerprint() != new.launch_fingerprint()
 }
 
-/// The saved secrets of servers that now start somewhere else than the saved
-/// server with that key did (the secrets were saved for the old target only).
-/// A server that is merely missing from `new` is not counted: an older config
-/// can arrive after a just-imported server was saved, and removing a server
-/// goes through `delete_mcp_secrets`. A change made through
+/// The saved secrets of servers that lost them: one missing from `new`, and
+/// one that now starts somewhere else than the saved server with its key did
+/// (the secrets were saved for the old target only). A server in `pending`
+/// (just handed to the webview) is never dropped for being missing: an older
+/// config can arrive after it was imported. A change made through
 /// `save_mcp_server_form` is already in `old`, so it does not count here.
-fn secrets_to_drop(old: &PersonalSourcesConfig, new: &PersonalSourcesConfig) -> Vec<String> {
+fn secrets_to_drop(old: &PersonalSourcesConfig, new: &PersonalSourcesConfig, pending: &[McpServer]) -> Vec<String> {
     let mut ids = Vec::new();
     for old_server in &old.mcp_servers {
-        let Some(kept) = new.mcp_servers.iter().find(|s| s.key == old_server.key) else {
-            continue;
+        let lost = match new.mcp_servers.iter().find(|s| s.key == old_server.key) {
+            None => !pending.iter().any(|p| p.id == old_server.id),
+            Some(kept) => target_changed(old_server, &kept.transport, &kept.env),
         };
-        if target_changed(old_server, &kept.transport, &kept.env) {
+        if lost {
             ids.extend(secret_ids(old_server));
         }
     }
@@ -838,7 +882,12 @@ pub fn set_personal_sources(
         std::mem::replace(&mut *slot, config.clone())
     };
     let store = SystemSecrets::new();
-    for id in secrets_to_drop(&old, &config) {
+    let pending: Vec<McpServer> = state
+        .pending_servers
+        .lock()
+        .map(|p| p.iter().map(|(s, _)| s.clone()).collect())
+        .unwrap_or_default();
+    for id in secrets_to_drop(&old, &config, &pending) {
         store.delete(&id);
     }
 
@@ -1410,14 +1459,18 @@ mod tests {
         // Same server (label and tools may change): nothing dropped.
         let mut same = old.clone();
         same.mcp_servers[0].label = "Mira 2".into();
-        assert!(secrets_to_drop(&old, &same).is_empty());
-        // Missing from an older push (a racing import): its secrets stay. Removing
-        // a server forgets them through delete_mcp_secrets.
-        assert!(secrets_to_drop(&old, &PersonalSourcesConfig::default()).is_empty());
+        assert!(secrets_to_drop(&old, &same, &[]).is_empty());
+        // Removed: its secrets go.
+        assert_eq!(
+            secrets_to_drop(&old, &PersonalSourcesConfig::default(), &[]),
+            vec!["mcp:mira:API_KEY".to_string()]
+        );
+        // Missing from an older push while it is a just-imported (pending) server: they stay.
+        assert!(secrets_to_drop(&old, &PersonalSourcesConfig::default(), &[saved_mira()]).is_empty());
         // Pointed somewhere else behind the form's back: its secrets go.
         let mut moved = old.clone();
         moved.mcp_servers[0].transport = McpTransport::Stdio { command: "evil.exe".into(), args: vec![] };
-        assert_eq!(secrets_to_drop(&old, &moved), vec!["mcp:mira:API_KEY".to_string()]);
+        assert_eq!(secrets_to_drop(&old, &moved, &[]), vec!["mcp:mira:API_KEY".to_string()]);
     }
 
     #[test]
@@ -1455,24 +1508,47 @@ mod tests {
     }
 
     #[test]
-    fn a_new_server_is_found_by_id_but_reserves_no_key_until_the_webview_saves_it() {
+    fn two_pending_servers_never_share_a_key_and_a_discarded_one_frees_its_key() {
         let state = AppState::new();
         let server = saved_mira();
         upsert_saved(&state, &server);
-        // Found for a Check or an edit, but its key is free: a discarded
-        // one must not push the real `mira` to `mira-2`.
         assert_eq!(saved_server(&state, "id1").unwrap().label, "Mira");
-        assert!(saved_keys(&state).is_empty());
-        assert_eq!(unique_key("Mira", &saved_keys(&state)), "mira");
-        // The webview saves it: now the key is taken, and the saved copy is the one used.
-        state.personal_sources.write().unwrap().mcp_servers.push(server.clone());
+        // Reserved against the next server added before this one is saved.
         assert_eq!(saved_keys(&state), vec!["mira".to_string()]);
+        assert_eq!(unique_key("Mira", &saved_keys(&state)), "mira-2");
+        // One the webview never saved stops reserving its key after a while.
+        let later = std::time::Instant::now() + PENDING_KEY_HOLD + std::time::Duration::from_secs(1);
+        assert!(taken_keys_at(&state, later).is_empty());
+        // The webview saves it: now its key is taken for good, and the saved copy is the one used.
+        state.personal_sources.write().unwrap().mcp_servers.push(server.clone());
+        assert_eq!(taken_keys_at(&state, later), vec!["mira".to_string()]);
         let mut renamed = server.clone();
         renamed.label = "Mira 2".into();
         upsert_saved(&state, &renamed);
         assert_eq!(state.personal_sources.read().unwrap().mcp_servers.len(), 1);
         assert_eq!(saved_server(&state, "id1").unwrap().label, "Mira 2");
         assert!(saved_server(&state, "nope").is_none());
+    }
+
+    #[test]
+    fn a_new_server_never_picks_up_a_leftover_secret_under_its_key() {
+        let store = MemoryStore::default();
+        store.set("mcp:mira:API_KEY", "left-by-an-old-server").unwrap();
+        let mut form = mira_form("node", None, "");
+        form.id = None;
+        // Nothing typed: the leftover is not accepted in its place.
+        let err = save_form(&store, &form, &[], None).unwrap_err();
+        assert!(err.contains("needs a value"), "{err}");
+        assert_eq!(store.get("mcp:mira:API_KEY").as_deref(), Some("left-by-an-old-server"));
+        // Typed: it replaces the leftover.
+        form.env[0].value = "fresh".into();
+        save_form(&store, &form, &[], None).unwrap();
+        assert_eq!(store.get("mcp:mira:API_KEY").as_deref(), Some("fresh"));
+        // An import clears what an earlier server of that key left, too.
+        store.set("mcp:imp:API_KEY", "left").unwrap();
+        let servers = import_json(&store, r#"{"imp":{"command":"x","env":{"API_KEY":"new"}}}"#, &[]).unwrap();
+        assert_eq!(servers[0].key, "imp");
+        assert_eq!(store.get("mcp:imp:API_KEY").as_deref(), Some("new"));
     }
 
     #[test]

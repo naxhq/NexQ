@@ -150,10 +150,12 @@ pub struct AppState {
     /// are not in `personal_sources`, so its fingerprint can't see them).
     pub sources_secrets_rev: Arc<AtomicU64>,
     /// Servers an import or the form returned that the webview has not saved
-    /// yet (newest last, at most `PENDING_SERVERS_MAX`). A Check or an edit
-    /// finds them here by id; they do not reserve their key, so one the user
-    /// discards doesn't push the real server to `name-2`.
-    pub pending_servers: Arc<Mutex<Vec<McpServer>>>,
+    /// yet (newest last, at most `PENDING_SERVERS_MAX`), with when each was
+    /// handed over. A Check or an edit finds them here by id. Each reserves its
+    /// key for `PENDING_KEY_HOLD` (so two servers added together get different
+    /// keys); one the webview never saves stops reserving it then, so a
+    /// discarded server doesn't push the real one to `name-2`.
+    pub pending_servers: Arc<Mutex<Vec<(McpServer, std::time::Instant)>>>,
     /// The sources (and secrets revision) the with-sources sessions were last
     /// started or restarted for.
     pub sources_applied: Arc<Mutex<(PersonalSourcesConfig, u64)>>,
