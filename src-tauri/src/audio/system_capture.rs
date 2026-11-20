@@ -195,6 +195,9 @@ fn send_system_chunk(
     }
 
     let pcm_data = resampler.process(i16_data);
+    if pcm_data.is_empty() {
+        return; // a chunk too short to yield a 16 kHz sample
+    }
 
     let timestamp_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)

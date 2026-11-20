@@ -174,6 +174,20 @@ mod tests {
         assert_eq!(resample(&input, 16000, 16000, 2), vec![150, 350]);
     }
 
+    /// A chunk of one or two frames at 3:1 can be too short for a sample:
+    /// the result is empty (callers send nothing), and the stream carries on.
+    #[test]
+    fn a_chunk_too_short_for_a_sample_gives_nothing_and_the_stream_carries_on() {
+        let mut r = StreamResampler::new(48_000, 16_000, 1);
+        assert!(r.process(&[1000]).is_empty(), "one frame: no sample yet");
+        let mut r = StreamResampler::new(48_000, 16_000, 1);
+        let mut total = 0;
+        for _ in 0..300 {
+            total += r.process(&[500, 500]).len();
+        }
+        assert_eq!(total, 200, "600 frames at 3:1, in 2-frame chunks");
+    }
+
     #[test]
     fn test_empty_input() {
         let output = resample(&[], 48000, 16000, 1);

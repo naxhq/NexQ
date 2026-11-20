@@ -36,6 +36,7 @@ const CUSHION: usize = 4;
 /// A queue that never fell below this for `CHECK_EVERY` frames holds more
 /// than the cushion: the reference runs ahead.
 const TOO_MANY: usize = CUSHION + 3;
+/// Clock drift beyond ~500 ppm between the streams is not compensated (the queue only re-aligns in whole frames).
 /// Mic frames between checks of the queue (0.5 s).
 const CHECK_EVERY: u64 = 50;
 /// With no mic audio coming at all, the reference stops piling up here.

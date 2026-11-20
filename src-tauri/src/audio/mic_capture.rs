@@ -178,6 +178,9 @@ fn handle_dual_data_i16(
 ) {
     if data.is_empty() { return; }
     let pcm_data = resampler.process(data);
+    if pcm_data.is_empty() {
+        return; // a chunk too short to yield a 16 kHz sample
+    }
     let ts = current_timestamp_ms();
 
     // Emit as Mic
@@ -207,6 +210,9 @@ fn handle_dual_data_f32(
         .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
         .collect();
     let pcm_data = resampler.process(&i16_data);
+    if pcm_data.is_empty() {
+        return; // a chunk too short to yield a 16 kHz sample
+    }
     let ts = current_timestamp_ms();
 
     let _ = tx.try_send(AudioChunk {
@@ -241,6 +247,9 @@ fn handle_mic_data_i16(
     }
 
     let pcm_data = resampler.process(data);
+    if pcm_data.is_empty() {
+        return; // a chunk too short to yield a 16 kHz sample
+    }
 
     let chunk = AudioChunk {
         pcm_data,
@@ -272,6 +281,9 @@ fn handle_mic_data_f32(
         .collect();
 
     let pcm_data = resampler.process(&i16_data);
+    if pcm_data.is_empty() {
+        return; // a chunk too short to yield a 16 kHz sample
+    }
 
     let chunk = AudioChunk {
         pcm_data,
@@ -302,6 +314,9 @@ fn handle_mic_data_u16(
         .collect();
 
     let pcm_data = resampler.process(&i16_data);
+    if pcm_data.is_empty() {
+        return; // a chunk too short to yield a 16 kHz sample
+    }
 
     let chunk = AudioChunk {
         pcm_data,
