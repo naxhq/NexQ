@@ -5,6 +5,8 @@
 //! one `key=value` directive per line, because the session strips/controls the
 //! child environment and parallel tests cannot share process env vars:
 //! - `fake_mode=normal|slow|crash_mid_turn|hang` (default `normal`)
+//! - `fake_mcp=<name>:<status>,...`: the `mcp_servers` of `system/init` (e.g.
+//!   `mira:failed,notes:connected`). Default none.
 //! - `fake_record=<path>`: every stdin line received is appended to this file.
 //!
 //! Behaviour:
@@ -96,7 +98,13 @@ fn main() {
     writeln!(out).unwrap();
     writeln!(out, r#"{{"type":"system","subtype":"ini"#).unwrap();
     out.flush().unwrap();
-    let init = json!({"type":"system","subtype":"init","session_id":"fake-session","model":model,"tools":[],"mcp_servers":[]});
+    let mcp_servers: Vec<Value> = directive("fake_mcp")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|p| p.split_once(':'))
+        .map(|(name, status)| json!({"name": name, "status": status, "source": "dynamic"}))
+        .collect();
+    let init = json!({"type":"system","subtype":"init","session_id":"fake-session","model":model,"tools":[],"mcp_servers":mcp_servers});
     eprintln!("fake_claude: ready (mode={mode})");
 
     let thinking = std::env::var("CLAUDE_CODE_DISABLE_THINKING").as_deref() != Ok("1");

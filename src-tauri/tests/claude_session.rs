@@ -105,6 +105,48 @@ async fn private_mcp_config_file_is_deleted_on_close_and_drop() {
     plain.close().await;
 }
 
+/// A with-sources session with some failed MCP servers still starts while
+/// something is usable (a notes folder, or a server that connected); the
+/// statuses are in `init_info`. With nothing usable left the start fails and
+/// the error carries the statuses.
+#[tokio::test]
+async fn failed_mcp_servers_fail_the_start_only_when_nothing_is_usable() {
+    let sources = |dirs: Vec<PathBuf>| SourcesLaunch {
+        add_dirs: dirs,
+        mcp_config_json: Some(r#"{"mcpServers":{}}"#.into()),
+        ..Default::default()
+    };
+    let with = |mcp: &str, dirs: Vec<PathBuf>| SessionConfig {
+        sources: Some(sources(dirs)),
+        ..cfg(&format!("normal
+fake_mcp={mcp}"), None)
+    };
+
+    // One server failed, another connected: starts.
+    let s = ClaudeSession::spawn(fake_bin(), with("mira:failed,wiki:connected", vec![])).await.unwrap();
+    let states: Vec<_> = s.init_info().mcp_servers.iter().map(|m| (m.name.clone(), m.status.clone())).collect();
+    assert_eq!(states, [("mira".into(), "failed".into()), ("wiki".into(), "connected".into())]);
+    s.close().await;
+
+    // The only server failed but a notes folder is left: starts.
+    let s = ClaudeSession::spawn(fake_bin(), with("mira:failed", vec![std::env::temp_dir()])).await.unwrap();
+    s.close().await;
+
+    // Only server, failed, no folder: nothing usable, with the statuses.
+    let err = match ClaudeSession::spawn(fake_bin(), with("mira:failed", vec![])).await {
+        Err(e) => e,
+        Ok(_) => panic!("started with nothing usable"),
+    };
+    match err {
+        AgentError::NoUsableSources { message, info } => {
+            assert!(message.contains("mira"), "{message}");
+            assert_eq!(info.mcp_servers.len(), 1);
+            assert_eq!(info.mcp_servers[0].status, "failed");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
 async fn spawn(mode: &str) -> ClaudeSession {
     ClaudeSession::spawn(fake_bin(), cfg(mode, None))
         .await

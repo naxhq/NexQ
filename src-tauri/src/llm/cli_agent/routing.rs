@@ -98,10 +98,9 @@ pub fn choose_route(
         },
         ClaudeHealth::Healthy => match scope {
             SessionScope::Utility => Route::Stateless,
-            SessionScope::Live(_) | SessionScope::Past(_) => Route::ClaudeSession(SessionKey {
-                scope: scope.clone(),
-                tier: tier_for(mode, scope, cfg),
-            }),
+            SessionScope::Live(_) | SessionScope::Past(_) => {
+                Route::ClaudeSession(SessionKey::plain(scope.clone(), tier_for(mode, scope, cfg)))
+            }
         },
     }
 }
@@ -237,6 +236,7 @@ impl SessionRecord {
         SessionInit {
             system_prompt: self.system_prompt.clone(),
             preload,
+            sources: None,
         }
     }
 }
@@ -724,10 +724,11 @@ pub fn session_key_label(key: &SessionKey) -> String {
         Tier::Fast => "fast",
         Tier::Deep => "deep",
     };
+    let sources = if key.with_sources { ":sources" } else { "" };
     match &key.scope {
-        SessionScope::Live(id) => format!("live:{id}:{tier}"),
-        SessionScope::Past(id) => format!("past:{id}:{tier}"),
-        SessionScope::Utility => format!("utility:{tier}"),
+        SessionScope::Live(id) => format!("live:{id}:{tier}{sources}"),
+        SessionScope::Past(id) => format!("past:{id}:{tier}{sources}"),
+        SessionScope::Utility => format!("utility:{tier}{sources}"),
     }
 }
 
@@ -883,7 +884,7 @@ mod tests {
         );
         match route {
             Route::ClaudeSession(key) => {
-                assert_eq!(key, SessionKey { scope: live(), tier: Tier::Fast })
+                assert_eq!(key, SessionKey::plain(live(), Tier::Fast))
             }
             other => panic!("expected a Claude session, got {other:?}"),
         }
@@ -1085,7 +1086,7 @@ mod tests {
         assert!(past_system_prompt("x").ends_with("Additional Instructions: x"));
         assert!(past_system_prompt("").contains("[SEGMENT_ID]"));
         assert_eq!(
-            session_key_label(&SessionKey { scope: live(), tier: Tier::Fast }),
+            session_key_label(&SessionKey::plain(live(), Tier::Fast)),
             "live:m1:fast"
         );
     }
@@ -1093,7 +1094,7 @@ mod tests {
     #[test]
     fn routing_truncate_replay_keeps_recent_tail() {
         let sessions = MeetingSessions::default();
-        let key = SessionKey { scope: live(), tier: Tier::Fast };
+        let key = SessionKey::plain(live(), Tier::Fast);
         sessions.insert_if_absent(
             key.clone(),
             SessionRecord {
@@ -1226,7 +1227,7 @@ mod tests {
             Arc::new(NoopStatusSink),
             Arc::new(RwLock::new(ClaudeCliConfig::default())),
         );
-        let key = SessionKey { scope: live(), tier: Tier::Fast };
+        let key = SessionKey::plain(live(), Tier::Fast);
         let sessions = Arc::new(MeetingSessions::default());
         sessions.insert_if_absent(
             key.clone(),
@@ -1529,7 +1530,7 @@ mod tests {
     #[test]
     fn routing_epoch_discards_background_work_after_close() {
         let sessions = MeetingSessions::default();
-        let key = SessionKey { scope: live(), tier: Tier::Fast };
+        let key = SessionKey::plain(live(), Tier::Fast);
         let epoch = sessions.epoch(&key.scope);
         sessions.remove_scope(&key.scope); // meeting ended while the record was built
         assert!(!sessions.insert_if_current(key.clone(), SessionRecord::default(), epoch));
@@ -1542,7 +1543,7 @@ mod tests {
     #[test]
     fn routing_request_never_recreates_a_closed_scope() {
         let sessions = MeetingSessions::default();
-        let key = SessionKey { scope: live(), tier: Tier::Deep };
+        let key = SessionKey::plain(live(), Tier::Deep);
         // The request chose its scope, then the meeting ended.
         let epoch = sessions.epoch(&key.scope);
         sessions.remove_scope(&key.scope);
@@ -1559,7 +1560,7 @@ mod tests {
     #[test]
     fn routing_request_closed_while_its_record_is_built_is_discarded() {
         let sessions = MeetingSessions::default();
-        let key = SessionKey { scope: live(), tier: Tier::Fast };
+        let key = SessionKey::plain(live(), Tier::Fast);
         let epoch = sessions.epoch(&key.scope);
         let ready = sessions.ensure_current(&key, epoch, || {
             sessions.remove_scope(&key.scope); // end_meeting lands mid-build
@@ -1572,14 +1573,14 @@ mod tests {
     #[test]
     fn routing_request_builds_a_missing_record_once() {
         let sessions = MeetingSessions::default();
-        let key = SessionKey { scope: live(), tier: Tier::Fast };
+        let key = SessionKey::plain(live(), Tier::Fast);
         let epoch = sessions.epoch(&key.scope);
         assert_eq!(sessions.ensure_current(&key, epoch, || Ok(SessionRecord::default())), Ok(true));
         assert!(sessions.contains(&key));
         let again = sessions.ensure_current(&key, epoch, || Err("must not rebuild".into()));
         assert_eq!(again, Ok(true));
         assert_eq!(
-            sessions.ensure_current(&SessionKey { scope: live(), tier: Tier::Deep }, epoch, || Err("no".into())),
+            sessions.ensure_current(&SessionKey::plain(live(), Tier::Deep), epoch, || Err("no".into())),
             Err("no".to_string()),
             "a build error is reported"
         );

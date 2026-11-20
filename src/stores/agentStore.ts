@@ -4,9 +4,11 @@ import { claudeCliModels, claudeCliStatus, getAgentSessions } from "../lib/ipc";
 import { onAgentSessionStatus } from "../lib/events";
 import { useConfigStore } from "./configStore";
 
-/** Map key of a session: `${scope}:${meeting_id ?? ""}:${tier}`. */
-export function agentSessionKey(s: Pick<AgentSessionStatus, "scope" | "meeting_id" | "tier">): string {
-  return `${s.scope}:${s.meeting_id ?? ""}:${s.tier}`;
+/** Map key of a session: `${scope}:${meeting_id ?? ""}:${tier}`, plus `:sources` for a with-sources session. */
+export function agentSessionKey(
+  s: Pick<AgentSessionStatus, "scope" | "meeting_id" | "tier"> & { with_sources?: boolean },
+): string {
+  return `${s.scope}:${s.meeting_id ?? ""}:${s.tier}${s.with_sources ? ":sources" : ""}`;
 }
 
 /** A session that holds (or is about to hold) a running `claude` process. */

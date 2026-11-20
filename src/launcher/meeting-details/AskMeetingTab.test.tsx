@@ -148,6 +148,7 @@ describe("AskMeetingTab", () => {
       model: "sonnet",
       detail: null,
       error_kind: null,
+      with_sources: false,
       usage: { input_tokens: 0, output_tokens: 0, cost_usd: 0 },
     });
     act(() => emit("agent_session_status", status("starting")));

@@ -432,6 +432,8 @@ export interface AgentSessionStatus {
    * "not_installed" | "context_overflow" | "crashed" | "other". Set with `detail`.
    */
   error_kind: string | null;
+  /** The with-sources session (notes folders, MCP tools), not the plain one. */
+  with_sources: boolean;
   /** Cumulative usage of the whole scope (all tiers). */
   usage: SessionUsage;
 }

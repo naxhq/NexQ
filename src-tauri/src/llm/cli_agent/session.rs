@@ -80,6 +80,19 @@ pub fn failed_mcp_servers(info: &InitInfo) -> Vec<String> {
         .collect()
 }
 
+/// Is a with-sources session that started with `info` useless? True when some
+/// MCP server failed and nothing else is left: no notes folder, and no server
+/// that is connected (or still connecting). A session whose servers all start,
+/// or that still has a folder or another server, is usable: the failed
+/// servers' tools are simply absent.
+pub fn nothing_usable(has_folders: bool, info: &InitInfo) -> bool {
+    let failed = failed_mcp_servers(info);
+    if failed.is_empty() || has_folders {
+        return false;
+    }
+    info.mcp_servers.iter().all(|s| failed.contains(&s.name))
+}
+
 /// Turns the CLI's cumulative `total_cost_usd` (per process) into per-turn
 /// costs. One per process, so it starts over when a session (re)starts.
 #[derive(Debug, Default)]
@@ -141,6 +154,12 @@ pub enum AgentError {
     /// A `result` with `is_error: true`, classified from its text.
     #[error("{1}")]
     Cli(AgentErrorKind, String),
+    /// A with-sources session came up with nothing usable: no notes folder and
+    /// every MCP server failed. `info` is its `system/init` (server statuses),
+    /// so a caller such as the server check reads them instead of parsing
+    /// `message`.
+    #[error("{message}")]
+    NoUsableSources { message: String, info: InitInfo },
 }
 
 impl AgentError {
@@ -163,6 +182,7 @@ impl AgentError {
                 AgentErrorKind::Other
             }
             AgentError::Cli(kind, _) => *kind,
+            AgentError::NoUsableSources { .. } => AgentErrorKind::Other,
         }
     }
 }
@@ -285,7 +305,8 @@ impl ClaudeSession {
         };
         let args = build_args(&cfg, &prompt_file, mcp_config_file.as_deref());
         let thinking = cfg.thinking;
-        let has_sources = cfg.sources.is_some();
+        // `None` for a plain session, else whether a notes folder is among its sources.
+        let sources_folders = cfg.sources.as_ref().map(|s| !s.add_dirs.is_empty());
         let started = tokio::task::spawn_blocking(move || start_process(&bin, &args, thinking))
             .await
             .map_err(|e| AgentError::Spawn(format!("spawn task failed: {e}")))
@@ -315,18 +336,26 @@ impl ClaudeSession {
             .await
             .unwrap_or(Err(AgentError::Timeout));
 
-        // A with-sources session whose MCP server did not start would answer
-        // without it: report that instead, so the caller can say so.
-        let init = init.and_then(|()| {
-            let failed = failed_mcp_servers(&session.init_info());
-            if has_sources && !failed.is_empty() {
-                Err(AgentError::Spawn(format!(
-                    "MCP server {} failed to start",
-                    failed.join(", ")
-                )))
-            } else {
-                Ok(())
+        // A with-sources session whose MCP servers all failed (and has no notes
+        // folder) has nothing to offer: report that, with the statuses. If
+        // something is left it starts, and the failed servers' tools are
+        // absent (the caller tells the user which ones).
+        let init = init.and_then(|()| match sources_folders {
+            Some(has_folders) => {
+                let info = session.init_info();
+                if nothing_usable(has_folders, &info) {
+                    Err(AgentError::NoUsableSources {
+                        message: format!(
+                            "MCP server {} failed to start",
+                            failed_mcp_servers(&info).join(", ")
+                        ),
+                        info,
+                    })
+                } else {
+                    Ok(())
+                }
             }
+            None => Ok(()),
         });
 
         match init {
@@ -870,6 +899,22 @@ mod tests {
         assert_eq!(decode_activity("plain text"), None);
         assert_eq!(decode_activity(&format!("{ACTIVITY_PREFIX}not json")), None);
         assert!(!is_activity("") && !is_activity("hello"));
+    }
+
+    #[test]
+    fn nothing_usable_needs_a_failed_server_and_nothing_else() {
+        let state = |name: &str, status: &str| McpServerState { name: name.into(), status: status.into() };
+        let info = |servers: Vec<McpServerState>| InitInfo { tools: vec![], mcp_servers: servers };
+        // Nothing failed.
+        assert!(!nothing_usable(false, &info(vec![state("a", "connected")])));
+        assert!(!nothing_usable(false, &info(vec![])));
+        // The only server failed.
+        assert!(nothing_usable(false, &info(vec![state("a", "failed")])));
+        assert!(nothing_usable(false, &info(vec![state("a", "failed"), state("b", "needs-auth")])));
+        // A folder, a connected server or one still connecting is left.
+        assert!(!nothing_usable(true, &info(vec![state("a", "failed")])));
+        assert!(!nothing_usable(false, &info(vec![state("a", "failed"), state("b", "connected")])));
+        assert!(!nothing_usable(false, &info(vec![state("a", "failed"), state("b", "pending")])));
     }
 
     #[test]

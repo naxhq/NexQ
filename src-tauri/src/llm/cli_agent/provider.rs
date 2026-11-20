@@ -78,10 +78,7 @@ impl Default for ClaudeCliProvider {
 
 /// The session serving every caller without a meeting scope.
 pub fn utility_key() -> SessionKey {
-    SessionKey {
-        scope: SessionScope::Utility,
-        tier: Tier::Fast,
-    }
+    SessionKey::plain(SessionScope::Utility, Tier::Fast)
 }
 
 /// One user message for the session: system messages become a leading
@@ -116,6 +113,7 @@ pub async fn ask_utility(
     let init = SessionInit {
         system_prompt: UTILITY_SYSTEM_PROMPT.to_string(),
         preload: Vec::new(),
+        sources: None,
     };
     // Not raced against `cancel`: dropping a spawn mid-way would leave the
     // session status stuck on "starting". Cancellation is checked right after.

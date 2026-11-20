@@ -214,6 +214,7 @@ fn start_session_in_background(
         let init = SessionInit {
             system_prompt: record.system_prompt,
             preload: record.preload,
+            sources: None,
         };
         match state.agent_sessions.ensure(&key, init).await {
             Ok(_) => {
@@ -262,10 +263,7 @@ pub async fn start_past_meeting_session(
     }
     let scope = SessionScope::Past(meeting_id.clone());
     let cfg = state.claude_cli_config.read().map(|c| c.clone()).unwrap_or_default();
-    let key = SessionKey {
-        tier: tier_for("MeetingSummary", &scope, &cfg),
-        scope,
-    };
+    let key = SessionKey::plain(scope.clone(), tier_for("MeetingSummary", &scope, &cfg));
     start_session_in_background(&app, key, move |state| past_session_record(state, &meeting_id));
     Ok(())
 }
@@ -372,10 +370,7 @@ pub async fn start_meeting(
         });
     }
     if routing::claude_is_active(&state) {
-        let key = SessionKey {
-            scope: SessionScope::Live(meeting.id.clone()),
-            tier: Tier::Fast,
-        };
+        let key = SessionKey::plain(SessionScope::Live(meeting.id.clone()), Tier::Fast);
         start_session_in_background(&app, key, |state| {
             Ok(live_session_record(state, Tier::Fast, &[]))
         });
