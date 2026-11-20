@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { noRemoteImages } from "../lib/answerMarkdown";
 import { getModeLabel } from "../lib/utils";
 import type { AIResponse, StreamSource } from "../lib/types";
 import { useConfigStore } from "../stores/configStore";
@@ -225,7 +226,7 @@ export function AIResponsePanel() {
             <SourceNotices notices={currentNotices} />
             {currentContent && (
               <div className="prose prose-sm prose-invert max-w-none leading-relaxed" style={proseStyle}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={noRemoteImages}>
                   {currentContent}
                 </ReactMarkdown>
                 <span className="inline-block h-3 w-0.5 animate-pulse bg-primary/60 ml-0.5" />
@@ -249,7 +250,7 @@ export function AIResponsePanel() {
             )}
             <SourceNotices notices={currentResponse?.source_notices ?? []} />
             <div className="prose prose-sm prose-invert max-w-none leading-relaxed" style={proseStyle}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={noRemoteImages}>
                 {currentContent}
               </ReactMarkdown>
             </div>
@@ -271,7 +272,7 @@ export function AIResponsePanel() {
             />
             <SourceNotices notices={displayResponse.source_notices ?? []} />
             <div className="prose prose-sm prose-invert max-w-none leading-relaxed" style={proseStyle}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={noRemoteImages}>
                 {displayContent}
               </ReactMarkdown>
             </div>

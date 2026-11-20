@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { withoutImages } from "../../lib/answerMarkdown";
 import type { Components } from "react-markdown";
 import { ArrowUp, Loader2, MessageCircleQuestion, Square } from "lucide-react";
 import type { ChatItem, MeetingChatState } from "../../hooks/useMeetingChat";
@@ -10,13 +11,13 @@ import { SourceChips } from "../../sources/SourceChips";
 import { SourceActivityLines, SourceNotices } from "../../sources/SourceActivityLines";
 
 /** Summary markdown styles, with headings and paragraphs sized for a chat answer. */
-const answerMd: Components = {
+const answerMd: Components = withoutImages({
   ...mdComponents,
   h1: ({ children }) => <h3 className="mt-4 mb-1.5 text-sm font-semibold text-foreground">{children}</h3>,
   h2: ({ children }) => <h3 className="mt-4 mb-1.5 text-sm font-semibold text-foreground">{children}</h3>,
   h3: ({ children }) => <h4 className="mt-3 mb-1 text-sm font-medium text-foreground/90">{children}</h4>,
   p: ({ children }) => <p className="mb-2.5 text-sm leading-relaxed text-foreground/85 last:mb-0">{children}</p>,
-};
+});
 
 const SUGGESTIONS = ["What was decided?", "What are the open questions?", "Who agreed to do what?"];
 
