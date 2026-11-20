@@ -1,3 +1,9 @@
+# [2.40.0](https://github.com/naxhq/NexQ/compare/v2.39.0...v2.40.0) (2026-11-20)
+
+
+### Features
+
+* **llm:** choose how much each provider's model thinks ([#126](https://github.com/naxhq/NexQ/issues/126)) ([e8db163](https://github.com/naxhq/NexQ/commit/e8db1632ee88293b24688dc9904addee6639beba)), closes [#125](https://github.com/naxhq/NexQ/issues/125)
 # [2.39.0](https://github.com/naxhq/NexQ/compare/v2.38.0...v2.39.0) (2026-11-20)
 
 
