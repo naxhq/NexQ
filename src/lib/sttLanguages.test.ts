@@ -13,6 +13,7 @@ describe("cartesiaSupportsLanguage", () => {
       (v) => !["en", "fr", "hi", "ja", "es"].includes(v.split("-")[0])
     );
     expect(unsupported).toContain("ru-RU");
+    expect(unsupported).toContain("uk-UA");
     expect(unsupported).toContain("vi-VN");
     for (const lang of unsupported) {
       expect(cartesiaSupportsLanguage(lang)).toBe(false);

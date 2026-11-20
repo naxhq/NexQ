@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useState } from "react";
 import { useMeetingStore } from "./stores/meetingStore";
 import { useConfigStore } from "./stores/configStore";
-import { useAIActionsStore } from "./stores/aiActionsStore";
+import { useAIActionsStore, watchSavedActionConfigs } from "./stores/aiActionsStore";
 import { useScenarioStore, watchSavedScenarios } from "./stores/scenarioStore";
 import { LauncherView } from "./launcher/LauncherView";
 import { OverlayView } from "./overlay/OverlayView";
@@ -93,10 +93,20 @@ function App() {
     useScenarioStore.getState().loadScenarioConfig();
   }, [loadConfig]);
 
+  // Settings the other window saves reach this one (scenarios, AI actions).
   useEffect(() => {
-    const watching = watchSavedScenarios().catch(() => undefined);
+    const watching = [
+      watchSavedScenarios().catch((e) => {
+        console.warn("[App] Could not start watching scenarios saved by the other window:", e);
+        return undefined;
+      }),
+      watchSavedActionConfigs().catch((e) => {
+        console.warn("[App] Could not start watching AI settings saved by the other window:", e);
+        return undefined;
+      }),
+    ];
     return () => {
-      watching.then((stop) => stop?.());
+      watching.forEach((w) => w.then((stop) => stop?.()));
     };
   }, []);
 

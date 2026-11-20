@@ -1,7 +1,8 @@
 // ONNX Runtime in-process streaming STT provider.
 //
-// Loads streaming transducer ONNX models (encoder, decoder, joiner) via the
-// `ort` crate and runs inference on a dedicated std::thread.
+// Loads streaming transducer ONNX models (encoder, decoder, joiner) or a
+// single-file NeMo CTC model (ort_streaming/ctc.rs) via the `ort` crate and
+// runs inference on a dedicated std::thread.
 //
 // Key fixes over the original implementation:
 // - Uses log-mel filterbank features (80-dim) instead of raw PCM
@@ -20,7 +21,27 @@ use tokio::sync::mpsc;
 use crate::audio::AudioChunk;
 use crate::stt::provider::{STTProvider, STTProviderType, TranscriptResult};
 
+mod ctc;
 mod nemo;
+mod segmenter;
+
+/// Which model layout a model directory holds: a transducer (encoder +
+/// decoder + joiner) or a single-file CTC encoder (no decoder/joiner).
+enum DiscoveredModel {
+    Transducer(crate::stt::local_engines::model_discovery::ModelFiles),
+    Ctc(crate::stt::local_engines::model_discovery::OfflineModelFiles),
+}
+
+fn discover(model_dir: &std::path::Path) -> Result<DiscoveredModel, String> {
+    match crate::stt::local_engines::model_discovery::discover_model_files(model_dir) {
+        Ok(files) => Ok(DiscoveredModel::Transducer(files)),
+        Err(transducer_err) => {
+            crate::stt::local_engines::model_discovery::discover_offline_model_files(model_dir)
+                .map(DiscoveredModel::Ctc)
+                .map_err(|ctc_err| format!("{transducer_err}; {ctc_err}"))
+        }
+    }
+}
 
 /// Audio sample rate expected by the models.
 const SAMPLE_RATE: u32 = 16_000;
@@ -93,18 +114,29 @@ impl STTProvider for OrtStreamingSTT {
             return Err("Stream already active".into());
         }
 
-        // Discover model files by pattern (handles epoch-based naming)
-        let model_files =
-            crate::stt::local_engines::model_discovery::discover_model_files(&self.model_dir)
-                .map_err(|e| format!("Model discovery failed in {}: {}", self.model_dir.display(), e))?;
+        // Discover model files by pattern (handles epoch-based naming):
+        // a transducer (encoder+decoder+joiner) or a single-file CTC encoder.
+        let discovered = discover(&self.model_dir)
+            .map_err(|e| format!("Model discovery failed in {}: {}", self.model_dir.display(), e))?;
 
-        log::info!(
-            "OrtStreamingSTT: Discovered models in {} — encoder={}, decoder={}, joiner={}",
-            self.model_dir.display(),
-            model_files.encoder.file_name().unwrap_or_default().to_string_lossy(),
-            model_files.decoder.file_name().unwrap_or_default().to_string_lossy(),
-            model_files.joiner.file_name().unwrap_or_default().to_string_lossy(),
-        );
+        match &discovered {
+            DiscoveredModel::Transducer(files) => {
+                log::info!(
+                    "OrtStreamingSTT: Discovered models in {} — encoder={}, decoder={}, joiner={}",
+                    self.model_dir.display(),
+                    files.encoder.file_name().unwrap_or_default().to_string_lossy(),
+                    files.decoder.file_name().unwrap_or_default().to_string_lossy(),
+                    files.joiner.file_name().unwrap_or_default().to_string_lossy(),
+                );
+            }
+            DiscoveredModel::Ctc(files) => {
+                log::info!(
+                    "OrtStreamingSTT: Discovered CTC model in {} — model={}",
+                    self.model_dir.display(),
+                    files.model.file_name().unwrap_or_default().to_string_lossy(),
+                );
+            }
+        }
 
         self.stop_flag.store(false, AtomicOrdering::SeqCst);
 
@@ -112,25 +144,16 @@ impl STTProvider for OrtStreamingSTT {
         self.audio_tx = Some(audio_tx);
         self.result_tx = Some(result_tx.clone());
 
-        let model_dir = self.model_dir.clone();
         let language = self.language.clone();
         let stop_flag = Arc::clone(&self.stop_flag);
         let seg_start = self.segment_counter;
         let app_handle = self.app_handle.clone();
-        let encoder_path = model_files.encoder.clone();
-        let decoder_path = model_files.decoder.clone();
-        let joiner_path = model_files.joiner.clone();
-        let tokens_path = model_files.tokens.clone();
 
         let thread = std::thread::Builder::new()
             .name("ort-stt-inference".to_string())
             .spawn(move || {
                 inference_thread_main(
-                    model_dir,
-                    encoder_path,
-                    decoder_path,
-                    joiner_path,
-                    tokens_path,
+                    discovered,
                     language,
                     stop_flag,
                     audio_rx,
@@ -196,7 +219,7 @@ impl STTProvider for OrtStreamingSTT {
     }
 
     async fn test_connection(&self) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        match crate::stt::local_engines::model_discovery::discover_model_files(&self.model_dir) {
+        match discover(&self.model_dir) {
             Ok(_) => Ok(true),
             Err(e) => Err(format!("Model files not found: {}", e).into()),
         }
@@ -584,11 +607,7 @@ impl EncoderStateManager {
 
 /// Main inference thread function.
 fn inference_thread_main(
-    _model_dir: PathBuf,
-    encoder_path: PathBuf,
-    decoder_path: PathBuf,
-    joiner_path: PathBuf,
-    tokens_path: PathBuf,
+    model: DiscoveredModel,
     language: String,
     stop_flag: Arc<AtomicBool>,
     audio_rx: std::sync::mpsc::Receiver<AudioMessage>,
@@ -610,8 +629,13 @@ fn inference_thread_main(
 
     debug("info", "Inference thread started, loading models...");
 
+    let (encoder_path, tokens_path) = match &model {
+        DiscoveredModel::Transducer(files) => (&files.encoder, &files.tokens),
+        DiscoveredModel::Ctc(files) => (&files.model, &files.tokens),
+    };
+
     // Load tokens
-    let tokens = match load_tokens(&tokens_path) {
+    let tokens = match load_tokens(tokens_path) {
         Ok(t) => {
             debug("info", &format!("Loaded {} tokens", t.len()));
             t
@@ -623,21 +647,37 @@ fn inference_thread_main(
     };
 
     // Load ORT sessions (mut required for session.run())
-    let mut encoder = match load_ort_session(&encoder_path) {
+    let mut encoder = match load_ort_session(encoder_path) {
         Ok(s) => s,
         Err(e) => {
             debug("error", &format!("Encoder load failed: {}", e));
             return;
         }
     };
-    let mut decoder = match load_ort_session(&decoder_path) {
+
+    // A CTC model directory has no decoder/joiner: a single encoder graph
+    // produces per-frame log-probs directly, decoded by greedy CTC search.
+    let files = match model {
+        DiscoveredModel::Transducer(files) => files,
+        DiscoveredModel::Ctc(_) => {
+            if let Err(error) = ctc::run(
+                &mut encoder, &tokens, &language,
+                &stop_flag, &audio_rx, &result_tx, segment_counter_start, &debug,
+            ) {
+                debug("error", &format!("NeMo CTC inference failed: {error}"));
+            }
+            return;
+        }
+    };
+
+    let mut decoder = match load_ort_session(&files.decoder) {
         Ok(s) => s,
         Err(e) => {
             debug("error", &format!("Decoder load failed: {}", e));
             return;
         }
     };
-    let mut joiner = match load_ort_session(&joiner_path) {
+    let mut joiner = match load_ort_session(&files.joiner) {
         Ok(s) => s,
         Err(e) => {
             debug("error", &format!("Joiner load failed: {}", e));
@@ -1337,12 +1377,54 @@ fn run_joiner(
 }
 
 #[cfg(test)]
+mod discovery_tests {
+    use super::*;
+
+    /// A fresh directory holding empty files with the given names.
+    fn model_dir(name: &str, files: &[&str]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("nexq-ort-discover-{}-{}", name, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for file in files {
+            std::fs::write(dir.join(file), b"").unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn a_transducer_directory_is_discovered_as_a_transducer() {
+        let dir = model_dir("transducer", &["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"]);
+        assert!(matches!(discover(&dir), Ok(DiscoveredModel::Transducer(_))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_single_file_directory_is_discovered_as_ctc() {
+        let dir = model_dir("ctc", &["model.int8.onnx", "tokens.txt"]);
+        assert!(matches!(discover(&dir), Ok(DiscoveredModel::Ctc(_))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_empty_directory_reports_both_layouts() {
+        let dir = model_dir("empty", &[]);
+        let error = discover(&dir).err().expect("an empty directory has no model");
+        assert!(error.contains("encoder"), "{error}");
+        assert!(error.contains("model.onnx"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
 mod live_tests {
     use super::*;
     use crate::audio::AudioSource;
 
     /// Streams a 16 kHz mono WAV through the provider in 100 ms chunks, like a
-    /// meeting does, and prints what comes back. Needs a downloaded model:
+    /// meeting does, and prints what comes back. Needs a downloaded model —
+    /// a transducer directory (encoder/decoder/joiner, e.g. Parakeet TDT
+    /// 0.6B v3) or a single-file CTC directory (e.g. Parakeet CTC 110M)
+    /// both work, since `OrtStreamingSTT` discovers the layout itself:
     ///
     /// `NEXQ_PARAKEET_DIR=<model dir> NEXQ_TEST_WAV=<wav> cargo test --lib transcribes_a_wav -- --ignored --nocapture`
     #[test]
