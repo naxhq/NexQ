@@ -176,3 +176,34 @@ describe("configStore: Claude CLI config", () => {
     expect(s().lastModelByProvider.claude_cli).toBeUndefined();
   });
 });
+
+describe("configStore: capture shortcut", () => {
+  beforeEach(() => {
+    saved.clear();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("an old saved config without it loads with Ctrl+Shift+S, other shortcuts untouched", async () => {
+    saved.set("stealthShortcut", "CmdOrCtrl+Alt+H");
+    saved.set("assistShortcut", "CmdOrCtrl+Alt+A");
+    const store = await freshStore();
+    await store.getState().loadConfig();
+    expect(store.getState().captureShortcut).toBe("CmdOrCtrl+Shift+S");
+    expect(store.getState().stealthShortcut).toBe("CmdOrCtrl+Alt+H");
+    expect(store.getState().assistShortcut).toBe("CmdOrCtrl+Alt+A");
+  });
+
+  it("restores a saved one and persists a change", async () => {
+    saved.set("captureShortcut", "CmdOrCtrl+Alt+S");
+    const store = await freshStore();
+    await store.getState().loadConfig();
+    expect(store.getState().captureShortcut).toBe("CmdOrCtrl+Alt+S");
+
+    store.getState().setCaptureShortcut("CmdOrCtrl+Alt+X");
+    await vi.waitFor(() => expect(saved.get("captureShortcut")).toBe("CmdOrCtrl+Alt+X"));
+  });
+});

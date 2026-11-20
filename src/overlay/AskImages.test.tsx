@@ -108,6 +108,28 @@ describe("useAskImages", () => {
     expect(result.current.images).toHaveLength(MAX_IMAGES);
   });
 
+  it("attaches files from the capture shortcut the same way, with the same limit", async () => {
+    const { result } = renderHook(() => useAskImages());
+    await act(async () => result.current.attach([png("a"), png("b")]));
+    await waitFor(() => expect(result.current.images).toHaveLength(2));
+    await act(async () => result.current.attach([png("c"), png("d")]));
+    await waitFor(() => expect(result.current.images).toHaveLength(3));
+    expect(useToastStore.getState().toasts).toEqual([
+      expect.objectContaining({ message: `You can attach up to ${MAX_IMAGES} images`, type: "error" }),
+    ]);
+  });
+
+  it("refuses captured files with another provider", async () => {
+    useConfigStore.setState({ llmProvider: "openai" });
+    const { result } = renderHook(() => useAskImages());
+    await act(async () => result.current.attach([png("a")]));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(result.current.images).toHaveLength(0);
+    expect(useToastStore.getState().toasts).toEqual([
+      expect.objectContaining({ message: IMAGES_NEED_CLAUDE, type: "warning" }),
+    ]);
+  });
+
   it("frees the slot of a removed image", async () => {
     const { result } = renderHook(() => useAskImages());
     await act(async () => result.current.onPaste(paste([png("a"), png("b"), png("c")]).event));

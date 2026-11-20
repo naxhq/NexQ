@@ -9,6 +9,7 @@ pub mod log_commands;
 pub mod meeting_chat_commands;
 pub mod meeting_commands;
 pub mod model_commands;
+pub mod screen_capture_commands;
 pub mod settings_commands;
 pub mod stealth_commands;
 pub mod stt_commands;

@@ -20,6 +20,14 @@ export const SEND_AS_IS_BYTES = 1_500_000;
 export const MAX_INPUT_BYTES = 25 * 1024 * 1024;
 export const IMAGE_TOO_LARGE = "That image is too large. Paste a smaller area.";
 
+/**
+ * Whether the LLM provider can read images. Only Claude (subscription) can;
+ * pasting an image and the screen-capture shortcut both depend on this.
+ */
+export function providerReadsImages(provider: string): boolean {
+  return provider === "claude_cli";
+}
+
 /** Why `file` can't be attached, or `null` when it can. */
 export function imageProblem(file: { type: string; size: number }, already: number): string | null {
   if (already >= MAX_IMAGES) return `You can attach up to ${MAX_IMAGES} images`;

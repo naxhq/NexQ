@@ -67,6 +67,24 @@ describe("ModeButtons Ask box with a pasted image", () => {
     vi.unstubAllGlobals();
   });
 
+  it("a captured screenshot opens the Ask box with the image attached, and sends nothing", async () => {
+    const { deliverScreenshot } = await import("../lib/screenCapture");
+    render(<ModeButtons />);
+    expect(screen.queryByLabelText("Ask a question")).toBeNull();
+    act(() => deliverScreenshot(new File(["shot"], "screen.png", { type: "image/png" })));
+    await screen.findByRole("group", { name: "Attached images" });
+    expect(input()).toBeTruthy();
+    expect(vi.mocked(runUserAction)).not.toHaveBeenCalled();
+  });
+
+  it("takes a screenshot that arrived before the Ask box existed", async () => {
+    const { deliverScreenshot } = await import("../lib/screenCapture");
+    deliverScreenshot(new File(["shot"], "screen.png", { type: "image/png" }));
+    render(<ModeButtons />);
+    await screen.findByRole("group", { name: "Attached images" });
+    expect(input()).toBeTruthy();
+  });
+
   it("an empty box with an image sends the default question with the image", async () => {
     render(<ModeButtons />);
     openAsk();

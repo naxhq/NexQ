@@ -41,6 +41,8 @@ use commands::meeting_chat_commands;
 use commands::settings_commands;
 // == MODULE COMMANDS: models ==
 use commands::model_commands;
+// == MODULE COMMANDS: screen capture ==
+use commands::screen_capture_commands;
 // == MODULE COMMANDS: stealth ==
 use commands::stealth_commands;
 // == MODULE COMMANDS: gemini cache ==
@@ -621,6 +623,8 @@ pub fn run() {
             model_commands::download_local_stt_model,
             model_commands::cancel_model_download,
             model_commands::delete_local_stt_model,
+            // == COMMANDS: screen capture ==
+            screen_capture_commands::capture_screen_under_cursor,
             // == COMMANDS: stealth ==
             stealth_commands::set_stealth_mode,
             stealth_commands::get_stealth_support,

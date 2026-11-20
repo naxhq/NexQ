@@ -10,6 +10,7 @@ import {
   clipboardHasText,
   fitWithin,
   imageFilesFrom,
+  providerReadsImages,
   imageProblem,
   prepareImage,
   previewSrc,
@@ -170,5 +171,14 @@ describe("clipboardHasText", () => {
     expect(clipboardHasText(clip(""))).toBe(false);
     expect(clipboardHasText(clip("  \n"))).toBe(false);
     expect(clipboardHasText(null)).toBe(false);
+  });
+});
+
+describe("providerReadsImages", () => {
+  it("is true only for Claude (subscription)", () => {
+    expect(providerReadsImages("claude_cli")).toBe(true);
+    for (const other of ["openai", "anthropic", "ollama", "groq", "custom", ""]) {
+      expect(providerReadsImages(other)).toBe(false);
+    }
   });
 });

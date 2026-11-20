@@ -6,6 +6,7 @@ import { useMeetingStore } from "../stores/meetingStore";
 import { cancelGeneration } from "../lib/ipc";
 import { runYourAction, useAutoAnswerRunning } from "../lib/autoAnswer";
 import { AskImageChips, askPlaceholder, useAskImages } from "./AskImages";
+import { SCREENSHOT_EVENT, takePendingScreenshots } from "../lib/screenCapture";
 import { sendAsk } from "./sendAsk";
 import { DEFAULT_CONTEXT_SCOPE, scopeHint } from "../lib/contextScope";
 import { showToast } from "../stores/toastStore";
@@ -128,6 +129,7 @@ export function ModeButtons() {
     canAttach: canAttachImage,
     announcement: askAnnouncement,
     onPaste: onAskPaste,
+    attach: attachAskImages,
     remove: removeAskImage,
     clear: clearAskImages,
   } = useAskImages();
@@ -140,6 +142,20 @@ export function ModeButtons() {
     setAskInputVisible(false);
     clearAskImages();
   }, [meetingId, clearAskImages]);
+
+  // The capture shortcut: open the Ask box with the screenshot attached, the
+  // same way a paste would. Also takes one that arrived before this mounted.
+  useEffect(() => {
+    const take = () => {
+      const files = takePendingScreenshots();
+      if (files.length === 0) return;
+      setAskInputVisible(true);
+      attachAskImages(files);
+    };
+    take();
+    window.addEventListener(SCREENSHOT_EVENT, take);
+    return () => window.removeEventListener(SCREENSHOT_EVENT, take);
+  }, [attachAskImages]);
 
   const handleAskSubmit = useCallback(() => {
     if (locked) return;

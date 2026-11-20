@@ -38,6 +38,11 @@ When the thing you need help with is only visible on screen (an exercise, a ques
 3. Press `Ctrl+V` in the Ask box. The picture shows as a small thumbnail.
 4. Press Enter.
 
+**Or capture the screen with one key.** During a meeting, press `Ctrl+Shift+S` from any app. NexQ takes a picture of the screen your mouse pointer is on (so it works with the meeting on a second monitor), opens the Ask box and attaches it. Nothing is sent until you press Enter. If the overlay was hidden, it comes back first. Change the key in Settings > General.
+
+- The capture shortcut is on only during a meeting with **Claude (subscription)**. With another provider `Ctrl+Shift+S` stays free for your other apps, and Settings says why the shortcut is off.
+- NexQ's own windows are not hidden or moved for the picture. With **Hide from screen share** on, they are left out of it; otherwise they are in it like any other window.
+- If the capture fails (for example the screen is locked or shows protected video, or on macOS Screen Recording isn't allowed for NexQ), a short message says so.
 - You can attach up to 3 images (PNG, JPEG, GIF or WebP). NexQ shrinks large ones before sending, so a full-screen screenshot works. Click the **x** on a thumbnail to remove it.
 - With an empty box, the image itself is the question: Claude reads it and answers or solves it, rather than describing it.
 - This works only with **Claude (subscription)**. With another provider, NexQ doesn't attach the image and tells you images need Claude. When Claude is unavailable and NexQ would answer with the fallback provider, it asks you to try again or remove the image, instead of answering without it.
@@ -68,7 +73,7 @@ Hovering the Claude chip in the footer shows the models, the number of requests 
 - NexQ never reads your `~/.claude` folder, your credentials, or any tokens. Sign-in happens only in Claude's own tool.
 - NexQ runs the unmodified `claude` program with all tools disabled, in an empty private folder. Claude cannot read your files, run commands, or browse on NexQ's behalf.
 - Claude API environment variables (such as `ANTHROPIC_API_KEY`) are removed from the process, so NexQ never passes an API key to Claude. The session uses whatever account you logged in with: if that login bills an API account rather than a Pro or Max plan, Settings and the footer show "This Claude login bills an API account, not your subscription." (amber, never "Connected"). It still works, at API prices; log in with your Claude account to use your subscription instead.
-- Images you paste into Ask go to Anthropic with your question, like the transcript. NexQ doesn't save them; the AI Log keeps only the text.
+- Images you paste or capture into Ask go to Anthropic with your question, like the transcript. A screenshot can include other people's video or documents. NexQ doesn't save them; the AI Log keeps only the text.
 - Transcript and context text you send is processed by Anthropic under your Claude account's terms, like any Claude conversation. Choose a local provider (Ollama, local Whisper) if audio and text must stay on your machine.
 
 ## Troubleshooting
