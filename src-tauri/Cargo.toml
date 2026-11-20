@@ -101,3 +101,14 @@ coreaudio-sys = "0.2"
 core-foundation = "0.10"
 # macOS Keychain credential backend (src/credentials/macos_keychain.rs).
 security-framework = "3"
+
+# The echo canceller's tests run minutes of audio through AEC3; unoptimized
+# that takes tens of seconds (and too long to keep up in `tauri dev`).
+[profile.dev.package.sonora]
+opt-level = 3
+[profile.dev.package.sonora-aec3]
+opt-level = 3
+[profile.dev.package.sonora-common-audio]
+opt-level = 3
+[profile.dev.package.sonora-fft]
+opt-level = 3
