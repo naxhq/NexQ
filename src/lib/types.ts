@@ -1303,6 +1303,8 @@ export interface SourceActivity {
   kind: SourceKind;
   label: string;
   chip: SourceChip | null;
+  /** Only the chip is new: the tool call it belongs to ended well. No line of its own. */
+  chip_only?: boolean;
 }
 
 /**

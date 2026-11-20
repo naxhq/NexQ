@@ -35,9 +35,10 @@ export function ResponseProgress() {
   const startedAt = useStreamStore((s) => s.requestStartedAt);
   const meta = useStreamStore((s) => s.streamMeta);
   const asked = useStreamStore((s) => s.requestSources);
-  // An answer with a pill on waits for the with-sources session while it starts.
+  // An answer with a pill on waits for the with-sources session while it starts
+  // (the Fast one, or the Deep one a Recap uses).
   const sourcesStarting = useAgentStore((s) =>
-    Object.values(s.sessions).some((x) => x.with_sources && x.scope === "live" && x.tier === "fast" && x.state === "starting"),
+    Object.values(s.sessions).some((x) => x.with_sources && x.scope === "live" && x.state === "starting"),
   );
   const running = phase !== "idle";
   const elapsed = useElapsed(startedAt, running);

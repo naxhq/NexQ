@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { withoutImages } from "../../lib/answerMarkdown";
+import { findSourcesSession } from "../../lib/sourcePills";
+import { useAgentStore } from "../../stores/agentStore";
 import type { Components } from "react-markdown";
 import { ArrowUp, Loader2, MessageCircleQuestion, Square } from "lucide-react";
 import type { ChatItem, MeetingChatState } from "../../hooks/useMeetingChat";
@@ -42,6 +44,8 @@ export function AskMeetingTab({ chat, meetingId = null, unavailableReason = null
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const pinnedRef = useRef(true);
 
+  // This meeting's with-sources session is still starting: an answer that asked for sources waits for it.
+  const sourcesStarting = useAgentStore((s) => findSourcesSession(s.sessions, "past", meetingId)?.state === "starting");
   const blocked = !!unavailableReason || otherTaskRunning;
   const canSend = !blocked && !isAsking && draft.trim().length > 0;
 
@@ -103,7 +107,7 @@ export function AskMeetingTab({ chat, meetingId = null, unavailableReason = null
             <EmptyState disabled={blocked || isAsking} onPick={submit} />
           )}
           {items.map((item) =>
-            item.role === "user" ? <Question key={item.id} item={item} /> : <Answer key={item.id} item={item} />,
+            item.role === "user" ? <Question key={item.id} item={item} /> : <Answer key={item.id} item={item} loadingSources={sourcesStarting} />,
           )}
         </div>
       </div>
@@ -201,7 +205,7 @@ function Question({ item }: { item: ChatItem }) {
   );
 }
 
-function Answer({ item }: { item: ChatItem }) {
+function Answer({ item, loadingSources }: { item: ChatItem; loadingSources: boolean }) {
   const text = stripThinkTags(item.content);
   const streaming = item.status === "streaming";
   return (
@@ -215,7 +219,7 @@ function Answer({ item }: { item: ChatItem }) {
       {streaming && !text ? (
         <div className="flex items-center gap-2 text-xs text-muted-foreground/60">
           <Loader2 className="h-3.5 w-3.5 animate-spin text-primary/70" />
-          Thinking…
+          {item.askedSources && loadingSources ? "Loading your sources…" : "Thinking…"}
         </div>
       ) : (
         text && (

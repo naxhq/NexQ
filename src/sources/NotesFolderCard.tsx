@@ -14,7 +14,7 @@ interface NotesFolderCardProps {
 
 /** What a folder card says about what is inside: a count, or why it can't be used. */
 function folderLine(info: NotesFolderInfo | undefined): { text: string; bad: boolean } {
-  if (!info) return { text: "Looking...", bad: false };
+  if (!info) return { text: "Looking…", bad: false };
   if (!info.exists) return { text: "Folder not found", bad: true };
   if (info.problem) return { text: info.problem, bad: true };
   const n = info.md_count;

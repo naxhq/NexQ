@@ -6,11 +6,12 @@ export function McpPermissionNotice({ onDismiss }: { onDismiss: () => void }) {
     <SourcesModal title="Before you switch tools on" onClose={onDismiss} hideClose>
       <div className="space-y-3 text-xs leading-relaxed text-muted-foreground">
         <p>
-          When a tool is on, the AI can use it without asking you first. NexQ switches off every tool that looks like
-          it changes something, such as adding, sending, editing or deleting.
+          When a tool is on, the AI can use it without asking you first. NexQ starts with the tools switched off whose names
+          suggest they change something, such as adding, sending, editing or deleting. A name can be misleading, so
+          this is a guess, not a guarantee.
         </p>
         <p>Look through each server's tool list and keep on only what you want the AI to use.</p>
-        <p>What a tool sends back is treated as information to read, never as instructions to follow.</p>
+        <p>NexQ tells the AI to treat what a tool sends back as information to read, not as instructions to follow.</p>
       </div>
       <div className="mt-4 flex justify-end">
         <button

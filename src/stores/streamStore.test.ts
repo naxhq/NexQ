@@ -193,6 +193,18 @@ describe("streamStore", () => {
       ]);
     });
 
+    it("a chip-only activity adds the chip but no line, and a line without one leaves no chip", () => {
+      s().setPending("Assist", "r9");
+      s().startStream("Assist", "m", "p", { requestId: "r9" });
+      // The call started: a line, no chip yet (it may still be denied).
+      s().addActivity("r9", { kind: "tool", label: "Mira: add_task", chip: null });
+      expect(s().currentChips).toEqual([]);
+      // A call that worked: its chip arrives on its own.
+      s().addActivity("r9", { kind: "tool", label: "Mira: person_brief", chip: tool.chip, chip_only: true });
+      expect(s().currentActivity.map((a) => a.label)).toEqual(["Mira: add_task"]);
+      expect(s().currentChips).toEqual([tool.chip]);
+    });
+
     it("activity that arrives before llm_stream_start is held by request id and shown once it starts", () => {
       s().setPending("Assist", "r1");
       s().addActivity("r1", { kind: "notice", label: "Mira did not start, so its tools are not available", chip: null });

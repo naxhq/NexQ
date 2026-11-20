@@ -38,6 +38,8 @@ export interface ChatItem {
   chips?: SourceChip[];
   /** Sources were not used, or only partly (this view only; not saved). */
   notice?: string | null;
+  /** This question asked for notes or tools (a pill was on), so it may wait for the sources session. */
+  askedSources?: boolean;
 }
 
 export interface MeetingChatState {
@@ -174,7 +176,14 @@ export function useMeetingChat(meetingId: string, { enabled = true, trackSession
       setItems((prev) => [
         ...prev,
         { id: questionId, role: "user", content: question, status: "pending", createdAt: now },
-        { id: answerId, role: "assistant", content: "", status: "streaming", createdAt: now },
+        {
+          id: answerId,
+          role: "assistant",
+          content: "",
+          status: "streaming",
+          createdAt: now,
+          ...(sources && (sources.notes || sources.tools) ? { askedSources: true } : {}),
+        },
       ]);
 
       let answer = "";
@@ -213,7 +222,7 @@ export function useMeetingChat(meetingId: string, { enabled = true, trackSession
             if (a.kind === "notice") {
               notice = notice ? `${notice} ${a.label}` : a.label;
             } else {
-              activity = [...activity, a.label];
+              if (!a.chip_only) activity = [...activity, a.label];
               if (a.chip) chips = dedupeChips([...chips, a.chip]);
             }
             update(answerId, { activity, chips, notice });

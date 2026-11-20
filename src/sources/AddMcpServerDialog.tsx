@@ -236,7 +236,7 @@ export function AddMcpServerDialog({ onClose, onAdded, editing }: AddMcpServerDi
           )}
           <div className="flex justify-end">
             <button type="button" onClick={submitJson} disabled={!json.trim() || busy === "json"} className={primaryButton}>
-              {busy === "json" ? "Adding..." : "Add servers"}
+              {busy === "json" ? "Adding…" : "Add servers"}
             </button>
           </div>
         </div>
@@ -336,7 +336,7 @@ export function AddMcpServerDialog({ onClose, onAdded, editing }: AddMcpServerDi
               Check these settings
             </button>
             <button type="button" onClick={submitForm} disabled={!formReady || busy !== null} className={primaryButton}>
-              {busy === "form" ? "Saving..." : editing ? "Save" : "Add server"}
+              {busy === "form" ? "Saving…" : editing ? "Save" : "Add server"}
             </button>
           </div>
         </div>
@@ -348,7 +348,7 @@ export function AddMcpServerDialog({ onClose, onAdded, editing }: AddMcpServerDi
           {!ccServers && !ccError && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" />
-              Looking...
+              Looking…
             </div>
           )}
           {ccServers && ccServers.length === 0 && <p className="text-xs text-muted-foreground">No servers found in Claude Code.</p>}
@@ -395,7 +395,7 @@ export function AddMcpServerDialog({ onClose, onAdded, editing }: AddMcpServerDi
           )}
           <div className="flex justify-end">
             <button type="button" onClick={submitClaude} disabled={picked.size === 0 || busy === "claude"} className={primaryButton}>
-              {busy === "claude" ? "Importing..." : "Import selected"}
+              {busy === "claude" ? "Importing…" : "Import selected"}
             </button>
           </div>
         </div>

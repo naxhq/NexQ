@@ -24,7 +24,7 @@ function summaryOf(server: McpServer): string {
 }
 
 function statusOf(server: McpServer, checking: boolean): { text: string; tone: "ok" | "bad" | "quiet" } {
-  if (checking) return { text: "Checking...", tone: "quiet" };
+  if (checking) return { text: "Checking…", tone: "quiet" };
   if (server.needs_sign_in) return { text: NEEDS_SIGN_IN_TEXT, tone: "bad" };
   const c = server.last_check;
   if (!c) return { text: server.enabled ? "Not checked" : "Not checked yet. Check it to switch it on", tone: "quiet" };

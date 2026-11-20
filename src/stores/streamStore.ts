@@ -132,7 +132,8 @@ function withActivity(state: ActivityState, activity: SourceActivity): ActivityS
     return { currentActivity, currentChips, currentNotices: [...currentNotices, activity.label] };
   }
   return {
-    currentActivity: [...state.currentActivity, activity],
+    // A chip-only activity adds no line: its line was shown when the call started.
+    currentActivity: activity.chip_only ? state.currentActivity : [...state.currentActivity, activity],
     currentChips: activity.chip ? dedupeChips([...state.currentChips, activity.chip]) : state.currentChips,
     currentNotices: state.currentNotices,
   };

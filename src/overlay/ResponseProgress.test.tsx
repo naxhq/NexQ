@@ -43,6 +43,13 @@ describe("ResponseProgress and your sources", () => {
     expect(screen.getByText("Loading your sources")).toBeInTheDocument();
   });
 
+  it("says it for a Deep answer (Recap) waiting on its sources session too", () => {
+    setSession({ ...sourcesSession("starting"), tier: "deep" });
+    useStreamStore.getState().setPending("Recap", "r2", { notes: false, tools: true });
+    render(<ResponseProgress />);
+    expect(screen.getByText("Loading your sources")).toBeInTheDocument();
+  });
+
   it("says Sending when the answer asked for no sources", () => {
     setSession(sourcesSession("starting"));
     useStreamStore.getState().setPending("Assist", "r1", { notes: false, tools: false });

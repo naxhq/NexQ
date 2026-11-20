@@ -38,10 +38,14 @@ vi.mock("../../lib/ipc", async (importOriginal) => ({
 
 import { AskMeetingTab } from "./AskMeetingTab";
 import { useMeetingChat } from "../../hooks/useMeetingChat";
+import { useSourcesStore, DEFAULT_SOURCES_CONFIG } from "../../stores/sourcesStore";
+import { useConfigStore } from "../../stores/configStore";
+import { agentSessionKey, useAgentStore } from "../../stores/agentStore";
+import type { AgentSessionStatus } from "../../lib/types";
 
 function Harness({ trackSession = false }: { trackSession?: boolean }) {
   const chat = useMeetingChat("m1", { trackSession });
-  return <AskMeetingTab chat={chat} />;
+  return <AskMeetingTab chat={chat} meetingId="m1" />;
 }
 
 const saved: MeetingChatMessage[] = [
@@ -205,5 +209,34 @@ describe("AskMeetingTab", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Dana\.md/ }));
     expect(ipc.openSourceFile).toHaveBeenCalledWith("D:\\V\\Dana.md");
     expect(screen.getByText("Mira did not start, so its tools are not available.")).toBeInTheDocument();
+  });
+  it("an answer that asked for sources says Loading your sources while that session starts", async () => {
+    ipc.askMeeting.mockImplementation(() => new Promise<void>(() => {}));
+    useConfigStore.setState({ llmProvider: "claude_cli" });
+    useSourcesStore.setState({
+      config: { ...DEFAULT_SOURCES_CONFIG, notes_folders: [{ id: "f", label: "Vault", path: "D:\V", enabled: true }] },
+      toggles: { notes: true, tools: false },
+    });
+    const starting = {
+      scope: "past",
+      meeting_id: "m1",
+      tier: "deep",
+      state: "starting",
+      model: "sonnet",
+      detail: null,
+      error_kind: null,
+      with_sources: true,
+      sources_notice: null,
+      usage: { input_tokens: 0, output_tokens: 0, cost_usd: 0 },
+    } as unknown as AgentSessionStatus;
+    useAgentStore.setState({ sessions: { [agentSessionKey(starting)]: starting } });
+    render(<Harness />);
+    await screen.findByText("When do we ship?");
+    fireEvent.change(screen.getByRole("textbox", { name: /ask about this meeting/i }), { target: { value: "Who is Dana?" } });
+    fireEvent.click(screen.getByRole("button", { name: /send question/i }));
+    expect(await screen.findByText("Loading your sources…")).toBeInTheDocument();
+    expect(screen.queryByText("Thinking…")).toBeNull();
+    useAgentStore.setState({ sessions: {} });
+    useSourcesStore.setState({ config: DEFAULT_SOURCES_CONFIG, toggles: { notes: false, tools: false } });
   });
 });

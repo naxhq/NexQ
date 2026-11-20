@@ -17,7 +17,7 @@ const NOTES_TOPICS: Topic[] = [
   },
   {
     title: "What it can't do",
-    body: "Change, create or delete a note. Notes are read only. Anything it reads is treated as information, never as instructions.",
+    body: "Change, create or delete a note. Notes are read only. NexQ tells the AI to treat what it reads in your notes as information, not as instructions.",
   },
   {
     title: "Claude subscription only",
@@ -25,7 +25,7 @@ const NOTES_TOPICS: Topic[] = [
   },
   {
     title: "It can add a few seconds",
-    body: "Looking things up takes a moment. That is why the Notes pill in a meeting is off until you switch it on for an answer.",
+    body: "Looking things up takes a moment. That is why the Notes pill in a meeting decides, for each answer you ask for, whether it may look in your notes. The pill stays as you left it.",
   },
   {
     title: "How to add one",
@@ -40,7 +40,7 @@ const TOOLS_TOPICS: Topic[] = [
   },
   {
     title: "What it can't do",
-    body: "Call a tool you switched off. Tools that look like they change something (add, send, edit, delete) start off. What a tool returns is treated as information, never as instructions.",
+    body: "Call a tool you switched off. Tools whose names suggest they change something (add, send, edit, delete) start off, and you should still read the list. NexQ tells the AI to treat what a tool returns as information, not as instructions.",
   },
   {
     title: "Claude subscription only",
@@ -48,7 +48,7 @@ const TOOLS_TOPICS: Topic[] = [
   },
   {
     title: "It can add a few seconds",
-    body: "Starting a server and calling a tool takes a moment. That is why the Tools pill in a meeting is off until you switch it on for an answer.",
+    body: "Starting a server and calling a tool takes a moment. That is why the Tools pill in a meeting decides, for each answer you ask for, whether it may use your tools. The pill stays as you left it.",
   },
   {
     title: "How to add one",
