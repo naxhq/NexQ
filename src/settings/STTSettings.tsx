@@ -272,6 +272,7 @@ export function STTSettings() {
   const setMeetingAudioConfig = useConfigStore((s) => s.setMeetingAudioConfig);
   const sttLanguage = useConfigStore((s) => s.sttLanguage);
   const setSTTLanguage = useConfigStore((s) => s.setSTTLanguage);
+  const isDeepgramFlux = useConfigStore((s) => s.deepgramConfig.model.startsWith("flux-"));
   const activeWhisperModel = useConfigStore((s) => s.activeWhisperModel);
   // Persisted: providers whose key has been saved + tested successfully
   const verifiedCloudProviders = useConfigStore((s) => s.verifiedCloudProviders);
@@ -762,9 +763,14 @@ export function STTSettings() {
             Select a Deepgram model that supports Vietnamese, such as Nova-3.
           </p>
         )}
+        {sttLanguage === "uk-UA" && selectedProvider === "deepgram" && isDeepgramFlux && (
+          <p className="mt-2 text-xs text-warning">
+            Switch from Flux to Nova-3 for Ukrainian transcription.
+          </p>
+        )}
         {selectedProvider === "parakeet_tdt" && parakeetCtcEnglishOnly && sttLanguage !== "vi-VN" && (
           <p className="mt-2 text-xs text-warning">
-            Parakeet CTC 110M is English-only. Use Parakeet TDT 0.6B v3 for Russian and other supported languages.
+            Parakeet CTC 110M is English-only. Choose Parakeet TDT 0.6B v3 for multilingual transcription.
           </p>
         )}
         {selectedProvider === "cartesia" && (
