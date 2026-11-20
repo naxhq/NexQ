@@ -253,6 +253,10 @@ export interface AIResponse {
   first_token_ms?: number;
   /** The transcript scope the answer was asked with, when not the default. */
   scope_label?: string | null;
+  /** Notes and tools the answer used, shown as chips at its end (see `SourceChip`). */
+  source_chips?: SourceChip[];
+  /** Why sources were not used, or only partly, shown with the answer. */
+  source_notices?: string[];
 }
 
 export interface ModelInfo {

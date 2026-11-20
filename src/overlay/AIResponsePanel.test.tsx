@@ -9,6 +9,12 @@ import { AIResponsePanel } from "./AIResponsePanel";
 import { useStreamStore } from "../stores/streamStore";
 import { useMeetingStore } from "../stores/meetingStore";
 
+const openSourceFile = vi.hoisted(() => vi.fn());
+vi.mock("../lib/ipc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/ipc")>()),
+  openSourceFile: (...args: unknown[]) => openSourceFile(...args),
+}));
+
 const T0 = 1_700_000_000_000;
 const s = () => useStreamStore.getState();
 
@@ -113,5 +119,49 @@ describe("AIResponsePanel", () => {
     });
     expect(screen.queryByText("Writing…")).toBeNull();
     expect(screen.getByText("Last 5 min · 1.2 s · first words 0.6 s")).toBeInTheDocument();
+  });
+
+  it("shows activity lines while streaming and chips after; a notes chip opens the file", async () => {
+    openSourceFile.mockResolvedValue(undefined);
+    render(<AIResponsePanel />);
+    act(() => {
+      s().setPending("Assist", "r1", { notes: true, tools: false });
+      s().startStream("Assist", "m", "Claude CLI", { requestId: "r1" });
+      s().addActivity("r1", {
+        kind: "notes",
+        label: "Searching notes for 'Dana'",
+        chip: { kind: "notes", label: "Dana.md", path: "D:\\V\\Dana.md" },
+      });
+      s().appendToken("Dana owns it.");
+    });
+    expect(screen.getByText("Searching notes for 'Dana'")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Dana\.md/ })).toBeNull();
+
+    act(() => s().endStream(5));
+    expect(screen.queryByText("Searching notes for 'Dana'")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Dana\.md/ }));
+    expect(openSourceFile).toHaveBeenCalledWith("D:\\V\\Dana.md");
+  });
+
+  it("a sources-failure notice shows above the answer, while it streams and after", () => {
+    render(<AIResponsePanel />);
+    act(() => {
+      s().setPending("Assist", "r2");
+      // Before llm_stream_start, as the backend sends it.
+      s().addActivity("r2", { kind: "notice", label: "Your sources were not used: Mira did not start.", chip: null });
+      s().startStream("Assist", "m", "Claude CLI", { requestId: "r2" });
+      s().appendToken("Answer text");
+    });
+    const notice = screen.getByText("Your sources were not used: Mira did not start.");
+    const text = screen.getByText("Answer text");
+    expect(notice.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    act(() => s().endStream(5));
+    expect(screen.getByText("Your sources were not used: Mira did not start.")).toBeInTheDocument();
+  });
+
+  it("an answer without sources shows no chip row", () => {
+    render(<AIResponsePanel />);
+    answer("Assist", "plain answer");
+    expect(screen.queryByLabelText("Sources used")).toBeNull();
   });
 });

@@ -19,6 +19,8 @@ import { ColorPickerButton } from "../components/ColorPickerButton";
 import { ResponseProgress } from "./ResponseProgress";
 import { ResponseHistoryList } from "./ResponseHistoryList";
 import { formatDuration } from "./responseFormat";
+import { SourceChips } from "../sources/SourceChips";
+import { SourceActivityLines, SourceNotices } from "../sources/SourceActivityLines";
 
 /** "current", "resp-<id>" (a history answer) or "pinned-<id>". */
 type TabId = "current" | `resp-${string}` | `pinned-${string}`;
@@ -35,6 +37,8 @@ export function AIResponsePanel() {
   const currentId = useStreamStore((s) => s.currentId);
   const error = useStreamStore((s) => s.error);
   const currentSources = useStreamStore((s) => s.currentSources);
+  const currentActivity = useStreamStore((s) => s.currentActivity);
+  const currentNotices = useStreamStore((s) => s.currentNotices);
   const responseHistory = useStreamStore((s) => s.responseHistory);
   const pinnedResponses = useStreamStore((s) => s.pinnedResponses);
   const pinResponse = useStreamStore((s) => s.pinResponse);
@@ -217,6 +221,8 @@ export function AIResponsePanel() {
         {activeTab === "current" && inFlight && (
           <div className="space-y-2.5" aria-atomic="false">
             <ResponseProgress />
+            <SourceActivityLines lines={currentActivity.map((a) => a.label)} />
+            <SourceNotices notices={currentNotices} />
             {currentContent && (
               <div className="prose prose-sm prose-invert max-w-none leading-relaxed" style={proseStyle}>
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -241,12 +247,14 @@ export function AIResponsePanel() {
                 onPin={currentResponse ? () => handlePin(currentResponse.id) : undefined}
               />
             )}
+            <SourceNotices notices={currentResponse?.source_notices ?? []} />
             <div className="prose prose-sm prose-invert max-w-none leading-relaxed" style={proseStyle}>
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {currentContent}
               </ReactMarkdown>
             </div>
             <SourcesList sources={currentSources} />
+            <SourceChips chips={currentResponse?.source_chips ?? []} />
           </div>
         )}
 
@@ -261,12 +269,14 @@ export function AIResponsePanel() {
               onCopy={() => handleCopy(displayContent, displayResponse!.id)}
               onPin={() => handlePin(displayResponse!.id)}
             />
+            <SourceNotices notices={displayResponse.source_notices ?? []} />
             <div className="prose prose-sm prose-invert max-w-none leading-relaxed" style={proseStyle}>
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {displayContent}
               </ReactMarkdown>
             </div>
             <SourcesList sources={displayResponse.sources} />
+            <SourceChips chips={displayResponse.source_chips ?? []} />
           </div>
         )}
 

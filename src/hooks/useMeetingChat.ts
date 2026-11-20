@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { askMeeting, cancelGeneration, getAgentSessions, listMeetingChat } from "../lib/ipc";
+import { dedupeChips } from "../lib/sourceChips";
 import {
   onAgentSessionStatus,
+  onStreamActivity,
   onStreamEnd,
   onStreamError,
   onStreamStart,
   onStreamToken,
 } from "../lib/events";
-import type { AgentSessionStatus, MeetingChatMessage } from "../lib/types";
+import type { AgentSessionStatus, MeetingChatMessage, SourceChip } from "../lib/types";
 import { requestToggles } from "../stores/sourcesStore";
 
 /**
@@ -30,6 +32,12 @@ export interface ChatItem {
   error?: string;
   model?: string | null;
   createdAt: number;
+  /** What the answer did with your sources while it streamed, oldest first (this view only; not saved). */
+  activity?: string[];
+  /** Notes and tools the answer used (this view only; not saved). */
+  chips?: SourceChip[];
+  /** Sources were not used, or only partly (this view only; not saved). */
+  notice?: string | null;
 }
 
 export interface MeetingChatState {
@@ -171,6 +179,9 @@ export function useMeetingChat(meetingId: string, { enabled = true, trackSession
 
       let answer = "";
       let finished = false;
+      let activity: string[] = [];
+      let chips: SourceChip[] = [];
+      let notice: string | null = null;
       const update = (id: string, patch: Partial<ChatItem>) =>
         setItems((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
       const finish = (status: ChatItemStatus, error?: string) => {
@@ -195,6 +206,17 @@ export function useMeetingChat(meetingId: string, { enabled = true, trackSession
             if (!ours(event.request_id)) return;
             answer += event.token;
             update(answerId, { content: answer });
+          }),
+          await onStreamActivity((event) => {
+            if (!ours(event.request_id)) return;
+            const a = event.activity;
+            if (a.kind === "notice") {
+              notice = notice ? `${notice} ${a.label}` : a.label;
+            } else {
+              activity = [...activity, a.label];
+              if (a.chip) chips = dedupeChips([...chips, a.chip]);
+            }
+            update(answerId, { activity, chips, notice });
           }),
           await onStreamEnd((event) => {
             if (ours(event.request_id)) finish(event.cancelled ? "stopped" : "done");

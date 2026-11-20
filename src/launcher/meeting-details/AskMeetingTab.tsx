@@ -6,6 +6,8 @@ import { ArrowUp, Loader2, MessageCircleQuestion, Square } from "lucide-react";
 import type { ChatItem, MeetingChatState } from "../../hooks/useMeetingChat";
 import { mdComponents, stripThinkTags } from "./SummaryView";
 import { SourcePills } from "../../sources/SourcePills";
+import { SourceChips } from "../../sources/SourceChips";
+import { SourceActivityLines, SourceNotices } from "../../sources/SourceActivityLines";
 
 /** Summary markdown styles, with headings and paragraphs sized for a chat answer. */
 const answerMd: Components = {
@@ -203,6 +205,12 @@ function Answer({ item }: { item: ChatItem }) {
   const streaming = item.status === "streaming";
   return (
     <div data-status={item.status} className="min-w-0">
+      {item.notice && <SourceNotices notices={[item.notice]} />}
+      {streaming && (
+        <div className="mb-2">
+          <SourceActivityLines lines={item.activity ?? []} />
+        </div>
+      )}
       {streaming && !text ? (
         <div className="flex items-center gap-2 text-xs text-muted-foreground/60">
           <Loader2 className="h-3.5 w-3.5 animate-spin text-primary/70" />
@@ -217,6 +225,11 @@ function Answer({ item }: { item: ChatItem }) {
             {streaming && <span className="ml-0.5 inline-block h-3.5 w-0.5 animate-pulse bg-primary/60 align-middle" />}
           </div>
         )
+      )}
+      {!streaming && item.chips && item.chips.length > 0 && (
+        <div className="mt-2">
+          <SourceChips chips={item.chips} />
+        </div>
       )}
       {item.status === "stopped" && <p className="mt-1.5 text-[11px] text-muted-foreground/50">Stopped · not saved</p>}
       {item.error && <p className="mt-1.5 text-xs text-destructive/80">{item.error}</p>}

@@ -23,6 +23,7 @@ vi.mock("../lib/events", () => ({
   onStreamToken: noListener,
   onStreamEnd: noListener,
   onStreamError: noListener,
+  onStreamActivity: noListener,
 }));
 
 import { useMeetingChat } from "./useMeetingChat";

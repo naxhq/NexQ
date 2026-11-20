@@ -8,6 +8,7 @@ import {
   onStreamToken,
   onStreamEnd,
   onStreamSources,
+  onStreamActivity,
   onStreamError,
   onStreamThinking,
 } from "../lib/events";
@@ -136,6 +137,14 @@ export function useStreamBuffer() {
       onStreamSources((event) => {
         if (!isActive(event.request_id)) return;
         setSources(event.sources);
+      })
+    );
+
+    // What the answer does with your sources. It can come before the start
+    // event (a notice that sources were not used): the store holds it by request id.
+    unlisteners.push(
+      onStreamActivity((event) => {
+        useStreamStore.getState().addActivity(event.request_id, event.activity);
       })
     );
 

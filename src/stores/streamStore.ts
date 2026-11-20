@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import type { AIResponse, IntelligenceMode, SourceToggles, StreamSource } from "../lib/types";
+import type { AIResponse, IntelligenceMode, SourceActivity, SourceChip, SourceToggles, StreamSource } from "../lib/types";
+import { dedupeChips } from "../lib/sourceChips";
 import { stripThinkTags } from "../lib/utils";
 import { NO_USER_REQUESTS, type LastUserRequests } from "../lib/contextScope";
 
@@ -42,6 +43,12 @@ interface StreamState {
   currentModel: string;
   currentProvider: string;
   currentSources: StreamSource[];
+  /** What the answer is doing with your sources, oldest first. */
+  currentActivity: SourceActivity[];
+  /** Notes and tools the answer used so far, one chip each. */
+  currentChips: SourceChip[];
+  /** Quiet lines about sources that were not used, or only partly. */
+  currentNotices: string[];
   error: string | null;
   latencyMs: number | null;
 
@@ -82,6 +89,11 @@ interface StreamState {
   setPhase: (phase: StreamPhase) => void;
   startStream: (mode: IntelligenceMode, model: string, provider: string, details?: StreamStartDetails) => void;
   setSources: (sources: StreamSource[]) => void;
+  /**
+   * A line about the sources of request `requestId`. It can arrive before that
+   * request's `llm_stream_start`: it waits by request id until the stream starts.
+   */
+  addActivity: (requestId: string | null, activity: SourceActivity) => void;
   endStream: (latencyMs: number) => void;
   setError: (error: string | null) => void;
   clearCurrent: () => void;
@@ -105,6 +117,27 @@ const IDLE_PROGRESS = {
 /** Requests to drop when they end (automatic answers NexQ stopped). */
 const discarded = new Set<string>();
 
+/** Activity that arrived before its request's stream started, by request id. */
+const earlyActivity = new Map<string, SourceActivity[]>();
+const EARLY_ACTIVITY_KEPT = 16;
+
+type ActivityState = Pick<StreamState, "currentActivity" | "currentChips" | "currentNotices">;
+const NO_ACTIVITY: ActivityState = { currentActivity: [], currentChips: [], currentNotices: [] };
+
+/** `state` with `activity` taken in: a notice is a quiet line, anything else an activity line (and its chip). */
+function withActivity(state: ActivityState, activity: SourceActivity): ActivityState {
+  if (activity.kind === "notice") {
+    const { currentActivity, currentChips, currentNotices } = state;
+    if (currentNotices.includes(activity.label)) return { currentActivity, currentChips, currentNotices };
+    return { currentActivity, currentChips, currentNotices: [...currentNotices, activity.label] };
+  }
+  return {
+    currentActivity: [...state.currentActivity, activity],
+    currentChips: activity.chip ? dedupeChips([...state.currentChips, activity.chip]) : state.currentChips,
+    currentNotices: state.currentNotices,
+  };
+}
+
 export const useStreamStore = create<StreamState>((set, get) => ({
   isStreaming: false,
   currentContent: "",
@@ -113,6 +146,7 @@ export const useStreamStore = create<StreamState>((set, get) => ({
   currentModel: "",
   currentProvider: "",
   currentSources: [],
+  ...NO_ACTIVITY,
   error: null,
   latencyMs: null,
   ...IDLE_PROGRESS,
@@ -153,6 +187,7 @@ export const useStreamStore = create<StreamState>((set, get) => ({
       currentContent: "",
       _rawContent: "",
       currentSources: [],
+      ...NO_ACTIVITY,
       currentId: null,
       error: null,
     });
@@ -180,6 +215,11 @@ export const useStreamStore = create<StreamState>((set, get) => ({
       state.pendingRequestId !== null &&
       state.requestStartedAt !== null &&
       (details.requestId == null || details.requestId === state.pendingRequestId);
+    // Lines about the sources that came before the start belong to this stream.
+    const early = details.requestId ? earlyActivity.get(details.requestId) ?? [] : [];
+    if (details.requestId) earlyActivity.delete(details.requestId);
+    let activity: ActivityState = NO_ACTIVITY;
+    for (const a of early) activity = withActivity(activity, a);
     set({
       isStreaming: true,
       currentContent: "",
@@ -188,6 +228,7 @@ export const useStreamStore = create<StreamState>((set, get) => ({
       currentModel: model,
       currentProvider: provider,
       currentSources: [],
+      ...activity,
       error: null,
       latencyMs: null,
       phase: "waiting",
@@ -208,6 +249,24 @@ export const useStreamStore = create<StreamState>((set, get) => ({
 
   setSources: (sources) => set({ currentSources: sources }),
 
+  addActivity: (requestId, activity) => {
+    if (!requestId) return;
+    const state = get();
+    if (state.isStreaming && state.streamRequestId === requestId) {
+      set(withActivity(state, activity));
+      return;
+    }
+    // Its stream has not started (or is not this window's): hold it by request id.
+    const held = earlyActivity.get(requestId) ?? [];
+    earlyActivity.delete(requestId);
+    earlyActivity.set(requestId, [...held, activity]);
+    while (earlyActivity.size > EARLY_ACTIVITY_KEPT) {
+      const oldest = earlyActivity.keys().next().value;
+      if (oldest === undefined) break;
+      earlyActivity.delete(oldest);
+    }
+  },
+
   endStream: (latencyMs) => {
     const state = get();
     // Strip <think> tags from the final stored content
@@ -224,6 +283,8 @@ export const useStreamStore = create<StreamState>((set, get) => ({
       provider: state.currentProvider,
       latency_ms: latencyMs,
       sources: state.currentSources.length > 0 ? state.currentSources : undefined,
+      source_chips: state.currentChips.length > 0 ? dedupeChips(state.currentChips) : undefined,
+      source_notices: state.currentNotices.length > 0 ? state.currentNotices : undefined,
       total_ms: started !== null ? now - started : latencyMs,
       first_token_ms: started !== null && state.firstTokenAt !== null ? state.firstTokenAt - started : undefined,
       scope_label: state.streamMeta?.scopeLabel ?? null,
@@ -252,6 +313,7 @@ export const useStreamStore = create<StreamState>((set, get) => ({
       currentModel: "",
       currentProvider: "",
       currentSources: [],
+      ...NO_ACTIVITY,
       error: null,
       latencyMs: null,
       currentId: null,
@@ -286,6 +348,7 @@ export const useStreamStore = create<StreamState>((set, get) => ({
 
   resetForMeeting: () => {
     discarded.clear();
+    earlyActivity.clear();
     get().clearCurrent();
     set({ isStreaming: false, responseHistory: [], pinnedResponses: [], lastUserRequest: NO_USER_REQUESTS });
   },

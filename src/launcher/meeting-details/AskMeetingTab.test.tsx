@@ -20,6 +20,7 @@ function emit(name: string, payload: unknown) {
 
 // ── IPC stub ────────────────────────────────────────────────────────────────
 const ipc = vi.hoisted(() => ({
+  openSourceFile: vi.fn(),
   listMeetingChat: vi.fn(),
   askMeeting: vi.fn(),
   cancelGeneration: vi.fn(),
@@ -28,6 +29,7 @@ const ipc = vi.hoisted(() => ({
 
 vi.mock("../../lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../lib/ipc")>()),
+  openSourceFile: (...args: unknown[]) => ipc.openSourceFile(...args),
   listMeetingChat: (...args: unknown[]) => ipc.listMeetingChat(...args),
   askMeeting: (...args: unknown[]) => ipc.askMeeting(...args),
   cancelGeneration: () => ipc.cancelGeneration(),
@@ -158,5 +160,50 @@ describe("AskMeetingTab", () => {
     expect(screen.getByText("Session starting…")).toBeInTheDocument();
     act(() => emit("agent_session_status", status("ready")));
     expect(await screen.findByText("Ready")).toBeInTheDocument();
+  });
+
+  it("past-meeting chat answers show activity while streaming, then chips and the notice", async () => {
+    let requestId = "";
+    ipc.askMeeting.mockImplementation((_m: string, _q: string, id: string) => {
+      requestId = id;
+      return new Promise<void>(() => {});
+    });
+    ipc.openSourceFile.mockResolvedValue(undefined);
+    render(<Harness />);
+    await screen.findByText("When do we ship?");
+    fireEvent.change(screen.getByRole("textbox", { name: /ask about this meeting/i }), { target: { value: "Who is Dana?" } });
+    fireEvent.click(screen.getByRole("button", { name: /send question/i }));
+    await waitFor(() => expect(ipc.askMeeting).toHaveBeenCalled());
+
+    act(() => {
+      emit("llm_stream_activity", {
+        request_id: "someone-else",
+        activity: { kind: "tool", label: "LEAK: tool", chip: { kind: "tool", label: "LEAK", path: null } },
+      });
+      emit("llm_stream_activity", {
+        request_id: requestId,
+        activity: { kind: "notice", label: "Mira did not start, so its tools are not available.", chip: null },
+      });
+      emit("llm_stream_activity", {
+        request_id: requestId,
+        activity: {
+          kind: "notes",
+          label: "Reading Dana.md",
+          chip: { kind: "notes", label: "Dana.md", path: "D:\\V\\Dana.md" },
+        },
+      });
+      emit("llm_stream_token", { token: "Dana is the PM.", request_id: requestId });
+    });
+    expect(await screen.findByText("Reading Dana.md")).toBeInTheDocument();
+    expect(screen.queryByText(/LEAK/)).toBeNull();
+    expect(screen.getByText("Mira did not start, so its tools are not available.")).toBeInTheDocument();
+
+    act(() => {
+      emit("llm_stream_end", { total_tokens: 5, latency_ms: 5, request_id: requestId, cancelled: false });
+    });
+    expect(screen.queryByText("Reading Dana.md")).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: /Dana\.md/ }));
+    expect(ipc.openSourceFile).toHaveBeenCalledWith("D:\\V\\Dana.md");
+    expect(screen.getByText("Mira did not start, so its tools are not available.")).toBeInTheDocument();
   });
 });
