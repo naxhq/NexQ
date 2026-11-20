@@ -1,6 +1,6 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { emit } from "@tauri-apps/api/event";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startCapturePerParty } from "../lib/ipc";
 import type { MeetingAudioConfig } from "../lib/types";
 import { useConfigStore } from "../stores/configStore";
@@ -111,9 +111,76 @@ it("tells the user once when Web Speech is chosen while Auto-detect is on, and l
   expect(warnings()).toHaveLength(1);
 
   // Picking a language wakes it up; Auto-detect again says so again.
+  // (It listens once the capture has restarted for that, a moment later.)
   await act(async () => useConfigStore.setState({ sttLanguage: "es-ES" }));
+  await act(() => vi.advanceTimersByTimeAsync(300));
   expect(started).toHaveLength(1);
   await act(async () => useConfigStore.setState({ sttLanguage: "auto" }));
   expect(warnings()).toHaveLength(2);
   expect(warnings()[1]).toMatch(/^Stopped transcribing You:/);
+});
+
+describe("leaving Auto-detect with a microphone Rust has to switch to", () => {
+  const headset: MeetingAudioConfig = {
+    ...config,
+    you: { ...config.you, device_id: "Headset Microphone" },
+  };
+  let finishSwap!: () => void;
+
+  beforeEach(() => {
+    vi.mocked(startCapturePerParty).mockImplementation(() => new Promise<void>((resolve) => { finishSwap = resolve; }));
+  });
+
+  it("starts Web Speech only once the capture restarted for it (shared language)", async () => {
+    useConfigStore.setState({ sttLanguage: "auto", meetingAudioConfig: headset });
+    renderHook(() => { useSpeechRecognition(); useAudioConfigSync(); });
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    expect(started).toHaveLength(0);
+
+    // The shared language stops being Auto-detect: no config change, but the capture must restart
+    // (Rust skipped the mic override for the side Auto-detect left without STT).
+    await act(async () => useConfigStore.setState({ sttLanguage: "es-ES" }));
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    expect(startCapturePerParty).toHaveBeenCalledTimes(1);
+    expect(startCapturePerParty).toHaveBeenLastCalledWith(headset.you, headset.them, { skipYouStt: false });
+    expect(started).toHaveLength(0); // still on the old default microphone
+
+    await act(async () => finishSwap());
+    expect(started).toHaveLength(1);
+    expect((started[0] as FakeRecognition).lang).toBe("es-ES");
+  });
+
+  it("starts Web Speech only once the capture restarted for it (its own language)", async () => {
+    const auto: MeetingAudioConfig = { ...headset, you: { ...headset.you, language: "auto" } };
+    useConfigStore.setState({ sttLanguage: "en-US", meetingAudioConfig: auto });
+    renderHook(() => { useSpeechRecognition(); useAudioConfigSync(); });
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    expect(started).toHaveLength(0);
+
+    const spanish: MeetingAudioConfig = { ...headset, you: { ...headset.you, language: "es-ES" } };
+    act(() => useConfigStore.setState({ meetingAudioConfig: spanish }));
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    expect(startCapturePerParty).toHaveBeenCalledTimes(1);
+    expect(started).toHaveLength(0);
+
+    await act(async () => finishSwap());
+    expect(started).toHaveLength(1);
+    expect((started[0] as FakeRecognition).lang).toBe("es-ES");
+  });
+
+  it("starts anyway when the swap fails, and doesn't restart for changes that don't touch the mic", async () => {
+    vi.mocked(startCapturePerParty).mockReset().mockRejectedValueOnce("Audio device busy").mockResolvedValue(undefined);
+    useConfigStore.setState({ sttLanguage: "auto", meetingAudioConfig: headset });
+    renderHook(() => { useSpeechRecognition(); useAudioConfigSync(); });
+    await act(() => vi.advanceTimersByTimeAsync(300));
+
+    await act(async () => useConfigStore.setState({ sttLanguage: "es-ES" }));
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    expect(started).toHaveLength(1);
+
+    // Them's language doesn't concern the microphone: Web Speech keeps listening.
+    await change({ ...headset, them: { ...headset.them, language: "fr-FR" } });
+    expect(startCapturePerParty).toHaveBeenCalledTimes(2);
+    expect(started).toHaveLength(1);
+  });
 });

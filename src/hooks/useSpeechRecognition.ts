@@ -17,6 +17,8 @@ import { useTranscriptStore } from "../stores/transcriptStore";
 import { useConfigStore } from "../stores/configStore";
 import { AUTO_STT_LANGUAGE, sideLanguage } from "../lib/sttLanguages";
 import { pushTranscript, ensureIpolicyOverride } from "../lib/ipc";
+import { overrideKey } from "../lib/audioConfigKeys";
+import { useCaptureSyncStore } from "../stores/captureSyncStore";
 
 // Web Speech API types (not in all TS libs)
 interface SpeechRecognitionEvent extends Event {
@@ -106,6 +108,13 @@ export function useSpeechRecognition() {
     return youIsWebSpeech || themIsWebSpeech;
   });
 
+  // Web Speech listens to the OS default microphone, which Rust switches to the chosen one
+  // when the capture starts. Wait for the capture to settle on the config that applies to
+  // this side (leaving Auto-detect, say, which skipped the override), then listen.
+  const wantedOverride = useConfigStore((s) => overrideKey(s.meetingAudioConfig, s.sttLanguage, audioMode === "in_person"));
+  const settledOverride = useCaptureSyncStore((s) => s.settledOverrideKey);
+  const captureReady = settledOverride === null || settledOverride === wantedOverride;
+
   // Ref for store action — always fresh without being a dep.
   const updateInterimRef = useRef(useTranscriptStore.getState().updateInterimSegment);
   useEffect(() => {
@@ -168,6 +177,9 @@ export function useSpeechRecognition() {
       return;
     }
     silencedRef.current = false;
+
+    // The capture is still being restarted for this config: the mic isn't switched yet.
+    if (!captureReady) return;
 
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -350,5 +362,5 @@ export function useSpeechRecognition() {
         recognitionRef.current = null;
       }
     };
-  }, [isRecording, usesWebSpeech, sttLanguage]);
+  }, [isRecording, usesWebSpeech, sttLanguage, captureReady]);
 }

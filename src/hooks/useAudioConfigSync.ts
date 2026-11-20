@@ -14,10 +14,14 @@ import { useTranscriptStore } from "../stores/transcriptStore";
 import { startCapturePerParty } from "../lib/ipc";
 import { skipYouStt } from "../lib/audioMode";
 import { AUTO_DETECT_REFUSAL_PREFIX, autoDetectRefusalSentences } from "../lib/sttLanguages";
+import { captureKey, overrideKey } from "../lib/audioConfigKeys";
+import { useCaptureSyncStore } from "../stores/captureSyncStore";
 
 export function useAudioConfigSync() {
   const isRecording = useMeetingStore((s) => s.isRecording);
   const meetingAudioConfig = useConfigStore((s) => s.meetingAudioConfig);
+  // The shared language decides which sides are on Auto-detect, so it can call for a restart too.
+  const sttLanguage = useConfigStore((s) => s.sttLanguage);
 
   // null starts a new session, undefined means the last restart failed.
   const appliedConfigRef = useRef<string | null | undefined>(null);
@@ -34,12 +38,17 @@ export function useAudioConfigSync() {
   useEffect(() => {
     if (!isRecording || !meetingAudioConfig) return;
 
-    const configKey = JSON.stringify(meetingAudioConfig);
+    const configKey = captureKey(meetingAudioConfig, sttLanguage);
+    const settle = (cfg: typeof meetingAudioConfig, shared: string) =>
+      useCaptureSyncStore.getState().setSettledOverrideKey(
+        overrideKey(cfg, shared, skipYouStt(useMeetingStore.getState().audioMode)),
+      );
 
     // On first run (meeting just started), record the applied config
     if (appliedConfigRef.current === null) {
       appliedConfigRef.current = configKey;
       pendingConfigRef.current = configKey;
+      settle(meetingAudioConfig, sttLanguage);
       return;
     }
 
@@ -87,12 +96,14 @@ export function useAudioConfigSync() {
         return;
       }
 
-      const latestKey = JSON.stringify(latestConfig);
+      const latestShared = useConfigStore.getState().sttLanguage;
+      const latestKey = captureKey(latestConfig, latestShared);
 
       // If the latest config matches what's already running, skip
       if (appliedConfigRef.current === latestKey) {
         pendingConfigRef.current = latestKey;
         restartingRef.current = false;
+        settle(latestConfig, latestShared);
         return;
       }
 
@@ -123,6 +134,8 @@ export function useAudioConfigSync() {
           .then(({ emit }) => emit("capture_warning", warning))
           .catch(() => {});
       } finally {
+        // Web Speech may start again now, whether or not the swap went through.
+        settle(latestConfig, latestShared);
         restartingRef.current = false;
         if (retryQueuedRef.current) {
           retryQueuedRef.current = false;
@@ -130,13 +143,14 @@ export function useAudioConfigSync() {
         }
       }
     }, 300);
-  }, [isRecording, meetingAudioConfig, retryTick]);
+  }, [isRecording, meetingAudioConfig, sttLanguage, retryTick]);
 
   // Reset when meeting ends
   useEffect(() => {
     if (!isRecording) {
       appliedConfigRef.current = null;
       pendingConfigRef.current = null;
+      useCaptureSyncStore.getState().setSettledOverrideKey(null);
       restartingRef.current = false;
       retryQueuedRef.current = false;
       if (debounceRef.current) {
