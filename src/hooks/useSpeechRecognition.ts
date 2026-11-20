@@ -162,7 +162,7 @@ export function useSpeechRecognition() {
           "capture_warning",
           hadInstance
             ? `Stopped transcribing ${side}: Web Speech can't detect the language. ${advice}`
-            : `${side} isn't transcribed: Web Speech can't detect the language. ${advice}`,
+            : `${side} won't be transcribed: Web Speech can't detect the language. ${advice}`,
         ).catch(() => {});
       }
       return;

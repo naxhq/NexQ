@@ -349,7 +349,7 @@ export function MeetingAudioSettings() {
   const updateParty = useCallback(
     (party: "you" | "them", updates: Partial<PartyAudioConfig>) => {
       const merged = { ...config[party], ...updates };
-      // "Same as transcription language" is stored as no language at all,
+      // "Default" (the transcription language) is stored as no language at all,
       // so the config keeps the shape older versions saved.
       if (!merged.language) delete merged.language;
       const newConfig: MeetingAudioConfig = {
@@ -752,7 +752,7 @@ function PartyPanel({
   showLanguage?: boolean;
   /** "You", "Them" or "Room": names the language picker. */
   sideName: string;
-  /** The shared transcription language's name, which "Same as transcription language" stands for. */
+  /** The shared transcription language's name, which the "Default" option stands for. */
   sharedLanguageLabel: string;
   onChange: (updates: Partial<PartyAudioConfig>) => void;
 }) {

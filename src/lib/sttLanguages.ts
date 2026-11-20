@@ -178,6 +178,17 @@ const PARAKEET_V3_LANGUAGES = [
  */
 export const FLUX_MULTI_LANGUAGES: string[] = cases.fluxMultiLanguages;
 
+/** SenseVoice Small: Chinese, English, Japanese, Korean (and Cantonese, which the app has no entry for). */
+const SENSE_VOICE_LANGUAGES = ["zh", "en", "ja", "ko"];
+
+/** The languages a Sherpa-ONNX model covers; undefined for a model this table doesn't know. */
+function sherpaModelLanguages(model: string): string[] | undefined {
+  if (model.includes("-en-")) return ["en"]; // streaming-zipformer-en-20M, -en-compact
+  if (model === "streaming-zipformer-multi") return ["zh"]; // zh-hans, not English
+  if (model === "sense-voice-small") return SENSE_VOICE_LANGUAGES;
+  return undefined;
+}
+
 const languageCode = (language: string): string => language.split("-")[0].toLowerCase();
 
 export interface SideLanguageHint {
@@ -252,14 +263,17 @@ export function sideLanguageHint(
             text: "ORT Streaming models are English-only. Choose another provider for this language.",
           };
     case "sherpa_onnx": {
-      // streaming-zipformer-en-* are English; the multi and SenseVoice models aren't.
+      // What each Sherpa-ONNX model transcribes (model_registry.rs); an unknown model gets no hint.
       const sherpaModel = side.localModel ?? "streaming-zipformer-en-20M";
-      return languageCode(language) !== "en" && sherpaModel.includes("-en-")
-        ? {
-            tone: "warning",
-            text: "This Sherpa-ONNX model is English-only. Choose a multilingual Sherpa-ONNX model or another provider for this language.",
-          }
-        : null;
+      const covered = sherpaModelLanguages(sherpaModel);
+      const code = languageCode(language);
+      if (!covered || covered.includes(code)) return null;
+      return {
+        tone: "warning",
+        text: SENSE_VOICE_LANGUAGES.includes(code)
+          ? "This Sherpa-ONNX model doesn't cover this language. Choose SenseVoice Small, or another provider for this language."
+          : "This Sherpa-ONNX model doesn't cover this language. Choose another provider for this language.",
+      };
     }
     case "whisper_cpp":
       // The same models that can't detect the language are the English-only ones.

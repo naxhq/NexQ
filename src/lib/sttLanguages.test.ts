@@ -209,8 +209,20 @@ describe("sideLanguageHint", () => {
     // Sherpa-ONNX: only the English zipformers.
     expect(sideLanguageHint({ provider: "sherpa_onnx", localModel: "streaming-zipformer-en-20M" }, "de-DE", none)?.tone).toBe("warning");
     expect(sideLanguageHint({ provider: "sherpa_onnx" }, "de-DE", none)?.tone).toBe("warning");
-    expect(sideLanguageHint({ provider: "sherpa_onnx", localModel: "streaming-zipformer-multi" }, "de-DE", none)).toBeNull();
-    expect(sideLanguageHint({ provider: "sherpa_onnx", localModel: "sense-voice-small" }, "ja-JP", none)).toBeNull();
+    // The multi model is Chinese (zh-hans), not English; SenseVoice Small covers zh, en, ja, ko.
+    const multi = { provider: "sherpa_onnx" as const, localModel: "streaming-zipformer-multi" };
+    const senseVoice = { provider: "sherpa_onnx" as const, localModel: "sense-voice-small" };
+    expect(sideLanguageHint(multi, "de-DE", none)?.text).toMatch(/Choose another provider/);
+    expect(sideLanguageHint(multi, "en-US", none)?.tone).toBe("warning");
+    expect(sideLanguageHint(multi, "ja-JP", none)?.text).toMatch(/Choose SenseVoice Small/);
+    expect(sideLanguageHint(multi, "zh-CN", none)).toBeNull();
+    expect(sideLanguageHint(senseVoice, "de-DE", none)?.text).toMatch(/Choose another provider/);
+    expect(sideLanguageHint(senseVoice, "ja-JP", none)).toBeNull();
+    for (const language of ["zh-CN", "en-GB", "ko-KR"]) expect(sideLanguageHint(senseVoice, language, none)).toBeNull();
+    expect(sideLanguageHint({ provider: "sherpa_onnx", localModel: "streaming-zipformer-en-20M" }, "zh-CN", none)?.text)
+      .toMatch(/Choose SenseVoice Small/);
+    // A model this table doesn't know gets no hint.
+    expect(sideLanguageHint({ provider: "sherpa_onnx", localModel: "some-new-model" }, "de-DE", none)).toBeNull();
     expect(sideLanguageHint({ provider: "sherpa_onnx", localModel: "streaming-zipformer-en-20M" }, "en-US", none)).toBeNull();
   });
 

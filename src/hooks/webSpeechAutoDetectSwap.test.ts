@@ -100,7 +100,7 @@ it("tells the user once when Web Speech is chosen while Auto-detect is on, and l
   await change(webSpeech);
   expect(started).toHaveLength(0);
   expect(warnings()).toEqual([
-    "You isn't transcribed: Web Speech can't detect the language. " +
+    "You won't be transcribed: Web Speech can't detect the language. " +
     "Pick a language (it applies right away) or choose another provider for You.",
   ]);
 
