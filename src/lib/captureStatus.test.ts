@@ -111,7 +111,8 @@ describe("reset (capture stopped)", () => {
   it("takes down a lost side's toast", () => {
     const { handle, reset } = createCaptureStatusHandler();
     handle(status("lost", "gone"));
-    handle(status("lost", "gone too", "them"));
+    handle(status("recovered", "Now listening on Speakers for the other side.", "them"));
+    expect(shown()).toHaveLength(2); // a lost microphone, a switched output
     reset();
     expect(shown()).toEqual([]);
     vi.advanceTimersByTime(TOAST_EXIT_MS);

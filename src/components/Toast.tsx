@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { toastDurationMs, useToastStore } from "../stores/toastStore";
+import { TOAST_EXIT_MS, toastDurationMs, useToastStore } from "../stores/toastStore";
 import type { Toast as ToastData } from "../stores/toastStore";
 import { CheckCircle, XCircle, Info, AlertTriangle, X } from "lucide-react";
 
@@ -66,7 +66,7 @@ function ToastItem({ toast, onDismiss }: { toast: ToastData; onDismiss: () => vo
     const startedAt = Date.now();
     timerRef.current = setTimeout(() => {
       setExiting(true);
-      setTimeout(onDismiss, 280);
+      setTimeout(onDismiss, TOAST_EXIT_MS);
     }, Math.max(0, remainingRef.current));
     return () => {
       clearTimeout(timerRef.current);
@@ -78,7 +78,7 @@ function ToastItem({ toast, onDismiss }: { toast: ToastData; onDismiss: () => vo
     if (exiting) return;
     clearTimeout(timerRef.current);
     setExiting(true);
-    setTimeout(onDismiss, 280);
+    setTimeout(onDismiss, TOAST_EXIT_MS);
   }, [exiting, onDismiss]);
 
   return (

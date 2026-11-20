@@ -152,6 +152,8 @@ describe("a capture side reconnecting mid-meeting", () => {
     await act(async () => {
       await listeners.get("audio_capture_stopped")?.({ payload: null });
     });
-    expect(useToastStore.getState().toasts.find((t) => t.message === lost)?.leaving).toBe(true);
+    const leaving = (message: string) => useToastStore.getState().toasts.find((t) => t.message === message)?.leaving;
+    expect(leaving(lost)).toBe(true);
+    expect(leaving(switched)).toBe(true);
   });
 });

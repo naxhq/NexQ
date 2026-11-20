@@ -93,6 +93,7 @@ export function createCaptureStatusHandler(toasts: CaptureToasts = storeToasts) 
       delete wasLost[side];
       delete noticeUp[side];
       toasts.dismiss(stickyKey(side));
+      toasts.dismiss(switchKey(side));
     }
   };
 
