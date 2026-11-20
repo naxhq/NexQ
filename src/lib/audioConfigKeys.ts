@@ -21,6 +21,38 @@ export function captureKey(cfg: MeetingAudioConfig, sharedLanguage: string): str
   return JSON.stringify(cfg) + "|" + autoSides(cfg, sharedLanguage).join(",");
 }
 
+/** What the running capture was started with: the config and the shared language. */
+export interface AppliedAudioConfig {
+  cfg: MeetingAudioConfig;
+  shared: string;
+}
+
+/** The config with both sides' own languages left out. */
+function withoutSideLanguages(cfg: MeetingAudioConfig): string {
+  return JSON.stringify({
+    ...cfg,
+    you: { ...cfg.you, language: undefined },
+    them: { ...cfg.them, language: undefined },
+  });
+}
+
+/**
+ * The one side whose transcription language is all that differs between the running
+ * capture and `next`, so only that side's speech-to-text has to restart. Null when
+ * anything else differs, when both sides' languages do, or when neither does (each
+ * side's effective language counts: its own, else the shared one).
+ */
+export function languageOnlyChange(
+  applied: AppliedAudioConfig,
+  next: AppliedAudioConfig,
+): "you" | "them" | null {
+  if (withoutSideLanguages(applied.cfg) !== withoutSideLanguages(next.cfg)) return null;
+  const youChanged = sideLanguage(applied.cfg.you, applied.shared) !== sideLanguage(next.cfg.you, next.shared);
+  const themChanged = sideLanguage(applied.cfg.them, applied.shared) !== sideLanguage(next.cfg.them, next.shared);
+  if (youChanged === themChanged) return null;
+  return youChanged ? "you" : "them";
+}
+
 /**
  * What Rust's default-microphone override depends on, for Web Speech to wait for:
  * each side's provider and device, whether it is on Auto-detect, and whether

@@ -1,7 +1,7 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { emit } from "@tauri-apps/api/event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { startCapturePerParty, stopCapture } from "../lib/ipc";
+import { setPartyLanguage, startCapturePerParty, stopCapture } from "../lib/ipc";
 import type { MeetingAudioConfig } from "../lib/types";
 import { useConfigStore } from "../stores/configStore";
 import { useMeetingStore } from "../stores/meetingStore";
@@ -11,6 +11,7 @@ import { useAudioConfigSync } from "./useAudioConfigSync";
 vi.mock("../lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/ipc")>()),
   startCapturePerParty: vi.fn(),
+  setPartyLanguage: vi.fn(),
   stopCapture: vi.fn(),
 }));
 vi.mock("@tauri-apps/api/event", async (importOriginal) => ({
@@ -34,6 +35,7 @@ const changed: MeetingAudioConfig = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(setPartyLanguage).mockResolvedValue(true);
   vi.useFakeTimers();
   useMeetingStore.setState({ isRecording: true, audioMode: "online" });
   useConfigStore.setState({ meetingAudioConfig: config });
@@ -100,8 +102,9 @@ it("applies a change made while a swap is running once that swap ends", async ()
   expect(startCapturePerParty).toHaveBeenLastCalledWith(later.you, later.them, { skipYouStt: false });
 });
 
-it("restarts the capture when a side's language changes, like a provider change", async () => {
+it("restarts the whole capture when Rust can't restart a side's language on its own", async () => {
   vi.mocked(startCapturePerParty).mockResolvedValue(undefined);
+  vi.mocked(setPartyLanguage).mockResolvedValue(false);
   renderHook(() => useAudioConfigSync());
 
   // The older config (no language) is what the meeting started with: no swap.
@@ -135,4 +138,107 @@ it("retries a failure that may have stopped the capture, and says so", async () 
   await change(config);
   expect(startCapturePerParty).toHaveBeenCalledTimes(2);
   expect(startCapturePerParty).toHaveBeenLastCalledWith(config.you, config.them, { skipYouStt: false });
+});
+
+const spanishThem: MeetingAudioConfig = { ...config, them: { ...config.them, language: "es-ES" } };
+
+it("restarts only one side's speech-to-text for a language-only change", async () => {
+  renderHook(() => useAudioConfigSync());
+
+  await change(spanishThem);
+  expect(setPartyLanguage).toHaveBeenCalledTimes(1);
+  expect(setPartyLanguage).toHaveBeenCalledWith("them", spanishThem.them, { skipYouStt: false });
+  expect(startCapturePerParty).not.toHaveBeenCalled();
+
+  // The other side next: that is one side again, from the config now running.
+  const spanishBoth: MeetingAudioConfig = { ...spanishThem, you: { ...spanishThem.you, language: "fr-FR" } };
+  await change(spanishBoth);
+  expect(setPartyLanguage).toHaveBeenCalledTimes(2);
+  expect(setPartyLanguage).toHaveBeenLastCalledWith("you", spanishBoth.you, { skipYouStt: false });
+  expect(startCapturePerParty).not.toHaveBeenCalled();
+
+  // What runs now is the new config: going back to it later is no change.
+  await change(spanishBoth);
+  expect(setPartyLanguage).toHaveBeenCalledTimes(2);
+});
+
+it("tells Rust the room is an in-person meeting's other side", async () => {
+  useMeetingStore.setState({ audioMode: "in_person" });
+  renderHook(() => useAudioConfigSync());
+
+  await change(spanishThem);
+  expect(setPartyLanguage).toHaveBeenCalledWith("them", spanishThem.them, { skipYouStt: true });
+});
+
+it("restarts the whole capture when a side's provider changes along with a language", async () => {
+  vi.mocked(startCapturePerParty).mockResolvedValue(undefined);
+  renderHook(() => useAudioConfigSync());
+
+  const both: MeetingAudioConfig = {
+    ...config,
+    them: { ...config.them, language: "es-ES", stt_provider: "groq_whisper" },
+  };
+  await change(both);
+  expect(setPartyLanguage).not.toHaveBeenCalled();
+  expect(startCapturePerParty).toHaveBeenCalledTimes(1);
+});
+
+it("restarts the whole capture when both sides' languages change at once", async () => {
+  vi.mocked(startCapturePerParty).mockResolvedValue(undefined);
+  renderHook(() => useAudioConfigSync());
+
+  await change({
+    ...config,
+    you: { ...config.you, language: "fr-FR" },
+    them: { ...config.them, language: "es-ES" },
+  });
+  expect(setPartyLanguage).not.toHaveBeenCalled();
+  expect(startCapturePerParty).toHaveBeenCalledTimes(1);
+});
+
+it("falls back to the whole capture when the one-side restart fails, or does nothing", async () => {
+  vi.mocked(startCapturePerParty).mockResolvedValue(undefined);
+  vi.mocked(setPartyLanguage).mockRejectedValueOnce("Audio state lock poisoned").mockResolvedValueOnce(false);
+  renderHook(() => useAudioConfigSync());
+
+  await change(spanishThem);
+  expect(setPartyLanguage).toHaveBeenCalledTimes(1);
+  expect(startCapturePerParty).toHaveBeenCalledTimes(1);
+  expect(startCapturePerParty).toHaveBeenLastCalledWith(spanishThem.you, spanishThem.them, { skipYouStt: false });
+  expect(emit).not.toHaveBeenCalled();
+
+  // Rust answered false (nothing it could restart): the whole capture again.
+  await change({ ...spanishThem, you: { ...spanishThem.you, language: "fr-FR" } });
+  expect(setPartyLanguage).toHaveBeenCalledTimes(2);
+  expect(startCapturePerParty).toHaveBeenCalledTimes(2);
+});
+
+it("keeps the running config when Rust refuses Auto-detect for the side", async () => {
+  vi.mocked(setPartyLanguage).mockRejectedValueOnce(REFUSAL);
+  renderHook(() => useAudioConfigSync());
+
+  await change({ ...config, you: { ...config.you, language: "auto" } });
+  expect(setPartyLanguage).toHaveBeenCalledTimes(1);
+  expect(startCapturePerParty).not.toHaveBeenCalled(); // a full swap would only be refused again
+  expect(emit).toHaveBeenCalledWith(
+    "capture_warning",
+    "Auto-detect doesn't work with Azure Speech, used for You. Your meeting keeps its current setup.",
+  );
+
+  // Back to what is still running: nothing to restart.
+  await change(config);
+  expect(setPartyLanguage).toHaveBeenCalledTimes(1);
+  expect(startCapturePerParty).not.toHaveBeenCalled();
+});
+
+it("restarts the whole capture after a failed swap, since what runs is unknown", async () => {
+  vi.mocked(startCapturePerParty).mockRejectedValueOnce("Audio device busy").mockResolvedValue(undefined);
+  renderHook(() => useAudioConfigSync());
+
+  await change(changed);
+  expect(startCapturePerParty).toHaveBeenCalledTimes(1);
+
+  await change(spanishThem);
+  expect(setPartyLanguage).not.toHaveBeenCalled();
+  expect(startCapturePerParty).toHaveBeenCalledTimes(2);
 });

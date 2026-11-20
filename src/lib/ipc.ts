@@ -134,6 +134,25 @@ export async function startCapturePerParty(
   });
 }
 
+/**
+ * Change one side's transcription language by restarting only that side's speech-to-text;
+ * the other side, the audio and the recording keep running. `config` is the side's whole
+ * config with the new language. Resolves true when it was done, false when the caller has
+ * to do a full `startCapturePerParty` (no capture, no Rust provider on that side).
+ * Rejects with the Auto-detect refusal when the side can't detect the language.
+ */
+export async function setPartyLanguage(
+  party: "you" | "them",
+  config: PartyAudioConfig,
+  options: { skipYouStt?: boolean } = {}
+): Promise<boolean> {
+  return invoke<boolean>("set_party_language", {
+    party,
+    config: JSON.stringify(config),
+    skipYouStt: options.skipYouStt ?? false,
+  });
+}
+
 /** Mute or unmute a specific audio source's STT feed. Audio levels + recording continue. */
 export async function setSourceMuted(source: "you" | "them", muted: boolean): Promise<void> {
   return invoke("set_source_muted", { source, muted });

@@ -109,6 +109,9 @@ pub struct AppState {
     /// a side that couldn't detect the language started without speech-to-text.
     /// A swap that gets the same refusal again isn't news. Cleared when capture stops.
     pub auto_refusals: Mutex<[Option<String>; 2]>,
+    /// Where a language change for one side reaches the running audio loop
+    /// (audio::side_swap). Replaced at every capture start; None before the first.
+    pub side_swap: Mutex<Option<crate::audio::side_swap::SideSwapSender>>,
     /// In-memory cache for OpenRouter model catalog (TTL: 4 hours).
     pub openrouter_cache: Arc<Mutex<Option<OpenRouterModelCache>>>,
     /// Tray icon manager — initialized after the tray handle is available.
@@ -178,6 +181,7 @@ impl AppState {
             active_scenario: Arc::new(RwLock::new(ActiveScenario::default())),
             pending_recording: Arc::new(Mutex::new(None)),
             auto_refusals: Mutex::new([None, None]),
+            side_swap: Mutex::new(None),
             openrouter_cache: Arc::new(Mutex::new(None)),
             tray_manager: Arc::new(Mutex::new(None)),
             gemini_cache: Arc::new(Mutex::new(None)),

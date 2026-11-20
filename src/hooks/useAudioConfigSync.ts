@@ -11,10 +11,10 @@ import { useConfigStore } from "../stores/configStore";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useDevLogStore } from "../stores/devLogStore";
 import { useTranscriptStore } from "../stores/transcriptStore";
-import { startCapturePerParty } from "../lib/ipc";
+import { setPartyLanguage, startCapturePerParty } from "../lib/ipc";
 import { skipYouStt } from "../lib/audioMode";
 import { AUTO_DETECT_REFUSAL_PREFIX, autoDetectRefusalSentences } from "../lib/sttLanguages";
-import { captureKey, overrideKey } from "../lib/audioConfigKeys";
+import { captureKey, languageOnlyChange, overrideKey, type AppliedAudioConfig } from "../lib/audioConfigKeys";
 import { useCaptureSyncStore } from "../stores/captureSyncStore";
 
 export function useAudioConfigSync() {
@@ -25,6 +25,9 @@ export function useAudioConfigSync() {
 
   // null starts a new session, undefined means the last restart failed.
   const appliedConfigRef = useRef<string | null | undefined>(null);
+  // The config and shared language behind appliedConfigRef, to tell a one-side language change
+  // (restarts only that side's speech-to-text) from anything else (restarts the capture).
+  const appliedSnapshotRef = useRef<AppliedAudioConfig | null>(null);
   // What we've already scheduled a restart for — prevents duplicate debounces
   const pendingConfigRef = useRef<string | null>(null);
   // Guard against concurrent restart attempts
@@ -47,6 +50,7 @@ export function useAudioConfigSync() {
     // On first run (meeting just started), record the applied config
     if (appliedConfigRef.current === null) {
       appliedConfigRef.current = configKey;
+      appliedSnapshotRef.current = { cfg: meetingAudioConfig, shared: sttLanguage };
       pendingConfigRef.current = configKey;
       settle(meetingAudioConfig, sttLanguage);
       return;
@@ -108,15 +112,36 @@ export function useAudioConfigSync() {
       }
 
       try {
-        // Rust checks the new STT configuration before replacing the active capture.
-        useTranscriptStore.getState().finalizeAllInterim();
-        log("info", "config", "Hot-swap: starting new capture pipeline...");
-        await startCapturePerParty(latestConfig.you, latestConfig.them, {
-          skipYouStt: skipYouStt(useMeetingStore.getState().audioMode),
-        });
+        const youSkipped = skipYouStt(useMeetingStore.getState().audioMode);
+        // Only one side's language changed: restart just that side's speech-to-text, so the
+        // other side and the recording keep going. Anything else, or a side Rust can't
+        // restart on its own, takes the full swap below.
+        const applied = appliedSnapshotRef.current;
+        const side = applied ? languageOnlyChange(applied, { cfg: latestConfig, shared: latestShared }) : null;
+        let swapped = false;
+        if (side) {
+          try {
+            log("info", "config", `Language change: restarting only the ${side} side's STT...`);
+            swapped = await setPartyLanguage(side, latestConfig[side], { skipYouStt: youSkipped });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            // A refusal would be the same for a full swap, and nothing was stopped.
+            if (msg.startsWith(AUTO_DETECT_REFUSAL_PREFIX)) throw err;
+            log("warn", "config", `One-side restart failed (${msg}) — restarting the whole capture`);
+          }
+        }
+        if (!swapped) {
+          // Rust checks the new STT configuration before replacing the active capture.
+          useTranscriptStore.getState().finalizeAllInterim();
+          log("info", "config", "Hot-swap: starting new capture pipeline...");
+          await startCapturePerParty(latestConfig.you, latestConfig.them, { skipYouStt: youSkipped });
+        }
         appliedConfigRef.current = latestKey;
+        appliedSnapshotRef.current = { cfg: latestConfig, shared: latestShared };
         pendingConfigRef.current = latestKey;
-        log("info", "config", "Hot-swap complete — new STT pipeline active");
+        log("info", "config", swapped
+          ? `Language change complete — ${side} STT restarted`
+          : "Hot-swap complete — new STT pipeline active");
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log("error", "config", `Hot-swap FAILED: ${msg}`);
@@ -125,7 +150,10 @@ export function useAudioConfigSync() {
         // to that config won't restart capture. Any other failure may have stopped the
         // capture, so mark it unknown (undefined) and let the next change retry.
         const refused = msg.startsWith(AUTO_DETECT_REFUSAL_PREFIX);
-        if (!refused) appliedConfigRef.current = undefined;
+        if (!refused) {
+          appliedConfigRef.current = undefined;
+          appliedSnapshotRef.current = null;
+        }
         pendingConfigRef.current = null;
         const warning = refused
           ? `${autoDetectRefusalSentences(msg).join(" ") || msg} Your meeting keeps its current setup.`
@@ -149,6 +177,7 @@ export function useAudioConfigSync() {
   useEffect(() => {
     if (!isRecording) {
       appliedConfigRef.current = null;
+      appliedSnapshotRef.current = null;
       pendingConfigRef.current = null;
       useCaptureSyncStore.getState().setSettledOverrideKey(null);
       restartingRef.current = false;
