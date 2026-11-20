@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Stages the ONNX Runtime shared library into src-tauri/ort/ so Tauri can bundle
 // it with the app (see bundle.resources in tauri.windows.conf.json / tauri.macos.conf.json).
 //
