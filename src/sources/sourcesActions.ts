@@ -28,6 +28,28 @@ export function replaceMcpServer(server: McpServer): Promise<void> {
   }));
 }
 
+/** What starts a server: a change here makes an older Check's answer about something else. */
+function launchSignature(s: McpServer): string {
+  return JSON.stringify([s.transport, s.env]);
+}
+
+/**
+ * Take a Check's answer into the latest copy of the server: only the tool list
+ * (new tools arrive with the backend's default) and the status. The switches the
+ * user flipped while it ran (`enabled`, each tool's `allowed`) stay. A failed
+ * Check keeps the tools. The answer is dropped when the server is gone or what
+ * starts it (command, address, variables) changed meanwhile.
+ */
+export function applyCheckResult(result: McpServer): Promise<void> {
+  return patchMcpServer(result.id, (now) => {
+    if (launchSignature(now) !== launchSignature(result)) return now;
+    if (!result.last_check?.ok) return { ...now, last_check: result.last_check };
+    const allowedNow = new Map(now.tools.map((t) => [t.full_name, t.allowed]));
+    const tools = result.tools.map((t) => ({ ...t, allowed: allowedNow.get(t.full_name) ?? t.allowed }));
+    return { ...now, tools, last_check: result.last_check };
+  });
+}
+
 export function patchMcpServer(id: string, patch: (s: McpServer) => McpServer): Promise<void> {
   return update((c) => ({ ...c, mcp_servers: c.mcp_servers.map((s) => (s.id === id ? patch(s) : s)) }));
 }

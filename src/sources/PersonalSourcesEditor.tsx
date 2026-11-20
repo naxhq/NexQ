@@ -20,7 +20,7 @@ import {
   patchNotesFolder,
   removeMcpServer,
   removeNotesFolder,
-  replaceMcpServer,
+  applyCheckResult,
 } from "./sourcesActions";
 
 export const SOURCES_GATING_LINE =
@@ -122,7 +122,7 @@ export function PersonalSourcesEditor({ variant }: PersonalSourcesEditorProps) {
     setChecking((prev) => new Set(prev).add(server.id));
     try {
       const result = await checkMcpServer(server.id);
-      await replaceMcpServer(result);
+      await applyCheckResult(result);
       if (expand && result.last_check?.ok) setExpanded((prev) => new Set(prev).add(server.id));
     } catch (e) {
       showToast(`Couldn't check ${server.label}: ${errorText(e)}`, "error");

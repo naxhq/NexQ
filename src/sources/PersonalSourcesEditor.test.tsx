@@ -218,6 +218,31 @@ describe("PersonalSourcesEditor", () => {
     await waitFor(() => expect(ipc.setPersonalSources).toHaveBeenCalled());
   });
 
+  it("a tool switched off while a Check runs stays off when the Check ends", async () => {
+    const tools = [
+      { name: "person_brief", full_name: "mcp__mira__person_brief", allowed: true },
+      { name: "tasks", full_name: "mcp__mira__tasks", allowed: true },
+    ];
+    const known = { ok: true, tool_count: 2, error: null, checked_at_ms: 1 };
+    setConfig({ mcp_servers: [server({ enabled: true, last_check: known, tools })] });
+    let finish: (s: McpServer) => void = () => {};
+    ipc.checkMcpServer.mockReturnValue(new Promise<McpServer>((resolve) => (finish = resolve)));
+    render(<PersonalSourcesEditor variant="full" />);
+    fireEvent.click(screen.getByRole("button", { name: "Check" }));
+    // While it runs the user opens the list and switches a tool off.
+    fireEvent.click(screen.getByText("2 of 2 tools allowed"));
+    fireEvent.click(screen.getByRole("switch", { name: "Allow tasks" }));
+    await waitFor(() => expect(useSourcesStore.getState().config.mcp_servers[0].tools[1].allowed).toBe(false));
+    // The Check answers from the copy it started with: both tools still allowed.
+    await act(async () => {
+      finish(server({ enabled: true, last_check: { ...known, checked_at_ms: 2 }, tools }));
+    });
+    const now = useSourcesStore.getState().config.mcp_servers[0];
+    expect(now.tools.map((t) => t.allowed)).toEqual([true, false]);
+    expect(now.enabled).toBe(true);
+    expect(now.last_check?.checked_at_ms).toBe(2);
+  });
+
   it("an OAuth import is listed but can't be enabled", () => {
     setConfig({
       mcp_servers: [server({ needs_sign_in: true, last_check: { ok: true, tool_count: 1, error: null, checked_at_ms: 1 } })],
