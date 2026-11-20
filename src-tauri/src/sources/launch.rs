@@ -549,7 +549,9 @@ mod tests {
 
     #[test]
     fn a_folder_that_holds_the_private_folder_is_left_out_of_the_launch() {
-        let home = std::env::var_os("USERPROFILE").map(PathBuf::from).expect("USERPROFILE");
+        // The folder two levels above the private folder holds it, on any platform.
+        let private = super::super::private_files::private_dir();
+        let home = private.parent().and_then(|p| p.parent()).expect("a parent folder").to_path_buf();
         let cfg = PersonalSourcesConfig {
             notes_folders: vec![folder("Home", &home), folder("Local", &super::super::private_files::private_dir())],
             ..Default::default()
