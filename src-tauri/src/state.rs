@@ -18,6 +18,7 @@ use crate::llm::gemini_cache::CachedContent;
 use crate::llm::openrouter_models::OpenRouterModelCache;
 use crate::llm::LLMRouter;
 use crate::rag::RagManager;
+use crate::sources::config::PersonalSourcesConfig;
 use crate::translation::TranslationRouter;
 use crate::translation::opus_mt_manager::OpusMtManager;
 use crate::stt::groq_whisper::GroqConfig;
@@ -143,6 +144,8 @@ pub struct AppState {
     pub live_meeting: Arc<Mutex<Option<LiveMeeting>>>,
     /// The fallback provider client last built (reused while unchanged).
     pub claude_fallback: Arc<Mutex<Option<CachedFallback>>>,
+    /// Notes folders and MCP servers the user set up (`set_personal_sources`).
+    pub personal_sources: Arc<RwLock<PersonalSourcesConfig>>,
 }
 
 /// The meeting between `start_meeting` and `end_meeting`.
@@ -201,6 +204,7 @@ impl AppState {
             meeting_sessions: Arc::new(MeetingSessions::default()),
             live_meeting: Arc::new(Mutex::new(None)),
             claude_fallback: Arc::new(Mutex::new(None)),
+            personal_sources: Arc::new(RwLock::new(PersonalSourcesConfig::default())),
         }
     }
 }

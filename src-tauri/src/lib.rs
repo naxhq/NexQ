@@ -6,6 +6,7 @@ pub mod db;
 pub mod intelligence;
 pub mod logging;
 pub mod rag;
+pub mod sources;
 pub mod llm;
 pub mod meeting_detect;
 pub mod ort_runtime;
