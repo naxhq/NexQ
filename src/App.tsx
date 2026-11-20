@@ -2,6 +2,7 @@ import { useEffect, useCallback, useState } from "react";
 import { useMeetingStore } from "./stores/meetingStore";
 import { useConfigStore } from "./stores/configStore";
 import { useAIActionsStore, watchSavedActionConfigs } from "./stores/aiActionsStore";
+import { useSourcesStore } from "./stores/sourcesStore";
 import { useScenarioStore, watchSavedScenarios } from "./stores/scenarioStore";
 import { LauncherView } from "./launcher/LauncherView";
 import { OverlayView } from "./overlay/OverlayView";
@@ -74,6 +75,7 @@ function App() {
   useEffect(() => {
     loadConfig();
     useAIActionsStore.getState().loadConfigs();
+    useSourcesStore.getState().load();
     useTranslationStore.getState().loadConfig().then(async () => {
       // Sync backend translation provider with persisted frontend setting
       const { provider } = useTranslationStore.getState();
