@@ -287,24 +287,26 @@ fn unsupported() -> &'static Mutex<HashSet<String>> {
     SET.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-fn key(provider: &str, model: &str) -> String {
-    format!("{}\u{1}{}", provider, model)
+/// One entry per provider label, endpoint (base URL) and model: a new URL
+/// for Custom / Ollama / LM Studio is a different server and starts clean.
+fn key(provider: &str, endpoint: &str, model: &str) -> String {
+    format!("{}\u{1}{}\u{1}{}", provider, endpoint.trim_end_matches('/'), model)
 }
 
-/// True once this provider+model rejected the thinking parameter this session.
-pub fn is_known_unsupported(provider: &str, model: &str) -> bool {
-    unsupported().lock().map(|s| s.contains(&key(provider, model))).unwrap_or(false)
+/// True once this provider, endpoint and model rejected the thinking parameter this session.
+pub fn is_known_unsupported(provider: &str, endpoint: &str, model: &str) -> bool {
+    unsupported().lock().map(|s| s.contains(&key(provider, endpoint, model))).unwrap_or(false)
 }
 
-pub fn remember_unsupported(provider: &str, model: &str) {
+pub fn remember_unsupported(provider: &str, endpoint: &str, model: &str) {
     if let Ok(mut s) = unsupported().lock() {
-        s.insert(key(provider, model));
+        s.insert(key(provider, endpoint, model));
     }
 }
 
 /// Whether the thinking parameter should be built into this request at all.
-pub fn should_send(provider: &str, model: &str, setting: ThinkingSetting) -> bool {
-    !setting.is_auto() && !is_known_unsupported(provider, model)
+pub fn should_send(provider: &str, endpoint: &str, model: &str, setting: ThinkingSetting) -> bool {
+    !setting.is_auto() && !is_known_unsupported(provider, endpoint, model)
 }
 
 /// Words a 400 names when it refuses a thinking parameter.
@@ -327,9 +329,10 @@ pub enum Sent {
 
 /// Sends the request via `send(with_thinking)`. When `thinking_sent` and the
 /// answer is a 400 that rejects the parameter, remembers that for
-/// `provider`+`model` and sends once more without it.
+/// `provider`+`endpoint`+`model` and sends once more without it.
 pub async fn send_with_fallback<F, Fut>(
     provider: &str,
+    endpoint: &str,
     model: &str,
     thinking_sent: bool,
     params: &GenerationParams,
@@ -347,7 +350,7 @@ where
     let body = cancellable(params, first.text()).await?.unwrap_or_default();
     if thinking_sent && rejects_thinking_param(status.as_u16(), &body) {
         log::warn!("{}/{} rejected the thinking parameter; retrying without it", provider, model);
-        remember_unsupported(provider, model);
+        remember_unsupported(provider, endpoint, model);
         let second = send(false).await?;
         if second.status().is_success() {
             return Ok(Sent::Ok(second));
@@ -580,12 +583,22 @@ mod tests {
 
     #[test]
     fn unsupported_is_remembered_per_provider_and_model() {
-        assert!(should_send("p-test", "m1", Off));
-        assert!(!should_send("p-test", "m1", Auto));
-        remember_unsupported("p-test", "m1");
-        assert!(!should_send("p-test", "m1", Off));
-        assert!(should_send("p-test", "m2", Off));
-        assert!(should_send("p-other", "m1", Off));
+        let url = "http://a:1/v1";
+        assert!(should_send("p-test", url, "m1", Off));
+        assert!(!should_send("p-test", url, "m1", Auto));
+        remember_unsupported("p-test", url, "m1");
+        assert!(!should_send("p-test", url, "m1", Off));
+        assert!(!should_send("p-test", "http://a:1/v1/", "m1", Off), "a trailing slash is the same endpoint");
+        assert!(should_send("p-test", url, "m2", Off));
+        assert!(should_send("p-other", url, "m1", Off));
+    }
+
+    #[test]
+    fn a_different_endpoint_with_the_same_model_is_not_suppressed() {
+        remember_unsupported("custom-ep", "http://old-server:8080/v1", "qwen3");
+        assert!(!should_send("custom-ep", "http://old-server:8080/v1", "qwen3", Off));
+        assert!(should_send("custom-ep", "http://new-server:9090/v1", "qwen3", Off));
+        assert!(!is_known_unsupported("custom-ep", "http://new-server:9090/v1", "qwen3"));
     }
 
     // ── send_with_fallback against a local server ───────────
@@ -656,7 +669,7 @@ mod tests {
     async fn a_rejected_parameter_is_retried_once_without_it_and_remembered() {
         let (url, seen) = server(r#"{"error":"Unrecognized request argument supplied: reasoning_effort"}"#, false).await;
         let params = GenerationParams::default();
-        let sent = send_with_fallback("retry-prov", "retry-model", true, &params, |t| post(&url, t))
+        let sent = send_with_fallback("retry-prov", &url, "retry-model", true, &params, |t| post(&url, t))
             .await
             .unwrap();
         assert!(matches!(sent, Sent::Ok(_)));
@@ -664,16 +677,16 @@ mod tests {
         assert_eq!(bodies.len(), 2);
         assert!(bodies[0].contains("reasoning_effort"));
         assert!(!bodies[1].contains("reasoning_effort"));
-        assert!(is_known_unsupported("retry-prov", "retry-model"));
+        assert!(is_known_unsupported("retry-prov", &url, "retry-model"));
         // The next request builds no thinking parameter at all.
-        assert!(!should_send("retry-prov", "retry-model", Off));
+        assert!(!should_send("retry-prov", &url, "retry-model", Off));
     }
 
     #[tokio::test]
     async fn an_unrelated_400_is_not_retried() {
         let (url, seen) = server(r#"{"error":"context length exceeded"}"#, true).await;
         let params = GenerationParams::default();
-        let sent = send_with_fallback("retry-prov2", "retry-model2", true, &params, |t| post(&url, t))
+        let sent = send_with_fallback("retry-prov2", &url, "retry-model2", true, &params, |t| post(&url, t))
             .await
             .unwrap();
         match sent {
@@ -684,14 +697,14 @@ mod tests {
             Sent::Ok(_) => panic!("expected a failure"),
         }
         assert_eq!(seen.lock().unwrap().len(), 1);
-        assert!(!is_known_unsupported("retry-prov2", "retry-model2"));
+        assert!(!is_known_unsupported("retry-prov2", &url, "retry-model2"));
     }
 
     #[tokio::test]
     async fn nothing_is_retried_when_no_thinking_parameter_was_sent() {
         let (url, seen) = server(r#"{"error":"bad reasoning_effort"}"#, true).await;
         let params = GenerationParams::default();
-        let sent = send_with_fallback("retry-prov3", "retry-model3", false, &params, |t| post(&url, t))
+        let sent = send_with_fallback("retry-prov3", &url, "retry-model3", false, &params, |t| post(&url, t))
             .await
             .unwrap();
         assert!(matches!(sent, Sent::Failed { .. }));

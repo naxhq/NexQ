@@ -195,8 +195,8 @@ impl LLMProvider for OpenAICompatClient {
         // NOTE: llm_stream_start is emitted by IntelligenceEngine::generate_assist()
         // with the correct mode. Do NOT emit it here — it would overwrite the mode.
 
-        let send_thinking = thinking::should_send(provider, model, setting);
-        let sent = thinking::send_with_fallback(provider, model, send_thinking, &params, |with_thinking| {
+        let send_thinking = thinking::should_send(provider, &self.config.base_url, model, setting);
+        let sent = thinking::send_with_fallback(provider, &self.config.base_url, model, send_thinking, &params, |with_thinking| {
             let (body, _) =
                 build_chat_body(provider, &messages, model, &params, setting, extra.as_ref(), with_thinking);
             let request = self

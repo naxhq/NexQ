@@ -40,7 +40,7 @@ describe("configStore: LLM thinking and extra request JSON", () => {
   beforeEach(() => {
     saved.clear();
     keyListeners.length = 0;
-    invoke.mockClear();
+    invoke.mockReset().mockImplementation(async () => null);
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
   afterEach(() => vi.restoreAllMocks());
@@ -94,5 +94,47 @@ describe("configStore: LLM thinking and extra request JSON", () => {
     // The next start has them too.
     const nextStart = await openWindow();
     expect(nextStart.getState().llmThinking).toEqual({ ollama: "low" });
+  });
+
+  it("an option update still loading when another provider is activated does not reinstall the old one", async () => {
+    saved.set("llmProvider", "groq");
+    saved.set("llmModel", "llama-3.3-70b");
+    const win = await openWindow();
+    await vi.waitFor(() => expect(pushedConfigs().length).toBeGreaterThan(0));
+    invoke.mockClear();
+
+    // Groq's credentials take a while to load: the option update is in flight.
+    let releaseKey!: (key: string) => void;
+    const keyLoaded = new Promise<string>((resolve) => (releaseKey = resolve));
+    invoke.mockImplementation(async (cmd: string) => (cmd === "get_api_key" ? keyLoaded : null));
+
+    win.getState().setLlmThinking("groq", "off");
+    // Meanwhile the user switches to Ollama.
+    const switched = win.getState().activateLLMProvider("ollama", { model: "llama3.2" });
+    releaseKey("gsk-test");
+    await switched;
+    await vi.waitFor(() => expect(win.getState().llmProvider).toBe("ollama"));
+    await new Promise((r) => setTimeout(r, 20));
+
+    const providers = pushedConfigs().map((c) => c.provider_type);
+    // Whatever was sent for Groq went first; the last word is Ollama's.
+    expect(providers[providers.length - 1]).toBe("ollama");
+    expect(win.getState().llmProvider).toBe("ollama");
+  });
+
+  it("an option update for a provider that is no longer active is dropped", async () => {
+    saved.set("llmProvider", "ollama");
+    saved.set("llmModel", "m");
+    const win = await openWindow();
+    await vi.waitFor(() => expect(pushedConfigs().length).toBeGreaterThan(0));
+    await win.getState().activateLLMProvider("lm_studio", { model: "q" });
+    invoke.mockClear();
+
+    win.getState().setLlmThinking("ollama", "off");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(pushedConfigs()).toEqual([]);
+    // It is saved and used when Ollama is activated again.
+    await win.getState().activateLLMProvider("ollama", { model: "m" });
+    expect(pushedConfigs().pop()).toEqual({ provider_type: "ollama", thinking: "off" });
   });
 });

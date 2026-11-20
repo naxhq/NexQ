@@ -263,8 +263,8 @@ impl LLMProvider for AnthropicClient {
         // with the correct mode. Do NOT emit it here — it would overwrite the mode.
 
         let (_, would_send) = build_messages_body(&messages, model, &params, setting, true);
-        let send_thinking = would_send && thinking::should_send("anthropic", model, setting);
-        let sent = thinking::send_with_fallback("anthropic", model, send_thinking, &params, |with_thinking| {
+        let send_thinking = would_send && thinking::should_send("anthropic", &self.base_url, model, setting);
+        let sent = thinking::send_with_fallback("anthropic", &self.base_url, model, send_thinking, &params, |with_thinking| {
             let (body, _) = build_messages_body(&messages, model, &params, setting, with_thinking);
             let request = self
                 .client

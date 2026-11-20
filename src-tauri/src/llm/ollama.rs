@@ -178,8 +178,8 @@ impl LLMProvider for OllamaClient {
         // NOTE: llm_stream_start is emitted by IntelligenceEngine::generate_assist()
         // with the correct mode. Do NOT emit it here — it would overwrite the mode.
 
-        let send_thinking = thinking::should_send("ollama", model, setting);
-        let sent = thinking::send_with_fallback("ollama", model, send_thinking, &params, |with_thinking| {
+        let send_thinking = thinking::should_send("ollama", &self.base_url, model, setting);
+        let sent = thinking::send_with_fallback("ollama", &self.base_url, model, send_thinking, &params, |with_thinking| {
             let (body, _) = build_chat_body(&messages, model, &params, setting, extra.as_ref(), with_thinking);
             let request = self
                 .client

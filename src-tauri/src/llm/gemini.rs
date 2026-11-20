@@ -230,8 +230,8 @@ impl LLMProvider for GeminiClient {
 
         let (_, would_send) =
             build_request_body(system_instruction.clone(), contents.clone(), model, &params, setting, true);
-        let send_thinking = would_send && thinking::should_send("gemini", model, setting);
-        let sent = thinking::send_with_fallback("gemini", model, send_thinking, &params, |with_thinking| {
+        let send_thinking = would_send && thinking::should_send("gemini", &self.base_url, model, setting);
+        let sent = thinking::send_with_fallback("gemini", &self.base_url, model, send_thinking, &params, |with_thinking| {
             let (body, _) =
                 build_request_body(system_instruction.clone(), contents.clone(), model, &params, setting, with_thinking);
             let request = self

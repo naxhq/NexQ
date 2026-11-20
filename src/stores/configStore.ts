@@ -148,13 +148,33 @@ async function storedProviderConfig(provider: LLMProviderType): Promise<string> 
 }
 
 /**
+ * Changes of the backend's provider run one after another, in the order they
+ * were asked for: both activating a provider and re-applying its options load
+ * credentials first, so a slow one must not land after a later switch and put
+ * the old provider back.
+ */
+let providerChanges: Promise<unknown> = Promise.resolve();
+function enqueueProviderChange<T>(task: () => Promise<T>): Promise<T> {
+  const run = providerChanges.then(task, task);
+  providerChanges = run.catch(() => {});
+  return run;
+}
+
+/**
  * A request option of the provider in use changed: the backend gets the whole
  * config again (it keeps the model). A provider not in use gets it on activation.
+ * The check of which provider is in use runs when its turn comes, after any
+ * switch asked for earlier, so a stale update is dropped.
  */
 function reapplyIfActive(provider: LLMProviderType): void {
-  if (provider === "claude_cli" || useConfigStore.getState().llmProvider !== provider) return;
-  storedProviderConfig(provider)
-    .then((config) => import("../lib/ipc").then((ipc) => ipc.setLLMProvider(config)))
+  if (provider === "claude_cli") return;
+  enqueueProviderChange(async () => {
+    if (useConfigStore.getState().llmProvider !== provider) return;
+    const config = await storedProviderConfig(provider);
+    if (useConfigStore.getState().llmProvider !== provider) return;
+    const ipc = await import("../lib/ipc");
+    await ipc.setLLMProvider(config);
+  })
     .catch((e) => {
       console.warn("[configStore] Failed to apply the request options:", e);
       import("./toastStore").then(({ showToast }) =>
@@ -574,7 +594,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
     persistValue("llmModel", model);
     useConfigStore.getState().rememberModel(provider ?? useConfigStore.getState().llmProvider, model);
   },
-  activateLLMProvider: async (provider, options = {}) => {
+  activateLLMProvider: (provider, options = {}) => enqueueProviderChange(async () => {
     const ipc = await import("../lib/ipc");
     const before = useConfigStore.getState();
     let providerConfig = options.providerConfig;
@@ -600,7 +620,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
       }
       useConfigStore.getState().setLLMModel(model, provider);
     }
-  },
+  }),
   rememberModel: (provider, model) => {
     if (!model || provider === "claude_cli") return;
     const { lastModelByProvider } = useConfigStore.getState();

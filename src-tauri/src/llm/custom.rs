@@ -33,6 +33,39 @@ pub struct CustomClient {
     options: RequestOptions,
 }
 
+/// How one endpoint attempt ended.
+enum Attempt {
+    Stream(reqwest::Response),
+    /// The server answered with an error: "answered 400 (...)".
+    Failed(String),
+    /// No answer: "couldn't be reached (...)".
+    Unreachable(String),
+}
+
+/// The Ollama-native `/api/chat` body (no OpenAI sampling options): `think`
+/// from the thinking setting, then the extra JSON merged last (`options`
+/// merged key by key; model, messages and stream kept).
+pub(crate) fn native_chat_body(
+    msgs: &[serde_json::Value],
+    model: &str,
+    setting: ThinkingSetting,
+    extra: Option<&serde_json::Map<String, serde_json::Value>>,
+    with_thinking: bool,
+) -> (serde_json::Value, bool) {
+    let mut body = json!({ "model": model, "messages": msgs, "stream": true });
+    let mut sent = false;
+    if with_thinking {
+        if let Some(think) = thinking::ollama_think(model, setting) {
+            body["think"] = think;
+            sent = true;
+        }
+    }
+    if let Some(extra) = extra {
+        thinking::merge_extra_request(&mut body, extra, true);
+    }
+    (body, sent)
+}
+
 /// The `/chat/completions` body for a custom endpoint (OpenAI-compatible).
 /// `with_thinking` false leaves out `reasoning_effort` (the retry after the
 /// endpoint refused it). Returns the body and whether it carries thinking.
@@ -117,55 +150,63 @@ impl CustomClient {
         params: &GenerationParams,
     ) -> Result<reqwest::Response, LLMError> {
         let setting = thinking::resolve(params, self.options.thinking);
-        let first = match self.try_chat_completions(msgs, model, params, setting).await? {
-            Ok(resp) => return Ok(resp),
-            Err(failure) => failure,
+        let extra = self.options.extra_request();
+        let first = match self
+            .attempt("/chat/completions", "custom", model, params, setting, |with_thinking| {
+                chat_completions_body(msgs, model, params, setting, extra.as_ref(), with_thinking)
+            })
+            .await?
+        {
+            Attempt::Stream(resp) => return Ok(resp),
+            Attempt::Failed(text) | Attempt::Unreachable(text) => text,
         };
+        log::warn!("CustomLLM: /chat/completions failed; trying /api/chat");
 
-        // Ollama's native API takes no OpenAI options.
-        let body = json!({ "model": model, "messages": msgs, "stream": true });
-        let (second, unreachable) = match self.post_json("/api/chat", &body, params).await? {
-            Ok(resp) if resp.status().is_success() => return Ok(resp),
-            Ok(resp) => (cancellable(params, Self::failure(resp)).await?, false),
-            Err(e) => (format!("couldn't be reached ({})", e), true),
+        let (second, unreachable) = match self
+            .attempt("/api/chat", "custom:/api/chat", model, params, setting, |with_thinking| {
+                native_chat_body(msgs, model, setting, extra.as_ref(), with_thinking)
+            })
+            .await?
+        {
+            Attempt::Stream(resp) => return Ok(resp),
+            Attempt::Failed(text) => (text, false),
+            Attempt::Unreachable(text) => (text, true),
         };
         let message = format!("Custom endpoint request failed: /chat/completions {}; /api/chat {}", first, second);
         Err(if unreachable { LLMError::ConnectionFailed(message) } else { LLMError::ProviderError(message) })
     }
 
-    /// The OpenAI-compatible attempt. `Ok(Ok(response))` streams; `Ok(Err(text))`
-    /// is why it failed ("answered 400 (...)" or "couldn't be reached (...)").
-    /// A 400 that refuses the thinking parameter is retried once without it, and
-    /// remembered for this endpoint and model.
-    async fn try_chat_completions(
+    /// One endpoint of the custom server. `build(with_thinking)` makes the body
+    /// and says whether it carries the thinking parameter. A 400 that refuses
+    /// that parameter is retried once without it and remembered for this
+    /// server (`label` + base URL) and model.
+    async fn attempt(
         &self,
-        msgs: &[serde_json::Value],
+        path: &str,
+        label: &str,
         model: &str,
         params: &GenerationParams,
         setting: ThinkingSetting,
-    ) -> Result<Result<reqwest::Response, String>, LLMError> {
-        let extra = self.options.extra_request();
-        let mut with_thinking = thinking::should_send("custom", model, setting);
+        build: impl Fn(bool) -> (serde_json::Value, bool),
+    ) -> Result<Attempt, LLMError> {
+        let endpoint = self.config.base_url.as_str();
+        let mut with_thinking = thinking::should_send(label, endpoint, model, setting);
         loop {
-            let (body, sent) = chat_completions_body(msgs, model, params, setting, extra.as_ref(), with_thinking);
-            match self.post_json("/chat/completions", &body, params).await? {
-                Ok(resp) if resp.status().is_success() => return Ok(Ok(resp)),
+            let (body, sent) = build(with_thinking);
+            match self.post_json(path, &body, params).await? {
+                Ok(resp) if resp.status().is_success() => return Ok(Attempt::Stream(resp)),
                 Ok(resp) => {
                     let status = resp.status();
-                    log::warn!("CustomLLM: /chat/completions answered {}; trying /api/chat", status);
                     let text = cancellable(params, resp.text()).await?.unwrap_or_default();
                     if sent && thinking::rejects_thinking_param(status.as_u16(), &text) {
-                        log::warn!("CustomLLM: {} rejected the thinking parameter; retrying without it", model);
-                        thinking::remember_unsupported("custom", model);
+                        log::warn!("CustomLLM: {}{} rejected the thinking parameter; retrying without it", model, path);
+                        thinking::remember_unsupported(label, endpoint, model);
                         with_thinking = false;
                         continue;
                     }
-                    return Ok(Err(Self::failure_text(status, &text)));
+                    return Ok(Attempt::Failed(Self::failure_text(status, &text)));
                 }
-                Err(e) => {
-                    log::warn!("CustomLLM: /chat/completions couldn't be reached; trying /api/chat");
-                    return Ok(Err(format!("couldn't be reached ({})", e)));
-                }
+                Err(e) => return Ok(Attempt::Unreachable(format!("couldn't be reached ({})", e))),
             }
         }
     }
@@ -675,11 +716,71 @@ mod tests {
 
         let _ = c.open_chat_stream(&hi(), "retry-custom-model", &GenerationParams::default()).await;
         assert_eq!(count(), 2, "one try with the parameter, one without");
-        assert!(thinking::is_known_unsupported("custom", "retry-custom-model"));
+        assert!(thinking::is_known_unsupported("custom", &base, "retry-custom-model"));
 
         // The next request does not try the parameter again.
         let _ = c.open_chat_stream(&hi(), "retry-custom-model", &GenerationParams::default()).await;
         assert_eq!(count(), 3);
+    }
+
+    #[test]
+    fn native_body_maps_thinking_and_merges_extra_json() {
+        let msgs = hi();
+        let build = |s, extra: Option<&str>, with| {
+            let extra = thinking::parse_extra_request(extra);
+            native_chat_body(&msgs, "m", s, extra.as_ref(), with)
+        };
+        let (b, sent) = build(ThinkingSetting::Auto, None, true);
+        assert!(!sent);
+        assert_eq!(b, json!({ "model": "m", "messages": msgs, "stream": true }), "Auto is the old body");
+        assert_eq!(build(ThinkingSetting::Off, None, true).0["think"], false);
+        assert_eq!(build(ThinkingSetting::High, None, true).0["think"], true);
+        assert!(build(ThinkingSetting::Off, None, false).0.get("think").is_none());
+        let (b, _) = build(
+            ThinkingSetting::Auto,
+            Some(r#"{"model":"evil","stream":false,"messages":[],"options":{"num_ctx":4096}}"#),
+            true,
+        );
+        assert_eq!((b["model"].as_str(), b["stream"].as_bool()), (Some("m"), Some(true)));
+        assert_eq!(b["messages"], json!(msgs));
+        assert_eq!(b["options"]["num_ctx"], 4096);
+    }
+
+    /// A server whose /v1/chat/completions is missing (404) but whose native
+    /// /v1/api/chat refuses `think` with a 400: the fallback retries without it.
+    #[tokio::test]
+    async fn the_api_chat_fallback_retries_without_a_refused_think_parameter() {
+        let (base, seen) = server(vec![(
+            "/v1/api/chat",
+            400,
+            r#"{"error":"\"m\" does not support thinking"}"#,
+        )])
+        .await;
+        let c = thinking_client(&base, ThinkingSetting::Off);
+        let count = || seen.lock().unwrap().iter().filter(|(p, _)| p == "/v1/api/chat").count();
+        let _ = c.open_chat_stream(&hi(), "native-retry-model", &GenerationParams::default()).await;
+        assert_eq!(count(), 2, "one try with think, one without");
+        assert!(thinking::is_known_unsupported("custom:/api/chat", &base, "native-retry-model"));
+        // The other endpoint's memory is separate: /chat/completions never rejected anything.
+        assert!(!thinking::is_known_unsupported("custom", &base, "native-retry-model"));
+        let _ = c.open_chat_stream(&hi(), "native-retry-model", &GenerationParams::default()).await;
+        assert_eq!(count(), 3, "remembered: no more retry");
+    }
+
+    #[tokio::test]
+    async fn a_new_base_url_is_not_treated_as_rejecting() {
+        let (old_base, _) =
+            server(vec![("/v1/chat/completions", 400, r#"{"error":"unknown field reasoning_effort"}"#)]).await;
+        let c = thinking_client(&old_base, ThinkingSetting::Off);
+        let _ = c.open_chat_stream(&hi(), "shared-model", &GenerationParams::default()).await;
+        assert!(thinking::is_known_unsupported("custom", &old_base, "shared-model"));
+
+        let (new_base, seen) = server(vec![("/v1/chat/completions", 200, "data: [DONE]\n\n")]).await;
+        let c = thinking_client(&new_base, ThinkingSetting::Off);
+        c.open_chat_stream(&hi(), "shared-model", &GenerationParams::default()).await.unwrap();
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        assert!(!thinking::is_known_unsupported("custom", &new_base, "shared-model"));
+        assert!(thinking::should_send("custom", &new_base, "shared-model", ThinkingSetting::Off));
     }
 
     #[tokio::test]
