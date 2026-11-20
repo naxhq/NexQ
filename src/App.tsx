@@ -96,8 +96,14 @@ function App() {
   // Settings the other window saves reach this one (scenarios, AI actions).
   useEffect(() => {
     const watching = [
-      watchSavedScenarios().catch(() => undefined),
-      watchSavedActionConfigs().catch(() => undefined),
+      watchSavedScenarios().catch((e) => {
+        console.warn("[App] Could not start watching scenarios saved by the other window:", e);
+        return undefined;
+      }),
+      watchSavedActionConfigs().catch((e) => {
+        console.warn("[App] Could not start watching AI settings saved by the other window:", e);
+        return undefined;
+      }),
     ];
     return () => {
       watching.forEach((w) => w.then((stop) => stop?.()));

@@ -97,13 +97,14 @@ describe("AI settings saved by another window", () => {
       await emit("store://change", {
         resourceId: 1,
         key: "ai_action_configs",
-        value: { actions: {}, globalDefaults: { questionDetection: true, autoTrigger: true } },
+        value: { actions: {}, globalDefaults: { autoTrigger: true } },
         exists: true,
       });
       expect(useAIActionsStore.getState().configs.globalDefaults.autoTrigger).toBe(true);
     });
     // Settings saved before a newer one existed still get its default.
     expect(useAIActionsStore.getState().configs.actions.Assist).toBeTruthy();
+    expect(useAIActionsStore.getState().configs.globalDefaults.questionDetection).toBe(true);
   });
 });
 
