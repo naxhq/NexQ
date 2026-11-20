@@ -1,10 +1,10 @@
-use super::{AudioMessage, TranscriptResult, SAMPLE_RATE};
+use super::segmenter::{argmax, decode_tokens, segment_loop};
+use super::{AudioMessage, TranscriptResult};
 use ort::session::Session;
 use ort::value::{DynValue, Tensor, TensorRef, ValueType};
 use rustfft::{num_complex::Complex, FftPlanner};
 use std::collections::HashMap;
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
-use std::time::{Duration, Instant};
+use std::sync::{atomic::AtomicBool, Arc};
 use tokio::sync::mpsc;
 
 fn joiner_shape(dim: usize) -> [usize; 3] {
@@ -15,10 +15,6 @@ fn gather_encoder_frame(data: &[f32], time: usize, t: usize, frame: &mut [f32]) 
     for (channel, value) in frame.iter_mut().enumerate() {
         *value = data[channel * time + t];
     }
-}
-
-fn argmax(values: &[f32]) -> usize {
-    values.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map(|x| x.0).unwrap_or(0)
 }
 
 fn tdt_step(logits: &[f32], vocab_size: usize, blank: usize, tokens_this_frame: usize) -> Result<(usize, usize), String> {
@@ -33,18 +29,6 @@ fn tdt_step(logits: &[f32], vocab_size: usize, blank: usize, tokens_this_frame: 
     Ok((token, skip))
 }
 
-fn decode_tokens(ids: &[i64], vocab: &HashMap<i64, String>) -> String {
-    let mut text = String::new();
-    for id in ids {
-        if let Some(piece) = vocab.get(id) {
-            if !piece.starts_with('<') {
-                text.extend(piece.chars().map(|c| if c == '▁' { ' ' } else { c }));
-            }
-        }
-    }
-    text.trim().to_owned()
-}
-
 fn normalize_features(features: &mut [f32], frames: usize) {
     for channel in features.chunks_exact_mut(frames) {
         let mean = channel.iter().map(|&x| x as f64).sum::<f64>() / frames as f64;
@@ -56,20 +40,23 @@ fn normalize_features(features: &mut [f32], frames: usize) {
     }
 }
 
-struct Features {
+/// NeMo-family (Slaney mel scale) log-mel feature extractor, parametrized by
+/// mel-channel count: 128 for the TDT encoder, 80 for the CTC encoder.
+pub(super) struct Features {
+    num_mels: usize,
     filters: Vec<Vec<f32>>,
     window: Vec<f32>,
     fft: Arc<dyn rustfft::Fft<f32>>,
 }
 
 impl Features {
-    fn new() -> Self {
+    pub(super) fn new(num_mels: usize) -> Self {
         let mel_max = 15.0 + (8000.0f64 / 1000.0).ln() / (6.4f64.ln() / 27.0);
-        let points: Vec<f64> = (0..130).map(|i| {
-            let mel = mel_max * i as f64 / 129.0;
+        let points: Vec<f64> = (0..num_mels + 2).map(|i| {
+            let mel = mel_max * i as f64 / (num_mels + 1) as f64;
             if mel < 15.0 { mel * 200.0 / 3.0 } else { 1000.0 * ((mel - 15.0) * (6.4f64.ln() / 27.0)).exp() }
         }).collect();
-        let filters = (0..128).map(|m| {
+        let filters = (0..num_mels).map(|m| {
             let (left, center, right) = (points[m], points[m + 1], points[m + 2]);
             (0..257).map(|k| {
                 let hz = k as f64 * 16000.0 / 512.0;
@@ -77,13 +64,17 @@ impl Features {
             }).collect()
         }).collect();
         let window = (0..400).map(|i| (0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / 399.0).cos()) as f32).collect();
-        Self { filters, window, fft: FftPlanner::new().plan_fft_forward(512) }
+        Self { num_mels, filters, window, fft: FftPlanner::new().plan_fft_forward(512) }
     }
 
-    fn extract(&self, samples: &[f32]) -> (usize, Vec<f32>) {
+    /// Extract log-mel features. `normalize` applies the per-feature
+    /// mean/variance normalization most NeMo exports expect; a model whose
+    /// metadata declares no normalization (e.g. `normalize_type: "NA"`)
+    /// wants the raw log-mel energies instead.
+    pub(super) fn extract(&self, samples: &[f32], normalize: bool) -> (usize, Vec<f32>) {
         let frames = samples.len() / 160;
         if frames < 2 { return (0, Vec::new()); }
-        let mut features = vec![0.0; 128 * frames];
+        let mut features = vec![0.0; self.num_mels * frames];
         let mut spectrum = vec![Complex::new(0.0, 0.0); 512];
         let mut scratch = vec![Complex::new(0.0, 0.0); self.fft.get_inplace_scratch_len()];
         let mut power = [0.0f32; 257];
@@ -104,7 +95,9 @@ impl Features {
                 features[m * frames + t] = (energy + 2.0f32.powi(-24)).ln();
             }
         }
-        normalize_features(&mut features, frames);
+        if normalize {
+            normalize_features(&mut features, frames);
+        }
         (frames, features)
     }
 }
@@ -136,7 +129,7 @@ fn recognize(
     encoder: &mut Session, decoder: &mut Session, joiner: &mut Session,
     features: &Features, samples: &[f32], vocab: &HashMap<i64, String>, blank: usize,
 ) -> Result<String, String> {
-    let (frames, features) = features.extract(samples);
+    let (frames, features) = features.extract(samples, true);
     if frames == 0 { return Ok(String::new()); }
     let lengths = [frames as i64];
     let feature_tensor = TensorRef::from_array_view(([1, 128, frames], &features[..])).map_err(|e| e.to_string())?;
@@ -180,18 +173,11 @@ fn recognize(
     Ok(decode_tokens(&tokens, vocab))
 }
 
-/// Mean power below this is silence (no decoding, counts toward a pause).
-const SILENCE_ENERGY: f64 = 1e-6;
-
-fn epoch_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
-}
-
 pub(super) fn run(
     encoder: &mut Session, decoder: &mut Session, joiner: &mut Session,
     vocab: &HashMap<i64, String>, language: &str, stop: &AtomicBool,
     audio_rx: &std::sync::mpsc::Receiver<AudioMessage>,
-    result_tx: &mpsc::Sender<TranscriptResult>, mut segment: u64,
+    result_tx: &mpsc::Sender<TranscriptResult>, segment: u64,
     debug: &impl Fn(&str, &str),
 ) -> Result<(), String> {
     let metadata = encoder.metadata().map_err(|e| e.to_string())?;
@@ -204,74 +190,10 @@ pub(super) fn run(
     }
     drop(metadata);
     debug("info", "NeMo TDT: offline channel-major encoder, per-feature normalized 128-bin Slaney mel, recurrent decoder, five durations");
-    let features = Features::new();
-    let mut samples = Vec::new();
-    let mut silence = 0;
-    // Whether the buffer holds any speech-energy frame (silent buffers aren't decoded).
-    let mut heard = false;
-    // Epoch ms of the buffer's first sample.
-    let mut segment_start_ms = 0u64;
-    let mut received = Instant::now();
-    loop {
-        let mut finished = false;
-        let mut flush = false;
-        // A stop request flushes only what is already buffered; queued audio is dropped.
-        let message = if stop.load(Ordering::SeqCst) {
-            Ok(AudioMessage::Stop)
-        } else {
-            audio_rx.recv_timeout(Duration::from_millis(100))
-        };
-        match message {
-            Ok(AudioMessage::Samples(audio)) => {
-                received = Instant::now();
-                // The chunk just arrived: its first sample was captured `len / 16` ms ago.
-                let chunk_start_ms = epoch_ms().saturating_sub(audio.len() as u64 * 1000 / SAMPLE_RATE as u64);
-                for (i, chunk) in audio.chunks(160).enumerate() {
-                    if samples.is_empty() {
-                        segment_start_ms = chunk_start_ms + (i as u64 * 160 * 1000 / SAMPLE_RATE as u64);
-                    }
-                    let energy = chunk.iter().map(|&x| (x as f64 / 32768.0).powi(2)).sum::<f64>() / chunk.len() as f64;
-                    let speech = energy >= SILENCE_ENERGY;
-                    heard |= speech;
-                    silence = if speech { 0 } else { silence + chunk.len() };
-                    samples.extend(chunk.iter().map(|&x| x as f32 / 32768.0));
-                    if (silence >= 12800 && samples.len() >= SAMPLE_RATE as usize) || samples.len() >= SAMPLE_RATE as usize * 20 {
-                        flush = true;
-                    }
-                }
-            }
-            Ok(AudioMessage::Stop) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                finished = true;
-                flush = true;
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                finished = stop.load(Ordering::SeqCst);
-                flush = finished || received.elapsed() >= Duration::from_millis(800);
-            }
-        }
-        if flush && !samples.is_empty() {
-            let text = if heard {
-                recognize(encoder, decoder, joiner, &features, &samples, vocab, blank)?
-            } else {
-                String::new()
-            };
-            let duration_ms = samples.len() as u64 * 1000 / SAMPLE_RATE as u64;
-            samples.clear();
-            silence = 0;
-            heard = false;
-            if !text.is_empty() {
-                result_tx.blocking_send(TranscriptResult {
-                    text, is_final: true, confidence: 0.9,
-                    timestamp_ms: segment_start_ms,
-                    speaker: None, language: Some(language.to_owned()), segment_id: Some(format!("ort_{segment}")),
-                    duration_ms: Some(duration_ms), speaker_tag: None,
-                    turn: None,
-                }).map_err(|e| e.to_string())?;
-                segment += 1;
-            }
-        }
-        if finished { return Ok(()); }
-    }
+    let features = Features::new(128);
+    segment_loop(stop, audio_rx, result_tx, segment, language, |samples| {
+        recognize(encoder, decoder, joiner, &features, samples, vocab, blank)
+    })
 }
 
 #[cfg(test)]
@@ -295,12 +217,6 @@ mod tests {
     }
 
     #[test]
-    fn sentencepiece_preserves_case_spaces_and_unicode() {
-        let vocab = HashMap::from([(0, "<unk>".into()), (1, "▁Hello".into()), (2, ",".into()), (3, "▁café".into()), (4, "!".into()), (5, "<blk>".into())]);
-        assert_eq!(decode_tokens(&[1, 2, 3, 4], &vocab), "Hello, café!");
-    }
-
-    #[test]
     fn per_feature_normalization_uses_unbiased_variance() {
         let mut features = [1.0, 2.0, 3.0, 4.0, 4.0, 4.0];
         normalize_features(&mut features, 3);
@@ -312,9 +228,22 @@ mod tests {
 
     #[test]
     fn silent_features_have_valid_frame_count_and_no_nan() {
-        let (frames, features) = Features::new().extract(&vec![0.0; 16000]);
+        let (frames, features) = Features::new(128).extract(&vec![0.0; 16000], true);
         assert_eq!(frames, 100);
         assert_eq!(features.len(), 12800);
         assert!(features.iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn eighty_mel_features_keep_the_log_floor_without_normalization() {
+        let floor = 2.0f32.powi(-24).ln();
+        let (frames, raw) = Features::new(80).extract(&vec![0.0; 16000], false);
+        assert_eq!(frames, 100);
+        assert_eq!(raw.len(), 8000);
+        assert!(raw.iter().all(|&x| x == floor));
+        // The same silence, normalized per feature, is all zeros.
+        let (_, normalized) = Features::new(80).extract(&vec![0.0; 16000], true);
+        assert_eq!(normalized.len(), 8000);
+        assert!(normalized.iter().all(|&x| x == 0.0));
     }
 }
