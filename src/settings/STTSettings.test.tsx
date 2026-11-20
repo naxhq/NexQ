@@ -62,3 +62,85 @@ it("checks the Them side too, and says nothing when both can detect the language
   expect(screen.queryByText(/Auto-detect doesn't work/)).toBeNull();
   expect(screen.getByText("Nova-3 can transcribe multiple languages within the same sentence.")).toBeInTheDocument();
 });
+
+const deepgramYou: MeetingAudioConfig = { ...config, you: { ...config.you, stt_provider: "deepgram" } };
+
+it("judges the You provider by the language You is transcribed in", () => {
+  const flux = { ...useConfigStore.getState().deepgramConfig, model: "flux-general-multi" };
+  // Shared Ukrainian, but You has its own English: Flux is fine.
+  useConfigStore.setState({
+    sttLanguage: "uk-UA",
+    deepgramConfig: flux,
+    meetingAudioConfig: { ...deepgramYou, you: { ...deepgramYou.you, language: "en-US" } },
+  });
+  render(<STTSettings />);
+  expect(screen.queryByText(/Switch from Flux to Nova-3/)).toBeNull();
+
+  // Shared English, but You has its own Ukrainian: not fine.
+  cleanup();
+  useConfigStore.setState({
+    sttLanguage: "en-US",
+    meetingAudioConfig: { ...deepgramYou, you: { ...deepgramYou.you, language: "uk-UA" } },
+  });
+  render(<STTSettings />);
+  expect(screen.getByText("Switch from Flux to Nova-3 for Ukrainian transcription.")).toBeInTheDocument();
+
+  // Without a language of its own, the shared one counts, as before.
+  cleanup();
+  useConfigStore.setState({ sttLanguage: "uk-UA", meetingAudioConfig: deepgramYou });
+  render(<STTSettings />);
+  expect(screen.getByText("Switch from Flux to Nova-3 for Ukrainian transcription.")).toBeInTheDocument();
+});
+
+it("keeps the Cartesia line and the other provider hints", () => {
+  useConfigStore.setState({
+    sttLanguage: "es-ES",
+    meetingAudioConfig: { ...config, you: { ...config.you, stt_provider: "cartesia" } },
+  });
+  render(<STTSettings />);
+  expect(screen.getByText("Cartesia detects English, French, Hindi, Japanese and Spanish on its own.")).toBeInTheDocument();
+  cleanup();
+  useConfigStore.setState({ sttLanguage: "de-DE" });
+  render(<STTSettings />);
+  expect(screen.getByText(/Cartesia transcribes only English, French, Hindi, Japanese and Spanish/)).toBeInTheDocument();
+  cleanup();
+  useConfigStore.setState({
+    sttLanguage: "vi-VN",
+    meetingAudioConfig: { ...config, you: { ...config.you, stt_provider: "parakeet_tdt" } },
+  });
+  render(<STTSettings />);
+  expect(screen.getByText(/The included Parakeet models do not support Vietnamese/)).toBeInTheDocument();
+});
+
+it("says which sides are transcribed in a language of their own, under the shared picker", () => {
+  useConfigStore.setState({ sttLanguage: "en-US" });
+  render(<STTSettings />);
+  expect(screen.queryByText(/set in Audio & Devices\)\.$/)).toBeNull();
+
+  cleanup();
+  useConfigStore.setState({
+    meetingAudioConfig: { ...config, them: { ...config.them, language: "es-ES" } },
+  });
+  render(<STTSettings />);
+  expect(screen.getByText("Them transcribes in Spanish (set in Audio & Devices).")).toBeInTheDocument();
+  expect(screen.queryByText(/^You transcribe/)).toBeNull();
+
+  cleanup();
+  useConfigStore.setState({
+    meetingAudioConfig: {
+      ...config,
+      you: { ...config.you, language: "en-GB" },
+      them: { ...config.them, language: "es-ES" },
+    },
+  });
+  render(<STTSettings />);
+  expect(screen.getByText("You transcribe in English (UK) (set in Audio & Devices).")).toBeInTheDocument();
+  expect(screen.getByText("Them transcribes in Spanish (set in Audio & Devices).")).toBeInTheDocument();
+
+  // In-person meetings transcribe the room only.
+  cleanup();
+  useMeetingStore.setState({ audioMode: "in_person" });
+  render(<STTSettings />);
+  expect(screen.getByText("Room transcribes in Spanish (set in Audio & Devices).")).toBeInTheDocument();
+  expect(screen.queryByText(/^You transcribe/)).toBeNull();
+});

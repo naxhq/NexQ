@@ -239,6 +239,7 @@ export function MeetingAudioSettings() {
   const youLanguage = sideLanguage(config.you, sttLanguage);
   const themLanguage = sideLanguage(config.them, sttLanguage);
   const themLabel = inPerson ? "Room" : "Them";
+  const sharedLanguageLabel = STT_LANGUAGES.find((l) => l.value === sttLanguage)?.label ?? sttLanguage;
   const sideProblems = (party: PartyAudioConfig, language: string, label: string) => {
     const side = { provider: party.stt_provider, localModel: party.local_model_id };
     return {
@@ -417,7 +418,7 @@ export function MeetingAudioSettings() {
           ))}
         </div>
         <label className="flex shrink-0 items-center gap-2 text-meta font-semibold uppercase tracking-wider text-muted-foreground/60">
-          STT Language
+          Transcription language
           <select
             value={sttLanguage}
             onChange={(e) => setSTTLanguage(e.target.value)}
@@ -464,6 +465,7 @@ export function MeetingAudioSettings() {
           // In-person meetings don't transcribe "You": there is nothing to set.
           showLanguage={!inPerson}
           sideName="You"
+          sharedLanguageLabel={sharedLanguageLabel}
           onChange={(updates) => updateParty("you", updates)}
         />
         <PartyPanel
@@ -486,6 +488,7 @@ export function MeetingAudioSettings() {
           languageHint={themProblems.hint}
           showLanguage
           sideName={themLabel}
+          sharedLanguageLabel={sharedLanguageLabel}
           onChange={(updates) => updateParty("them", updates)}
         />
       </div>
@@ -722,6 +725,7 @@ function PartyPanel({
   languageHint,
   showLanguage,
   sideName,
+  sharedLanguageLabel,
   onChange,
 }: {
   label: string;
@@ -748,6 +752,8 @@ function PartyPanel({
   showLanguage?: boolean;
   /** "You", "Them" or "Room": names the language picker. */
   sideName: string;
+  /** The shared transcription language's name, which "Same as transcription language" stands for. */
+  sharedLanguageLabel: string;
   onChange: (updates: Partial<PartyAudioConfig>) => void;
 }) {
   const c = PARTY_CONFIG[role];
@@ -915,7 +921,7 @@ function PartyPanel({
               onChange={(e) => onChange({ language: e.target.value || undefined })}
               className="w-full cursor-pointer rounded-lg border border-border/40 bg-background/60 px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
             >
-              <option value={SAME_AS_SHARED_LANGUAGE}>Same as transcription language</option>
+              <option value={SAME_AS_SHARED_LANGUAGE}>Same as transcription language: {sharedLanguageLabel}</option>
               {STT_LANGUAGES.map((lang) => (
                 <option key={lang.value} value={lang.value}>
                   {lang.label}

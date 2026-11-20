@@ -37,8 +37,13 @@ const initialConfig: MeetingAudioConfig = {
   preset_name: null,
 };
 
+const initialDeepgramConfig = useConfigStore.getState().deepgramConfig;
 beforeEach(() => useConfigStore.setState({ meetingAudioConfig: initialConfig }));
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  // A test's Deepgram model (Flux, say) must not reach the next test.
+  useConfigStore.setState({ deepgramConfig: initialDeepgramConfig });
+});
 
 it.each([
   ["Vietnamese", "vi-VN"],
@@ -46,7 +51,7 @@ it.each([
 ])("allows %s to be selected in Audio & Devices", async (label, locale) => {
   useConfigStore.setState({ sttLanguage: "en-US" });
   render(<MeetingAudioSettings />);
-  const select = screen.getByRole("combobox", { name: /STT Language/i });
+  const select = screen.getByRole("combobox", { name: /Transcription language/i });
   await userEvent.setup().selectOptions(select, locale);
   expect(useConfigStore.getState().sttLanguage).toBe(locale);
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("set_stt_language", { language: locale }));
@@ -64,7 +69,7 @@ it("selects Auto-detect and identifies the channel that needs a different STT en
   });
   const user = userEvent.setup();
   render(<MeetingAudioSettings />);
-  const select = screen.getByRole("combobox", { name: /STT Language/i });
+  const select = screen.getByRole("combobox", { name: /Transcription language/i });
 
   await user.selectOptions(select, within(select).getByRole("option", { name: "Auto-detect" }));
   expect(useConfigStore.getState().sttLanguage).toBe("auto");
@@ -140,7 +145,7 @@ describe.each([
 });
 
 describe("a language for each side", () => {
-  const SAME = "Same as transcription language";
+  const SAME = /^Same as transcription language: /;
   const side = (name: "You" | "Them" | "Room") =>
     screen.getByRole<HTMLSelectElement>("combobox", { name: `${name} language` });
 
@@ -151,15 +156,23 @@ describe("a language for each side", () => {
     useConfigStore.setState({ sttLanguage: "en-US" });
     render(<MeetingAudioSettings />);
     for (const name of ["You", "Them"] as const) {
-      expect(side(name).selectedOptions[0]).toHaveTextContent(SAME);
+      expect(side(name).selectedOptions[0]).toHaveTextContent("Same as transcription language: English (US)");
       expect(side(name).value).toBe("");
       // The shared list, Auto-detect included.
       const labels = within(side(name)).getAllByRole("option").map((o) => o.textContent);
-      expect(labels).toEqual([SAME, ...STT_LANGUAGES.map((l) => l.label)]);
+      expect(labels).toEqual(["Same as transcription language: English (US)", ...STT_LANGUAGES.map((l) => l.label)]);
     }
     // Showing the pickers saved nothing.
     expect(useConfigStore.getState().meetingAudioConfig).toEqual(initialConfig);
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("names the shared language in the default option", async () => {
+    useConfigStore.setState({ sttLanguage: "es-ES" });
+    render(<MeetingAudioSettings />);
+    expect(side("You").selectedOptions[0]).toHaveTextContent("Same as transcription language: Spanish");
+    await act(async () => useConfigStore.setState({ sttLanguage: "auto" }));
+    expect(side("Them").selectedOptions[0]).toHaveTextContent("Same as transcription language: Auto-detect");
   });
 
   it("saves a side's language into meetingAudioConfig and leaves the shared language and the other side alone", async () => {
@@ -178,8 +191,8 @@ describe("a language for each side", () => {
     expect(useConfigStore.getState().meetingAudioConfig!.you.language).toBe("auto");
 
     // Back to "Same as…" drops the field, so the config has its old shape again.
-    await user.selectOptions(side("Them"), SAME);
-    await user.selectOptions(side("You"), SAME);
+    await user.selectOptions(side("Them"), within(side("Them")).getByRole("option", { name: SAME }));
+    await user.selectOptions(side("You"), within(side("You")).getByRole("option", { name: SAME }));
     expect(useConfigStore.getState().meetingAudioConfig).toEqual(initialConfig);
     expect("language" in useConfigStore.getState().meetingAudioConfig!.them).toBe(false);
   });
@@ -207,7 +220,7 @@ describe("a language for each side", () => {
     let alerts = screen.getAllByRole("alert");
     expect(alerts).toHaveLength(1);
     expect(alerts[0]).toHaveTextContent("Auto-detect doesn't work with Azure Speech, used for Them.");
-    expect(screen.getByRole("combobox", { name: /STT Language/i })).toHaveAccessibleDescription(
+    expect(screen.getByRole("combobox", { name: /Transcription language/i })).toHaveAccessibleDescription(
       "Auto-detect won't work for Them. See its card below, or pick a language.",
     );
 

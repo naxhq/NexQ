@@ -148,6 +148,38 @@ describe("sideLanguageHint", () => {
     expect(sideLanguageHint({ provider: "deepgram" }, "vi-VN", { deepgram: "nova-3" })?.tone).toBe("info");
   });
 
+  it("warns when Parakeet TDT v3 isn't given one of the 25 languages on NVIDIA's model card", () => {
+    const parakeet = { provider: "parakeet_tdt" as const };
+    // In the app's list: English, Spanish, French, German, Italian, Portuguese, Dutch, Russian, Ukrainian, Polish, Czech, Swedish.
+    for (const language of ["en-US", "en-GB", "es-ES", "fr-FR", "de-DE", "it-IT", "pt-BR", "nl-NL", "ru-RU", "uk-UA", "pl-PL", "cs-CZ", "sv-SE"]) {
+      expect(sideLanguageHint(parakeet, language, none), language).toBeNull();
+    }
+    // Not on the card: Japanese, Chinese, Korean, Hindi, Arabic, Turkish.
+    for (const language of ["ja-JP", "zh-CN", "ko-KR", "hi-IN", "ar-SA", "tr-TR"]) {
+      expect(sideLanguageHint(parakeet, language, none)?.text, language).toMatch(/25 European languages/);
+    }
+    // The model the side runs decides; Vietnamese keeps its own wording.
+    expect(sideLanguageHint(parakeet, "ja-JP", { parakeet: "parakeet-tdt-0.6b-v3-int8" })?.tone).toBe("warning");
+    expect(sideLanguageHint(parakeet, "vi-VN", none)?.text).toMatch(/Vietnamese/);
+    expect(
+      sideLanguageHint({ ...parakeet, localModel: "parakeet-tdt-ctc-110m-int8" }, "ja-JP", none)?.text,
+    ).toMatch(/English-only/);
+  });
+
+  it("warns when Flux (English) is given another language, and Flux Multilingual isn't", () => {
+    expect(sideLanguageHint({ provider: "deepgram" }, "es-ES", { deepgram: "flux-general-en" })?.text).toMatch(
+      /English only/,
+    );
+    expect(sideLanguageHint({ provider: "deepgram" }, "uk-UA", { deepgram: "flux-general-en" })?.text).toMatch(
+      /English only/,
+    );
+    expect(sideLanguageHint({ provider: "deepgram" }, "en-GB", { deepgram: "flux-general-en" })).toBeNull();
+    expect(sideLanguageHint({ provider: "deepgram" }, "es-ES", { deepgram: "flux-general-multi" })).toBeNull();
+    expect(sideLanguageHint({ provider: "deepgram" }, "es-ES", { deepgram: "nova-3" })).toBeNull();
+    // Auto-detect on Flux (English) is the Auto-detect refusal's business.
+    expect(sideLanguageHint({ provider: "deepgram" }, "auto", { deepgram: "flux-general-en" })).toBeNull();
+  });
+
   it("leaves Auto-detect to autoDetectProblem and fine pairs alone", () => {
     expect(sideLanguageHint({ provider: "cartesia" }, "auto", none)).toBeNull();
     expect(sideLanguageHint({ provider: "web_speech" }, "uk-UA", none)).toBeNull();

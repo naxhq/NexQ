@@ -14,6 +14,7 @@ import {
   cartesiaSupportsLanguage,
   isDeepgramNova3,
   sideLanguage,
+  sideLanguageHint,
 } from "../lib/sttLanguages";
 import {
   setSTTProvider,
@@ -281,7 +282,6 @@ export function STTSettings() {
   const setMeetingAudioConfig = useConfigStore((s) => s.setMeetingAudioConfig);
   const sttLanguage = useConfigStore((s) => s.sttLanguage);
   const setSTTLanguage = useConfigStore((s) => s.setSTTLanguage);
-  const isDeepgramFlux = useConfigStore((s) => s.deepgramConfig.model.startsWith("flux-"));
   const activeWhisperModel = useConfigStore((s) => s.activeWhisperModel);
   const deepgramModel = useConfigStore((s) => s.deepgramConfig.model);
   // Persisted: providers whose key has been saved + tested successfully
@@ -311,10 +311,6 @@ export function STTSettings() {
   const activeParakeetModel = useConfigStore((s) =>
     s.activeModelPerEngine.parakeet_tdt ?? "parakeet-tdt-0.6b-v3-int8"
   );
-  const parakeetCtcEnglishOnly =
-    sttLanguage !== AUTO_STT_LANGUAGE &&
-    activeParakeetModel.includes("ctc-110m") &&
-    !sttLanguage.toLowerCase().startsWith("en");
 
   // The "You" side as meetings will run it; before the audio setup exists, the picker's choice.
   const youSide = meetingAudioConfig
@@ -338,6 +334,29 @@ export function STTSettings() {
       : null,
   ].filter((p): p is string => p !== null);
   const showAutoDetectionWarning = autoProblems.length > 0;
+
+  // The hints below follow the language "You" is transcribed in: its own, else the shared one.
+  const youLanguage = sideLanguage(meetingAudioConfig?.you, sttLanguage);
+  const languageHint = sideLanguageHint(
+    {
+      provider: selectedProvider,
+      localModel: meetingAudioConfig?.you.stt_provider === selectedProvider ? meetingAudioConfig.you.local_model_id : undefined,
+    },
+    youLanguage,
+    autoModels,
+  );
+  // Sides with a language of their own, which this shared setting doesn't decide.
+  const ownLanguageNotes = (
+    [
+      meetingAudioConfig?.you.language && !inPerson ? { name: "You", verb: "transcribe", language: meetingAudioConfig.you.language } : null,
+      meetingAudioConfig?.them.language
+        ? { name: inPerson ? "Room" : "Them", verb: "transcribes", language: meetingAudioConfig.them.language }
+        : null,
+    ].filter((note) => note !== null)
+  ).map(
+    (note) =>
+      `${note.name} ${note.verb} in ${STT_LANGUAGES.find((l) => l.value === note.language)?.label ?? note.language} (set in Audio & Devices).`,
+  );
 
   const currentProviderOption = PROVIDER_OPTIONS.find(
     (p) => p.value === selectedProvider
@@ -808,36 +827,18 @@ export function STTSettings() {
                 </p>}
           </div>
         )}
-        {sttLanguage === "vi-VN" && selectedProvider === "parakeet_tdt" && (
-          <p className="mt-2 text-xs text-warning">
-            The included Parakeet models do not support Vietnamese. Choose a multilingual Whisper model, Deepgram Nova-3, or Azure Speech.
+        {ownLanguageNotes.map((note) => (
+          <p key={note} className="mt-2 text-xs text-muted-foreground">{note}</p>
+        ))}
+        {languageHint && (
+          <p className={`mt-2 text-xs ${languageHint.tone === "warning" ? "text-warning" : "text-muted-foreground"}`}>
+            {languageHint.text}
           </p>
         )}
-        {sttLanguage === "vi-VN" && selectedProvider === "deepgram" && (
+        {selectedProvider === "cartesia" && (youLanguage === AUTO_STT_LANGUAGE || cartesiaSupportsLanguage(youLanguage)) && (
           <p className="mt-2 text-xs text-muted-foreground">
-            Select a Deepgram model that supports Vietnamese, such as Nova-3.
+            Cartesia detects English, French, Hindi, Japanese and Spanish on its own.
           </p>
-        )}
-        {sttLanguage === "uk-UA" && selectedProvider === "deepgram" && isDeepgramFlux && (
-          <p className="mt-2 text-xs text-warning">
-            Switch from Flux to Nova-3 for Ukrainian transcription.
-          </p>
-        )}
-        {selectedProvider === "parakeet_tdt" && parakeetCtcEnglishOnly && sttLanguage !== "vi-VN" && (
-          <p className="mt-2 text-xs text-warning">
-            Parakeet CTC 110M is English-only. Choose Parakeet TDT 0.6B v3 for multilingual transcription.
-          </p>
-        )}
-        {selectedProvider === "cartesia" && (
-          autoDetectionSelected || cartesiaSupportsLanguage(sttLanguage) ? (
-            <p className="mt-2 text-xs text-muted-foreground">
-              Cartesia detects English, French, Hindi, Japanese and Spanish on its own.
-            </p>
-          ) : (
-            <p className="mt-2 text-xs text-warning">
-              Cartesia transcribes only English, French, Hindi, Japanese and Spanish. Choose another provider for this language.
-            </p>
-          )
         )}
       </div>
 

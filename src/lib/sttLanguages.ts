@@ -160,6 +160,16 @@ export function autoDetectProblem(
   return `${AUTO_DETECT_REFUSAL_PREFIX} ${name}, used for ${label}. ${advice}`;
 }
 
+/**
+ * The 25 languages NVIDIA's model card lists for parakeet-tdt-0.6b-v3
+ * (huggingface.co/nvidia/parakeet-tdt-0.6b-v3): bg hr cs da nl en et fi fr de el
+ * hu it lv lt mt pl pt ro sk sl es sv ru uk.
+ */
+const PARAKEET_V3_LANGUAGES = [
+  "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it",
+  "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk",
+];
+
 export interface SideLanguageHint {
   /** "warning": the side won't transcribe well. "info": a tip. */
   tone: "warning" | "info";
@@ -192,10 +202,22 @@ export function sideLanguageHint(
           text: "Parakeet CTC 110M is English-only. Choose Parakeet TDT 0.6B v3 for multilingual transcription.",
         };
       }
+      if (!PARAKEET_V3_LANGUAGES.includes(language.split("-")[0].toLowerCase())) {
+        return {
+          tone: "warning",
+          text: "Parakeet TDT 0.6B v3 transcribes 25 European languages only. Choose a multilingual Whisper model, Deepgram Nova-3, or Azure Speech for this language.",
+        };
+      }
       return null;
     case "deepgram":
       if (language === "vi-VN") {
         return { tone: "info", text: "Select a Deepgram model that supports Vietnamese, such as Nova-3." };
+      }
+      if (model === "flux-general-en" && !language.toLowerCase().startsWith("en")) {
+        return {
+          tone: "warning",
+          text: "Flux transcribes English only. Switch to Flux Multilingual or Nova-3 for this language.",
+        };
       }
       if (language === "uk-UA" && model?.startsWith("flux-")) {
         return { tone: "warning", text: "Switch from Flux to Nova-3 for Ukrainian transcription." };
