@@ -9,6 +9,7 @@ use crate::audio::device_manager;
 use crate::audio::recording_mixer::{wall_clock_ms, CaptureTimes, MixSide, RecordingMixer};
 use crate::audio::session_monitor;
 use crate::audio::vad::{calculate_peak, calculate_rms, VoiceActivityDetector};
+use crate::audio::side_swap::{self, Side, SideSwapMsg, SwapSignal, Tagged};
 use crate::audio::{AudioCaptureManager, AudioLevel, AudioSource};
 use crate::stt::provider::STTProvider;
 use crate::stt::segment_accumulator::AccumulatorOutput;
@@ -1172,10 +1173,12 @@ pub async fn start_capture_per_party(
     }
 
     // Start STT streams
-    let (you_stt_tx, mut you_stt_rx) =
-        mpsc::channel::<crate::stt::provider::TranscriptResult>(256);
-    let (them_stt_tx, mut them_stt_rx) =
-        mpsc::channel::<crate::stt::provider::TranscriptResult>(256);
+    // Each side's results arrive tagged with the generation of the provider that made
+    // them (a side's provider can be swapped alone, see audio::side_swap).
+    let (you_stt_tx, mut you_stt_rx) = mpsc::channel::<Tagged>(256);
+    let (them_stt_tx, mut them_stt_rx) = mpsc::channel::<Tagged>(256);
+    let you_signal = Arc::new(SwapSignal::default());
+    let them_signal = Arc::new(SwapSignal::default());
 
     let mut you_stt_provider = you_stt;
     let mut them_stt_provider = them_stt;
@@ -1189,7 +1192,7 @@ pub async fn start_capture_per_party(
         crate::stt::emit_stt_debug(&app, "info", "stt",
             &format!("Starting 'You' STT ({})", you.stt_provider));
         provider.set_muted(you_muted_at_start);
-        match provider.start_stream(you_stt_tx).await {
+        match provider.start_stream(you_signal.attach(&you_stt_tx)).await {
             Ok(()) => {
                 log::info!("'You' party STT started ({})", you.stt_provider);
                 crate::stt::emit_stt_debug(&app, "info", "stt",
@@ -1214,7 +1217,7 @@ pub async fn start_capture_per_party(
         crate::stt::emit_stt_debug(&app, "info", "stt",
             &format!("Starting 'Them' STT ({})", them.stt_provider));
         provider.set_muted(them_muted_at_start);
-        match provider.start_stream(them_stt_tx).await {
+        match provider.start_stream(them_signal.attach(&them_stt_tx)).await {
             Ok(()) => {
                 log::info!("'Them' party STT started ({})", them.stt_provider);
                 crate::stt::emit_stt_debug(&app, "info", "stt",
@@ -1253,6 +1256,7 @@ pub async fn start_capture_per_party(
         let use_accumulator = you.stt_provider != "web_speech"
             && you.stt_provider != "whisper_cpp";
         let mut tally = TranscriptTally::new("You", &you.stt_provider);
+        let you_signal_for_task = you_signal.clone();
         let pause_threshold = if use_accumulator {
             Some(app.state::<AppState>().pause_threshold_ms.clone())
         } else {
@@ -1266,13 +1270,13 @@ pub async fn start_capture_per_party(
                 let mut accumulator =
                     crate::stt::segment_accumulator::SegmentAccumulator::new(threshold);
 
-                while let Some(result) = you_stt_rx.recv().await {
-                    tally.record(result.is_final);
-                    let current_threshold = pause_threshold.load(Ordering::Relaxed);
-                    accumulator.set_pause_threshold(current_threshold);
-
-                    let outputs = accumulator.feed_result(result);
-                    for output in outputs {
+                side_swap::pump_accumulated(
+                    &mut you_stt_rx,
+                    &you_signal_for_task,
+                    &mut accumulator,
+                    &pause_threshold,
+                    |result| tally.record(result.is_final),
+                    |output| {
                         let event_name = if output.is_final {
                             "transcript_final"
                         } else {
@@ -1283,8 +1287,9 @@ pub async fn start_capture_per_party(
                             "segment": accumulator_segment_json(&seg_id, "User", &output)
                         });
                         let _ = stt_app.emit(event_name, &payload);
-                    }
-                }
+                    },
+                )
+                .await;
 
                 // Flush remaining accumulated segment on meeting end
                 if let Some(output) = accumulator.flush() {
@@ -1297,30 +1302,37 @@ pub async fn start_capture_per_party(
             } else {
                 // Direct path: web_speech / whisper_cpp handle their own segmentation
                 let mut counter = 0u64;
-                while let Some(result) = you_stt_rx.recv().await {
-                    tally.record(result.is_final);
-                    let seg_id = if let Some(ref custom_id) = result.segment_id {
-                        format!("you_{}_{}", prefix, custom_id)
-                    } else {
-                        if result.is_final {
-                            counter += 1;
-                        }
-                        if result.is_final {
-                            format!("you_{}_{}", prefix, counter)
+                side_swap::pump_direct(
+                    &mut you_stt_rx,
+                    &you_signal_for_task,
+                    |result| tally.record(result.is_final),
+                    |generation, result| {
+                        // A swapped provider's ids carry its generation, so they can't reuse the old one's.
+                        let prefix = side_swap::generation_prefix(&prefix, generation);
+                        let seg_id = if let Some(ref custom_id) = result.segment_id {
+                            format!("you_{}_{}", prefix, custom_id)
                         } else {
-                            format!("you_{}_{}", prefix, counter + 1)
-                        }
-                    };
-                    let event_name = if result.is_final {
-                        "transcript_final"
-                    } else {
-                        "transcript_update"
-                    };
-                    let payload = serde_json::json!({
-                        "segment": result_segment_json(&seg_id, "User", &result)
-                    });
-                    let _ = stt_app.emit(event_name, &payload);
-                }
+                            if result.is_final {
+                                counter += 1;
+                            }
+                            if result.is_final {
+                                format!("you_{}_{}", prefix, counter)
+                            } else {
+                                format!("you_{}_{}", prefix, counter + 1)
+                            }
+                        };
+                        let event_name = if result.is_final {
+                            "transcript_final"
+                        } else {
+                            "transcript_update"
+                        };
+                        let payload = serde_json::json!({
+                            "segment": result_segment_json(&seg_id, "User", &result)
+                        });
+                        let _ = stt_app.emit(event_name, &payload);
+                    },
+                )
+                .await;
             }
         });
     }
@@ -1334,20 +1346,20 @@ pub async fn start_capture_per_party(
         let intel_arc = app.state::<AppState>().intelligence.clone();
         let pause_threshold = app.state::<AppState>().pause_threshold_ms.clone();
         let mut tally = TranscriptTally::new("Them", &them.stt_provider);
+        let them_signal_for_task = them_signal.clone();
         tokio::spawn(async move {
             use std::sync::atomic::Ordering;
             let threshold = pause_threshold.load(Ordering::Relaxed);
             let mut accumulator =
                 crate::stt::segment_accumulator::SegmentAccumulator::new(threshold);
 
-            while let Some(result) = them_stt_rx.recv().await {
-                tally.record(result.is_final);
-                // Live-update threshold from settings changes
-                let current_threshold = pause_threshold.load(Ordering::Relaxed);
-                accumulator.set_pause_threshold(current_threshold);
-
-                let outputs = accumulator.feed_result(result);
-                for output in outputs {
+            side_swap::pump_accumulated(
+                &mut them_stt_rx,
+                &them_signal_for_task,
+                &mut accumulator,
+                &pause_threshold,
+                |result| tally.record(result.is_final),
+                |output| {
                     let event_name = if output.is_final {
                         "transcript_final"
                     } else {
@@ -1372,8 +1384,9 @@ pub async fn start_capture_per_party(
                             }
                         }
                     }
-                }
-            }
+                },
+            )
+            .await;
 
             // Flush remaining accumulated segment on meeting end
             if let Some(output) = accumulator.flush() {
@@ -1419,6 +1432,16 @@ pub async fn start_capture_per_party(
             if echo_flag.load(Ordering::Relaxed) { "on" } else { "off" }
         );
     }
+
+    // A language change for one side reaches the loop here (set_party_language).
+    let (swap_tx, mut swap_rx) =
+        mpsc::unbounded_channel::<SideSwapMsg<Box<dyn STTProvider>>>();
+    if let Ok(mut slot) = state.side_swap.lock() {
+        *slot = Some(swap_tx);
+    }
+    // The loop keeps each side's result channel for the provider swapped in.
+    let you_stt_tx = Some(you_stt_tx);
+    let them_stt_tx = Some(them_stt_tx);
 
     // Audio processing task: levels + recording + STT feed per party
     let app_handle = app.clone();
@@ -1476,6 +1499,21 @@ pub async fn start_capture_per_party(
                     // a side that went quiet as it happens.
                     if let Some(ref rec) = recorder {
                         recording_mixer.tick(wall_clock_ms(), &mut |b| rec.write_samples(b));
+                    }
+                    continue;
+                }
+                // One side's provider is being swapped for a new language; the other side,
+                // the audio and the recording carry on.
+                Some(msg) = swap_rx.recv() => {
+                    match msg {
+                        SideSwapMsg::Take { side: Side::You, reply } => side_swap::handle_take(
+                            &mut you_stt_provider, you_stt_tx.as_ref(), &you_signal, reply),
+                        SideSwapMsg::Take { side: Side::Them, reply } => side_swap::handle_take(
+                            &mut them_stt_provider, them_stt_tx.as_ref(), &them_signal, reply),
+                        SideSwapMsg::Put { side: Side::You, provider, muted } => side_swap::handle_put(
+                            &mut you_stt_provider, &mut you_muted_applied, provider, muted),
+                        SideSwapMsg::Put { side: Side::Them, provider, muted } => side_swap::handle_put(
+                            &mut them_stt_provider, &mut them_muted_applied, provider, muted),
                     }
                     continue;
                 }
@@ -1670,6 +1708,9 @@ pub async fn start_capture_per_party(
                 }
             },
         );
+        // The transcript tasks end (and flush) once no result channel is left open.
+        drop(you_stt_tx);
+        drop(them_stt_tx);
 
         // Restore IPolicyConfig override if active (crash recovery for async task exit)
         {
@@ -2259,6 +2300,20 @@ fn resolve_sides<T, U>(
     }
 }
 
+/// What a language change for one running side comes to, by the same rules as a
+/// full swap (`resolve_side`, while capturing):
+/// - `Ok(Some(provider))`: restart that side's speech-to-text with it;
+/// - `Ok(None)`: the side has no provider of its own (Web Speech, a refusal it already
+///   runs under, no model): nothing for Rust to restart, so the caller falls back to a full swap;
+/// - `Err`: a new Auto-detect refusal or another error, before anything was stopped.
+fn resolve_language_swap<T>(
+    result: Result<Option<T>, String>,
+    running_refusal: Option<&str>,
+    frontend_stt: bool,
+) -> Result<Option<T>, String> {
+    resolve_side(result, true, running_refusal, frontend_stt).map(|side| side.provider)
+}
+
 /// The provider a refusal names: "Auto-detect doesn't work with <name>, used for <side>. ..."
 fn refusal_provider_name(refusal: &str) -> Option<&str> {
     refusal
@@ -2485,6 +2540,105 @@ pub async fn set_source_muted(
     Ok(())
 }
 
+/// Change one side's transcription language mid-meeting by restarting only that
+/// side's speech-to-text. The other side's capture and STT, the audio levels and
+/// the recording keep running (see `audio::side_swap`).
+///
+/// `config` is the side's whole `PartyAudioConfig` with the new language;
+/// `party` is "you" or "them" ("Room" in an in-person meeting is "them").
+/// Returns `true` when the side was restarted, `false` when nothing was done and
+/// the caller has to do a full `start_capture_per_party` (no capture running, the
+/// side has no Rust provider, or the loop is gone). A new Auto-detect refusal is
+/// an error that starts with "Auto-detect doesn't work with", before anything is stopped;
+/// a new provider that fails to start is another error, after the side's old one has
+/// stopped, and the caller restarts the whole capture.
+#[command]
+pub async fn set_party_language(
+    app: AppHandle,
+    party: String,
+    config: String,
+    skip_you_stt: Option<bool>,
+) -> Result<bool, String> {
+    let side = Side::parse(&party)
+        .ok_or_else(|| format!("Unknown party: '{}' (expected 'you' or 'them')", party))?;
+    let config: crate::audio::PartyAudioConfig =
+        serde_json::from_str(&config).map_err(|e| format!("Invalid party config: {}", e))?;
+    let skip_you_stt = skip_you_stt.unwrap_or(false);
+    let state = app.state::<AppState>();
+
+    let capturing = state
+        .audio
+        .lock()
+        .map(|guard| guard.as_ref().is_some_and(|mgr| mgr.is_capturing()))
+        .unwrap_or(false);
+    // An in-person meeting runs no "You" provider; Web Speech runs in the frontend.
+    if !capturing || (side == Side::You && skip_you_stt) || uses_frontend_stt(&config) {
+        return Ok(false);
+    }
+    let (role, label) = match side {
+        Side::You => ("You", "You"),
+        Side::Them => (if skip_you_stt { "Room" } else { "Them" }, "Them"),
+    };
+
+    let created = create_stt_provider_for_party(&config, &state, &app, role).await;
+    let running_refusal = state
+        .auto_refusals
+        .lock()
+        .ok()
+        .and_then(|refusals| refusals[side.index()].clone());
+    let Some(provider) = resolve_language_swap(created, running_refusal.as_deref(), false)? else {
+        return Ok(false);
+    };
+    let Some(sender) = state.side_swap.lock().ok().and_then(|slot| slot.clone()) else {
+        return Ok(false);
+    };
+    let muted_flag = match side {
+        Side::You => state.you_muted.clone(),
+        Side::Them => state.them_muted.clone(),
+    };
+
+    crate::stt::emit_stt_debug(&app, "info", "stt", &format!(
+        "[{}] Language change: restarting only this side's STT ({})",
+        role, config.stt_provider
+    ));
+    let answer = side_swap::swap_side_provider(&sender, side, provider, &muted_flag)
+        .await
+        .into_answer();
+    match &answer {
+        Ok(true) => {
+            log::info!("'{}' STT restarted for a language change", label);
+            crate::stt::emit_stt_debug(&app, "info", "stt",
+                &format!("'{}' STT restarted: {}", label, config.stt_provider));
+            // The overlay's language picker waits for a status of this side. Not every
+            // provider reports one when it starts (the batch ones don't), so say it here.
+            let _ = app.emit(
+                "stt_connection_status",
+                swap_status_event(&config.stt_provider, label, muted_flag.load(Ordering::Relaxed)),
+            );
+        }
+        // The side has no STT now: the caller restarts the whole capture.
+        Err(e) => {
+            log::warn!("Failed to restart '{}' STT: {}", label, e);
+            crate::stt::emit_stt_debug(&app, "error", "stt",
+                &format!("'{}' STT failed to restart ({}): restarting the capture", label, e));
+        }
+        Ok(false) => {}
+    }
+    answer
+}
+
+/// The `stt_connection_status` event for a side whose provider was just swapped:
+/// connected, or paused while the side is muted (a muted provider holds no stream).
+/// `label` is "You" or "Them" ("Them" is the room in an in-person meeting).
+fn swap_status_event(provider: &str, label: &str, muted: bool) -> serde_json::Value {
+    serde_json::json!({
+        "provider": provider,
+        "party": label,
+        "status": if muted { "paused" } else { "connected" },
+        "message": "Restarted for a language change",
+    })
+}
+
 /// Get the current mute status for both sources.
 #[command]
 pub async fn get_mute_status(app: AppHandle) -> Result<String, String> {
@@ -2662,6 +2816,49 @@ mod tests {
         let new = whisper_auto_refusal("distil-large-v3", "You");
         assert_eq!(resolve_side::<u8>(Err(new.clone()), true, Some(&old), false).err(), Some(new.clone()));
         assert_eq!(resolve_side::<u8>(Err(new.clone()), true, None, false).err(), Some(new));
+    }
+
+    #[test]
+    fn a_swapped_side_reports_a_status_the_overlay_picker_clears_on() {
+        let event = swap_status_event("deepgram", "Them", false);
+        assert_eq!(event["party"], "Them");
+        assert_eq!(event["status"], "connected");
+        assert_eq!(event["provider"], "deepgram");
+        assert_eq!(swap_status_event("deepgram", "You", true)["status"], "paused");
+    }
+
+    #[test]
+    fn a_language_change_restarts_a_side_that_still_has_a_provider() {
+        assert_eq!(resolve_language_swap(Ok(Some(7u8)), None, false), Ok(Some(7)));
+        // Provider and model are the same, only the language changed: Auto-detect on a
+        // provider that can't do it is refused with that side's own words.
+        let mut them = party("azure_speech", "default", false);
+        them.language = Some("auto".into());
+        let refusal = auto_check(&them, "en-US", "Them").unwrap_err();
+        assert!(refusal.starts_with(AUTO_DETECT_REFUSAL));
+        assert_eq!(resolve_language_swap::<u8>(Err(refusal.clone()), None, false), Err(refusal.clone()));
+        // The side's own language wins over a shared Auto-detect it was not on.
+        them.language = Some("es-ES".into());
+        assert!(auto_check(&them, "auto", "Them").is_ok());
+    }
+
+    #[test]
+    fn a_language_change_goes_on_to_a_full_swap_when_the_side_has_no_provider() {
+        // No model, Web Speech: nothing for Rust to restart.
+        assert_eq!(resolve_language_swap::<u8>(Ok(None), None, false), Ok(None));
+        // The refusal the side already runs under is tolerated silently, like in a full swap.
+        let refusal = parakeet_ctc_auto_refusal("Them");
+        assert_eq!(resolve_language_swap::<u8>(Err(refusal.clone()), Some(&refusal), false), Ok(None));
+        // Any other error stays an error.
+        assert!(resolve_language_swap::<u8>(Err("Deepgram key missing".into()), None, false).is_err());
+    }
+
+    #[test]
+    fn a_language_change_into_a_new_refusal_is_an_error_before_anything_stops() {
+        let old = parakeet_ctc_auto_refusal("You");
+        let new = whisper_auto_refusal("distil-large-v3", "You");
+        assert_eq!(resolve_language_swap::<u8>(Err(new.clone()), Some(&old), false), Err(new.clone()));
+        assert_eq!(resolve_language_swap::<u8>(Err(new.clone()), None, false), Err(new));
     }
 
     #[test]

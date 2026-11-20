@@ -543,6 +543,7 @@ pub fn run() {
             audio_commands::get_audio_sessions,
             audio_commands::get_audio_peak_levels,
             audio_commands::start_capture_per_party,
+            audio_commands::set_party_language,
             audio_commands::start_device_monitor,
             audio_commands::stop_device_monitor,
             audio_commands::set_source_muted,

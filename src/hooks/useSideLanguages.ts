@@ -2,8 +2,8 @@
 // lets people change it (the meeting overlay). Reads and writes the same setting
 // as Settings > Audio & Devices: `meetingAudioConfig[side].language`. The store
 // persists it, the launcher window picks the change up, and its useAudioConfigSync
-// restarts capture (both sides' capture is reopened for a moment, not only the
-// changed one).
+// restarts only that side's transcription (the other side and the recording keep
+// running); a change of anything else restarts capture.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useConfigStore } from "../stores/configStore";
@@ -30,7 +30,7 @@ export interface SideLanguageInfo {
   sharedLabel: string;
   /** Why the side's provider can't handle its language, or a tip. */
   notice: SideLanguageHint | null;
-  /** This side's transcription is reconnecting after a language change (the other side's capture is reopened too, briefly). */
+  /** This side's transcription is reconnecting after a language change (the other side keeps running). */
   restarting: boolean;
 }
 
@@ -39,7 +39,7 @@ export interface SideLanguages {
   you: SideLanguageInfo | null;
   /** Null before the config loads. */
   them: SideLanguageInfo | null;
-  /** Sets one side's language ("" for Default). While a meeting runs, capture restarts for a moment on both sides; only the changed side shows as restarting. */
+  /** Sets one side's language ("" for Default). While a meeting runs, only that side's transcription restarts, and it shows as restarting. */
   setLanguage: (side: LanguageSide, value: string) => void;
 }
 

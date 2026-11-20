@@ -9,6 +9,7 @@ pub mod recorder;
 pub mod recording_mixer;
 pub mod resampler;
 pub mod session_monitor;
+pub mod side_swap;
 pub mod system_capture;
 pub mod vad;
 pub mod waveform;

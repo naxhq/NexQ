@@ -19,7 +19,7 @@ pub const MAX_PARAGRAPH_MS: u64 = 60_000;
 
 /// Timestamps at or above this are epoch ms (2001+); smaller ones are
 /// relative to the STT stream's start.
-const EPOCH_MS_FLOOR: u64 = 1_000_000_000_000;
+pub const EPOCH_MS_FLOOR: u64 = 1_000_000_000_000;
 
 /// Rough speaking time of `text` (~150 words per minute).
 fn estimated_speech_ms(text: &str) -> u64 {
@@ -69,6 +69,9 @@ pub struct SegmentAccumulator {
     segment_counter: u64,
     /// Whether we have an active accumulated segment
     has_active: bool,
+    /// The interim line last shown, until a final replaces it: words the
+    /// provider hasn't confirmed, which `close_line` still turns into a line.
+    last_interim: Option<AccumulatorOutput>,
     clock: Clock,
 }
 
@@ -88,6 +91,7 @@ impl SegmentAccumulator {
             last_end_ms: 0,
             segment_counter: 0,
             has_active: false,
+            last_interim: None,
             clock,
         }
     }
@@ -119,26 +123,30 @@ impl SegmentAccumulator {
 
         // Interim results: pass through with accumulated prefix for display
         if !result.is_final {
-            if self.has_active {
+            let out = if self.has_active {
                 // Shown as the end of the current line (same id, speaker and
                 // tag), so the interim replaces it in place instead of
                 // adding a duplicate line in the UI.
                 let mut out = self.output(false, result.confidence);
                 out.text = format!("{} {}", self.current_text, result.text);
                 out.turn = result.turn;
-                return vec![out];
-            }
-            return vec![AccumulatorOutput {
-                id: format!("acc_{}", self.segment_counter + 1),
-                text: result.text.clone(),
-                speaker,
-                speaker_tag: result.speaker_tag.clone(),
-                timestamp_ms: result.timestamp_ms,
-                is_final: false,
-                confidence: result.confidence,
-                turn: result.turn,
-            }];
+                out
+            } else {
+                AccumulatorOutput {
+                    id: format!("acc_{}", self.segment_counter + 1),
+                    text: result.text.clone(),
+                    speaker,
+                    speaker_tag: result.speaker_tag.clone(),
+                    timestamp_ms: result.timestamp_ms,
+                    is_final: false,
+                    confidence: result.confidence,
+                    turn: result.turn,
+                }
+            };
+            self.last_interim = Some(out.clone());
+            return vec![out];
         }
+        self.last_interim = None;
 
         let end_ms = match result.duration_ms {
             Some(duration) => result.timestamp_ms + duration,
@@ -197,6 +205,24 @@ impl SegmentAccumulator {
         } else {
             None
         }
+    }
+
+    /// End the line being shown, interim words included, as a final line, and
+    /// leave the next result a new id (the provider behind this accumulator is
+    /// being replaced). Nothing when no line is showing.
+    pub fn close_line(&mut self) -> Option<AccumulatorOutput> {
+        let Some(mut shown) = self.last_interim.take() else {
+            return self.flush();
+        };
+        if !self.has_active {
+            // Interim words with no final yet: they own the next id.
+            self.segment_counter += 1;
+        }
+        shown.is_final = true;
+        shown.turn = None;
+        self.current_text.clear();
+        self.has_active = false;
+        Some(shown)
     }
 
     /// Update the pause threshold at runtime.
@@ -397,5 +423,42 @@ mod tests {
         let out = a.flush().unwrap();
         assert_eq!((out.id.as_str(), out.text.as_str(), out.is_final), ("acc_1", "Bye.", true));
         assert!(a.flush().is_none());
+    }
+
+    #[test]
+    fn closing_a_line_with_only_interim_words_makes_them_a_final_and_moves_on() {
+        let mut a = acc();
+        let shown = a.feed_result(interim("good mor", T0));
+        assert_eq!((shown[0].id.as_str(), shown[0].is_final), ("acc_1", false));
+
+        let closed = a.close_line().unwrap();
+        assert_eq!((closed.id.as_str(), closed.text.as_str(), closed.is_final), ("acc_1", "good mor", true));
+        assert!(a.close_line().is_none(), "closed once");
+
+        // The next provider's first final is a line of its own, not a rewrite of the old one.
+        let next = a.feed_result(fin("buenos dias", T0 + 5_000, Some(500), None));
+        assert_eq!((next[0].id.as_str(), next[0].text.as_str()), ("acc_2", "buenos dias"));
+    }
+
+    #[test]
+    fn closing_a_line_keeps_the_interim_words_after_its_finals() {
+        let mut a = acc();
+        a.feed_result(fin("Hello there.", T0, Some(500), None));
+        a.feed_result(interim("how ar", T0 + 700));
+
+        let closed = a.close_line().unwrap();
+        assert_eq!((closed.id.as_str(), closed.text.as_str(), closed.is_final), ("acc_1", "Hello there. how ar", true));
+        let next = a.feed_result(fin("Hola.", T0 + 900, Some(300), None));
+        assert_eq!(next[0].id, "acc_2");
+    }
+
+    #[test]
+    fn closing_a_line_whose_interim_was_confirmed_adds_nothing_twice() {
+        let mut a = acc();
+        a.feed_result(interim("Hello", T0));
+        a.feed_result(fin("Hello there.", T0, Some(500), None));
+        let closed = a.close_line().unwrap();
+        assert_eq!((closed.id.as_str(), closed.text.as_str()), ("acc_1", "Hello there."));
+        assert!(a.close_line().is_none());
     }
 }

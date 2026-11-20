@@ -11,7 +11,7 @@ const MAX_LIST_HEIGHT = 224;
 /**
  * Chip beside a side's mute button: the language that side is transcribed in.
  * Opens a small list to change it without leaving the meeting; transcription
- * restarts by itself (capture reopens for a moment on both sides). The same setting as Settings > Audio & Devices.
+ * restarts by itself, for that side only. The same setting as Settings > Audio & Devices.
  * Renders nothing for "You" in an in-person meeting (the room is transcribed as "Room").
  */
 export function SideLanguagePicker({ side }: { side: LanguageSide }) {
