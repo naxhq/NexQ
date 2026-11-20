@@ -940,27 +940,33 @@ pub async fn start_capture_per_party(
         .lock()
         .map(|guard| guard.as_ref().is_some_and(|mgr| mgr.is_capturing()))
         .unwrap_or(false);
+    let you_result = if skip_you_stt {
+        crate::stt::emit_stt_debug(&app, "info", "stt", "'You' STT skipped (in-person meeting)");
+        Ok(None)
+    } else {
+        create_stt_provider_for_party(&you, &state, &app, "You").await
+    };
+    let them_result = create_stt_provider_for_party(&them, &state, &app, "Them").await;
+    // A swap refused for both sides says so for both: the one the user just
+    // changed may not be the one named first.
+    if was_capturing {
+        let errors: Vec<&str> = [&you_result, &them_result]
+            .into_iter()
+            .filter_map(|result| result.as_ref().err().map(String::as_str))
+            .collect();
+        if errors.len() > 1 && errors.iter().all(|message| message.starts_with(AUTO_DETECT_REFUSAL)) {
+            return Err(errors.join(" "));
+        }
+    }
     let mut refusals: Vec<String> = Vec::new();
     let mut you_refused = false;
     let mut them_refused = false;
-    let you_stt = if skip_you_stt {
-        crate::stt::emit_stt_debug(&app, "info", "stt", "'You' STT skipped (in-person meeting)");
-        None
-    } else {
-        let (provider, refusal) = apply_auto_refusal(
-            create_stt_provider_for_party(&you, &state, &app, "You").await,
-            was_capturing,
-        )?;
-        if let Some(message) = refusal {
-            you_refused = true;
-            refusals.push(format!("You won't be transcribed in this meeting. {message}"));
-        }
-        provider
-    };
-    let (them_stt, them_refusal) = apply_auto_refusal(
-        create_stt_provider_for_party(&them, &state, &app, "Them").await,
-        was_capturing,
-    )?;
+    let (you_stt, you_refusal) = apply_auto_refusal(you_result, was_capturing)?;
+    if let Some(message) = you_refusal {
+        you_refused = true;
+        refusals.push(format!("You won't be transcribed in this meeting. {message}"));
+    }
+    let (them_stt, them_refusal) = apply_auto_refusal(them_result, was_capturing)?;
     if let Some(message) = them_refusal {
         them_refused = true;
         let side = if skip_you_stt { "Room" } else { "Them" };
