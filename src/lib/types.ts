@@ -311,6 +311,12 @@ export type LLMProviderType =
   | "custom"
   | "claude_cli";
 
+/**
+ * How much a provider's model thinks before answering. "auto" sends nothing
+ * (the provider's own default); the others map to each API's own parameter.
+ */
+export type ThinkingSetting = "auto" | "off" | "low" | "high";
+
 /** Auth mode for a user-supplied (custom) LLM endpoint. */
 export type CustomLlmAuthType = "none" | "bearer" | "api_key";
 

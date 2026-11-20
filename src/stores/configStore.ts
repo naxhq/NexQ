@@ -17,7 +17,13 @@ import type {
   ClaudeCliConfig,
   ClaudeModelInfo,
   ContextScopeSetting,
+  ThinkingSetting,
 } from "../lib/types";
+import {
+  normalizeExtraJsonMap,
+  normalizeThinkingMap,
+  requestOptionFields,
+} from "../lib/llmRequestOptions";
 import { clampMinutes, DEFAULT_CONTEXT_SCOPE, SCOPE_KINDS } from "../lib/contextScope";
 
 const DEFAULT_DEEPGRAM_CONFIG: DeepgramConfig = {
@@ -124,6 +130,8 @@ function normalizeContextScope(value: Partial<ContextScopeSetting> | null | unde
 async function storedProviderConfig(provider: LLMProviderType): Promise<string> {
   const { getApiKey } = await import("../lib/ipc");
   const config: Record<string, unknown> = { provider_type: provider };
+  const { llmThinking, llmExtraRequestJson } = useConfigStore.getState();
+  Object.assign(config, requestOptionFields(provider, llmThinking[provider], llmExtraRequestJson[provider]));
   if (provider === "custom") {
     const { customLlmBaseUrl, customLlmAuthType } = useConfigStore.getState();
     if (customLlmBaseUrl) config.base_url = customLlmBaseUrl;
@@ -137,6 +145,42 @@ async function storedProviderConfig(provider: LLMProviderType): Promise<string> 
     if (key) config.api_key = key;
   }
   return JSON.stringify(config);
+}
+
+/**
+ * Changes of the backend's provider run one after another, in the order they
+ * were asked for: both activating a provider and re-applying its options load
+ * credentials first, so a slow one must not land after a later switch and put
+ * the old provider back.
+ */
+let providerChanges: Promise<unknown> = Promise.resolve();
+function enqueueProviderChange<T>(task: () => Promise<T>): Promise<T> {
+  const run = providerChanges.then(task, task);
+  providerChanges = run.catch(() => {});
+  return run;
+}
+
+/**
+ * A request option of the provider in use changed: the backend gets the whole
+ * config again (it keeps the model). A provider not in use gets it on activation.
+ * The check of which provider is in use runs when its turn comes, after any
+ * switch asked for earlier, so a stale update is dropped.
+ */
+function reapplyIfActive(provider: LLMProviderType): void {
+  if (provider === "claude_cli") return;
+  enqueueProviderChange(async () => {
+    if (useConfigStore.getState().llmProvider !== provider) return;
+    const config = await storedProviderConfig(provider);
+    if (useConfigStore.getState().llmProvider !== provider) return;
+    const ipc = await import("../lib/ipc");
+    await ipc.setLLMProvider(config);
+  })
+    .catch((e) => {
+      console.warn("[configStore] Failed to apply the request options:", e);
+      import("./toastStore").then(({ showToast }) =>
+        showToast(`Couldn't apply the AI setting: ${e instanceof Error ? e.message : String(e)}`, "error"),
+      );
+    });
 }
 
 /** Meeting detection defaults: on for the main meeting apps. */
@@ -188,6 +232,10 @@ interface ConfigState {
   llmModel: string;
   /** Last model used with each provider (default model of the Claude fallback). */
   lastModelByProvider: Record<string, string>;
+  /** How much each provider's model thinks; a provider not listed is "auto". */
+  llmThinking: Record<string, ThinkingSetting>;
+  /** Advanced: extra JSON merged into each provider's request (only valid JSON is kept). */
+  llmExtraRequestJson: Record<string, string>;
 
   // Claude CLI (subscription) settings; the backend gets a copy on load and on change.
   claudeCliConfig: ClaudeCliConfig;
@@ -345,6 +393,10 @@ interface ConfigState {
   ) => Promise<void>;
   /** Remember `model` as the last one used with `provider` (no activation). */
   rememberModel: (provider: string, model: string) => void;
+  /** Set how much `provider`'s model thinks (persisted, synced, applied at once when it is active). */
+  setLlmThinking: (provider: LLMProviderType, value: ThinkingSetting) => void;
+  /** Set `provider`'s extra request JSON; the caller passes valid JSON or "". */
+  setLlmExtraRequestJson: (provider: LLMProviderType, json: string) => void;
   /** Replace the Claude CLI config (persisted + pushed to the backend). */
   setClaudeCliConfig: (config: ClaudeCliConfig) => void;
   /** The user's fallback choice: pins it so it no longer follows the active provider. */
@@ -433,6 +485,8 @@ export const useConfigStore = create<ConfigState>((set) => ({
   llmProvider: "ollama",
   llmModel: "",
   lastModelByProvider: {},
+  llmThinking: {},
+  llmExtraRequestJson: {},
   claudeCliConfig: DEFAULT_CLAUDE_CLI_CONFIG,
   claudeCliFallbackPinned: false,
   claudeModels: null,
@@ -540,7 +594,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
     persistValue("llmModel", model);
     useConfigStore.getState().rememberModel(provider ?? useConfigStore.getState().llmProvider, model);
   },
-  activateLLMProvider: async (provider, options = {}) => {
+  activateLLMProvider: (provider, options = {}) => enqueueProviderChange(async () => {
     const ipc = await import("../lib/ipc");
     const before = useConfigStore.getState();
     let providerConfig = options.providerConfig;
@@ -566,7 +620,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
       }
       useConfigStore.getState().setLLMModel(model, provider);
     }
-  },
+  }),
   rememberModel: (provider, model) => {
     if (!model || provider === "claude_cli") return;
     const { lastModelByProvider } = useConfigStore.getState();
@@ -580,6 +634,20 @@ export const useConfigStore = create<ConfigState>((set) => ({
     if (!claudeCliFallbackPinned && cfg.fallback_provider === provider && cfg.fallback_model !== model) {
       useConfigStore.getState().setClaudeCliConfig({ ...cfg, fallback_model: model });
     }
+  },
+  setLlmThinking: (provider, value) => {
+    const { [provider]: _previous, ...others } = useConfigStore.getState().llmThinking;
+    const next = value === "auto" ? others : { ...others, [provider]: value };
+    set({ llmThinking: next });
+    persistValue("llmThinking", next);
+    reapplyIfActive(provider);
+  },
+  setLlmExtraRequestJson: (provider, json) => {
+    const { [provider]: _previous, ...others } = useConfigStore.getState().llmExtraRequestJson;
+    const next = json.trim() ? { ...others, [provider]: json } : others;
+    set({ llmExtraRequestJson: next });
+    persistValue("llmExtraRequestJson", next);
+    reapplyIfActive(provider);
   },
   setClaudeCliConfig: (config) => {
     const { llmProvider, llmModel } = useConfigStore.getState();
@@ -1025,6 +1093,9 @@ export const useConfigStore = create<ConfigState>((set) => ({
       const storedClaudeCliConfig = await store.get<Partial<ClaudeCliConfig>>("claudeCliConfig");
       const claudeCliFallbackPinned = (await store.get<boolean>("claudeCliFallbackPinned")) ?? false;
       const claudeModels = await store.get<ClaudeModelInfo[]>("claudeModels");
+      // Absent in configs saved before these settings: every provider is Auto, no extra JSON.
+      const llmThinking = normalizeThinkingMap(await store.get<unknown>("llmThinking"));
+      const llmExtraRequestJson = normalizeExtraJsonMap(await store.get<unknown>("llmExtraRequestJson"));
 
       // Last model per provider; seeded from the saved active provider on upgrade.
       const lastModelByProvider: Record<string, string> = { ...(storedLastModels ?? {}) };
@@ -1145,6 +1216,8 @@ export const useConfigStore = create<ConfigState>((set) => ({
         ...(llmProvider != null && { llmProvider }),
         ...(llmModel != null && { llmModel }),
         lastModelByProvider,
+        llmThinking,
+        llmExtraRequestJson,
         claudeCliConfig,
         claudeCliFallbackPinned,
         ...(Array.isArray(claudeModels) && claudeModels.length > 0 && { claudeModels }),
@@ -1267,6 +1340,12 @@ export const useConfigStore = create<ConfigState>((set) => ({
       });
       store.onKeyChange<Record<string, string>>("lastModelByProvider", (val) => {
         if (val != null) set({ lastModelByProvider: val });
+      });
+      store.onKeyChange<Record<string, ThinkingSetting>>("llmThinking", (val) => {
+        set({ llmThinking: normalizeThinkingMap(val) });
+      });
+      store.onKeyChange<Record<string, string>>("llmExtraRequestJson", (val) => {
+        set({ llmExtraRequestJson: normalizeExtraJsonMap(val) });
       });
       store.onKeyChange<ContextStrategy>("contextStrategy", (val) => {
         if (val != null) set({ contextStrategy: val });

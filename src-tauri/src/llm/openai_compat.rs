@@ -10,6 +10,7 @@ use super::provider::{
     cancellable, check_cancelled, is_cancelled, emit_end, emit_error, emit_token, TokenSink,
 };
 use super::stream_parser::{LineBuffer, SSEParser};
+use super::thinking::{self, RequestOptions, Sent, ThinkingSetting};
 
 /// Configuration for an OpenAI-compatible provider instance.
 #[derive(Debug, Clone)]
@@ -29,12 +30,63 @@ pub struct OpenAICompatConfig {
 pub struct OpenAICompatClient {
     config: OpenAICompatConfig,
     client: reqwest::Client,
+    options: RequestOptions,
+}
+
+/// The `/chat/completions` request body. `with_thinking` false leaves out the
+/// thinking field (the retry after a model refused it). Returns the body and
+/// whether a thinking field is in it.
+pub(crate) fn build_chat_body(
+    provider: &str,
+    messages: &[LLMMessage],
+    model: &str,
+    params: &GenerationParams,
+    thinking: ThinkingSetting,
+    extra: Option<&serde_json::Map<String, serde_json::Value>>,
+    with_thinking: bool,
+) -> (serde_json::Value, bool) {
+    let msgs: Vec<serde_json::Value> = messages
+        .iter()
+        .map(|m| json!({ "role": m.role, "content": m.content }))
+        .collect();
+
+    // OpenRouter: ":online" suffix enables web search grounding (via Exa) for any model.
+    let model_id = if params.enable_web_search && provider == "openrouter" {
+        format!("{}:online", model)
+    } else {
+        model.to_string()
+    };
+
+    let mut body = json!({
+        "model": model_id,
+        "messages": msgs,
+        "stream": true
+    });
+
+    if let Some(temp) = params.temperature {
+        body["temperature"] = json!(temp);
+    }
+    if let Some(max_tok) = params.max_tokens {
+        body["max_tokens"] = json!(max_tok);
+    }
+
+    let sent = with_thinking && thinking::apply_openai_compat(&mut body, provider, model, thinking);
+    if let Some(extra) = extra {
+        thinking::merge_extra_request(&mut body, extra, false);
+    }
+    (body, sent)
 }
 
 impl OpenAICompatClient {
     pub fn new(config: OpenAICompatConfig) -> Self {
         let client = reqwest::Client::new();
-        Self { config, client }
+        Self { config, client, options: RequestOptions::default() }
+    }
+
+    /// Applies the user's thinking setting and extra request JSON.
+    pub fn with_options(mut self, options: RequestOptions) -> Self {
+        self.options = options;
+        self
     }
 
     /// Build a request with auth headers applied.
@@ -126,7 +178,7 @@ impl LLMProvider for OpenAICompatClient {
 
     async fn stream_completion(
         &self,
-        messages: Vec<LLMMessage>,
+        mut messages: Vec<LLMMessage>,
         model: &str,
         params: GenerationParams,
         app_handle: tauri::AppHandle,
@@ -135,61 +187,45 @@ impl LLMProvider for OpenAICompatClient {
         let url = format!("{}/chat/completions", self.config.base_url);
         let start = Instant::now();
 
-        // Build messages array
-        let msgs: Vec<serde_json::Value> = messages
-            .iter()
-            .map(|m| {
-                json!({
-                    "role": m.role,
-                    "content": m.content
-                })
-            })
-            .collect();
-
-        // OpenRouter: ":online" suffix enables web search grounding (via Exa) for any model.
-        let model_id = if params.enable_web_search && self.config.provider_name == "openrouter" {
-            format!("{}:online", model)
-        } else {
-            model.to_string()
-        };
-
-        let mut body = json!({
-            "model": model_id,
-            "messages": msgs,
-            "stream": true
-        });
-
-        if let Some(temp) = params.temperature {
-            body["temperature"] = json!(temp);
-        }
-        if let Some(max_tok) = params.max_tokens {
-            body["max_tokens"] = json!(max_tok);
-        }
-
-        let request = self
-            .apply_auth(self.client.post(&url))
-            .header("Content-Type", "application/json")
-            .json(&body);
+        let provider = self.config.provider_name.as_str();
+        let setting = thinking::resolve(&params, self.options.thinking);
+        thinking::apply_prompt_hint(&mut messages, model, setting);
+        let extra = self.options.extra_request();
 
         // NOTE: llm_stream_start is emitted by IntelligenceEngine::generate_assist()
         // with the correct mode. Do NOT emit it here — it would overwrite the mode.
 
-        let response = cancellable(&params, request.send()).await?.map_err(|e| {
-            if is_cancelled(&params) {
-                return LLMError::Cancelled;
+        let send_thinking = thinking::should_send(provider, &self.config.base_url, model, setting);
+        let sent = thinking::send_with_fallback(provider, &self.config.base_url, model, send_thinking, &params, |with_thinking| {
+            let (body, _) =
+                build_chat_body(provider, &messages, model, &params, setting, extra.as_ref(), with_thinking);
+            let request = self
+                .apply_auth(self.client.post(&url))
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send();
+            let (params, app_handle) = (&params, &app_handle);
+            async move {
+                cancellable(params, request).await?.map_err(|e| {
+                    if is_cancelled(params) {
+                        return LLMError::Cancelled;
+                    }
+                    emit_error(app_handle, params, &e.to_string());
+                    LLMError::HttpError(e)
+                })
             }
-            emit_error(&app_handle, &params, &e.to_string());
-            LLMError::HttpError(e)
-        })?;
+        })
+        .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            let err_msg = format!("Completion request failed ({}): {}", status, body);
-            check_cancelled(&params)?;
-            emit_error(&app_handle, &params, &err_msg);
-            return Err(LLMError::ProviderError(err_msg));
-        }
+        let response = match sent {
+            Sent::Ok(response) => response,
+            Sent::Failed { status, body } => {
+                let err_msg = format!("Completion request failed ({}): {}", status, body);
+                check_cancelled(&params)?;
+                emit_error(&app_handle, &params, &err_msg);
+                return Err(LLMError::ProviderError(err_msg));
+            }
+        };
 
         let mut stream = response.bytes_stream();
         let mut line_buffer = LineBuffer::new();
@@ -307,4 +343,66 @@ pub fn create_lm_studio_client(base_url: Option<&str>) -> OpenAICompatClient {
         auth_value: None,
         extra_headers: vec![],
     })
+}
+
+#[cfg(test)]
+mod thinking_tests {
+    use super::*;
+    use crate::llm::thinking::{parse_extra_request, ThinkingSetting::*};
+
+    fn user() -> Vec<LLMMessage> {
+        vec![LLMMessage { role: "user".into(), content: "hi".into() }]
+    }
+
+    fn body(provider: &str, model: &str, setting: ThinkingSetting) -> serde_json::Value {
+        let params = GenerationParams { temperature: Some(0.3), max_tokens: Some(50), ..Default::default() };
+        build_chat_body(provider, &user(), model, &params, setting, None, true).0
+    }
+
+    #[test]
+    fn auto_sends_nothing_extra() {
+        for provider in ["openai", "groq", "lm_studio", "openrouter"] {
+            let b = body(provider, "some-model", Auto);
+            assert!(b.get("reasoning_effort").is_none(), "{provider}");
+            assert!(b.get("reasoning").is_none(), "{provider}");
+            assert_eq!(b["temperature"], 0.3);
+            assert_eq!(b["max_tokens"], 50);
+            assert_eq!(b["stream"], true);
+        }
+    }
+
+    #[test]
+    fn off_low_high_use_reasoning_effort() {
+        assert_eq!(body("openai", "gpt-5.1", Off)["reasoning_effort"], "none");
+        assert_eq!(body("openai", "gpt-5-mini", Off)["reasoning_effort"], "minimal");
+        assert_eq!(body("groq", "qwen/qwen3-32b", Off)["reasoning_effort"], "none");
+        assert_eq!(body("lm_studio", "qwen3-8b", Low)["reasoning_effort"], "low");
+        assert_eq!(body("openai", "gpt-5", High)["reasoning_effort"], "high");
+    }
+
+    #[test]
+    fn openrouter_uses_reasoning_object_and_keeps_online_suffix() {
+        assert_eq!(body("openrouter", "m", Off)["reasoning"], serde_json::json!({ "enabled": false }));
+        assert_eq!(body("openrouter", "m", Low)["reasoning"], serde_json::json!({ "effort": "low" }));
+        assert_eq!(body("openrouter", "m", High)["reasoning"], serde_json::json!({ "effort": "high" }));
+        assert!(body("openrouter", "m", High).get("reasoning_effort").is_none());
+        let params = GenerationParams { enable_web_search: true, ..Default::default() };
+        let (b, _) = build_chat_body("openrouter", &user(), "m", &params, Off, None, true);
+        assert_eq!(b["model"], "m:online");
+    }
+
+    #[test]
+    fn the_retry_body_has_no_thinking_field_and_extra_json_cannot_override_protected_keys() {
+        let params = GenerationParams::default();
+        let (b, sent) = build_chat_body("openai", &user(), "gpt-5.1", &params, Off, None, false);
+        assert!(!sent);
+        assert!(b.get("reasoning_effort").is_none());
+
+        let extra = parse_extra_request(Some(r#"{"model":"evil","stream":false,"messages":[],"top_p":0.9}"#));
+        let (b, _) = build_chat_body("lm_studio", &user(), "m", &params, Auto, extra.as_ref(), true);
+        assert_eq!(b["model"], "m");
+        assert_eq!(b["stream"], true);
+        assert_eq!(b["messages"][0]["content"], "hi");
+        assert_eq!(b["top_p"], 0.9);
+    }
 }

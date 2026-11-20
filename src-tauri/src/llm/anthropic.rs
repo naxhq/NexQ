@@ -10,6 +10,7 @@ use super::provider::{
     cancellable, check_cancelled, is_cancelled, emit_end_with_stats, emit_error, emit_token, TokenSink,
 };
 use super::stream_parser::{LineBuffer, SSEParser};
+use super::thinking::{self, RequestOptions, Sent, ThinkingSetting};
 
 /// `anthropic-version` sent with every request.
 const API_VERSION: &str = "2023-06-01";
@@ -22,6 +23,50 @@ pub struct AnthropicClient {
     api_key: String,
     base_url: String,
     client: reqwest::Client,
+    options: RequestOptions,
+}
+
+/// The `/v1/messages` request body. `with_thinking` false leaves out the
+/// thinking fields (the retry after a model refused them). Returns the body
+/// and whether thinking fields are in it.
+pub(crate) fn build_messages_body(
+    messages: &[LLMMessage],
+    model: &str,
+    params: &GenerationParams,
+    thinking: ThinkingSetting,
+    with_thinking: bool,
+) -> (serde_json::Value, bool) {
+    // Anthropic requires system message to be separate
+    let mut system_content: Option<String> = None;
+    let mut api_messages: Vec<serde_json::Value> = Vec::new();
+
+    for msg in messages {
+        if msg.role == "system" {
+            system_content = Some(msg.content.clone());
+        } else {
+            api_messages.push(json!({
+                "role": msg.role,
+                "content": msg.content
+            }));
+        }
+    }
+
+    let max_tokens = params.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
+    // No `temperature`: current Claude models reject sampling parameters
+    // with a 400, so `params.temperature` is not sent.
+    let mut body = json!({
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": api_messages,
+        "stream": true
+    });
+
+    if let Some(system) = &system_content {
+        body["system"] = json!(system);
+    }
+
+    let sent = with_thinking && thinking::apply_anthropic(&mut body, model, thinking);
+    (body, sent)
 }
 
 /// One page of `GET /v1/models`.
@@ -68,7 +113,14 @@ impl AnthropicClient {
                 .unwrap_or("https://api.anthropic.com")
                 .to_string(),
             client: reqwest::Client::new(),
+            options: RequestOptions::default(),
         }
+    }
+
+    /// Applies the user's thinking setting.
+    pub fn with_options(mut self, options: RequestOptions) -> Self {
+        self.options = options;
+        self
     }
 
     /// Current models, for a base URL that has no Models API (a proxy).
@@ -205,70 +257,49 @@ impl LLMProvider for AnthropicClient {
         let url = format!("{}/v1/messages", self.base_url);
         let start = Instant::now();
 
-        // Anthropic requires system message to be separate
-        let mut system_content: Option<String> = None;
-        let mut api_messages: Vec<serde_json::Value> = Vec::new();
-
-        for msg in &messages {
-            if msg.role == "system" {
-                system_content = Some(msg.content.clone());
-            } else {
-                api_messages.push(json!({
-                    "role": msg.role,
-                    "content": msg.content
-                }));
-            }
-        }
-
-        let max_tokens = params.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
-        // No `temperature`: current Claude models reject sampling parameters
-        // with a 400, so `params.temperature` is not sent.
-        let mut body = json!({
-            "model": model,
-            "max_tokens": max_tokens,
-            "messages": api_messages,
-            "stream": true
-        });
-
-        if let Some(system) = &system_content {
-            body["system"] = json!(system);
-        }
+        let setting = thinking::resolve(&params, self.options.thinking);
 
         // NOTE: llm_stream_start is emitted by IntelligenceEngine::generate_assist()
         // with the correct mode. Do NOT emit it here — it would overwrite the mode.
 
-        let response = cancellable(
-            &params,
-            self
+        let (_, would_send) = build_messages_body(&messages, model, &params, setting, true);
+        let send_thinking = would_send && thinking::should_send("anthropic", &self.base_url, model, setting);
+        let sent = thinking::send_with_fallback("anthropic", &self.base_url, model, send_thinking, &params, |with_thinking| {
+            let (body, _) = build_messages_body(&messages, model, &params, setting, with_thinking);
+            let request = self
                 .client
                 .post(&url)
                 .header("x-api-key", &self.api_key)
                 .header("anthropic-version", API_VERSION)
                 .header("Content-Type", "application/json")
                 .json(&body)
-                .send(),
-        )
-        .await?
-        .map_err(|e| {
-            if is_cancelled(&params) {
-                return LLMError::Cancelled;
+                .send();
+            let (params, app_handle) = (&params, &app_handle);
+            async move {
+                cancellable(params, request).await?.map_err(|e| {
+                    if is_cancelled(params) {
+                        return LLMError::Cancelled;
+                    }
+                    emit_error(app_handle, params, &e.to_string());
+                    LLMError::HttpError(e)
+                })
             }
-                emit_error(&app_handle, &params, &e.to_string());
-            LLMError::HttpError(e)
-        })?;
+        })
+        .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            let err_msg = format!("Anthropic request failed ({}): {}", status, body);
-            check_cancelled(&params)?;
-            emit_error(&app_handle, &params, &err_msg);
+        let response = match sent {
+            Sent::Ok(response) => response,
+            Sent::Failed { status, body } => {
+                let err_msg = format!("Anthropic request failed ({}): {}", status, body);
+                check_cancelled(&params)?;
+                emit_error(&app_handle, &params, &err_msg);
 
-            if status.as_u16() == 401 || status.as_u16() == 403 {
-                return Err(LLMError::AuthError(err_msg));
+                if status.as_u16() == 401 || status.as_u16() == 403 {
+                    return Err(LLMError::AuthError(err_msg));
+                }
+                return Err(LLMError::ProviderError(err_msg));
             }
-            return Err(LLMError::ProviderError(err_msg));
-        }
+        };
 
         let mut stream = response.bytes_stream();
         let mut line_buffer = LineBuffer::new();
@@ -408,5 +439,50 @@ mod tests {
         let ids: Vec<String> = AnthropicClient::fallback_models().into_iter().map(|m| m.id).collect();
         assert!(ids.contains(&"claude-opus-5-5".to_string()));
         assert!(ids.iter().all(|id| !id.starts_with("claude-3")));
+    }
+}
+
+#[cfg(test)]
+mod thinking_tests {
+    use super::*;
+    use crate::llm::thinking::ThinkingSetting::*;
+
+    fn body(model: &str, setting: ThinkingSetting, with: bool) -> (serde_json::Value, bool) {
+        let messages = vec![
+            LLMMessage { role: "system".into(), content: "sys".into() },
+            LLMMessage { role: "user".into(), content: "hi".into() },
+        ];
+        build_messages_body(&messages, model, &GenerationParams::default(), setting, with)
+    }
+
+    #[test]
+    fn auto_sends_exactly_the_old_body() {
+        let (b, sent) = body("claude-sonnet-5-5", Auto, true);
+        assert!(!sent);
+        assert!(b.get("thinking").is_none());
+        assert!(b.get("output_config").is_none());
+        assert_eq!(b["system"], "sys");
+        assert_eq!(b["max_tokens"], DEFAULT_MAX_TOKENS);
+        assert_eq!(b["messages"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn off_low_high_use_documented_thinking_and_effort() {
+        assert_eq!(body("claude-sonnet-5-5", Off, true).0["thinking"]["type"], "between_tools");
+        assert_eq!(body("claude-opus-5-5", Off, true).0["output_config"]["effort"], "low");
+        assert_eq!(body("claude-opus-4-8", Off, true).0["thinking"]["type"], "disabled");
+        let (low, sent) = body("claude-sonnet-5-5", Low, true);
+        assert!(sent);
+        assert_eq!(low["thinking"]["type"], "adaptive");
+        assert_eq!(low["output_config"]["effort"], "low");
+        assert_eq!(body("claude-opus-5-5", High, true).0["output_config"]["effort"], "high");
+    }
+
+    #[test]
+    fn the_retry_body_has_no_thinking_fields() {
+        let (b, sent) = body("claude-sonnet-5-5", High, false);
+        assert!(!sent);
+        assert!(b.get("thinking").is_none());
+        assert!(b.get("output_config").is_none());
     }
 }

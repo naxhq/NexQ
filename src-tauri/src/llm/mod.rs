@@ -8,6 +8,7 @@ pub mod openai_compat;
 pub mod openrouter_models;
 pub mod provider;
 pub mod stream_parser;
+pub mod thinking;
 
 use provider::{LLMError, LLMProvider};
 use serde::{Deserialize, Serialize};
@@ -111,6 +112,29 @@ pub struct ProviderConfig {
     pub auth_type: Option<String>,
     pub auth_value: Option<String>,
     pub auth_header: Option<String>,
+    /// How much the model thinks. Saved configs from before this setting lack
+    /// it and load as `Auto`: nothing is sent, exactly as before.
+    #[serde(default)]
+    pub thinking: thinking::ThinkingSetting,
+    /// Optional JSON object merged into the request body (Ollama, LM Studio,
+    /// custom endpoints and OpenRouter only; ignored elsewhere).
+    #[serde(default)]
+    pub extra_request_json: Option<String>,
+}
+
+impl ProviderConfig {
+    /// The request options this config asks for. The extra JSON only applies
+    /// to the providers that offer it.
+    pub fn request_options(&self) -> thinking::RequestOptions {
+        let offers_extra = matches!(
+            ProviderType::from_str(&self.provider_type),
+            Ok(ProviderType::Ollama | ProviderType::LmStudio | ProviderType::Openrouter | ProviderType::Custom)
+        );
+        thinking::RequestOptions {
+            thinking: self.thinking,
+            extra_json: if offers_extra { self.extra_request_json.clone() } else { None },
+        }
+    }
 }
 
 /// Provider info returned to the frontend
@@ -133,48 +157,50 @@ pub fn create_provider(config: &ProviderConfig) -> Result<Box<dyn LLMProvider>, 
         other => other.to_string(),
     })?;
 
+    let options = config.request_options();
     let provider: Box<dyn LLMProvider> = match provider_type {
-        ProviderType::Ollama => Box::new(ollama::OllamaClient::new(config.base_url.as_deref())),
-        ProviderType::LmStudio => Box::new(openai_compat::create_lm_studio_client(
-            config.base_url.as_deref(),
-        )),
+        ProviderType::Ollama => Box::new(
+            ollama::OllamaClient::new(config.base_url.as_deref()).with_options(options),
+        ),
+        ProviderType::LmStudio => Box::new(
+            openai_compat::create_lm_studio_client(config.base_url.as_deref()).with_options(options),
+        ),
         ProviderType::Openai => {
             let api_key = config
                 .api_key
                 .as_deref()
                 .ok_or_else(|| "OpenAI API key required".to_string())?;
-            Box::new(openai_compat::create_openai_client(api_key))
+            Box::new(openai_compat::create_openai_client(api_key).with_options(options))
         }
         ProviderType::Anthropic => {
             let api_key = config
                 .api_key
                 .as_deref()
                 .ok_or_else(|| "Anthropic API key required".to_string())?;
-            Box::new(anthropic::AnthropicClient::new(
-                api_key,
-                config.base_url.as_deref(),
-            ))
+            Box::new(
+                anthropic::AnthropicClient::new(api_key, config.base_url.as_deref()).with_options(options),
+            )
         }
         ProviderType::Groq => {
             let api_key = config
                 .api_key
                 .as_deref()
                 .ok_or_else(|| "Groq API key required".to_string())?;
-            Box::new(openai_compat::create_groq_client(api_key))
+            Box::new(openai_compat::create_groq_client(api_key).with_options(options))
         }
         ProviderType::Gemini => {
             let api_key = config
                 .api_key
                 .as_deref()
                 .ok_or_else(|| "Gemini API key required".to_string())?;
-            Box::new(gemini::GeminiClient::new(api_key, config.base_url.as_deref()))
+            Box::new(gemini::GeminiClient::new(api_key, config.base_url.as_deref()).with_options(options))
         }
         ProviderType::Openrouter => {
             let api_key = config
                 .api_key
                 .as_deref()
                 .ok_or_else(|| "OpenRouter API key required".to_string())?;
-            Box::new(openai_compat::create_openrouter_client(api_key))
+            Box::new(openai_compat::create_openrouter_client(api_key).with_options(options))
         }
         ProviderType::Custom => {
             let base_url = config
@@ -186,12 +212,15 @@ pub fn create_provider(config: &ProviderConfig) -> Result<Box<dyn LLMProvider>, 
                 Some("api_key") | Some("api-key") => custom::CustomAuthType::ApiKey,
                 _ => custom::CustomAuthType::None,
             };
-            Box::new(custom::CustomClient::new(custom::CustomConfig {
-                base_url,
-                auth_type,
-                auth_value: config.auth_value.clone(),
-                auth_header: config.auth_header.clone(),
-            }))
+            Box::new(
+                custom::CustomClient::new(custom::CustomConfig {
+                    base_url,
+                    auth_type,
+                    auth_value: config.auth_value.clone(),
+                    auth_header: config.auth_header.clone(),
+                })
+                .with_options(options),
+            )
         }
         // Needs no config: it reaches the session manager through the
         // `AppHandle` passed to every `stream_completion` call.
@@ -309,6 +338,8 @@ mod tests {
             auth_type: None,
             auth_value: None,
             auth_header: None,
+            thinking: thinking::ThinkingSetting::Auto,
+            extra_request_json: None,
         }
     }
 
@@ -350,5 +381,45 @@ mod tests {
     fn create_provider_rejects_missing_key_and_unknown_type() {
         assert!(create_provider(&cfg("openai", None, None)).is_err());
         assert!(create_provider(&cfg("nope", None, None)).is_err());
+    }
+
+    #[test]
+    fn an_old_saved_config_loads_as_auto_with_no_extra_json() {
+        // What every config saved before the thinking setting looks like.
+        let old = r#"{"provider_type":"ollama","api_key":null,"base_url":"http://localhost:11434","auth_type":null,"auth_value":null,"auth_header":null}"#;
+        let config: ProviderConfig = serde_json::from_str(old).unwrap();
+        assert_eq!(config.thinking, thinking::ThinkingSetting::Auto);
+        assert!(config.extra_request_json.is_none());
+        let options = config.request_options();
+        assert!(options.thinking.is_auto());
+        assert!(options.extra_request().is_none());
+        assert!(create_provider(&config).is_ok());
+
+        // The frontend sends only the fields it has: provider type alone works.
+        let bare: ProviderConfig = serde_json::from_str(r#"{"provider_type":"claude_cli"}"#).unwrap();
+        assert!(bare.thinking.is_auto());
+        assert!(create_provider(&bare).is_ok());
+    }
+
+    #[test]
+    fn a_new_config_carries_thinking_and_extra_json_only_where_offered() {
+        let json = r#"{"provider_type":"ollama","thinking":"off","extra_request_json":"{\"options\":{\"num_ctx\":8192}}"}"#;
+        let config: ProviderConfig = serde_json::from_str(json).unwrap();
+        let o = config.request_options();
+        assert_eq!(o.thinking, thinking::ThinkingSetting::Off);
+        assert_eq!(o.extra_request().unwrap()["options"]["num_ctx"], 8192);
+
+        // OpenAI offers no extra JSON: it is dropped, thinking stays.
+        let openai: ProviderConfig = serde_json::from_str(
+            r#"{"provider_type":"openai","api_key":"k","thinking":"high","extra_request_json":"{\"a\":1}"}"#,
+        )
+        .unwrap();
+        let o = openai.request_options();
+        assert_eq!(o.thinking, thinking::ThinkingSetting::High);
+        assert!(o.extra_request().is_none());
+
+        // A damaged value never breaks loading.
+        let bad: ProviderConfig = serde_json::from_str(r#"{"provider_type":"ollama","thinking":"nonsense"}"#).unwrap();
+        assert!(bad.thinking.is_auto());
     }
 }
