@@ -42,9 +42,9 @@ pub fn start_system_capture_device(
     let label = device_name.as_deref().unwrap_or("default").to_string();
     log::info!("Starting system audio capture on: {}", label);
 
-    // Everything runs inside the spawned thread because cpal::Stream is !Send.
-    // The stream must be created and kept alive on the same thread; the thread
-    // reports whether it started so the caller can warn the user.
+    // The stream is created, kept alive and dropped on this one thread (cpal::Stream
+    // has been Send since 0.17, so that is for ownership, not a requirement). The
+    // thread reports whether it started so the caller can warn the user.
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
     let handle = std::thread::Builder::new()
         .name("system-audio-capture".into())
@@ -109,7 +109,8 @@ fn run_cpal_loopback(
             .ok_or_else(|| "No default output device".to_string())?
     };
 
-    let actual_name = super::device_manager::device_name(&device).unwrap_or_else(|_| "unknown".into());
+    let actual_name = super::device_manager::device_name(&device)
+        .unwrap_or_else(|_| "unknown".into());
     log::info!("System loopback device: {}", actual_name);
 
     let config = device
@@ -122,7 +123,7 @@ fn run_cpal_loopback(
     log::info!("System capture: {}Hz, {}ch, {:?}", sample_rate, channels, sample_format);
 
     let err_fn = |err: cpal::Error| {
-        super::device_manager::log_stream_error("System capture error", &err);
+        super::capture_common::log_stream_error("System capture error", &err);
     };
 
     let stop = stop_flag.clone();
@@ -165,27 +166,16 @@ fn run_cpal_loopback(
             err_fn,
             None,
         ),
-        cpal::SampleFormat::I32 => device.build_input_stream(
+        _ => super::capture_common::build_converted_for(
+            &device,
             config.into(),
-            move |data: &[i32], _: &cpal::InputCallbackInfo| {
+            sample_format,
+            move |pcm| {
                 if stop.load(Ordering::Relaxed) { return; }
-                let pcm = super::device_manager::samples_to_i16(data);
-                send_system_chunk(&pcm, &mut resampler, &tx2);
+                send_system_chunk(pcm, &mut resampler, &tx2);
             },
             err_fn,
-            None,
         ),
-        cpal::SampleFormat::I24 => device.build_input_stream(
-            config.into(),
-            move |data: &[cpal::I24], _: &cpal::InputCallbackInfo| {
-                if stop.load(Ordering::Relaxed) { return; }
-                let pcm = super::device_manager::samples_to_i16(data);
-                send_system_chunk(&pcm, &mut resampler, &tx2);
-            },
-            err_fn,
-            None,
-        ),
-        _ => return Err(format!("Unsupported format: {:?}", sample_format)),
     }
     .map_err(|e| format!("Failed to build loopback stream on '{}': {}", actual_name, e))?;
 

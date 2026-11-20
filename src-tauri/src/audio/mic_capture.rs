@@ -25,7 +25,8 @@ pub fn start_mic_capture(
 ) -> Result<Stream, String> {
     let device = super::device_manager::find_input_device(device_id)?;
 
-    let device_name = super::device_manager::device_name(&device).unwrap_or_else(|_| "unknown".into());
+    let device_name = super::device_manager::device_name(&device)
+        .unwrap_or_else(|_| "unknown".into());
     log::info!("Starting mic capture on device: {}", device_name);
 
     let config = device
@@ -44,7 +45,7 @@ pub fn start_mic_capture(
     );
 
     let err_fn = |err: cpal::Error| {
-        super::device_manager::log_stream_error("Mic capture stream error", &err);
+        super::capture_common::log_stream_error("Mic capture stream error", &err);
     };
 
     let stream = match sample_format {
@@ -78,38 +79,6 @@ pub fn start_mic_capture(
                 )
                 .map_err(|e| format!("Failed to build f32 input stream: {}", e))?
         }
-        SampleFormat::I32 => {
-            let tx = tx.clone();
-            let src = source.clone();
-            let mut resampler = StreamResampler::new(sample_rate, TARGET_SAMPLE_RATE, channels);
-            device
-                .build_input_stream(
-                    config.into(),
-                    move |data: &[i32], _: &cpal::InputCallbackInfo| {
-                        let pcm = super::device_manager::samples_to_i16(data);
-                        handle_mic_data_i16(&pcm, &mut resampler, &tx, &src);
-                    },
-                    err_fn,
-                    None,
-                )
-                .map_err(|e| format!("Failed to build i32 input stream: {}", e))?
-        }
-        SampleFormat::I24 => {
-            let tx = tx.clone();
-            let src = source.clone();
-            let mut resampler = StreamResampler::new(sample_rate, TARGET_SAMPLE_RATE, channels);
-            device
-                .build_input_stream(
-                    config.into(),
-                    move |data: &[cpal::I24], _: &cpal::InputCallbackInfo| {
-                        let pcm = super::device_manager::samples_to_i16(data);
-                        handle_mic_data_i16(&pcm, &mut resampler, &tx, &src);
-                    },
-                    err_fn,
-                    None,
-                )
-                .map_err(|e| format!("Failed to build i24 input stream: {}", e))?
-        }
         SampleFormat::U16 => {
             let tx = tx.clone();
             let src = source;
@@ -126,7 +95,17 @@ pub fn start_mic_capture(
                 .map_err(|e| format!("Failed to build u16 input stream: {}", e))?
         }
         _ => {
-            return Err(format!("Unsupported sample format: {:?}", sample_format));
+            let tx = tx.clone();
+            let src = source.clone();
+            let mut resampler = StreamResampler::new(sample_rate, TARGET_SAMPLE_RATE, channels);
+            super::capture_common::build_converted_for(
+                &device,
+                config.into(),
+                sample_format,
+                move |pcm| handle_mic_data_i16(pcm, &mut resampler, &tx, &src),
+                err_fn,
+            )
+            .map_err(|e| format!("Failed to build {:?} input stream: {}", sample_format, e))?
         }
     };
 
@@ -146,7 +125,8 @@ pub fn start_mic_capture_dual(
     tx: mpsc::Sender<AudioChunk>,
 ) -> Result<Stream, String> {
     let device = super::device_manager::find_input_device(device_id)?;
-    let device_name = super::device_manager::device_name(&device).unwrap_or_else(|_| "unknown".into());
+    let device_name = super::device_manager::device_name(&device)
+        .unwrap_or_else(|_| "unknown".into());
     log::info!("Starting dual-tagged capture on device: {}", device_name);
 
     let config = device
@@ -158,7 +138,7 @@ pub fn start_mic_capture_dual(
     let sample_format = config.sample_format();
 
     let err_fn = |err: cpal::Error| {
-        super::device_manager::log_stream_error("Dual capture stream error", &err);
+        super::capture_common::log_stream_error("Dual capture stream error", &err);
     };
 
     let stream = match sample_format {
@@ -190,38 +170,17 @@ pub fn start_mic_capture_dual(
                 )
                 .map_err(|e| format!("Failed to build dual f32 stream: {}", e))?
         }
-        SampleFormat::I32 => {
-            let tx = tx.clone();
-            let mut resampler = StreamResampler::new(sample_rate, TARGET_SAMPLE_RATE, channels);
-            device
-                .build_input_stream(
-                    config.into(),
-                    move |data: &[i32], _: &cpal::InputCallbackInfo| {
-                        let pcm = super::device_manager::samples_to_i16(data);
-                        handle_dual_data_i16(&pcm, &mut resampler, &tx);
-                    },
-                    err_fn,
-                    None,
-                )
-                .map_err(|e| format!("Failed to build dual i32 stream: {}", e))?
-        }
-        SampleFormat::I24 => {
-            let tx = tx.clone();
-            let mut resampler = StreamResampler::new(sample_rate, TARGET_SAMPLE_RATE, channels);
-            device
-                .build_input_stream(
-                    config.into(),
-                    move |data: &[cpal::I24], _: &cpal::InputCallbackInfo| {
-                        let pcm = super::device_manager::samples_to_i16(data);
-                        handle_dual_data_i16(&pcm, &mut resampler, &tx);
-                    },
-                    err_fn,
-                    None,
-                )
-                .map_err(|e| format!("Failed to build dual i24 stream: {}", e))?
-        }
         _ => {
-            return Err(format!("Unsupported sample format for dual capture: {:?}", sample_format));
+            let tx = tx.clone();
+            let mut resampler = StreamResampler::new(sample_rate, TARGET_SAMPLE_RATE, channels);
+            super::capture_common::build_converted_for(
+                &device,
+                config.into(),
+                sample_format,
+                move |pcm| handle_dual_data_i16(pcm, &mut resampler, &tx),
+                err_fn,
+            )
+            .map_err(|e| format!("Failed to build dual {:?} stream: {}", sample_format, e))?
         }
     };
 
