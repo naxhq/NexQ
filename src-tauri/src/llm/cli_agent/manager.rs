@@ -566,7 +566,7 @@ impl AgentSessionManager {
         let on_delta: OnDelta = {
             let first_text = first_text.clone();
             Box::new(move |token: &str| {
-                if !token.is_empty() {
+                if !token.is_empty() && !crate::llm::cli_agent::session::is_activity(token) {
                     first_text.get_or_init(|| started.elapsed().as_millis() as u64);
                 }
                 on_delta(token)
@@ -925,7 +925,16 @@ mod tests {
                 // Still in flight across a scheduler turn.
                 tokio::task::yield_now().await;
             }
-            if prompt == "slow" {
+            if prompt == "activity-slow" {
+                // A tool use first, text 30 ms later.
+                let tool = crate::llm::cli_agent::protocol::ToolUse {
+                    name: "Grep".into(),
+                    input: serde_json::json!({"pattern": "x"}),
+                };
+                on_delta(&crate::llm::cli_agent::session::encode_activity(&tool));
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                on_delta("a");
+            } else if prompt == "slow" {
                 // Thinks, then answers 30 ms in and finishes 60 ms in.
                 on_delta(crate::llm::cli_agent::session::THINKING_SIGNAL);
                 tokio::time::sleep(Duration::from_millis(30)).await;
@@ -1273,6 +1282,21 @@ mod tests {
         assert_eq!(snap[0].state, "error");
         assert!(snap[0].detail.as_deref().unwrap().contains("boom"));
         assert_eq!(snap[0].error_kind.as_deref(), Some("crashed"));
+    }
+
+    #[tokio::test]
+    async fn ask_first_text_ignores_activity() {
+        let (mgr, _spawner, _sink) = setup();
+        let k = key(SessionScope::Live("act".into()), Tier::Fast);
+        mgr.ensure(&k, init(&[])).await.unwrap();
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let sink = seen.clone();
+        let on_delta: OnDelta = Box::new(move |t: &str| sink.lock().unwrap().push(t.to_string()));
+        let turn = mgr.ask(&k, "activity-slow", on_delta, Arc::new(CancelToken::new())).await.unwrap();
+        // The activity token reached the caller, but the first-text clock waited for "a".
+        assert!(crate::llm::cli_agent::session::is_activity(&seen.lock().unwrap()[0]));
+        let first = turn.first_text_ms.expect("text arrived");
+        assert!(first >= 25, "first text counted at {first} ms");
     }
 
     #[tokio::test]

@@ -44,10 +44,35 @@ impl TurnResult {
     }
 }
 
+/// One tool call the model made (a block of an `assistant` line).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolUse {
+    /// `Read`, `Grep`, `mcp__<key>__<tool>`, ...
+    pub name: String,
+    pub input: Value,
+}
+
+/// One MCP server in `system/init`: only its name and status (`connected`,
+/// `failed`, `needs-auth`, `pending`). No error text, no tool count.
+#[derive(Debug, Clone, PartialEq)]
+pub struct McpServerState {
+    pub name: String,
+    pub status: String,
+}
+
 /// One parsed stdout line.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AgentEvent {
-    Init { session_id: String, model: String },
+    /// `tools` lists every tool name (`mcp__<key>__<tool>` for MCP tools).
+    Init {
+        session_id: String,
+        model: String,
+        tools: Vec<String>,
+        mcp_servers: Vec<McpServerState>,
+    },
+    /// The `tool_use` blocks of one `assistant` line (the CLI sends one line
+    /// per content block).
+    ToolUses(Vec<ToolUse>),
     TextDelta(String),
     /// The model is thinking (extended thinking) before it answers.
     ThinkingDelta,
@@ -72,7 +97,38 @@ pub fn parse_line(line: &str) -> Result<AgentEvent, String> {
         ("system", "init") => Ok(AgentEvent::Init {
             session_id: str_field(&v, "session_id"),
             model: str_field(&v, "model"),
+            tools: v["tools"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|t| t.as_str().map(str::to_string)).collect())
+                .unwrap_or_default(),
+            mcp_servers: v["mcp_servers"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .map(|s| McpServerState {
+                            name: str_field(s, "name"),
+                            status: str_field(s, "status"),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
         }),
+        ("assistant", _) => {
+            let uses: Vec<ToolUse> = v["message"]["content"]
+                .as_array()
+                .map(|blocks| {
+                    blocks
+                        .iter()
+                        .filter(|b| b["type"] == "tool_use")
+                        .map(|b| ToolUse {
+                            name: str_field(b, "name"),
+                            input: b.get("input").cloned().unwrap_or(Value::Null),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            Ok(if uses.is_empty() { AgentEvent::Other } else { AgentEvent::ToolUses(uses) })
+        }
         ("stream_event", _) => {
             let delta = &v["event"]["delta"];
             if v["event"]["type"] == "content_block_delta" {
@@ -284,8 +340,57 @@ pub(crate) mod tests {
         let l = r#"{"type":"system","subtype":"init","session_id":"s","model":"claude-haiku-4-5-20251001","tools":[],"mcp_servers":[]}"#;
         assert_eq!(
             parse_line(l).unwrap(),
-            AgentEvent::Init { session_id: "s".into(), model: "claude-haiku-4-5-20251001".into() }
+            AgentEvent::Init {
+                session_id: "s".into(),
+                model: "claude-haiku-4-5-20251001".into(),
+                tools: vec![],
+                mcp_servers: vec![],
+            }
         );
+    }
+
+    #[test]
+    fn parse_init_lists_tools_and_mcp_servers() {
+        let AgentEvent::Init { tools, mcp_servers, .. } =
+            parse_line(include_str!("testdata/init_with_mcp.json")).unwrap()
+        else {
+            panic!("not an init");
+        };
+        assert!(!tools.is_empty());
+        assert!(tools.iter().any(|t| t.starts_with("mcp__My-Server__")), "{tools:?}");
+        assert_eq!(
+            mcp_servers,
+            vec![McpServerState { name: "My-Server".into(), status: "connected".into() }]
+        );
+    }
+
+    #[test]
+    fn parse_init_with_a_failed_server() {
+        let AgentEvent::Init { mcp_servers, .. } =
+            parse_line(include_str!("testdata/init_mcp_failed.json")).unwrap()
+        else {
+            panic!("not an init");
+        };
+        assert_eq!(mcp_servers[0].status, "failed");
+        assert_eq!(mcp_servers[0].name, "broken");
+    }
+
+    #[test]
+    fn parse_assistant_tool_use() {
+        let AgentEvent::ToolUses(uses) =
+            parse_line(include_str!("testdata/assistant_tool_use.json")).unwrap()
+        else {
+            panic!("not tool uses");
+        };
+        assert_eq!(uses.len(), 1);
+        assert_eq!(uses[0].name, "mcp__My-Server__get_note");
+        assert_eq!(uses[0].input["name"], "x");
+    }
+
+    #[test]
+    fn parse_assistant_text_only_is_other() {
+        let l = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}"#;
+        assert_eq!(parse_line(l).unwrap(), AgentEvent::Other);
     }
 
     #[test]
