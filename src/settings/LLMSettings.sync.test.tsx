@@ -109,7 +109,7 @@ describe("Settings ↔ footer sync of the active LLM", () => {
     expect(useConfigStore.getState().llmProvider).toBe("claude_cli");
     expect(ipc.setLLMProvider).toHaveBeenCalledWith(JSON.stringify({ provider_type: "claude_cli" }));
     expect(ipc.setActiveModel).toHaveBeenCalledWith("claude_cli", "haiku");
-    expect(within(claudeCard()).getByText("Active")).toBeInTheDocument();
+    expect(within(claudeCard()).getByText("In use")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Use Claude" })).not.toBeInTheDocument();
     // Same side effects as every other activation path.
     expect(useConfigStore.getState().verifiedCloudProviders).toContain("claude_cli");
@@ -163,7 +163,7 @@ describe("Settings ↔ footer sync of the active LLM", () => {
     });
   });
 
-  it("the bottom 'Set as Active' button takes the same path", async () => {
+  it("the bottom Use button takes the same path", async () => {
     render(
       <>
         <LLMSettings />
@@ -172,7 +172,7 @@ describe("Settings ↔ footer sync of the active LLM", () => {
     );
     fireEvent.click(claudeCard());
     await screen.findByText("me@example.com · Max");
-    fireEvent.click(screen.getByRole("button", { name: /set claude \(subscription\) as active provider/i }));
+    fireEvent.click(screen.getByRole("button", { name: /use claude \(subscription\) for ai responses/i }));
     await waitFor(() => expect(footerShowsClaude()).toBe(true));
     expect(ipc.setActiveModel).toHaveBeenCalledWith("claude_cli", "haiku");
   });
@@ -206,11 +206,11 @@ describe("Settings ↔ footer sync of the active LLM", () => {
     // cross-window sync (onKeyChange) applies it here.
     act(() => useConfigStore.setState({ llmProvider: "claude_cli", llmModel: "haiku" }));
 
-    expect(screen.getByText(/Active: Claude \(subscription\)/)).toBeInTheDocument();
+    expect(screen.getByText(/In use: Claude \(subscription\)/)).toBeInTheDocument();
     // Settings shows the provider that is actually active...
     expect(claudeCard()).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: /^Ollama/ })).toHaveAttribute("aria-pressed", "false");
     // ...and doesn't offer to "activate" the provider that was just replaced.
-    expect(screen.queryByRole("button", { name: /set .* as active provider/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /for ai responses$/i })).not.toBeInTheDocument();
   });
 });
