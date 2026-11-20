@@ -30,16 +30,16 @@ export function pillState(_kind: "notes" | "tools", ctx: PillContext): PillState
 
 /**
  * The with-sources session that answers `scope`: the Fast one of the live
- * meeting, or the Deep one of that past meeting.
+ * meeting, or that past meeting's: Deep, or Fast when both tiers have the same
+ * settings (the backend then runs only the Fast one).
  */
 export function findSourcesSession(
   sessions: Record<string, AgentSessionStatus>,
   scope: "live" | "past",
   meetingId?: string | null,
 ): AgentSessionStatus | undefined {
-  return Object.values(sessions).find((s) => {
-    if (!s.with_sources) return false;
-    if (scope === "live") return s.scope === "live" && s.tier === "fast";
-    return s.scope === "past" && s.tier === "deep" && s.meeting_id === (meetingId ?? null);
-  });
+  const all = Object.values(sessions).filter((s) => s.with_sources);
+  if (scope === "live") return all.find((s) => s.scope === "live" && s.tier === "fast");
+  const ofMeeting = all.filter((s) => s.scope === "past" && s.meeting_id === (meetingId ?? null));
+  return ofMeeting.find((s) => s.tier === "deep") ?? ofMeeting.find((s) => s.tier === "fast");
 }
