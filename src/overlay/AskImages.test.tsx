@@ -1,7 +1,20 @@
 import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-import { AskImageChips, useAskImages } from "./AskImages";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AskImageChips, IMAGES_NEED_CLAUDE, askPlaceholder, useAskImages } from "./AskImages";
 import { MAX_IMAGES } from "../lib/imageAttachments";
+import { useConfigStore } from "../stores/configStore";
+import { useToastStore } from "../stores/toastStore";
+
+beforeEach(() => {
+  useConfigStore.setState({ llmProvider: "claude_cli" });
+  useToastStore.setState({ toasts: [] });
+  // jsdom can't decode images: every pasted file is a small 100x100 picture.
+  vi.stubGlobal("createImageBitmap", async () => ({ width: 100, height: 100, close: () => {} }));
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 const png = (name: string) => new File([name], `${name}.png`, { type: "image/png" });
 
@@ -23,6 +36,40 @@ describe("useAskImages", () => {
     expect(preventDefault).toHaveBeenCalled();
     await waitFor(() => expect(result.current.images).toHaveLength(1));
     expect(result.current.images[0].media_type).toBe("image/png");
+  });
+
+  it("announces an attached image politely", async () => {
+    const { result } = renderHook(() => useAskImages());
+    await act(async () => result.current.onPaste(paste([png("a")]).event));
+    await waitFor(() => expect(result.current.announcement).toBe("Image attached (1 of 3)"));
+  });
+
+  it("with another provider takes the paste, attaches nothing and warns", async () => {
+    useConfigStore.setState({ llmProvider: "openai" });
+    const { result } = renderHook(() => useAskImages());
+    expect(result.current.canAttach).toBe(false);
+    const { event, preventDefault } = paste([png("a")]);
+    await act(async () => result.current.onPaste(event));
+    expect(preventDefault).toHaveBeenCalled();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(result.current.images).toHaveLength(0);
+    expect(useToastStore.getState().toasts).toEqual([
+      expect.objectContaining({ message: IMAGES_NEED_CLAUDE, type: "warning" }),
+    ]);
+  });
+
+  it("with another provider still lets a text paste through", async () => {
+    useConfigStore.setState({ llmProvider: "openai" });
+    const { result } = renderHook(() => useAskImages());
+    const { event, preventDefault } = paste([png("cells")], "A1\tB1");
+    await act(async () => result.current.onPaste(event));
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(useToastStore.getState().toasts).toHaveLength(0);
+  });
+
+  it("names the paste shortcut in the placeholder only when images can be attached", () => {
+    expect(askPlaceholder(true)).toMatch(/Ctrl\+V to attach a screenshot|⌘V to attach a screenshot/);
+    expect(askPlaceholder(false)).toBe("Ask about the meeting...");
   });
 
   it("lets text through when the clipboard has text and a picture (Excel, Word, web)", async () => {

@@ -4,7 +4,8 @@ import { useAIActionsStore } from "../stores/aiActionsStore";
 import { useConfigStore } from "../stores/configStore";
 import { cancelGeneration } from "../lib/ipc";
 import { runYourAction, useAutoAnswerRunning } from "../lib/autoAnswer";
-import { AskImageChips, DEFAULT_IMAGE_QUESTION, useAskImages } from "./AskImages";
+import { AskImageChips, askPlaceholder, useAskImages } from "./AskImages";
+import { sendAsk } from "./sendAsk";
 import { DEFAULT_CONTEXT_SCOPE, scopeHint } from "../lib/contextScope";
 import { showToast } from "../stores/toastStore";
 import { ContextScopePicker } from "./ContextScopePicker";
@@ -119,26 +120,32 @@ export function ModeButtons() {
     [isStreaming, locked, streaming, currentMode]
   );
 
-  const { images: askImages, onPaste: onAskPaste, remove: removeAskImage, clear: clearAskImages } = useAskImages();
+  const {
+    images: askImages,
+    sending: askSending,
+    setSending: setAskSending,
+    canAttach: canAttachImage,
+    announcement: askAnnouncement,
+    onPaste: onAskPaste,
+    remove: removeAskImage,
+    clear: clearAskImages,
+  } = useAskImages();
 
   const handleAskSubmit = useCallback(() => {
-    const text = askInputText.trim() || (askImages.length > 0 ? DEFAULT_IMAGE_QUESTION : "");
-    if (!text || locked) return;
-    const withImages = askImages.length > 0;
-    // A failed send keeps the images, so they don't have to be pasted again.
-    runYourAction("AskQuestion", text, askImages).then(clearAskImages, (err) =>
-      showToast(
-        err instanceof Error
-          ? err.message
-          : withImages && typeof err === "string"
-            ? err
-            : "Couldn't send question",
-        "error"
-      )
-    );
+    if (locked) return;
+    const sent = sendAsk({
+      typed: askInputText,
+      images: askSending ? [] : askImages,
+      fallbackError: "Couldn't send question",
+      onSending: setAskSending,
+      onSent: clearAskImages,
+      // A failed send keeps the typed text and the images, to send again.
+      onFailed: (typed) => setAskInputText((current) => current || typed),
+    });
+    if (!sent) return;
     setAskInputText("");
     setAskInputVisible(false);
-  }, [askInputText, askImages, locked, clearAskImages]);
+  }, [askInputText, askImages, askSending, locked, clearAskImages, setAskSending]);
 
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -177,7 +184,7 @@ export function ModeButtons() {
       {/* Inline Ask input */}
       {askInputVisible && !locked && (
         <div className="flex flex-col gap-1 rounded-lg border border-info/20 bg-info/5 px-2 py-1 slide-down-enter">
-          <AskImageChips images={askImages} onRemove={removeAskImage} />
+          <AskImageChips images={askSending ? [] : askImages} onRemove={removeAskImage} announcement={askAnnouncement} />
           <div className="flex items-center gap-1.5">
           <input
             type="text"
@@ -189,7 +196,7 @@ export function ModeButtons() {
               if (e.key === "Enter") { e.preventDefault(); handleAskSubmit(); }
               if (e.key === "Escape") { e.preventDefault(); setAskInputVisible(false); }
             }}
-            placeholder="Ask about the meeting... (Ctrl+V to attach a screenshot)"
+            placeholder={askPlaceholder(canAttachImage)}
             aria-label="Ask a question"
             autoFocus
             maxLength={2000}
@@ -197,7 +204,7 @@ export function ModeButtons() {
           />
           <button
             onClick={handleAskSubmit}
-            disabled={!askInputText.trim() && askImages.length === 0}
+            disabled={!askInputText.trim() && (askImages.length === 0 || askSending)}
             className="rounded-md p-1 text-info/60 hover:bg-info/10 hover:text-info disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             aria-label="Send question"
           >

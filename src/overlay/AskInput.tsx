@@ -1,9 +1,9 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useStreamStore } from "../stores/streamStore";
-import { runYourAction, useAutoAnswerRunning } from "../lib/autoAnswer";
-import { showToast } from "../stores/toastStore";
+import { useAutoAnswerRunning } from "../lib/autoAnswer";
 import { Send, X } from "lucide-react";
-import { AskImageChips, DEFAULT_IMAGE_QUESTION, useAskImages } from "./AskImages";
+import { AskImageChips, askPlaceholder, useAskImages } from "./AskImages";
+import { sendAsk } from "./sendAsk";
 
 interface AskInputProps {
   visible: boolean;
@@ -18,8 +18,8 @@ export function AskInput({ visible, onClose }: AskInputProps) {
   const autoRunning = useAutoAnswerRunning();
   const locked = isStreaming && !autoRunning;
   const inputRef = useRef<HTMLInputElement>(null);
-  const { images, onPaste, remove, clear } = useAskImages();
-  const canSend = (inputText.trim().length > 0 || images.length > 0) && !locked;
+  const { images, sending, setSending, canAttach, announcement, onPaste, remove, clear } = useAskImages();
+  const canSend = (inputText.trim().length > 0 || (images.length > 0 && !sending)) && !locked;
 
   // Focus the input when made visible
   useEffect(() => {
@@ -29,22 +29,21 @@ export function AskInput({ visible, onClose }: AskInputProps) {
   }, [visible]);
 
   const handleSubmit = useCallback(() => {
-    const text = inputText.trim() || (images.length > 0 ? DEFAULT_IMAGE_QUESTION : "");
-    if (!text || locked) return;
-
+    if (locked) return;
     // Send question in AskQuestion mode (with the picked transcript scope)
-    const withImages = images.length > 0;
-    runYourAction("AskQuestion", text, images).then(clear, (err) => {
-      // A failed send keeps the images, so they don't have to be pasted again.
-      // Tauri rejects with plain text. With an image, say why it couldn't go
-      // (e.g. the provider can't take images) instead of a generic failure.
-      const msg =
-        err instanceof Error ? err.message : withImages && typeof err === "string" ? err : "Failed to send question";
-      showToast(msg, "error");
+    const sent = sendAsk({
+      typed: inputText,
+      images: sending ? [] : images,
+      fallbackError: "Failed to send question",
+      onSending: setSending,
+      onSent: clear,
+      // A failed send keeps the typed text and the images, to send again.
+      onFailed: (typed) => setInputText((current) => current || typed),
     });
+    if (!sent) return;
     setInputText("");
     onClose();
-  }, [inputText, images, locked, onClose, clear]);
+  }, [inputText, images, sending, locked, onClose, clear, setSending]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -66,7 +65,7 @@ export function AskInput({ visible, onClose }: AskInputProps) {
 
   return (
     <div className="flex flex-col gap-1.5 rounded-xl border border-border/20 bg-card/50 px-3 py-1.5">
-      <AskImageChips images={images} onRemove={remove} />
+      <AskImageChips images={sending ? [] : images} onRemove={remove} announcement={announcement} />
       <div className="flex items-center gap-2">
       <input
         ref={inputRef}
@@ -75,7 +74,7 @@ export function AskInput({ visible, onClose }: AskInputProps) {
         onChange={(e) => setInputText(e.target.value)}
         onKeyDown={handleKeyDown}
         onPaste={onPaste}
-        placeholder="Ask about the meeting... (Ctrl+V to attach a screenshot)"
+        placeholder={askPlaceholder(canAttach)}
         aria-label="Ask a question"
         disabled={locked}
         maxLength={2000}
