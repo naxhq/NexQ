@@ -5,6 +5,7 @@ import { startCapturePerParty, stopCapture } from "../lib/ipc";
 import type { MeetingAudioConfig } from "../lib/types";
 import { useConfigStore } from "../stores/configStore";
 import { useMeetingStore } from "../stores/meetingStore";
+import { autoDetectProblem } from "../lib/sttLanguages";
 import { useAudioConfigSync } from "./useAudioConfigSync";
 
 vi.mock("../lib/ipc", async (importOriginal) => ({
@@ -17,9 +18,8 @@ vi.mock("@tauri-apps/api/event", async (importOriginal) => ({
   emit: vi.fn(async () => {}),
 }));
 
-const REFUSAL =
-  "Auto-detect doesn't work with Azure Speech, used for You. " +
-  "Choose Deepgram Nova-3, Whisper or Parakeet TDT 0.6B v3 for that side, or pick a language.";
+// What Rust sends back for a refused swap, built the way the settings screens word it.
+const REFUSAL = autoDetectProblem({ provider: "azure_speech" }, {}, "You")!;
 
 const config: MeetingAudioConfig = {
   you: { role: "You", device_id: "default", is_input_device: true, stt_provider: "deepgram" },
@@ -61,7 +61,7 @@ it("tells the user about a refused switch and keeps the running capture's config
   expect(stopCapture).not.toHaveBeenCalled();
   expect(emit).toHaveBeenCalledWith(
     "capture_warning",
-    `${REFUSAL} Your meeting keeps using the previous speech-to-text setup.`,
+    "Auto-detect doesn't work with Azure Speech, used for You. Your meeting keeps its current setup.",
   );
 
   // Back to what is still running: nothing to restart.

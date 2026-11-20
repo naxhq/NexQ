@@ -13,7 +13,7 @@ import { useDevLogStore } from "../stores/devLogStore";
 import { useTranscriptStore } from "../stores/transcriptStore";
 import { startCapturePerParty } from "../lib/ipc";
 import { skipYouStt } from "../lib/audioMode";
-import { AUTO_DETECT_REFUSAL_PREFIX } from "../lib/sttLanguages";
+import { AUTO_DETECT_REFUSAL_PREFIX, autoDetectRefusalSentences } from "../lib/sttLanguages";
 
 export function useAudioConfigSync() {
   const isRecording = useMeetingStore((s) => s.isRecording);
@@ -115,7 +115,7 @@ export function useAudioConfigSync() {
         if (!refused) appliedConfigRef.current = undefined;
         pendingConfigRef.current = null;
         const warning = refused
-          ? `${msg} Your meeting keeps using the previous speech-to-text setup.`
+          ? `${autoDetectRefusalSentences(msg).join(" ") || msg} Your meeting keeps its current setup.`
           : `Couldn't switch speech-to-text: ${msg}`;
         import("@tauri-apps/api/event")
           .then(({ emit }) => emit("capture_warning", warning))

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useToastStore } from "../stores/toastStore";
+import { toastDurationMs, useToastStore } from "../stores/toastStore";
 import type { Toast as ToastData } from "../stores/toastStore";
 import { CheckCircle, XCircle, Info, AlertTriangle, X } from "lucide-react";
 
@@ -46,15 +46,26 @@ function ToastItem({ toast, onDismiss }: { toast: ToastData; onDismiss: () => vo
   const Icon = iconMap[toast.type];
   const [exiting, setExiting] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const duration = toastDurationMs(toast.message);
+  // Hovering or focusing the toast stops the countdown (WCAG 2.2.1): it resumes with what was left.
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const paused = hovered || focused;
+  const remainingRef = useRef(duration);
 
   // Auto-dismiss with exit animation (component-driven)
   useEffect(() => {
+    if (paused) return;
+    const startedAt = Date.now();
     timerRef.current = setTimeout(() => {
       setExiting(true);
       setTimeout(onDismiss, 280);
-    }, 4000);
-    return () => clearTimeout(timerRef.current);
-  }, [onDismiss]);
+    }, Math.max(0, remainingRef.current));
+    return () => {
+      clearTimeout(timerRef.current);
+      remainingRef.current -= Date.now() - startedAt;
+    };
+  }, [onDismiss, paused]);
 
   const handleDismiss = useCallback(() => {
     if (exiting) return;
@@ -77,6 +88,12 @@ function ToastItem({ toast, onDismiss }: { toast: ToastData; onDismiss: () => vo
         ${exiting ? "toast-exit" : "toast-enter"}
       `}
       style={{ maxWidth: 400, minWidth: 280 }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocused(false);
+      }}
     >
       {/* Icon with colored circle background */}
       <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${iconBgMap[toast.type]} ${iconAnimMap[toast.type]}`}>
@@ -99,7 +116,10 @@ function ToastItem({ toast, onDismiss }: { toast: ToastData; onDismiss: () => vo
 
       {/* Progress bar — visual countdown to auto-dismiss */}
       <div className="absolute bottom-0 left-0 right-0 h-[2px] overflow-hidden">
-        <div className={`h-full ${progressMap[toast.type]} toast-progress-bar`} />
+        <div
+          className={`h-full ${progressMap[toast.type]} toast-progress-bar`}
+          style={{ animationDuration: `${duration}ms`, animationPlayState: paused ? "paused" : "running" }}
+        />
       </div>
     </div>
   );

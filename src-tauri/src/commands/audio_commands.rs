@@ -434,6 +434,13 @@ pub async fn stop_capture(app: AppHandle, keep_recording: Option<bool>) -> Resul
             Some(mgr) => {
                 let info = mgr.stop_capture(keep_recording.unwrap_or(false));
                 log::info!("Audio capture stopped via command");
+                // A device change keeps the meeting going; only a real stop forgets
+                // which sides run without speech-to-text.
+                if !keep_recording.unwrap_or(false) {
+                    if let Ok(mut refusals) = state.auto_refusals.lock() {
+                        *refusals = [None, None];
+                    }
+                }
                 info
             }
             None => return Err("No audio manager initialized".to_string()),
@@ -931,10 +938,11 @@ pub async fn start_capture_per_party(
     // Validate provider/model combinations before stopping an existing meeting,
     // switching the default microphone, or starting new audio capture.
     //
-    // A side that can't detect the language in an Auto-detect meeting that is
-    // just starting goes without STT instead of blocking the meeting, and the
-    // user is told once capture is up. While a capture runs (a swap), the
-    // refusal is returned and the running capture is left alone.
+    // A side that can't detect the language goes without STT instead of
+    // blocking a meeting that is just starting, and the user is told once
+    // capture is up. While a capture runs (a swap), a refusal the side already
+    // runs under is tolerated silently; a new one is returned as an error and
+    // the running capture is left alone (see `resolve_sides`).
     let was_capturing = state
         .audio
         .lock()
@@ -946,32 +954,23 @@ pub async fn start_capture_per_party(
     } else {
         create_stt_provider_for_party(&you, &state, &app, "You").await
     };
-    let them_result = create_stt_provider_for_party(&them, &state, &app, "Them").await;
-    // A swap refused for both sides says so for both: the one the user just
-    // changed may not be the one named first.
-    if was_capturing {
-        let errors: Vec<&str> = [&you_result, &them_result]
-            .into_iter()
-            .filter_map(|result| result.as_ref().err().map(String::as_str))
-            .collect();
-        if errors.len() > 1 && errors.iter().all(|message| message.starts_with(AUTO_DETECT_REFUSAL)) {
-            return Err(errors.join(" "));
-        }
-    }
-    let mut refusals: Vec<String> = Vec::new();
-    let mut you_refused = false;
-    let mut them_refused = false;
-    let (you_stt, you_refusal) = apply_auto_refusal(you_result, was_capturing)?;
-    if let Some(message) = you_refusal {
-        you_refused = true;
-        refusals.push(format!("You won't be transcribed in this meeting. {message}"));
-    }
-    let (them_stt, them_refusal) = apply_auto_refusal(them_result, was_capturing)?;
-    if let Some(message) = them_refusal {
-        them_refused = true;
-        let side = if skip_you_stt { "Room" } else { "Them" };
-        refusals.push(format!("{side} won't be transcribed in this meeting. {message}"));
-    }
+    let them_role = if skip_you_stt { "Room" } else { "Them" };
+    let them_result = create_stt_provider_for_party(&them, &state, &app, them_role).await;
+    let running_refusals = state
+        .auto_refusals
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+    let (you_side, them_side) = resolve_sides(you_result, them_result, was_capturing, &running_refusals)?;
+    let you_refused = you_side.refusal.is_some();
+    let them_refused = them_side.refusal.is_some();
+    let sides_refusals = [you_side.refusal.clone(), them_side.refusal.clone()];
+    let refusals = start_warnings(&[
+        ("You", you_side.announce.then(|| you_side.refusal.clone()).flatten()),
+        (them_role, them_side.announce.then(|| them_side.refusal.clone()).flatten()),
+    ]);
+    let you_stt = you_side.provider;
+    let them_stt = them_side.provider;
 
     // If already capturing, stop first (allows mid-meeting hot-swap).
     let mut stopped_existing_capture = false;
@@ -1626,11 +1625,11 @@ pub async fn start_capture_per_party(
     });
 
     log::info!("Per-party audio capture started");
-    if !refusals.is_empty() {
-        let warning = format!(
-            "{} Change it now in Audio & Devices, or pick a language before your next meeting.",
-            refusals.join(" ")
-        );
+    // Remember what each side now runs under, so the next swap can tell news from old.
+    if let Ok(mut stored) = state.auto_refusals.lock() {
+        *stored = sides_refusals;
+    }
+    if let Some(warning) = refusals {
         let _ = app.emit("capture_warning", warning);
     }
     Ok(())
@@ -1671,11 +1670,7 @@ async fn create_stt_provider_for_party(
                 .as_deref()
                 .map(resolve_parakeet_model_id)
                 .unwrap_or_else(|| "parakeet-tdt-0.6b-v3-int8".to_string()),
-            STTProviderType::GroqWhisper => state
-                .shared_groq_config
-                .read()
-                .map(|config| config.model.clone())
-                .unwrap_or_default(),
+            // The other providers don't depend on a model for Auto-detect.
             _ => String::new(),
         };
         validate_auto_language_provider(&stt_type, &model, party_role)?;
@@ -2026,7 +2021,7 @@ fn get_stt_language(state: &AppState) -> String {
 
 /// Whether `provider` + `model` can detect the spoken language on its own.
 /// Mirrors `supportsSTTAutoDetection` in `src/lib/sttLanguages.ts`; both sides
-/// check the same table (`AUTO_DETECT_CASES` there, the test below here).
+/// check the same table (`src/lib/autoDetectCases.json`, tested on both sides).
 fn supports_auto_language(provider: &crate::stt::provider::STTProviderType, model: &str) -> bool {
     use crate::stt::provider::STTProviderType;
 
@@ -2042,7 +2037,7 @@ fn supports_auto_language(provider: &crate::stt::provider::STTProviderType, mode
 }
 
 /// Refuse Auto-detect for a side whose provider or model can't do it, in words
-/// a user can act on. `party_role` is "You" or "Them".
+/// a user can act on. `party_role` is "You", "Them" or "Room" (Them in an in-person meeting).
 fn validate_auto_language_provider(
     provider: &crate::stt::provider::STTProviderType,
     model: &str,
@@ -2083,8 +2078,8 @@ fn auto_refusal(name: &str, party_role: &str, advice: &str) -> String {
 
 /// A Whisper.cpp model that can't detect the language ("ggml-base.en.bin", "distil-large-v3").
 fn whisper_auto_refusal(model: &str, party_role: &str) -> String {
-    let shown = model.trim_start_matches("ggml-").trim_end_matches(".bin");
-    auto_refusal(&format!("the {shown} Whisper model"), party_role, AUTO_DETECT_WHISPER_ADVICE)
+    let id = model.trim_start_matches("ggml-").trim_end_matches(".bin");
+    auto_refusal(&format!("the {} Whisper model", whisper_model_label(id)), party_role, AUTO_DETECT_WHISPER_ADVICE)
 }
 
 fn parakeet_ctc_auto_refusal(party_role: &str) -> String {
@@ -2100,26 +2095,102 @@ fn deepgram_model_label(model: &str) -> &str {
         "nova-2" => "Nova 2",
         "nova" => "Nova",
         "enhanced" => "Enhanced",
+        "base" => "Base",
         other => other,
     }
 }
 
-/// A side whose provider can't detect the language during a start (nothing is
-/// running yet) is left without speech-to-text rather than blocking the whole
-/// meeting. A refusal while a capture runs (a mid-meeting swap), or any other
-/// error, stays an error so the running capture is kept. The second value is
-/// the refusal to tell the user about.
-fn apply_auto_refusal<T>(
+/// A Whisper.cpp model's name as people know it; other models show their id.
+fn whisper_model_label(model: &str) -> &str {
+    match model {
+        "distil-large-v3" => "Distil Large v3",
+        other => other,
+    }
+}
+
+/// What becomes of one side when its STT provider is created.
+struct SideOutcome<T> {
+    provider: Option<T>,
+    /// Set when the side goes without STT because it can't detect the language.
+    refusal: Option<String>,
+    /// Whether the user hasn't been told about `refusal` yet.
+    announce: bool,
+}
+
+/// A side that can't detect the language goes without speech-to-text instead
+/// of blocking the meeting:
+/// - at a start, the refusal is announced;
+/// - during a swap, the refusal the side already runs under (`running_refusal`)
+///   is tolerated silently, while a new one is an error that keeps the running
+///   capture untouched.
+/// Any other error is an error.
+fn resolve_side<T>(
     result: Result<Option<T>, String>,
     was_capturing: bool,
-) -> Result<(Option<T>, Option<String>), String> {
+    running_refusal: Option<&str>,
+) -> Result<SideOutcome<T>, String> {
     match result {
-        Ok(provider) => Ok((provider, None)),
-        Err(message) if !was_capturing && message.starts_with(AUTO_DETECT_REFUSAL) => {
-            Ok((None, Some(message)))
+        Ok(provider) => Ok(SideOutcome { provider, refusal: None, announce: false }),
+        Err(message) if message.starts_with(AUTO_DETECT_REFUSAL) => {
+            if !was_capturing {
+                Ok(SideOutcome { provider: None, refusal: Some(message), announce: true })
+            } else if running_refusal == Some(message.as_str()) {
+                Ok(SideOutcome { provider: None, refusal: Some(message), announce: false })
+            } else {
+                Err(message)
+            }
         }
         Err(message) => Err(message),
     }
+}
+
+/// Both sides at once. A swap refused for both says so for both (the side the
+/// user just changed may not be the one named first); a real error wins over a refusal.
+fn resolve_sides<T, U>(
+    you: Result<Option<T>, String>,
+    them: Result<Option<U>, String>,
+    was_capturing: bool,
+    running_refusals: &[Option<String>; 2],
+) -> Result<(SideOutcome<T>, SideOutcome<U>), String> {
+    match (
+        resolve_side(you, was_capturing, running_refusals[0].as_deref()),
+        resolve_side(them, was_capturing, running_refusals[1].as_deref()),
+    ) {
+        (Ok(you), Ok(them)) => Ok((you, them)),
+        (Err(a), Err(b)) => {
+            let (a_refusal, b_refusal) = (a.starts_with(AUTO_DETECT_REFUSAL), b.starts_with(AUTO_DETECT_REFUSAL));
+            Err(match (a_refusal, b_refusal) {
+                (true, true) => format!("{a} {b}"),
+                (true, false) => b,
+                _ => a,
+            })
+        }
+        (Err(message), _) | (_, Err(message)) => Err(message),
+    }
+}
+
+/// The provider a refusal names: "Auto-detect doesn't work with <name>, used for <side>. ..."
+fn refusal_provider_name(refusal: &str) -> Option<&str> {
+    refusal
+        .strip_prefix(AUTO_DETECT_REFUSAL)?
+        .trim_start()
+        .split_once(", used for ")
+        .map(|(name, _)| name)
+}
+
+/// The one toast for sides that start without speech-to-text, a sentence per
+/// side. `sides` is (label, refusal to announce); None when there is nothing to say.
+fn start_warnings(sides: &[(&str, Option<String>)]) -> Option<String> {
+    let sentences: Vec<String> = sides
+        .iter()
+        .filter_map(|(label, refusal)| {
+            let name = refusal_provider_name(refusal.as_deref()?)?;
+            Some(format!(
+                "{label} won't be transcribed: {name} can't detect the language. Change it in Audio & Devices or pick a language."
+            ))
+        })
+        .collect();
+    (!sentences.is_empty()).then(|| sentences.join(" "))
 }
 
 fn resolve_parakeet_model_id(model: &str) -> String {
@@ -2371,6 +2442,16 @@ mod tests {
         // The same table src/lib/sttLanguages.test.ts reads.
         let table: serde_json::Value =
             serde_json::from_str(include_str!("../../../src/lib/autoDetectCases.json")).unwrap();
+        // The refusal wording is the same table's too.
+        assert_eq!(AUTO_DETECT_REFUSAL, table["refusalPrefix"].as_str().unwrap());
+        assert_eq!(AUTO_DETECT_ADVICE, table["advice"].as_str().unwrap());
+        assert_eq!(AUTO_DETECT_WHISPER_ADVICE, table["whisperAdvice"].as_str().unwrap());
+        for (model, label) in table["deepgramLabels"].as_object().unwrap() {
+            assert_eq!(deepgram_model_label(model), label.as_str().unwrap(), "{model}");
+        }
+        for (model, label) in table["whisperLabels"].as_object().unwrap() {
+            assert_eq!(whisper_model_label(model), label.as_str().unwrap(), "{model}");
+        }
         let cases = table["cases"].as_array().unwrap();
         assert!(cases.len() > 20);
         for case in cases {
@@ -2417,19 +2498,71 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_side_goes_without_stt_only_when_nothing_is_running() {
+    fn a_provider_that_works_passes_through() {
+        let side = resolve_side(Ok(Some(1)), false, None).unwrap();
+        assert_eq!((side.provider, side.refusal, side.announce), (Some(1), None, false));
+    }
+
+    #[test]
+    fn a_refusal_at_a_start_goes_without_stt_and_is_announced() {
         let refusal = parakeet_ctc_auto_refusal("You");
-        // Fine providers pass through untouched.
-        assert!(matches!(apply_auto_refusal(Ok(Some(1)), false), Ok((Some(1), None))));
-        // Refusal at a start: the side gets no provider and the reason is kept.
-        match apply_auto_refusal::<u8>(Err(refusal.clone()), false) {
-            Ok((None, Some(message))) => assert_eq!(message, refusal),
-            _ => panic!("a refusal at a start should leave the side without STT"),
+        let side = resolve_side::<u8>(Err(refusal.clone()), false, None).unwrap();
+        assert_eq!((side.provider, side.refusal, side.announce), (None, Some(refusal), true));
+    }
+
+    #[test]
+    fn a_swap_tolerates_the_refusal_a_side_already_runs_under_without_a_word() {
+        let refusal = parakeet_ctc_auto_refusal("You");
+        let side = resolve_side::<u8>(Err(refusal.clone()), true, Some(&refusal)).unwrap();
+        assert_eq!((side.provider, side.refusal.as_deref(), side.announce), (None, Some(refusal.as_str()), false));
+    }
+
+    #[test]
+    fn a_swap_with_a_new_refusal_is_an_error() {
+        let old = parakeet_ctc_auto_refusal("You");
+        let new = whisper_auto_refusal("distil-large-v3", "You");
+        assert_eq!(resolve_side::<u8>(Err(new.clone()), true, Some(&old)).err(), Some(new.clone()));
+        assert_eq!(resolve_side::<u8>(Err(new.clone()), true, None).err(), Some(new));
+    }
+
+    #[test]
+    fn other_errors_stay_errors_at_a_start_and_in_a_swap() {
+        for was_capturing in [false, true] {
+            assert!(resolve_side::<u8>(Err("Deepgram key missing".into()), was_capturing, None).is_err());
         }
-        // Refusal while a capture runs (a swap): stays an error.
-        assert_eq!(apply_auto_refusal::<u8>(Err(refusal.clone()), true).unwrap_err(), refusal);
-        // Any other error stays an error, running or not.
-        assert!(apply_auto_refusal::<u8>(Err("Deepgram key missing".into()), false).is_err());
+    }
+
+    #[test]
+    fn a_swap_refused_for_both_sides_names_both_and_a_real_error_wins() {
+        let you = parakeet_ctc_auto_refusal("You");
+        let them = auto_refusal("Azure Speech", "Them", AUTO_DETECT_ADVICE);
+        let none = [None, None];
+        let both = resolve_sides::<u8, u8>(Err(you.clone()), Err(them.clone()), true, &none).err().unwrap();
+        assert_eq!(both, format!("{you} {them}"));
+        // The side already running without STT isn't part of it: only the new refusal is reported.
+        let known = [Some(you.clone()), None];
+        assert_eq!(resolve_sides::<u8, u8>(Err(you.clone()), Err(them.clone()), true, &known).err(), Some(them.clone()));
+        // A real error is reported rather than a refusal.
+        assert_eq!(
+            resolve_sides::<u8, u8>(Err(you), Err("Deepgram key missing".into()), true, &none).err(),
+            Some("Deepgram key missing".to_string())
+        );
+    }
+
+    #[test]
+    fn the_start_toast_is_one_short_sentence_per_announced_side() {
+        let you = auto_refusal("Web Speech", "You", AUTO_DETECT_ADVICE);
+        let room = whisper_auto_refusal("ggml-base.en.bin", "Room");
+        assert_eq!(
+            start_warnings(&[("You", Some(you.clone())), ("Room", None)]).unwrap(),
+            "You won't be transcribed: Web Speech can't detect the language. Change it in Audio & Devices or pick a language."
+        );
+        let both = start_warnings(&[("You", Some(you)), ("Room", Some(room))]).unwrap();
+        assert!(both.contains("Room won't be transcribed: the base.en Whisper model can't detect the language."), "{both}");
+        assert!(start_warnings(&[("You", None), ("Them", None)]).is_none());
+        for sentence in both.split(". ") {
+            assert!(sentence.split_whitespace().count() <= 22, "{sentence}");
+        }
     }
 
     #[test]

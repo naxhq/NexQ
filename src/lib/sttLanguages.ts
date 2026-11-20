@@ -98,8 +98,12 @@ const PROVIDER_NAMES: Partial<Record<STTProviderType, string>> = {
   ort_streaming: "ORT Streaming",
 };
 
+/** Whisper.cpp models as people know them; other models show their id. */
+export const WHISPER_MODEL_LABELS: Record<string, string> = { "distil-large-v3": "Distil Large v3" };
+const whisperLabel = (id: string): string => WHISPER_MODEL_LABELS[id] ?? id;
+
 /** Deepgram models as the STT Providers picker names them. */
-const DEEPGRAM_MODEL_LABELS: Record<string, string> = {
+export const DEEPGRAM_MODEL_LABELS: Record<string, string> = {
   "nova-3": "Nova 3",
   "nova-3-general": "Nova 3",
   "flux-general-en": "Flux",
@@ -107,6 +111,7 @@ const DEEPGRAM_MODEL_LABELS: Record<string, string> = {
   "nova-2": "Nova 2",
   nova: "Nova",
   enhanced: "Enhanced",
+  base: "Base",
 };
 
 /**
@@ -115,9 +120,9 @@ const DEEPGRAM_MODEL_LABELS: Record<string, string> = {
  */
 export const AUTO_DETECT_REFUSAL_PREFIX = "Auto-detect doesn't work with";
 
-const AUTO_DETECT_ADVICE =
+export const AUTO_DETECT_ADVICE =
   "Choose Deepgram Nova-3, Parakeet TDT 0.6B v3, Groq Whisper or Whisper API for that side, or pick a language.";
-const AUTO_DETECT_WHISPER_ADVICE =
+export const AUTO_DETECT_WHISPER_ADVICE =
   "Choose a multilingual Whisper model (Tiny, Base, Small, Medium or Large v3 Turbo), or pick a language.";
 
 /**
@@ -133,10 +138,15 @@ export function autoDetectProblem(
   if (supportsSTTAutoDetection(side.provider, model)) return null;
   let name = PROVIDER_NAMES[side.provider] ?? "this speech-to-text provider";
   if (side.provider === "deepgram") name = `Deepgram ${(model && DEEPGRAM_MODEL_LABELS[model]) || model || "(this model)"}`;
-  if (side.provider === "whisper_cpp") name = `the ${model ? whisperModelId(model) : "selected"} Whisper model`;
+  if (side.provider === "whisper_cpp") name = `the ${model ? whisperLabel(whisperModelId(model)) : "selected"} Whisper model`;
   if (side.provider === "parakeet_tdt") name = "Parakeet CTC 110M";
   const advice = side.provider === "whisper_cpp" ? AUTO_DETECT_WHISPER_ADVICE : AUTO_DETECT_ADVICE;
   return `${AUTO_DETECT_REFUSAL_PREFIX} ${name}, used for ${label}. ${advice}`;
+}
+
+/** The "Auto-detect doesn't work with X, used for Y." sentences of a refusal (without the advice). */
+export function autoDetectRefusalSentences(message: string): string[] {
+  return message.match(/Auto-detect doesn't work with .+?, used for (?:You|Them|Room)\./g) ?? [];
 }
 
 /** Languages Cartesia ink-2 detects on its own (it has no language setting). */

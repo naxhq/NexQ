@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { STTProviderType } from "./types";
 import cases from "./autoDetectCases.json";
 import {
+  AUTO_DETECT_ADVICE,
   AUTO_DETECT_REFUSAL_PREFIX,
+  AUTO_DETECT_WHISPER_ADVICE,
+  DEEPGRAM_MODEL_LABELS,
+  WHISPER_MODEL_LABELS,
+  autoDetectRefusalSentences,
   STT_LANGUAGES,
   autoDetectProblem,
   cartesiaSupportsLanguage,
@@ -28,6 +33,24 @@ describe("autoDetectCases.json (shared with Rust)", () => {
   });
 });
 
+describe("refusal wording (shared with Rust)", () => {
+  it("uses the wording in autoDetectCases.json", () => {
+    expect(AUTO_DETECT_REFUSAL_PREFIX).toBe(cases.refusalPrefix);
+    expect(AUTO_DETECT_ADVICE).toBe(cases.advice);
+    expect(AUTO_DETECT_WHISPER_ADVICE).toBe(cases.whisperAdvice);
+    expect(DEEPGRAM_MODEL_LABELS).toMatchObject(cases.deepgramLabels);
+    expect(WHISPER_MODEL_LABELS).toEqual(cases.whisperLabels);
+  });
+
+  it("picks the sentences naming each refused side out of a joined refusal", () => {
+    const joined = `${autoDetectProblem({ provider: "web_speech" }, {}, "You")} ${autoDetectProblem({ provider: "whisper_cpp", localModel: "ggml-base.en.bin" }, {}, "Room")}`;
+    expect(autoDetectRefusalSentences(joined)).toEqual([
+      "Auto-detect doesn't work with Web Speech, used for You.",
+      "Auto-detect doesn't work with the base.en Whisper model, used for Room.",
+    ]);
+  });
+});
+
 describe("autoDetectProblem", () => {
   it("names the side, the provider and what to change", () => {
     expect(autoDetectProblem({ provider: "web_speech" }, {}, "You")).toBe(
@@ -42,7 +65,7 @@ describe("autoDetectProblem", () => {
   it("sends a failing Whisper model to a multilingual Whisper model, not to Whisper in general", () => {
     const problem = autoDetectProblem({ provider: "whisper_cpp", localModel: "ggml-distil-large-v3.bin" }, {}, "Them");
     expect(problem).toBe(
-      "Auto-detect doesn't work with the distil-large-v3 Whisper model, used for Them. " +
+      "Auto-detect doesn't work with the Distil Large v3 Whisper model, used for Them. " +
       "Choose a multilingual Whisper model (Tiny, Base, Small, Medium or Large v3 Turbo), or pick a language."
     );
   });

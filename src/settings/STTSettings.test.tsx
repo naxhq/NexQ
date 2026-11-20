@@ -53,7 +53,7 @@ it("checks the Them side too, and says nothing when both can detect the language
     meetingAudioConfig: { ...config, you: { ...config.you, stt_provider: "deepgram" }, them: { ...config.them, stt_provider: "azure_speech" } },
   });
   render(<STTSettings />);
-  expect(screen.getByText(/doesn't work with Azure Speech, used for Them/)).toBeInTheDocument();
+  expect(screen.getByText(/doesn't work with Azure Speech, used for Them\..*\(set in Audio & Devices\)$/)).toBeInTheDocument();
   expect(screen.queryByText(/used for You/)).toBeNull();
 
   cleanup();
