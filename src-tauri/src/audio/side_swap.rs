@@ -8,13 +8,14 @@
 //! audio for that side isn't transcribed during the swap, but it is still
 //! recorded and measured, and the other side's provider keeps being fed.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Notify};
 
 use crate::stt::provider::{STTProvider, TranscriptResult};
+use crate::stt::segment_accumulator::{AccumulatorOutput, SegmentAccumulator};
 
 /// One side of the meeting. "Them" is the room in an in-person meeting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,15 +47,69 @@ const TAKE_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub type ResultTx = mpsc::Sender<TranscriptResult>;
 
+/// What a side's transcript task learns about swaps of its provider.
+#[derive(Default)]
+pub struct SwapSignal {
+    generation: AtomicU32,
+    flush: Notify,
+}
+
+impl SwapSignal {
+    /// How many times the side's provider has been swapped. A side that keeps
+    /// provider-made segment ids puts it in its ids, so the new provider's
+    /// first lines don't reuse the old one's.
+    pub fn generation(&self) -> u32 {
+        self.generation.load(Ordering::Relaxed)
+    }
+
+    /// The old provider has stopped: new ids from now on, and the line the
+    /// transcript task has open ends as a final line of its own.
+    pub fn swapped(&self) {
+        self.generation.fetch_add(1, Ordering::Relaxed);
+        self.flush.notify_one();
+    }
+}
+
+/// Run a side's transcript task until its result channel closes: feed every
+/// result to the accumulator, and end the open line when the side's provider
+/// is swapped (after the results the old provider sent while stopping, and
+/// before anything the new one sends). The caller flushes at the end.
+pub async fn pump_accumulated(
+    rx: &mut mpsc::Receiver<TranscriptResult>,
+    signal: &SwapSignal,
+    accumulator: &mut SegmentAccumulator,
+    pause_threshold: &AtomicU64,
+    mut on_result: impl FnMut(&TranscriptResult),
+    mut on_output: impl FnMut(AccumulatorOutput),
+) {
+    loop {
+        tokio::select! {
+            biased;
+            received = rx.recv() => {
+                let Some(result) = received else { break };
+                on_result(&result);
+                // Live-update the threshold from settings changes.
+                accumulator.set_pause_threshold(pause_threshold.load(Ordering::Relaxed));
+                for output in accumulator.feed_result(result) {
+                    on_output(output);
+                }
+            }
+            _ = signal.flush.notified() => {
+                if let Some(output) = accumulator.flush() {
+                    on_output(output);
+                }
+            }
+        }
+    }
+}
+
 /// A side's provider, handed over by the audio loop together with what a new provider needs.
 pub struct TakenSide<P> {
     pub provider: P,
     /// The side's result channel; the transcript task of the side reads its other end.
     pub tx: ResultTx,
-    /// Bumped by the command once the old provider has stopped. The transcript
-    /// task of a side that keeps provider-made segment ids puts it in its ids,
-    /// so the new provider's first lines don't reuse the old one's ids.
-    pub generation: Arc<AtomicU32>,
+    /// Told by the command once the old provider has stopped.
+    pub signal: Arc<SwapSignal>,
 }
 
 /// A message to the audio loop.
@@ -74,11 +129,11 @@ pub type SideSwapSender = mpsc::UnboundedSender<SideSwapMsg<Box<dyn STTProvider>
 pub fn handle_take<P>(
     provider: &mut Option<P>,
     tx: Option<&ResultTx>,
-    generation: &Arc<AtomicU32>,
+    signal: &Arc<SwapSignal>,
     reply: oneshot::Sender<Option<TakenSide<P>>>,
 ) {
     let taken = match (provider.take(), tx) {
-        (Some(p), Some(tx)) => Some(TakenSide { provider: p, tx: tx.clone(), generation: generation.clone() }),
+        (Some(p), Some(tx)) => Some(TakenSide { provider: p, tx: tx.clone(), signal: signal.clone() }),
         (p, _) => {
             *provider = p;
             None
@@ -129,7 +184,7 @@ pub async fn swap_side_provider(
     if sender.send(SideSwapMsg::Take { side, reply }).is_err() {
         return SwapOutcome::NotRunning;
     }
-    let TakenSide { provider: mut old, tx, generation } =
+    let TakenSide { provider: mut old, tx, signal } =
         match tokio::time::timeout(TAKE_TIMEOUT, answer).await {
             Ok(Ok(Some(taken))) => taken,
             _ => return SwapOutcome::NotRunning,
@@ -139,7 +194,7 @@ pub async fn swap_side_provider(
         log::warn!("{:?} STT stop before a language swap: {}", side, e);
     }
     drop(old);
-    generation.fetch_add(1, Ordering::Relaxed);
+    signal.swapped();
 
     let muted = muted_flag.load(Ordering::Relaxed);
     new_provider.set_muted(muted);
@@ -218,7 +273,7 @@ mod tests {
     struct FakeLoop {
         providers: [Option<Box<dyn STTProvider>>; 2],
         txs: [Option<ResultTx>; 2],
-        generations: [Arc<AtomicU32>; 2],
+        signals: [Arc<SwapSignal>; 2],
         muted_applied: [bool; 2],
     }
 
@@ -229,7 +284,7 @@ mod tests {
             FakeLoop {
                 providers: [you, them],
                 txs: [have[0].then(|| tx.clone()), have[1].then(|| tx.clone())],
-                generations: [Arc::new(AtomicU32::new(0)), Arc::new(AtomicU32::new(0))],
+                signals: [Arc::default(), Arc::default()],
                 muted_applied: [false, false],
             }
         }
@@ -238,7 +293,7 @@ mod tests {
             match msg {
                 SideSwapMsg::Take { side, reply } => {
                     let i = side.index();
-                    handle_take(&mut self.providers[i], self.txs[i].as_ref(), &self.generations[i], reply);
+                    handle_take(&mut self.providers[i], self.txs[i].as_ref(), &self.signals[i], reply);
                 }
                 SideSwapMsg::Put { side, provider, muted } => {
                     let i = side.index();
@@ -285,8 +340,8 @@ mod tests {
         assert_eq!(events(&log), ["them_old:stop", "them_new:muted=false", "them_new:start"]);
         assert_eq!(fake.providers[Side::Them.index()].as_ref().unwrap().provider_name(), "them_new");
         assert_eq!(fake.providers[Side::You.index()].as_ref().unwrap().provider_name(), "you_old");
-        assert_eq!(fake.generations[Side::Them.index()].load(Ordering::Relaxed), 1);
-        assert_eq!(fake.generations[Side::You.index()].load(Ordering::Relaxed), 0);
+        assert_eq!(fake.signals[Side::Them.index()].generation(), 1);
+        assert_eq!(fake.signals[Side::You.index()].generation(), 0);
     }
 
     #[tokio::test]
@@ -346,6 +401,105 @@ mod tests {
         drop(answer);
         fake.handle(SideSwapMsg::Take { side: Side::You, reply });
         assert_eq!(fake.providers[0].as_ref().unwrap().provider_name(), "you_old");
+    }
+
+    fn final_result(text: &str, at: u64) -> TranscriptResult {
+        TranscriptResult {
+            text: text.into(),
+            is_final: true,
+            confidence: 0.9,
+            timestamp_ms: at,
+            speaker: None,
+            language: None,
+            segment_id: None,
+            duration_ms: Some(500),
+            speaker_tag: None,
+            turn: None,
+        }
+    }
+
+    /// Let the spawned transcript tasks work through what they were sent.
+    async fn settle() {
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// Run a side's transcript task over a channel until it is closed; returns its outputs.
+    async fn run_side(
+        mut rx: mpsc::Receiver<TranscriptResult>,
+        signal: Arc<SwapSignal>,
+        out: Arc<Mutex<Vec<(String, bool)>>>,
+    ) {
+        let pause = AtomicU64::new(60_000);
+        let mut acc = SegmentAccumulator::new(60_000);
+        let sink = out.clone();
+        pump_accumulated(&mut rx, &signal, &mut acc, &pause, |_| {}, move |o| {
+            sink.lock().unwrap().push((format!("{}:{}", o.id, o.text), o.is_final));
+        })
+        .await;
+        if let Some(o) = acc.flush() {
+            out.lock().unwrap().push((format!("{}:{}", o.id, o.text), o.is_final));
+        }
+    }
+
+    #[tokio::test]
+    async fn the_open_line_of_a_swapped_side_ends_before_the_new_providers_first_line() {
+        let (tx, rx) = mpsc::channel(8);
+        let signal: Arc<SwapSignal> = Arc::default();
+        let out: Arc<Mutex<Vec<(String, bool)>>> = Default::default();
+        let task = tokio::spawn(run_side(rx, signal.clone(), out.clone()));
+
+        // The old provider's line is open (a long pause threshold keeps it open).
+        tx.send(final_result("hello there", 1_000)).await.unwrap();
+        // Swapped: the old provider's last result is already queued, then the signal.
+        tx.send(final_result("how are you", 1_600)).await.unwrap();
+        settle().await; // the task has taken what the old provider sent
+        signal.swapped();
+        settle().await;
+        // The new provider's first words, right after.
+        tx.send(final_result("hola amigo", 2_200)).await.unwrap();
+        drop(tx);
+        task.await.unwrap();
+
+        let lines: Vec<(String, bool)> = out.lock().unwrap().iter().filter(|(_, f)| *f).cloned().collect();
+        let finals: Vec<&str> = lines.iter().map(|(l, _)| l.as_str()).collect();
+        // The old line closed with everything the old provider said, on its own id...
+        assert!(finals.iter().any(|l| l.starts_with("acc_1:") && l.contains("hello there") && l.contains("how are you")), "{finals:?}");
+        // ...and the new provider's words are another line.
+        assert!(finals.iter().any(|l| l.starts_with("acc_2:") && l.ends_with("hola amigo")), "{finals:?}");
+        assert!(!finals.iter().any(|l| l.contains("how are you") && l.contains("hola amigo")), "{finals:?}");
+    }
+
+    #[tokio::test]
+    async fn swapping_one_side_leaves_the_other_sides_open_line_open() {
+        let (you_tx, you_rx) = mpsc::channel(8);
+        let (them_tx, them_rx) = mpsc::channel(8);
+        let (you_signal, them_signal): (Arc<SwapSignal>, Arc<SwapSignal>) = (Arc::default(), Arc::default());
+        let (you_out, them_out): (Arc<Mutex<Vec<(String, bool)>>>, Arc<Mutex<Vec<(String, bool)>>>) =
+            (Default::default(), Default::default());
+        let you_task = tokio::spawn(run_side(you_rx, you_signal.clone(), you_out.clone()));
+        let them_task = tokio::spawn(run_side(them_rx, them_signal.clone(), them_out.clone()));
+
+        you_tx.send(final_result("you open line", 1_000)).await.unwrap();
+        them_tx.send(final_result("them open line", 1_000)).await.unwrap();
+        settle().await;
+        // Only Them is swapped.
+        them_signal.swapped();
+        settle().await;
+        // Both sides then get their next words: Them starts a new line, You's line goes on.
+        you_tx.send(final_result("you more", 1_400)).await.unwrap();
+        them_tx.send(final_result("them new words", 1_400)).await.unwrap();
+        settle().await;
+        let last_id = |out: &Arc<Mutex<Vec<(String, bool)>>>| {
+            out.lock().unwrap().last().unwrap().0.split(':').next().unwrap().to_string()
+        };
+        assert_eq!(last_id(&them_out), "acc_2", "Them's open line ended at the swap");
+        assert_eq!(last_id(&you_out), "acc_1", "You's open line is still open");
+
+        drop((you_tx, them_tx));
+        you_task.await.unwrap();
+        them_task.await.unwrap();
     }
 
     #[test]

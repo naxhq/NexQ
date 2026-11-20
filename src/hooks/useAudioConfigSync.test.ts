@@ -5,6 +5,7 @@ import { setPartyLanguage, startCapturePerParty, stopCapture } from "../lib/ipc"
 import type { MeetingAudioConfig } from "../lib/types";
 import { useConfigStore } from "../stores/configStore";
 import { useMeetingStore } from "../stores/meetingStore";
+import { useTranscriptStore } from "../stores/transcriptStore";
 import { autoDetectProblem } from "../lib/sttLanguages";
 import { useAudioConfigSync } from "./useAudioConfigSync";
 
@@ -160,6 +161,21 @@ it("restarts only one side's speech-to-text for a language-only change", async (
   // What runs now is the new config: going back to it later is no change.
   await change(spanishBoth);
   expect(setPartyLanguage).toHaveBeenCalledTimes(2);
+});
+
+it("ends the swapped side's open line on screen and leaves the other side's alone", async () => {
+  const line = (id: string, speaker: "User" | "Them") => ({
+    id, text: id, speaker, timestamp_ms: 1, is_final: false, confidence: 1,
+  });
+  useTranscriptStore.getState().clearSegments();
+  useTranscriptStore.getState().updateInterimSegment(line("you_1_acc_1", "User"));
+  useTranscriptStore.getState().updateInterimSegment(line("them_1_acc_1", "Them"));
+  renderHook(() => useAudioConfigSync());
+
+  await change(spanishThem);
+  const lines = useTranscriptStore.getState().segments;
+  expect(lines.map((s) => [s.id, s.is_final])).toEqual([["you_1_acc_1", false], ["them_1_acc_1", true]]);
+  useTranscriptStore.getState().clearSegments();
 });
 
 it("tells Rust the room is an in-person meeting's other side", async () => {

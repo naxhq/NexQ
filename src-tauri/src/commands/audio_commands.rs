@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tauri::{command, AppHandle, Emitter, Manager};
@@ -9,7 +9,7 @@ use crate::audio::device_manager;
 use crate::audio::recording_mixer::{wall_clock_ms, CaptureTimes, MixSide, RecordingMixer};
 use crate::audio::session_monitor;
 use crate::audio::vad::{calculate_peak, calculate_rms, VoiceActivityDetector};
-use crate::audio::side_swap::{self, Side, SideSwapMsg, SwapOutcome};
+use crate::audio::side_swap::{self, Side, SideSwapMsg, SwapOutcome, SwapSignal};
 use crate::audio::{AudioCaptureManager, AudioLevel, AudioSource};
 use crate::stt::provider::STTProvider;
 use crate::stt::segment_accumulator::AccumulatorOutput;
@@ -1236,10 +1236,10 @@ pub async fn start_capture_per_party(
         }
     }
 
-    // Bumped when a side's provider is swapped alone (set_party_language), so the
-    // new provider's own segment ids don't reuse the old one's.
-    let you_generation = Arc::new(AtomicU32::new(0));
-    let them_generation = Arc::new(AtomicU32::new(0));
+    // Told when a side's provider is swapped alone (set_party_language): the side's
+    // open line ends, and the new provider's own segment ids don't reuse the old one's.
+    let you_signal = Arc::new(SwapSignal::default());
+    let them_signal = Arc::new(SwapSignal::default());
 
     // Unique session prefix to avoid segment ID collisions across mid-meeting restarts.
     // Each restart of start_capture_per_party gets a distinct prefix, so segment IDs
@@ -1259,7 +1259,7 @@ pub async fn start_capture_per_party(
         let use_accumulator = you.stt_provider != "web_speech"
             && you.stt_provider != "whisper_cpp";
         let mut tally = TranscriptTally::new("You", &you.stt_provider);
-        let you_generation_for_ids = you_generation.clone();
+        let you_signal_for_task = you_signal.clone();
         let pause_threshold = if use_accumulator {
             Some(app.state::<AppState>().pause_threshold_ms.clone())
         } else {
@@ -1273,13 +1273,13 @@ pub async fn start_capture_per_party(
                 let mut accumulator =
                     crate::stt::segment_accumulator::SegmentAccumulator::new(threshold);
 
-                while let Some(result) = you_stt_rx.recv().await {
-                    tally.record(result.is_final);
-                    let current_threshold = pause_threshold.load(Ordering::Relaxed);
-                    accumulator.set_pause_threshold(current_threshold);
-
-                    let outputs = accumulator.feed_result(result);
-                    for output in outputs {
+                side_swap::pump_accumulated(
+                    &mut you_stt_rx,
+                    &you_signal_for_task,
+                    &mut accumulator,
+                    &pause_threshold,
+                    |result| tally.record(result.is_final),
+                    |output| {
                         let event_name = if output.is_final {
                             "transcript_final"
                         } else {
@@ -1290,8 +1290,9 @@ pub async fn start_capture_per_party(
                             "segment": accumulator_segment_json(&seg_id, "User", &output)
                         });
                         let _ = stt_app.emit(event_name, &payload);
-                    }
-                }
+                    },
+                )
+                .await;
 
                 // Flush remaining accumulated segment on meeting end
                 if let Some(output) = accumulator.flush() {
@@ -1306,7 +1307,7 @@ pub async fn start_capture_per_party(
                 let mut counter = 0u64;
                 while let Some(result) = you_stt_rx.recv().await {
                     tally.record(result.is_final);
-                    let prefix = side_swap::generation_prefix(&prefix, you_generation_for_ids.load(Ordering::Relaxed));
+                    let prefix = side_swap::generation_prefix(&prefix, you_signal_for_task.generation());
                     let seg_id = if let Some(ref custom_id) = result.segment_id {
                         format!("you_{}_{}", prefix, custom_id)
                     } else {
@@ -1342,20 +1343,20 @@ pub async fn start_capture_per_party(
         let intel_arc = app.state::<AppState>().intelligence.clone();
         let pause_threshold = app.state::<AppState>().pause_threshold_ms.clone();
         let mut tally = TranscriptTally::new("Them", &them.stt_provider);
+        let them_signal_for_task = them_signal.clone();
         tokio::spawn(async move {
             use std::sync::atomic::Ordering;
             let threshold = pause_threshold.load(Ordering::Relaxed);
             let mut accumulator =
                 crate::stt::segment_accumulator::SegmentAccumulator::new(threshold);
 
-            while let Some(result) = them_stt_rx.recv().await {
-                tally.record(result.is_final);
-                // Live-update threshold from settings changes
-                let current_threshold = pause_threshold.load(Ordering::Relaxed);
-                accumulator.set_pause_threshold(current_threshold);
-
-                let outputs = accumulator.feed_result(result);
-                for output in outputs {
+            side_swap::pump_accumulated(
+                &mut them_stt_rx,
+                &them_signal_for_task,
+                &mut accumulator,
+                &pause_threshold,
+                |result| tally.record(result.is_final),
+                |output| {
                     let event_name = if output.is_final {
                         "transcript_final"
                     } else {
@@ -1380,8 +1381,9 @@ pub async fn start_capture_per_party(
                             }
                         }
                     }
-                }
-            }
+                },
+            )
+            .await;
 
             // Flush remaining accumulated segment on meeting end
             if let Some(output) = accumulator.flush() {
@@ -1502,9 +1504,9 @@ pub async fn start_capture_per_party(
                 Some(msg) = swap_rx.recv() => {
                     match msg {
                         SideSwapMsg::Take { side: Side::You, reply } => side_swap::handle_take(
-                            &mut you_stt_provider, you_stt_tx.as_ref(), &you_generation, reply),
+                            &mut you_stt_provider, you_stt_tx.as_ref(), &you_signal, reply),
                         SideSwapMsg::Take { side: Side::Them, reply } => side_swap::handle_take(
-                            &mut them_stt_provider, them_stt_tx.as_ref(), &them_generation, reply),
+                            &mut them_stt_provider, them_stt_tx.as_ref(), &them_signal, reply),
                         SideSwapMsg::Put { side: Side::You, provider, muted } => side_swap::handle_put(
                             &mut you_stt_provider, &mut you_muted_applied, provider, muted),
                         SideSwapMsg::Put { side: Side::Them, provider, muted } => side_swap::handle_put(

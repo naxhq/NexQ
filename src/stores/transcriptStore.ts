@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { TranscriptSegment } from "../lib/types";
+import type { Speaker, TranscriptSegment } from "../lib/types";
 
 /**
  * How long interim text stays without an update. Not every interim gets a
@@ -21,11 +21,21 @@ interface TranscriptState {
   appendSegment: (segment: TranscriptSegment) => void;
   updateInterimSegment: (segment: TranscriptSegment) => void;
   finalizeAllInterim: () => void;
+  finalizeSideInterim: (speaker: Speaker) => void;
   dropStaleInterim: () => void;
   clearSegments: () => void;
   setSearchQuery: (query: string) => void;
   setAutoScroll: (auto: boolean) => void;
   reassignSpeaker: (fromId: string, toId: string) => void;
+}
+
+/** A line with its interim words committed. */
+function finalizeLine(s: TranscriptSegment): TranscriptSegment {
+  return s.is_final
+    ? s.pending_text === undefined
+      ? s
+      : { ...s, text: s.pending_text, pending_text: undefined }
+    : { ...s, is_final: true };
 }
 
 export const useTranscriptStore = create<TranscriptState>((set) => ({
@@ -62,15 +72,12 @@ export const useTranscriptStore = create<TranscriptState>((set) => ({
     });
   },
 
-  finalizeAllInterim: () =>
+  finalizeAllInterim: () => set((state) => ({ segments: state.segments.map(finalizeLine) })),
+
+  // Only the lines of one speaker: the other side keeps its open lines.
+  finalizeSideInterim: (speaker) =>
     set((state) => ({
-      segments: state.segments.map((s) =>
-        s.is_final
-          ? s.pending_text === undefined
-            ? s
-            : { ...s, text: s.pending_text, pending_text: undefined }
-          : { ...s, is_final: true }
-      ),
+      segments: state.segments.map((s) => (s.speaker === speaker ? finalizeLine(s) : s)),
     })),
 
   dropStaleInterim: () =>
