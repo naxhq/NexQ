@@ -153,6 +153,16 @@ pub fn sources_note(t: SourceToggles) -> String {
     )
 }
 
+/// [`sources_note`] without its header line, for `compose_delta`'s extra
+/// sections (which add the header themselves).
+pub fn sources_note_body(t: SourceToggles) -> String {
+    sources_note(t)
+        .strip_prefix(SOURCES_NOTE_HEADER)
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
 /// A provider config naming only the type; the caller adds the API key.
 pub fn fallback_config(provider: &str) -> ProviderConfig {
     ProviderConfig {
@@ -377,6 +387,31 @@ impl MeetingSessions {
         *epochs.entry(scope.clone()).or_insert(0) += 1;
         self.records.lock().unwrap().retain(|key, _| key.scope != *scope);
         self.last_answer_sources.lock().unwrap().remove(scope);
+    }
+
+    /// Forget the with-sources records of `scope` (the sources changed in
+    /// settings): the next request builds them again from the new settings.
+    /// Plain records and the scope's epoch stay.
+    pub fn clear_sources(&self, scope: &SessionScope) {
+        self.records
+            .lock()
+            .unwrap()
+            .retain(|key, _| !(key.scope == *scope && key.with_sources));
+    }
+
+    /// Every scope that has a with-sources record.
+    pub fn scopes_with_sources(&self) -> Vec<SessionScope> {
+        let mut scopes: Vec<SessionScope> = self
+            .records
+            .lock()
+            .unwrap()
+            .keys()
+            .filter(|key| key.with_sources)
+            .map(|key| key.scope.clone())
+            .collect();
+        scopes.sort();
+        scopes.dedup();
+        scopes
     }
 
     /// Note whether the latest answer of `scope` used sources.
@@ -1910,6 +1945,34 @@ mod tests {
         sessions.set_last_answer(&live(), true);
         sessions.remove_scope(&live());
         assert!(!sessions.last_answer_with_sources(&live()));
+    }
+
+    #[test]
+    fn sources_note_body_drops_the_header() {
+        assert_eq!(
+            sources_note_body(SourceToggles { notes: false, tools: true }),
+            "Notes: off. Tools: on. Use only the sources marked on."
+        );
+    }
+
+    #[test]
+    fn clear_sources_drops_only_the_with_sources_records_of_that_scope() {
+        let sessions = MeetingSessions::default();
+        let other = SessionScope::Live("m2".into());
+        for scope in [live(), other.clone()] {
+            for with in [false, true] {
+                let key = SessionKey { scope: scope.clone(), tier: Tier::Fast, with_sources: with };
+                sessions.insert_if_absent(key, SessionRecord::default());
+            }
+        }
+        assert_eq!(sessions.scopes_with_sources(), vec![live(), other.clone()]);
+        let epoch = sessions.epoch(&live());
+        sessions.clear_sources(&live());
+        assert!(sessions.contains(&SessionKey::plain(live(), Tier::Fast)));
+        assert!(!sessions.contains(&SessionKey::sources(live(), Tier::Fast)));
+        assert!(sessions.contains(&SessionKey::sources(other.clone(), Tier::Fast)));
+        assert_eq!(sessions.epoch(&live()), epoch, "not a close");
+        assert_eq!(sessions.scopes_with_sources(), vec![other]);
     }
 
     #[test]

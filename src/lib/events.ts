@@ -15,6 +15,7 @@ import type {
   OllamaPullProgressEvent,
   QuestionDetectedEvent,
   RagIndexProgressEvent,
+  StreamActivityEvent,
   StreamEndEvent,
   StreamErrorEvent,
   StreamSourcesEvent,
@@ -79,6 +80,15 @@ export function onStreamThinking(
   handler: (event: StreamThinkingEvent) => void
 ): Promise<UnlistenFn> {
   return listen<StreamThinkingEvent>("llm_stream_thinking", (e) =>
+    handler(e.payload)
+  );
+}
+
+/** A line about the sources an answer is using, or why they were not (`llm_stream_activity`). */
+export function onStreamActivity(
+  handler: (event: StreamActivityEvent) => void
+): Promise<UnlistenFn> {
+  return listen<StreamActivityEvent>("llm_stream_activity", (e) =>
     handler(e.payload)
   );
 }

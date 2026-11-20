@@ -37,6 +37,7 @@ function session(over: Partial<AgentSessionStatus> = {}): AgentSessionStatus {
     detail: null,
     error_kind: null,
     with_sources: false,
+    sources_notice: null,
     usage: { ...EMPTY_USAGE, input_tokens: 12345, output_tokens: 678, cost_usd: 0.1234 },
     ...over,
   };

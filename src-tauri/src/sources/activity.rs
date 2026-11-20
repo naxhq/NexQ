@@ -28,6 +28,44 @@ pub struct SourceActivity {
     pub chip: Option<SourceChip>,
 }
 
+/// A line about the sources themselves (no chip).
+pub fn notice(label: impl Into<String>) -> SourceActivity {
+    SourceActivity { kind: SourceKind::Notice, label: label.into(), chip: None }
+}
+
+/// What a with-sources session came up without: servers that did not start
+/// (`failed_keys`, named by `server_labels`) and sources left out at build time
+/// (`left_out` reasons). `None` when nothing is missing.
+pub fn sources_degraded_notice(
+    server_labels: &[(String, String)],
+    failed_keys: &[String],
+    left_out: &[String],
+) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if !failed_keys.is_empty() {
+        let names: Vec<&str> = failed_keys
+            .iter()
+            .map(|k| {
+                server_labels
+                    .iter()
+                    .find(|(key, _)| key == k)
+                    .map(|(_, label)| label.as_str())
+                    .unwrap_or(k.as_str())
+            })
+            .collect();
+        let list = match names.split_last() {
+            Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+            _ => names.join(""),
+        };
+        let (verb, pronoun) = if names.len() == 1 { ("didn't", "its tools aren't") } else { ("didn't", "their tools aren't") };
+        parts.push(format!("{list} {verb} start, so {pronoun} available"));
+    }
+    if !left_out.is_empty() {
+        parts.push(format!("Left out: {}", left_out.join("; ")));
+    }
+    (!parts.is_empty()).then(|| parts.join(". "))
+}
+
 /// One tool use as an activity line, plus the chip it leaves behind.
 /// `server_labels` maps an MCP server key to the name the user gave it.
 pub fn describe_tool_use(t: &ToolUse, server_labels: &[(String, String)]) -> SourceActivity {
@@ -125,6 +163,28 @@ mod tests {
         assert_eq!(r.label, "Reading a b.md");
         let none = describe_tool_use(&use_of("Read", json!({})), &[]);
         assert_eq!((none.label.as_str(), none.chip), ("Reading a note", None));
+    }
+
+    #[test]
+    fn degraded_notice_names_failed_servers_and_left_out_sources() {
+        let labels = vec![("mira".to_string(), "Mira".to_string()), ("wiki".to_string(), "Wiki".to_string())];
+        assert_eq!(sources_degraded_notice(&labels, &[], &[]), None);
+        assert_eq!(
+            sources_degraded_notice(&labels, &["mira".into()], &[]).as_deref(),
+            Some("Mira didn't start, so its tools aren't available")
+        );
+        assert_eq!(
+            sources_degraded_notice(&labels, &["mira".into(), "wiki".into()], &[]).as_deref(),
+            Some("Mira and Wiki didn't start, so their tools aren't available")
+        );
+        assert_eq!(
+            sources_degraded_notice(&labels, &["other".into()], &["Vault: folder not found".into(), "B: x".into()]).as_deref(),
+            Some("other didn't start, so its tools aren't available. Left out: Vault: folder not found; B: x")
+        );
+        assert_eq!(
+            sources_degraded_notice(&labels, &[], &["Vault: folder not found".into()]).as_deref(),
+            Some("Left out: Vault: folder not found")
+        );
     }
 
     #[test]

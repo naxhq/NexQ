@@ -252,6 +252,7 @@ describe("ClaudeCliSettings", () => {
       detail: null,
       error_kind: null,
       with_sources: false,
+      sources_notice: null,
       usage: { ...EMPTY_USAGE },
     };
     renderSettings();

@@ -434,6 +434,12 @@ export interface AgentSessionStatus {
   error_kind: string | null;
   /** The with-sources session (notes folders, MCP tools), not the plain one. */
   with_sources: boolean;
+  /**
+   * For a running with-sources session that came up without something: the
+   * servers that did not start and the sources left out ("Mira didn't start,
+   * so its tools aren't available"). `null` when all is in.
+   */
+  sources_notice: string | null;
   /** Cumulative usage of the whole scope (all tiers). */
   usage: SessionUsage;
 }
@@ -781,6 +787,12 @@ export interface GenerateAssistOptions {
   scope?: ResolvedScope | null;
   /** Images pasted into Ask; only a Claude (subscription) answer can use them. */
   images?: ImageAttachment[];
+  /**
+   * The Notes / Tools pills as they are when the user asks. Leave it out for an
+   * automatic answer (Auto-Answer, summaries, action items, bookmark
+   * suggestions): those never use sources.
+   */
+  sources?: SourceToggles;
 }
 
 /** One image sent with a question. Mirrors Rust `cli_agent::protocol::ImageAttachment`. */
@@ -1269,4 +1281,32 @@ export interface ClaudeCodeMcpServer {
   needs_sign_in: boolean;
   /** Why it can't be imported at all (SSE, a malformed entry). */
   unsupported: string | null;
+}
+
+/** Mirrors Rust `sources::activity::SourceKind`. */
+export type SourceKind = "notes" | "tool" | "notice";
+
+/** A source an answer used, shown as a chip at its end. */
+export interface SourceChip {
+  kind: SourceKind;
+  label: string;
+  /** The full path of a note, so the chip can open it (`openSourceFile`). */
+  path: string | null;
+}
+
+/** One line about the sources while an answer streams, with the chip it leaves. */
+export interface SourceActivity {
+  kind: SourceKind;
+  label: string;
+  chip: SourceChip | null;
+}
+
+/**
+ * `llm_stream_activity`: an activity line of the answer `request_id`. It can
+ * arrive before that answer's `llm_stream_start` (a notice that the sources
+ * could not be used), so hold it by request id.
+ */
+export interface StreamActivityEvent {
+  request_id: string | null;
+  activity: SourceActivity;
 }

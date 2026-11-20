@@ -19,7 +19,7 @@ use super::context::DeltaCursor;
 use super::detect::find_claude_binary;
 use super::models::{effective_effort, ModelCatalog};
 use super::protocol::{AgentErrorKind, ImageAttachment, TurnResult};
-use super::session::{AgentError, ClaudeSession, InitInfo, SessionTimeouts};
+use super::session::{failed_mcp_servers, AgentError, ClaudeSession, InitInfo, SessionTimeouts};
 use crate::llm::provider::CancelToken;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -253,6 +253,11 @@ pub struct AgentSessionStatus {
     /// tools), not the plain one.
     #[serde(default)]
     pub with_sources: bool,
+    /// For a running with-sources session that came up without something: the
+    /// servers that did not start and the sources left out ("Mira didn't
+    /// start, so its tools aren't available"). `None` when all is in.
+    #[serde(default)]
+    pub sources_notice: Option<String>,
     /// Cumulative usage of the whole scope (all tiers).
     pub usage: SessionUsage,
 }
@@ -434,6 +439,9 @@ struct Entry {
     in_flight: usize,
     /// Turns finished on this session (any outcome).
     turns: usize,
+    /// What a with-sources session came up without (see
+    /// [`AgentSessionStatus::sources_notice`]).
+    sources_notice: Option<String>,
 }
 
 pub struct AgentSessionManager {
@@ -544,6 +552,14 @@ impl AgentSessionManager {
             return Err(shut_down_error());
         }
 
+        let sources_notice = match (&init.sources, key.with_sources) {
+            (Some(launch), true) => crate::sources::activity::sources_degraded_notice(
+                &launch.server_labels,
+                &failed_mcp_servers(&handle.init_info()),
+                &launch.left_out,
+            ),
+            _ => None,
+        };
         self.cursors.lock().unwrap().insert(
             key.clone(),
             Arc::new(AsyncMutex::new(DeltaCursor::default())),
@@ -557,6 +573,7 @@ impl AgentSessionManager {
                 last_used: Instant::now(),
                 in_flight: 0,
                 turns: 0,
+                sources_notice,
             },
         );
         self.emit(key, SessionState::Ready, &handle.model(), None);
@@ -780,6 +797,11 @@ impl AgentSessionManager {
         }
     }
 
+    /// What `key`'s running with-sources session came up without, if anything.
+    pub fn sources_notice(&self, key: &SessionKey) -> Option<String> {
+        self.entries.lock().unwrap().get(key).and_then(|e| e.sources_notice.clone())
+    }
+
     /// Turns finished on `key`'s current session (0 when none is running).
     pub fn turns(&self, key: &SessionKey) -> usize {
         self.entries
@@ -871,6 +893,7 @@ impl AgentSessionManager {
             detail: error.as_ref().map(|e| e.text.clone()),
             error_kind: error.map(|e| e.kind.as_str().to_string()),
             with_sources: key.with_sources,
+            sources_notice: self.sources_notice(key),
             usage: self.usage(&key.scope),
         }
     }
@@ -1211,6 +1234,7 @@ mod tests {
             detail: None,
             error_kind: None,
             with_sources: true,
+            sources_notice: None,
             usage: SessionUsage {
                 input_tokens: 1,
                 output_tokens: 2,
@@ -1360,6 +1384,22 @@ mod tests {
         let spawned = spawner.spawned.lock().unwrap();
         assert_eq!(*spawned[0].1.appended.lock().unwrap(), vec!["shared answer"]);
         assert_eq!(spawner.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_with_sources_session_reports_what_was_left_out() {
+        let (mgr, _, sink) = setup();
+        let k = SessionKey::sources(SessionScope::Live("m".into()), Tier::Fast);
+        let launch = SourcesLaunch { left_out: vec!["Vault: folder not found".into()], ..launch() };
+        mgr.ensure(&k, SessionInit { sources: Some(launch), ..init(&[]) }).await.unwrap();
+        assert_eq!(mgr.sources_notice(&k).as_deref(), Some("Left out: Vault: folder not found"));
+        let ready = sink.0.lock().unwrap().iter().find(|s| s.state == "ready").cloned().unwrap();
+        assert_eq!(ready.sources_notice.as_deref(), Some("Left out: Vault: folder not found"));
+        assert_eq!(mgr.snapshot()[0].sources_notice, ready.sources_notice);
+        // A session with everything in, and a plain one, carry none.
+        let plain = SessionKey::plain(SessionScope::Live("m".into()), Tier::Fast);
+        mgr.ensure(&plain, init_with_sources()).await.unwrap();
+        assert_eq!(mgr.sources_notice(&plain), None);
     }
 
     #[test]

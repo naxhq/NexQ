@@ -146,6 +146,12 @@ pub struct AppState {
     pub claude_fallback: Arc<Mutex<Option<CachedFallback>>>,
     /// Notes folders and MCP servers the user set up (`set_personal_sources`).
     pub personal_sources: Arc<RwLock<PersonalSourcesConfig>>,
+    /// Bumped when the saved secrets of an enabled MCP server change (they
+    /// are not in `personal_sources`, so its fingerprint can't see them).
+    pub sources_secrets_rev: Arc<AtomicU64>,
+    /// The sources (and secrets revision) the with-sources sessions were last
+    /// started or restarted for.
+    pub sources_applied: Arc<Mutex<(PersonalSourcesConfig, u64)>>,
 }
 
 /// The meeting between `start_meeting` and `end_meeting`.
@@ -205,6 +211,8 @@ impl AppState {
             live_meeting: Arc::new(Mutex::new(None)),
             claude_fallback: Arc::new(Mutex::new(None)),
             personal_sources: Arc::new(RwLock::new(PersonalSourcesConfig::default())),
+            sources_secrets_rev: Arc::new(AtomicU64::new(0)),
+            sources_applied: Arc::new(Mutex::new((PersonalSourcesConfig::default(), 0))),
         }
     }
 }

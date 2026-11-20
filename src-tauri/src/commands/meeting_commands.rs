@@ -9,10 +9,12 @@ use crate::db::meetings::{
     self, MeetingActionItem, MeetingBookmark, MeetingSpeaker, MeetingTopicSection,
     MeetingUpdate, TranscriptSegment,
 };
+use crate::llm::cli_agent::command::SourcesLaunch;
 use crate::llm::cli_agent::context::{build_preload_messages, Seg, SentLine};
 use crate::llm::cli_agent::manager::{tier_for, SessionInit, SessionKey, SessionScope, Tier};
 use crate::llm::cli_agent::protocol::AgentErrorKind;
 use crate::llm::cli_agent::routing::{self, SessionRecord, PRELOAD_MESSAGE_CHARS};
+use crate::sources::launch::build_sources_launch;
 use crate::state::{AppState, LiveMeeting};
 
 /// Global custom instructions (AI Actions settings).
@@ -25,11 +27,39 @@ fn custom_instructions(state: &AppState) -> String {
         .unwrap_or_default()
 }
 
+/// The launch of a with-sources session from the saved sources and secrets:
+/// `Ok(None)` when nothing usable is enabled, `Err` when something was enabled
+/// but every source was left out.
+pub(crate) fn current_sources_launch(state: &AppState) -> Result<Option<SourcesLaunch>, String> {
+    let cfg = state
+        .personal_sources
+        .read()
+        .map_err(|_| "Couldn't read your sources".to_string())?
+        .clone();
+    build_sources_launch(&cfg, &crate::commands::sources_commands::saved_secret)
+}
+
+/// `record` as a with-sources session starts it: the sources launch, and the
+/// system prompt followed by what each source is.
+fn with_sources_record(state: &AppState, mut record: SessionRecord) -> Result<SessionRecord, String> {
+    let launch = current_sources_launch(state)?.ok_or_else(|| "No personal sources are enabled".to_string())?;
+    record.system_prompt = format!("{}\n\n{}", record.system_prompt, launch.system_prompt_addition);
+    record.sources = Some(launch);
+    Ok(record)
+}
+
 /// What a live-meeting Claude session starts with: the scenario prompt,
 /// speaker context and custom instructions as its system prompt, and the
 /// context documents as preload when they fit the cap (else RAG mode). A
-/// Deep session (Recap) also gets the transcript so far (`finals`).
-pub(crate) fn live_session_record(state: &AppState, tier: Tier, finals: &[Seg]) -> SessionRecord {
+/// Deep session (Recap) also gets the transcript so far (`finals`). With
+/// `with_sources` it is the with-sources session's record (see
+/// [`with_sources_record`]); that fails when no source is usable.
+pub(crate) fn live_session_record(
+    state: &AppState,
+    tier: Tier,
+    finals: &[Seg],
+    with_sources: bool,
+) -> Result<SessionRecord, String> {
     let (scenario_prompt, speaker_context) = state
         .active_scenario
         .read()
@@ -47,7 +77,7 @@ pub(crate) fn live_session_record(state: &AppState, tier: Tier, finals: &[Seg]) 
         preload.extend(build_preload_messages(finals, None, PRELOAD_MESSAGE_CHARS, true));
         sent = finals.iter().map(|s| (s.id.clone(), SentLine::held(&s.text))).collect();
     }
-    SessionRecord {
+    let record = SessionRecord {
         system_prompt: routing::live_system_prompt(
             &scenario_prompt,
             &speaker_context,
@@ -57,6 +87,11 @@ pub(crate) fn live_session_record(state: &AppState, tier: Tier, finals: &[Seg]) 
         sent,
         rag_mode,
         ..SessionRecord::default()
+    };
+    if with_sources {
+        with_sources_record(state, record)
+    } else {
+        Ok(record)
     }
 }
 
@@ -104,7 +139,11 @@ pub(crate) fn past_meeting_context(state: &AppState, meeting_id: &str) -> Result
 /// any), its final transcript with segment ids, speaker names and `[mm:ss]`
 /// times (bookmark suggestions cite the ids), then the questions already
 /// asked about it with their answers, so follow-ups work.
-pub(crate) fn past_session_record(state: &AppState, meeting_id: &str) -> Result<SessionRecord, String> {
+pub(crate) fn past_session_record(
+    state: &AppState,
+    meeting_id: &str,
+    with_sources: bool,
+) -> Result<SessionRecord, String> {
     let context = past_meeting_context(state, meeting_id)?;
     let mut preload = build_preload_messages(
         &context.transcript,
@@ -113,11 +152,16 @@ pub(crate) fn past_session_record(state: &AppState, meeting_id: &str) -> Result<
         true,
     );
     preload.extend(chat_history_preload(&context.chat));
-    Ok(SessionRecord {
+    let record = SessionRecord {
         system_prompt: routing::past_system_prompt(&custom_instructions(state)),
         preload,
         ..SessionRecord::default()
-    })
+    };
+    if with_sources {
+        with_sources_record(state, record)
+    } else {
+        Ok(record)
+    }
 }
 
 /// Final segments of a stored transcript (JSON array of segments), labelled
@@ -177,7 +221,7 @@ fn past_transcript(transcript: &serde_json::Value, names: &HashMap<String, Strin
 /// session that finished starting after the close is closed again. A
 /// definite outage found at start (not installed / not logged in) marks
 /// Claude unavailable so requests go straight to the fallback.
-fn start_session_in_background(
+pub(crate) fn start_session_in_background(
     app: &AppHandle,
     key: SessionKey,
     build: impl FnOnce(&AppState) -> Result<SessionRecord, String> + Send + 'static,
@@ -214,7 +258,7 @@ fn start_session_in_background(
         let init = SessionInit {
             system_prompt: record.system_prompt,
             preload: record.preload,
-            sources: None,
+            sources: record.sources,
         };
         match state.agent_sessions.ensure(&key, init).await {
             Ok(_) => {
@@ -236,6 +280,44 @@ fn start_session_in_background(
                     state.claude_health.mark_unavailable(kind);
                 }
             }
+        }
+    });
+}
+
+/// The sources changed: forget and close every with-sources session (their
+/// records are rebuilt from the new settings on the next request), and start
+/// the running meeting's Fast one again when sources are still enabled. All in
+/// the background; plain sessions are untouched.
+pub(crate) fn restart_sources_sessions(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let mut scopes = state.meeting_sessions.scopes_with_sources();
+    for status in state.agent_sessions.snapshot().into_iter().filter(|s| s.with_sources) {
+        let scope = match (status.scope.as_str(), status.meeting_id) {
+            ("live", Some(id)) => SessionScope::Live(id),
+            ("past", Some(id)) => SessionScope::Past(id),
+            _ => continue,
+        };
+        if !scopes.contains(&scope) {
+            scopes.push(scope);
+        }
+    }
+    for scope in &scopes {
+        state.meeting_sessions.clear_sources(scope);
+    }
+    let live = state.live_meeting.lock().ok().and_then(|m| m.as_ref().map(|m| m.id.clone()));
+    let rewarm = live.filter(|_| {
+        routing::claude_is_active(&state)
+            && state.personal_sources.read().map(|c| c.has_enabled()).unwrap_or(false)
+    });
+    let sessions = state.agent_sessions.clone();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        for scope in &scopes {
+            sessions.close_sources(scope).await;
+        }
+        if let Some(id) = rewarm {
+            let key = SessionKey::sources(SessionScope::Live(id), Tier::Fast);
+            start_session_in_background(&app, key, |state| live_session_record(state, Tier::Fast, &[], true));
         }
     });
 }
@@ -264,7 +346,7 @@ pub async fn start_past_meeting_session(
     let scope = SessionScope::Past(meeting_id.clone());
     let cfg = state.claude_cli_config.read().map(|c| c.clone()).unwrap_or_default();
     let key = SessionKey::plain(scope.clone(), tier_for("MeetingSummary", &scope, &cfg));
-    start_session_in_background(&app, key, move |state| past_session_record(state, &meeting_id));
+    start_session_in_background(&app, key, move |state| past_session_record(state, &meeting_id, false));
     Ok(())
 }
 
@@ -372,8 +454,17 @@ pub async fn start_meeting(
     if routing::claude_is_active(&state) {
         let key = SessionKey::plain(SessionScope::Live(meeting.id.clone()), Tier::Fast);
         start_session_in_background(&app, key, |state| {
-            Ok(live_session_record(state, Tier::Fast, &[]))
+            live_session_record(state, Tier::Fast, &[], false)
         });
+        // The with-sources Fast session warms beside it, so the first answer
+        // with a pill on finds it ready. Deep ones start on first use.
+        let has_sources = state.personal_sources.read().map(|c| c.has_enabled()).unwrap_or(false);
+        if has_sources {
+            let key = SessionKey::sources(SessionScope::Live(meeting.id.clone()), Tier::Fast);
+            start_session_in_background(&app, key, |state| {
+                live_session_record(state, Tier::Fast, &[], true)
+            });
+        }
     }
 
     serde_json::to_string(&meeting).map_err(|e| format!("Failed to serialize meeting: {}", e))

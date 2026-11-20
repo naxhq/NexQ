@@ -27,7 +27,8 @@ use crate::sources::notes::{inspect_folder, NotesFolderInfo};
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use tauri::{command, State};
+use std::sync::atomic::Ordering;
+use tauri::{command, AppHandle, State};
 
 // ── Secret storage ──────────────────────────────────────────────────────────
 
@@ -62,6 +63,11 @@ impl SecretStore for SystemSecrets {
             log::warn!("could not delete a saved server secret ({id}): {e}");
         }
     }
+}
+
+/// A saved secret by credential id, for building a session's launch.
+pub(crate) fn saved_secret(id: &str) -> Option<String> {
+    SystemSecrets::new().get(id)
 }
 
 /// Store every secret, or none: a failure puts back what this call changed.
@@ -157,6 +163,18 @@ const SECRETS_RESET: &str = "Enter the secrets again: the server's command, URL,
 /// The saved server with this id (backend state, never the frontend's copy).
 fn saved_server(state: &AppState, id: &str) -> Option<McpServer> {
     state.personal_sources.read().ok()?.mcp_servers.iter().find(|s| s.id == id).cloned()
+}
+
+/// Put `server` into the saved sources (replace the one with its id, else
+/// add it), so backend state knows it before the webview syncs its config:
+/// its key is taken, and later checks and edits find it.
+fn upsert_saved(state: &AppState, server: &McpServer) {
+    if let Ok(mut cfg) = state.personal_sources.write() {
+        match cfg.mcp_servers.iter_mut().find(|s| s.id == server.id) {
+            Some(slot) => *slot = server.clone(),
+            None => cfg.mcp_servers.push(server.clone()),
+        }
+    }
 }
 
 /// Keys of the saved servers: what a new key must not collide with.
@@ -274,7 +292,9 @@ fn import_json(store: &dyn SecretStore, json: &str, taken_keys: &[String]) -> Re
 /// keys NexQ has saved (not a list the webview sends).
 #[command]
 pub fn import_mcp_servers_json(json: String, state: State<'_, AppState>) -> Result<Vec<McpServer>, String> {
-    import_json(&SystemSecrets::new(), &json, &saved_keys(&state))
+    let servers = import_json(&SystemSecrets::new(), &json, &saved_keys(&state))?;
+    servers.iter().for_each(|s| upsert_saved(&state, s));
+    Ok(servers)
 }
 
 /// A server in Claude Code's own config, for the import picker.
@@ -377,7 +397,9 @@ pub fn import_claude_code_mcp_servers(
     state: State<'_, AppState>,
 ) -> Result<Vec<McpServer>, String> {
     let text = read_claude_json()?.ok_or("Claude Code's config wasn't found on this PC")?;
-    import_claude_code(&SystemSecrets::new(), &text, &names, &saved_keys(&state))
+    let servers = import_claude_code(&SystemSecrets::new(), &text, &names, &saved_keys(&state))?;
+    servers.iter().for_each(|s| upsert_saved(&state, s));
+    Ok(servers)
 }
 
 // ── MCP servers: the add/edit form ──────────────────────────────────────────
@@ -596,7 +618,13 @@ pub fn save_mcp_server_form(
         )?),
         None => None,
     };
-    save_form(&SystemSecrets::new(), &form, &saved_keys(&state), old.as_ref())
+    let server = save_form(&SystemSecrets::new(), &form, &saved_keys(&state), old.as_ref())?;
+    upsert_saved(&state, &server);
+    // Saved secrets of a server that can run changed: its session must restart.
+    if server.enabled && !server.needs_sign_in {
+        state.sources_secrets_rev.fetch_add(1, Ordering::SeqCst);
+    }
+    Ok(server)
 }
 
 // ── MCP servers: check, forget ──────────────────────────────────────────────
@@ -711,6 +739,92 @@ pub fn delete_mcp_secrets(server_id: String, state: State<'_, AppState>) -> Resu
         for id in secret_ids(&server) {
             store.delete(&id);
         }
+    }
+    Ok(())
+}
+
+// ── Saving the sources, restarting sessions ─────────────────────────────────
+
+/// Do the running with-sources sessions have to be restarted for `new`?
+/// `applied` is what they were started for. Anything in the launch args or
+/// the system prompt counts (see `PersonalSourcesConfig::launch_fingerprint`),
+/// a changed label on an enabled folder included; `last_check` and the
+/// one-time notice flag do not.
+pub fn needs_sources_restart(applied: &PersonalSourcesConfig, new: &PersonalSourcesConfig) -> bool {
+    applied.launch_fingerprint() != new.launch_fingerprint()
+}
+
+/// The saved secrets of servers that lost them: a server removed from the
+/// config, and one whose key now starts somewhere else than the saved server
+/// with that key (the secrets were saved for the old target only). A change
+/// made through `save_mcp_server_form` is already in `old`, so it does not
+/// count here.
+fn secrets_to_drop(old: &PersonalSourcesConfig, new: &PersonalSourcesConfig) -> Vec<String> {
+    let mut ids = Vec::new();
+    for old_server in &old.mcp_servers {
+        let kept = new.mcp_servers.iter().find(|s| s.key == old_server.key);
+        let lost = match kept {
+            None => true,
+            Some(s) => target_changed(old_server, &s.transport, &s.env),
+        };
+        if lost {
+            ids.extend(secret_ids(old_server));
+        }
+    }
+    ids
+}
+
+/// What the webview's config must satisfy before it is saved: keys that are
+/// safe, unique and not shared by two servers.
+fn validate_sources(cfg: &PersonalSourcesConfig) -> Result<(), String> {
+    let mut seen: Vec<&str> = Vec::new();
+    for server in &cfg.mcp_servers {
+        if !is_valid_key(&server.key) {
+            return Err(format!("The server \"{}\" has an invalid key", server.label));
+        }
+        if seen.contains(&server.key.as_str()) {
+            return Err(format!("Two servers share the key \"{}\"", server.key));
+        }
+        seen.push(&server.key);
+    }
+    Ok(())
+}
+
+/// Give the backend the sources the user set up. Call it at startup and after
+/// every change (the webview owns the saved copy). It becomes the saved
+/// config every other command looks servers up in. Saved secrets of a server
+/// that was removed, or that now starts something else, are forgotten. When
+/// something that goes into a with-sources session changed (or a secret of an
+/// enabled server did), the with-sources sessions close, and the live meeting's
+/// Fast one starts again in the background; the plain sessions are untouched.
+#[command]
+pub fn set_personal_sources(
+    config: PersonalSourcesConfig,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    validate_sources(&config)?;
+    let old = {
+        let mut slot = state
+            .personal_sources
+            .write()
+            .map_err(|_| "Couldn't save your sources".to_string())?;
+        std::mem::replace(&mut *slot, config.clone())
+    };
+    let store = SystemSecrets::new();
+    for id in secrets_to_drop(&old, &config) {
+        store.delete(&id);
+    }
+
+    let restart = {
+        let rev = state.sources_secrets_rev.load(Ordering::SeqCst);
+        let mut applied = state.sources_applied.lock().map_err(|_| "Couldn't save your sources".to_string())?;
+        let restart = needs_sources_restart(&applied.0, &config) || (applied.1 != rev && config.has_enabled());
+        *applied = (config, rev);
+        restart
+    };
+    if restart {
+        crate::commands::meeting_commands::restart_sources_sessions(&app);
     }
     Ok(())
 }
@@ -1221,5 +1335,74 @@ mod tests {
         let mut blank = mira_form("node", None, "");
         blank.env.push(FormPair { name: "EXTRA_TOKEN".into(), value: "".into() });
         assert!(plan_check(Some(&old), Some(&blank), &["mira".into()], &has).is_err());
+    }
+
+    // ── saving the sources ──────────────────────────────────────────────────
+
+    #[test]
+    fn sources_restart_needed_only_when_fingerprint_changes() {
+        let folder_cfg = PersonalSourcesConfig {
+            notes_folders: vec![NotesFolder { id: "f".into(), label: "Vault".into(), path: "D:/v".into(), enabled: true }],
+            mcp_servers: vec![McpServer {
+                tools: vec![McpTool { name: "kb".into(), full_name: "mcp__m__kb".into(), allowed: true }],
+                ..saved_mira()
+            }],
+            ..Default::default()
+        };
+        let mut renamed = folder_cfg.clone();
+        renamed.notes_folders[0].label = "Renamed".into(); // it is in the system prompt
+        assert!(needs_sources_restart(&folder_cfg, &renamed));
+        let mut checked = folder_cfg.clone();
+        checked.mcp_servers[0].last_check =
+            Some(McpCheckStatus { ok: true, tool_count: 1, error: None, checked_at_ms: 3 });
+        checked.mcp_notice_seen = true;
+        assert!(!needs_sources_restart(&folder_cfg, &checked));
+        let mut switched = folder_cfg.clone();
+        switched.mcp_servers[0].tools[0].allowed = false;
+        assert!(needs_sources_restart(&folder_cfg, &switched));
+        assert!(!needs_sources_restart(&folder_cfg, &folder_cfg.clone()));
+    }
+
+    #[test]
+    fn secrets_follow_the_saved_server_they_were_saved_for() {
+        let old = PersonalSourcesConfig { mcp_servers: vec![saved_mira()], ..Default::default() };
+        // Same server (label and tools may change): nothing dropped.
+        let mut same = old.clone();
+        same.mcp_servers[0].label = "Mira 2".into();
+        assert!(secrets_to_drop(&old, &same).is_empty());
+        // Removed: its secrets go.
+        assert_eq!(secrets_to_drop(&old, &PersonalSourcesConfig::default()), vec!["mcp:mira:API_KEY".to_string()]);
+        // Pointed somewhere else behind the form's back: its secrets go.
+        let mut moved = old.clone();
+        moved.mcp_servers[0].transport = McpTransport::Stdio { command: "evil.exe".into(), args: vec![] };
+        assert_eq!(secrets_to_drop(&old, &moved), vec!["mcp:mira:API_KEY".to_string()]);
+    }
+
+    #[test]
+    fn saved_config_keys_must_be_safe_and_unique() {
+        let with = |keys: &[&str]| PersonalSourcesConfig {
+            mcp_servers: keys.iter().map(|k| McpServer { key: (*k).into(), label: (*k).into(), ..Default::default() }).collect(),
+            ..Default::default()
+        };
+        assert!(validate_sources(&with(&["mira", "wiki-2"])).is_ok());
+        assert!(validate_sources(&with(&["mira", "mira"])).is_err());
+        assert!(validate_sources(&with(&["Mira"])).is_err());
+        assert!(validate_sources(&with(&["a:b"])).is_err());
+        assert!(validate_sources(&with(&[""])).is_err());
+    }
+
+    #[test]
+    fn a_saved_form_is_known_to_the_backend_at_once() {
+        let state = AppState::new();
+        let server = saved_mira();
+        upsert_saved(&state, &server);
+        assert_eq!(saved_keys(&state), vec!["mira".to_string()]);
+        assert_eq!(saved_server(&state, "id1").unwrap().label, "Mira");
+        let mut renamed = server.clone();
+        renamed.label = "Mira 2".into();
+        upsert_saved(&state, &renamed);
+        assert_eq!(state.personal_sources.read().unwrap().mcp_servers.len(), 1);
+        assert_eq!(saved_server(&state, "id1").unwrap().label, "Mira 2");
+        assert!(saved_server(&state, "nope").is_none());
     }
 }

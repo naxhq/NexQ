@@ -171,6 +171,21 @@ pub fn emit_token(app: &AppHandle, params: &GenerationParams, token: &str, sink:
     }
 }
 
+/// Event carrying one [`StreamActivityPayload`].
+pub const STREAM_ACTIVITY_EVENT: &str = "llm_stream_activity";
+
+/// Emits `llm_stream_activity`: a line about the sources an answer is using
+/// (nothing for silent streams).
+pub fn emit_activity(app: &AppHandle, params: &GenerationParams, activity: crate::sources::activity::SourceActivity) {
+    if params.silent {
+        return;
+    }
+    let _ = app.emit(
+        STREAM_ACTIVITY_EVENT,
+        StreamActivityPayload { request_id: params.request_id.clone(), activity },
+    );
+}
+
 /// Emits `llm_stream_end` for this request (nothing for silent streams).
 pub fn emit_end(app: &AppHandle, params: &GenerationParams, total_tokens: u64, latency_ms: u64) {
     emit_end_with_usage(app, params, total_tokens, latency_ms, None);
@@ -358,6 +373,14 @@ pub struct RagChunkInfo {
 pub struct StreamTokenPayload {
     pub token: String,
     pub request_id: Option<String>,
+}
+
+/// Payload of `llm_stream_activity`: one activity line (and its chip) of an
+/// answer that uses personal sources. Mirrors `StreamActivityEvent` in types.ts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StreamActivityPayload {
+    pub request_id: Option<String>,
+    pub activity: crate::sources::activity::SourceActivity,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

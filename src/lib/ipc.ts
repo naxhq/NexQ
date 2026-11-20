@@ -44,6 +44,8 @@ import type {
   McpServer,
   McpServerForm,
   NotesFolderInfo,
+  PersonalSourcesConfig,
+  SourceToggles,
 } from "./types";
 
 // == IPC: Audio (Sub-PRD 3) ==
@@ -269,6 +271,8 @@ export async function generateAssist(
     transcriptSegments: JSON.stringify(segments),
     requestId,
     ...(opts.pastMeetingId ? { pastMeetingId: opts.pastMeetingId } : {}),
+    // No `sources`: an automatic answer, which never uses personal sources.
+    ...(opts.sources ? { sources: opts.sources } : {}),
     // No scope (or `default`): the backend keeps the action's own window.
     ...(opts.scope && opts.scope.kind !== "default" ? { scope: opts.scope } : {}),
     ...(opts.images && opts.images.length > 0 ? { images: opts.images } : {}),
@@ -941,6 +945,17 @@ export async function deleteMcpSecrets(serverId: string): Promise<void> {
   return invoke("delete_mcp_secrets", { serverId });
 }
 
+/**
+ * Give the backend the sources the user set up. Call it at startup and after
+ * every change: it is the saved config the other commands look servers up in
+ * (keys, checks, secrets), and it restarts the with-sources Claude session
+ * when something that goes into it changed. Removing a server here forgets
+ * its saved secrets. Rejects on an invalid or duplicate server key.
+ */
+export async function setPersonalSources(config: PersonalSourcesConfig): Promise<void> {
+  return invoke("set_personal_sources", { config });
+}
+
 /** Open a note with the default app; only a file inside an enabled notes folder. */
 export async function openSourceFile(path: string): Promise<void> {
   return invoke("open_source_file", { path });
@@ -953,8 +968,13 @@ export async function openSourceFile(path: string): Promise<void> {
  * `llm_stream_*` events tagged with `requestId` — subscribe before calling.
  * Resolves once the answer is saved (stop with `cancelGeneration`).
  */
-export async function askMeeting(meetingId: string, question: string, requestId: string): Promise<void> {
-  return invoke("ask_meeting", { meetingId, question, requestId });
+export async function askMeeting(
+  meetingId: string,
+  question: string,
+  requestId: string,
+  sources?: SourceToggles,
+): Promise<void> {
+  return invoke("ask_meeting", { meetingId, question, requestId, ...(sources ? { sources } : {}) });
 }
 
 /** The meeting's saved "Ask this meeting" chat, oldest first. */

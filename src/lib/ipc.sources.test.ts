@@ -6,6 +6,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import {
+  askMeeting,
   checkMcpServer,
   deleteMcpSecrets,
   importClaudeCodeMcpServers,
@@ -14,6 +15,7 @@ import {
   listClaudeCodeMcpServers,
   openSourceFile,
   saveMcpServerForm,
+  setPersonalSources,
 } from "./ipc";
 import type { McpServer, McpServerForm } from "./types";
 
@@ -58,6 +60,21 @@ describe("personal sources ipc", () => {
     };
     await saveMcpServerForm(form);
     expect(invoke).toHaveBeenLastCalledWith("save_mcp_server_form", { form });
+  });
+
+  it("saves the sources and asks a meeting with or without pills", async () => {
+    const config = { notes_folders: [], mcp_servers: [server], mcp_notice_seen: false };
+    await setPersonalSources(config);
+    expect(invoke).toHaveBeenLastCalledWith("set_personal_sources", { config });
+    await askMeeting("m", "q", "r");
+    expect(invoke).toHaveBeenLastCalledWith("ask_meeting", { meetingId: "m", question: "q", requestId: "r" });
+    await askMeeting("m", "q", "r", { notes: true, tools: true });
+    expect(invoke).toHaveBeenLastCalledWith("ask_meeting", {
+      meetingId: "m",
+      question: "q",
+      requestId: "r",
+      sources: { notes: true, tools: true },
+    });
   });
 
   it("uses the command names the backend registers", async () => {

@@ -711,6 +711,7 @@ pub fn run() {
             sources_commands::check_mcp_server,
             sources_commands::delete_mcp_secrets,
             sources_commands::open_source_file,
+            sources_commands::set_personal_sources,
             claude_cli_commands::open_claude_login_terminal,
         ])
         .build(tauri::generate_context!())
