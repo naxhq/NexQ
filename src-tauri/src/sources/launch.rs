@@ -187,6 +187,7 @@ pub fn build_sources_launch(
         server_labels: servers.iter().map(|s| (s.key.clone(), s.label.clone())).collect(),
         system_prompt_addition: sources_system_prompt(&folders, &servers),
         left_out,
+        mcp_startup_timeout_ms: None,
     }))
 }
 

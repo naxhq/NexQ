@@ -354,7 +354,8 @@ impl ClaudeSession {
         // `None` for a plain session, else whether a notes folder is among its sources.
         let sources_folders = cfg.sources.as_ref().map(|s| !s.add_dirs.is_empty());
         let server_labels = cfg.sources.as_ref().map(|s| s.server_labels.clone()).unwrap_or_default();
-        let with_sources = cfg.sources.is_some();
+        // `Some(MCP_TIMEOUT override)` for a with-sources session.
+        let with_sources = cfg.sources.as_ref().map(|s| s.mcp_startup_timeout_ms);
         let started = tokio::task::spawn_blocking(move || start_process(&bin, &args, thinking, with_sources))
             .await
             .map_err(|e| AgentError::Spawn(format!("spawn task failed: {e}")))
@@ -733,13 +734,13 @@ fn start_process(
     bin: &Path,
     args: &[String],
     thinking: bool,
-    with_sources: bool,
+    with_sources: Option<Option<u32>>,
 ) -> Result<Started, AgentError> {
     let mut cmd = Command::new(bin);
     cmd.args(args);
     configure_session_command(&mut cmd, &sandbox_dir(), thinking);
-    if with_sources {
-        configure_sources_env(&mut cmd);
+    if let Some(startup_timeout_ms) = with_sources {
+        configure_sources_env(&mut cmd, startup_timeout_ms);
     }
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())

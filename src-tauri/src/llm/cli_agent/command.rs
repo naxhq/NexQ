@@ -40,6 +40,9 @@ pub struct SourcesLaunch {
     /// Sources left out at build time, with the reason (missing folder, missing
     /// saved secret).
     pub left_out: Vec<String>,
+    /// `MCP_TIMEOUT` (ms) for this session; `None` is [`MCP_STARTUP_TIMEOUT_MS`].
+    /// Only a Check sets it: a first `npx`/`uvx` run downloads the server.
+    pub mcp_startup_timeout_ms: Option<u32>,
 }
 
 impl std::fmt::Debug for SourcesLaunch {
@@ -56,6 +59,7 @@ impl std::fmt::Debug for SourcesLaunch {
             .field("server_labels", &self.server_labels)
             .field("system_prompt_addition_len", &self.system_prompt_addition.len())
             .field("left_out", &self.left_out)
+            .field("mcp_startup_timeout_ms", &self.mcp_startup_timeout_ms)
             .finish()
     }
 }
@@ -75,8 +79,10 @@ pub const STRIPPED_ENV: [&str; 7] = [
     "CLAUDE_CODE_USE_FOUNDRY",
 ];
 
-/// How long the CLI waits for an MCP server to start (`MCP_TIMEOUT`, ms). A hung
-/// server then shows as `failed` in about this long, not 30 s.
+/// How long the CLI waits for an MCP server to start (`MCP_TIMEOUT`, ms) in a
+/// meeting session. A hung server then shows as `failed` a few seconds after
+/// this, not after the CLI's own default. The Check alone waits longer
+/// (`mcp_check::CHECK_MCP_TIMEOUT_MS`).
 pub const MCP_STARTUP_TIMEOUT_MS: &str = "20000";
 /// How long one MCP tool call may take (`MCP_TOOL_TIMEOUT`, ms). A hung tool
 /// ends the call with an error instead of holding the answer for minutes.
@@ -183,8 +189,9 @@ pub fn configure_session_command(cmd: &mut std::process::Command, sandbox: &Path
 
 /// The limits a with-sources session runs its MCP servers under (see the
 /// constants above); a plain session has no MCP servers and gets none.
-pub fn configure_sources_env(cmd: &mut std::process::Command) {
-    cmd.env("MCP_TIMEOUT", MCP_STARTUP_TIMEOUT_MS)
+pub fn configure_sources_env(cmd: &mut std::process::Command, startup_timeout_ms: Option<u32>) {
+    let startup = startup_timeout_ms.map(|ms| ms.to_string());
+    cmd.env("MCP_TIMEOUT", startup.as_deref().unwrap_or(MCP_STARTUP_TIMEOUT_MS))
         .env("MCP_TOOL_TIMEOUT", MCP_TOOL_TIMEOUT_MS)
         .env("MAX_MCP_OUTPUT_TOKENS", MCP_MAX_OUTPUT_TOKENS);
 }
@@ -196,13 +203,18 @@ mod tests {
     #[test]
     fn a_with_sources_session_limits_its_mcp_servers() {
         let mut cmd = std::process::Command::new("claude.exe");
-        configure_sources_env(&mut cmd);
-        let env = |key: &str| {
+        configure_sources_env(&mut cmd, None);
+        let env = |cmd: &std::process::Command, key: &str| {
             cmd.get_envs().find(|(k, _)| *k == key).and_then(|(_, v)| v.map(|v| v.to_string_lossy().into_owned()))
         };
-        assert_eq!(env("MCP_TIMEOUT").as_deref(), Some("20000"));
-        assert_eq!(env("MCP_TOOL_TIMEOUT").as_deref(), Some("20000"));
-        assert_eq!(env("MAX_MCP_OUTPUT_TOKENS").as_deref(), Some("10000"));
+        assert_eq!(env(&cmd, "MCP_TIMEOUT").as_deref(), Some("20000"));
+        // A Check waits longer, for a first download.
+        let mut check = std::process::Command::new("claude.exe");
+        configure_sources_env(&mut check, Some(60_000));
+        assert_eq!(env(&check, "MCP_TIMEOUT").as_deref(), Some("60000"));
+        assert_eq!(env(&check, "MCP_TOOL_TIMEOUT").as_deref(), Some("20000"));
+        assert_eq!(env(&cmd, "MCP_TOOL_TIMEOUT").as_deref(), Some("20000"));
+        assert_eq!(env(&cmd, "MAX_MCP_OUTPUT_TOKENS").as_deref(), Some("10000"));
     }
 
     fn cfg() -> SessionConfig {

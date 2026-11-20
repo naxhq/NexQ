@@ -7,11 +7,18 @@
 
 use super::command::SessionConfig;
 use super::detect::find_claude_binary;
-use super::manager::SOURCES_INIT_TIMEOUT;
 use super::mcp_diagnose::diagnose_start;
 use super::session::{AgentError, ClaudeSession, InitInfo, SessionTimeouts};
 use crate::sources::config::McpServer;
 use crate::sources::launch::single_server_launch;
+use std::time::Duration;
+
+/// `MCP_TIMEOUT` of a Check, in ms. A first `npx` or `uvx` run downloads the
+/// server, which takes longer than the 20 s a meeting session allows.
+pub const CHECK_MCP_TIMEOUT_MS: u32 = 60_000;
+/// How long the Check session may take to come up: [`CHECK_MCP_TIMEOUT_MS`]
+/// plus the few seconds the CLI needs to report a hung server as `failed`.
+pub const CHECK_INIT_TIMEOUT: Duration = Duration::from_secs(75);
 
 /// System prompt of the check session. It is never answered: no model call.
 const CHECK_SYSTEM_PROMPT: &str = "NexQ is checking an MCP server. No answer is needed.";
@@ -35,14 +42,25 @@ pub fn tools_of_server(info: &InitInfo, key: &str) -> Result<Vec<String>, String
     }
 }
 
+/// The launch of a Check: `server` alone, with the longer startup limit.
+pub fn check_launch(
+    server: &McpServer,
+    secret: &dyn Fn(&str) -> Option<String>,
+) -> Result<crate::llm::cli_agent::command::SourcesLaunch, String> {
+    let mut launch = single_server_launch(server, secret)?;
+    launch.mcp_startup_timeout_ms = Some(CHECK_MCP_TIMEOUT_MS);
+    Ok(launch)
+}
+
 /// Start `server` alone and list its tools. `secret` looks a saved value up by
-/// credential id. Takes up to [`SOURCES_INIT_TIMEOUT`] (a hung server only
-/// reports `failed` after about 27 s).
+/// credential id. Takes up to [`CHECK_INIT_TIMEOUT`] (a hung server reports
+/// `failed` only a few seconds after [`CHECK_MCP_TIMEOUT_MS`]), then up to
+/// [`super::mcp_diagnose::DIAGNOSE_LIMIT`] more to find the cause.
 pub async fn list_server_tools(
     server: &McpServer,
     secret: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Vec<String>, String> {
-    let launch = single_server_launch(server, secret)?;
+    let launch = check_launch(server, secret)?;
     let bin = tokio::task::spawn_blocking(find_claude_binary)
         .await
         .ok()
@@ -55,7 +73,7 @@ pub async fn list_server_tools(
         thinking: false,
         sources: Some(launch),
     };
-    let timeouts = SessionTimeouts { init: SOURCES_INIT_TIMEOUT, ..SessionTimeouts::default() };
+    let timeouts = SessionTimeouts { init: CHECK_INIT_TIMEOUT, ..SessionTimeouts::default() };
     let failure = match ClaudeSession::spawn_with_timeouts(bin, cfg, timeouts).await {
         Ok(session) => {
             let info = session.init_info();
@@ -99,6 +117,16 @@ mod tests {
         assert_eq!(tools_of_server(&ok, "mira"), Ok(vec!["mcp__mira__kb_search".to_string()]));
         let failed = info(&[], &[("mira", "failed")]);
         assert!(tools_of_server(&failed, "mira").unwrap_err().contains("failed"));
+    }
+
+    #[test]
+    fn a_check_waits_longer_for_the_server_than_a_meeting_session() {
+        let server = McpServer { key: "s".into(), label: "S".into(), ..Default::default() };
+        let launch = check_launch(&server, &|_| None).unwrap();
+        assert_eq!(launch.mcp_startup_timeout_ms, Some(60_000));
+        assert!(CHECK_INIT_TIMEOUT > Duration::from_millis(CHECK_MCP_TIMEOUT_MS as u64));
+        // A meeting session keeps the default.
+        assert_eq!(single_server_launch(&server, &|_| None).unwrap().mcp_startup_timeout_ms, None);
     }
 
     #[test]

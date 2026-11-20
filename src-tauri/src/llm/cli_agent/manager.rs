@@ -36,9 +36,10 @@ pub const REAP_INTERVAL: Duration = Duration::from_secs(60);
 /// Tauri event carrying [`AgentSessionStatus`].
 pub const STATUS_EVENT: &str = "agent_session_status";
 /// How long a with-sources session may take to come up. MCP servers connect
-/// during start, and a hung one only reports `failed` after about 27.5 s, so
-/// the plain session's 20 s would turn a slow server into a launch error.
-/// Plain sessions keep [`SessionTimeouts::default`].
+/// during start (`MCP_TIMEOUT` is 20 s), and a hung one only reports `failed`
+/// a few seconds after that, so the plain session's 20 s would turn a slow
+/// server into a launch error. Plain sessions keep [`SessionTimeouts::default`].
+/// A Check has its own, longer limit (`mcp_check::CHECK_INIT_TIMEOUT`).
 pub const SOURCES_INIT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// What a session is for.
@@ -1405,7 +1406,7 @@ mod tests {
 
     #[test]
     fn sources_init_timeout_is_longer_than_a_hung_servers_failure() {
-        // A hung MCP server only reports `failed` after about 27.5 s.
+        // A hung MCP server only reports `failed` a few seconds after MCP_TIMEOUT (20 s).
         assert_eq!(SOURCES_INIT_TIMEOUT, Duration::from_secs(60));
         assert!(SOURCES_INIT_TIMEOUT > SessionTimeouts::default().init);
     }
