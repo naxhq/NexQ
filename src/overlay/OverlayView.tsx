@@ -9,7 +9,6 @@ import { TranscriptPanel } from "./TranscriptPanel";
 import { QuestionPanel } from "./QuestionDetector";
 import { AIResponsePanel } from "./AIResponsePanel";
 import { ModeButtons } from "./ModeButtons";
-import { AskInput } from "./AskInput";
 import { ServiceStatusBar } from "../components/ServiceStatusBar";
 import { DevLogPanel } from "../components/DevLogPanel";
 import { SpeakerStatsPanel } from "./SpeakerStatsPanel";
@@ -57,17 +56,15 @@ export function OverlayView() {
   const endMeetingFlow = useMeetingStore((s) => s.endMeetingFlow);
   const setCurrentView = useMeetingStore((s) => s.setCurrentView);
   const scenarioName = useScenarioStore((s) => s.getActiveTemplate().name);
-  const [askInputVisible, setAskInputVisible] = useState(false);
   const [devLogOpen, setDevLogOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [layoutMode, setLayoutMode] = useState<"split" | "ai" | "transcript">("split");
 
   // The overlay window stays mounted between meetings, so reset its local UI
-  // state whenever a new meeting starts (panels, layout, ask input).
+  // state whenever a new meeting starts (panels, layout).
   const activeMeetingId = activeMeeting?.id ?? "";
   useEffect(() => {
-    setAskInputVisible(false);
     setDevLogOpen(false);
     setStatsOpen(false);
     setBookmarksOpen(false);
@@ -383,13 +380,6 @@ export function OverlayView() {
         )}
       </div>
       </div>
-
-      {/* Ask input */}
-      {askInputVisible && (
-        <div className="border-t border-border/20 px-3 py-1.5 slide-down-enter">
-          <AskInput visible={askInputVisible} onClose={() => setAskInputVisible(false)} />
-        </div>
-      )}
 
       {/* DevLog panel */}
       <DevLogPanel open={devLogOpen} onClose={() => setDevLogOpen(false)} />

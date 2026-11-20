@@ -7,7 +7,7 @@ use crate::intelligence::context_scope::{self, ResolvedScope, TranscriptWindow};
 use crate::intelligence::IntelligenceEngine;
 use crate::llm::cli_agent::context::Seg;
 use crate::llm::cli_agent::manager::{OnDelta, SessionKey, SessionScope};
-use crate::llm::cli_agent::protocol::{AgentErrorKind, TurnResult};
+use crate::llm::cli_agent::protocol::{AgentErrorKind, ImageAttachment, TurnResult};
 use crate::llm::cli_agent::routing::{
     self, choose_route, AgentFallbackPayload, AskFailure, ClaudeHealth, Route,
 };
@@ -314,6 +314,17 @@ pub(crate) fn request_route(state: &AppState, mode: &str, scope: &SessionScope) 
     choose_route(&active, state.claude_health.get(), scope, mode, &cfg)
 }
 
+/// Why a request with images can't be answered statelessly: another provider
+/// is active (it can't take images), or it is Claude but its session isn't
+/// available for this request (outage, fallback, meeting too long).
+pub(crate) fn images_refusal(active: Option<&ProviderType>) -> &'static str {
+    if active == Some(&ProviderType::ClaudeCli) {
+        "Claude can't read images right now. Try again in a moment, or remove the image and ask again."
+    } else {
+        "Images work only with Claude (subscription). Choose it in Settings > LLM, or remove the image and ask again."
+    }
+}
+
 /// Fallback provider, model and display name for `config` (type only): the
 /// API key comes from the credential store; the model is the configured
 /// fallback model, else the provider's first listed model. The result is
@@ -390,6 +401,8 @@ pub(crate) struct SessionAssist<'a> {
     pub temperature: f64,
     pub params: GenerationParams,
     pub cancel: Arc<CancelToken>,
+    /// Images pasted into Ask, sent with the question.
+    pub images: &'a [ImageAttachment],
 }
 
 /// A request a Claude session answered: what was sent, which model
@@ -550,6 +563,7 @@ pub(crate) async fn session_assist(state: &AppState, app: &AppHandle, req: Sessi
         on_sent,
         make_on_delta,
         cancel.clone(),
+        req.images,
     )
     .await;
 
@@ -708,11 +722,15 @@ pub async fn generate_assist(
     request_id: Option<String>,
     past_meeting_id: Option<String>,
     scope: Option<ResolvedScope>,
+    images: Option<Vec<ImageAttachment>>,
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     // The user's transcript scope (`scope` names the session scope below).
     let user_scope = scope;
+    let images = images.unwrap_or_default();
+    // The frontend checks these too; the backend doesn't rely on it.
+    crate::llm::cli_agent::protocol::validate_images(&images)?;
     // Every stream carries a request id so listeners can tell streams apart.
     let request_id = request_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
@@ -842,6 +860,7 @@ pub async fn generate_assist(
                 cancel: Some(cancel_token.clone()),
             },
             cancel: cancel_token.clone(),
+            images: &images,
         };
         match session_assist(&state, &app_handle, req).await {
             SessionOutcome::Done(result) => {
@@ -862,6 +881,31 @@ pub async fn generate_assist(
     }
 
     // ── Today's stateless full-prompt path (active or fallback provider) ──
+
+    // Only a Claude session carries images; no other route can send them, and
+    // answering without the image would silently ignore what the user attached.
+    if !images.is_empty() {
+        let active = state
+            .llm
+            .as_ref()
+            .and_then(|l| l.lock().ok())
+            .and_then(|r| r.active_provider_type().cloned());
+        let message = images_refusal(active.as_ref()).to_string();
+        // End the stream too: a session attempt above may already have started
+        // it, and the frontend ignores errors for streams it never started, so
+        // this is harmless otherwise (the rejection below reports it then).
+        emit_error(
+            &app_handle,
+            &GenerationParams {
+                request_id: Some(request_id.clone()),
+                cancel: Some(cancel_token.clone()),
+                ..GenerationParams::default()
+            },
+            &message,
+        );
+        drop(generation_guard);
+        return Err(message);
+    }
 
     // Determine transcript window: per-action override or global default,
     // unless the user picked a scope for this request.
@@ -1273,6 +1317,13 @@ mod tests {
         assert_eq!(default_window_seconds("BookmarkSuggestions", None, 300), 0);
         assert_eq!(default_window_seconds("MeetingSummary", Some(120), 300), 120);
         assert_eq!(default_window_seconds("Assist", None, 300), 300);
+    }
+
+    #[test]
+    fn images_refusal_names_the_provider_problem() {
+        assert!(images_refusal(Some(&ProviderType::Openai)).starts_with("Images work only with Claude"));
+        assert!(images_refusal(None).starts_with("Images work only with Claude"));
+        assert!(images_refusal(Some(&ProviderType::ClaudeCli)).starts_with("Claude can't read images right now"));
     }
 
     #[test]

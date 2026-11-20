@@ -22,7 +22,7 @@ use super::manager::{
     tier_for, AgentSessionManager, ClaudeCliConfig, OnDelta, SessionInit, SessionKey,
     SessionScope, Tier,
 };
-use super::protocol::{AgentErrorKind, TurnResult};
+use super::protocol::{AgentErrorKind, ImageAttachment, TurnResult};
 use super::session::AgentError;
 use crate::context::token_counter::count_tokens;
 use crate::llm::provider::{CancelToken, LLMProvider};
@@ -455,6 +455,16 @@ fn delivered(result: &Result<TurnResult, AgentError>) -> bool {
     )
 }
 
+/// What the user sees when Claude answers a request with images by an error
+/// result: a hint about the image when the error mentions one, else Claude's text.
+fn image_refusal(raw: &str) -> String {
+    if raw.to_lowercase().contains("image") {
+        "Claude couldn't use the attached image. Remove it or paste a smaller one, then send again.".to_string()
+    } else {
+        raw.to_string()
+    }
+}
+
 /// Take `key`'s session out of service (closed in the background) so the
 /// next `ensure` starts it again from its record.
 fn retire(manager: &AgentSessionManager, key: &SessionKey) {
@@ -484,6 +494,7 @@ pub async fn ask_meeting_session(
     on_sent: impl FnOnce(&str, &str, usize),
     make_on_delta: impl Fn() -> OnDelta,
     cancel: Arc<CancelToken>,
+    images: &[ImageAttachment],
 ) -> Result<TurnResult, AskFailure> {
     let mut compose = Some(compose);
     let mut on_sent = Some(on_sent);
@@ -532,8 +543,15 @@ pub async fn ask_meeting_session(
                     inner(token)
                 })
             };
-            let result = manager.ask(key, &text, on_delta, cancel.clone()).await;
-            if delivered(&result) {
+            let result = manager
+                .ask_with_images(key, &text, images, on_delta, cancel.clone())
+                .await;
+            // An image Claude refused (too big, unreadable) is not in a usable
+            // history: roll the request back like an undelivered one.
+            let refused = !images.is_empty()
+                && !streamed.load(Ordering::SeqCst)
+                && matches!(&result, Err(AgentError::Cli(AgentErrorKind::Other, _)));
+            if delivered(&result) && !refused {
                 sessions.record_sent(key, &text, cursor.sent_lines().clone());
             } else {
                 *cursor = before;
@@ -560,6 +578,11 @@ pub async fn ask_meeting_session(
         // Before the overflow case: text already on screen is never re-answered.
         if streamed.load(Ordering::SeqCst) {
             return Err(AskFailure::AfterOutput(err));
+        }
+        if let (false, AgentError::Cli(AgentErrorKind::Other, raw)) = (images.is_empty(), &err) {
+            log::warn!("Claude refused a request with images: {raw}");
+            retire(manager, key);
+            return Err(AskFailure::Error(AgentError::Cli(AgentErrorKind::Other, image_refusal(raw))));
         }
         if matches!(err, AgentError::Cli(AgentErrorKind::ContextOverflow, _)) {
             log::warn!("Claude session {key:?} is full ({err}); resetting it to a short replay");
@@ -1095,6 +1118,8 @@ mod tests {
     struct Script {
         appended: Mutex<Vec<Vec<String>>>,
         prompts: Mutex<Vec<String>>,
+        /// How many images came with each ask.
+        image_counts: Mutex<Vec<usize>>,
         steps: Mutex<Vec<Step>>,
         spawns: AtomicUsize,
         /// Closes this scope's records + sessions mid-turn (meeting ended).
@@ -1155,6 +1180,16 @@ mod tests {
                 self.alive.store(false, Ordering::SeqCst);
             }
             Err(err)
+        }
+        async fn ask_with_images(
+            &self,
+            prompt: &str,
+            images: &[ImageAttachment],
+            on_delta: OnDelta,
+            cancel: Arc<CancelToken>,
+        ) -> Result<TurnResult, AgentError> {
+            self.script.image_counts.lock().unwrap().push(images.len());
+            self.ask(prompt, on_delta, cancel).await
         }
         fn is_alive(&self) -> bool {
             self.alive.load(Ordering::SeqCst)
@@ -1221,6 +1256,7 @@ mod tests {
                 Box::new(move |t: &str| out.lock().unwrap().push_str(t))
             },
             Arc::new(CancelToken::new()),
+            &[],
         )
         .await
     }
@@ -1236,6 +1272,27 @@ mod tests {
 
     fn last_prompt(script: &Script) -> String {
         script.prompts.lock().unwrap().last().cloned().unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn routing_session_sends_the_images_with_the_question() {
+        let (manager, sessions, script, key) = setup(&[]);
+        let images = [ImageAttachment { media_type: "image/png".into(), data: "AAAA".into() }];
+        ask_meeting_session(
+            &manager,
+            &sessions,
+            &key,
+            &[seg("a", 0)],
+            |new| compose_delta(new, &[], "Help.", Some("What is this?"), None),
+            |_, _, _| {},
+            || Box::new(|_: &str| {}),
+            Arc::new(CancelToken::new()),
+            &images,
+        )
+        .await
+        .unwrap();
+        ask(&manager, &sessions, &key, &[seg("a", 0), seg("b", 1)]).await.unwrap();
+        assert_eq!(*script.image_counts.lock().unwrap(), vec![1, 0], "only the question that had images");
     }
 
     #[tokio::test]
@@ -1548,6 +1605,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn routing_refused_image_rolls_the_request_back_and_restarts_the_session() {
+        let (manager, sessions, script, key) = setup(&[]);
+        script.fail_next(AgentError::Cli(
+            AgentErrorKind::Other,
+            "API Error: 400 messages.0.content.0.image.source.base64: image exceeds 5 MB maximum".into(),
+        ));
+        let images = [ImageAttachment { media_type: "image/png".into(), data: "AAAA".into() }];
+        let failure = ask_meeting_session(
+            &manager,
+            &sessions,
+            &key,
+            &[seg("a", 0)],
+            |new| compose_delta(new, &[], "Help.", Some("What is this?"), None),
+            |_, _, _| {},
+            || Box::new(|_: &str| {}),
+            Arc::new(CancelToken::new()),
+            &images,
+        )
+        .await
+        .unwrap_err();
+        match failure {
+            AskFailure::Error(AgentError::Cli(AgentErrorKind::Other, msg)) => {
+                assert_eq!(
+                    msg,
+                    "Claude couldn't use the attached image. Remove it or paste a smaller one, then send again."
+                );
+            }
+            _ => panic!("expected the image refusal"),
+        }
+        assert!(!sessions.get(&key).unwrap().sent.contains_key("a"), "nothing recorded");
+        // The next text-only request starts a fresh session and carries the segments.
+        ask(&manager, &sessions, &key, &[seg("a", 0)]).await.unwrap();
+        assert_eq!(script.spawns.load(Ordering::SeqCst), 2, "the session was restarted");
+        assert!(last_prompt(&script).contains("## New transcript"), "segments were rolled back");
+        assert_eq!(*script.image_counts.lock().unwrap(), vec![1, 0]);
+    }
+
+    #[test]
+    fn routing_image_refusal_keeps_claudes_text_when_it_is_not_about_an_image() {
+        assert_eq!(image_refusal("request refused"), "request refused");
+        assert!(image_refusal("Could not process Image").contains("attached image"));
+    }
+
+    #[tokio::test]
     async fn routing_cancel_before_send_sends_nothing_and_keeps_segments_unsent() {
         let (manager, sessions, script, key) = setup(&[]);
         let cancel = Arc::new(CancelToken::new());
@@ -1561,6 +1662,7 @@ mod tests {
             |_, _, _| panic!("nothing is sent once cancelled"),
             || Box::new(|_: &str| {}),
             cancel,
+            &[],
         )
         .await
         .unwrap_err();

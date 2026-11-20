@@ -221,6 +221,7 @@ pub async fn ask_meeting(
             temperature,
             params: params.clone(),
             cancel: cancel.clone(),
+            images: &[],
         };
         match session_assist(&state, &app_handle, req).await {
             SessionOutcome::Done(Ok(Some(answer))) => {

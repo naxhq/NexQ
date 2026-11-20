@@ -2,8 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useStreamStore } from "../stores/streamStore";
 import { useAIActionsStore } from "../stores/aiActionsStore";
 import { useConfigStore } from "../stores/configStore";
+import { useMeetingStore } from "../stores/meetingStore";
 import { cancelGeneration } from "../lib/ipc";
 import { runYourAction, useAutoAnswerRunning } from "../lib/autoAnswer";
+import { AskImageChips, askPlaceholder, useAskImages } from "./AskImages";
+import { sendAsk } from "./sendAsk";
 import { DEFAULT_CONTEXT_SCOPE, scopeHint } from "../lib/contextScope";
 import { showToast } from "../stores/toastStore";
 import { ContextScopePicker } from "./ContextScopePicker";
@@ -118,15 +121,41 @@ export function ModeButtons() {
     [isStreaming, locked, streaming, currentMode]
   );
 
-  const handleAskSubmit = useCallback(() => {
-    const text = askInputText.trim();
-    if (!text || locked) return;
-    runYourAction("AskQuestion", text).catch((err) =>
-      showToast(err instanceof Error ? err.message : "Couldn't send question", "error")
-    );
+  const {
+    images: askImages,
+    sending: askSending,
+    setSending: setAskSending,
+    canAttach: canAttachImage,
+    announcement: askAnnouncement,
+    onPaste: onAskPaste,
+    remove: removeAskImage,
+    clear: clearAskImages,
+  } = useAskImages();
+
+  // The overlay stays mounted between meetings: each meeting starts with an
+  // empty Ask box (no leftover text or screenshots from the last one).
+  const meetingId = useMeetingStore((s) => s.activeMeeting?.id ?? "");
+  useEffect(() => {
     setAskInputText("");
     setAskInputVisible(false);
-  }, [askInputText, locked]);
+    clearAskImages();
+  }, [meetingId, clearAskImages]);
+
+  const handleAskSubmit = useCallback(() => {
+    if (locked) return;
+    const sent = sendAsk({
+      typed: askInputText,
+      images: askSending ? [] : askImages,
+      fallbackError: "Couldn't send question",
+      onSending: setAskSending,
+      onSent: clearAskImages,
+      // A failed send keeps the typed text and the images, to send again.
+      onFailed: (typed) => setAskInputText((current) => current || typed),
+    });
+    if (!sent) return;
+    setAskInputText("");
+    setAskInputVisible(false);
+  }, [askInputText, askImages, askSending, locked, clearAskImages, setAskSending]);
 
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -164,17 +193,31 @@ export function ModeButtons() {
 
       {/* Inline Ask input */}
       {askInputVisible && !locked && (
-        <div className="flex items-center gap-1.5 rounded-lg border border-info/20 bg-info/5 px-2 py-1 slide-down-enter">
+        <div
+          className="flex flex-col gap-1 rounded-lg border border-info/20 bg-info/5 px-2 py-1 slide-down-enter"
+          // Keys pressed on the thumbnails' remove buttons (Space, digits) must not
+          // reach the meeting shortcuts; Escape closes the box from anywhere in it.
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Escape") {
+              e.preventDefault();
+              setAskInputVisible(false);
+            }
+          }}
+        >
+          <AskImageChips images={askSending ? [] : askImages} onRemove={removeAskImage} announcement={askAnnouncement} />
+          <div className="flex items-center gap-1.5">
           <input
             type="text"
             value={askInputText}
             onChange={(e) => setAskInputText(e.target.value)}
+            onPaste={onAskPaste}
             onKeyDown={(e) => {
               e.stopPropagation();
               if (e.key === "Enter") { e.preventDefault(); handleAskSubmit(); }
               if (e.key === "Escape") { e.preventDefault(); setAskInputVisible(false); }
             }}
-            placeholder="Ask about the meeting..."
+            placeholder={askPlaceholder(canAttachImage)}
             aria-label="Ask a question"
             autoFocus
             maxLength={2000}
@@ -182,7 +225,7 @@ export function ModeButtons() {
           />
           <button
             onClick={handleAskSubmit}
-            disabled={!askInputText.trim()}
+            disabled={!askInputText.trim() && (askImages.length === 0 || askSending)}
             className="rounded-md p-1 text-info/60 hover:bg-info/10 hover:text-info disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             aria-label="Send question"
           >
@@ -195,6 +238,7 @@ export function ModeButtons() {
           >
             <X className="h-3 w-3" aria-hidden="true" />
           </button>
+          </div>
         </div>
       )}
     </div>
