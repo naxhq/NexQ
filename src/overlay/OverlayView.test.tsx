@@ -103,6 +103,33 @@ describe("OverlayView", () => {
     expect(screen.getByText("My interview")).toBeTruthy();
   });
 
+  it("a captured screenshot brings the Ask box back from the transcript-only layout", async () => {
+    const { SCREENSHOT_EVENT, deliverScreenshot, discardPendingScreenshots } = await import("../lib/screenCapture");
+    useConfigStore.setState({ llmProvider: "claude_cli" });
+    // jsdom can't decode images.
+    const realBitmap = (globalThis as { createImageBitmap?: unknown }).createImageBitmap;
+    (globalThis as { createImageBitmap?: unknown }).createImageBitmap = async () => ({ width: 100, height: 100, close: () => {} });
+    renderOverlay("online", "team_meeting");
+    // split -> AI panel only -> transcript only
+    fireEvent.click(screen.getByRole("button", { name: "Focus AI panel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Focus Transcript" }));
+    expect(screen.getByRole("button", { name: "Expand AI panel" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Ask/ })).toBeNull();
+
+    const claimed: boolean[] = [];
+    const after = (e: Event) => claimed.push(e.defaultPrevented);
+    window.addEventListener(SCREENSHOT_EVENT, after); // runs after the overlay's own listener
+    act(() => deliverScreenshot(new File(["shot"], "screen.png", { type: "image/png" })));
+    window.removeEventListener(SCREENSHOT_EVENT, after);
+
+    expect(claimed).toEqual([true]);
+    expect(screen.queryByRole("button", { name: "Expand AI panel" })).toBeNull();
+    // The Ask box mounted with the picture and took it.
+    expect(await screen.findByRole("group", { name: "Attached images" })).toBeTruthy();
+    discardPendingScreenshots();
+    (globalThis as { createImageBitmap?: unknown }).createImageBitmap = realBitmap;
+  });
+
   it("Minus button tooltip says 'Minimize to Dashboard' when stealth is off", () => {
     useConfigStore.setState({ stealthMode: false });
     renderOverlay("online", "team_meeting");

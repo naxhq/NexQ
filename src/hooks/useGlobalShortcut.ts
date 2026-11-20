@@ -12,7 +12,7 @@ import { isOverlayVisible, meetingShortcutAction, showLauncherWindow, showMeetin
 import { endMeetingFromThisWindow } from "./useUpdater";
 import { showToast } from "../stores/toastStore";
 import { useConfigStore } from "../stores/configStore";
-import { normalizeAccelerator, reservedShortcutAction } from "../lib/shortcutLabel";
+import { formatShortcut, normalizeAccelerator, reservedShortcutAction, screenCaptureSupported } from "../lib/shortcutLabel";
 import { providerReadsImages } from "../lib/imageAttachments";
 import { captureScreenIntoAsk } from "../lib/screenCapture";
 
@@ -44,6 +44,18 @@ export async function toggleStealthMode(): Promise<void> {
   } catch (e) {
     showToast(`Couldn't change screen-share visibility: ${e instanceof Error ? e.message : String(e)}`, "error");
   }
+}
+
+/** Keys whose registration failure was already announced (once is enough). */
+const announcedCaptureKeys = new Set<string>();
+
+function announceCaptureShortcutFailure(key: string): void {
+  if (announcedCaptureKeys.has(key)) return;
+  announcedCaptureKeys.add(key);
+  showToast(
+    `${formatShortcut(key)} (capture screen into Ask) didn't work, another app may be using it. Choose another shortcut in Settings > General.`,
+    "error",
+  );
 }
 
 export function useGlobalShortcut() {
@@ -93,7 +105,8 @@ export function useGlobalShortcut() {
   // Assist and Hide from screen share win a collision.
   useEffect(() => {
     const key = captureShortcut;
-    if (!meetingActive || !canReadImages || !key || getCurrentWebviewWindow().label !== "overlay") return;
+    if (!screenCaptureSupported() || !meetingActive || !canReadImages || !key) return;
+    if (getCurrentWebviewWindow().label !== "overlay") return;
     const wanted = normalizeAccelerator(key);
     if (
       reservedShortcutAction(key) ||
@@ -117,6 +130,7 @@ export function useGlobalShortcut() {
         if (cancelled) unregister(key).catch(() => {});
       } catch (err) {
         console.warn(`Failed to register capture shortcut ${key}:`, err);
+        if (!cancelled) announceCaptureShortcutFailure(key);
       }
     })();
     return () => {

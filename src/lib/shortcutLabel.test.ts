@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { acceleratorFromEvent, formatShortcut, normalizeAccelerator, reservedShortcutAction } from "./shortcutLabel";
+import { acceleratorFromEvent, formatShortcut, normalizeAccelerator, reservedShortcutAction, screenCaptureSupported } from "./shortcutLabel";
 
 const press = (over: Partial<KeyboardEvent>) =>
   ({ key: "h", code: "KeyH", ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...over }) as KeyboardEvent;
@@ -43,5 +43,12 @@ describe("reserved shortcuts", () => {
     // Control+M on a Mac is not Command+M.
     expect(reservedShortcutAction("Ctrl+M", true)).toBeNull();
     expect(reservedShortcutAction("CmdOrCtrl+Shift+H", false)).toBeNull();
+  });
+});
+
+describe("screenCaptureSupported", () => {
+  it("is Windows only for now", () => {
+    expect(screenCaptureSupported(false)).toBe(true);
+    expect(screenCaptureSupported(true)).toBe(false);
   });
 });

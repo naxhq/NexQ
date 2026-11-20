@@ -4,10 +4,14 @@ import type { LLMProviderType, Meeting } from "../lib/types";
 
 const shortcuts = vi.hoisted(() => new Map<string, (event: { state: string }) => void>());
 const captureFailure = vi.hoisted(() => ({ message: "" }));
+const registerFailure = vi.hoisted(() => ({ key: "" }));
 const emitted = vi.hoisted(() => [] as Array<[string, unknown]>);
 const invoked = vi.hoisted(() => [] as Array<[string, Record<string, unknown> | undefined]>);
 vi.mock("@tauri-apps/plugin-global-shortcut", () => ({
-  register: async (key: string, handler: (event: { state: string }) => void) => { shortcuts.set(key, handler); },
+  register: async (key: string, handler: (event: { state: string }) => void) => {
+    if (key === registerFailure.key) throw new Error("already registered");
+    shortcuts.set(key, handler);
+  },
   unregister: async (key: string) => { shortcuts.delete(key); },
 }));
 vi.mock("@tauri-apps/api/event", () => ({
@@ -56,6 +60,7 @@ beforeEach(() => {
   invoked.length = 0;
   shortcuts.clear();
   captureFailure.message = "";
+  registerFailure.key = "";
 });
 afterEach(() => {
   cleanup();
@@ -217,5 +222,35 @@ describe("capture screen shortcut", () => {
     await act(async () => { shortcuts.get("CmdOrCtrl+B")?.({ state: "Pressed" }); });
     await new Promise((r) => setTimeout(r, 20));
     expect(captured()).toBe(false);
+  });
+
+  it("is not registered on macOS (Windows only for now)", async () => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)");
+    const { overlay, key } = await overlayWithProvider("claude_cli");
+    act(() => overlay.setState({ activeMeeting: { id: "m1" } as Meeting }));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(shortcuts.has(key)).toBe(false);
+  });
+
+  it("tells the user once, pointing to Settings, when the key can't be registered", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    registerFailure.key = "CmdOrCtrl+Shift+S";
+    const { overlay, useConfigStore } = await overlayWithProvider("claude_cli");
+    const { useToastStore } = await import("../stores/toastStore");
+    const toasts = () => useToastStore.getState().toasts.filter((t) => t.message.includes("Settings > General"));
+
+    act(() => overlay.setState({ activeMeeting: { id: "m1" } as Meeting }));
+    await waitFor(() => expect(toasts()).toHaveLength(1));
+    expect(toasts()[0].message).toContain("Ctrl+Shift+S");
+    expect(toasts()[0].type).toBe("error");
+
+    // A second try (another meeting, the provider switched back) stays quiet.
+    useToastStore.setState({ toasts: [] });
+    act(() => overlay.setState({ activeMeeting: null }));
+    act(() => useConfigStore.setState({ llmProvider: "openai" }));
+    act(() => useConfigStore.setState({ llmProvider: "claude_cli" }));
+    act(() => overlay.setState({ activeMeeting: { id: "m2" } as Meeting }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(toasts()).toHaveLength(0);
   });
 });

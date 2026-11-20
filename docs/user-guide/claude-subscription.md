@@ -38,11 +38,11 @@ When the thing you need help with is only visible on screen (an exercise, a ques
 3. Press `Ctrl+V` in the Ask box. The picture shows as a small thumbnail.
 4. Press Enter.
 
-**Or capture the screen with one key.** During a meeting, press `Ctrl+Shift+S` from any app. NexQ takes a picture of the screen your mouse pointer is on (so it works with the meeting on a second monitor), opens the Ask box and attaches it. Nothing is sent until you press Enter. If the overlay was hidden, it comes back first. Change the key in Settings > General.
+**Or capture the screen with one key.** During a meeting, press `Ctrl+Shift+S` from any app. NexQ takes a picture of the screen your mouse pointer is on (so it works with the meeting on a second monitor), brings the overlay up, opens the Ask box, attaches the picture and puts the cursor in the Ask box; press Enter to send. Nothing is sent until you do. Windows only for now. Change the key in Settings > General.
 
 - The capture shortcut is on only during a meeting with **Claude (subscription)**. With another provider `Ctrl+Shift+S` stays free for your other apps, and Settings says why the shortcut is off.
-- NexQ's own windows are not hidden or moved for the picture. With **Hide from screen share** on, they are left out of it; otherwise they are in it like any other window.
-- If the capture fails (for example the screen is locked or shows protected video, or on macOS Screen Recording isn't allowed for NexQ), a short message says so.
+- NexQ's own windows are not hidden or moved for the picture. With **Hide from screen share** on, they are left out of it; otherwise they are in it like any other window. If the overlay was hidden, it comes back once the picture is taken, so it isn't in it.
+- If the capture fails (for example the screen is locked or shows protected video), a short message says so.
 - You can attach up to 3 images (PNG, JPEG, GIF or WebP). NexQ shrinks large ones before sending, so a full-screen screenshot works. Click the **x** on a thumbnail to remove it.
 - With an empty box, the image itself is the question: Claude reads it and answers or solves it, rather than describing it.
 - This works only with **Claude (subscription)**. With another provider, NexQ doesn't attach the image and tells you images need Claude. When Claude is unavailable and NexQ would answer with the fallback provider, it asks you to try again or remove the image, instead of answering without it.

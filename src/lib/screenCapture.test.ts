@@ -1,21 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const capture = vi.hoisted(() => vi.fn<() => Promise<ArrayBuffer>>());
-const overlay = vi.hoisted(() => ({ visible: true, shown: 0 }));
+const overlay = vi.hoisted(() => ({ shown: 0, log: [] as string[] }));
 vi.mock("./ipc", () => ({ captureScreenUnderCursor: capture }));
 vi.mock("./windows", () => ({
-  isOverlayVisible: async () => overlay.visible,
   showMeetingOverlay: async () => {
     overlay.shown += 1;
+    overlay.log.push("show");
   },
 }));
 
 import {
   PENDING_SCREENSHOT_MS,
   SCREENSHOT_EVENT,
+  SCREENSHOT_NOT_ATTACHED,
   captureErrorText,
   captureScreenIntoAsk,
   deliverScreenshot,
+  discardPendingScreenshots,
+  leaveSettingsForAsk,
   takePendingScreenshots,
 } from "./screenCapture";
 import { useConfigStore } from "../stores/configStore";
@@ -24,59 +27,77 @@ import { useToastStore } from "../stores/toastStore";
 import type { Meeting } from "./types";
 
 const bytes = () => new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer;
+const shot = () => new File(["a"], "a.png", { type: "image/png" });
+const messages = () => useToastStore.getState().toasts.map((t) => t.message);
 
 beforeEach(() => {
-  takePendingScreenshots(Number.MAX_SAFE_INTEGER);
+  discardPendingScreenshots();
   capture.mockReset().mockImplementation(async () => bytes());
-  overlay.visible = true;
   overlay.shown = 0;
+  overlay.log = [];
   useConfigStore.setState({ llmProvider: "claude_cli" });
-  useMeetingStore.setState({ activeMeeting: { id: "m" } as Meeting });
+  useMeetingStore.setState({ activeMeeting: { id: "m" } as Meeting, currentView: "overlay", settingsOpen: false });
   useToastStore.setState({ toasts: [] });
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
+/** A listener the way the Ask box has one: it takes the picture and claims the event. */
+function askBoxListening() {
+  const listener = (e: Event) => {
+    takePendingScreenshots();
+    e.preventDefault();
+  };
+  window.addEventListener(SCREENSHOT_EVENT, listener);
+  return () => window.removeEventListener(SCREENSHOT_EVENT, listener);
+}
+
 describe("captureScreenIntoAsk", () => {
   it("hands the screenshot to the Ask box as a PNG file and tells the window", async () => {
-    const heard = vi.fn();
-    window.addEventListener(SCREENSHOT_EVENT, heard);
+    const files: File[] = [];
+    const listener = (e: Event) => {
+      files.push(...takePendingScreenshots());
+      e.preventDefault();
+    };
+    window.addEventListener(SCREENSHOT_EVENT, listener);
     await captureScreenIntoAsk();
-    window.removeEventListener(SCREENSHOT_EVENT, heard);
+    window.removeEventListener(SCREENSHOT_EVENT, listener);
 
-    expect(heard).toHaveBeenCalledTimes(1);
-    const files = takePendingScreenshots();
     expect(files).toHaveLength(1);
     expect(files[0].type).toBe("image/png");
     expect(files[0].size).toBe(4);
-    expect(overlay.shown).toBe(0);
+    expect(messages()).toEqual([]);
   });
 
-  it("brings a hidden overlay back, after the capture", async () => {
-    overlay.visible = false;
-    const order: string[] = [];
+  it("runs the show path on every press (the overlay may be visible but not focused), after the capture", async () => {
     capture.mockImplementation(async () => {
-      order.push("capture");
+      overlay.log.push("capture");
       return bytes();
     });
-    const heard = () => order.push(`shown:${overlay.shown}`);
+    const heard = () => overlay.log.push("ask");
     window.addEventListener(SCREENSHOT_EVENT, heard);
+    const stop = askBoxListening();
+    await captureScreenIntoAsk();
     await captureScreenIntoAsk();
     window.removeEventListener(SCREENSHOT_EVENT, heard);
-    // The overlay is shown only once the picture is taken, before the Ask box gets it.
-    expect(order).toEqual(["capture", "shown:1"]);
+    stop();
+    expect(overlay.log).toEqual(["capture", "show", "ask", "capture", "show", "ask"]);
   });
 
-  it("shows a plain error toast and attaches nothing when the capture fails", async () => {
-    capture.mockRejectedValue("NexQ needs the Screen Recording permission.");
+  it("brings the overlay back before the error toast, and attaches nothing", async () => {
+    capture.mockRejectedValue("NexQ couldn't read the screen.");
+    const seen: string[][] = [];
+    const unsubscribe = useToastStore.subscribe(() => seen.push([...overlay.log, "toast"]));
     await captureScreenIntoAsk();
+    unsubscribe();
+    expect(seen[0]).toEqual(["show", "toast"]);
     expect(useToastStore.getState().toasts).toEqual([
-      expect.objectContaining({ message: "NexQ needs the Screen Recording permission.", type: "error" }),
+      expect.objectContaining({ message: "NexQ couldn't read the screen.", type: "error" }),
     ]);
     expect(takePendingScreenshots()).toHaveLength(0);
-    expect(overlay.shown).toBe(0);
   });
 
   it("does nothing without a meeting or when the AI can't read images", async () => {
@@ -86,30 +107,96 @@ describe("captureScreenIntoAsk", () => {
     useConfigStore.setState({ llmProvider: "openai" });
     await captureScreenIntoAsk();
     expect(capture).not.toHaveBeenCalled();
+    expect(overlay.shown).toBe(0);
   });
 
   it("ignores a second press while one capture is running", async () => {
     let release!: () => void;
     capture.mockImplementation(() => new Promise((resolve) => (release = () => resolve(bytes()))));
+    const stop = askBoxListening();
     const first = captureScreenIntoAsk();
     await captureScreenIntoAsk();
     expect(capture).toHaveBeenCalledTimes(1);
     release();
     await first;
-    expect(takePendingScreenshots()).toHaveLength(1);
+    stop();
   });
 });
 
-describe("pending screenshots", () => {
-  it("are handed over once", () => {
-    deliverScreenshot(new File(["a"], "a.png", { type: "image/png" }));
-    expect(takePendingScreenshots()).toHaveLength(1);
+describe("delivering a screenshot", () => {
+  it("is handed over once", () => {
+    const stop = askBoxListening();
+    deliverScreenshot(shot());
+    stop();
+    expect(takePendingScreenshots()).toHaveLength(0);
+    expect(messages()).toEqual([]);
+  });
+
+  it("tells the user, right away, when nobody claims it", () => {
+    deliverScreenshot(shot());
+    expect(messages()).toEqual([SCREENSHOT_NOT_ATTACHED]);
     expect(takePendingScreenshots()).toHaveLength(0);
   });
 
-  it("are dropped when no Ask box took them in time", () => {
-    deliverScreenshot(new File(["a"], "a.png", { type: "image/png" }));
+  it("a claimed picture that no Ask box takes in time is announced, not dropped silently", () => {
+    vi.useFakeTimers();
+    const claim = (e: Event) => e.preventDefault(); // e.g. making room for the Ask box
+    window.addEventListener(SCREENSHOT_EVENT, claim);
+    deliverScreenshot(shot());
+    window.removeEventListener(SCREENSHOT_EVENT, claim);
+    expect(messages()).toEqual([]);
+    vi.advanceTimersByTime(PENDING_SCREENSHOT_MS + 1);
+    expect(messages()).toEqual([SCREENSHOT_NOT_ATTACHED]);
+  });
+
+  it("one the Ask box took in time never produces the late toast", () => {
+    vi.useFakeTimers();
+    const claim = (e: Event) => e.preventDefault();
+    window.addEventListener(SCREENSHOT_EVENT, claim);
+    deliverScreenshot(shot());
+    window.removeEventListener(SCREENSHOT_EVENT, claim);
+    expect(takePendingScreenshots()).toHaveLength(1);
+    vi.advanceTimersByTime(PENDING_SCREENSHOT_MS + 1);
+    expect(messages()).toEqual([]);
+  });
+
+  it("a waiting screenshot is cleared when the meeting changes", () => {
+    vi.useFakeTimers();
+    const claim = (e: Event) => e.preventDefault();
+    window.addEventListener(SCREENSHOT_EVENT, claim);
+    deliverScreenshot(shot());
+    window.removeEventListener(SCREENSHOT_EVENT, claim);
+    useMeetingStore.setState({ activeMeeting: { id: "next" } as Meeting });
+    expect(takePendingScreenshots()).toHaveLength(0);
+    vi.advanceTimersByTime(PENDING_SCREENSHOT_MS + 1);
+    expect(messages()).toEqual([]);
+  });
+
+  it("a stale screenshot is not handed over", () => {
+    const claim = (e: Event) => e.preventDefault();
+    window.addEventListener(SCREENSHOT_EVENT, claim);
+    deliverScreenshot(shot());
+    window.removeEventListener(SCREENSHOT_EVENT, claim);
     expect(takePendingScreenshots(Date.now() + PENDING_SCREENSHOT_MS + 1000)).toHaveLength(0);
+  });
+});
+
+describe("leaveSettingsForAsk", () => {
+  it("goes from the Settings view back to the meeting view", () => {
+    useMeetingStore.setState({ currentView: "settings", previousView: "overlay" });
+    expect(leaveSettingsForAsk()).toBe(true);
+    expect(useMeetingStore.getState().currentView).toBe("overlay");
+  });
+
+  it("closes the Settings modal over the meeting", () => {
+    useMeetingStore.setState({ currentView: "overlay", settingsOpen: true });
+    expect(leaveSettingsForAsk()).toBe(true);
+    expect(useMeetingStore.getState().settingsOpen).toBe(false);
+  });
+
+  it("leaves the meeting view alone", () => {
+    expect(leaveSettingsForAsk()).toBe(false);
+    expect(useMeetingStore.getState().currentView).toBe("overlay");
   });
 });
 

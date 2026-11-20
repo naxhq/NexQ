@@ -63,6 +63,13 @@ describe("StealthSettings capture shortcut row", () => {
     expect(useConfigStore.getState().stealthShortcut).toBe("CmdOrCtrl+Shift+H");
   });
 
+  it("is not offered on macOS, where capturing isn't supported yet", () => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)");
+    render(<StealthSettings />);
+    expect(screen.queryByText("Capture screen into Ask")).toBeNull();
+    vi.restoreAllMocks();
+  });
+
   it("rebinds the capture shortcut to a free combination", () => {
     render(<StealthSettings />);
     fireEvent.click(screen.getByRole("button", { name: /currently Ctrl\+Shift\+S$/ }));

@@ -4,6 +4,7 @@ import { DEFAULT_ASSIST_SHORTCUT, DEFAULT_CAPTURE_SHORTCUT, DEFAULT_STEALTH_SHOR
 import { showToast } from "../stores/toastStore";
 import { getStealthSupport } from "../lib/ipc";
 import { providerReadsImages } from "../lib/imageAttachments";
+import { screenCaptureSupported } from "../lib/shortcutLabel";
 import { ShortcutButton } from "./ShortcutButton";
 import type { StealthSupport } from "../lib/types";
 
@@ -113,6 +114,7 @@ export function StealthSettings() {
         <ShortcutButton value={assistShortcut} defaultValue={DEFAULT_ASSIST_SHORTCUT} onChange={setAssistShortcut} others={assistTaken} />
       </div>
 
+      {screenCaptureSupported() && (
       <div className="flex items-center justify-between gap-4">
         <div>
           <span className="text-xs font-medium text-foreground/80">Capture screen into Ask</span>
@@ -127,6 +129,7 @@ export function StealthSettings() {
         </div>
         <ShortcutButton value={captureShortcut} defaultValue={DEFAULT_CAPTURE_SHORTCUT} onChange={setCaptureShortcut} others={captureTaken} />
       </div>
+      )}
 
       {support?.note && <p className="text-meta text-muted-foreground/70">{support.note}</p>}
     </div>

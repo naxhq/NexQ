@@ -19,7 +19,7 @@ These shortcuts are registered system-wide and work regardless of which applicat
 | `Ctrl+,` | Open / Close Settings | Toggles the settings panel |
 | `Ctrl+Shift+H` | Hide from screen share | Turns stealth mode on or off. Change it in Settings > General |
 | `Ctrl+Shift+Space` | Assist from any app | During a meeting, generates AI Assist without switching to NexQ. Stops an automatic answer that's running. Change it in Settings > General |
-| `Ctrl+Shift+S` | Capture screen into Ask | During a meeting with Claude (subscription), attaches a picture of the screen your mouse is on to the Ask box and opens it. You send it yourself. Not used with other providers, so the key stays free for your other apps. Change it in Settings > General |
+| `Ctrl+Shift+S` | Capture screen into Ask | During a meeting with Claude (subscription), attaches a picture of the screen your mouse is on to the Ask box, opens it and puts the cursor there; press Enter to send. Windows only for now. Not used with other providers, so the key stays free for your other apps. Change it in Settings > General |
 
 ## Meeting Shortcuts
 

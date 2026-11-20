@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStreamStore } from "../stores/streamStore";
 import { useAIActionsStore } from "../stores/aiActionsStore";
 import { useConfigStore } from "../stores/configStore";
@@ -144,18 +144,26 @@ export function ModeButtons() {
   }, [meetingId, clearAskImages]);
 
   // The capture shortcut: open the Ask box with the screenshot attached, the
-  // same way a paste would. Also takes one that arrived before this mounted.
+  // same way a paste would, and put the cursor in it (also when it was already
+  // open). Also takes one that arrived before this mounted.
+  const askInputRef = useRef<HTMLInputElement>(null);
+  const [focusAsk, setFocusAsk] = useState(0);
   useEffect(() => {
-    const take = () => {
+    const take = (e?: Event) => {
       const files = takePendingScreenshots();
       if (files.length === 0) return;
+      e?.preventDefault(); // taken: nobody else needs to make room for it
       setAskInputVisible(true);
       attachAskImages(files);
+      setFocusAsk((n) => n + 1);
     };
     take();
     window.addEventListener(SCREENSHOT_EVENT, take);
     return () => window.removeEventListener(SCREENSHOT_EVENT, take);
   }, [attachAskImages]);
+  useEffect(() => {
+    if (focusAsk > 0) askInputRef.current?.focus();
+  }, [focusAsk]);
 
   const handleAskSubmit = useCallback(() => {
     if (locked) return;
@@ -224,6 +232,7 @@ export function ModeButtons() {
           <AskImageChips images={askSending ? [] : askImages} onRemove={removeAskImage} announcement={askAnnouncement} />
           <div className="flex items-center gap-1.5">
           <input
+            ref={askInputRef}
             type="text"
             value={askInputText}
             onChange={(e) => setAskInputText(e.target.value)}

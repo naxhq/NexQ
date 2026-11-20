@@ -31,6 +31,7 @@ import type { AppView, Meeting, AudioMode, AIScenario } from "./lib/types";
 import { useDemoShortcut } from "./demo/useDemoShortcut";
 import { DemoPicker } from "./demo/DemoPicker";
 import { DemoBadge } from "./demo/DemoBadge";
+import { SCREENSHOT_EVENT, leaveSettingsForAsk } from "./lib/screenCapture";
 import { SHOW_MEETING_OVERLAY_EVENT, showLauncherWindow, showMeetingOverlay, showOverlayWindow } from "./lib/windows";
 import { logToFile } from "./lib/logger";
 import { emitOverlayMeetingReady, onCaptureWarning, onOverlayMeetingReady, onStartDetectedMeeting, onStealthModeChanged } from "./lib/events";
@@ -161,6 +162,17 @@ function App() {
     listen(SHOW_MEETING_OVERLAY_EVENT, show).then((fn) => unlisteners.push(fn));
     listen("tray_show_overlay", show).then((fn) => unlisteners.push(fn));
     return () => unlisteners.forEach((fn) => fn());
+  }, [windowLabel]);
+
+  // OVERLAY window: a captured screenshot goes to the Ask box, which Settings
+  // covers: go back to the meeting view first.
+  useEffect(() => {
+    if (windowLabel !== "overlay") return;
+    const onScreenshot = (e: Event) => {
+      if (leaveSettingsForAsk()) e.preventDefault();
+    };
+    window.addEventListener(SCREENSHOT_EVENT, onScreenshot);
+    return () => window.removeEventListener(SCREENSHOT_EVENT, onScreenshot);
   }, [windowLabel]);
 
   // LAUNCHER window: listen for nexq:meeting_ended from overlay, show self + reset state

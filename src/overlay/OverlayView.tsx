@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useScenarioStore } from "../stores/scenarioStore";
 import { useCallLogStore } from "../stores/callLogStore";
@@ -22,6 +22,7 @@ import { useTopicDetection } from "../hooks/useTopicDetection";
 import { useTranslation } from "../hooks/useTranslation";
 import { MODE_COLORS } from "../lib/speakerColors";
 import { showLauncherWindow } from "../lib/windows";
+import { SCREENSHOT_EVENT } from "../lib/screenCapture";
 import {
   GripHorizontal,
   Minus,
@@ -70,6 +71,19 @@ export function OverlayView() {
     setBookmarksOpen(false);
     setLayoutMode("split");
   }, [activeMeetingId]);
+  // A captured screenshot needs the Ask box, which the "transcript" layout hides:
+  // switch to the split view (the Ask box takes the picture when it mounts).
+  const layoutRef = useRef(layoutMode);
+  layoutRef.current = layoutMode;
+  useEffect(() => {
+    const onScreenshot = (e: Event) => {
+      if (layoutRef.current !== "transcript") return;
+      setLayoutMode("split");
+      e.preventDefault();
+    };
+    window.addEventListener(SCREENSHOT_EVENT, onScreenshot);
+    return () => window.removeEventListener(SCREENSHOT_EVENT, onScreenshot);
+  }, []);
   const cycleLayout = () => setLayoutMode((m) => m === "split" ? "ai" : m === "ai" ? "transcript" : "split");
   const toggleLog = useCallLogStore((s) => s.toggleOpen);
   const logOpen = useCallLogStore((s) => s.isOpen);

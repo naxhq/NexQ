@@ -77,9 +77,25 @@ describe("ModeButtons Ask box with a pasted image", () => {
     expect(vi.mocked(runUserAction)).not.toHaveBeenCalled();
   });
 
-  it("takes a screenshot that arrived before the Ask box existed", async () => {
+  it("puts the cursor in the Ask box for a screenshot, also when the box was already open", async () => {
     const { deliverScreenshot } = await import("../lib/screenCapture");
+    render(<ModeButtons />);
+    openAsk();
+    // Focus is somewhere else (the user clicked away, or the window was behind).
+    input().blur();
+    expect(document.activeElement).not.toBe(input());
+    act(() => deliverScreenshot(new File(["shot"], "screen.png", { type: "image/png" })));
+    await screen.findByRole("group", { name: "Attached images" });
+    expect(document.activeElement).toBe(input());
+  });
+
+  it("takes a screenshot that arrived before the Ask box existed", async () => {
+    const { SCREENSHOT_EVENT, deliverScreenshot } = await import("../lib/screenCapture");
+    // Something (e.g. the overlay switching layouts) claimed it while the Ask box was on its way.
+    const claim = (e: Event) => e.preventDefault();
+    window.addEventListener(SCREENSHOT_EVENT, claim);
     deliverScreenshot(new File(["shot"], "screen.png", { type: "image/png" }));
+    window.removeEventListener(SCREENSHOT_EVENT, claim);
     render(<ModeButtons />);
     await screen.findByRole("group", { name: "Attached images" });
     expect(input()).toBeTruthy();

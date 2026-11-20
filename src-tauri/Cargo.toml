@@ -117,3 +117,17 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.sonora-simd]
 opt-level = 3
+
+# A full-screen capture is resized and PNG-encoded for the Ask box
+# (src/commands/screen_capture_commands.rs): seconds of work unoptimized.
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
+# png uses this miniz_oxide; the bare name is ambiguous (two versions).
+[profile.dev.package."miniz_oxide@0.8.9"]
+opt-level = 3
+[profile.dev.package.crc32fast]
+opt-level = 3
