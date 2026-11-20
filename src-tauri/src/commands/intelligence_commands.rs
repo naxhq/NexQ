@@ -512,9 +512,9 @@ pub(crate) async fn run_session_assist<'a>(
         // A with-sources session that just failed is not tried again at once:
         // the plain session answers, with the reason and when it retries.
         if key.with_sources {
-            if let Some(text) = state.sources_cooldown.gate(&key, std::time::Instant::now()) {
+            if let Some((plain, text)) = state.sources_cooldown.plain_instead(&key, std::time::Instant::now()) {
                 emit_activity(app, &params, notice(text));
-                key = key.sibling();
+                key = plain;
                 continue;
             }
         }

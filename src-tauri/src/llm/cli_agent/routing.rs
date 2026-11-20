@@ -194,6 +194,17 @@ impl SourcesCooldown {
         ))
     }
 
+    /// The routing decision of a request for `key`, as `run_session_assist`
+    /// takes it: `None` to go on with `key`, or `Some((plain key, notice))` when
+    /// `key` is a with-sources session still cooling down after a failure, so
+    /// the plain session answers and the notice says why.
+    pub fn plain_instead(&self, key: &SessionKey, now: Instant) -> Option<(SessionKey, String)> {
+        if !key.with_sources {
+            return None;
+        }
+        self.gate(key, now).map(|text| (key.sibling(), text))
+    }
+
     /// The cooldown of failure `generation` of `key` ended: true if it is still
     /// that key's current failure (not cleared or replaced since), meaning the
     /// caller runs the background retry.
@@ -2130,8 +2141,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_sources_start_is_not_retried_by_the_next_requests() {
-        // Mirror of run_session_assist's gate: ask the cooldown, and only
-        // start the with-sources session when it allows.
+        // The routing decision run_session_assist takes (`plain_instead`), then
+        // the real manager: only the first request starts the with-sources
+        // session, the next ones go to the plain session.
         let (manager, sessions, script, plain) = setup(&[]);
         script.fail_sources.store(true, Ordering::SeqCst);
         let key = plain.sibling();
@@ -2141,18 +2153,27 @@ mod tests {
         );
         let cd = SourcesCooldown::default();
         let mut started = 0;
+        let mut notices = Vec::new();
         for _ in 0..3 {
-            if cd.gate(&key, Instant::now()).is_none() {
-                let init = sessions.restart_init(&key).unwrap();
-                if manager.ensure(&key, init).await.is_err() {
-                    cd.fail(&key, "failed", Instant::now());
+            match cd.plain_instead(&key, Instant::now()) {
+                None => {
+                    let init = sessions.restart_init(&key).unwrap();
+                    if manager.ensure(&key, init).await.is_err() {
+                        cd.fail(&key, "failed", Instant::now());
+                    }
+                    started += 1;
                 }
-                started += 1;
-            } else {
-                // The plain session answers instead.
-                ask(&manager, &sessions, &plain, &[seg("a", 0)]).await.unwrap();
+                Some((instead, notice)) => {
+                    assert_eq!(instead, plain, "the plain session of the same scope and tier answers");
+                    notices.push(notice);
+                    ask(&manager, &sessions, &instead, &[seg("a", 0)]).await.unwrap();
+                }
             }
         }
+        assert_eq!(notices.len(), 2);
+        assert!(notices[0].contains("Your sources couldn't be loaded") && notices[0].contains("failed"), "{}", notices[0]);
+        // A plain key is never held back, failure or not.
+        assert!(cd.plain_instead(&plain, Instant::now()).is_none());
         assert_eq!(started, 1, "only the first request tried the sources");
         assert_eq!(script.sources_spawns.load(Ordering::SeqCst), 1);
         // A config change clears it: the next request tries again.
