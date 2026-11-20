@@ -1,7 +1,8 @@
 // ONNX Runtime in-process streaming STT provider.
 //
-// Loads streaming transducer ONNX models (encoder, decoder, joiner) via the
-// `ort` crate and runs inference on a dedicated std::thread.
+// Loads streaming transducer ONNX models (encoder, decoder, joiner) or a
+// single-file NeMo CTC model (ort_streaming/ctc.rs) via the `ort` crate and
+// runs inference on a dedicated std::thread.
 //
 // Key fixes over the original implementation:
 // - Uses log-mel filterbank features (80-dim) instead of raw PCM
@@ -1375,6 +1376,45 @@ fn run_joiner(
         .map_err(|e| format!("joiner output extraction failed: {}", e))?;
 
     Ok(data.to_vec())
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+
+    /// A fresh directory holding empty files with the given names.
+    fn model_dir(name: &str, files: &[&str]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("nexq-ort-discover-{}-{}", name, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for file in files {
+            std::fs::write(dir.join(file), b"").unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn a_transducer_directory_is_discovered_as_a_transducer() {
+        let dir = model_dir("transducer", &["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"]);
+        assert!(matches!(discover(&dir), Ok(DiscoveredModel::Transducer(_))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_single_file_directory_is_discovered_as_ctc() {
+        let dir = model_dir("ctc", &["model.int8.onnx", "tokens.txt"]);
+        assert!(matches!(discover(&dir), Ok(DiscoveredModel::Ctc(_))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_empty_directory_reports_both_layouts() {
+        let dir = model_dir("empty", &[]);
+        let error = discover(&dir).err().expect("an empty directory has no model");
+        assert!(error.contains("encoder"), "{error}");
+        assert!(error.contains("model.onnx"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]

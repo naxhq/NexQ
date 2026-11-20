@@ -45,7 +45,7 @@ fn decode_tokens(ids: &[i64], vocab: &HashMap<i64, String>) -> String {
     text.trim().to_owned()
 }
 
-pub(super) fn normalize_features(features: &mut [f32], frames: usize) {
+fn normalize_features(features: &mut [f32], frames: usize) {
     for channel in features.chunks_exact_mut(frames) {
         let mean = channel.iter().map(|&x| x as f64).sum::<f64>() / frames as f64;
         let variance = channel.iter().map(|&x| (x as f64 - mean).powi(2)).sum::<f64>() / (frames - 1) as f64;
@@ -325,5 +325,18 @@ mod tests {
         assert_eq!(frames, 100);
         assert_eq!(features.len(), 12800);
         assert!(features.iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn eighty_mel_features_keep_the_log_floor_without_normalization() {
+        let floor = 2.0f32.powi(-24).ln();
+        let (frames, raw) = Features::new(80).extract(&vec![0.0; 16000], false);
+        assert_eq!(frames, 100);
+        assert_eq!(raw.len(), 8000);
+        assert!(raw.iter().all(|&x| x == floor));
+        // The same silence, normalized per feature, is all zeros.
+        let (_, normalized) = Features::new(80).extract(&vec![0.0; 16000], true);
+        assert_eq!(normalized.len(), 8000);
+        assert!(normalized.iter().all(|&x| x == 0.0));
     }
 }

@@ -1,7 +1,7 @@
 // Native NeMo CTC decoding (Parakeet CTC 110M and similar).
 //
 // Unlike the TDT transducer in nemo.rs, a NeMo CTC export is a single ONNX
-// graph: log-mel features in, per-frame log-probits over the vocabulary out.
+// graph: log-mel features in, per-frame log-probs over the vocabulary out.
 // No decoder/joiner, no autoregressive loop — just one encoder run per
 // segment followed by greedy CTC decoding (argmax, collapse repeats, drop
 // blank), the same contract sherpa-onnx's own offline-ctc-greedy-search
@@ -10,7 +10,7 @@
 use super::nemo::Features;
 use super::{AudioMessage, TranscriptResult, SAMPLE_RATE};
 use ort::session::Session;
-use ort::value::TensorRef;
+use ort::value::{TensorRef, ValueType};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -51,10 +51,11 @@ fn decode_tokens(ids: &[i64], vocab: &HashMap<i64, String>) -> String {
 }
 
 /// The blank class id for a CTC head with `num_classes` outputs. Sherpa-onnx
-/// reads it from the token table (`<blk>`, else `<blank>`, else `<eps>`); the
-/// last class is the fallback, since NeMo appends the blank after the vocabulary.
+/// reads it from the token table (`<blk>`, else `<eps>`, else `<blank>`, in
+/// that order, see offline-recognizer-ctc-impl.h); the last class is the
+/// fallback, since NeMo appends the blank after the vocabulary.
 fn blank_id(vocab: &HashMap<i64, String>, num_classes: usize) -> Result<usize, String> {
-    let blank = ["<blk>", "<blank>", "<eps>"].iter()
+    let blank = ["<blk>", "<eps>", "<blank>"].iter()
         .find_map(|name| vocab.iter().find(|(_, piece)| piece.as_str() == *name).map(|(id, _)| *id))
         .unwrap_or(num_classes as i64 - 1);
     if blank < 0 || blank as usize >= num_classes {
@@ -65,7 +66,8 @@ fn blank_id(vocab: &HashMap<i64, String>, num_classes: usize) -> Result<usize, S
 
 fn recognize(
     encoder: &mut Session, features: &Features, samples: &[f32],
-    vocab: &HashMap<i64, String>, subsampling_factor: usize, normalize: bool,
+    vocab: &HashMap<i64, String>, num_classes: usize, blank: usize,
+    subsampling_factor: usize, normalize: bool,
 ) -> Result<String, String> {
     let (frames, mel) = features.extract(samples, normalize);
     if frames == 0 { return Ok(String::new()); }
@@ -74,14 +76,9 @@ fn recognize(
     let length_tensor = TensorRef::from_array_view(([1], &lengths[..])).map_err(|e| e.to_string())?;
     let outputs = encoder.run(ort::inputs![feature_tensor, length_tensor]).map_err(|e| format!("NeMo CTC encoder: {e}"))?;
     let (shape, data) = outputs[0].try_extract_tensor::<f32>().map_err(|e| e.to_string())?;
-    if shape.len() != 3 || shape[0] != 1 || shape[2] < 1 {
-        return Err(format!("Unexpected NeMo CTC output shape {shape:?}"));
+    if shape.len() != 3 || shape[0] != 1 || shape[2] as usize != num_classes {
+        return Err(format!("Unexpected NeMo CTC output shape {shape:?}, expected [1, frames, {num_classes}]"));
     }
-    // The class count comes from the output itself: the metadata `vocab_size`
-    // excludes the blank in hybrid TDT/CTC exports (1024 vs. a 1025-wide head)
-    // but includes it in CTC-only exports.
-    let num_classes = shape[2] as usize;
-    let blank = blank_id(vocab, num_classes)?;
     let num_frames = shape[1] as usize;
     let valid = (frames / subsampling_factor.max(1)).min(num_frames);
     let tokens = greedy_decode(data, valid, num_classes, blank);
@@ -95,25 +92,52 @@ fn epoch_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
 }
 
+/// Static size of dimension `index` of a tensor type, when the graph fixes it.
+fn static_dim(dtype: &ValueType, index: usize) -> Option<usize> {
+    match dtype {
+        ValueType::Tensor { shape, .. } => shape.get(index).copied().filter(|&d| d > 0).map(|d| d as usize),
+        _ => None,
+    }
+}
+
 pub(super) fn run(
     encoder: &mut Session, vocab: &HashMap<i64, String>, language: &str, stop: &AtomicBool,
     audio_rx: &std::sync::mpsc::Receiver<AudioMessage>,
     result_tx: &mpsc::Sender<TranscriptResult>, mut segment: u64,
     debug: &impl Fn(&str, &str),
 ) -> Result<(), String> {
+    // The input contract is NeMo's `audio_signal` [batch, mels, time] plus `length`.
+    let input = encoder.inputs().first().ok_or("NeMo CTC encoder has no inputs")?;
+    if input.name() != "audio_signal" {
+        return Err(format!("Unsupported NeMo CTC encoder input {:?}, expected audio_signal", input.name()));
+    }
+    if let Some(mels) = static_dim(input.dtype(), 1) {
+        if mels != 80 {
+            return Err(format!("Unsupported NeMo CTC encoder: {mels} mel bins, expected 80"));
+        }
+    }
+    let static_classes = encoder.outputs().first().and_then(|output| static_dim(output.dtype(), 2));
     let metadata = encoder.metadata().map_err(|e| e.to_string())?;
     let subsampling_factor: usize = metadata.custom("subsampling_factor").ok_or("NeMo CTC encoder missing subsampling_factor")?.parse().map_err(|e| format!("NeMo CTC subsampling_factor: {e}"))?;
     // "per_feature" is the normalization every published Parakeet CTC export
-    // uses; an empty/"NA" value (GigaAM-style exports) means raw features.
+    // uses. An empty or "NA" value means unnormalized log-mel; other front ends
+    // (e.g. GigaAM's 64-bin features) are not supported.
     let normalize_type = metadata.custom("normalize_type").unwrap_or_default();
     let normalize = normalize_type == "per_feature";
     if !matches!(normalize_type.as_str(), "per_feature" | "" | "NA") {
         return Err(format!("Unsupported NeMo CTC normalize_type {normalize_type:?}"));
     }
     drop(metadata);
+    // The class count is the output's last dimension (the metadata vocab_size
+    // can leave out the blank) and the blank follows from the token table.
+    // Both are fixed for the model, so they are resolved once, here; every
+    // segment's output is checked against them.
+    let num_classes = static_classes.unwrap_or(vocab.len());
+    let blank = blank_id(vocab, num_classes)?;
     debug("info", &format!(
         "NeMo CTC: offline 80-bin Slaney mel encoder, subsampling {subsampling_factor}, normalize_type={normalize_type:?}"
     ));
+    debug("info", &format!("NeMo CTC: {num_classes} classes, blank {blank}"));
     let features = Features::new(80);
     let mut samples = Vec::new();
     let mut silence = 0;
@@ -157,7 +181,7 @@ pub(super) fn run(
         }
         if flush && !samples.is_empty() {
             let text = if heard {
-                recognize(encoder, &features, &samples, vocab, subsampling_factor, normalize)?
+                recognize(encoder, &features, &samples, vocab, num_classes, blank, subsampling_factor, normalize)?
             } else {
                 String::new()
             };
@@ -234,10 +258,11 @@ mod tests {
 
     #[test]
     fn blank_falls_back_through_other_names_then_the_last_class() {
+        // sherpa-onnx's order: `<blk>`, then `<eps>`, then `<blank>`.
         let vocab = HashMap::from([(0, "a".into()), (1, "<blank>".into()), (2, "<eps>".into())]);
-        assert_eq!(blank_id(&vocab, 3), Ok(1));
-        let vocab = HashMap::from([(0, "a".into()), (2, "<eps>".into())]);
         assert_eq!(blank_id(&vocab, 3), Ok(2));
+        let vocab = HashMap::from([(0, "a".into()), (1, "<blank>".into())]);
+        assert_eq!(blank_id(&vocab, 3), Ok(1));
         let vocab = HashMap::from([(0, "a".into()), (1, "b".into())]);
         assert_eq!(blank_id(&vocab, 3), Ok(2));
     }

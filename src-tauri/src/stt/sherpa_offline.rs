@@ -520,7 +520,7 @@ fn write_wav(path: &std::path::Path, samples: &[i16], sample_rate: u32) -> std::
 /// The sherpa-onnx offline program's file name on this platform.
 pub const OFFLINE_BINARY: &str = if cfg!(windows) { "sherpa-onnx-offline.exe" } else { "sherpa-onnx-offline" };
 
-/// Why a CTC or SenseVoice model can't start, for the Dev Log. NexQ doesn't
+/// Why a SenseVoice model can't start, for the Dev Log. NexQ doesn't
 /// download the program those models run through.
 pub fn missing_binary_message(models_base_dir: &std::path::Path) -> String {
     format!(
