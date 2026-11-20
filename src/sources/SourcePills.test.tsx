@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSessionStatus, McpServer } from "../lib/types";
 
@@ -93,6 +93,26 @@ describe("SourcePills", () => {
     await waitFor(() => expect(saved.get("sourceToggles")).toEqual({ notes: true, tools: false }));
     fireEvent.click(screen.getByRole("switch", { name: "Notes" }));
     expect(useSourcesStore.getState().toggles.notes).toBe(false);
+  });
+
+  it("two quick clicks on different pills both count", () => {
+    render(<SourcePills scope="live" />);
+    const notes = screen.getByRole("switch", { name: "Notes" });
+    const tools = screen.getByRole("switch", { name: "Tools" });
+    // Both clicks land before React renders again, as with a fast double click.
+    act(() => {
+      notes.click();
+      tools.click();
+    });
+    expect(useSourcesStore.getState().toggles).toEqual({ notes: true, tools: true });
+  });
+
+  it("what a pill's tooltip says is also read out, not only in the title", () => {
+    render(<SourcePills scope="live" />);
+    const notes = screen.getByRole("switch", { name: "Notes" });
+    const described = notes.getAttribute("aria-describedby");
+    expect(described).toBeTruthy();
+    expect(document.getElementById(described!)?.textContent).toBe("Notes: DePaul vault, Team wiki");
   });
 
   it("a pill shows only for a kind that has something enabled", () => {

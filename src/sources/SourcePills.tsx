@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { Fragment, useEffect, useId } from "react";
 import { AlertCircle, AlertTriangle, BookOpen, Loader2, RotateCcw, Wrench } from "lucide-react";
 import { findSourcesSession, pillState, type PillState } from "../lib/sourcePills";
 import { retrySourcesSession } from "../lib/ipc";
@@ -19,7 +19,7 @@ const ON_STYLE = {
 } as const;
 
 const PILL_BASE =
-  "flex items-center gap-1 rounded-lg px-2 py-1 text-meta font-medium transition-all duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
+  "flex items-center gap-1 min-h-6 rounded-lg px-2 py-1 text-meta font-medium transition-all duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
 
 function styleOf(kind: "notes" | "tools", state: PillState): string {
   switch (state) {
@@ -43,6 +43,7 @@ export function SourcePills({ scope, meetingId = null }: SourcePillsProps) {
   const toggles = useSourcesStore((s) => s.toggles);
   const setToggles = useSourcesStore((s) => s.setToggles);
   const sessions = useAgentStore((s) => s.sessions);
+  const baseId = useId();
 
   useEffect(() => {
     useAgentStore.getState().init();
@@ -85,13 +86,14 @@ export function SourcePills({ scope, meetingId = null }: SourcePillsProps) {
         const label = kind === "notes" ? "Notes" : "Tools";
         const Icon = kind === "notes" ? BookOpen : Wrench;
         return (
+          <Fragment key={kind}>
           <button
-            key={kind}
             type="button"
             role="switch"
             aria-checked={toggles[kind]}
             title={tooltip(kind)}
-            onClick={() => setToggles({ ...toggles, [kind]: !toggles[kind] })}
+            aria-describedby={`${baseId}-${kind}`}
+            onClick={() => setToggles((t) => ({ ...t, [kind]: !t[kind] }))}
             className={`${PILL_BASE} ${styleOf(kind, state)}`}
           >
             {state === "loading" ? (
@@ -104,6 +106,10 @@ export function SourcePills({ scope, meetingId = null }: SourcePillsProps) {
             <span>{label}</span>
             {notice && state !== "error" && <AlertTriangle className="h-3 w-3 text-warning" aria-hidden="true" />}
           </button>
+          <span id={`${baseId}-${kind}`} className="sr-only">
+            {tooltip(kind)}
+          </span>
+          </Fragment>
         );
       })}
       {failing && (

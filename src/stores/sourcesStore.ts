@@ -161,8 +161,12 @@ interface SourcesState {
   load: () => Promise<void>;
   /** Set, save and give to the backend. Resolves once the backend has answered; never rejects. */
   setConfig: (c: PersonalSourcesConfig) => Promise<void>;
-  /** Set and save. A pill flipped here applies to the next answer. */
-  setToggles: (t: SourceToggles) => void;
+  /**
+   * Set and save. A pill flipped here applies to the next answer. Pass a
+   * function to change the latest value (two quick clicks each see the other's
+   * result).
+   */
+  setToggles: (t: SourceToggles | ((latest: SourceToggles) => SourceToggles)) => void;
 }
 
 /** Notices of our own saves come back through `onKeyChange`; skip them. */
@@ -270,8 +274,12 @@ export const useSourcesStore = create<SourcesState>((set) => ({
   },
 
   setToggles: (t) => {
-    const toggles = { notes: t.notes === true, tools: t.tools === true };
-    set({ toggles });
+    let toggles: SourceToggles = { notes: false, tools: false };
+    set((state) => {
+      const next = typeof t === "function" ? t(state.toggles) : t;
+      toggles = { notes: next.notes === true, tools: next.tools === true };
+      return { toggles };
+    });
     void persist(TOGGLES_KEY, toggles);
   },
 }));
