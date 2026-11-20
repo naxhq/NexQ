@@ -165,6 +165,24 @@ describe("LLM provider cards: in use, viewing, status", () => {
     }
   });
 
+  it("a manual Test Connection result isn't overwritten by the opening check timing out", async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      // The two opening probes never answer; the manual test (third call) succeeds.
+      ipc.testLLMConnection.mockImplementation(() => (++calls <= 2 ? new Promise(() => {}) : Promise.resolve(true)));
+      render(<LLMSettings />);
+      fireEvent.click(card(/^Ollama\b/));
+      fireEvent.click(screen.getByRole("button", { name: /Test Connection/ }));
+      await vi.advanceTimersByTimeAsync(100);
+      expect(within(card(/^Ollama\b/)).getByText("Ready")).toBeInTheDocument();
+      await vi.advanceTimersByTimeAsync(3500);
+      expect(within(card(/^Ollama\b/)).getByText("Ready")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("Claude connected but not in use is Connected, not In use", async () => {
     render(<LLMSettings />);
     await waitFor(() => expect(within(card(/^Claude\b/)).getByText("Connected")).toBeInTheDocument());

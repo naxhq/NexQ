@@ -186,7 +186,11 @@ export function LLMSettings() {
         timer = setTimeout(() => resolve(false), REACH_TIMEOUT_MS);
       });
       Promise.race([testLLMConnection(JSON.stringify({ provider_type: p })).catch(() => false), timeout])
-        .then((ok) => alive && setLocalReach((prev) => ({ ...prev, [p]: ok ? "up" : "down" })))
+        // A manual Test Connection that finished first wins: only fill in a still-unknown status.
+        .then((ok) =>
+          alive &&
+          setLocalReach((prev) => (prev[p] === "checking" ? { ...prev, [p]: ok ? "up" : "down" } : prev)),
+        )
         .finally(() => clearTimeout(timer));
     }
     return () => {
