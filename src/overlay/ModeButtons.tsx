@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStreamStore } from "../stores/streamStore";
 import { useAIActionsStore } from "../stores/aiActionsStore";
 import { useConfigStore } from "../stores/configStore";
@@ -6,6 +6,7 @@ import { useMeetingStore } from "../stores/meetingStore";
 import { cancelGeneration } from "../lib/ipc";
 import { runYourAction, useAutoAnswerRunning } from "../lib/autoAnswer";
 import { AskImageChips, askPlaceholder, useAskImages } from "./AskImages";
+import { SCREENSHOT_EVENT, takePendingScreenshots } from "../lib/screenCapture";
 import { sendAsk } from "./sendAsk";
 import { DEFAULT_CONTEXT_SCOPE, scopeHint } from "../lib/contextScope";
 import { showToast } from "../stores/toastStore";
@@ -128,7 +129,9 @@ export function ModeButtons() {
     canAttach: canAttachImage,
     announcement: askAnnouncement,
     onPaste: onAskPaste,
+    attach: attachAskImages,
     remove: removeAskImage,
+    removeSent: removeSentImages,
     clear: clearAskImages,
   } = useAskImages();
 
@@ -141,21 +144,57 @@ export function ModeButtons() {
     clearAskImages();
   }, [meetingId, clearAskImages]);
 
+  // The capture shortcut: open the Ask box with the screenshot attached, the
+  // same way a paste would, and put the cursor in it (also when it was already
+  // open). Also takes one that arrived before this mounted.
+  const askInputRef = useRef<HTMLInputElement>(null);
+  const [focusAsk, setFocusAsk] = useState(0);
+  const wantsFocus = useRef(false);
+  // The user's own answer is running: the Ask box stays hidden until it ends.
+  const lockedRef = useRef(locked);
+  lockedRef.current = locked;
+  useEffect(() => {
+    const take = (e?: Event) => {
+      const files = takePendingScreenshots();
+      if (files.length === 0) return;
+      e?.preventDefault(); // taken: nobody else needs to make room for it
+      setAskInputVisible(true);
+      // A refused screenshot (no free slot, wrong provider) is explained by the
+      // attach itself; only an accepted one is announced.
+      const accepted = attachAskImages(files);
+      if (accepted && lockedRef.current) showToast("Screenshot added. Ask opens when this answer finishes.", "info");
+      wantsFocus.current = true;
+      setFocusAsk((n) => n + 1);
+    };
+    take();
+    window.addEventListener(SCREENSHOT_EVENT, take);
+    return () => window.removeEventListener(SCREENSHOT_EVENT, take);
+  }, [attachAskImages]);
+  useEffect(() => {
+    // Waits for the Ask box to exist (it is hidden while an answer runs).
+    if (wantsFocus.current && askInputRef.current) {
+      askInputRef.current.focus();
+      wantsFocus.current = false;
+    }
+  }, [focusAsk, locked, askInputVisible]);
+
   const handleAskSubmit = useCallback(() => {
     if (locked) return;
+    // A screenshot taken while this request is on its way is not part of it.
+    const carried = askSending ? [] : askImages;
     const sent = sendAsk({
       typed: askInputText,
-      images: askSending ? [] : askImages,
+      images: carried,
       fallbackError: "Couldn't send question",
       onSending: setAskSending,
-      onSent: clearAskImages,
+      onSent: () => removeSentImages(carried),
       // A failed send keeps the typed text and the images, to send again.
       onFailed: (typed) => setAskInputText((current) => current || typed),
     });
     if (!sent) return;
     setAskInputText("");
     setAskInputVisible(false);
-  }, [askInputText, askImages, askSending, locked, clearAskImages, setAskSending]);
+  }, [askInputText, askImages, askSending, locked, removeSentImages, setAskSending]);
 
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -208,6 +247,7 @@ export function ModeButtons() {
           <AskImageChips images={askSending ? [] : askImages} onRemove={removeAskImage} announcement={askAnnouncement} />
           <div className="flex items-center gap-1.5">
           <input
+            ref={askInputRef}
             type="text"
             value={askInputText}
             onChange={(e) => setAskInputText(e.target.value)}

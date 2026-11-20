@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { ScreenShareOff } from "lucide-react";
-import { DEFAULT_ASSIST_SHORTCUT, DEFAULT_STEALTH_SHORTCUT, useConfigStore } from "../stores/configStore";
+import { DEFAULT_ASSIST_SHORTCUT, DEFAULT_CAPTURE_SHORTCUT, DEFAULT_STEALTH_SHORTCUT, useConfigStore } from "../stores/configStore";
 import { showToast } from "../stores/toastStore";
 import { getStealthSupport } from "../lib/ipc";
+import { providerReadsImages } from "../lib/imageAttachments";
+import { screenCaptureSupported } from "../lib/shortcutLabel";
 import { ShortcutButton } from "./ShortcutButton";
 import type { StealthSupport } from "../lib/types";
 
 /**
  * Settings → General: stealth mode ("Hide from screen share"), its shortcut,
- * and the Assist shortcut that works without switching to NexQ.
+ * the Assist shortcut that works without switching to NexQ, and the shortcut
+ * that captures the screen into Ask.
  */
 export function StealthSettings() {
   const stealthMode = useConfigStore((s) => s.stealthMode);
@@ -17,8 +20,23 @@ export function StealthSettings() {
   const setShortcut = useConfigStore((s) => s.setStealthShortcut);
   const assistShortcut = useConfigStore((s) => s.assistShortcut);
   const setAssistShortcut = useConfigStore((s) => s.setAssistShortcut);
-  const stealthTaken = useMemo(() => ({ [assistShortcut]: "Assist" }), [assistShortcut]);
-  const assistTaken = useMemo(() => ({ [shortcut]: "Hide from screen share" }), [shortcut]);
+  const captureShortcut = useConfigStore((s) => s.captureShortcut);
+  const setCaptureShortcut = useConfigStore((s) => s.setCaptureShortcut);
+  const canReadImages = useConfigStore((s) => providerReadsImages(s.llmProvider));
+  // The capture shortcut doesn't exist where capturing isn't supported: its key stays free there.
+  const captureSupported = screenCaptureSupported();
+  const stealthTaken = useMemo(
+    () => ({ [assistShortcut]: "Assist", ...(captureSupported ? { [captureShortcut]: "Capture screen into Ask" } : {}) }),
+    [assistShortcut, captureShortcut, captureSupported],
+  );
+  const assistTaken = useMemo(
+    () => ({ [shortcut]: "Hide from screen share", ...(captureSupported ? { [captureShortcut]: "Capture screen into Ask" } : {}) }),
+    [shortcut, captureShortcut, captureSupported],
+  );
+  const captureTaken = useMemo(
+    () => ({ [shortcut]: "Hide from screen share", [assistShortcut]: "Assist" }),
+    [shortcut, assistShortcut],
+  );
 
   const [support, setSupport] = useState<StealthSupport | null>(null);
   const [busy, setBusy] = useState(false);
@@ -97,6 +115,23 @@ export function StealthSettings() {
         </div>
         <ShortcutButton value={assistShortcut} defaultValue={DEFAULT_ASSIST_SHORTCUT} onChange={setAssistShortcut} others={assistTaken} />
       </div>
+
+      {captureSupported && (
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <span className="text-xs font-medium text-foreground/80">Capture screen into Ask</span>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              During a meeting, attaches the screen your mouse is on to the Ask box. You send it yourself.
+            </p>
+            {!canReadImages && (
+              <p className="mt-0.5 text-xs text-warning">
+                Off: this AI can't read images. Use Claude (subscription).
+              </p>
+            )}
+          </div>
+          <ShortcutButton value={captureShortcut} defaultValue={DEFAULT_CAPTURE_SHORTCUT} onChange={setCaptureShortcut} others={captureTaken} />
+        </div>
+      )}
 
       {support?.note && <p className="text-meta text-muted-foreground/70">{support.note}</p>}
     </div>

@@ -729,6 +729,15 @@ export async function dismissMeetingPrompt(): Promise<void> {
   return invoke("dismiss_meeting_prompt");
 }
 
+/**
+ * The screen under the mouse pointer as a PNG (at most 1568 px on the long
+ * edge). Held in memory only: nothing is saved. Rejects with a sentence to show
+ * (asked outside the overlay or a meeting, black or protected screen, capture failure).
+ */
+export async function captureScreenUnderCursor(): Promise<ArrayBuffer> {
+  return invoke<ArrayBuffer>("capture_screen_under_cursor");
+}
+
 export async function getStealthSupport(): Promise<StealthSupport> {
   return invoke<StealthSupport>("get_stealth_support");
 }

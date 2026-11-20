@@ -7,6 +7,7 @@ import {
   imageFilesFrom,
   imageProblem,
   prepareImage,
+  providerReadsImages,
   previewSrc,
 } from "../lib/imageAttachments";
 import { showToast } from "../stores/toastStore";
@@ -34,20 +35,22 @@ export function useAskImages() {
   // A request with these images is on its way: they aren't shown meanwhile.
   const [sending, setSending] = useState(false);
   const [announcement, setAnnouncement] = useState("");
-  const canAttach = useConfigStore((s) => s.llmProvider === "claude_cli");
+  const canAttach = useConfigStore((s) => providerReadsImages(s.llmProvider));
   // Slots taken so far, including images still being prepared. A slot is reserved
   // before the (async) work starts, so a quick second paste sees it.
   const count = useRef(0);
 
-  const onPaste = useCallback((e: React.ClipboardEvent) => {
-    // Text wins: a copy from Excel, Word or a web page also carries a picture.
-    if (clipboardHasText(e.clipboardData)) return;
-    const files = imageFilesFrom(e.clipboardData);
-    if (files.length === 0) return;
-    e.preventDefault();
-    if (useConfigStore.getState().llmProvider !== "claude_cli") {
+  /**
+   * Attaches image files: from a paste, or the screen-capture shortcut. The
+   * provider check, the 3-image limit, the type and size checks and the
+   * downscaling are the same for both. Returns whether at least one file was
+   * accepted; otherwise a toast already says why.
+   */
+  const attach = useCallback((files: File[]): boolean => {
+    if (files.length === 0) return false;
+    if (!providerReadsImages(useConfigStore.getState().llmProvider)) {
       showToast(IMAGES_NEED_CLAUDE, "warning");
-      return;
+      return false;
     }
     const accepted: File[] = [];
     for (const file of files) {
@@ -59,7 +62,7 @@ export function useAskImages() {
       count.current += 1;
       accepted.push(file);
     }
-    if (accepted.length === 0) return;
+    if (accepted.length === 0) return false;
     void (async () => {
       const prepared = await Promise.allSettled(accepted.map(prepareImage));
       const added: ImageAttachment[] = [];
@@ -76,7 +79,20 @@ export function useAskImages() {
         setAnnouncement(`Image attached (${count.current} of ${MAX_IMAGES})`);
       }
     })();
+    return true;
   }, []);
+
+  const onPaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      // Text wins: a copy from Excel, Word or a web page also carries a picture.
+      if (clipboardHasText(e.clipboardData)) return;
+      const files = imageFilesFrom(e.clipboardData);
+      if (files.length === 0) return;
+      e.preventDefault();
+      attach(files);
+    },
+    [attach],
+  );
 
   const remove = useCallback((index: number) => {
     // One slot back; images still being prepared keep theirs.
@@ -85,13 +101,24 @@ export function useAskImages() {
     setAnnouncement("Image removed");
   }, []);
 
+  /**
+   * Drops the images that were just sent (by identity) and frees their slots;
+   * one attached while the request was on its way stays.
+   */
+  const removeSent = useCallback((sent: ImageAttachment[]) => {
+    if (sent.length === 0) return;
+    count.current = Math.max(0, count.current - sent.length);
+    setImages((prev) => prev.filter((image) => !sent.includes(image)));
+    setAnnouncement("");
+  }, []);
+
   const clear = useCallback(() => {
     count.current = 0;
     setImages([]);
     setAnnouncement("");
   }, []);
 
-  return { images, sending, setSending, canAttach, announcement, onPaste, remove, clear };
+  return { images, sending, setSending, canAttach, announcement, onPaste, attach, remove, removeSent, clear };
 }
 
 /**

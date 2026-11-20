@@ -12,7 +12,9 @@ import { isOverlayVisible, meetingShortcutAction, showLauncherWindow, showMeetin
 import { endMeetingFromThisWindow } from "./useUpdater";
 import { showToast } from "../stores/toastStore";
 import { useConfigStore } from "../stores/configStore";
-import { normalizeAccelerator, reservedShortcutAction } from "../lib/shortcutLabel";
+import { formatShortcut, normalizeAccelerator, reservedShortcutAction, screenCaptureSupported } from "../lib/shortcutLabel";
+import { providerReadsImages } from "../lib/imageAttachments";
+import { captureScreenIntoAsk } from "../lib/screenCapture";
 
 /** Ctrl+M: end the running meeting (in every window that holds it) or start one. */
 async function toggleMeetingFromShortcut(): Promise<void> {
@@ -44,9 +46,23 @@ export async function toggleStealthMode(): Promise<void> {
   }
 }
 
+/** Keys whose registration failure was already announced (once is enough). */
+const announcedCaptureKeys = new Set<string>();
+
+function announceCaptureShortcutFailure(key: string): void {
+  if (announcedCaptureKeys.has(key)) return;
+  announcedCaptureKeys.add(key);
+  showToast(
+    `${formatShortcut(key)} is in use by another app, so Capture screen into Ask is off. Choose another key in Settings > General.`,
+    "warning",
+  );
+}
+
 export function useGlobalShortcut() {
   const stealthShortcut = useConfigStore((s) => s.stealthShortcut);
   const assistShortcut = useConfigStore((s) => s.assistShortcut);
+  const captureShortcut = useConfigStore((s) => s.captureShortcut);
+  const canReadImages = useConfigStore((s) => providerReadsImages(s.llmProvider));
   const meetingActive = useMeetingStore((s) => !!s.activeMeeting);
 
   // Assist from any app (Space only works while the overlay has focus). Held
@@ -82,6 +98,46 @@ export function useGlobalShortcut() {
       if (registered) unregister(key).catch(() => {});
     };
   }, [assistShortcut, stealthShortcut, meetingActive]);
+
+  // Capture the screen under the mouse into the Ask box. Held only during a
+  // meeting, by the overlay window, and only while the chosen AI can read
+  // images, so the key combination stays free for other apps otherwise.
+  // Assist and Hide from screen share win a collision.
+  useEffect(() => {
+    const key = captureShortcut;
+    if (!screenCaptureSupported() || !meetingActive || !canReadImages || !key) return;
+    if (getCurrentWebviewWindow().label !== "overlay") return;
+    const wanted = normalizeAccelerator(key);
+    if (
+      reservedShortcutAction(key) ||
+      wanted === normalizeAccelerator(stealthShortcut) ||
+      wanted === normalizeAccelerator(assistShortcut)
+    ) {
+      console.warn(`[useGlobalShortcut] Capture shortcut ${key} collides with another shortcut; not registered`);
+      return;
+    }
+    let registered = false;
+    let cancelled = false;
+    (async () => {
+      try {
+        await unregister(key).catch(() => {});
+        if (cancelled) return;
+        await register(key, (event) => {
+          if (event.state === "Pressed") captureScreenIntoAsk().catch(() => {});
+        });
+        registered = true;
+        // The meeting ended (or the key or provider changed) while registering.
+        if (cancelled) unregister(key).catch(() => {});
+      } catch (err) {
+        console.warn(`Failed to register capture shortcut ${key}:`, err);
+        if (!cancelled) announceCaptureShortcutFailure(key);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (registered) unregister(key).catch(() => {});
+    };
+  }, [captureShortcut, assistShortcut, stealthShortcut, meetingActive, canReadImages]);
 
   // Stealth mode shortcut (user-configurable, re-registered when it changes)
   useEffect(() => {

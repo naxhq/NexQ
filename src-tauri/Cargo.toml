@@ -89,6 +89,9 @@ windows = { version = "0.62", features = [
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Variant",
     "Win32_System_LibraryLoader",
+    # Screen capture for the Ask shortcut (GDI BitBlt, monitors, per-monitor DPI)
+    "Win32_Graphics_Gdi",
+    "Win32_UI_HiDpi",
 ] }
 
 # macOS-specific
@@ -113,4 +116,17 @@ opt-level = 3
 [profile.dev.package.sonora-fft]
 opt-level = 3
 [profile.dev.package.sonora-simd]
+opt-level = 3
+
+# A full-screen capture is resized and PNG-encoded for the Ask box
+# (src/commands/screen_capture_commands.rs): seconds of work unoptimized.
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+[profile.dev.package.crc32fast]
 opt-level = 3

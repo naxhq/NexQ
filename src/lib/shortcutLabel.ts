@@ -3,6 +3,11 @@ export function isMacPlatform(): boolean {
   return typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
 }
 
+/** Capturing the screen into Ask works on Windows only for now. */
+export function screenCaptureSupported(mac = isMacPlatform()): boolean {
+  return !mac;
+}
+
 const MAC_SYMBOLS: Record<string, string> = {
   CmdOrCtrl: "⌘",
   CommandOrControl: "⌘",

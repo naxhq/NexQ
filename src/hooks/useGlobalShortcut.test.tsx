@@ -1,13 +1,17 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { Meeting } from "../lib/types";
+import type { LLMProviderType, Meeting } from "../lib/types";
 
 const shortcuts = vi.hoisted(() => new Map<string, (event: { state: string }) => void>());
 const captureFailure = vi.hoisted(() => ({ message: "" }));
+const registerFailure = vi.hoisted(() => ({ key: "" }));
 const emitted = vi.hoisted(() => [] as Array<[string, unknown]>);
 const invoked = vi.hoisted(() => [] as Array<[string, Record<string, unknown> | undefined]>);
 vi.mock("@tauri-apps/plugin-global-shortcut", () => ({
-  register: async (key: string, handler: (event: { state: string }) => void) => { shortcuts.set(key, handler); },
+  register: async (key: string, handler: (event: { state: string }) => void) => {
+    if (key === registerFailure.key) throw new Error("already registered");
+    shortcuts.set(key, handler);
+  },
   unregister: async (key: string) => { shortcuts.delete(key); },
 }));
 vi.mock("@tauri-apps/api/event", () => ({
@@ -56,6 +60,7 @@ beforeEach(() => {
   invoked.length = 0;
   shortcuts.clear();
   captureFailure.message = "";
+  registerFailure.key = "";
 });
 afterEach(() => {
   cleanup();
@@ -123,4 +128,129 @@ it("leaves the Assist shortcut to the overlay", async () => {
   act(() => launcher.setState({ activeMeeting: { id: "m1" } as Meeting }));
   await new Promise((r) => setTimeout(r, 20));
   expect(shortcuts.has(DEFAULT_ASSIST_SHORTCUT)).toBe(false);
+});
+
+describe("capture screen shortcut", () => {
+  async function overlayWithProvider(provider: LLMProviderType) {
+    const overlay = await mountWindow("overlay");
+    const { DEFAULT_CAPTURE_SHORTCUT, useConfigStore } = await import("../stores/configStore");
+    useConfigStore.setState({ llmProvider: provider });
+    return { overlay, useConfigStore, key: DEFAULT_CAPTURE_SHORTCUT };
+  }
+  const captured = () => invoked.map(([command]) => command).includes("capture_screen_under_cursor");
+
+  it("is Ctrl+Shift+S by default", async () => {
+    const { key } = await overlayWithProvider("claude_cli");
+    expect(key).toBe("CmdOrCtrl+Shift+S");
+  });
+
+  it("is held in the overlay only during a meeting with a provider that reads images", async () => {
+    const { overlay, useConfigStore, key } = await overlayWithProvider("claude_cli");
+    expect(shortcuts.has(key)).toBe(false);
+
+    act(() => overlay.setState({ activeMeeting: { id: "m1" } as Meeting }));
+    await waitFor(() => expect(shortcuts.has(key)).toBe(true));
+
+    // Another provider can't read images: the key goes back to other apps.
+    act(() => useConfigStore.setState({ llmProvider: "openai" }));
+    await waitFor(() => expect(shortcuts.has(key)).toBe(false));
+    act(() => useConfigStore.setState({ llmProvider: "claude_cli" }));
+    await waitFor(() => expect(shortcuts.has(key)).toBe(true));
+
+    act(() => overlay.setState({ activeMeeting: null }));
+    await waitFor(() => expect(shortcuts.has(key)).toBe(false));
+  });
+
+  it("is not held with another provider even during a meeting", async () => {
+    const { overlay, key } = await overlayWithProvider("openai");
+    act(() => overlay.setState({ activeMeeting: { id: "m1" } as Meeting }));
+    await waitFor(() => expect(shortcuts.has("CmdOrCtrl+Shift+Space")).toBe(true));
+    expect(shortcuts.has(key)).toBe(false);
+  });
+
+  it("is left to the overlay", async () => {
+    const launcher = await mountWindow("launcher");
+    const { DEFAULT_CAPTURE_SHORTCUT, useConfigStore } = await import("../stores/configStore");
+    useConfigStore.setState({ llmProvider: "claude_cli" });
+    act(() => launcher.setState({ activeMeeting: { id: "m1" } as Meeting }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(shortcuts.has(DEFAULT_CAPTURE_SHORTCUT)).toBe(false);
+  });
+
+  it("captures when pressed, and ignores the key release", async () => {
+    const { overlay, key } = await overlayWithProvider("claude_cli");
+    act(() => overlay.setState({ activeMeeting: { id: "m1" } as Meeting }));
+    await waitFor(() => expect(shortcuts.has(key)).toBe(true));
+
+    await act(async () => { shortcuts.get(key)!({ state: "Released" }); });
+    expect(captured()).toBe(false);
+    await act(async () => { shortcuts.get(key)!({ state: "Pressed" }); });
+    await waitFor(() => expect(captured()).toBe(true));
+  });
+
+  it("yields to Assist when bound to the same keys", async () => {
+    const { overlay, useConfigStore } = await overlayWithProvider("claude_cli");
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    act(() => useConfigStore.setState({ assistShortcut: "Ctrl+Shift+S" }));
+    act(() => overlay.setState({ activeMeeting: { id: "m1" } as Meeting }));
+    await waitFor(() => expect(shortcuts.has("Ctrl+Shift+S")).toBe(true));
+    await new Promise((r) => setTimeout(r, 30));
+    // Assist holds it; pressing it does not capture.
+    await act(async () => { shortcuts.get("Ctrl+Shift+S")!({ state: "Pressed" }); });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(captured()).toBe(false);
+  });
+
+  it("yields to Hide from screen share when bound to the same keys", async () => {
+    const { overlay, useConfigStore, key } = await overlayWithProvider("claude_cli");
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    act(() => useConfigStore.setState({ stealthShortcut: key }));
+    act(() => overlay.setState({ activeMeeting: { id: "m1" } as Meeting }));
+    await waitFor(() => expect(shortcuts.has(key)).toBe(true));
+    await new Promise((r) => setTimeout(r, 30));
+    await act(async () => { shortcuts.get(key)!({ state: "Pressed" }); });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(captured()).toBe(false);
+  });
+
+  it("never takes a built-in shortcut", async () => {
+    const { overlay, useConfigStore } = await overlayWithProvider("claude_cli");
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    act(() => useConfigStore.setState({ captureShortcut: "CmdOrCtrl+B" }));
+    act(() => overlay.setState({ activeMeeting: { id: "m1" } as Meeting }));
+    await new Promise((r) => setTimeout(r, 30));
+    await act(async () => { shortcuts.get("CmdOrCtrl+B")?.({ state: "Pressed" }); });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(captured()).toBe(false);
+  });
+
+  it("is not registered on macOS (Windows only for now)", async () => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)");
+    const { overlay, key } = await overlayWithProvider("claude_cli");
+    act(() => overlay.setState({ activeMeeting: { id: "m1" } as Meeting }));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(shortcuts.has(key)).toBe(false);
+  });
+
+  it("tells the user once, pointing to Settings, when the key can't be registered", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    registerFailure.key = "CmdOrCtrl+Shift+S";
+    const { overlay, useConfigStore } = await overlayWithProvider("claude_cli");
+    const { useToastStore } = await import("../stores/toastStore");
+    const toasts = () => useToastStore.getState().toasts.filter((t) => t.message.includes("Settings > General"));
+
+    act(() => overlay.setState({ activeMeeting: { id: "m1" } as Meeting }));
+    await waitFor(() => expect(toasts()).toHaveLength(1));
+    expect(toasts()[0].message).toContain("Ctrl+Shift+S");
+    expect(toasts()[0].type).toBe("warning");
+
+    // A second try (another meeting, the provider switched back) stays quiet.
+    useToastStore.setState({ toasts: [] });
+    act(() => overlay.setState({ activeMeeting: null }));
+    act(() => useConfigStore.setState({ llmProvider: "openai" }));
+    act(() => useConfigStore.setState({ llmProvider: "claude_cli" }));
+    act(() => overlay.setState({ activeMeeting: { id: "m2" } as Meeting }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(toasts()).toHaveLength(0);
+  });
 });
