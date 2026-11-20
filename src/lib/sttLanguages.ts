@@ -1,4 +1,5 @@
 import type { STTProviderType } from "./types";
+import cases from "./autoDetectCases.json";
 
 export const AUTO_STT_LANGUAGE = "auto";
 
@@ -170,6 +171,15 @@ const PARAKEET_V3_LANGUAGES = [
   "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk",
 ];
 
+/**
+ * The languages Deepgram's Flux Multilingual takes (en es fr de hi ru pt ja it nl).
+ * One list for both sides: `MULTI_LANGUAGES` in src-tauri/src/stt/deepgram_flux.rs is
+ * checked against autoDetectCases.json by a Rust test.
+ */
+export const FLUX_MULTI_LANGUAGES: string[] = cases.fluxMultiLanguages;
+
+const languageCode = (language: string): string => language.split("-")[0].toLowerCase();
+
 export interface SideLanguageHint {
   /** "warning": the side won't transcribe well. "info": a tip. */
   tone: "warning" | "info";
@@ -202,27 +212,63 @@ export function sideLanguageHint(
           text: "Parakeet CTC 110M is English-only. Choose Parakeet TDT 0.6B v3 for multilingual transcription.",
         };
       }
-      if (!PARAKEET_V3_LANGUAGES.includes(language.split("-")[0].toLowerCase())) {
+      if (!PARAKEET_V3_LANGUAGES.includes(languageCode(language))) {
         return {
           tone: "warning",
           text: "Parakeet TDT 0.6B v3 transcribes 25 European languages only. Choose a multilingual Whisper model, Deepgram Nova-3, or Azure Speech for this language.",
         };
       }
       return null;
-    case "deepgram":
+    case "deepgram": {
+      // Every language in the app's list is on Deepgram's Nova-3 language page.
+      const inFluxMulti = FLUX_MULTI_LANGUAGES.includes(languageCode(language));
+      if (model === "flux-general-en" && languageCode(language) !== "en") {
+        return {
+          tone: "warning",
+          text: inFluxMulti
+            ? "Flux transcribes English only. Switch to Flux Multilingual or Nova-3 for this language."
+            : "Flux transcribes English only. Switch to Nova-3 for this language.",
+        };
+      }
+      if (model === "flux-general-multi" && !inFluxMulti) {
+        return {
+          tone: "warning",
+          text: language === "uk-UA"
+            ? "Switch from Flux to Nova-3 for Ukrainian transcription."
+            : "Flux Multilingual doesn't cover this language. Switch to Nova-3.",
+        };
+      }
       if (language === "vi-VN") {
         return { tone: "info", text: "Select a Deepgram model that supports Vietnamese, such as Nova-3." };
       }
-      if (model === "flux-general-en" && !language.toLowerCase().startsWith("en")) {
-        return {
-          tone: "warning",
-          text: "Flux transcribes English only. Switch to Flux Multilingual or Nova-3 for this language.",
-        };
-      }
-      if (language === "uk-UA" && model?.startsWith("flux-")) {
-        return { tone: "warning", text: "Switch from Flux to Nova-3 for Ukrainian transcription." };
-      }
       return null;
+    }
+    case "ort_streaming":
+      // Both ORT Streaming models (zipformer-en-20M, zipformer-en-compact) are English.
+      return languageCode(language) === "en"
+        ? null
+        : {
+            tone: "warning",
+            text: "ORT Streaming models are English-only. Choose another provider for this language.",
+          };
+    case "sherpa_onnx": {
+      // streaming-zipformer-en-* are English; the multi and SenseVoice models aren't.
+      const sherpaModel = side.localModel ?? "streaming-zipformer-en-20M";
+      return languageCode(language) !== "en" && sherpaModel.includes("-en-")
+        ? {
+            tone: "warning",
+            text: "This Sherpa-ONNX model is English-only. Choose a multilingual Sherpa-ONNX model or another provider for this language.",
+          }
+        : null;
+    }
+    case "whisper_cpp":
+      // The same models that can't detect the language are the English-only ones.
+      return languageCode(language) !== "en" && model && !supportsSTTAutoDetection("whisper_cpp", model)
+        ? {
+            tone: "warning",
+            text: `The ${whisperLabel(whisperModelId(model))} Whisper model is English-only. Choose a multilingual Whisper model (Tiny, Base, Small, Medium or Large v3 Turbo) for this language.`,
+          }
+        : null;
     case "cartesia":
       return cartesiaSupportsLanguage(language)
         ? null

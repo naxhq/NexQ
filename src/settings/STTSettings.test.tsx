@@ -45,7 +45,7 @@ it("opens on the provider You uses and names the side that can't detect the lang
     "Choose Deepgram Nova-3, Parakeet TDT 0.6B v3, Groq Whisper or Whisper API for that side, or pick a language."
   );
   expect(warning).toBeInTheDocument();
-  expect(screen.getByRole("combobox", { name: /STT language/i })).toHaveAccessibleDescription(warning.textContent!);
+  expect(screen.getByRole("combobox", { name: /Transcription language/i })).toHaveAccessibleDescription(warning.textContent!);
 });
 
 it("checks the Them side too, and says nothing when both can detect the language", () => {
@@ -115,15 +115,15 @@ it("keeps the Cartesia line and the other provider hints", () => {
 it("says which sides are transcribed in a language of their own, under the shared picker", () => {
   useConfigStore.setState({ sttLanguage: "en-US" });
   render(<STTSettings />);
-  expect(screen.queryByText(/set in Audio & Devices\)\.$/)).toBeNull();
+  expect(screen.queryByText(/set in Audio & Devices\.$/)).toBeNull();
 
   cleanup();
   useConfigStore.setState({
     meetingAudioConfig: { ...config, them: { ...config.them, language: "es-ES" } },
   });
   render(<STTSettings />);
-  expect(screen.getByText("Them transcribes in Spanish (set in Audio & Devices).")).toBeInTheDocument();
-  expect(screen.queryByText(/^You transcribe/)).toBeNull();
+  expect(screen.getByText("Them: Spanish, set in Audio & Devices.")).toBeInTheDocument();
+  expect(screen.queryByText(/^You: /)).toBeNull();
 
   cleanup();
   useConfigStore.setState({
@@ -134,13 +134,37 @@ it("says which sides are transcribed in a language of their own, under the share
     },
   });
   render(<STTSettings />);
-  expect(screen.getByText("You transcribe in English (UK) (set in Audio & Devices).")).toBeInTheDocument();
-  expect(screen.getByText("Them transcribes in Spanish (set in Audio & Devices).")).toBeInTheDocument();
+  expect(screen.getByText("You: English (UK), set in Audio & Devices.")).toBeInTheDocument();
+  expect(screen.getByText("Them: Spanish, set in Audio & Devices.")).toBeInTheDocument();
 
   // In-person meetings transcribe the room only.
   cleanup();
   useMeetingStore.setState({ audioMode: "in_person" });
   render(<STTSettings />);
-  expect(screen.getByText("Room transcribes in Spanish (set in Audio & Devices).")).toBeInTheDocument();
-  expect(screen.queryByText(/^You transcribe/)).toBeNull();
+  expect(screen.getByText("Room: Spanish, set in Audio & Devices.")).toBeInTheDocument();
+  expect(screen.queryByText(/^You: /)).toBeNull();
+});
+
+it("warns about a side that picked Auto-detect itself, though the shared language is fixed", () => {
+  useConfigStore.setState({
+    sttLanguage: "en-US",
+    meetingAudioConfig: { ...config, you: { ...config.you, language: "auto" } },
+  });
+  render(<STTSettings />);
+  const warning = screen.getByText(/Auto-detect doesn't work with Web Speech, used for You\./);
+  expect(warning).toBeInTheDocument();
+  expect(screen.getByRole("combobox", { name: /Transcription language/i })).toHaveAccessibleDescription(warning.textContent!);
+  // The Nova-3 tip belongs to the shared Auto-detect only.
+  expect(screen.queryByText(/Nova-3 can transcribe|For speech that switches/)).toBeNull();
+});
+
+it("keeps the Nova-3 tip for the shared Auto-detect and drops a warning for a side that picked a language", () => {
+  useConfigStore.setState({
+    sttLanguage: "auto",
+    meetingAudioConfig: { ...config, you: { ...config.you, language: "en-US" } },
+  });
+  render(<STTSettings />);
+  // You (Web Speech) has its own language, so Auto-detect doesn't concern it; Them runs Deepgram Nova-3.
+  expect(screen.queryByText(/Auto-detect doesn't work/)).toBeNull();
+  expect(screen.getByText("For speech that switches languages mid-sentence, use Deepgram Nova-3.")).toBeInTheDocument();
 });

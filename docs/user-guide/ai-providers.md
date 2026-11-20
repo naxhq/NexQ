@@ -42,6 +42,8 @@ These can't detect the language: Web Speech, Windows Speech, Azure Speech, Sherp
 
 **For speech that switches languages mid-sentence**, such as Ukrainian with English technical terms, use **Deepgram Nova-3** with **Auto-detect**. This combination enables [Nova-3 multilingual transcription](https://developers.deepgram.com/docs/nova-3-language-prompting), which Deepgram bills at a higher rate than single-language Nova-3 (see [Deepgram's pricing](https://deepgram.com/pricing)).
 
+**Which engines cover which languages:** Parakeet TDT 0.6B v3 covers 25 European languages (including Ukrainian and Russian, not Chinese, Japanese, Korean, Hindi, Arabic or Turkish). Deepgram Flux is English only; Flux Multilingual covers English, Spanish, French, German, Hindi, Russian, Portuguese, Japanese, Italian and Dutch. Parakeet CTC 110M, ORT Streaming, the English Sherpa-ONNX models and the `.en` and Distil Whisper.cpp models are English only. For Chinese, use a multilingual Whisper model or Azure Speech.
+
 ### A different language for each side
 
 When you and the others speak different languages, give each side its own. Open **Settings > Audio & Devices** and use the **Language** menu on each card: **You**, **Them**, or **Room** in an in-person meeting. The menu starts on **Same as transcription language**, which follows the language in Settings > STT Providers > Language (**Transcription language** at the top of Audio & Devices), so nothing changes until you pick one.

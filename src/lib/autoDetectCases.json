@@ -1,5 +1,6 @@
 {
   "note": "Which provider/model pairs can detect the spoken language (Auto-detect), and the wording of a refusal. Read by src/lib/sttLanguages.test.ts and by the Rust test in src-tauri/src/commands/audio_commands.rs (include_str!); change the code on both sides together with this file. 'name' is how a refusal names the provider.",
+  "fluxMultiLanguages": ["en", "es", "fr", "de", "hi", "ru", "pt", "ja", "it", "nl"],
   "refusalPrefix": "Auto-detect doesn't work with",
   "advice": "Choose Deepgram Nova-3, Parakeet TDT 0.6B v3, Groq Whisper or Whisper API for that side, or pick a language.",
   "whisperAdvice": "Choose a multilingual Whisper model (Tiny, Base, Small, Medium or Large v3 Turbo), or pick a language.",

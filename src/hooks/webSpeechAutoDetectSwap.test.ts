@@ -85,3 +85,35 @@ it("tells the user once when Web Speech is set to Auto-detect mid-meeting, and l
   expect(startCapturePerParty).toHaveBeenLastCalledWith(spanish.you, spanish.them, { skipYouStt: false });
   expect(warnings()).toHaveLength(1);
 });
+
+it("tells the user once when Web Speech is chosen while Auto-detect is on, and later swaps still work", async () => {
+  // The meeting starts with You on Deepgram under Auto-detect: nothing for Web Speech to say.
+  const deepgram: MeetingAudioConfig = { ...config, you: { ...config.you, stt_provider: "deepgram" } };
+  useConfigStore.setState({ sttLanguage: "auto", meetingAudioConfig: deepgram });
+  renderHook(() => { useSpeechRecognition(); useAudioConfigSync(); });
+  await act(() => vi.advanceTimersByTimeAsync(300));
+  expect(started).toHaveLength(0);
+  expect(warnings()).toEqual([]);
+
+  // You is switched to Web Speech (the overlay's STT chip, say).
+  const webSpeech: MeetingAudioConfig = { ...deepgram, you: { ...deepgram.you, stt_provider: "web_speech" } };
+  await change(webSpeech);
+  expect(started).toHaveLength(0);
+  expect(warnings()).toEqual([
+    "You isn't transcribed: Web Speech can't detect the language. " +
+    "Pick a language (it applies right away) or choose another provider for You.",
+  ]);
+
+  // A later change on Them swaps without another notice.
+  const spanish: MeetingAudioConfig = { ...webSpeech, them: { ...webSpeech.them, language: "es-ES" } };
+  await change(spanish);
+  expect(startCapturePerParty).toHaveBeenLastCalledWith(spanish.you, spanish.them, { skipYouStt: false });
+  expect(warnings()).toHaveLength(1);
+
+  // Picking a language wakes it up; Auto-detect again says so again.
+  await act(async () => useConfigStore.setState({ sttLanguage: "es-ES" }));
+  expect(started).toHaveLength(1);
+  await act(async () => useConfigStore.setState({ sttLanguage: "auto" }));
+  expect(warnings()).toHaveLength(2);
+  expect(warnings()[1]).toMatch(/^Stopped transcribing You:/);
+});

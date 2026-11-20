@@ -323,7 +323,8 @@ export function STTSettings() {
   // A side with a language of its own is judged by that one, not the shared one.
   const youAuto = sideLanguage(meetingAudioConfig?.you, sttLanguage) === AUTO_STT_LANGUAGE;
   const themAuto = sideLanguage(meetingAudioConfig?.them, sttLanguage) === AUTO_STT_LANGUAGE;
-  const autoProblems = !autoDetectionSelected ? [] : [
+  // Whatever sets a side to Auto-detect (the shared language or its own) can run into it.
+  const autoProblems = [
     inPerson || !youAuto ? null : autoDetectProblem(youSide, autoModels, "You"),
     meetingAudioConfig && themAuto
       ? autoDetectProblem(
@@ -348,14 +349,14 @@ export function STTSettings() {
   // Sides with a language of their own, which this shared setting doesn't decide.
   const ownLanguageNotes = (
     [
-      meetingAudioConfig?.you.language && !inPerson ? { name: "You", verb: "transcribe", language: meetingAudioConfig.you.language } : null,
+      meetingAudioConfig?.you.language && !inPerson ? { name: "You", language: meetingAudioConfig.you.language } : null,
       meetingAudioConfig?.them.language
-        ? { name: inPerson ? "Room" : "Them", verb: "transcribes", language: meetingAudioConfig.them.language }
+        ? { name: inPerson ? "Room" : "Them", language: meetingAudioConfig.them.language }
         : null,
     ].filter((note) => note !== null)
   ).map(
     (note) =>
-      `${note.name} ${note.verb} in ${STT_LANGUAGES.find((l) => l.value === note.language)?.label ?? note.language} (set in Audio & Devices).`,
+      `${note.name}: ${STT_LANGUAGES.find((l) => l.value === note.language)?.label ?? note.language}, set in Audio & Devices.`,
   );
 
   const currentProviderOption = PROVIDER_OPTIONS.find(
@@ -801,13 +802,13 @@ export function STTSettings() {
       {/* Language Selection */}
       <div className="rounded-xl border border-border/30 bg-card/50 p-5">
         <h3 className="mb-3 text-sm font-semibold text-primary/80">
-          Language
+          Transcription language
         </h3>
         <select
           value={sttLanguage}
           onChange={(e) => setSTTLanguage(e.target.value)}
-          aria-label="STT language"
-          aria-describedby={autoDetectionSelected ? "provider-stt-auto-description" : undefined}
+          aria-label="Transcription language"
+          aria-describedby={autoDetectionSelected || showAutoDetectionWarning ? "provider-stt-auto-description" : undefined}
           className="w-full rounded-lg border border-border/50 bg-background px-3.5 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
         >
           {STT_LANGUAGES.map((lang) => (
@@ -816,7 +817,7 @@ export function STTSettings() {
             </option>
           ))}
         </select>
-        {autoDetectionSelected && (
+        {(autoDetectionSelected || showAutoDetectionWarning) && (
           <div id="provider-stt-auto-description" className={`mt-2 space-y-1 text-xs ${showAutoDetectionWarning ? "text-warning" : "text-muted-foreground"}`}>
             {showAutoDetectionWarning
               ? autoProblems.map((problem) => <p key={problem}>{problem}</p>)

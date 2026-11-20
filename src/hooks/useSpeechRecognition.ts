@@ -125,10 +125,16 @@ export function useSpeechRecognition() {
   // True from the moment an instance starts until the next run of the effect below
   // (whose cleanup has already stopped it by then).
   const instanceStartedRef = useRef(false);
+  // Auto-detect has silenced Web Speech and the user has been told (reset when it speaks again).
+  const silencedRef = useRef(false);
+  // This meeting's first run of the effect below is over: Rust announces what is silenced at a start.
+  const ranOnceRef = useRef(false);
 
   useEffect(() => {
     const hadInstance = instanceStartedRef.current;
     instanceStartedRef.current = false;
+    const firstRun = isRecording && !ranOnceRef.current;
+    ranOnceRef.current = isRecording;
 
     // Always clean up any existing recognition first
     if (recognitionRef.current) {
@@ -137,22 +143,31 @@ export function useSpeechRecognition() {
       recognitionRef.current = null;
     }
 
-    if (!isRecording || !usesWebSpeech) return;
+    if (!isRecording || !usesWebSpeech) {
+      silencedRef.current = false;
+      return;
+    }
     if (sttLanguage === AUTO_STT_LANGUAGE) {
-      // Web Speech can't detect the language, so Auto-detect silences it. Say so
-      // only when it was running a moment ago (Rust already told the user at a start).
-      if (hadInstance) {
+      // Web Speech can't detect the language, so Auto-detect silences it. Say so once,
+      // however it came about (a language picked, or Web Speech chosen while Auto-detect
+      // was on), except at a meeting's start, where Rust already told the user.
+      const alreadyTold = silencedRef.current;
+      silencedRef.current = true;
+      if (!firstRun && !alreadyTold) {
         const side = getSpeakerLabel(useConfigStore.getState().meetingAudioConfig) === "Them"
           ? (useMeetingStore.getState().audioMode === "in_person" ? "Room" : "Them")
           : "You";
+        const advice = `Pick a language (it applies right away) or choose another provider for ${side}.`;
         emit(
           "capture_warning",
-          `Stopped transcribing ${side}: Web Speech can't detect the language. ` +
-          `Pick a language (it applies right away) or choose another provider for ${side}.`,
+          hadInstance
+            ? `Stopped transcribing ${side}: Web Speech can't detect the language. ${advice}`
+            : `${side} isn't transcribed: Web Speech can't detect the language. ${advice}`,
         ).catch(() => {});
       }
       return;
     }
+    silencedRef.current = false;
 
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;

@@ -5,6 +5,7 @@ import {
   AUTO_DETECT_ADVICE,
   AUTO_DETECT_REFUSAL_PREFIX,
   AUTO_DETECT_WHISPER_ADVICE,
+  FLUX_MULTI_LANGUAGES,
   DEEPGRAM_MODEL_LABELS,
   WHISPER_MODEL_LABELS,
   autoDetectRefusalSentences,
@@ -170,14 +171,47 @@ describe("sideLanguageHint", () => {
     expect(sideLanguageHint({ provider: "deepgram" }, "es-ES", { deepgram: "flux-general-en" })?.text).toMatch(
       /English only/,
     );
-    expect(sideLanguageHint({ provider: "deepgram" }, "uk-UA", { deepgram: "flux-general-en" })?.text).toMatch(
-      /English only/,
+    // Flux Multilingual is only suggested for the languages it takes (Spanish: yes, Ukrainian: no).
+    expect(sideLanguageHint({ provider: "deepgram" }, "es-ES", { deepgram: "flux-general-en" })?.text).toMatch(
+      /Flux Multilingual or Nova-3/,
+    );
+    expect(sideLanguageHint({ provider: "deepgram" }, "uk-UA", { deepgram: "flux-general-en" })?.text).toBe(
+      "Flux transcribes English only. Switch to Nova-3 for this language.",
     );
     expect(sideLanguageHint({ provider: "deepgram" }, "en-GB", { deepgram: "flux-general-en" })).toBeNull();
     expect(sideLanguageHint({ provider: "deepgram" }, "es-ES", { deepgram: "flux-general-multi" })).toBeNull();
+    // Flux Multilingual with one of the app's languages it doesn't take.
+    expect(FLUX_MULTI_LANGUAGES).toEqual(["en", "es", "fr", "de", "hi", "ru", "pt", "ja", "it", "nl"]);
+    for (const language of ["zh-CN", "ko-KR", "ar-SA", "tr-TR", "pl-PL", "cs-CZ", "sv-SE", "vi-VN"]) {
+      expect(sideLanguageHint({ provider: "deepgram" }, language, { deepgram: "flux-general-multi" })?.text, language)
+        .toBe("Flux Multilingual doesn't cover this language. Switch to Nova-3.");
+    }
+    for (const language of ["en-US", "fr-FR", "hi-IN", "ja-JP", "nl-NL"]) {
+      expect(sideLanguageHint({ provider: "deepgram" }, language, { deepgram: "flux-general-multi" }), language).toBeNull();
+    }
     expect(sideLanguageHint({ provider: "deepgram" }, "es-ES", { deepgram: "nova-3" })).toBeNull();
     // Auto-detect on Flux (English) is the Auto-detect refusal's business.
     expect(sideLanguageHint({ provider: "deepgram" }, "auto", { deepgram: "flux-general-en" })).toBeNull();
+  });
+
+  it("warns about English-only local models given another language", () => {
+    expect(sideLanguageHint({ provider: "ort_streaming" }, "es-ES", none)?.text).toMatch(/ORT Streaming models are English-only/);
+    expect(sideLanguageHint({ provider: "ort_streaming" }, "en-GB", none)).toBeNull();
+    // Whisper.cpp: the models that can't detect the language are the English-only ones.
+    expect(
+      sideLanguageHint({ provider: "whisper_cpp", localModel: "base.en" }, "fr-FR", none)?.text,
+    ).toMatch(/The base\.en Whisper model is English-only/);
+    expect(sideLanguageHint({ provider: "whisper_cpp" }, "fr-FR", { whisperCpp: "ggml-distil-large-v3.bin" })?.text)
+      .toMatch(/The Distil Large v3 Whisper model is English-only/);
+    expect(sideLanguageHint({ provider: "whisper_cpp", localModel: "base.en" }, "en-US", none)).toBeNull();
+    expect(sideLanguageHint({ provider: "whisper_cpp", localModel: "small" }, "fr-FR", none)).toBeNull();
+    expect(sideLanguageHint({ provider: "whisper_cpp" }, "fr-FR", none)).toBeNull();
+    // Sherpa-ONNX: only the English zipformers.
+    expect(sideLanguageHint({ provider: "sherpa_onnx", localModel: "streaming-zipformer-en-20M" }, "de-DE", none)?.tone).toBe("warning");
+    expect(sideLanguageHint({ provider: "sherpa_onnx" }, "de-DE", none)?.tone).toBe("warning");
+    expect(sideLanguageHint({ provider: "sherpa_onnx", localModel: "streaming-zipformer-multi" }, "de-DE", none)).toBeNull();
+    expect(sideLanguageHint({ provider: "sherpa_onnx", localModel: "sense-voice-small" }, "ja-JP", none)).toBeNull();
+    expect(sideLanguageHint({ provider: "sherpa_onnx", localModel: "streaming-zipformer-en-20M" }, "en-US", none)).toBeNull();
   });
 
   it("leaves Auto-detect to autoDetectProblem and fine pairs alone", () => {
