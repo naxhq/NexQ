@@ -13,7 +13,7 @@
 //! ([`CaptureOpener`]) and the time ([`Clock`]) are injected, so tests drive it
 //! without hardware or waiting.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -36,6 +36,9 @@ const STEADY_RETRY: Duration = Duration::from_secs(5);
 /// After this long without a stream the side is reported lost, once, and
 /// the thread stops trying.
 pub const GIVE_UP_AFTER: Duration = Duration::from_secs(60);
+/// A reconnected stream that fails again sooner than this is the same outage:
+/// the backoff and the minute keep running instead of starting over.
+const STABLE_AFTER: Duration = Duration::from_secs(5);
 /// How long starting capture waits for a side to open (a slow Bluetooth
 /// device): past it the side carries on opening and start returns.
 pub const START_TIMEOUT: Duration = Duration::from_secs(5);
@@ -237,6 +240,12 @@ pub struct Supervisor<O: CaptureOpener, C: Clock> {
     phase: Phase,
     counters: Arc<CaptureCounters>,
     sink: StatusSink,
+    /// Set by `SideHandle::request_stop`: cuts a reconnect short and keeps it
+    /// from reporting anything afterwards.
+    stop_requested: Arc<AtomicBool>,
+    /// The last reconnect: when it succeeded, and the outage it ended
+    /// (its start and how many attempts it took).
+    last_recovery: Option<(Instant, Instant, usize)>,
 }
 
 impl<O: CaptureOpener, C: Clock> Supervisor<O, C> {
@@ -259,7 +268,27 @@ impl<O: CaptureOpener, C: Clock> Supervisor<O, C> {
             phase: Phase::Stopped,
             counters,
             sink,
+            stop_requested: Arc::new(AtomicBool::new(false)),
+            last_recovery: None,
         }
+    }
+
+    fn with_stop_flag(mut self, stop_requested: Arc<AtomicBool>) -> Self {
+        self.stop_requested = stop_requested;
+        self
+    }
+
+    fn stopping(&self) -> bool {
+        self.stop_requested.load(Ordering::SeqCst)
+    }
+
+    /// The first open failed after start had stopped waiting: handle it as an
+    /// outage (backoff, then one "lost") instead of leaving the side dead.
+    fn begin_outage(&mut self) {
+        let now = self.clock.now();
+        self.device = self.device_id.clone();
+        self.phase = Phase::Pending { due: now + REBUILD_DEBOUNCE, outage_start: now, attempt: 0 };
+        self.emit(CaptureState::Recovering, self.device.clone(), String::new());
     }
 
     pub fn now(&self) -> Instant {
@@ -280,8 +309,18 @@ impl<O: CaptureOpener, C: Clock> Supervisor<O, C> {
     fn open_first(&mut self) -> (Option<Opened<O::Stream>>, Vec<String>) {
         let mut errors = Vec::new();
         for choice in device_choices(self.kind, &self.device_id) {
+            if self.stopping() {
+                break;
+            }
             self.generation += 1;
-            match self.opener.open(&choice, self.generation) {
+            let generation = self.generation;
+            // A panic inside a driver call counts as a failed attempt; it must
+            // not end the side's thread.
+            let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.opener.open(&choice, generation)
+            }))
+            .unwrap_or_else(|_| Err("opening the device panicked".to_string()));
+            match attempt {
                 Ok(opened) => return (Some(opened), errors),
                 Err(e) => errors.push(e),
             }
@@ -325,8 +364,29 @@ impl<O: CaptureOpener, C: Clock> Supervisor<O, C> {
                 }
                 log::warn!("{label}: {:?}: {error}. Reconnecting '{}'", error.kind(), self.device);
                 let now = self.clock.now();
-                self.phase = Phase::Pending { due: now + REBUILD_DEBOUNCE, outage_start: now, attempt: 0 };
-                self.emit(CaptureState::Recovering, self.device.clone(), String::new());
+                // A stream that fails again right after reconnecting is the
+                // same outage: the backoff goes on and the minute isn't reset.
+                let carried = self
+                    .last_recovery
+                    .filter(|(at, _, _)| now.duration_since(*at) < STABLE_AFTER)
+                    .map(|(_, start, attempts)| (start, attempts));
+                match carried {
+                    Some((start, _)) if now >= start + GIVE_UP_AFTER => {
+                        log::error!("{label}: '{}' keeps failing; giving up", self.device);
+                        self.stream = None;
+                        self.phase = Phase::Lost;
+                        self.emit(CaptureState::Lost, self.device.clone(), lost_message(self.kind).to_string());
+                    }
+                    Some((start, attempts)) => {
+                        let due = (now + backoff(attempts)).min(start + GIVE_UP_AFTER);
+                        self.phase = Phase::Pending { due, outage_start: start, attempt: attempts };
+                        self.emit(CaptureState::Recovering, self.device.clone(), String::new());
+                    }
+                    None => {
+                        self.phase = Phase::Pending { due: now + REBUILD_DEBOUNCE, outage_start: now, attempt: 0 };
+                        self.emit(CaptureState::Recovering, self.device.clone(), String::new());
+                    }
+                }
             }
         }
     }
@@ -344,8 +404,15 @@ impl<O: CaptureOpener, C: Clock> Supervisor<O, C> {
         self.stream = None;
         let label = self.kind.label();
         let (opened, errors) = self.open_first();
+        if self.stopping() {
+            // Stop arrived while opening: drop what opened, report nothing.
+            drop(opened);
+            self.stop();
+            return None;
+        }
         match opened {
             Some(opened) => {
+                self.last_recovery = Some((now, outage_start, attempt + 1));
                 let before = std::mem::replace(&mut self.device, opened.device.clone());
                 self.stream = Some(opened.stream);
                 self.phase = Phase::Running;
@@ -403,7 +470,7 @@ fn recovered_message(kind: CaptureKind, device_id: &str, before: &str, now: &str
         (CaptureKind::Mic, true) => format!("Your microphone disconnected. Using {now} for now."),
         (CaptureKind::Mic, false) => format!("Now using {now} as your microphone."),
         (CaptureKind::Output, true) => {
-            format!("The other side's audio device disconnected. Listening on {now} for now.")
+            format!("The speakers or headphones you hear the call on disconnected. Listening on {now} instead.")
         }
         (CaptureKind::Output, false) => format!("Now listening on {now} for the other side."),
         (CaptureKind::InputThem, _) => format!("Now capturing the other side from {now}."),
@@ -414,16 +481,16 @@ fn recovered_message(kind: CaptureKind, device_id: &str, before: &str, now: &str
 fn lost_message(kind: CaptureKind) -> &'static str {
     match kind {
         CaptureKind::Mic => {
-            "Your microphone disconnected and didn't come back. Pick a microphone in Audio & Devices to continue."
+            "Your microphone disconnected and didn't come back. The other side is still transcribed. Choose a microphone in Audio & Devices."
         }
         CaptureKind::Output => {
-            "The other side's audio device disconnected and didn't come back. Pick a device in Audio & Devices to continue."
+            "The speakers or headphones you hear the call on disconnected and didn't come back. Your microphone is still transcribed. Choose a device in Audio & Devices."
         }
         CaptureKind::InputThem => {
-            "The other side's input device disconnected and didn't come back. Pick a device in Audio & Devices to continue."
+            "The device the other side comes in on disconnected and didn't come back. Your microphone is still transcribed. Choose a device in Audio & Devices."
         }
         CaptureKind::Dual => {
-            "Your shared input device disconnected and didn't come back. Pick a device in Audio & Devices to continue."
+            "Your shared input device disconnected and didn't come back. Choose a device in Audio & Devices."
         }
     }
 }
@@ -432,6 +499,7 @@ fn lost_message(kind: CaptureKind) -> &'static str {
 pub struct SideHandle {
     kind: CaptureKind,
     messages: SyncSender<SideMessage>,
+    stop_requested: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -442,6 +510,7 @@ impl SideHandle {
 
     /// Ask the thread to stop; `join` waits for it.
     pub fn request_stop(&self) {
+        self.stop_requested.store(true, Ordering::SeqCst);
         let _ = self.messages.send(SideMessage::Stop);
     }
 
@@ -486,6 +555,8 @@ where
     let (tx, rx) = messages;
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<Started, Vec<String>>>();
     let device_id = device_id.to_string();
+    let stop_requested = Arc::new(AtomicBool::new(false));
+    let thread_stop = Arc::clone(&stop_requested);
     let thread_name = match kind.side() {
         CaptureSide::You => "capture-you",
         CaptureSide::Them => "capture-them",
@@ -493,16 +564,25 @@ where
     let thread = std::thread::Builder::new()
         .name(thread_name.into())
         .spawn(move || {
-            let mut supervisor = Supervisor::new(kind, &device_id, opener, clock, counters, sink);
-            let started = supervisor.start();
-            let ok = started.is_ok();
-            let _ = ready_tx.send(started);
-            if ok {
-                run_side(&mut supervisor, &rx);
+            let mut supervisor =
+                Supervisor::new(kind, &device_id, opener, clock, counters, sink).with_stop_flag(thread_stop);
+            match supervisor.start() {
+                Ok(started) => {
+                    let _ = ready_tx.send(Ok(started));
+                    run_side(&mut supervisor, &rx);
+                }
+                Err(errors) => {
+                    // Nobody is waiting any more (start timed out): reconnect
+                    // like any other outage instead of ending silently.
+                    if ready_tx.send(Err(errors)).is_err() && !supervisor.stopping() {
+                        supervisor.begin_outage();
+                        run_side(&mut supervisor, &rx);
+                    }
+                }
             }
         })
         .map_err(|e| vec![format!("Failed to start the capture thread: {e}")])?;
-    let handle = SideHandle { kind, messages: tx, thread: Some(thread) };
+    let handle = SideHandle { kind, messages: tx, stop_requested, thread: Some(thread) };
 
     match ready_rx.recv_timeout(start_timeout) {
         Ok(Ok(started)) => Ok((handle, Some(started))),
@@ -868,6 +948,147 @@ pub(crate) mod tests {
         assert_eq!(rig.attempts(CaptureSide::Them), 1, "Them only opened at start");
         assert_eq!((rig.live(CaptureSide::You), rig.live(CaptureSide::Them)), (1, 1));
         assert!(rig.statuses.lock().unwrap().iter().all(|s| s.side == CaptureSide::You));
+    }
+
+    /// A stream that dies right after every reconnect is one outage: backoff
+    /// grows, the minute isn't reset, and it ends in one "lost".
+    #[test]
+    fn a_stream_that_keeps_failing_backs_off_and_is_given_up_on() {
+        let rig = Rig::new(&["Realtek"]);
+        let mut sup = rig.supervisor(CaptureKind::Mic, "default", "Realtek");
+        sup.start().unwrap();
+        let mut last_recovery = rig.clock.now();
+        invalidated(&mut sup, CaptureSide::You);
+        for _ in 0..(150 * 20) {
+            rig.clock.advance(Duration::from_millis(50));
+            let before = sup.last_recovery;
+            sup.poll();
+            if sup.last_recovery != before {
+                last_recovery = rig.clock.now();
+            }
+            if matches!(sup.phase, Phase::Running)
+                && rig.clock.now().duration_since(last_recovery) >= Duration::from_millis(100)
+            {
+                invalidated(&mut sup, CaptureSide::You);
+            }
+        }
+        let lost = rig.states().iter().filter(|s| **s == CaptureState::Lost).count();
+        assert_eq!(lost, 1, "one lost");
+        let attempts = rig.attempts(CaptureSide::You);
+        assert!((10..=25).contains(&attempts), "a reopen every few seconds, not several a second: {attempts}");
+        assert_eq!(rig.live(CaptureSide::You), 0);
+    }
+
+    /// An open that is still going when Stop arrives gives up between devices
+    /// and reports nothing.
+    #[test]
+    fn stop_while_reconnecting_reports_nothing() {
+        let rig = Rig::new(&["Headset", "Realtek"]);
+        let mut sup = rig.supervisor(CaptureKind::Mic, "Headset", "Realtek");
+        sup.start().unwrap();
+        invalidated(&mut sup, CaptureSide::You);
+        rig.clock.advance(REBUILD_DEBOUNCE);
+        sup.stop_requested.store(true, Ordering::SeqCst);
+        sup.poll();
+        assert_eq!(rig.states(), vec![CaptureState::Recovering], "no recovered after Stop");
+        assert_eq!(rig.live(CaptureSide::You), 0);
+        assert_eq!(rig.attempts(CaptureSide::You), 1, "Stop before the first device was tried");
+    }
+
+    /// A panic inside a driver call is a failed attempt, not a dead side.
+    #[test]
+    fn a_panicking_open_counts_as_a_failed_attempt() {
+        struct Panics(bool);
+        impl CaptureOpener for Panics {
+            type Stream = ();
+            fn open(&mut self, _: &DeviceChoice, _: u64) -> Result<Opened<()>, String> {
+                if std::mem::replace(&mut self.0, true) {
+                    panic!("driver bug");
+                }
+                Ok(Opened { stream: (), device: "Mic".into() })
+            }
+        }
+        let rig = Rig::new(&[]);
+        let mut sup = Supervisor::new(
+            CaptureKind::Mic,
+            "default",
+            Panics(false),
+            rig.clock.clone(),
+            Arc::clone(&rig.counters),
+            rig.sink(),
+        );
+        sup.start().unwrap();
+        sup.on_stream_error(CaptureSide::You, sup.generation, &err(cpal::ErrorKind::StreamInvalidated));
+        rig.run_for(&mut sup, Duration::from_secs(2));
+        assert!(rig.states().contains(&CaptureState::Recovering));
+        assert!(matches!(sup.phase, Phase::Pending { .. }), "still trying");
+    }
+
+    /// A first open that fails after start gave up waiting is an outage, not a dead side.
+    #[test]
+    fn a_late_start_failure_is_retried() {
+        struct SlowThenFine(usize);
+        impl CaptureOpener for SlowThenFine {
+            type Stream = ();
+            fn open(&mut self, _: &DeviceChoice, _: u64) -> Result<Opened<()>, String> {
+                self.0 += 1;
+                if self.0 == 1 {
+                    std::thread::sleep(Duration::from_millis(200));
+                    return Err("busy".to_string());
+                }
+                Ok(Opened { stream: (), device: "Mic".into() })
+            }
+        }
+        let rig = Rig::new(&[]);
+        let (tx, rx) = side_channel();
+        let (handle, started) = spawn_side(
+            CaptureKind::InputThem,
+            "Mic",
+            SlowThenFine(0),
+            SystemClock,
+            Arc::clone(&rig.counters),
+            rig.sink(),
+            (tx, rx),
+            Duration::from_millis(50),
+        )
+        .unwrap();
+        assert!(started.is_none(), "still opening when start stopped waiting");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !rig.states().contains(&CaptureState::Recovered) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(rig.states(), vec![CaptureState::Recovering, CaptureState::Recovered]);
+        handle.join();
+    }
+
+    /// Stopping every side closes the audio channel, so the processing loop ends.
+    #[test]
+    fn stopping_a_side_releases_the_audio_channel() {
+        struct Holds(tokio::sync::mpsc::Sender<u8>);
+        impl CaptureOpener for Holds {
+            type Stream = ();
+            fn open(&mut self, _: &DeviceChoice, _: u64) -> Result<Opened<()>, String> {
+                let _ = self.0.try_send(1);
+                Ok(Opened { stream: (), device: "Mic".into() })
+            }
+        }
+        let rig = Rig::new(&[]);
+        let (audio_tx, mut audio_rx) = tokio::sync::mpsc::channel(4);
+        let (tx, rx) = side_channel();
+        let (handle, _) = spawn_side(
+            CaptureKind::Mic,
+            "default",
+            Holds(audio_tx),
+            SystemClock,
+            Arc::clone(&rig.counters),
+            rig.sink(),
+            (tx, rx),
+            START_TIMEOUT,
+        )
+        .unwrap();
+        assert_eq!(audio_rx.blocking_recv(), Some(1));
+        handle.join();
+        assert_eq!(audio_rx.try_recv(), Err(tokio::sync::mpsc::error::TryRecvError::Disconnected));
     }
 
     #[test]

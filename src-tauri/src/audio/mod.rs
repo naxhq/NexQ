@@ -172,6 +172,8 @@ impl AudioCaptureManager {
                 .spawn_input(CaptureKind::Dual, mic_device_id, mic_capture::InputTags::Both, &tx, &on_status)
                 .map_err(|errors| format!("Dual capture failed: {}", errors.join("; ")))?;
             self.sides.push(side);
+            // One stream serves both sides: its xruns and rebuilds show on both stats lines.
+            self.counters.1 = Arc::clone(&self.counters.0);
             log::info!("Dual-tagged capture started on shared device");
         } else {
             // Standard: separate mic capture, or the default mic when the chosen one fails.

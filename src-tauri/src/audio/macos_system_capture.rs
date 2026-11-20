@@ -27,7 +27,8 @@ extern "C" {
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
 }
 
-/// `on_failure` runs when the tap ends with an error (not when `stop` ends it).
+/// `on_failure` runs when the tap ends with an error, a failed start included
+/// (not when `stop` ends it).
 pub(super) fn start(
     tx: mpsc::Sender<AudioChunk>,
     stop: Arc<AtomicBool>,
