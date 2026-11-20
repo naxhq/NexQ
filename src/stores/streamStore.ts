@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { AIResponse, IntelligenceMode, StreamSource } from "../lib/types";
+import type { AIResponse, IntelligenceMode, SourceToggles, StreamSource } from "../lib/types";
 import { stripThinkTags } from "../lib/utils";
 import { NO_USER_REQUESTS, type LastUserRequests } from "../lib/contextScope";
 
@@ -56,6 +56,8 @@ interface StreamState {
   pendingRequestId: string | null;
   /** Request id of the answer streaming now (null when idle or unknown). */
   streamRequestId: string | null;
+  /** The pills the user asked this request with (null for an answer that may not use sources). */
+  requestSources: SourceToggles | null;
 
   /** Id of the history entry shown as "Current" (null while streaming / none). */
   currentId: string | null;
@@ -70,7 +72,7 @@ interface StreamState {
   setStreaming: (streaming: boolean) => void;
   appendToken: (token: string) => void;
   /** A user action was invoked: show "Sending…" until its start event. No-op while streaming. */
-  setPending: (mode: IntelligenceMode | string, requestId: string) => void;
+  setPending: (mode: IntelligenceMode | string, requestId: string, sources?: SourceToggles) => void;
   /** The pending action failed before starting (only clears that request). */
   clearPending: (requestId: string) => void;
   /** Whether `requestId` is the request being sent or streamed now. */
@@ -97,6 +99,7 @@ const IDLE_PROGRESS = {
   streamMeta: null,
   pendingRequestId: null,
   streamRequestId: null,
+  requestSources: null,
 };
 
 /** Requests to drop when they end (automatic answers NexQ stopped). */
@@ -135,13 +138,14 @@ export const useStreamStore = create<StreamState>((set, get) => ({
       return { _rawContent: raw, currentContent: content, ...progress };
     }),
 
-  setPending: (mode, requestId) => {
+  setPending: (mode, requestId, sources) => {
     // A second press while one is running or still sending is refused by the
     // backend; it must not take over the first request's progress.
     if (get().isStreaming || get().phase === "sending") return;
     set({
       phase: "sending",
       pendingRequestId: requestId,
+      requestSources: sources ?? null,
       requestStartedAt: Date.now(),
       firstTokenAt: null,
       streamMeta: null,

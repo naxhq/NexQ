@@ -5,6 +5,7 @@ import type { Components } from "react-markdown";
 import { ArrowUp, Loader2, MessageCircleQuestion, Square } from "lucide-react";
 import type { ChatItem, MeetingChatState } from "../../hooks/useMeetingChat";
 import { mdComponents, stripThinkTags } from "./SummaryView";
+import { SourcePills } from "../../sources/SourcePills";
 
 /** Summary markdown styles, with headings and paragraphs sized for a chat answer. */
 const answerMd: Components = {
@@ -22,6 +23,8 @@ const PIN_THRESHOLD = 80;
 
 interface AskMeetingTabProps {
   chat: MeetingChatState;
+  /** The meeting being asked about: its Notes and Tools pills follow that meeting's sources session. */
+  meetingId?: string | null;
   /** Why asking is unavailable right now (e.g. no transcript), if it is. */
   unavailableReason?: string | null;
   /** Another AI task of this view is running; asking waits for it. */
@@ -29,7 +32,7 @@ interface AskMeetingTabProps {
 }
 
 /** "Ask this meeting": a chat about a past meeting, saved with it. */
-export function AskMeetingTab({ chat, unavailableReason = null, otherTaskRunning = false }: AskMeetingTabProps) {
+export function AskMeetingTab({ chat, meetingId = null, unavailableReason = null, otherTaskRunning = false }: AskMeetingTabProps) {
   const { items, loading, loadError, isAsking, session, ask, stop } = chat;
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -111,6 +114,9 @@ export function AskMeetingTab({ chat, unavailableReason = null, otherTaskRunning
       >
         <div className="mx-auto max-w-2xl">
           <div className="flex items-end gap-2 rounded-xl border border-border/30 bg-card/40 py-1.5 pl-3.5 pr-1.5 transition-colors duration-150 focus-within:border-primary/40">
+            <div className="flex min-h-[28px] shrink-0 items-center">
+              <SourcePills scope="past" meetingId={meetingId} />
+            </div>
             <textarea
               ref={inputRef}
               rows={1}

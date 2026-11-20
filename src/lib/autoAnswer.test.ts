@@ -11,6 +11,8 @@ import { cancelGeneration } from "./ipc";
 import { runUserAction } from "./userAction";
 import { useQuestionStore, type AutoAnswerRef } from "../stores/questionStore";
 import { useStreamStore } from "../stores/streamStore";
+import { useConfigStore } from "../stores/configStore";
+import { DEFAULT_SOURCES_CONFIG, useSourcesStore } from "../stores/sourcesStore";
 
 const ref = (over: Partial<AutoAnswerRef> = {}): AutoAnswerRef => ({
   requestId: "r1",
@@ -142,5 +144,57 @@ describe("an answer you ask for", () => {
     await makeWayForYou();
     expect(cancelGeneration).not.toHaveBeenCalled();
     expect(useStreamStore.getState().isRunning("yours")).toBe(true);
+  });
+});
+
+describe("runYourAction and the Notes / Tools pills", () => {
+  const providerBefore = useConfigStore.getState().llmProvider;
+
+  function setUp(provider: string, toggles = { notes: true, tools: false }) {
+    useConfigStore.setState({ llmProvider: provider as never });
+    useSourcesStore.setState({
+      config: {
+        ...DEFAULT_SOURCES_CONFIG,
+        notes_folders: [{ id: "f1", label: "Vault", path: "D:\Vault", enabled: true }],
+      },
+      toggles,
+    });
+  }
+
+  afterEach(() => {
+    useConfigStore.setState({ llmProvider: providerBefore });
+    useSourcesStore.setState({ config: DEFAULT_SOURCES_CONFIG, toggles: { notes: false, tools: false } });
+    vi.mocked(runUserAction).mockClear();
+  });
+
+  it("an action button sends the pills that are on", async () => {
+    setUp("claude_cli");
+    await runYourAction("Assist");
+    expect(runUserAction).toHaveBeenCalledWith("Assist", undefined, { sources: { notes: true, tools: false } });
+  });
+
+  it("a pill on with nothing set up behind it is sent as off", async () => {
+    setUp("claude_cli", { notes: true, tools: true });
+    await runYourAction("WhatToSay");
+    expect(runUserAction).toHaveBeenCalledWith("WhatToSay", undefined, { sources: { notes: true, tools: false } });
+  });
+
+  it("pills off the Claude provider send nothing", async () => {
+    setUp("openai", { notes: true, tools: true });
+    await runYourAction("Assist", "q");
+    expect(runUserAction).toHaveBeenCalledWith("Assist", "q");
+  });
+
+  it("a pill flipped after the click applies to the next answer only", async () => {
+    setUp("claude_cli");
+    useStreamStore.getState().startStream("Assist", "m", "p", { requestId: "auto-1" });
+    useQuestionStore.getState().setAutoAnswer(ref({ requestId: "auto-1" }));
+    vi.mocked(cancelGeneration).mockImplementation(async () => {
+      // The pill is flipped while your request waits for the automatic answer to stop.
+      useSourcesStore.getState().setToggles({ notes: false, tools: false });
+      useStreamStore.getState().endStream(0);
+    });
+    await runYourAction("Assist");
+    expect(runUserAction).toHaveBeenCalledWith("Assist", undefined, { sources: { notes: true, tools: false } });
   });
 });

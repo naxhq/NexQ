@@ -218,5 +218,9 @@ describe("sourcesStore", () => {
 
     await w.setProvider("claude_cli");
     expect(w.requestToggles()).toEqual({ notes: true, tools: false }); // no usable server behind Tools
+
+    // Nothing set up at all: nothing to send.
+    await w.useSourcesStore.getState().setConfig(config({ notes_folders: [], mcp_servers: [] }));
+    expect(w.requestToggles()).toBeUndefined();
   });
 });

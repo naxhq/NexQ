@@ -7,7 +7,7 @@
 import { generateAssist } from "./ipc";
 import { resolveScope, DEFAULT_CONTEXT_SCOPE } from "./contextScope";
 import { getModeLabel } from "./utils";
-import type { ImageAttachment, IntelligenceMode } from "./types";
+import type { ImageAttachment, IntelligenceMode, SourceToggles } from "./types";
 import { useConfigStore } from "../stores/configStore";
 import { useStreamStore } from "../stores/streamStore";
 import { useAIActionsStore } from "../stores/aiActionsStore";
@@ -27,7 +27,15 @@ export function actionLabel(mode: string): string {
 export async function runUserAction(
   mode: string,
   customQuestion?: string,
-  opts: { requestId?: string; images?: ImageAttachment[] } = {},
+  opts: {
+    requestId?: string;
+    images?: ImageAttachment[];
+    /**
+     * The Notes / Tools pills when the user asks. Only an answer the user asked
+     * for passes this; an automatic answer (Auto-Answer) never does.
+     */
+    sources?: SourceToggles;
+  } = {},
 ): Promise<void> {
   const config = useConfigStore.getState();
   const setting = config.contextScope ?? DEFAULT_CONTEXT_SCOPE;
@@ -37,7 +45,7 @@ export async function runUserAction(
   // Another action is already on its way: the backend will refuse this one.
   const busy = stream.isStreaming || stream.phase === "sending";
 
-  stream.setPending(mode, requestId);
+  stream.setPending(mode, requestId, opts.sources);
   // A one-off scope is used up by this action (not by a click the running
   // stream will refuse).
   if (!config.contextScopeSticky && setting.kind !== "default" && !busy) {
@@ -45,7 +53,12 @@ export async function runUserAction(
   }
 
   try {
-    await generateAssist(mode, customQuestion, { requestId, scope, images: opts.images });
+    await generateAssist(mode, customQuestion, {
+      requestId,
+      scope,
+      images: opts.images,
+      ...(opts.sources ? { sources: opts.sources } : {}),
+    });
   } catch (err) {
     const store = useStreamStore.getState();
     store.clearPending(requestId);

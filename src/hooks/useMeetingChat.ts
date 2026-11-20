@@ -9,6 +9,7 @@ import {
   onStreamToken,
 } from "../lib/events";
 import type { AgentSessionStatus, MeetingChatMessage } from "../lib/types";
+import { requestToggles } from "../stores/sourcesStore";
 
 /**
  * - `saved`: loaded from the database
@@ -128,7 +129,8 @@ export function useMeetingChat(meetingId: string, { enabled = true, trackSession
     setSession(null);
     if (!enabled || !trackSession) return;
     let alive = true;
-    const ours = (s: AgentSessionStatus) => s.scope === "past" && s.meeting_id === meetingId;
+    // The plain session only: the with-sources one has its own status on the pills.
+    const ours = (s: AgentSessionStatus) => s.scope === "past" && s.meeting_id === meetingId && !s.with_sources;
     const unlisten = onAgentSessionStatus((status) => {
       if (ours(status)) setSession(status);
     });
@@ -156,6 +158,8 @@ export function useMeetingChat(meetingId: string, { enabled = true, trackSession
       setIsAsking(true);
 
       const requestId = crypto.randomUUID();
+      // The pills as they are when you ask; a question you type always may use them.
+      const sources = requestToggles();
       const questionId = `local-q-${requestId}`;
       const answerId = `local-a-${requestId}`;
       const now = Date.now();
@@ -199,7 +203,7 @@ export function useMeetingChat(meetingId: string, { enabled = true, trackSession
             if (ours(event.request_id)) finish("error", event.message);
           }),
         );
-        await askMeeting(meetingId, question, requestId);
+        await (sources ? askMeeting(meetingId, question, requestId, sources) : askMeeting(meetingId, question, requestId));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (finished) {

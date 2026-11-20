@@ -9,6 +9,7 @@
 import { cancelGeneration } from "./ipc";
 import { logToFile } from "./logger";
 import { runUserAction } from "./userAction";
+import { requestToggles } from "../stores/sourcesStore";
 import type { ImageAttachment, TurnSignal } from "./types";
 import { useQuestionStore, type AutoAnswerRef } from "../stores/questionStore";
 import { useStreamStore } from "../stores/streamStore";
@@ -118,11 +119,15 @@ export async function makeWayForYou(): Promise<void> {
  */
 export function runYourAction(mode: string, question?: string, images?: ImageAttachment[]): Promise<void> {
   let answer: Promise<void> = Promise.resolve();
+  // The pills as they are when you ask: a flip while this answer streams is for the next one.
+  const sources = requestToggles();
   return inTurn(async () => {
     if (autoAnswerRunning()) await makeWayForYou();
-    answer = images && images.length > 0
-      ? runUserAction(mode, question, { images })
-      : runUserAction(mode, question);
+    const opts = {
+      ...(images && images.length > 0 ? { images } : {}),
+      ...(sources ? { sources } : {}),
+    };
+    answer = Object.keys(opts).length > 0 ? runUserAction(mode, question, opts) : runUserAction(mode, question);
   }).then(() => answer);
 }
 

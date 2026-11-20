@@ -278,12 +278,15 @@ export const useSourcesStore = create<SourcesState>((set) => ({
 
 /**
  * The pills as they are right now, for a request the user makes. `undefined`
- * off the Claude subscription (nothing to send), otherwise each pill that is
- * on and has a source behind it.
+ * off the Claude subscription, or with no source set up at all (nothing to
+ * send, so nobody who never set sources up sends anything new); otherwise each
+ * pill that is on and has a source behind it. Both off still goes out when
+ * sources exist: Shorten and FollowUp follow the answer they work on.
  */
 export function requestToggles(): SourceToggles | undefined {
   if (useConfigStore.getState().llmProvider !== "claude_cli") return undefined;
   const { config, toggles } = useSourcesStore.getState();
   const kinds = enabledKinds(config);
+  if (!kinds.notes && !kinds.tools) return undefined;
   return { notes: toggles.notes && kinds.notes, tools: toggles.tools && kinds.tools };
 }
