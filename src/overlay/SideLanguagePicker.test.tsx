@@ -200,6 +200,15 @@ describe("SideLanguagePicker", () => {
       expect(configNow().them.language).toBe("it-IT");
     });
 
+    it("a Room connection status clears Restarting", () => {
+      render(<SideLanguagePicker side="them" />);
+      fireEvent.click(chip(/Room language/));
+      fireEvent.click(screen.getByRole("radio", { name: "Italian" }));
+      expect(chip(/Room language.*Restarting/)).toHaveTextContent("Restarting…");
+      emit("stt_connection_status", { provider: "deepgram", party: "Room", status: "connected" });
+      expect(chip(/Room language: Italian$/)).toHaveTextContent("IT-IT");
+    });
+
     it("words a Room warning with Room", () => {
       useConfigStore.setState({
         meetingAudioConfig: { ...baseConfig, them: { ...baseConfig.them, stt_provider: "web_speech", language: "auto" } },
@@ -208,6 +217,31 @@ describe("SideLanguagePicker", () => {
       fireEvent.click(chip(/Room language/));
       expect(screen.getByRole("alert")).toHaveTextContent("used for Room.");
     });
+  });
+
+  it("Space and Enter on the chip open the picker and never reach window shortcuts", () => {
+    const onWindowKey = vi.fn();
+    window.addEventListener("keydown", onWindowKey);
+    try {
+      render(<SideLanguagePicker side="them" />);
+      for (const key of [" ", "Enter"]) {
+        fireEvent.click(screen.getByRole("button", { name: /Them language/ }));
+        if (screen.queryByRole("dialog")) fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        const c = chip(/Them language/);
+        c.focus();
+        const notPrevented = fireEvent.keyDown(c, { key });
+        expect(notPrevented).toBe(false);
+        expect(screen.getByRole("dialog", { name: "Them language" })).toBeInTheDocument();
+        fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+      }
+      // Keys inside the list are contained too.
+      fireEvent.click(chip(/Them language/));
+      fireEvent.keyDown(document.activeElement!, { key: " " });
+      expect(onWindowKey).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", onWindowKey);
+    }
   });
 
   it("renders nothing before the config has loaded", () => {

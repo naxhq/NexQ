@@ -10,8 +10,8 @@ const MAX_LIST_HEIGHT = 224;
 
 /**
  * Chip beside a side's mute button: the language that side is transcribed in.
- * Opens a small list to change it without leaving the meeting; the side's
- * transcription restarts by itself. The same setting as Settings > Audio & Devices.
+ * Opens a small list to change it without leaving the meeting; transcription
+ * restarts by itself (capture reopens for a moment on both sides). The same setting as Settings > Audio & Devices.
  * Renders nothing for "You" in an in-person meeting (the room is transcribed as "Room").
  */
 export function SideLanguagePicker({ side }: { side: LanguageSide }) {
@@ -121,8 +121,10 @@ export function SideLanguagePicker({ side }: { side: LanguageSide }) {
         type="button"
         onClick={() => (open ? close() : openPicker())}
         onKeyDown={(e) => {
-          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          // Keys on the chip never reach the window-level shortcuts (Space runs Assist).
+          if (e.key === "Enter" || e.key === " " || e.key === "ArrowDown" || e.key === "ArrowUp") {
             e.preventDefault();
+            e.stopPropagation();
             if (!open) openPicker();
           }
         }}

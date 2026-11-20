@@ -2,7 +2,8 @@
 // lets people change it (the meeting overlay). Reads and writes the same setting
 // as Settings > Audio & Devices: `meetingAudioConfig[side].language`. The store
 // persists it, the launcher window picks the change up, and its useAudioConfigSync
-// restarts that side.
+// restarts capture (both sides' capture is reopened for a moment, not only the
+// changed one).
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useConfigStore } from "../stores/configStore";
@@ -29,7 +30,7 @@ export interface SideLanguageInfo {
   sharedLabel: string;
   /** Why the side's provider can't handle its language, or a tip. */
   notice: SideLanguageHint | null;
-  /** The side's transcription is being restarted for a language change. */
+  /** This side's transcription is reconnecting after a language change (the other side's capture is reopened too, briefly). */
   restarting: boolean;
 }
 
@@ -38,7 +39,7 @@ export interface SideLanguages {
   you: SideLanguageInfo | null;
   /** Null before the config loads. */
   them: SideLanguageInfo | null;
-  /** Sets one side's language ("" for Default). Restarts that side when a meeting is running. */
+  /** Sets one side's language ("" for Default). While a meeting runs, capture restarts for a moment on both sides; only the changed side shows as restarting. */
   setLanguage: (side: LanguageSide, value: string) => void;
 }
 
@@ -68,7 +69,9 @@ export function useSideLanguages(): SideLanguages {
     let gone = false;
     const keep = (off: () => void) => (gone ? off() : offs.push(off));
     onSTTConnectionStatus((e) => {
-      const party = e.party.toLowerCase();
+      // In-person capture names the provider's party "Room": that is the Them side.
+      const raw = e.party.toLowerCase();
+      const party = raw === "room" ? "them" : raw;
       if (e.status !== "connected" && e.status !== "error") return;
       if (party === "you" || party === "them") finishRestart(party);
     }).then(keep, () => {});

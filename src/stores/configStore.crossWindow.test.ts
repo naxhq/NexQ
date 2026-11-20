@@ -121,6 +121,34 @@ describe("configStore: active LLM across windows", () => {
   });
 });
 
+describe("configStore: Deepgram and local model picks across windows", () => {
+  beforeEach(() => {
+    saved.clear();
+    keyListeners.length = 0;
+    invoke.mockClear();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("a Deepgram model changed in one window reaches the other", async () => {
+    const launcher = await openWindow();
+    const overlay = await openWindow();
+    const next = { ...launcher.getState().deepgramConfig, model: "nova-2" };
+    launcher.getState().setDeepgramConfig(next);
+    await vi.waitFor(() => expect(overlay.getState().deepgramConfig.model).toBe("nova-2"));
+  });
+
+  it("the active model of an engine reaches the other window", async () => {
+    const launcher = await openWindow();
+    const overlay = await openWindow();
+    launcher.getState().setActiveModelForEngine("parakeet_tdt", "parakeet-v3");
+    await vi.waitFor(() => expect(overlay.getState().activeModelPerEngine.parakeet_tdt).toBe("parakeet-v3"));
+  });
+});
+
 describe("configStore: stealth mode and the custom endpoint across windows", () => {
   beforeEach(() => {
     saved.clear();
