@@ -894,16 +894,23 @@ export async function inspectNotesFolder(path: string): Promise<NotesFolderInfo>
 
 /**
  * Add the servers in pasted `mcpServers` JSON. Secret values are stored in
- * Credential Manager and are not in the returned servers. `takenKeys` are the
- * keys of the servers already saved.
+ * Credential Manager and are not in the returned servers. New keys avoid the
+ * keys the backend has saved (see `setPersonalSources`).
  */
-export async function importMcpServersJson(json: string, takenKeys: string[]): Promise<McpServer[]> {
-  return invoke<McpServer[]>("import_mcp_servers_json", { json, takenKeys });
+export async function importMcpServersJson(json: string): Promise<McpServer[]> {
+  return invoke<McpServer[]>("import_mcp_servers_json", { json });
 }
 
-/** Save the add/edit server form; secrets go to Credential Manager, the result holds names only. */
-export async function saveMcpServerForm(form: McpServerForm, takenKeys: string[]): Promise<McpServer> {
-  return invoke<McpServer>("save_mcp_server_form", { form, takenKeys });
+/**
+ * Save the add/edit server form; secrets go to Credential Manager, the result
+ * holds names only. An edit (`form.id`) must name a server the backend has
+ * saved (`setPersonalSources`): its key comes from there, `form.key` is
+ * ignored. If the edit changes the command, arguments, URL or plain
+ * environment, stored secrets are not kept: it rejects with "Enter the secrets
+ * again: ..." until every secret is typed in the form.
+ */
+export async function saveMcpServerForm(form: McpServerForm): Promise<McpServer> {
+  return invoke<McpServer>("save_mcp_server_form", { form });
 }
 
 /** The user-scope MCP servers in Claude Code's config (read only when called). */
@@ -912,22 +919,26 @@ export async function listClaudeCodeMcpServers(): Promise<ClaudeCodeMcpServer[]>
 }
 
 /** Copy the named Claude Code servers into NexQ (OAuth ones come back off, `needs_sign_in`). */
-export async function importClaudeCodeMcpServers(names: string[], takenKeys: string[]): Promise<McpServer[]> {
-  return invoke<McpServer[]>("import_claude_code_mcp_servers", { names, takenKeys });
+export async function importClaudeCodeMcpServers(names: string[]): Promise<McpServer[]> {
+  return invoke<McpServer[]>("import_claude_code_mcp_servers", { names });
 }
 
 /**
- * Start the server like a session would and list its tools (up to 60 s). A
- * failing server does not reject: the result's `last_check` has `ok: false`
- * and the `error`.
+ * Start a server like a session would and list its tools (up to 60 s). The
+ * backend runs the server it has saved under `serverId` (call
+ * `setPersonalSources` first when it was just added) with its stored secrets.
+ * To check an unsaved or edited form instead, pass `draft`: it runs with the
+ * secrets typed in it, and stored secrets only if the draft starts the same
+ * thing as the saved server. A failing server does not reject: the result's
+ * `last_check` has `ok: false` and the `error`.
  */
-export async function checkMcpServer(server: McpServer): Promise<McpServer> {
-  return invoke<McpServer>("check_mcp_server", { server });
+export async function checkMcpServer(serverId: string | null, draft: McpServerForm | null = null): Promise<McpServer> {
+  return invoke<McpServer>("check_mcp_server", { serverId, draft });
 }
 
-/** Forget the saved secrets of a server that is being removed. */
-export async function deleteMcpSecrets(server: McpServer): Promise<void> {
-  return invoke("delete_mcp_secrets", { server });
+/** Forget the saved secrets of a saved server that is being removed (call before saving the removal). */
+export async function deleteMcpSecrets(serverId: string): Promise<void> {
+  return invoke("delete_mcp_secrets", { serverId });
 }
 
 /** Open a note with the default app; only a file inside an enabled notes folder. */

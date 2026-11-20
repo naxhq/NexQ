@@ -35,16 +35,19 @@ describe("personal sources ipc", () => {
     invoke.mockResolvedValue(undefined);
   });
 
-  it("checks a server through check_mcp_server", async () => {
-    await checkMcpServer(server);
-    expect(invoke).toHaveBeenCalledWith("check_mcp_server", { server });
+  it("checks a saved server by id, or a draft form", async () => {
+    await checkMcpServer("i");
+    expect(invoke).toHaveBeenLastCalledWith("check_mcp_server", { serverId: "i", draft: null });
+    const draft: McpServerForm = { id: null, key: null, label: "M", transport: server.transport, env: [], headers: [] };
+    await checkMcpServer(null, draft);
+    expect(invoke).toHaveBeenLastCalledWith("check_mcp_server", { serverId: null, draft });
   });
 
   it("sends camelCase argument names for the Rust snake_case ones", async () => {
-    await importMcpServersJson("{}", ["a"]);
-    expect(invoke).toHaveBeenLastCalledWith("import_mcp_servers_json", { json: "{}", takenKeys: ["a"] });
-    await importClaudeCodeMcpServers(["x"], ["a"]);
-    expect(invoke).toHaveBeenLastCalledWith("import_claude_code_mcp_servers", { names: ["x"], takenKeys: ["a"] });
+    await importMcpServersJson("{}");
+    expect(invoke).toHaveBeenLastCalledWith("import_mcp_servers_json", { json: "{}" });
+    await importClaudeCodeMcpServers(["x"]);
+    expect(invoke).toHaveBeenLastCalledWith("import_claude_code_mcp_servers", { names: ["x"] });
     const form: McpServerForm = {
       id: null,
       key: null,
@@ -53,8 +56,8 @@ describe("personal sources ipc", () => {
       env: [{ name: "API_KEY", value: "k" }],
       headers: [],
     };
-    await saveMcpServerForm(form, ["a"]);
-    expect(invoke).toHaveBeenLastCalledWith("save_mcp_server_form", { form, takenKeys: ["a"] });
+    await saveMcpServerForm(form);
+    expect(invoke).toHaveBeenLastCalledWith("save_mcp_server_form", { form });
   });
 
   it("uses the command names the backend registers", async () => {
@@ -62,8 +65,8 @@ describe("personal sources ipc", () => {
     expect(invoke).toHaveBeenLastCalledWith("inspect_notes_folder", { path: "D:/v" });
     await listClaudeCodeMcpServers();
     expect(invoke).toHaveBeenLastCalledWith("list_claude_code_mcp_servers");
-    await deleteMcpSecrets(server);
-    expect(invoke).toHaveBeenLastCalledWith("delete_mcp_secrets", { server });
+    await deleteMcpSecrets("i");
+    expect(invoke).toHaveBeenLastCalledWith("delete_mcp_secrets", { serverId: "i" });
     await openSourceFile("D:/v/a.md");
     expect(invoke).toHaveBeenLastCalledWith("open_source_file", { path: "D:/v/a.md" });
   });

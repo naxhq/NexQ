@@ -5,6 +5,13 @@
 //! Secret values (secret env vars, every HTTP header value) go to Credential
 //! Manager under `mcp_json::credential_id` / `header_credential_id` and never
 //! come back over IPC: a returned `McpServer` holds only names.
+//!
+//! The webview has no CSP, so anything it sends is untrusted. Backend state
+//! (`AppState::personal_sources`, set by `set_personal_sources`) is the source
+//! of truth: a server is looked up there by id, keys are derived against the
+//! keys saved there, and a stored secret is only ever handed to the server
+//! that was saved with it (same command, arguments, URL and plain
+//! environment). Change any of those and the secrets must be typed again.
 
 use crate::credentials::CredentialManager;
 use crate::llm::cli_agent::mcp_check::list_server_tools;
@@ -97,6 +104,51 @@ pub fn secret_ids(server: &McpServer) -> Vec<String> {
 fn stale_credential_ids(old: &McpServer, new: &McpServer) -> Vec<String> {
     let kept = secret_ids(new);
     secret_ids(old).into_iter().filter(|id| !kept.contains(id)).collect()
+}
+
+/// A server key the generated mcp-config and the credential ids can trust:
+/// lowercase letters, digits and `-` only (so never `__`, `:` or a path).
+pub fn is_valid_key(key: &str) -> bool {
+    !key.is_empty() && key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// What a stored secret is tied to: where the server starts (command and
+/// arguments, or URL) and its plain environment. A changed target must not
+/// receive the old secrets.
+fn launch_target(transport: &McpTransport, env: &[EnvVar]) -> (McpTransport, Vec<(String, String)>) {
+    let transport = match transport {
+        McpTransport::Http { url, .. } => McpTransport::Http { url: url.clone(), header_names: Vec::new() },
+        other => other.clone(),
+    };
+    let mut plain: Vec<(String, String)> = env
+        .iter()
+        .filter(|v| !v.secret)
+        .map(|v| (v.name.to_ascii_uppercase(), v.value.clone().unwrap_or_default()))
+        .collect();
+    plain.sort();
+    (transport, plain)
+}
+
+/// Does `new` start somewhere other than the saved `old`?
+fn target_changed(old: &McpServer, new_transport: &McpTransport, new_env: &[EnvVar]) -> bool {
+    launch_target(&old.transport, &old.env) != launch_target(new_transport, new_env)
+}
+
+/// Shown when an edit moved a server and its secrets must be typed again.
+const SECRETS_RESET: &str = "Enter the secrets again: the server's command, URL or environment changed";
+
+/// The saved server with this id (backend state, never the frontend's copy).
+fn saved_server(state: &AppState, id: &str) -> Option<McpServer> {
+    state.personal_sources.read().ok()?.mcp_servers.iter().find(|s| s.id == id).cloned()
+}
+
+/// Keys of the saved servers: what a new key must not collide with.
+fn saved_keys(state: &AppState) -> Vec<String> {
+    state
+        .personal_sources
+        .read()
+        .map(|c| c.mcp_servers.iter().map(|s| s.key.clone()).collect())
+        .unwrap_or_default()
 }
 
 // ── Notes folders ───────────────────────────────────────────────────────────
@@ -201,10 +253,11 @@ fn import_json(store: &dyn SecretStore, json: &str, taken_keys: &[String]) -> Re
 }
 
 /// Add the servers in pasted `mcpServers` JSON. Secret values are stored in
-/// Credential Manager and are not in the returned servers.
+/// Credential Manager and are not in the returned servers. New keys avoid the
+/// keys NexQ has saved (not a list the webview sends).
 #[command]
-pub fn import_mcp_servers_json(json: String, taken_keys: Vec<String>) -> Result<Vec<McpServer>, String> {
-    import_json(&SystemSecrets::new(), &json, &taken_keys)
+pub fn import_mcp_servers_json(json: String, state: State<'_, AppState>) -> Result<Vec<McpServer>, String> {
+    import_json(&SystemSecrets::new(), &json, &saved_keys(&state))
 }
 
 /// A server in Claude Code's own config, for the import picker.
@@ -304,10 +357,10 @@ pub fn list_claude_code_mcp_servers() -> Result<Vec<ClaudeCodeMcpServer>, String
 #[command]
 pub fn import_claude_code_mcp_servers(
     names: Vec<String>,
-    taken_keys: Vec<String>,
+    state: State<'_, AppState>,
 ) -> Result<Vec<McpServer>, String> {
     let text = read_claude_json()?.ok_or("Claude Code's config wasn't found on this PC")?;
-    import_claude_code(&SystemSecrets::new(), &text, &names, &taken_keys)
+    import_claude_code(&SystemSecrets::new(), &text, &names, &saved_keys(&state))
 }
 
 // ── MCP servers: the add/edit form ──────────────────────────────────────────
@@ -331,7 +384,8 @@ impl std::fmt::Debug for FormPair {
 pub struct McpServerForm {
     /// `None` for a new server.
     pub id: Option<String>,
-    /// The existing server's key (never changes); `None` for a new server.
+    /// Ignored: an edit keeps the saved server's key and a new server's key is
+    /// derived from its name. Kept so the form shape stays the same.
     pub key: Option<String>,
     pub label: String,
     /// For HTTP only the `url` is read: header names come from `headers`.
@@ -370,24 +424,40 @@ pub fn form_secrets(
     Ok(secrets)
 }
 
+/// A form turned into a server.
+#[derive(Debug)]
+struct FormBuild {
+    server: McpServer,
+    /// The secrets the form typed (blank ones that keep a stored value are not here).
+    secrets: Vec<SecretValue>,
+    /// The edit moved the server: the old secrets are not kept.
+    target_changed: bool,
+}
+
 /// Check the form and build the server it describes plus the secrets to store.
-/// `old` is the saved server being edited (its tool switches and on/off state
-/// stay; it counts as unchecked again).
+/// `old` is the saved server being edited, from backend state: its key stays
+/// (the form's own `key` is ignored), and so do its tool switches and on/off
+/// state; it counts as unchecked again. `taken_keys` are the saved servers'
+/// keys, for a new server's key. `stored` says whether a secret is saved; it
+/// is not consulted when the edit changes where the server starts, so every
+/// secret must then be typed again.
 fn build_form_server(
     form: &McpServerForm,
     taken_keys: &[String],
     old: Option<&McpServer>,
-    has_stored: &dyn Fn(&str) -> bool,
-) -> Result<(McpServer, Vec<SecretValue>), String> {
+    stored: &dyn Fn(&str) -> bool,
+) -> Result<FormBuild, String> {
     let label = form.label.trim();
     if label.is_empty() {
         return Err("Give the server a name".to_string());
     }
-    let key = match (&form.key, old) {
-        (Some(key), _) => key.clone(),
-        (None, Some(old)) => old.key.clone(),
-        (None, None) => unique_key(label, taken_keys),
+    let key = match old {
+        Some(old) => old.key.clone(),
+        None => unique_key(label, taken_keys),
     };
+    if !is_valid_key(&key) {
+        return Err("This server's key isn't valid".to_string());
+    }
 
     let transport = match &form.transport {
         McpTransport::Stdio { command, args } => {
@@ -447,14 +517,17 @@ fn build_form_server(
         env: form.env.iter().filter(|_| matches!(transport, McpTransport::Stdio { .. })).cloned().collect(),
         ..form.clone()
     };
-    let secrets = form_secrets(&for_secrets, &key, has_stored)?;
+    let changed = old.is_some_and(|o| target_changed(o, &transport, &env));
+    let secrets = form_secrets(&for_secrets, &key, &|id| !changed && stored(id)).map_err(|e| {
+        if changed {
+            format!("{SECRETS_RESET} ({e})")
+        } else {
+            e
+        }
+    })?;
 
     let server = McpServer {
-        id: form
-            .id
-            .clone()
-            .or_else(|| old.map(|o| o.id.clone()))
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        id: old.map(|o| o.id.clone()).unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         key,
         label: label.to_string(),
         transport,
@@ -464,36 +537,49 @@ fn build_form_server(
         last_check: None,
         needs_sign_in: false,
     };
-    Ok((server, secrets))
+    Ok(FormBuild { server, secrets, target_changed: changed })
+}
+
+/// Save a form against the saved server `old` (backend state): store what was
+/// typed, then forget the secrets the edit no longer keeps. On any error
+/// nothing is changed.
+fn save_form(
+    store: &dyn SecretStore,
+    form: &McpServerForm,
+    taken_keys: &[String],
+    old: Option<&McpServer>,
+) -> Result<McpServer, String> {
+    let build = build_form_server(form, taken_keys, old, &|id| store.get(id).is_some())?;
+    store_secrets(store, &build.secrets)?;
+    if let Some(old) = old {
+        // After a move every secret was typed again, so what is stale is only
+        // what the new form dropped.
+        for id in stale_credential_ids(old, &build.server) {
+            store.delete(&id);
+        }
+    }
+    Ok(build.server)
 }
 
 /// Save the add/edit form: builds the server, stores its secrets in
 /// Credential Manager and drops the ones an edit removed. The returned server
-/// holds names only. For an edit, tool switches and the on/off state come from
-/// the server NexQ already has under that id.
+/// holds names only. An edit (`form.id`) must name a server NexQ has saved: its
+/// key, tool switches and on/off state come from that server. If the edit
+/// changes the command, arguments, URL or plain environment, the stored
+/// secrets are not kept and must be typed in the form again (the error says
+/// so). A new server's key avoids the saved servers' keys.
 #[command]
 pub fn save_mcp_server_form(
     form: McpServerForm,
-    taken_keys: Vec<String>,
     state: State<'_, AppState>,
 ) -> Result<McpServer, String> {
-    let store = SystemSecrets::new();
-    let old = form.id.as_ref().and_then(|id| {
-        state
-            .personal_sources
-            .read()
-            .ok()
-            .and_then(|cfg| cfg.mcp_servers.iter().find(|s| &s.id == id).cloned())
-    });
-    let (server, secrets) =
-        build_form_server(&form, &taken_keys, old.as_ref(), &|id| store.get(id).is_some())?;
-    store_secrets(&store, &secrets)?;
-    if let Some(old) = &old {
-        for id in stale_credential_ids(old, &server) {
-            store.delete(&id);
-        }
-    }
-    Ok(server)
+    let old = match &form.id {
+        Some(id) => Some(saved_server(&state, id).ok_or(
+            "NexQ doesn't have this server saved yet. Save your sources first, then edit it.",
+        )?),
+        None => None,
+    };
+    save_form(&SystemSecrets::new(), &form, &saved_keys(&state), old.as_ref())
 }
 
 // ── MCP servers: check, forget ──────────────────────────────────────────────
@@ -532,23 +618,82 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Start the server the way a session would and list its tools (up to 60 s).
-/// Never an `Err` for a server that fails: the returned server says so in
-/// `last_check` (`ok: false`, with `error`).
-#[command]
-pub async fn check_mcp_server(server: McpServer) -> Result<McpServer, String> {
-    let store = SystemSecrets::new();
-    let secret = |id: &str| store.get(id);
-    let found = list_server_tools(&server, &secret).await;
-    Ok(apply_check(&server, found, now_ms()))
+/// What a check runs: the server to start and where its secrets come from.
+struct CheckPlan {
+    server: McpServer,
+    /// Secrets typed in the request, by credential id.
+    typed: std::collections::HashMap<String, String>,
+    /// Saved secrets may be used: the server is the saved one, unchanged.
+    use_stored: bool,
 }
 
-/// Forget the saved secrets of a server that is being removed.
+/// Decide what to check from backend state, never from a server object the
+/// webview made up. `saved` is the saved server with the requested id. With no
+/// `draft` the saved server is checked with its stored secrets. With a draft
+/// (an unsaved or edited form) the draft is checked with the secrets typed in
+/// it; stored secrets are used only when the draft starts the same thing as
+/// the saved server.
+fn plan_check(
+    saved: Option<&McpServer>,
+    draft: Option<&McpServerForm>,
+    taken_keys: &[String],
+    stored: &dyn Fn(&str) -> bool,
+) -> Result<CheckPlan, String> {
+    match draft {
+        None => {
+            let saved = saved.ok_or("NexQ doesn't have this server saved yet. Save your sources first.")?;
+            Ok(CheckPlan { server: saved.clone(), typed: Default::default(), use_stored: true })
+        }
+        Some(form) => {
+            let build = build_form_server(form, taken_keys, saved, stored)?;
+            Ok(CheckPlan {
+                use_stored: saved.is_some() && !build.target_changed,
+                typed: build.secrets.into_iter().map(|s| (s.credential_id, s.value)).collect(),
+                server: build.server,
+            })
+        }
+    }
+}
+
+/// Where a check looks a secret up: typed values first, then (only when
+/// allowed) the saved ones.
+fn check_secret(plan: &CheckPlan, store: &dyn SecretStore, id: &str) -> Option<String> {
+    plan.typed.get(id).cloned().or_else(|| plan.use_stored.then(|| store.get(id)).flatten())
+}
+
+/// Start a server the way a session would and list its tools (up to 60 s).
+/// `server_id` names a saved server, found in backend state. `draft` checks an
+/// unsaved or edited form instead (with `server_id` set to the server being
+/// edited, if any), using the secrets typed in it. Never an `Err` for a server
+/// that fails to start: the returned server says so in `last_check`
+/// (`ok: false`, with `error`).
 #[command]
-pub fn delete_mcp_secrets(server: McpServer) -> Result<(), String> {
+pub async fn check_mcp_server(
+    server_id: Option<String>,
+    draft: Option<McpServerForm>,
+    state: State<'_, AppState>,
+) -> Result<McpServer, String> {
+    let saved = match &server_id {
+        Some(id) => Some(saved_server(&state, id).ok_or("NexQ doesn't have this server saved yet. Save your sources first.")?),
+        None => None,
+    };
     let store = SystemSecrets::new();
-    for id in secret_ids(&server) {
-        store.delete(&id);
+    let plan = plan_check(saved.as_ref(), draft.as_ref(), &saved_keys(&state), &|id| store.get(id).is_some())?;
+    let secret = |id: &str| check_secret(&plan, &store, id);
+    let found = list_server_tools(&plan.server, &secret).await;
+    Ok(apply_check(&plan.server, found, now_ms()))
+}
+
+/// Forget the saved secrets of a saved server that is being removed. The
+/// server is found in backend state by id: call this before the removal is
+/// saved with `set_personal_sources`.
+#[command]
+pub fn delete_mcp_secrets(server_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    let store = SystemSecrets::new();
+    if let Some(server) = saved_server(&state, &server_id) {
+        for id in secret_ids(&server) {
+            store.delete(&id);
+        }
     }
     Ok(())
 }
@@ -669,7 +814,7 @@ mod tests {
             ],
             headers: vec![FormPair { name: "Ignored".into(), value: "v".into() }],
         };
-        let (server, secrets) = build_form_server(&form, &["my-mira".into()], None, &|_| false).unwrap();
+        let FormBuild { server, secrets, .. } = build_form_server(&form, &["my-mira".into()], None, &|_| false).unwrap();
         assert_eq!(server.key, "my-mira-2");
         assert_eq!(server.label, "My Mira");
         assert!(server.enabled && server.tools.is_empty() && server.last_check.is_none());
@@ -692,7 +837,7 @@ mod tests {
             env: vec![FormPair { name: "API_KEY".into(), value: "ignored".into() }],
             headers: vec![FormPair { name: "Authorization".into(), value: "Bearer t".into() }],
         };
-        let (server, secrets) = build_form_server(&form, &[], None, &|_| false).unwrap();
+        let FormBuild { server, secrets, .. } = build_form_server(&form, &[], None, &|_| false).unwrap();
         assert_eq!(server.transport, McpTransport::Http { url: "https://h/mcp".into(), header_names: vec!["Authorization".into()] });
         assert!(server.env.is_empty());
         assert_eq!(secrets, vec![SecretValue { credential_id: "mcp:wiki:header:Authorization".into(), value: "Bearer t".into() }]);
@@ -741,7 +886,9 @@ mod tests {
             env: vec![FormPair { name: "API_KEY".into(), value: "".into() }],
             headers: vec![],
         };
-        let (server, secrets) = build_form_server(&form, &["other".into()], Some(&old), &|id| id == "mcp:mira:API_KEY").unwrap();
+        let FormBuild { server, secrets, target_changed } =
+            build_form_server(&form, &["other".into()], Some(&old), &|id| id == "mcp:mira:API_KEY").unwrap();
+        assert!(!target_changed);
         assert!(secrets.is_empty());
         assert_eq!((server.key.as_str(), server.id.as_str(), server.enabled), ("mira", "id1", false));
         assert_eq!(server.tools, old.tools);
@@ -844,5 +991,160 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(secret_ids(&server), vec!["mcp:a:API_KEY".to_string(), "mcp:a:header:Authorization".to_string()]);
+    }
+
+    // ── backend state is the source of truth ────────────────────────────────
+
+    fn saved_mira() -> McpServer {
+        McpServer {
+            id: "id1".into(),
+            key: "mira".into(),
+            label: "Mira".into(),
+            transport: McpTransport::Stdio { command: "node".into(), args: vec!["s.js".into()] },
+            enabled: true,
+            env: vec![
+                EnvVar { name: "API_KEY".into(), value: None, secret: true },
+                EnvVar { name: "MODE".into(), value: Some("ro".into()), secret: false },
+            ],
+            ..Default::default()
+        }
+    }
+
+    fn mira_form(command: &str, key_claim: Option<&str>, api_key: &str) -> McpServerForm {
+        McpServerForm {
+            id: Some("id1".into()),
+            key: key_claim.map(str::to_string),
+            label: "Mira".into(),
+            transport: McpTransport::Stdio { command: command.into(), args: vec!["s.js".into()] },
+            env: vec![
+                FormPair { name: "API_KEY".into(), value: api_key.into() },
+                FormPair { name: "MODE".into(), value: "ro".into() },
+            ],
+            headers: vec![],
+        }
+    }
+
+    fn store_with_mira_secret() -> MemoryStore {
+        let store = MemoryStore::default();
+        store.set("mcp:mira:API_KEY", "stored-secret").unwrap();
+        store
+    }
+
+    #[test]
+    fn an_edit_cannot_change_the_key() {
+        let old = saved_mira();
+        // The form claims another server's key: ignored, the saved key stays.
+        let form = mira_form("node", Some("other-server"), "");
+        let build = build_form_server(&form, &["mira".into(), "other-server".into()], Some(&old), &|_| true).unwrap();
+        assert_eq!(build.server.key, "mira");
+        assert_eq!(build.server.id, "id1");
+        // A form's id never gives a new server a chosen id either.
+        let mut new_form = mira_form("node", Some("mira"), "k");
+        new_form.id = None;
+        let new = build_form_server(&new_form, &["mira".into()], None, &|_| false).unwrap();
+        assert_eq!(new.server.key, "mira-2");
+    }
+
+    #[test]
+    fn a_new_key_avoids_the_keys_saved_in_the_backend() {
+        let mut form = mira_form("node", None, "k");
+        form.id = None;
+        let saved = vec!["mira".to_string(), "mira-2".to_string()];
+        let build = build_form_server(&form, &saved, None, &|_| false).unwrap();
+        assert_eq!(build.server.key, "mira-3");
+        assert!(is_valid_key(&build.server.key));
+        for bad in ["", "A", "a b", "a__b", "a:b", "../x", "ünï"] {
+            assert!(!is_valid_key(bad), "{bad}");
+        }
+        assert!(is_valid_key("my-server-2"));
+    }
+
+    #[test]
+    fn a_changed_command_clears_the_secrets_and_they_must_be_typed_again() {
+        let old = saved_mira();
+        let store = store_with_mira_secret();
+
+        // Blank secret on a moved server: refused with a clear message, nothing changed.
+        let err = save_form(&store, &mira_form("evil.exe", None, ""), &["mira".into()], Some(&old)).unwrap_err();
+        assert!(err.contains("Enter the secrets again"), "{err}");
+        assert!(err.contains("API_KEY"), "{err}");
+        assert_eq!(store.get("mcp:mira:API_KEY").as_deref(), Some("stored-secret"));
+
+        // Typed again: the new value replaces the old one.
+        let saved = save_form(&store, &mira_form("evil.exe", None, "typed"), &["mira".into()], Some(&old)).unwrap();
+        assert_eq!(saved.key, "mira");
+        assert_eq!(store.get("mcp:mira:API_KEY").as_deref(), Some("typed"));
+
+        // Same command: a blank secret keeps the stored one.
+        let store = store_with_mira_secret();
+        save_form(&store, &mira_form("node", None, ""), &["mira".into()], Some(&old)).unwrap();
+        assert_eq!(store.get("mcp:mira:API_KEY").as_deref(), Some("stored-secret"));
+    }
+
+    #[test]
+    fn changed_arguments_url_or_plain_environment_also_reset_the_secrets() {
+        let old = saved_mira();
+        let stored = |_: &str| true;
+        let moved = |f: McpServerForm| build_form_server(&f, &[], Some(&old), &stored).unwrap_err();
+        let mut args = mira_form("node", None, "");
+        args.transport = McpTransport::Stdio { command: "node".into(), args: vec!["evil.js".into()] };
+        assert!(moved(args).contains("Enter the secrets again"));
+        let mut env = mira_form("node", None, "");
+        env.env[1].value = "--require evil.js".into();
+        assert!(moved(env).contains("Enter the secrets again"));
+
+        let http = McpServer {
+            transport: McpTransport::Http { url: "https://a/mcp".into(), header_names: vec!["Authorization".into()] },
+            env: vec![],
+            ..saved_mira()
+        };
+        let http_form = |url: &str, value: &str| McpServerForm {
+            id: Some("id1".into()),
+            key: None,
+            label: "Mira".into(),
+            transport: McpTransport::Http { url: url.into(), header_names: vec![] },
+            env: vec![],
+            headers: vec![FormPair { name: "Authorization".into(), value: value.into() }],
+        };
+        assert!(build_form_server(&http_form("https://a/mcp", ""), &[], Some(&http), &stored).is_ok());
+        let err = build_form_server(&http_form("https://evil/mcp", ""), &[], Some(&http), &stored).unwrap_err();
+        assert!(err.contains("Enter the secrets again"), "{err}");
+    }
+
+    #[test]
+    fn check_with_a_tampered_command_or_url_gets_no_stored_secrets() {
+        let saved = saved_mira();
+        let store = store_with_mira_secret();
+        let stored = |id: &str| store.get(id).is_some();
+
+        // No draft: the saved server, with its stored secrets.
+        let plan = plan_check(Some(&saved), None, &["mira".into()], &stored).unwrap();
+        assert_eq!(check_secret(&plan, &store, "mcp:mira:API_KEY").as_deref(), Some("stored-secret"));
+
+        // A draft that moved the server and typed nothing: refused before anything starts.
+        assert!(plan_check(Some(&saved), Some(&mira_form("evil.exe", None, "")), &["mira".into()], &stored).is_err());
+
+        // A moved draft with a typed secret: only the typed value, never the stored one.
+        let plan = plan_check(Some(&saved), Some(&mira_form("evil.exe", None, "typed")), &["mira".into()], &stored).unwrap();
+        assert!(!plan.use_stored);
+        assert_eq!(check_secret(&plan, &store, "mcp:mira:API_KEY").as_deref(), Some("typed"));
+        assert_eq!(check_secret(&plan, &store, "mcp:other:API_KEY"), None);
+        assert_eq!(plan.server.transport, McpTransport::Stdio { command: "evil.exe".into(), args: vec!["s.js".into()] });
+
+        // The same draft with a blank secret and an unchanged command may use the stored one.
+        let plan = plan_check(Some(&saved), Some(&mira_form("node", None, "")), &["mira".into()], &stored).unwrap();
+        assert!(plan.use_stored);
+        assert_eq!(check_secret(&plan, &store, "mcp:mira:API_KEY").as_deref(), Some("stored-secret"));
+
+        // A brand-new draft claiming a saved server's key gets a fresh key and no stored secrets.
+        let mut fresh = mira_form("node", Some("mira"), "typed");
+        fresh.id = None;
+        let plan = plan_check(None, Some(&fresh), &["mira".into()], &stored).unwrap();
+        assert_eq!(plan.server.key, "mira-2");
+        assert_eq!(check_secret(&plan, &store, "mcp:mira:API_KEY"), None, "nothing stored under another key");
+        assert_eq!(check_secret(&plan, &store, "mcp:mira-2:API_KEY").as_deref(), Some("typed"));
+
+        // Without a draft the server must be a saved one.
+        assert!(plan_check(None, None, &[], &stored).is_err());
     }
 }
