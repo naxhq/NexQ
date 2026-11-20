@@ -5,12 +5,14 @@
 import { useState, useEffect, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useConfigStore } from "../stores/configStore";
+import { useMeetingStore } from "../stores/meetingStore";
+import { skipYouStt } from "../lib/audioMode";
 import {
   AUTO_STT_LANGUAGE,
   STT_LANGUAGES,
+  autoDetectProblem,
   cartesiaSupportsLanguage,
   isDeepgramNova3,
-  supportsSTTAutoDetection,
 } from "../lib/sttLanguages";
 import {
   setSTTProvider,
@@ -310,11 +312,21 @@ export function STTSettings() {
   const localModel = meetingAudioConfig?.you.stt_provider === selectedProvider
     ? meetingAudioConfig.you.local_model_id
     : undefined;
-  const selectedModel = selectedProvider === "deepgram"
-    ? deepgramModel
-    : localModel ?? (selectedProvider === "whisper_cpp" ? activeWhisperModel : activeParakeetModel);
+  const autoModels = { deepgram: deepgramModel, whisperCpp: activeWhisperModel, parakeet: activeParakeetModel };
   const autoDetectionSelected = sttLanguage === AUTO_STT_LANGUAGE;
-  const showAutoDetectionWarning = autoDetectionSelected && !supportsSTTAutoDetection(selectedProvider, selectedModel);
+  const inPerson = useMeetingStore((s) => skipYouStt(s.audioMode));
+  // This page picks the "You" provider; the "Them" side is set in Audio & Devices.
+  const autoProblems = !autoDetectionSelected ? [] : [
+    inPerson ? null : autoDetectProblem({ provider: selectedProvider, localModel }, autoModels, "You"),
+    meetingAudioConfig
+      ? autoDetectProblem(
+          { provider: meetingAudioConfig.them.stt_provider, localModel: meetingAudioConfig.them.local_model_id },
+          autoModels,
+          inPerson ? "Room" : "Them",
+        )
+      : null,
+  ].filter((p): p is string => p !== null);
+  const showAutoDetectionWarning = autoProblems.length > 0;
 
   const currentProviderOption = PROVIDER_OPTIONS.find(
     (p) => p.value === selectedProvider
@@ -775,13 +787,15 @@ export function STTSettings() {
           ))}
         </select>
         {autoDetectionSelected && (
-          <p id="provider-stt-auto-description" className={`mt-2 text-xs ${showAutoDetectionWarning ? "text-warning" : "text-muted-foreground"}`}>
+          <div id="provider-stt-auto-description" className={`mt-2 space-y-1 text-xs ${showAutoDetectionWarning ? "text-warning" : "text-muted-foreground"}`}>
             {showAutoDetectionWarning
-              ? "Choose an STT model that supports Auto-detect or select a specific language."
-              : selectedProvider === "deepgram" && isDeepgramNova3(deepgramModel)
-                ? "Nova-3 can transcribe multiple languages within the same sentence."
-                : "For speech that switches languages within a sentence, choose Deepgram Nova-3."}
-          </p>
+              ? autoProblems.map((problem) => <p key={problem}>{problem}</p>)
+              : <p>
+                  {selectedProvider === "deepgram" && isDeepgramNova3(deepgramModel)
+                    ? "Nova-3 can transcribe multiple languages within the same sentence."
+                    : "For speech that switches languages within a sentence, choose Deepgram Nova-3."}
+                </p>}
+          </div>
         )}
         {sttLanguage === "vi-VN" && selectedProvider === "parakeet_tdt" && (
           <p className="mt-2 text-xs text-warning">

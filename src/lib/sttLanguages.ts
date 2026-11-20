@@ -29,6 +29,19 @@ export function isDeepgramNova3(model?: string | null): boolean {
   return model === "nova-3" || model === "nova-3-general";
 }
 
+const MULTILINGUAL_WHISPER_MODELS = ["tiny", "base", "small", "medium", "large-v3-turbo"];
+
+/** "ggml-small.bin" and "small" are the same Whisper model. */
+function whisperModelId(model: string): string {
+  return model.replace(/^ggml-/, "").replace(/\.bin$/, "");
+}
+
+/**
+ * Whether a provider (and its model) can detect the spoken language itself.
+ * Mirrors `supports_auto_language` in src-tauri/src/commands/audio_commands.rs,
+ * which refuses a meeting start for the same cases; AUTO_DETECT_CASES in the
+ * tests is the table both sides are checked against.
+ */
 export function supportsSTTAutoDetection(
   provider: STTProviderType,
   model?: string | null,
@@ -37,7 +50,7 @@ export function supportsSTTAutoDetection(
     case "deepgram":
       return isDeepgramNova3(model) || model === "flux-general-multi";
     case "whisper_cpp":
-      return model == null || ["tiny", "base", "small", "medium", "large-v3-turbo"].includes(model);
+      return model == null || MULTILINGUAL_WHISPER_MODELS.includes(whisperModelId(model));
     case "parakeet_tdt":
       return !model || (!model.includes("parakeet") && !model.includes("nemo"))
         || model.startsWith("parakeet-tdt-0.6b-v3");
@@ -48,6 +61,51 @@ export function supportsSTTAutoDetection(
     default:
       return false;
   }
+}
+
+/** The models a side falls back to when its own config doesn't name one. */
+export interface AutoDetectModels {
+  deepgram?: string | null;
+  whisperCpp?: string | null;
+  parakeet?: string | null;
+}
+
+export interface AutoDetectSide {
+  provider: STTProviderType;
+  localModel?: string | null;
+}
+
+/** The model that will actually run for a side, as far as the settings know. */
+export function autoDetectModelFor(side: AutoDetectSide, models: AutoDetectModels): string | null | undefined {
+  if (side.provider === "deepgram") return models.deepgram;
+  return side.localModel ?? (side.provider === "whisper_cpp" ? models.whisperCpp : models.parakeet);
+}
+
+const PROVIDER_NAMES: Partial<Record<STTProviderType, string>> = {
+  web_speech: "Web Speech",
+  windows_native: "Windows speech recognition",
+  azure_speech: "Azure Speech",
+  sherpa_onnx: "Sherpa-ONNX",
+  ort_streaming: "ORT Streaming",
+};
+
+/**
+ * Plain-language reason Auto-detect won't work for one side, or null when it
+ * will. `label` is what the person calls that side: "You", "Them" or "Room".
+ */
+export function autoDetectProblem(
+  side: AutoDetectSide,
+  models: AutoDetectModels,
+  label: string,
+): string | null {
+  const model = autoDetectModelFor(side, models);
+  if (supportsSTTAutoDetection(side.provider, model)) return null;
+  let name = PROVIDER_NAMES[side.provider] ?? "this speech-to-text provider";
+  if (side.provider === "deepgram") name = `Deepgram ${model ?? "with this model"}`;
+  if (side.provider === "whisper_cpp") name = `the ${model ? whisperModelId(model) : "selected"} Whisper model`;
+  if (side.provider === "parakeet_tdt") name = "Parakeet CTC 110M";
+  return `Auto-detect doesn't work with ${name}, used for ${label}. ` +
+    "Choose Deepgram Nova-3, Whisper or Parakeet TDT 0.6B v3 for that side, or pick a language.";
 }
 
 /** Languages Cartesia ink-2 detects on its own (it has no language setting). */

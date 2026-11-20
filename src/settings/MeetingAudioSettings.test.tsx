@@ -62,12 +62,20 @@ it("selects Auto-detect and identifies the channel that needs a different STT en
   await user.selectOptions(select, screen.getByRole("option", { name: "Auto-detect" }));
   expect(useConfigStore.getState().sttLanguage).toBe("auto");
   expect(select).toHaveAccessibleDescription(
-    "For You, choose an STT model that supports Auto-detect or select a specific language."
+    "Auto-detect won't work for You yet. See the warning on its card below, or pick a language."
+  );
+  // Only the affected side's card carries the explanation.
+  const alerts = screen.getAllByRole("alert");
+  expect(alerts).toHaveLength(1);
+  expect(alerts[0]).toHaveTextContent(
+    "Auto-detect doesn't work with Web Speech, used for You. " +
+    "Choose Deepgram Nova-3, Whisper or Parakeet TDT 0.6B v3 for that side, or pick a language."
   );
 
   await user.selectOptions(select, "en-US");
   expect(useConfigStore.getState().sttLanguage).toBe("en-US");
   expect(select).not.toHaveAccessibleDescription();
+  expect(screen.queryByRole("alert")).toBeNull();
 });
 
 describe.each([

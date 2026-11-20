@@ -6,7 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useConfigStore } from "../stores/configStore";
 import { useMeetingStore } from "../stores/meetingStore";
 import { skipYouStt } from "../lib/audioMode";
-import { AUTO_STT_LANGUAGE, STT_LANGUAGES, supportsSTTAutoDetection } from "../lib/sttLanguages";
+import { AUTO_STT_LANGUAGE, STT_LANGUAGES, autoDetectProblem } from "../lib/sttLanguages";
 import {
   listAudioDevices,
   setRecordingEnabled,
@@ -226,16 +226,18 @@ export function MeetingAudioSettings() {
     preset_name: null,
   };
 
-  const unsupportedAutoChannels = sttLanguage === AUTO_STT_LANGUAGE
-    ? (inPerson ? [config.them] : [config.you, config.them])
-        .filter(({ stt_provider: provider, local_model_id: localModel }) => {
-          const model = provider === "deepgram"
-            ? deepgramModel
-            : localModel ?? (provider === "whisper_cpp" ? activeWhisperModel : activeParakeetModel);
-          return !supportsSTTAutoDetection(provider, model);
-        })
-        .map(({ role }) => inPerson ? "Room" : role)
-    : [];
+  const autoModels = { deepgram: deepgramModel, whisperCpp: activeWhisperModel, parakeet: activeParakeetModel };
+  const autoProblemFor = (party: PartyAudioConfig, label: string) =>
+    sttLanguage === AUTO_STT_LANGUAGE
+      ? autoDetectProblem({ provider: party.stt_provider, localModel: party.local_model_id }, autoModels, label)
+      : null;
+  // In an in-person meeting only the room microphone ("Them") is transcribed.
+  const youAutoProblem = inPerson ? null : autoProblemFor(config.you, "You");
+  const themAutoProblem = autoProblemFor(config.them, inPerson ? "Room" : "Them");
+  const unsupportedAutoChannels = [
+    youAutoProblem && "You",
+    themAutoProblem && (inPerson ? "Room" : "Them"),
+  ].filter(Boolean) as string[];
 
   useEffect(() => {
     if (!meetingAudioConfig) {
@@ -408,7 +410,7 @@ export function MeetingAudioSettings() {
       {sttLanguage === AUTO_STT_LANGUAGE && (
         <p id="audio-stt-auto-description" className={`mb-3 text-xs ${unsupportedAutoChannels.length ? "text-warning" : "text-muted-foreground"}`}>
           {unsupportedAutoChannels.length
-            ? `For ${unsupportedAutoChannels.join(" and ")}, choose an STT model that supports Auto-detect or select a specific language.`
+            ? `Auto-detect won't work for ${unsupportedAutoChannels.join(" and ")} yet. See the warning on ${unsupportedAutoChannels.length > 1 ? "each card" : "its card"} below, or pick a language.`
             : "For speech that switches languages within a sentence, use Deepgram Nova-3 on that audio channel."}
         </p>
       )}
@@ -431,6 +433,7 @@ export function MeetingAudioSettings() {
           localEngines={localEngines}
           otherPartyProvider={config.them.stt_provider}
           otherPartyLabel="Them"
+          autoProblem={youAutoProblem}
           onChange={(updates) => updateParty("you", updates)}
         />
         <PartyPanel
@@ -449,6 +452,7 @@ export function MeetingAudioSettings() {
           localEngines={localEngines}
           otherPartyProvider={config.you.stt_provider}
           otherPartyLabel="You"
+          autoProblem={themAutoProblem}
           onChange={(updates) => updateParty("them", updates)}
         />
       </div>
@@ -681,6 +685,7 @@ function PartyPanel({
   localEngines,
   otherPartyProvider,
   otherPartyLabel,
+  autoProblem,
   onChange,
 }: {
   label: string;
@@ -699,6 +704,8 @@ function PartyPanel({
   localEngines: LocalSTTEngineInfo[];
   otherPartyProvider: STTProviderType | null;
   otherPartyLabel: string;
+  /** Why Auto-detect won't work for this side, when it is selected. */
+  autoProblem?: string | null;
   onChange: (updates: Partial<PartyAudioConfig>) => void;
 }) {
   const c = PARTY_CONFIG[role];
@@ -849,6 +856,14 @@ function PartyPanel({
             onChange={handleProviderChange}
           />
         </div>
+
+        {/* Auto-detect can't work with this side's provider or model */}
+        {autoProblem && (
+          <div role="alert" className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+            <p className="text-meta leading-relaxed text-amber-200/80">{autoProblem}</p>
+          </div>
+        )}
 
         {/* Device + Provider mismatch warning */}
         {(party.stt_provider === "web_speech" || party.stt_provider === "windows_native") &&

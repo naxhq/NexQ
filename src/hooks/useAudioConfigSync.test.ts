@@ -1,5 +1,6 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { emit } from "@tauri-apps/api/event";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { startCapturePerParty, stopCapture } from "../lib/ipc";
 import type { MeetingAudioConfig } from "../lib/types";
 import { useConfigStore } from "../stores/configStore";
@@ -11,6 +12,32 @@ vi.mock("../lib/ipc", async (importOriginal) => ({
   startCapturePerParty: vi.fn(),
   stopCapture: vi.fn(),
 }));
+vi.mock("@tauri-apps/api/event", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tauri-apps/api/event")>()),
+  emit: vi.fn(async () => {}),
+}));
+
+const REFUSAL =
+  "Auto-detect doesn't work with Azure Speech, used for You. " +
+  "Choose Deepgram Nova-3, Whisper or Parakeet TDT 0.6B v3 for that side, or pick a language.";
+
+const config: MeetingAudioConfig = {
+  you: { role: "You", device_id: "default", is_input_device: true, stt_provider: "deepgram" },
+  them: { role: "Them", device_id: "default", is_input_device: false, stt_provider: "deepgram" },
+  recording_enabled: true,
+  preset_name: null,
+};
+const changed: MeetingAudioConfig = {
+  ...config,
+  you: { ...config.you, stt_provider: "azure_speech" },
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.useFakeTimers();
+  useMeetingStore.setState({ isRecording: true, audioMode: "online" });
+  useConfigStore.setState({ meetingAudioConfig: config });
+});
 
 afterEach(() => {
   cleanup();
@@ -19,30 +46,48 @@ afterEach(() => {
   useConfigStore.setState({ meetingAudioConfig: null });
 });
 
-it("lets Rust validate a hot-swap before capture stops and can retry after rejection", async () => {
-  vi.useFakeTimers();
-  vi.mocked(startCapturePerParty).mockRejectedValueOnce("Unsupported automatic detection");
-  const config: MeetingAudioConfig = {
-    you: { role: "You", device_id: "default", is_input_device: true, stt_provider: "deepgram" },
-    them: { role: "Them", device_id: "default", is_input_device: false, stt_provider: "deepgram" },
-    recording_enabled: true,
-    preset_name: null,
-  };
-  const unsupported: MeetingAudioConfig = {
-    ...config,
-    you: { ...config.you, stt_provider: "azure_speech" },
-  };
+async function change(next: MeetingAudioConfig) {
+  act(() => useConfigStore.setState({ meetingAudioConfig: next }));
+  await act(() => vi.advanceTimersByTimeAsync(300));
+}
 
-  useMeetingStore.setState({ isRecording: true, audioMode: "online" });
-  useConfigStore.setState({ meetingAudioConfig: config });
+it("tells the user about a refused switch and keeps the running capture's config", async () => {
+  vi.mocked(startCapturePerParty).mockRejectedValueOnce(REFUSAL);
   renderHook(() => useAudioConfigSync());
 
-  act(() => useConfigStore.setState({ meetingAudioConfig: unsupported }));
-  await act(() => vi.advanceTimersByTimeAsync(300));
-  expect(startCapturePerParty).toHaveBeenNthCalledWith(1, unsupported.you, unsupported.them, { skipYouStt: false });
+  await change(changed);
+  expect(startCapturePerParty).toHaveBeenCalledTimes(1);
+  expect(startCapturePerParty).toHaveBeenCalledWith(changed.you, changed.them, { skipYouStt: false });
   expect(stopCapture).not.toHaveBeenCalled();
+  expect(emit).toHaveBeenCalledWith(
+    "capture_warning",
+    `${REFUSAL} Your meeting keeps using the previous speech-to-text setup.`,
+  );
 
-  act(() => useConfigStore.setState({ meetingAudioConfig: config }));
-  await act(() => vi.advanceTimersByTimeAsync(300));
-  expect(startCapturePerParty).toHaveBeenNthCalledWith(2, config.you, config.them, { skipYouStt: false });
+  // Back to what is still running: nothing to restart.
+  await change(config);
+  expect(startCapturePerParty).toHaveBeenCalledTimes(1);
+});
+
+it("can switch again after a refusal", async () => {
+  vi.mocked(startCapturePerParty).mockRejectedValueOnce(REFUSAL).mockResolvedValue(undefined);
+  renderHook(() => useAudioConfigSync());
+
+  await change(changed);
+  const other: MeetingAudioConfig = { ...config, you: { ...config.you, stt_provider: "groq_whisper" } };
+  await change(other);
+  expect(startCapturePerParty).toHaveBeenCalledTimes(2);
+  expect(startCapturePerParty).toHaveBeenLastCalledWith(other.you, other.them, { skipYouStt: false });
+});
+
+it("retries a failure that may have stopped the capture, and says so", async () => {
+  vi.mocked(startCapturePerParty).mockRejectedValueOnce("Audio device busy").mockResolvedValue(undefined);
+  renderHook(() => useAudioConfigSync());
+
+  await change(changed);
+  expect(emit).toHaveBeenCalledWith("capture_warning", "Couldn't switch speech-to-text: Audio device busy");
+
+  await change(config);
+  expect(startCapturePerParty).toHaveBeenCalledTimes(2);
+  expect(startCapturePerParty).toHaveBeenLastCalledWith(config.you, config.them, { skipYouStt: false });
 });

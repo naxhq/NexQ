@@ -14,6 +14,9 @@ import { useTranscriptStore } from "../stores/transcriptStore";
 import { startCapturePerParty } from "../lib/ipc";
 import { skipYouStt } from "../lib/audioMode";
 
+/** How Rust words a refusal made before any capture is stopped (audio_commands.rs). */
+const AUTO_DETECT_REFUSAL_PREFIX = "Auto-detect doesn't work with";
+
 export function useAudioConfigSync() {
   const isRecording = useMeetingStore((s) => s.isRecording);
   const meetingAudioConfig = useConfigStore((s) => s.meetingAudioConfig);
@@ -101,9 +104,19 @@ export function useAudioConfigSync() {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log("error", "config", `Hot-swap FAILED: ${msg}`);
-        // Allow the next config change to retry, including a return to the prior config.
-        appliedConfigRef.current = undefined;
+        // Rust says "Auto-detect doesn't work with ..." before it stops anything, so the
+        // old capture is still running: keep appliedConfigRef on it, and switching back
+        // to that config won't restart capture. Any other failure may have stopped the
+        // capture, so mark it unknown (undefined) and let the next change retry.
+        const refused = msg.startsWith(AUTO_DETECT_REFUSAL_PREFIX);
+        if (!refused) appliedConfigRef.current = undefined;
         pendingConfigRef.current = null;
+        const warning = refused
+          ? `${msg} Your meeting keeps using the previous speech-to-text setup.`
+          : `Couldn't switch speech-to-text: ${msg}`;
+        import("@tauri-apps/api/event")
+          .then(({ emit }) => emit("capture_warning", warning))
+          .catch(() => {});
       } finally {
         restartingRef.current = false;
       }

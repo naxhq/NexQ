@@ -121,7 +121,7 @@ pub async fn start_capture(
     });
     if auto_language_selected {
         return Err(
-            "Automatic language detection requires per-party STT configuration. Configure both channels in Audio & Devices, then start capture again.".to_string(),
+            "Auto-detect needs You and Them to be set up separately. Open Audio & Devices, choose a speech-to-text provider for each side, then start again.".to_string(),
         );
     }
 
@@ -1636,7 +1636,7 @@ async fn create_stt_provider_for_party(
                 .unwrap_or_default(),
             _ => String::new(),
         };
-        validate_auto_language_provider(&stt_type, &model)?;
+        validate_auto_language_provider(&stt_type, &model, party_role)?;
     }
 
     crate::stt::emit_stt_debug(app, "info", "stt",
@@ -1660,8 +1660,8 @@ async fn create_stt_provider_for_party(
                             .unwrap_or_default();
                         if !is_multilingual_whisper_model(resolved_model) {
                             return Err(format!(
-                                "Whisper.cpp model '{}' does not support automatic language detection. Choose Tiny, Base, Small, Medium, or Large v3 Turbo.",
-                                resolved_model
+                                "Auto-detect doesn't work with the {} Whisper model, used for {}. Choose Deepgram Nova-3, Whisper (Tiny, Base, Small, Medium or Large v3 Turbo) or Parakeet TDT 0.6B v3 for that side, or pick a language.",
+                                resolved_model, party_role
                             ));
                         }
                     }
@@ -1884,7 +1884,7 @@ async fn create_stt_provider_for_party(
                     // Auto-detect model type: transducer (encoder/decoder/joiner) vs CTC (model.onnx)
                     let transducer = crate::stt::local_engines::model_discovery::discover_model_files(&model_dir);
                     if stt_language.eq_ignore_ascii_case("auto") && transducer.is_err() {
-                        return Err("Parakeet automatic language detection requires the multilingual TDT 0.6B v3 model. CTC 110M supports English only.".to_string());
+                        return Err(format!("Auto-detect doesn't work with Parakeet CTC 110M, used for {}. Choose Parakeet TDT 0.6B v3, Deepgram Nova-3 or Whisper for that side, or pick a language.", party_role));
                     }
                     if transducer.is_ok() {
                         // Transducer model (e.g., 0.6B v3) → use in-process ORT streaming
@@ -2015,13 +2015,13 @@ fn get_stt_language(state: &AppState) -> String {
         .unwrap_or_else(|| "en-US".to_string())
 }
 
-fn validate_auto_language_provider(
-    provider: &crate::stt::provider::STTProviderType,
-    model: &str,
-) -> Result<(), String> {
+/// Whether `provider` + `model` can detect the spoken language on its own.
+/// Mirrors `supportsSTTAutoDetection` in `src/lib/sttLanguages.ts`; both sides
+/// check the same table (`AUTO_DETECT_CASES` there, the test below here).
+fn supports_auto_language(provider: &crate::stt::provider::STTProviderType, model: &str) -> bool {
     use crate::stt::provider::STTProviderType;
 
-    let supported = match provider {
+    match provider {
         STTProviderType::Deepgram => {
             matches!(model, "nova-3" | "nova-3-general" | "flux-general-multi")
         }
@@ -2029,24 +2029,36 @@ fn validate_auto_language_provider(
         STTProviderType::GroqWhisper | STTProviderType::WhisperApi | STTProviderType::Cartesia => true,
         STTProviderType::ParakeetTdt => model.starts_with("parakeet-tdt-0.6b-v3"),
         _ => false,
-    };
+    }
+}
 
-    if supported {
+/// Refuse Auto-detect for a side whose provider or model can't do it, in words
+/// a user can act on. `party_role` is "You" or "Them".
+fn validate_auto_language_provider(
+    provider: &crate::stt::provider::STTProviderType,
+    model: &str,
+    party_role: &str,
+) -> Result<(), String> {
+    use crate::stt::provider::STTProviderType;
+
+    if supports_auto_language(provider, model) {
         return Ok(());
     }
 
     let provider_name = match provider {
-        STTProviderType::Deepgram => "Deepgram Nova-3 or Flux Multilingual",
-        STTProviderType::WhisperCpp => "a multilingual Whisper.cpp model",
-        STTProviderType::ParakeetTdt => "Parakeet TDT 0.6B v3",
-        STTProviderType::Cartesia => "Cartesia",
-        STTProviderType::GroqWhisper => "Groq Whisper",
-        STTProviderType::WhisperApi => "OpenAI Whisper API",
-        _ => "a provider that supports automatic language detection",
+        STTProviderType::Deepgram => format!("Deepgram {}", model),
+        STTProviderType::WhisperCpp => format!("the {} Whisper model", model),
+        STTProviderType::ParakeetTdt => "Parakeet CTC 110M".to_string(),
+        STTProviderType::WebSpeech => "Web Speech".to_string(),
+        STTProviderType::WindowsNative => "Windows speech recognition".to_string(),
+        STTProviderType::AzureSpeech => "Azure Speech".to_string(),
+        STTProviderType::SherpaOnnx => "Sherpa-ONNX".to_string(),
+        STTProviderType::OrtStreaming => "ORT Streaming".to_string(),
+        _ => "this speech-to-text provider".to_string(),
     };
     Err(format!(
-        "Automatic language detection is not supported by this STT provider/model. Choose {} or select a specific language.",
-        provider_name
+        "Auto-detect doesn't work with {}, used for {}. Choose Deepgram Nova-3, Whisper or Parakeet TDT 0.6B v3 for that side, or pick a language.",
+        provider_name, party_role
     ))
 }
 
@@ -2296,15 +2308,41 @@ mod tests {
     fn automatic_language_detection_is_limited_to_compatible_providers_and_models() {
         use crate::stt::provider::STTProviderType;
 
-        assert!(validate_auto_language_provider(&STTProviderType::Deepgram, "nova-3").is_ok());
-        assert!(validate_auto_language_provider(&STTProviderType::Deepgram, "nova-3-general").is_ok());
-        assert!(validate_auto_language_provider(&STTProviderType::Deepgram, "flux-general-multi").is_ok());
-        assert!(validate_auto_language_provider(&STTProviderType::Deepgram, "flux-general-en").is_err());
-        assert!(validate_auto_language_provider(&STTProviderType::WhisperCpp, "small").is_ok());
-        assert!(validate_auto_language_provider(&STTProviderType::WhisperCpp, "distil-large-v3").is_err());
-        assert!(validate_auto_language_provider(&STTProviderType::ParakeetTdt, "parakeet-tdt-0.6b-v3-int8").is_ok());
-        assert!(validate_auto_language_provider(&STTProviderType::ParakeetTdt, "parakeet-tdt-ctc-110m-int8").is_err());
-        assert!(validate_auto_language_provider(&STTProviderType::AzureSpeech, "").is_err());
+        // Keep in step with AUTO_DETECT_CASES in src/lib/sttLanguages.test.ts.
+        let cases: [(&str, &str, bool); 24] = [
+            ("deepgram", "nova-3", true),
+            ("deepgram", "nova-3-general", true),
+            ("deepgram", "flux-general-multi", true),
+            ("deepgram", "flux-general-en", false),
+            ("deepgram", "nova-2", false),
+            ("whisper_cpp", "tiny", true),
+            ("whisper_cpp", "base", true),
+            ("whisper_cpp", "small", true),
+            ("whisper_cpp", "medium", true),
+            ("whisper_cpp", "large-v3-turbo", true),
+            ("whisper_cpp", "distil-large-v3", false),
+            ("parakeet_tdt", "parakeet-tdt-0.6b-v3-int8", true),
+            ("parakeet_tdt", "parakeet-tdt-ctc-110m-int8", false),
+            ("whisper_api", "", true),
+            ("groq_whisper", "", true),
+            ("cartesia", "", true),
+            ("web_speech", "", false),
+            ("windows_native", "", false),
+            ("azure_speech", "", false),
+            ("sherpa_onnx", "", false),
+            ("ort_streaming", "", false),
+            ("deepgram", "", false),
+            ("whisper_cpp", "ggml-small.bin", true),
+            ("whisper_cpp", "ggml-base.en.bin", false),
+        ];
+        for (provider, model, expected) in cases {
+            let kind = STTProviderType::from_str(provider).expect(provider);
+            assert_eq!(supports_auto_language(&kind, model), expected, "{provider} / {model}");
+            assert_eq!(validate_auto_language_provider(&kind, model, "You").is_ok(), expected);
+        }
+
+        let message = validate_auto_language_provider(&STTProviderType::WebSpeech, "", "You").unwrap_err();
+        assert!(message.contains("Web Speech") && message.contains("used for You"), "{message}");
         assert_eq!(resolve_parakeet_model_id("small"), "parakeet-tdt-0.6b-v3-int8");
         assert_eq!(
             resolve_parakeet_model_id("parakeet-tdt-ctc-110m-int8"),
