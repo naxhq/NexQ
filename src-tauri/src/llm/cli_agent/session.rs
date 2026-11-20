@@ -18,6 +18,7 @@ use super::protocol::{
     ImageAttachment, TurnResult,
 };
 use crate::llm::provider::CancelToken;
+use crate::sources::private_files::{private_dir, remove_private_file, write_private_file};
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -189,6 +190,8 @@ pub struct ClaudeSession {
     /// The FIFO turn lock; the holder owns the current turn's events.
     turn: Arc<AsyncMutex<mpsc::UnboundedReceiver<AgentEvent>>>,
     prompt_file: PathBuf,
+    /// The private mcp-config file (holds secrets): deleted on close and drop.
+    mcp_config_file: Option<PathBuf>,
     timeouts: SessionTimeouts,
 }
 
@@ -220,7 +223,20 @@ impl ClaudeSession {
             ))
         })?;
 
-        let args = build_args(&cfg, &prompt_file);
+        // The mcp-config holds each server's own secret values, so it goes in
+        // the private folder (never the sandbox the model can read) and never
+        // in the process env.
+        let mcp_config_file = match cfg.sources.as_ref().and_then(|s| s.mcp_config_json.as_deref()) {
+            Some(json) => match write_private_file(&private_dir(), json) {
+                Ok(path) => Some(path),
+                Err(e) => {
+                    let _ = std::fs::remove_file(&prompt_file);
+                    return Err(AgentError::Spawn(format!("cannot write the sources config: {e}")));
+                }
+            },
+            None => None,
+        };
+        let args = build_args(&cfg, &prompt_file, mcp_config_file.as_deref());
         let thinking = cfg.thinking;
         let started = tokio::task::spawn_blocking(move || start_process(&bin, &args, thinking))
             .await
@@ -230,6 +246,9 @@ impl ClaudeSession {
             Ok(parts) => parts,
             Err(e) => {
                 let _ = std::fs::remove_file(&prompt_file);
+                if let Some(file) = &mcp_config_file {
+                    remove_private_file(file);
+                }
                 return Err(e);
             }
         };
@@ -240,6 +259,7 @@ impl ClaudeSession {
             stdin_tx: Mutex::new(Some(stdin_tx)),
             turn: Arc::new(AsyncMutex::new(events)),
             prompt_file,
+            mcp_config_file,
             timeouts,
         };
 
@@ -363,6 +383,15 @@ impl ClaudeSession {
         }
         self.shared.alive.store(false, Ordering::SeqCst);
         remove_prompt_file(&self.prompt_file);
+        if let Some(file) = &self.mcp_config_file {
+            remove_private_file(file);
+        }
+    }
+
+    /// Where this session's private mcp-config file is (only the path: its
+    /// content holds secrets). `None` for a session without MCP servers.
+    pub fn mcp_config_path(&self) -> Option<&Path> {
+        self.mcp_config_file.as_deref()
     }
 
     /// The model this session was started with (as configured, e.g. `haiku`).
@@ -448,6 +477,9 @@ impl Drop for ClaudeSession {
         }
         self.shared.alive.store(false, Ordering::SeqCst);
         remove_prompt_file(&self.prompt_file);
+        if let Some(file) = &self.mcp_config_file {
+            remove_private_file(file);
+        }
     }
 }
 

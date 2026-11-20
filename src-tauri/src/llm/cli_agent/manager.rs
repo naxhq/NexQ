@@ -475,6 +475,7 @@ impl AgentSessionManager {
             effort,
             system_prompt: init.system_prompt,
             thinking,
+            sources: None,
         };
         let handle = match self.spawner.spawn(cfg).await {
             Ok(handle) => handle,

@@ -12,6 +12,52 @@ pub struct SessionConfig {
     /// Extended thinking. Off sets [`DISABLE_THINKING_ENV`] on the process:
     /// the first words then come far sooner (Haiku thinks on every turn).
     pub thinking: bool,
+    /// Personal sources for a with-sources session; `None` for the plain one.
+    pub sources: Option<SourcesLaunch>,
+}
+
+/// Built-in tools a with-sources session gets when a notes folder is enabled.
+pub const SOURCES_BUILTIN_TOOLS: &str = "Read,Grep,Glob";
+
+/// What a with-sources session adds to the plain launch: notes folders, the
+/// MCP servers and which of their tools are allowed.
+#[derive(Clone, PartialEq, Default)]
+pub struct SourcesLaunch {
+    /// One `--add-dir` per folder, each one argv entry.
+    pub add_dirs: Vec<PathBuf>,
+    /// The mcp-config file text, with each server's own secret values inline.
+    /// Written to a private per-session file and deleted when the session
+    /// closes. Never log it or send it over IPC.
+    pub mcp_config_json: Option<String>,
+    /// `--allowedTools`: the read-only built-ins and the allowed MCP tools.
+    pub allowed_tools: Vec<String>,
+    /// `--disallowedTools`: the MCP tools the user switched off.
+    pub disallowed_tools: Vec<String>,
+    /// `(server key, label)` of each included server, for activity lines.
+    pub server_labels: Vec<(String, String)>,
+    /// Appended to the system prompt by the caller.
+    pub system_prompt_addition: String,
+    /// Sources left out at build time, with the reason (missing folder, missing
+    /// saved secret).
+    pub left_out: Vec<String>,
+}
+
+impl std::fmt::Debug for SourcesLaunch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let config = self
+            .mcp_config_json
+            .as_ref()
+            .map(|c| format!("<redacted, {} bytes>", c.len()));
+        f.debug_struct("SourcesLaunch")
+            .field("add_dirs", &self.add_dirs)
+            .field("mcp_config_json", &config)
+            .field("allowed_tools", &self.allowed_tools)
+            .field("disallowed_tools", &self.disallowed_tools)
+            .field("server_labels", &self.server_labels)
+            .field("system_prompt_addition_len", &self.system_prompt_addition.len())
+            .field("left_out", &self.left_out)
+            .finish()
+    }
 }
 
 /// Env var that turns off extended thinking in the `claude` CLI.
@@ -30,8 +76,19 @@ pub const STRIPPED_ENV: [&str; 7] = [
 ];
 
 /// Exact launch args (never `--bare`). The system prompt travels via file.
-pub fn build_args(cfg: &SessionConfig, system_prompt_file: &Path) -> Vec<String> {
+///
+/// A plain session (`cfg.sources == None`) is `--safe-mode`, no tools, every
+/// tool denied. A with-sources session swaps `--safe-mode` for `--restricted`
+/// (safe mode drops `--mcp-config` servers and does not confine `Read`; see
+/// `docs/superpowers/specs/2026-11-20-personal-sources-cli-findings.md`) and
+/// adds the sources flags. Each value is its own argv entry.
+pub fn build_args(
+    cfg: &SessionConfig,
+    system_prompt_file: &Path,
+    mcp_config_file: Option<&Path>,
+) -> Vec<String> {
     let s = |x: &str| x.to_string();
+    let sources = cfg.sources.as_ref();
     let mut args = vec![
         s("-p"),
         s("--input-format"),
@@ -40,17 +97,36 @@ pub fn build_args(cfg: &SessionConfig, system_prompt_file: &Path) -> Vec<String>
         s("stream-json"),
         s("--verbose"),
         s("--include-partial-messages"),
-        s("--safe-mode"),
+        s(if sources.is_some() { "--restricted" } else { "--safe-mode" }),
         s("--tools"),
-        s(""),
-        s("--disallowedTools"),
-        s("*"),
-        s("--permission-prompts"),
-        s("none"),
-        s("--no-session-persistence"),
-        s("--model"),
-        cfg.model.clone(),
+        s(match sources {
+            Some(src) if !src.add_dirs.is_empty() => SOURCES_BUILTIN_TOOLS,
+            _ => "",
+        }),
     ];
+    match sources {
+        None => args.extend([s("--disallowedTools"), s("*")]),
+        Some(src) if !src.disallowed_tools.is_empty() => {
+            args.push(s("--disallowedTools"));
+            args.extend(src.disallowed_tools.iter().cloned());
+        }
+        Some(_) => {}
+    }
+    args.extend([s("--permission-prompts"), s("none"), s("--no-session-persistence")]);
+    if let Some(src) = sources {
+        if !src.allowed_tools.is_empty() {
+            args.push(s("--allowedTools"));
+            args.extend(src.allowed_tools.iter().cloned());
+        }
+        args.push(s("--strict-mcp-config"));
+        if let Some(file) = mcp_config_file {
+            args.extend([s("--mcp-config"), file.to_string_lossy().into_owned()]);
+        }
+        for dir in &src.add_dirs {
+            args.extend([s("--add-dir"), dir.to_string_lossy().into_owned()]);
+        }
+    }
+    args.extend([s("--model"), cfg.model.clone()]);
     if let Some(effort) = &cfg.effort {
         args.extend([s("--effort"), effort.clone()]);
     }
@@ -106,6 +182,7 @@ mod tests {
             effort: Some("low".into()),
             system_prompt: "sp".into(),
             thinking: true,
+            sources: None,
         }
     }
 
@@ -134,7 +211,7 @@ mod tests {
 
     #[test]
     fn build_args_exact() {
-        let args = build_args(&cfg(), Path::new("C:\\t\\sp.txt"));
+        let args = build_args(&cfg(), Path::new("C:\\t\\sp.txt"), None);
         let joined = args.join("\u{1}");
         assert_eq!(args[0], "-p");
         for seq in [
@@ -157,10 +234,104 @@ mod tests {
         assert!(pos("--model") < pos("--effort") && pos("--effort") < pos("--system-prompt-file"));
     }
 
+    fn sources() -> SourcesLaunch {
+        SourcesLaunch {
+            add_dirs: vec!["D:\\Vault\\@ObsidianVault\\DePaul notes".into()],
+            mcp_config_json: Some("{}".into()),
+            allowed_tools: vec!["Read".into(), "Grep".into(), "Glob".into(), "mcp__mira__kb_search".into()],
+            disallowed_tools: vec!["mcp__mira__add_task".into()],
+            ..Default::default()
+        }
+    }
+
+    fn after(args: &[String], flag: &str) -> String {
+        args[args.iter().position(|a| a == flag).unwrap() + 1].clone()
+    }
+
+    #[test]
+    fn plain_args_are_unchanged_by_the_sources_field() {
+        let args = build_args(&cfg(), Path::new("C:\\t\\sp.txt"), Some(Path::new("C:\\t\\ignored.json")));
+        let expected = [
+            "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+            "--include-partial-messages", "--safe-mode", "--tools", "", "--disallowedTools", "*",
+            "--permission-prompts", "none", "--no-session-persistence", "--model", "haiku",
+            "--effort", "low", "--system-prompt-file", "C:\\t\\sp.txt",
+        ];
+        assert_eq!(args, expected);
+    }
+
+    #[test]
+    fn sources_args_notes_and_tools() {
+        let args = build_args(
+            &SessionConfig { sources: Some(sources()), ..cfg() },
+            Path::new("C:\\t\\sp.txt"),
+            Some(Path::new("C:\\t\\mcp.json")),
+        );
+        assert_eq!(after(&args, "--tools"), "Read,Grep,Glob");
+        // A path with spaces and `@` is a single argv entry.
+        assert_eq!(after(&args, "--add-dir"), "D:\\Vault\\@ObsidianVault\\DePaul notes");
+        assert_eq!(after(&args, "--mcp-config"), "C:\\t\\mcp.json");
+        assert_eq!(after(&args, "--disallowedTools"), "mcp__mira__add_task");
+        assert_eq!(after(&args, "--allowedTools"), "Read");
+        assert!(args.iter().any(|a| a == "--restricted"));
+        assert!(!args.iter().any(|a| a == "--safe-mode"));
+        assert!(args.iter().any(|a| a == "--strict-mcp-config"));
+        assert!(args.iter().any(|a| a == "--permission-prompts") && args.iter().any(|a| a == "--no-session-persistence"));
+        assert!(args.iter().any(|a| a == "mcp__mira__kb_search") && args.iter().any(|a| a == "mcp__mira__add_task"));
+        assert!(!args.iter().any(|a| a == "*" || a == "--bare" || a.contains("dangerously") || a.contains("bypass")));
+        let pos = |f: &str| args.iter().position(|a| a == f).unwrap();
+        assert!(pos("--no-session-persistence") < pos("--allowedTools"));
+        assert!(pos("--add-dir") < pos("--model") && pos("--model") < pos("--system-prompt-file"));
+    }
+
+    #[test]
+    fn sources_args_tools_only_keeps_builtins_off() {
+        let src = SourcesLaunch {
+            add_dirs: vec![],
+            allowed_tools: vec!["mcp__mira__kb_search".into()],
+            disallowed_tools: vec![],
+            ..sources()
+        };
+        let args = build_args(&SessionConfig { sources: Some(src), ..cfg() }, Path::new("C:\\t\\sp.txt"), Some(Path::new("C:\\t\\mcp.json")));
+        assert_eq!(after(&args, "--tools"), "");
+        assert!(!args.iter().any(|a| a == "--add-dir"));
+        // Nothing switched off: no deny list, and never `*`.
+        assert!(!args.iter().any(|a| a == "--disallowedTools" || a == "*"));
+    }
+
+    #[test]
+    fn sources_args_notes_only_has_no_mcp_config() {
+        let src = SourcesLaunch { mcp_config_json: None, disallowed_tools: vec![], ..sources() };
+        let args = build_args(&SessionConfig { sources: Some(src), ..cfg() }, Path::new("C:\\t\\sp.txt"), None);
+        assert!(!args.iter().any(|a| a == "--mcp-config"));
+        // Still strict, so no other MCP server loads.
+        assert!(args.iter().any(|a| a == "--strict-mcp-config"));
+    }
+
+    #[test]
+    fn each_folder_gets_its_own_add_dir() {
+        let src = SourcesLaunch { add_dirs: vec!["D:\\a b".into(), "E:\\c".into()], ..sources() };
+        let args = build_args(&SessionConfig { sources: Some(src), ..cfg() }, Path::new("C:\\t\\sp.txt"), None);
+        let dirs: Vec<&String> = args.windows(2).filter(|w| w[0] == "--add-dir").map(|w| &w[1]).collect();
+        assert_eq!(dirs, ["D:\\a b", "E:\\c"]);
+    }
+
+    #[test]
+    fn sources_launch_debug_redacts_secrets() {
+        let src = SourcesLaunch {
+            mcp_config_json: Some(r#"{"mcpServers":{"a":{"env":{"API_KEY":"sk-live-123"}}}}"#.into()),
+            ..Default::default()
+        };
+        let shown = format!("{src:?}");
+        assert!(shown.contains("redacted") && !shown.contains("sk-live-123"), "{shown}");
+        let cfg = SessionConfig { sources: Some(src), ..cfg() };
+        assert!(!format!("{cfg:?}").contains("sk-live-123"));
+    }
+
     #[test]
     fn build_args_omits_effort_when_unsupported() {
         let no_effort = SessionConfig { effort: None, ..cfg() };
-        let args = build_args(&no_effort, Path::new("C:\\t\\sp.txt"));
+        let args = build_args(&no_effort, Path::new("C:\\t\\sp.txt"), None);
         assert!(!args.iter().any(|a| a == "--effort"), "{args:?}");
         assert!(args.windows(2).any(|w| w[0] == "--model" && w[1] == "haiku"));
         assert!(args.iter().any(|a| a == "--system-prompt-file"));

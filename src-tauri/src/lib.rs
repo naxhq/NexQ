@@ -148,6 +148,11 @@ pub fn run() {
         })
         .setup(|app| {
             log_commands::start(app.handle());
+            // Private mcp-config files a crashed run left behind hold secrets.
+            let stale = sources::private_files::cleanup_leftovers(&sources::private_files::private_dir());
+            if stale > 0 {
+                log::info!("Removed {stale} leftover private session file(s)");
+            }
             let mut app_state = AppState::new();
 
             // -- Initialize DatabaseManager --

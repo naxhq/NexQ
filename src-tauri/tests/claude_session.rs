@@ -4,7 +4,7 @@
 //! (`fake_mode=...`, `fake_record=...`): the session controls the child's
 //! environment and parallel tests cannot share process env vars.
 
-use nexq_lib::llm::cli_agent::command::SessionConfig;
+use nexq_lib::llm::cli_agent::command::{SessionConfig, SourcesLaunch};
 use nexq_lib::llm::cli_agent::detect::find_claude_binary;
 use nexq_lib::llm::cli_agent::models::probe_models;
 use nexq_lib::llm::cli_agent::protocol::AgentErrorKind;
@@ -75,7 +75,34 @@ fn cfg(mode: &str, record: Option<&Path>) -> SessionConfig {
         effort: Some("low".into()),
         system_prompt,
         thinking: false,
+        sources: None,
     }
+}
+
+/// The private mcp-config file exists while the session runs, holds the
+/// config, and is gone after `close` and after a plain drop.
+#[tokio::test]
+async fn private_mcp_config_file_is_deleted_on_close_and_drop() {
+    let json = r#"{"mcpServers":{"a":{"command":"x","env":{"API_KEY":"va"}}}}"#;
+    let sources = SourcesLaunch { mcp_config_json: Some(json.into()), ..Default::default() };
+    let with = |mode| SessionConfig { sources: Some(sources.clone()), ..cfg(mode, None) };
+
+    let closed = ClaudeSession::spawn(fake_bin(), with("normal")).await.unwrap();
+    let path = closed.mcp_config_path().expect("mcp config path").to_path_buf();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), json);
+    closed.close().await;
+    assert!(!path.exists(), "file left after close");
+
+    let dropped = ClaudeSession::spawn(fake_bin(), with("normal")).await.unwrap();
+    let path = dropped.mcp_config_path().unwrap().to_path_buf();
+    assert!(path.exists());
+    drop(dropped);
+    assert!(!path.exists(), "file left after drop");
+
+    // A plain session never writes one.
+    let plain = spawn("normal").await;
+    assert!(plain.mcp_config_path().is_none());
+    plain.close().await;
 }
 
 async fn spawn(mode: &str) -> ClaudeSession {
@@ -469,6 +496,7 @@ async fn real_claude_image() {
         effort: Some("low".into()),
         system_prompt: "You are a terse assistant. Answer in as few words as possible.".into(),
         thinking: false,
+        sources: None,
     };
     let session = ClaudeSession::spawn(bin, cfg).await.expect("spawn real claude");
 
@@ -512,6 +540,7 @@ async fn real_claude_two_turns() {
         effort: Some("low".into()),
         system_prompt: "You are a terse assistant. Answer in as few words as possible.".into(),
         thinking: false,
+        sources: None,
     };
     let session = ClaudeSession::spawn(bin, cfg)
         .await
