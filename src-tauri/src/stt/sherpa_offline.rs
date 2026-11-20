@@ -1,8 +1,9 @@
 // Sherpa-ONNX offline (batch) STT provider.
 //
-// Handles non-streaming models like SenseVoice and Parakeet TDT (NeMo CTC)
-// by accumulating audio chunks, writing them to a temp WAV file, and running
-// the `sherpa-onnx-offline` program on each batch.
+// Handles models NexQ can't decode in-process (today SenseVoice) through
+// sherpa-onnx's offline program. Parakeet CTC is decoded natively in
+// ort_streaming/ctc.rs. Audio chunks are accumulated, written to a temp WAV
+// file, and run through the `sherpa-onnx-offline` program on each batch.
 //
 // This is inherently higher-latency than streaming (3–5s chunk delay) but
 // supports the full range of sherpa-onnx non-streaming model architectures.
@@ -29,7 +30,8 @@ const SAMPLE_RATE: u32 = 16_000;
 pub enum OfflineModelType {
     /// SenseVoice: `--sense-voice-model=...`
     SenseVoice,
-    /// NeMo CTC (Parakeet TDT): `--nemo-ctc-model=...`
+    /// NeMo CTC through the offline program: `--nemo-ctc-model=...`; Parakeet no
+    /// longer uses this (ort_streaming/ctc.rs).
     NemoCtc,
 }
 
@@ -520,7 +522,7 @@ fn write_wav(path: &std::path::Path, samples: &[i16], sample_rate: u32) -> std::
 /// The sherpa-onnx offline program's file name on this platform.
 pub const OFFLINE_BINARY: &str = if cfg!(windows) { "sherpa-onnx-offline.exe" } else { "sherpa-onnx-offline" };
 
-/// Why a CTC or SenseVoice model can't start, for the Dev Log. NexQ doesn't
+/// Why a SenseVoice model can't start, for the Dev Log. NexQ doesn't
 /// download the program those models run through.
 pub fn missing_binary_message(models_base_dir: &std::path::Path) -> String {
     format!(

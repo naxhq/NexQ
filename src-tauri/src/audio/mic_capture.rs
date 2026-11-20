@@ -6,7 +6,7 @@ use cpal::{SampleFormat, Stream};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
-use super::resampler::resample;
+use super::resampler::StreamResampler;
 use super::{AudioChunk, AudioSource};
 
 /// Target sample rate for all audio output
@@ -51,11 +51,12 @@ pub fn start_mic_capture(
         SampleFormat::I16 => {
             let tx = tx.clone();
             let src = source.clone();
+            let mut resampler = StreamResampler::new(sample_rate, TARGET_SAMPLE_RATE, channels);
             device
                 .build_input_stream(
                     &config.into(),
                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                        handle_mic_data_i16(data, sample_rate, channels, &tx, &src);
+                        handle_mic_data_i16(data, &mut resampler, &tx, &src);
                     },
                     err_fn,
                     None,
@@ -65,11 +66,12 @@ pub fn start_mic_capture(
         SampleFormat::F32 => {
             let tx = tx.clone();
             let src = source.clone();
+            let mut resampler = StreamResampler::new(sample_rate, TARGET_SAMPLE_RATE, channels);
             device
                 .build_input_stream(
                     &config.into(),
                     move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                        handle_mic_data_f32(data, sample_rate, channels, &tx, &src);
+                        handle_mic_data_f32(data, &mut resampler, &tx, &src);
                     },
                     err_fn,
                     None,
@@ -79,11 +81,12 @@ pub fn start_mic_capture(
         SampleFormat::U16 => {
             let tx = tx.clone();
             let src = source;
+            let mut resampler = StreamResampler::new(sample_rate, TARGET_SAMPLE_RATE, channels);
             device
                 .build_input_stream(
                     &config.into(),
                     move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                        handle_mic_data_u16(data, sample_rate, channels, &tx, &src);
+                        handle_mic_data_u16(data, &mut resampler, &tx, &src);
                     },
                     err_fn,
                     None,
@@ -129,11 +132,12 @@ pub fn start_mic_capture_dual(
     let stream = match sample_format {
         SampleFormat::I16 => {
             let tx = tx.clone();
+            let mut resampler = StreamResampler::new(sample_rate, TARGET_SAMPLE_RATE, channels);
             device
                 .build_input_stream(
                     &config.into(),
                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                        handle_dual_data_i16(data, sample_rate, channels, &tx);
+                        handle_dual_data_i16(data, &mut resampler, &tx);
                     },
                     err_fn,
                     None,
@@ -142,11 +146,12 @@ pub fn start_mic_capture_dual(
         }
         SampleFormat::F32 => {
             let tx = tx.clone();
+            let mut resampler = StreamResampler::new(sample_rate, TARGET_SAMPLE_RATE, channels);
             device
                 .build_input_stream(
                     &config.into(),
                     move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                        handle_dual_data_f32(data, sample_rate, channels, &tx);
+                        handle_dual_data_f32(data, &mut resampler, &tx);
                     },
                     err_fn,
                     None,
@@ -168,12 +173,14 @@ pub fn start_mic_capture_dual(
 
 fn handle_dual_data_i16(
     data: &[i16],
-    sample_rate: u32,
-    channels: u16,
+    resampler: &mut StreamResampler,
     tx: &mpsc::Sender<AudioChunk>,
 ) {
     if data.is_empty() { return; }
-    let pcm_data = resample(data, sample_rate, TARGET_SAMPLE_RATE, channels);
+    let pcm_data = resampler.process(data);
+    if pcm_data.is_empty() {
+        return; // a chunk too short to yield a 16 kHz sample
+    }
     let ts = current_timestamp_ms();
 
     // Emit as Mic
@@ -194,8 +201,7 @@ fn handle_dual_data_i16(
 
 fn handle_dual_data_f32(
     data: &[f32],
-    sample_rate: u32,
-    channels: u16,
+    resampler: &mut StreamResampler,
     tx: &mpsc::Sender<AudioChunk>,
 ) {
     if data.is_empty() { return; }
@@ -203,7 +209,10 @@ fn handle_dual_data_f32(
         .iter()
         .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
         .collect();
-    let pcm_data = resample(&i16_data, sample_rate, TARGET_SAMPLE_RATE, channels);
+    let pcm_data = resampler.process(&i16_data);
+    if pcm_data.is_empty() {
+        return; // a chunk too short to yield a 16 kHz sample
+    }
     let ts = current_timestamp_ms();
 
     let _ = tx.try_send(AudioChunk {
@@ -229,8 +238,7 @@ fn current_timestamp_ms() -> u64 {
 
 fn handle_mic_data_i16(
     data: &[i16],
-    sample_rate: u32,
-    channels: u16,
+    resampler: &mut StreamResampler,
     tx: &mpsc::Sender<AudioChunk>,
     source: &AudioSource,
 ) {
@@ -238,7 +246,10 @@ fn handle_mic_data_i16(
         return;
     }
 
-    let pcm_data = resample(data, sample_rate, TARGET_SAMPLE_RATE, channels);
+    let pcm_data = resampler.process(data);
+    if pcm_data.is_empty() {
+        return; // a chunk too short to yield a 16 kHz sample
+    }
 
     let chunk = AudioChunk {
         pcm_data,
@@ -255,8 +266,7 @@ fn handle_mic_data_i16(
 
 fn handle_mic_data_f32(
     data: &[f32],
-    sample_rate: u32,
-    channels: u16,
+    resampler: &mut StreamResampler,
     tx: &mpsc::Sender<AudioChunk>,
     source: &AudioSource,
 ) {
@@ -270,7 +280,10 @@ fn handle_mic_data_f32(
         .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
         .collect();
 
-    let pcm_data = resample(&i16_data, sample_rate, TARGET_SAMPLE_RATE, channels);
+    let pcm_data = resampler.process(&i16_data);
+    if pcm_data.is_empty() {
+        return; // a chunk too short to yield a 16 kHz sample
+    }
 
     let chunk = AudioChunk {
         pcm_data,
@@ -286,8 +299,7 @@ fn handle_mic_data_f32(
 
 fn handle_mic_data_u16(
     data: &[u16],
-    sample_rate: u32,
-    channels: u16,
+    resampler: &mut StreamResampler,
     tx: &mpsc::Sender<AudioChunk>,
     source: &AudioSource,
 ) {
@@ -301,7 +313,10 @@ fn handle_mic_data_u16(
         .map(|&s| (s as i32 - 32768) as i16)
         .collect();
 
-    let pcm_data = resample(&i16_data, sample_rate, TARGET_SAMPLE_RATE, channels);
+    let pcm_data = resampler.process(&i16_data);
+    if pcm_data.is_empty() {
+        return; // a chunk too short to yield a 16 kHz sample
+    }
 
     let chunk = AudioChunk {
         pcm_data,
@@ -312,5 +327,20 @@ fn handle_mic_data_u16(
 
     if tx.try_send(chunk).is_err() {
         log::trace!("Mic audio channel full, dropping chunk");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_chunk_too_short_for_a_sample_sends_nothing() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let mut resampler = StreamResampler::new(48_000, TARGET_SAMPLE_RATE, 1);
+        handle_mic_data_i16(&[1000], &mut resampler, &tx, &AudioSource::Mic);
+        assert!(rx.try_recv().is_err(), "an empty chunk was sent");
+        handle_mic_data_i16(&[1000; 480], &mut resampler, &tx, &AudioSource::Mic);
+        assert_eq!(rx.try_recv().unwrap().pcm_data.len(), 160);
     }
 }

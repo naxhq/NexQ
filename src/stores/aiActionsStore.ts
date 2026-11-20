@@ -20,6 +20,32 @@ async function getStore(): Promise<Store> {
   return storeInstance;
 }
 
+/** Saved settings with any setting or built-in action added since they were saved. */
+function withDefaults(saved: AllActionConfigs): AllActionConfigs {
+  const defaults = createDefaultConfigs();
+  return {
+    ...defaults,
+    ...saved,
+    actions: { ...defaults.actions, ...saved.actions },
+    globalDefaults: { ...defaults.globalDefaults, ...saved.globalDefaults },
+  };
+}
+
+/** The same settings give the same text, whatever order their keys come back in. */
+function fingerprint(value: unknown): string {
+  return JSON.stringify(value, (_key, v) =>
+    v && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : v,
+  );
+}
+
+// The plugin tells every window about a save, the saving window included. These
+// are this window's saves it hasn't heard back yet, so its own echo (which can
+// arrive after a newer edit) is never taken for another window's change.
+const ownSaves: string[] = [];
+const OWN_SAVES_KEPT = 20;
+
 // Default prompt templates (mirror of Rust prompt_templates.rs)
 const DEFAULT_PROMPTS: Record<string, string> = {
   Assist:
@@ -181,13 +207,7 @@ export const useAIActionsStore = create<AIActionsState>((set, get) => ({
       const saved = await store.get<AllActionConfigs>(STORE_KEY);
       if (saved) {
         // Merge saved configs with defaults to handle new built-in actions and settings
-        const defaults = createDefaultConfigs();
-        const merged: AllActionConfigs = {
-          ...defaults,
-          ...saved,
-          actions: { ...defaults.actions, ...saved.actions },
-          globalDefaults: { ...defaults.globalDefaults, ...saved.globalDefaults },
-        };
+        const merged = withDefaults(saved);
         set({ configs: merged, isLoaded: true });
         // Sync to backend (action configs + composed instructions)
         updateActionConfigs(merged).catch((e) =>
@@ -216,10 +236,21 @@ export const useAIActionsStore = create<AIActionsState>((set, get) => ({
 
   saveConfigs: async () => {
     const { configs } = get();
+    const mine = fingerprint(configs);
+    let recorded = false;
     try {
       const store = await getStore();
+      ownSaves.push(mine);
+      recorded = true;
+      if (ownSaves.length > OWN_SAVES_KEPT) ownSaves.shift();
       await store.set(STORE_KEY, configs);
     } catch (e) {
+      // Nothing was saved, so no notice of it will come back. Only take back
+      // the entry this call recorded: an equal one may belong to another save.
+      if (recorded) {
+        const at = ownSaves.lastIndexOf(mine);
+        if (at >= 0) ownSaves.splice(at, 1);
+      }
       console.error("[aiActionsStore] Failed to persist:", e);
     }
     // Sync to backend
@@ -348,3 +379,23 @@ export const useAIActionsStore = create<AIActionsState>((set, get) => ({
     return composeInstructions(configs.instructionPresets, configs.customInstructions);
   },
 }));
+
+/**
+ * Keeps this window's AI settings in step with what the other window saves.
+ * Auto-Answer and question cards run in the overlay, but their switches are
+ * usually flipped in the launcher's Settings; without this the overlay kept
+ * the values it read at app start. The saving window already told the backend,
+ * so this only updates the window's own copy.
+ */
+export async function watchSavedActionConfigs(): Promise<() => void> {
+  const store = await getStore();
+  return store.onKeyChange<AllActionConfigs>(STORE_KEY, (saved) => {
+    if (!saved) return;
+    const own = ownSaves.indexOf(fingerprint(saved));
+    if (own >= 0) {
+      ownSaves.splice(own, 1);
+      return;
+    }
+    useAIActionsStore.setState({ configs: withDefaults(saved), isLoaded: true });
+  });
+}

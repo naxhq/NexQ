@@ -29,7 +29,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-rusqlite = { version = "0.41", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
 async-trait = "0.1"
 futures = "0.3"
@@ -101,3 +101,16 @@ coreaudio-sys = "0.2"
 core-foundation = "0.10"
 # macOS Keychain credential backend (src/credentials/macos_keychain.rs).
 security-framework = "3"
+
+# The echo canceller's tests run minutes of audio through AEC3; unoptimized
+# that takes tens of seconds.
+[profile.dev.package.sonora]
+opt-level = 3
+[profile.dev.package.sonora-aec3]
+opt-level = 3
+[profile.dev.package.sonora-common-audio]
+opt-level = 3
+[profile.dev.package.sonora-fft]
+opt-level = 3
+[profile.dev.package.sonora-simd]
+opt-level = 3
