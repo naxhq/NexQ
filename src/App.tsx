@@ -346,7 +346,7 @@ function App() {
     }).then((unlisten) => unlisteners.push(unlisten));
 
     onCaptureWarning((message) => {
-      showToast(message, "error");
+      showToast(message, "warning");
     }).then((unlisten) => unlisteners.push(unlisten));
 
     onStealthModeChanged((enabled) => {

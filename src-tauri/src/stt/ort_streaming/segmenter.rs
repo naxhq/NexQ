@@ -116,7 +116,7 @@ pub(super) fn segment_loop(
                 result_tx.blocking_send(TranscriptResult {
                     text, is_final: true, confidence: 0.9,
                     timestamp_ms: segment_start_ms,
-                    speaker: None, language: Some(language.to_owned()), segment_id: Some(format!("ort_{segment}")),
+                    speaker: None, language: crate::stt::provider::reported_language(language), segment_id: Some(format!("ort_{segment}")),
                     duration_ms: Some(duration_ms), speaker_tag: None,
                     turn: None,
                 }).map_err(|e| e.to_string())?;
@@ -171,6 +171,16 @@ mod tests {
         // 1 s of speech followed by the pause flushes at once.
         let (lengths, _) = run_queued(vec![AudioMessage::Samples([speech(1000), silence(800)].concat())], &[], 0);
         assert_eq!(lengths, [28_800]);
+    }
+
+    #[test]
+    fn auto_detect_never_tags_a_line_with_the_word_auto() {
+        let (tx, rx) = channel();
+        tx.send(AudioMessage::Samples([speech(1000), silence(800)].concat())).unwrap();
+        drop(tx);
+        let (result_tx, mut result_rx) = mpsc::channel(4);
+        segment_loop(&AtomicBool::new(false), &rx, &result_tx, 0, "auto", |_| Ok("hello".into())).unwrap();
+        assert_eq!(result_rx.try_recv().unwrap().language, None);
     }
 
     #[test]

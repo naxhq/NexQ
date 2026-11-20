@@ -9,6 +9,11 @@ export interface Toast {
   createdAt: number;
 }
 
+/** How long a toast stays: 4 s plus about 60 ms per character, at most 10 s, so a long message can be read. */
+export function toastDurationMs(message: string): number {
+  return Math.min(10_000, 4000 + 60 * message.length);
+}
+
 interface ToastState {
   toasts: Toast[];
   addToast: (message: string, type: ToastType) => void;
@@ -26,16 +31,11 @@ export const useToastStore = create<ToastState>((set) => ({
     const id = crypto.randomUUID();
     const toast: Toast = { id, message, type, createdAt: Date.now() };
 
+    // The toast removes itself once it has been on screen long enough (and has not
+    // been hovered or focused): see ToastItem, which owns the timer.
     set((state) => ({
       toasts: [...state.toasts, toast],
     }));
-
-    // Auto-dismiss after 4 seconds
-    setTimeout(() => {
-      set((state) => ({
-        toasts: state.toasts.filter((t) => t.id !== id),
-      }));
-    }, 4000);
   },
 
   removeToast: (id) =>

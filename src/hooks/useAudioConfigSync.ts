@@ -6,24 +6,28 @@
 // - appliedConfigRef: what Rust currently has running (only set after successful restart)
 // - pendingConfigRef: set immediately to prevent duplicate debounce scheduling
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useConfigStore } from "../stores/configStore";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useDevLogStore } from "../stores/devLogStore";
 import { useTranscriptStore } from "../stores/transcriptStore";
-import { stopCapture, startCapturePerParty } from "../lib/ipc";
+import { startCapturePerParty } from "../lib/ipc";
 import { skipYouStt } from "../lib/audioMode";
+import { AUTO_DETECT_REFUSAL_PREFIX, autoDetectRefusalSentences } from "../lib/sttLanguages";
 
 export function useAudioConfigSync() {
   const isRecording = useMeetingStore((s) => s.isRecording);
   const meetingAudioConfig = useConfigStore((s) => s.meetingAudioConfig);
 
-  // What Rust currently has running — only updated after successful restart
-  const appliedConfigRef = useRef<string | null>(null);
+  // null starts a new session, undefined means the last restart failed.
+  const appliedConfigRef = useRef<string | null | undefined>(null);
   // What we've already scheduled a restart for — prevents duplicate debounces
   const pendingConfigRef = useRef<string | null>(null);
   // Guard against concurrent restart attempts
   const restartingRef = useRef(false);
+  // A change arrived while a swap was running: look at the config again once it ends
+  const retryQueuedRef = useRef(false);
+  const [retryTick, setRetryTick] = useState(0);
   // Debounce timer to batch rapid config changes
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -63,10 +67,12 @@ export function useAudioConfigSync() {
     debounceRef.current = setTimeout(async () => {
       debounceRef.current = null;
 
-      // If already restarting, clear pending so next effect re-schedules
+      // If already restarting, clear pending and retry as soon as the current swap ends
+      // (the effect only re-runs when the config changes, so it has to be nudged).
       if (restartingRef.current) {
         log("warn", "config", "Hot-swap already in progress — queued for retry");
         pendingConfigRef.current = null;
+        retryQueuedRef.current = true;
         return;
       }
 
@@ -88,47 +94,41 @@ export function useAudioConfigSync() {
         return;
       }
 
-      log("info", "config", "Hot-swap: stopping current capture...");
-
       try {
-        // Finalize any interim (non-final) transcript segments before restarting,
-        // so they don't stay stuck as gray italic after the new provider takes over.
+        // Rust checks the new STT configuration before replacing the active capture.
         useTranscriptStore.getState().finalizeAllInterim();
-
-        // Stop current capture and wait for full cleanup. The recording stays
-        // open: the new capture keeps writing the meeting's audio to it.
-        await stopCapture(true);
-        log("info", "config", "Hot-swap: capture stopped, waiting for resource release...");
-
-        // Let Rust fully release WASAPI/audio resources
-        await new Promise((r) => setTimeout(r, 200));
-
-        // Re-read config in case it changed during the stop
-        const freshConfig = useConfigStore.getState().meetingAudioConfig;
-        if (!freshConfig) {
-          log("warn", "config", "Hot-swap: no config available after stop");
-          return;
-        }
-
         log("info", "config", "Hot-swap: starting new capture pipeline...");
-        await startCapturePerParty(freshConfig.you, freshConfig.them, {
+        await startCapturePerParty(latestConfig.you, latestConfig.them, {
           skipYouStt: skipYouStt(useMeetingStore.getState().audioMode),
         });
-        const freshKey = JSON.stringify(freshConfig);
-        appliedConfigRef.current = freshKey;
-        pendingConfigRef.current = freshKey;
+        appliedConfigRef.current = latestKey;
+        pendingConfigRef.current = latestKey;
         log("info", "config", "Hot-swap complete — new STT pipeline active");
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log("error", "config", `Hot-swap FAILED: ${msg}`);
-        // Reset both refs so next config change retries
-        appliedConfigRef.current = null;
+        // Rust says "Auto-detect doesn't work with ..." before it stops anything, so the
+        // old capture is still running: keep appliedConfigRef on it, and switching back
+        // to that config won't restart capture. Any other failure may have stopped the
+        // capture, so mark it unknown (undefined) and let the next change retry.
+        const refused = msg.startsWith(AUTO_DETECT_REFUSAL_PREFIX);
+        if (!refused) appliedConfigRef.current = undefined;
         pendingConfigRef.current = null;
+        const warning = refused
+          ? `${autoDetectRefusalSentences(msg).join(" ") || msg} Your meeting keeps its current setup.`
+          : `Couldn't switch speech-to-text: ${msg}`;
+        import("@tauri-apps/api/event")
+          .then(({ emit }) => emit("capture_warning", warning))
+          .catch(() => {});
       } finally {
         restartingRef.current = false;
+        if (retryQueuedRef.current) {
+          retryQueuedRef.current = false;
+          setRetryTick((tick) => tick + 1);
+        }
       }
     }, 300);
-  }, [isRecording, meetingAudioConfig]);
+  }, [isRecording, meetingAudioConfig, retryTick]);
 
   // Reset when meeting ends
   useEffect(() => {
@@ -136,6 +136,7 @@ export function useAudioConfigSync() {
       appliedConfigRef.current = null;
       pendingConfigRef.current = null;
       restartingRef.current = false;
+      retryQueuedRef.current = false;
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
         debounceRef.current = null;

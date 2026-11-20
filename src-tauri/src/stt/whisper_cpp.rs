@@ -361,10 +361,14 @@ impl STTProvider for WhisperCppSTT {
             let run_whisper = |state: &mut whisper_rs::WhisperState,
                                samples: &[f32],
                                lang: &str|
-             -> String {
+             -> (String, Option<String>) {
                 let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
                 let lang_code = lang.split('-').next().unwrap_or(lang);
-                params.set_language(Some(lang_code));
+                params.set_language(if lang_code.eq_ignore_ascii_case("auto") {
+                    None
+                } else {
+                    Some(lang_code)
+                });
                 params.set_print_special(false);
                 params.set_print_progress(false);
                 params.set_print_realtime(false);
@@ -389,11 +393,17 @@ impl STTProvider for WhisperCppSTT {
                             }
                         }
                         // Apply hallucination filter
-                        clean_whisper_text(&text)
+                        let detected_language = if lang_code.eq_ignore_ascii_case("auto") {
+                            whisper_rs::get_lang_str(state.full_lang_id_from_state())
+                                .map(str::to_string)
+                        } else {
+                            Some(lang.to_string())
+                        };
+                        (clean_whisper_text(&text), detected_language)
                     }
                     Err(e) => {
                         log::error!("WhisperCppSTT: Inference failed: {}", e);
-                        String::new()
+                        (String::new(), crate::stt::provider::reported_language(lang))
                     }
                 }
             };
@@ -471,7 +481,7 @@ impl STTProvider for WhisperCppSTT {
                         segment_id,
                         timestamp_ms,
                     } => {
-                        let text = run_whisper(&mut state, &samples, &language);
+                        let (text, detected_language) = run_whisper(&mut state, &samples, &language);
                         if !text.is_empty() {
                             let _ = fb_tx.send(FastPassFeedback {
                                 text: text.clone(),
@@ -485,7 +495,7 @@ impl STTProvider for WhisperCppSTT {
                                     confidence: 0.80,
                                     timestamp_ms,
                                     speaker: None,
-                                    language: Some(language.clone()),
+                                    language: detected_language,
                                     segment_id: Some(segment_id),
                                     duration_ms: None,
                                     speaker_tag: None,
@@ -501,7 +511,8 @@ impl STTProvider for WhisperCppSTT {
                         timestamp_ms,
                         fast_words,
                     } => {
-                        let correction_text = run_whisper(&mut state, &samples, &language);
+                        let (correction_text, detected_language) =
+                            run_whisper(&mut state, &samples, &language);
                         if correction_text.is_empty() {
                             continue;
                         }
@@ -521,7 +532,7 @@ impl STTProvider for WhisperCppSTT {
                                 confidence: 0.92,
                                 timestamp_ms,
                                 speaker: None,
-                                language: Some(language.clone()),
+                                language: detected_language,
                                 segment_id: Some(segment_id),
                                 duration_ms: None,
                                 speaker_tag: None,
@@ -544,7 +555,7 @@ impl STTProvider for WhisperCppSTT {
                                 confidence: 0.92,
                                 timestamp_ms,
                                 speaker: None,
-                                language: Some(language.clone()),
+                                language: crate::stt::provider::reported_language(&language),
                                 segment_id: Some(segment_id),
                                 duration_ms: None,
                                 speaker_tag: None,

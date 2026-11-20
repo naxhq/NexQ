@@ -105,6 +105,10 @@ pub struct AppState {
     /// in sequence; by the time end_meeting runs the recorder is stopped and
     /// the WAV path + start time are waiting here.
     pub pending_recording: Arc<Mutex<Option<PendingRecording>>>,
+    /// The Auto-detect refusal each side (You, Them) is running under, if any:
+    /// a side that couldn't detect the language started without speech-to-text.
+    /// A swap that gets the same refusal again isn't news. Cleared when capture stops.
+    pub auto_refusals: Mutex<[Option<String>; 2]>,
     /// In-memory cache for OpenRouter model catalog (TTL: 4 hours).
     pub openrouter_cache: Arc<Mutex<Option<OpenRouterModelCache>>>,
     /// Tray icon manager — initialized after the tray handle is available.
@@ -173,6 +177,7 @@ impl AppState {
             ipolicy_target_endpoint: Arc::new(Mutex::new(None)),
             active_scenario: Arc::new(RwLock::new(ActiveScenario::default())),
             pending_recording: Arc::new(Mutex::new(None)),
+            auto_refusals: Mutex::new([None, None]),
             openrouter_cache: Arc::new(Mutex::new(None)),
             tray_manager: Arc::new(Mutex::new(None)),
             gemini_cache: Arc::new(Mutex::new(None)),

@@ -908,7 +908,7 @@ fn inference_thread_main(
                             confidence: 0.80,
                             timestamp_ms: epoch_ms(),
                             speaker: None,
-                            language: Some(language.clone()),
+                            language: crate::stt::provider::reported_language(&language),
                             segment_id: Some(seg_id),
                             duration_ms: None,
                             speaker_tag: None,
@@ -930,7 +930,7 @@ fn inference_thread_main(
                                 confidence: 0.90,
                                 timestamp_ms: epoch_ms(),
                                 speaker: None,
-                                language: Some(language.clone()),
+                                language: crate::stt::provider::reported_language(&language),
                                 segment_id: Some(seg_id),
                                 duration_ms: None,
                                 speaker_tag: None,
@@ -960,7 +960,7 @@ fn inference_thread_main(
                 confidence: 0.85,
                 timestamp_ms: epoch_ms(),
                 speaker: None,
-                language: Some(language),
+                language: crate::stt::provider::reported_language(&language),
                 segment_id: Some(seg_id),
                 duration_ms: None,
                 speaker_tag: None,
@@ -1441,6 +1441,11 @@ mod live_tests {
 
         let texts = tokio::runtime::Runtime::new().unwrap().block_on(async {
             let mut stt = OrtStreamingSTT::new(PathBuf::from(dir));
+            // `NEXQ_STT_LANGUAGE=auto` checks that Auto-detect leaves the language tag empty.
+            let language = std::env::var("NEXQ_STT_LANGUAGE").ok();
+            if let Some(language) = &language {
+                stt.set_language(language);
+            }
             let (tx, mut rx) = mpsc::channel(256);
             stt.start_stream(tx).await.expect("start");
             for chunk in samples.chunks(1600) {
@@ -1453,6 +1458,10 @@ mod live_tests {
             stt.stop_stream().await.expect("stop");
             let mut texts = Vec::new();
             while let Ok(result) = rx.try_recv() {
+                println!("language tag: {:?}", result.language);
+                if language.as_deref() == Some("auto") {
+                    assert_eq!(result.language, None, "Auto-detect must not tag a line with a language");
+                }
                 texts.push(result.text);
             }
             texts

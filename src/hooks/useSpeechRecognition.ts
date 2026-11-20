@@ -15,6 +15,7 @@ import { emit } from "@tauri-apps/api/event";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useTranscriptStore } from "../stores/transcriptStore";
 import { useConfigStore } from "../stores/configStore";
+import { AUTO_STT_LANGUAGE } from "../lib/sttLanguages";
 import { pushTranscript, ensureIpolicyOverride } from "../lib/ipc";
 
 // Web Speech API types (not in all TS libs)
@@ -113,7 +114,14 @@ export function useSpeechRecognition() {
   // Track consecutive restart failures for backoff
   const restartFailCountRef = useRef(0);
 
+  // True from the moment an instance starts until the next run of the effect below
+  // (whose cleanup has already stopped it by then).
+  const instanceStartedRef = useRef(false);
+
   useEffect(() => {
+    const hadInstance = instanceStartedRef.current;
+    instanceStartedRef.current = false;
+
     // Always clean up any existing recognition first
     if (recognitionRef.current) {
       shouldRestartRef.current = false;
@@ -122,6 +130,21 @@ export function useSpeechRecognition() {
     }
 
     if (!isRecording || !usesWebSpeech) return;
+    if (sttLanguage === AUTO_STT_LANGUAGE) {
+      // Web Speech can't detect the language, so Auto-detect silences it. Say so
+      // only when it was running a moment ago (Rust already told the user at a start).
+      if (hadInstance) {
+        const side = getSpeakerLabel(useConfigStore.getState().meetingAudioConfig) === "Them"
+          ? (useMeetingStore.getState().audioMode === "in_person" ? "Room" : "Them")
+          : "You";
+        emit(
+          "capture_warning",
+          `Stopped transcribing ${side}: Web Speech can't detect the language. ` +
+          `Pick a language (it applies right away) or choose another provider for ${side}.`,
+        ).catch(() => {});
+      }
+      return;
+    }
 
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -151,6 +174,7 @@ export function useSpeechRecognition() {
     recognition.lang = currentLanguage;
 
     recognitionRef.current = recognition;
+    instanceStartedRef.current = true;
     shouldRestartRef.current = true;
     sessionPrefixRef.current = Date.now().toString(36).slice(-4);
     restartFailCountRef.current = 0;
@@ -265,11 +289,15 @@ export function useSpeechRecognition() {
               } catch {
                 // proceed anyway
               }
+              const language = useConfigStore.getState().sttLanguage;
+              if (language === AUTO_STT_LANGUAGE) return;
+              if (instanceIdRef.current !== myInstanceId || !shouldRestartRef.current || !recognitionRef.current) return;
+
               const fresh = new SpeechRecognition();
               fresh.continuous = true;
               fresh.interimResults = true;
               fresh.maxAlternatives = 1;
-              fresh.lang = useConfigStore.getState().sttLanguage || currentLanguage;
+              fresh.lang = language || currentLanguage;
               // Copy handlers from old instance
               fresh.onresult = recognitionRef.current!.onresult;
               fresh.onerror = recognitionRef.current!.onerror;

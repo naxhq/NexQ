@@ -4,7 +4,9 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useConfigStore } from "../stores/configStore";
-import { STT_LANGUAGES } from "../lib/sttLanguages";
+import { useMeetingStore } from "../stores/meetingStore";
+import { skipYouStt } from "../lib/audioMode";
+import { AUTO_STT_LANGUAGE, STT_LANGUAGES, autoDetectProblem } from "../lib/sttLanguages";
 import {
   listAudioDevices,
   setRecordingEnabled,
@@ -200,6 +202,9 @@ export function MeetingAudioSettings() {
   const [apiKeyStatus, setApiKeyStatus] = useState<Record<string, boolean>>({});
   const [localEngines, setLocalEngines] = useState<LocalSTTEngineInfo[]>([]);
   const activeWhisperModel = useConfigStore((s) => s.activeWhisperModel);
+  const activeParakeetModel = useConfigStore((s) => s.activeModelPerEngine.parakeet_tdt);
+  const deepgramModel = useConfigStore((s) => s.deepgramConfig.model);
+  const inPerson = useMeetingStore((s) => skipYouStt(s.audioMode));
 
   const [deviceLevels, setDeviceLevels] = useState<Record<string, number>>({});
   const [devicePeaks, setDevicePeaks] = useState<Record<string, number>>({});
@@ -220,6 +225,19 @@ export function MeetingAudioSettings() {
     recording_enabled: recordingEnabled,
     preset_name: null,
   };
+
+  const autoModels = { deepgram: deepgramModel, whisperCpp: activeWhisperModel, parakeet: activeParakeetModel };
+  const autoProblemFor = (party: PartyAudioConfig, label: string) =>
+    sttLanguage === AUTO_STT_LANGUAGE
+      ? autoDetectProblem({ provider: party.stt_provider, localModel: party.local_model_id }, autoModels, label)
+      : null;
+  // In an in-person meeting only the room microphone ("Them") is transcribed.
+  const youAutoProblem = inPerson ? null : autoProblemFor(config.you, "You");
+  const themAutoProblem = autoProblemFor(config.them, inPerson ? "Room" : "Them");
+  const unsupportedAutoChannels = [
+    youAutoProblem && "You",
+    themAutoProblem && (inPerson ? "Room" : "Them"),
+  ].filter(Boolean) as string[];
 
   useEffect(() => {
     if (!meetingAudioConfig) {
@@ -377,6 +395,7 @@ export function MeetingAudioSettings() {
           <select
             value={sttLanguage}
             onChange={(e) => setSTTLanguage(e.target.value)}
+            aria-describedby={sttLanguage === AUTO_STT_LANGUAGE ? "audio-stt-auto-description" : undefined}
             className="h-8 cursor-pointer rounded-lg border border-border/40 bg-background/60 px-2 text-xs font-medium normal-case tracking-normal text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
           >
             {STT_LANGUAGES.map((lang) => (
@@ -387,6 +406,14 @@ export function MeetingAudioSettings() {
           </select>
         </label>
       </div>
+
+      {sttLanguage === AUTO_STT_LANGUAGE && (
+        <p id="audio-stt-auto-description" className={`mb-3 text-xs ${unsupportedAutoChannels.length ? "text-warning" : "text-muted-foreground"}`}>
+          {unsupportedAutoChannels.length
+            ? `Auto-detect won't work for ${unsupportedAutoChannels.join(" and ")}. See ${unsupportedAutoChannels.length > 1 ? "their cards" : "its card"} below, or pick a language.`
+            : "For speech that switches languages mid-sentence, use Deepgram Nova-3."}
+        </p>
+      )}
 
       {/* ── Main two-panel: YOU | THEM ── */}
       <div className="grid grid-cols-2 gap-4">
@@ -406,6 +433,7 @@ export function MeetingAudioSettings() {
           localEngines={localEngines}
           otherPartyProvider={config.them.stt_provider}
           otherPartyLabel="Them"
+          autoProblem={youAutoProblem}
           onChange={(updates) => updateParty("you", updates)}
         />
         <PartyPanel
@@ -424,6 +452,7 @@ export function MeetingAudioSettings() {
           localEngines={localEngines}
           otherPartyProvider={config.you.stt_provider}
           otherPartyLabel="You"
+          autoProblem={themAutoProblem}
           onChange={(updates) => updateParty("them", updates)}
         />
       </div>
@@ -656,6 +685,7 @@ function PartyPanel({
   localEngines,
   otherPartyProvider,
   otherPartyLabel,
+  autoProblem,
   onChange,
 }: {
   label: string;
@@ -674,6 +704,8 @@ function PartyPanel({
   localEngines: LocalSTTEngineInfo[];
   otherPartyProvider: STTProviderType | null;
   otherPartyLabel: string;
+  /** Why Auto-detect won't work for this side, when it is selected. */
+  autoProblem?: string | null;
   onChange: (updates: Partial<PartyAudioConfig>) => void;
 }) {
   const c = PARTY_CONFIG[role];
@@ -706,8 +738,7 @@ function PartyPanel({
         ?? activeWhisperModel;
       if (engineModel) updates.local_model_id = engineModel;
     } else {
-      // Clear local_model_id for non-local providers to prevent cross-engine contamination
-      updates.local_model_id = undefined;
+      updates.local_model_id = newProvider === "whisper_cpp" ? activeWhisperModel ?? undefined : undefined;
     }
     // Dev log: provider change
     import("../stores/devLogStore").then(({ useDevLogStore }) => {
@@ -825,6 +856,14 @@ function PartyPanel({
             onChange={handleProviderChange}
           />
         </div>
+
+        {/* Auto-detect can't work with this side's provider or model */}
+        {autoProblem && (
+          <div role="alert" className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+            <p className="text-meta leading-relaxed text-amber-200/80">{autoProblem}</p>
+          </div>
+        )}
 
         {/* Device + Provider mismatch warning */}
         {(party.stt_provider === "web_speech" || party.stt_provider === "windows_native") &&

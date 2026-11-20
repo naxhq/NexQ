@@ -5,7 +5,15 @@
 import { useState, useEffect, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useConfigStore } from "../stores/configStore";
-import { STT_LANGUAGES, cartesiaSupportsLanguage } from "../lib/sttLanguages";
+import { useMeetingStore } from "../stores/meetingStore";
+import { skipYouStt } from "../lib/audioMode";
+import {
+  AUTO_STT_LANGUAGE,
+  STT_LANGUAGES,
+  autoDetectProblem,
+  cartesiaSupportsLanguage,
+  isDeepgramNova3,
+} from "../lib/sttLanguages";
 import {
   setSTTProvider,
   testSTTConnection,
@@ -274,12 +282,18 @@ export function STTSettings() {
   const setSTTLanguage = useConfigStore((s) => s.setSTTLanguage);
   const isDeepgramFlux = useConfigStore((s) => s.deepgramConfig.model.startsWith("flux-"));
   const activeWhisperModel = useConfigStore((s) => s.activeWhisperModel);
+  const deepgramModel = useConfigStore((s) => s.deepgramConfig.model);
   // Persisted: providers whose key has been saved + tested successfully
   const verifiedCloudProviders = useConfigStore((s) => s.verifiedCloudProviders);
   const setVerifiedCloudProviders = useConfigStore((s) => s.setVerifiedCloudProviders);
 
+  // Starts on the provider "You" actually uses (Audio & Devices can change it).
+  const youProvider = meetingAudioConfig?.you.stt_provider;
   const [selectedProvider, setSelectedProvider] =
-    useState<STTProviderType>(sttProvider);
+    useState<STTProviderType>(youProvider ?? sttProvider);
+  useEffect(() => {
+    if (youProvider) setSelectedProvider(youProvider);
+  }, [youProvider]);
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
   const [hasStoredKey, setHasStoredKey] = useState(false);
@@ -297,7 +311,29 @@ export function STTSettings() {
     s.activeModelPerEngine.parakeet_tdt ?? "parakeet-tdt-0.6b-v3-int8"
   );
   const parakeetCtcEnglishOnly =
-    activeParakeetModel.includes("ctc-110m") && !sttLanguage.toLowerCase().startsWith("en");
+    sttLanguage !== AUTO_STT_LANGUAGE &&
+    activeParakeetModel.includes("ctc-110m") &&
+    !sttLanguage.toLowerCase().startsWith("en");
+
+  // The "You" side as meetings will run it; before the audio setup exists, the picker's choice.
+  const youSide = meetingAudioConfig
+    ? { provider: meetingAudioConfig.you.stt_provider, localModel: meetingAudioConfig.you.local_model_id }
+    : { provider: selectedProvider, localModel: undefined };
+  const autoModels = { deepgram: deepgramModel, whisperCpp: activeWhisperModel, parakeet: activeParakeetModel };
+  const autoDetectionSelected = sttLanguage === AUTO_STT_LANGUAGE;
+  const inPerson = useMeetingStore((s) => skipYouStt(s.audioMode));
+  // This page picks the "You" provider; the "Them" side is set in Audio & Devices.
+  const autoProblems = !autoDetectionSelected ? [] : [
+    inPerson ? null : autoDetectProblem(youSide, autoModels, "You"),
+    meetingAudioConfig
+      ? autoDetectProblem(
+          { provider: meetingAudioConfig.them.stt_provider, localModel: meetingAudioConfig.them.local_model_id },
+          autoModels,
+          `${inPerson ? "Room" : "Them"} (set in Audio & Devices)`,
+        )
+      : null,
+  ].filter((p): p is string => p !== null);
+  const showAutoDetectionWarning = autoProblems.length > 0;
 
   const currentProviderOption = PROVIDER_OPTIONS.find(
     (p) => p.value === selectedProvider
@@ -421,10 +457,13 @@ export function STTSettings() {
         await setSTTProvider(provider);
         setConfigSTTProvider(provider);
         // Sync meetingAudioConfig so useAudioConfigSync hot-swaps the live capture.
-        if (meetingAudioConfig) {
+        if (meetingAudioConfig && meetingAudioConfig.you.stt_provider !== provider) {
+          const { activeModelPerEngine, activeWhisperModel } = useConfigStore.getState();
+          const model = activeModelPerEngine[provider]
+            ?? (provider === "whisper_cpp" ? activeWhisperModel ?? undefined : undefined);
           setMeetingAudioConfig({
             ...meetingAudioConfig,
-            you: { ...meetingAudioConfig.you, stt_provider: provider },
+            you: { ...meetingAudioConfig.you, stt_provider: provider, local_model_id: model },
           });
         }
       } catch (e) {
@@ -745,6 +784,7 @@ export function STTSettings() {
           value={sttLanguage}
           onChange={(e) => setSTTLanguage(e.target.value)}
           aria-label="STT language"
+          aria-describedby={autoDetectionSelected ? "provider-stt-auto-description" : undefined}
           className="w-full rounded-lg border border-border/50 bg-background px-3.5 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
         >
           {STT_LANGUAGES.map((lang) => (
@@ -753,6 +793,17 @@ export function STTSettings() {
             </option>
           ))}
         </select>
+        {autoDetectionSelected && (
+          <div id="provider-stt-auto-description" className={`mt-2 space-y-1 text-xs ${showAutoDetectionWarning ? "text-warning" : "text-muted-foreground"}`}>
+            {showAutoDetectionWarning
+              ? autoProblems.map((problem) => <p key={problem}>{problem}</p>)
+              : <p>
+                  {selectedProvider === "deepgram" && isDeepgramNova3(deepgramModel)
+                    ? "Nova-3 can transcribe multiple languages within the same sentence."
+                    : "For speech that switches languages mid-sentence, use Deepgram Nova-3."}
+                </p>}
+          </div>
+        )}
         {sttLanguage === "vi-VN" && selectedProvider === "parakeet_tdt" && (
           <p className="mt-2 text-xs text-warning">
             The included Parakeet models do not support Vietnamese. Choose a multilingual Whisper model, Deepgram Nova-3, or Azure Speech.
@@ -774,7 +825,7 @@ export function STTSettings() {
           </p>
         )}
         {selectedProvider === "cartesia" && (
-          cartesiaSupportsLanguage(sttLanguage) ? (
+          autoDetectionSelected || cartesiaSupportsLanguage(sttLanguage) ? (
             <p className="mt-2 text-xs text-muted-foreground">
               Cartesia detects English, French, Hindi, Japanese and Spanish on its own.
             </p>
