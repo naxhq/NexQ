@@ -8,8 +8,9 @@
 //! and so readable by the model's Read, Grep and Glob tools.
 //!
 //! Files are named `nexq-mcp-<pid>-<uuid>.json`, written when a session starts,
-//! deleted when it closes, and any a crashed run left behind are deleted at app
-//! start. Their content is never logged or returned over IPC.
+//! deleted as soon as the CLI's `system/init` arrives (it keeps the config in
+//! memory from then on; close and drop delete it too if init never came), and
+//! any a crashed run left behind are deleted at app start. Their content is never logged or returned over IPC.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

@@ -303,7 +303,8 @@ pub struct ClaudeSession {
     /// The FIFO turn lock; the holder owns the current turn's events.
     turn: Arc<AsyncMutex<mpsc::UnboundedReceiver<AgentEvent>>>,
     prompt_file: PathBuf,
-    /// The private mcp-config file (holds secrets): deleted on close and drop.
+    /// The private mcp-config file (holds secrets): deleted when `system/init`
+    /// arrives, and on close and drop if it never did.
     mcp_config_file: Option<PathBuf>,
     timeouts: SessionTimeouts,
 }

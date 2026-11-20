@@ -16,8 +16,8 @@ use std::time::Duration;
 /// `MCP_TIMEOUT` of a Check, in ms. A first `npx` or `uvx` run downloads the
 /// server, which takes longer than the 20 s a meeting session allows.
 pub const CHECK_MCP_TIMEOUT_MS: u32 = 60_000;
-/// How long the Check session may take to come up: [`CHECK_MCP_TIMEOUT_MS`]
-/// plus the few seconds the CLI needs to report a hung server as `failed`.
+/// How long the Check session may take to come up: `system/init` waits for a
+/// hung server up to [`CHECK_MCP_TIMEOUT_MS`] (measured: plus about 0.3 s).
 pub const CHECK_INIT_TIMEOUT: Duration = Duration::from_secs(75);
 
 /// System prompt of the check session. It is never answered: no model call.
@@ -37,6 +37,9 @@ pub fn tools_of_server(info: &InitInfo, key: &str) -> Result<Vec<String>, String
             "The server failed to start. Check its command, arguments and sign-in values.".to_string(),
         ),
         Some("needs-auth") => Err("The server needs a sign-in, which NexQ doesn't support yet.".to_string()),
+        Some("pending") => Err(
+            "The server didn't answer in time. A first run can take a while to download; try Check again.".to_string(),
+        ),
         Some(other) => Err(format!("The server didn't finish connecting (status: {other}).")),
         None => Err("The server didn't start.".to_string()),
     }
@@ -53,8 +56,8 @@ pub fn check_launch(
 }
 
 /// Start `server` alone and list its tools. `secret` looks a saved value up by
-/// credential id. Takes up to [`CHECK_INIT_TIMEOUT`] (a hung server reports
-/// `failed` only a few seconds after [`CHECK_MCP_TIMEOUT_MS`]), then up to
+/// credential id. Takes up to [`CHECK_INIT_TIMEOUT`] (a hung server holds
+/// `system/init` back for [`CHECK_MCP_TIMEOUT_MS`]), then up to
 /// [`super::mcp_diagnose::DIAGNOSE_LIMIT`] more to find the cause.
 pub async fn list_server_tools(
     server: &McpServer,
@@ -134,7 +137,9 @@ mod tests {
         let auth = info(&[], &[("a", "needs-auth")]);
         assert!(tools_of_server(&auth, "a").unwrap_err().contains("sign-in"));
         let pending = info(&[], &[("a", "pending")]);
-        assert!(tools_of_server(&pending, "a").unwrap_err().contains("pending"));
+        assert!(tools_of_server(&pending, "a").unwrap_err().contains("didn't answer in time"));
+        let other = info(&[], &[("a", "disabled")]);
+        assert!(tools_of_server(&other, "a").unwrap_err().contains("disabled"));
         assert!(tools_of_server(&info(&[], &[]), "a").is_err());
         // A server with no tools is fine: an empty list.
         assert_eq!(tools_of_server(&info(&[], &[("a", "connected")]), "a"), Ok(vec![]));

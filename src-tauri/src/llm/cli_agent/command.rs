@@ -26,8 +26,9 @@ pub struct SourcesLaunch {
     /// One `--add-dir` per folder, each one argv entry.
     pub add_dirs: Vec<PathBuf>,
     /// The mcp-config file text, with each server's own secret values inline.
-    /// Written to a private per-session file and deleted when the session
-    /// closes. Never log it or send it over IPC.
+    /// Written to a private per-session file and deleted once the session's
+    /// `system/init` arrived (or when it closes, if it never did). Never log it
+    /// or send it over IPC.
     pub mcp_config_json: Option<String>,
     /// `--allowedTools`: the read-only built-ins and the allowed MCP tools.
     pub allowed_tools: Vec<String>,
@@ -80,8 +81,8 @@ pub const STRIPPED_ENV: [&str; 7] = [
 ];
 
 /// How long the CLI waits for an MCP server to start (`MCP_TIMEOUT`, ms) in a
-/// meeting session. A hung server then shows as `failed` a few seconds after
-/// this, not after the CLI's own default. The Check alone waits longer
+/// meeting session: `system/init` waits at most this long for a server that
+/// does not answer. The Check alone waits longer
 /// (`mcp_check::CHECK_MCP_TIMEOUT_MS`).
 pub const MCP_STARTUP_TIMEOUT_MS: &str = "20000";
 /// How long one MCP tool call may take (`MCP_TOOL_TIMEOUT`, ms). A hung tool
