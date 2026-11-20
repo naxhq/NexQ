@@ -253,6 +253,10 @@ export interface AIResponse {
   first_token_ms?: number;
   /** The transcript scope the answer was asked with, when not the default. */
   scope_label?: string | null;
+  /** Notes and tools the answer used, shown as chips at its end (see `SourceChip`). */
+  source_chips?: SourceChip[];
+  /** Why sources were not used, or only partly, shown with the answer. */
+  source_notices?: string[];
 }
 
 export interface ModelInfo {
@@ -432,6 +436,14 @@ export interface AgentSessionStatus {
    * "not_installed" | "context_overflow" | "crashed" | "other". Set with `detail`.
    */
   error_kind: string | null;
+  /** The with-sources session (notes folders, MCP tools), not the plain one. */
+  with_sources: boolean;
+  /**
+   * For a running with-sources session that came up without something: the
+   * servers that did not start and the sources left out ("Mira didn't start,
+   * so its tools aren't available"). `null` when all is in.
+   */
+  sources_notice: string | null;
   /** Cumulative usage of the whole scope (all tiers). */
   usage: SessionUsage;
 }
@@ -779,6 +791,12 @@ export interface GenerateAssistOptions {
   scope?: ResolvedScope | null;
   /** Images pasted into Ask; only a Claude (subscription) answer can use them. */
   images?: ImageAttachment[];
+  /**
+   * The Notes / Tools pills as they are when the user asks. Leave it out for an
+   * automatic answer (Auto-Answer, summaries, action items, bookmark
+   * suggestions): those never use sources.
+   */
+  sources?: SourceToggles;
 }
 
 /** One image sent with a question. Mirrors Rust `cli_agent::protocol::ImageAttachment`. */
@@ -1162,4 +1180,139 @@ export interface OverlayMeetingReadyEvent {
 /** Frontend-only event: a window finished `endMeetingFlow`. */
 export interface WindowMeetingEndedEvent {
   window: string;
+}
+
+// == PERSONAL SOURCES (notes folders + MCP servers) ==
+// Mirror `src-tauri/src/sources/config.rs` and `commands/sources_commands.rs`
+// field for field. Secret values never live in these: a secret env var or
+// header has no value here and sits in Windows Credential Manager.
+
+/** Which sources one answer may use: the two overlay pills. */
+export interface SourceToggles {
+  notes: boolean;
+  tools: boolean;
+}
+
+export interface NotesFolder {
+  id: string;
+  label: string;
+  path: string;
+  enabled: boolean;
+}
+
+export type McpTransport =
+  | { type: "stdio"; command: string; args: string[] }
+  | { type: "http"; url: string; header_names: string[] };
+
+export interface EnvVar {
+  name: string;
+  /** `null` exactly when `secret`. */
+  value: string | null;
+  secret: boolean;
+}
+
+export interface McpTool {
+  /** The server's own tool name, e.g. `kb_search`. */
+  name: string;
+  /** `mcp__<key>__<name>`. */
+  full_name: string;
+  allowed: boolean;
+}
+
+export interface McpCheckStatus {
+  ok: boolean;
+  tool_count: number;
+  error: string | null;
+  checked_at_ms: number;
+}
+
+export interface McpServer {
+  id: string;
+  /** Fixed at creation: the server's name in the generated mcp-config. */
+  key: string;
+  label: string;
+  transport: McpTransport;
+  enabled: boolean;
+  env: EnvVar[];
+  tools: McpTool[];
+  last_check: McpCheckStatus | null;
+  needs_sign_in: boolean;
+}
+
+export interface PersonalSourcesConfig {
+  notes_folders: NotesFolder[];
+  mcp_servers: McpServer[];
+  /** The one-time note about tool permissions was shown. */
+  mcp_notice_seen: boolean;
+}
+
+export interface NotesFolderInfo {
+  exists: boolean;
+  md_count: number;
+  /** The walk stopped at its entry limit: `md_count` is a lower bound. */
+  truncated: boolean;
+  /** Why this folder can't be a notes folder (a whole drive, NexQ's private files, the user's home). */
+  problem: string | null;
+}
+
+/** One name/value row of the server form (an env var or an HTTP header). */
+export interface FormPair {
+  name: string;
+  /** A secret left blank on an existing server keeps its saved value. */
+  value: string;
+}
+
+export interface McpServerForm {
+  /** `null` for a new server. */
+  id: string | null;
+  /** The existing server's key; `null` for a new server. */
+  key: string | null;
+  label: string;
+  /** For HTTP only the `url` is read: header names come from `headers`. */
+  transport: McpTransport;
+  env: FormPair[];
+  headers: FormPair[];
+}
+
+/** A server in Claude Code's own config, for the import picker. */
+export interface ClaudeCodeMcpServer {
+  name: string;
+  /** `node s.js`, or the URL. */
+  summary: string;
+  /** `"stdio"` | `"http"`; `"unsupported"` when it can't be imported. */
+  transport: string;
+  /** An OAuth server Claude Code signs in to itself: imported off. */
+  needs_sign_in: boolean;
+  /** Why it can't be imported at all (SSE, a malformed entry). */
+  unsupported: string | null;
+}
+
+/** Mirrors Rust `sources::activity::SourceKind`. */
+export type SourceKind = "notes" | "tool" | "notice";
+
+/** A source an answer used, shown as a chip at its end. */
+export interface SourceChip {
+  kind: SourceKind;
+  label: string;
+  /** The full path of a note, so the chip can open it (`openSourceFile`). */
+  path: string | null;
+}
+
+/** One line about the sources while an answer streams, with the chip it leaves. */
+export interface SourceActivity {
+  kind: SourceKind;
+  label: string;
+  chip: SourceChip | null;
+  /** Only the chip is new: the tool call it belongs to ended well. No line of its own. */
+  chip_only?: boolean;
+}
+
+/**
+ * `llm_stream_activity`: an activity line of the answer `request_id`. It can
+ * arrive before that answer's `llm_stream_start` (a notice that the sources
+ * could not be used), so hold it by request id.
+ */
+export interface StreamActivityEvent {
+  request_id: string | null;
+  activity: SourceActivity;
 }

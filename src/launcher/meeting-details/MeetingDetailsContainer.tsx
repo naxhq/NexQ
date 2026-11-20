@@ -478,6 +478,7 @@ export function MeetingDetails({ meetingId, onBack }: MeetingDetailsProps) {
         {activeTab === "ask" && showAsk && (
           <AskMeetingTab
             chat={meetingChat}
+            meetingId={meetingId}
             otherTaskRunning={otherAiBusy}
             unavailableReason={
               meeting.transcript.length === 0 && !meeting.summary

@@ -13,6 +13,7 @@
 //!   it once on a crash, timeout, logout or rate limit, and say how a failed
 //!   request should be handled ([`AskFailure`]).
 
+use super::command::SourcesLaunch;
 use super::context::{
     build_delta_prompt, build_document_preload, pack_messages, transcript_lines, DeltaCursor, Seg,
     SentLine,
@@ -27,6 +28,7 @@ use super::session::AgentError;
 use crate::context::token_counter::count_tokens;
 use crate::llm::provider::{CancelToken, LLMProvider};
 use crate::llm::{ProviderConfig, ProviderType};
+use crate::sources::config::SourceToggles;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -78,15 +80,18 @@ pub enum Route {
 
 /// Pick the route of one request. Only the Claude CLI provider has sessions,
 /// and only meeting scopes (live or past) use them; Utility requests go
-/// through the provider's own `stream_completion`. When Claude is unavailable
-/// the request goes to the fallback provider, or, with none configured, down
-/// the stateless path, where the Claude provider reports the reason.
+/// through the provider's own `stream_completion`, never with sources. With
+/// `with_sources` a meeting request goes to the with-sources session of its
+/// tier. When Claude is unavailable the request goes to the fallback
+/// provider, or, with none configured, down the stateless path, where the
+/// Claude provider reports the reason.
 pub fn choose_route(
     active: &ProviderType,
     claude_health: ClaudeHealth,
     scope: &SessionScope,
     mode: &str,
     cfg: &ClaudeCliConfig,
+    with_sources: bool,
 ) -> Route {
     if *active != ProviderType::ClaudeCli {
         return Route::Stateless;
@@ -98,12 +103,166 @@ pub fn choose_route(
         },
         ClaudeHealth::Healthy => match scope {
             SessionScope::Utility => Route::Stateless,
-            SessionScope::Live(_) | SessionScope::Past(_) => Route::ClaudeSession(SessionKey {
-                scope: scope.clone(),
-                tier: tier_for(mode, scope, cfg),
-            }),
+            SessionScope::Live(_) | SessionScope::Past(_) => {
+                let tier = tier_for(mode, scope, cfg);
+                Route::ClaudeSession(if with_sources {
+                    SessionKey::sources(scope.clone(), tier)
+                } else {
+                    SessionKey::plain(scope.clone(), tier)
+                })
+            }
         },
     }
+}
+
+/// How long answers skip a with-sources session that just failed to start.
+pub const SOURCES_COOLDOWN: Duration = Duration::from_secs(120);
+
+#[derive(Debug, Clone)]
+struct SourcesFailure {
+    at: Instant,
+    reason: String,
+    generation: u64,
+}
+
+/// With-sources sessions that just failed to start, one failure per session
+/// key (a Past or Deep failure does not push Live Fast answers to the plain
+/// session). For [`SOURCES_COOLDOWN`] after a failure, requests that ask for
+/// sources on that key go straight to the plain session (no waiting on a
+/// server that hangs); then one background retry runs. A key's failure is
+/// cleared when its start works; all of them when the sources or their secrets
+/// change or the user retries.
+pub struct SourcesCooldown {
+    cooldown: Duration,
+    failures: Mutex<HashMap<SessionKey, SourcesFailure>>,
+    generation: std::sync::atomic::AtomicU64,
+}
+
+impl Default for SourcesCooldown {
+    fn default() -> Self {
+        Self::with_duration(SOURCES_COOLDOWN)
+    }
+}
+
+impl SourcesCooldown {
+    pub fn with_duration(cooldown: Duration) -> Self {
+        Self { cooldown, failures: Mutex::new(HashMap::new()), generation: Default::default() }
+    }
+
+    pub fn duration(&self) -> Duration {
+        self.cooldown
+    }
+
+    /// A with-sources start of `key` failed. Returns this failure's generation,
+    /// for the retry timer ([`begin_retry`](Self::begin_retry)).
+    pub fn fail(&self, key: &SessionKey, reason: &str, now: Instant) -> u64 {
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.failures
+            .lock()
+            .unwrap()
+            .insert(key.clone(), SourcesFailure { at: now, reason: reason.to_string(), generation });
+        generation
+    }
+
+    /// Sources changed or the user asked to retry: forget every failure (and
+    /// make their pending retry timers stale).
+    pub fn clear(&self) {
+        self.failures.lock().unwrap().clear();
+    }
+
+    /// `key` started fine: forget its failure (and its pending retry timer).
+    pub fn clear_key(&self, key: &SessionKey) {
+        self.failures.lock().unwrap().remove(key);
+    }
+
+    /// `None`: try the with-sources session `key`. `Some(text)`: don't, answer
+    /// on the plain session and show this notice (the failure's reason, and
+    /// when the next try is).
+    pub fn gate(&self, key: &SessionKey, now: Instant) -> Option<String> {
+        let failure = self.failures.lock().unwrap().get(key).cloned()?;
+        let wait = (failure.at + self.cooldown).saturating_duration_since(now);
+        let when = if wait.is_zero() {
+            "Trying again now.".to_string()
+        } else if wait < Duration::from_secs(60) {
+            "Trying again in under a minute.".to_string()
+        } else {
+            format!("Trying again in {} min.", wait.as_secs().div_ceil(60))
+        };
+        Some(format!(
+            "Your sources couldn't be loaded, so this answer didn't use them. {}. {when}",
+            failure.reason.trim_end_matches('.')
+        ))
+    }
+
+    /// The routing decision of a request for `key`, as `run_session_assist`
+    /// takes it: `None` to go on with `key`, or `Some((plain key, notice))` when
+    /// `key` is a with-sources session still cooling down after a failure, so
+    /// the plain session answers and the notice says why.
+    pub fn plain_instead(&self, key: &SessionKey, now: Instant) -> Option<(SessionKey, String)> {
+        if !key.with_sources {
+            return None;
+        }
+        self.gate(key, now).map(|text| (key.sibling(), text))
+    }
+
+    /// The cooldown of failure `generation` of `key` ended: true if it is still
+    /// that key's current failure (not cleared or replaced since), meaning the
+    /// caller runs the background retry.
+    pub fn begin_retry(&self, key: &SessionKey, generation: u64) -> bool {
+        self.failures.lock().unwrap().get(key).is_some_and(|f| f.generation == generation)
+    }
+
+    pub fn is_failed(&self, key: &SessionKey) -> bool {
+        self.failures.lock().unwrap().contains_key(key)
+    }
+}
+
+/// Modes that run by themselves, never because the user asked: they never use
+/// sources, whatever the pills say.
+pub const BACKGROUND_MODES: [&str; 3] = ["MeetingSummary", "ActionItemsExtraction", "BookmarkSuggestions"];
+
+/// First line of the per-request sources note.
+pub const SOURCES_NOTE_HEADER: &str = "## Sources for this answer";
+
+/// Whether one request may use sources. `toggles` is what the user's pills
+/// said when they asked, or `None` for an automatic answer (a detected
+/// question's Auto-Answer sends none). In order:
+/// 1. a background mode: never;
+/// 2. no toggles (automatic): never;
+/// 3. Shorten and FollowUp: whatever produced the answer they work on used;
+/// 4. any other request: when a pill is on.
+pub fn wants_sources(mode: &str, toggles: Option<SourceToggles>, last_answer_with_sources: bool) -> bool {
+    if BACKGROUND_MODES.contains(&mode) {
+        return false;
+    }
+    let Some(toggles) = toggles else {
+        return false;
+    };
+    match mode {
+        "Shorten" | "FollowUp" => last_answer_with_sources,
+        _ => toggles.notes || toggles.tools,
+    }
+}
+
+/// The per-request note saying which sources this answer may use. It is an
+/// instruction, not a lock (the user enabled both kinds in settings).
+pub fn sources_note(t: SourceToggles) -> String {
+    let word = |on: bool| if on { "on" } else { "off" };
+    format!(
+        "{SOURCES_NOTE_HEADER}\nNotes: {}. Tools: {}. Use only the sources marked on.",
+        word(t.notes),
+        word(t.tools)
+    )
+}
+
+/// [`sources_note`] without its header line, for `compose_delta`'s extra
+/// sections (which add the header themselves).
+pub fn sources_note_body(t: SourceToggles) -> String {
+    sources_note(t)
+        .strip_prefix(SOURCES_NOTE_HEADER)
+        .unwrap_or_default()
+        .trim()
+        .to_string()
 }
 
 /// A provider config naming only the type; the caller adds the API key.
@@ -226,6 +385,9 @@ pub struct SessionRecord {
     /// The preload alone overflows the context: requests skip the session
     /// and go down the stateless path.
     pub stateless_only: bool,
+    /// What a with-sources session launches with (also on a restart); `None`
+    /// for a plain session.
+    pub sources: Option<SourcesLaunch>,
 }
 
 impl SessionRecord {
@@ -237,6 +399,7 @@ impl SessionRecord {
         SessionInit {
             system_prompt: self.system_prompt.clone(),
             preload,
+            sources: self.sources.clone(),
         }
     }
 }
@@ -249,6 +412,9 @@ pub struct MeetingSessions {
     /// Lock order: `epochs`, then `records`.
     epochs: Mutex<HashMap<SessionScope, u64>>,
     records: Mutex<HashMap<SessionKey, SessionRecord>>,
+    /// Whether the latest answer of each scope came from a with-sources
+    /// session: Shorten and FollowUp follow it.
+    last_answer_sources: Mutex<HashMap<SessionScope, bool>>,
 }
 
 impl MeetingSessions {
@@ -322,6 +488,64 @@ impl MeetingSessions {
         let mut epochs = self.epochs.lock().unwrap();
         *epochs.entry(scope.clone()).or_insert(0) += 1;
         self.records.lock().unwrap().retain(|key, _| key.scope != *scope);
+        self.last_answer_sources.lock().unwrap().remove(scope);
+    }
+
+    /// Forget the with-sources records of `scope` (the sources changed in
+    /// settings): the next request builds them again from the new settings.
+    /// Plain records and the scope's epoch stay.
+    pub fn clear_sources(&self, scope: &SessionScope) {
+        self.records
+            .lock()
+            .unwrap()
+            .retain(|key, _| !(key.scope == *scope && key.with_sources));
+    }
+
+    /// Every scope that has a with-sources record.
+    pub fn scopes_with_sources(&self) -> Vec<SessionScope> {
+        let mut scopes: Vec<SessionScope> = self
+            .records
+            .lock()
+            .unwrap()
+            .keys()
+            .filter(|key| key.with_sources)
+            .map(|key| key.scope.clone())
+            .collect();
+        scopes.sort();
+        scopes.dedup();
+        scopes
+    }
+
+    /// Note whether the latest answer of `scope` used sources.
+    pub fn set_last_answer(&self, scope: &SessionScope, with_sources: bool) {
+        self.last_answer_sources.lock().unwrap().insert(scope.clone(), with_sources);
+    }
+
+    /// [`set_last_answer`](Self::set_last_answer) for the answer of `mode`. A
+    /// background run (summary, action items, bookmarks) is not an answer
+    /// Shorten or FollowUp could work on, so it leaves the note as it was.
+    pub fn note_answer(&self, mode: &str, scope: &SessionScope, with_sources: bool) {
+        if !BACKGROUND_MODES.contains(&mode) {
+            self.set_last_answer(scope, with_sources);
+        }
+    }
+
+    /// Whether the latest answer of `scope` came from a with-sources session.
+    pub fn last_answer_with_sources(&self, scope: &SessionScope) -> bool {
+        self.last_answer_sources.lock().unwrap().get(scope).copied().unwrap_or(false)
+    }
+
+    /// Put `message` (an answer the sibling session gave) on `key`'s replay,
+    /// so a restart of that session still knows it. False when `key` has no
+    /// record.
+    pub fn record_shared(&self, key: &SessionKey, message: &str) -> bool {
+        match self.records.lock().unwrap().get_mut(key) {
+            Some(record) => {
+                record.replay.push(message.to_string());
+                true
+            }
+            None => false,
+        }
     }
 
     fn restart_init(&self, key: &SessionKey) -> Option<SessionInit> {
@@ -642,6 +866,33 @@ pub fn answered_turn(prompt: &str, reply: &str) -> String {
     format!("{prompt}\n\n{ANSWER_HEADER}\n{}", reply.trim())
 }
 
+/// An answer one Fast session gave, as the other one is told it: both keep
+/// the same conversation, so either can take a follow-up.
+pub fn shared_answer(action_label: &str, question: Option<&str>, answer: &str) -> String {
+    let mut out = format!("## Answer given earlier in this meeting ({action_label})");
+    if let Some(q) = question.map(str::trim).filter(|q| !q.is_empty()) {
+        out.push_str(&format!("\nQuestion: {q}"));
+    }
+    out.push_str(&format!("\n\n{ANSWER_HEADER}\n{}", answer.trim()));
+    out
+}
+
+/// Tell the session `target` about an answer its sibling gave: appended to
+/// its context when it is running (it is never started for this), and kept on
+/// its record's replay so a (re)start knows it too. Failures are only logged:
+/// the answer is out already.
+pub async fn share_answer(
+    manager: &AgentSessionManager,
+    sessions: &MeetingSessions,
+    target: &SessionKey,
+    message: String,
+) {
+    if let Err(e) = manager.append_if_running(target, &message).await {
+        log::warn!("could not share an answer with {}: {e}", session_key_label(target));
+    }
+    sessions.record_shared(target, &message);
+}
+
 /// A saved "Ask this meeting" exchange, as replayed into a fresh session.
 pub fn earlier_exchange(question: &str, answer: &str) -> String {
     format!(
@@ -724,10 +975,11 @@ pub fn session_key_label(key: &SessionKey) -> String {
         Tier::Fast => "fast",
         Tier::Deep => "deep",
     };
+    let sources = if key.with_sources { ":sources" } else { "" };
     match &key.scope {
-        SessionScope::Live(id) => format!("live:{id}:{tier}"),
-        SessionScope::Past(id) => format!("past:{id}:{tier}"),
-        SessionScope::Utility => format!("utility:{tier}"),
+        SessionScope::Live(id) => format!("live:{id}:{tier}{sources}"),
+        SessionScope::Past(id) => format!("past:{id}:{tier}{sources}"),
+        SessionScope::Utility => format!("utility:{tier}{sources}"),
     }
 }
 
@@ -880,10 +1132,11 @@ mod tests {
             &live(),
             "Assist",
             &ClaudeCliConfig::default(),
+            false,
         );
         match route {
             Route::ClaudeSession(key) => {
-                assert_eq!(key, SessionKey { scope: live(), tier: Tier::Fast })
+                assert_eq!(key, SessionKey::plain(live(), Tier::Fast))
             }
             other => panic!("expected a Claude session, got {other:?}"),
         }
@@ -901,6 +1154,7 @@ mod tests {
             &live(),
             "Assist",
             &cfg,
+            false,
         );
         match route {
             Route::Fallback(p) => {
@@ -919,6 +1173,7 @@ mod tests {
             &live(),
             "Assist",
             &ClaudeCliConfig::default(),
+            false,
         );
         assert!(matches!(route, Route::Stateless), "{route:?}");
     }
@@ -931,6 +1186,7 @@ mod tests {
             &live(),
             "Assist",
             &ClaudeCliConfig::default(),
+            false,
         );
         assert!(matches!(route, Route::Stateless), "{route:?}");
     }
@@ -939,7 +1195,7 @@ mod tests {
     fn routing_recap_deep_past_deep_utility_stateless() {
         let cfg = ClaudeCliConfig::default();
         let key = |scope: &SessionScope, mode: &str| {
-            match choose_route(&ProviderType::ClaudeCli, ClaudeHealth::Healthy, scope, mode, &cfg) {
+            match choose_route(&ProviderType::ClaudeCli, ClaudeHealth::Healthy, scope, mode, &cfg, false) {
                 Route::ClaudeSession(k) => Some(k.tier),
                 _ => None,
             }
@@ -1085,7 +1341,7 @@ mod tests {
         assert!(past_system_prompt("x").ends_with("Additional Instructions: x"));
         assert!(past_system_prompt("").contains("[SEGMENT_ID]"));
         assert_eq!(
-            session_key_label(&SessionKey { scope: live(), tier: Tier::Fast }),
+            session_key_label(&SessionKey::plain(live(), Tier::Fast)),
             "live:m1:fast"
         );
     }
@@ -1093,7 +1349,7 @@ mod tests {
     #[test]
     fn routing_truncate_replay_keeps_recent_tail() {
         let sessions = MeetingSessions::default();
-        let key = SessionKey { scope: live(), tier: Tier::Fast };
+        let key = SessionKey::plain(live(), Tier::Fast);
         sessions.insert_if_absent(
             key.clone(),
             SessionRecord {
@@ -1124,6 +1380,10 @@ mod tests {
         image_counts: Mutex<Vec<usize>>,
         steps: Mutex<Vec<Step>>,
         spawns: AtomicUsize,
+        /// Starting a session with sources fails while set.
+        fail_sources: AtomicBool,
+        /// Starts tried for sessions with sources.
+        sources_spawns: AtomicUsize,
         /// Closes this scope's records + sessions mid-turn (meeting ended).
         close_on_ask: Mutex<Option<Arc<MeetingSessions>>>,
     }
@@ -1208,7 +1468,13 @@ mod tests {
 
     #[async_trait]
     impl SessionSpawner for FakeSpawner {
-        async fn spawn(&self, _cfg: SessionConfig) -> Result<Arc<dyn SessionHandle>, AgentError> {
+        async fn spawn(&self, cfg: SessionConfig) -> Result<Arc<dyn SessionHandle>, AgentError> {
+            if cfg.sources.is_some() {
+                self.0.sources_spawns.fetch_add(1, Ordering::SeqCst);
+                if self.0.fail_sources.load(Ordering::SeqCst) {
+                    return Err(AgentError::Spawn("MCP server mira failed to start".into()));
+                }
+            }
             let index = self.0.spawns.fetch_add(1, Ordering::SeqCst);
             self.0.appended.lock().unwrap().push(Vec::new());
             Ok(Arc::new(FakeSession { script: self.0.clone(), index, alive: AtomicBool::new(true) }))
@@ -1226,7 +1492,7 @@ mod tests {
             Arc::new(NoopStatusSink),
             Arc::new(RwLock::new(ClaudeCliConfig::default())),
         );
-        let key = SessionKey { scope: live(), tier: Tier::Fast };
+        let key = SessionKey::plain(live(), Tier::Fast);
         let sessions = Arc::new(MeetingSessions::default());
         sessions.insert_if_absent(
             key.clone(),
@@ -1443,7 +1709,7 @@ mod tests {
         };
         assert_eq!(kind, AgentErrorKind::Crashed);
         let cfg = ClaudeCliConfig { fallback_provider: Some("ollama".into()), ..Default::default() };
-        let route = choose_route(&ProviderType::ClaudeCli, ClaudeHealth::Unavailable(kind), &key.scope, "Assist", &cfg);
+        let route = choose_route(&ProviderType::ClaudeCli, ClaudeHealth::Unavailable(kind), &key.scope, "Assist", &cfg, false);
         assert!(matches!(&route, Route::Fallback(p) if p.provider_type == "ollama"), "{route:?}");
     }
 
@@ -1529,7 +1795,7 @@ mod tests {
     #[test]
     fn routing_epoch_discards_background_work_after_close() {
         let sessions = MeetingSessions::default();
-        let key = SessionKey { scope: live(), tier: Tier::Fast };
+        let key = SessionKey::plain(live(), Tier::Fast);
         let epoch = sessions.epoch(&key.scope);
         sessions.remove_scope(&key.scope); // meeting ended while the record was built
         assert!(!sessions.insert_if_current(key.clone(), SessionRecord::default(), epoch));
@@ -1542,7 +1808,7 @@ mod tests {
     #[test]
     fn routing_request_never_recreates_a_closed_scope() {
         let sessions = MeetingSessions::default();
-        let key = SessionKey { scope: live(), tier: Tier::Deep };
+        let key = SessionKey::plain(live(), Tier::Deep);
         // The request chose its scope, then the meeting ended.
         let epoch = sessions.epoch(&key.scope);
         sessions.remove_scope(&key.scope);
@@ -1559,7 +1825,7 @@ mod tests {
     #[test]
     fn routing_request_closed_while_its_record_is_built_is_discarded() {
         let sessions = MeetingSessions::default();
-        let key = SessionKey { scope: live(), tier: Tier::Fast };
+        let key = SessionKey::plain(live(), Tier::Fast);
         let epoch = sessions.epoch(&key.scope);
         let ready = sessions.ensure_current(&key, epoch, || {
             sessions.remove_scope(&key.scope); // end_meeting lands mid-build
@@ -1572,14 +1838,14 @@ mod tests {
     #[test]
     fn routing_request_builds_a_missing_record_once() {
         let sessions = MeetingSessions::default();
-        let key = SessionKey { scope: live(), tier: Tier::Fast };
+        let key = SessionKey::plain(live(), Tier::Fast);
         let epoch = sessions.epoch(&key.scope);
         assert_eq!(sessions.ensure_current(&key, epoch, || Ok(SessionRecord::default())), Ok(true));
         assert!(sessions.contains(&key));
         let again = sessions.ensure_current(&key, epoch, || Err("must not rebuild".into()));
         assert_eq!(again, Ok(true));
         assert_eq!(
-            sessions.ensure_current(&SessionKey { scope: live(), tier: Tier::Deep }, epoch, || Err("no".into())),
+            sessions.ensure_current(&SessionKey::plain(live(), Tier::Deep), epoch, || Err("no".into())),
             Err("no".to_string()),
             "a build error is reported"
         );
@@ -1725,5 +1991,291 @@ mod tests {
         let last = last_prompt(&script);
         assert!(last.contains("Them: b") && !last.contains("Them: a"), "{last}");
         assert_eq!(script.appended.lock().unwrap()[1].len(), 2);
+    }
+
+    // ── sources: routing, note, shared history ──────────────────────────────
+
+    #[test]
+    fn wants_sources_table() {
+        let on = Some(SourceToggles { notes: true, tools: false });
+        let off = Some(SourceToggles::default());
+        assert!(wants_sources("Assist", on, false));
+        assert!(wants_sources("AskQuestion", on, false));
+        assert!(wants_sources("MeetingAsk", on, false));
+        assert!(!wants_sources("Assist", None, false)); // Auto-Answer
+        assert!(!wants_sources("Assist", off, true));
+        for m in BACKGROUND_MODES {
+            assert!(!wants_sources(m, on, true), "{m}");
+        }
+        assert!(wants_sources("Shorten", off, true)); // follows the producing session
+        assert!(!wants_sources("FollowUp", on, false));
+        assert!(!wants_sources("Shorten", None, true));
+    }
+
+    #[test]
+    fn route_with_sources_only_for_meeting_scopes_on_claude() {
+        let cfg = ClaudeCliConfig::default();
+        let route = |provider: &ProviderType, health, scope: &SessionScope| {
+            choose_route(provider, health, scope, "Assist", &cfg, true)
+        };
+        match route(&ProviderType::ClaudeCli, ClaudeHealth::Healthy, &live()) {
+            Route::ClaudeSession(key) => assert_eq!(key, SessionKey::sources(live(), Tier::Fast)),
+            other => panic!("{other:?}"),
+        }
+        let past = SessionScope::Past("p".into());
+        match route(&ProviderType::ClaudeCli, ClaudeHealth::Healthy, &past) {
+            Route::ClaudeSession(key) => assert_eq!(key, SessionKey::sources(past, Tier::Deep)),
+            other => panic!("{other:?}"),
+        }
+        let r = route(&ProviderType::ClaudeCli, ClaudeHealth::Healthy, &SessionScope::Utility);
+        assert!(matches!(r, Route::Stateless), "{r:?}");
+        let r = route(&ProviderType::Ollama, ClaudeHealth::Healthy, &live());
+        assert!(matches!(r, Route::Stateless), "{r:?}");
+        let with_fallback = ClaudeCliConfig { fallback_provider: Some("ollama".into()), ..Default::default() };
+        let r = choose_route(
+            &ProviderType::ClaudeCli,
+            ClaudeHealth::Unavailable(AgentErrorKind::NotLoggedIn),
+            &live(),
+            "Assist",
+            &with_fallback,
+            true,
+        );
+        assert!(matches!(r, Route::Fallback(_)), "{r:?}");
+    }
+
+    #[test]
+    fn sources_note_exact() {
+        assert_eq!(
+            sources_note(SourceToggles { notes: true, tools: false }),
+            "## Sources for this answer\nNotes: on. Tools: off. Use only the sources marked on."
+        );
+        assert!(sources_note(SourceToggles::default()).contains("Notes: off. Tools: off."));
+        assert!(sources_note(SourceToggles { notes: false, tools: true }).starts_with(SOURCES_NOTE_HEADER));
+    }
+
+    #[test]
+    fn last_answer_is_per_scope_and_cleared_on_close() {
+        let sessions = MeetingSessions::default();
+        let other = SessionScope::Live("m2".into());
+        assert!(!sessions.last_answer_with_sources(&live()));
+        sessions.set_last_answer(&live(), true);
+        assert!(sessions.last_answer_with_sources(&live()));
+        assert!(!sessions.last_answer_with_sources(&other));
+        sessions.set_last_answer(&live(), false);
+        assert!(!sessions.last_answer_with_sources(&live()));
+        sessions.set_last_answer(&live(), true);
+        sessions.remove_scope(&live());
+        assert!(!sessions.last_answer_with_sources(&live()));
+    }
+
+    #[test]
+    fn a_background_run_does_not_change_which_session_shorten_follows() {
+        let sessions = MeetingSessions::default();
+        // The user's Assist answered with sources.
+        sessions.note_answer("Assist", &live(), true);
+        assert!(sessions.last_answer_with_sources(&live()));
+        // Summary, action items and bookmarks run on the plain session by themselves.
+        for mode in BACKGROUND_MODES {
+            sessions.note_answer(mode, &live(), false);
+            assert!(sessions.last_answer_with_sources(&live()), "{mode}");
+            assert!(wants_sources("Shorten", Some(SourceToggles::default()), sessions.last_answer_with_sources(&live())));
+            assert!(wants_sources("FollowUp", Some(SourceToggles::default()), sessions.last_answer_with_sources(&live())));
+        }
+        // A plain answer the user asked for does count.
+        sessions.note_answer("Assist", &live(), false);
+        assert!(!sessions.last_answer_with_sources(&live()));
+    }
+
+    // ── the cooldown after a failed sources start ───────────────────────────
+
+    #[test]
+    fn cooldown_gate_counts_down_then_says_trying_again() {
+        let cd = SourcesCooldown::with_duration(Duration::from_secs(120));
+        let key = SessionKey::sources(live(), Tier::Fast);
+        let t0 = Instant::now();
+        assert_eq!(cd.gate(&key, t0), None);
+        cd.fail(&key, "Mira didn't start", t0);
+        let text = cd.gate(&key, t0 + Duration::from_secs(20)).unwrap();
+        assert!(text.contains("didn't use them") && text.contains("Mira didn't start"), "{text}");
+        assert!(text.ends_with("Trying again in 2 min."), "{text}");
+        assert!(!text.contains(" s."), "{text}");
+        assert!(cd.gate(&key, t0 + Duration::from_secs(100)).unwrap().ends_with("Trying again in under a minute."));
+        assert!(cd.gate(&key, t0 + Duration::from_secs(130)).unwrap().ends_with("Trying again now."));
+        cd.clear();
+        assert_eq!(cd.gate(&key, t0), None);
+    }
+
+    #[test]
+    fn a_failed_start_gates_only_its_own_session_key() {
+        let cd = SourcesCooldown::default();
+        let live_fast = SessionKey::sources(live(), Tier::Fast);
+        let live_deep = SessionKey::sources(live(), Tier::Deep);
+        let past = SessionKey::sources(SessionScope::Past("m9".into()), Tier::Deep);
+        let t0 = Instant::now();
+        cd.fail(&past, "Wiki didn't start", t0);
+        cd.fail(&live_deep, "Wiki didn't start", t0);
+        assert_eq!(cd.gate(&live_fast, t0), None, "Live Fast still tries its sources");
+        assert!(cd.gate(&past, t0).is_some() && cd.gate(&live_deep, t0).is_some());
+        // A start that works clears only its key.
+        cd.clear_key(&past);
+        assert!(cd.gate(&past, t0).is_none() && cd.gate(&live_deep, t0).is_some());
+    }
+
+    #[test]
+    fn a_retry_timer_only_fires_for_the_current_failure_of_its_key() {
+        let cd = SourcesCooldown::default();
+        let key = SessionKey::sources(live(), Tier::Fast);
+        let other = SessionKey::sources(SessionScope::Past("m9".into()), Tier::Deep);
+        let first = cd.fail(&key, "a", Instant::now());
+        assert!(cd.begin_retry(&key, first));
+        let elsewhere = cd.fail(&other, "x", Instant::now());
+        assert!(cd.begin_retry(&key, first), "another key's failure doesn't cancel it");
+        assert!(cd.begin_retry(&other, elsewhere));
+        let second = cd.fail(&key, "b", Instant::now());
+        assert!(!cd.begin_retry(&key, first), "replaced by a newer failure");
+        assert!(cd.begin_retry(&key, second));
+        cd.clear();
+        assert!(!cd.begin_retry(&key, second), "cleared (config or secrets changed, or a retry)");
+        assert!(!cd.is_failed(&key) && !cd.is_failed(&other));
+    }
+
+    #[tokio::test]
+    async fn a_failed_sources_start_is_not_retried_by_the_next_requests() {
+        // The routing decision run_session_assist takes (`plain_instead`), then
+        // the real manager: only the first request starts the with-sources
+        // session, the next ones go to the plain session.
+        let (manager, sessions, script, plain) = setup(&[]);
+        script.fail_sources.store(true, Ordering::SeqCst);
+        let key = plain.sibling();
+        sessions.insert_if_absent(
+            key.clone(),
+            SessionRecord { sources: Some(SourcesLaunch::default()), ..Default::default() },
+        );
+        let cd = SourcesCooldown::default();
+        let mut started = 0;
+        let mut notices = Vec::new();
+        for _ in 0..3 {
+            match cd.plain_instead(&key, Instant::now()) {
+                None => {
+                    let init = sessions.restart_init(&key).unwrap();
+                    if manager.ensure(&key, init).await.is_err() {
+                        cd.fail(&key, "failed", Instant::now());
+                    }
+                    started += 1;
+                }
+                Some((instead, notice)) => {
+                    assert_eq!(instead, plain, "the plain session of the same scope and tier answers");
+                    notices.push(notice);
+                    ask(&manager, &sessions, &instead, &[seg("a", 0)]).await.unwrap();
+                }
+            }
+        }
+        assert_eq!(notices.len(), 2);
+        assert!(notices[0].contains("Your sources couldn't be loaded") && notices[0].contains("failed"), "{}", notices[0]);
+        // A plain key is never held back, failure or not.
+        assert!(cd.plain_instead(&plain, Instant::now()).is_none());
+        assert_eq!(started, 1, "only the first request tried the sources");
+        assert_eq!(script.sources_spawns.load(Ordering::SeqCst), 1);
+        // A config change clears it: the next request tries again.
+        cd.clear();
+        assert!(cd.gate(&key, Instant::now()).is_none());
+    }
+
+    #[test]
+    fn sources_note_body_drops_the_header() {
+        assert_eq!(
+            sources_note_body(SourceToggles { notes: false, tools: true }),
+            "Notes: off. Tools: on. Use only the sources marked on."
+        );
+    }
+
+    #[test]
+    fn clear_sources_drops_only_the_with_sources_records_of_that_scope() {
+        let sessions = MeetingSessions::default();
+        let other = SessionScope::Live("m2".into());
+        for scope in [live(), other.clone()] {
+            for with in [false, true] {
+                let key = SessionKey { scope: scope.clone(), tier: Tier::Fast, with_sources: with };
+                sessions.insert_if_absent(key, SessionRecord::default());
+            }
+        }
+        assert_eq!(sessions.scopes_with_sources(), vec![live(), other.clone()]);
+        let epoch = sessions.epoch(&live());
+        sessions.clear_sources(&live());
+        assert!(sessions.contains(&SessionKey::plain(live(), Tier::Fast)));
+        assert!(!sessions.contains(&SessionKey::sources(live(), Tier::Fast)));
+        assert!(sessions.contains(&SessionKey::sources(other.clone(), Tier::Fast)));
+        assert_eq!(sessions.epoch(&live()), epoch, "not a close");
+        assert_eq!(sessions.scopes_with_sources(), vec![other]);
+    }
+
+    #[test]
+    fn shared_answer_format() {
+        assert_eq!(
+            shared_answer("Assist", Some(" Who owns it? "), " Dana.\n"),
+            "## Answer given earlier in this meeting (Assist)\nQuestion: Who owns it?\n\n## Your answer\nDana."
+        );
+        assert_eq!(
+            shared_answer("Shorten", None, "Dana."),
+            "## Answer given earlier in this meeting (Shorten)\n\n## Your answer\nDana."
+        );
+    }
+
+    #[test]
+    fn restart_init_carries_the_sources_launch() {
+        let launch = SourcesLaunch { add_dirs: vec!["D:/v".into()], ..Default::default() };
+        let record = SessionRecord { sources: Some(launch.clone()), ..Default::default() };
+        assert_eq!(record.restart_init().sources, Some(launch));
+        assert_eq!(SessionRecord::default().restart_init().sources, None);
+    }
+
+    #[tokio::test]
+    async fn share_answer_appends_to_a_running_sibling_and_records_it() {
+        let (manager, sessions, script, key) = setup(&[]);
+        ask(&manager, &sessions, &key, &[seg("a", 0)]).await.unwrap();
+        let sibling = key.sibling();
+        // The sibling has a record but is not running: nothing is spawned.
+        sessions.insert_if_absent(sibling.clone(), SessionRecord { system_prompt: "sp".into(), ..Default::default() });
+        share_answer(&manager, &sessions, &sibling, "msg-1".into()).await;
+        assert_eq!(script.spawns.load(Ordering::SeqCst), 1, "never starts the sibling");
+        assert_eq!(sessions.get(&sibling).unwrap().replay, vec!["msg-1"]);
+
+        // Running: the live session is told, no query is made.
+        manager.ensure(&sibling, sessions.restart_init(&sibling).unwrap()).await.unwrap();
+        let asks = script.prompts.lock().unwrap().len();
+        share_answer(&manager, &sessions, &sibling, "msg-2".into()).await;
+        assert_eq!(script.prompts.lock().unwrap().len(), asks, "an append is not a query");
+        assert_eq!(script.appended.lock().unwrap()[1].last().unwrap(), "msg-2");
+        assert_eq!(sessions.get(&sibling).unwrap().replay, vec!["msg-1", "msg-2"]);
+    }
+
+    #[tokio::test]
+    async fn share_answer_without_session_or_record_does_nothing() {
+        let (manager, sessions, script, key) = setup(&[]);
+        share_answer(&manager, &sessions, &key.sibling(), "lost".into()).await;
+        assert_eq!(script.spawns.load(Ordering::SeqCst), 0);
+        assert!(!sessions.contains(&key.sibling()));
+    }
+
+    #[tokio::test]
+    async fn sources_session_gets_catch_up_delta_on_first_answer() {
+        let (manager, sessions, script, plain) = setup(&[]);
+        let sources = plain.sibling();
+        sessions.insert_if_absent(sources.clone(), SessionRecord { system_prompt: "sp".into(), ..Default::default() });
+        let finals = vec![seg("s1", 0), seg("s2", 1), seg("s3", 2)];
+        ask(&manager, &sessions, &plain, &finals).await.unwrap();
+        // The with-sources session has its own cursor: it gets everything.
+        ask(&manager, &sessions, &sources, &finals).await.unwrap();
+        let first = last_prompt(&script);
+        assert!(first.contains("Them: s1") && first.contains("Them: s2") && first.contains("Them: s3"), "{first}");
+        // Then only what is new since.
+        let finals = vec![seg("s1", 0), seg("s2", 1), seg("s3", 2), seg("s4", 3)];
+        ask(&manager, &sessions, &sources, &finals).await.unwrap();
+        let second = last_prompt(&script);
+        assert!(second.contains("Them: s4") && !second.contains("Them: s1"), "{second}");
+        // The plain session was not advanced by the other one.
+        ask(&manager, &sessions, &plain, &finals).await.unwrap();
+        let plain_prompt = last_prompt(&script);
+        assert!(plain_prompt.contains("Them: s4") && !plain_prompt.contains("Them: s3"), "{plain_prompt}");
     }
 }

@@ -6,8 +6,10 @@ pub mod db;
 pub mod intelligence;
 pub mod logging;
 pub mod rag;
+pub mod sources;
 pub mod llm;
 pub mod meeting_detect;
+pub mod nav_guard;
 pub mod ort_runtime;
 pub mod state;
 pub mod stt;
@@ -39,6 +41,8 @@ use commands::meeting_commands;
 use commands::meeting_chat_commands;
 // == MODULE COMMANDS: settings ==
 use commands::settings_commands;
+// == MODULE COMMANDS: personal sources ==
+use commands::sources_commands;
 // == MODULE COMMANDS: models ==
 use commands::model_commands;
 // == MODULE COMMANDS: screen capture ==
@@ -132,6 +136,8 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             show_for_second_launch(app);
         }))
+        // Both windows stay on the app's own pages; links open in the browser.
+        .plugin(nav_guard::plugin())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -147,6 +153,11 @@ pub fn run() {
         })
         .setup(|app| {
             log_commands::start(app.handle());
+            // Private mcp-config files a crashed run left behind hold secrets.
+            let stale = sources::private_files::cleanup_leftovers(&sources::private_files::private_dir());
+            if stale > 0 {
+                log::info!("Removed {stale} leftover private session file(s)");
+            }
             let mut app_state = AppState::new();
 
             // -- Initialize DatabaseManager --
@@ -595,6 +606,7 @@ pub fn run() {
             // == COMMANDS: meetings ==
             meeting_commands::start_meeting,
             meeting_commands::end_meeting,
+            meeting_commands::retry_sources_session,
             meeting_commands::list_meetings,
             meeting_commands::get_meeting,
             meeting_commands::delete_meeting,
@@ -695,6 +707,17 @@ pub fn run() {
             claude_cli_commands::claude_cli_models,
             claude_cli_commands::seed_claude_cli_models,
             claude_cli_commands::get_agent_sessions,
+            sources_commands::inspect_notes_folder,
+            sources_commands::import_mcp_servers_json,
+            sources_commands::save_mcp_server_form,
+            sources_commands::list_claude_code_mcp_servers,
+            sources_commands::import_claude_code_mcp_servers,
+            sources_commands::check_mcp_server,
+            sources_commands::classify_secret_names,
+            sources_commands::discard_pending_mcp_servers,
+            sources_commands::delete_mcp_secrets,
+            sources_commands::open_source_file,
+            sources_commands::set_personal_sources,
             claude_cli_commands::open_claude_login_terminal,
         ])
         .build(tauri::generate_context!())

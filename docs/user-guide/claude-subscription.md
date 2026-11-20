@@ -68,10 +68,33 @@ If Claude cannot answer (not installed, logged out, rate limited, or it keeps cr
 
 Hovering the Claude chip in the footer shows the models, the number of requests in this meeting, when the last one ran and how long it took, the average response time and time to first words, the tokens in (including cached input) and out (including thinking), and the cost reported by Claude. The AI Log header shows the same totals, and each log entry shows the actual tokens and cost of that request. Treat this as an **estimate**: with a subscription login it is included in your plan, and Claude does not expose your real remaining quota, so NexQ cannot show it. If Claude reports a rate or usage limit, NexQ warns you and uses the fallback provider.
 
+## Personal sources
+
+Let the AI look things up in your own notes and tools while it answers you. Open **Settings > Personal Sources**, or use the Personal sources section on the launcher's main screen. Both are the same list. Personal sources work only with **Claude (subscription)**; with another provider they stay saved and are not used.
+
+- **Notes folders.** Add a folder of `.md` files, such as an Obsidian vault. The AI can search and read it but never change it. A folder that holds your whole user folder, your Claude sign-in files or NexQ's own private files is refused.
+- **Tools (MCP servers).** Choose **Add server**, paste the `mcpServers` JSON from the server's README (or fill in a form, or import a server from Claude Code). NexQ checks the new server right away and shows its tools, so you can look before switching it on. Each tool has its own switch; tools whose names suggest they change something (add, send, edit, delete) start off.
+- **Per answer.** In a meeting and in past-meeting chat, the **Notes** and **Tools** pills decide whether the answer you ask for may use them. Automatic answers (detected questions, summaries, action items) never use your sources. Looking things up can add a few seconds.
+- **Links in answers.** A link in an answer never opens by itself. Clicking it shows the full address and opens your browser only after you confirm.
+
+### If a server's Check fails
+
+The card shows why, plus the server's own last message when it has one.
+
+| What you see | What it means and what to do |
+|---|---|
+| "It couldn't start npx: ..." | The command isn't installed or not found. Servers written as `npx ...` need [Node.js](https://nodejs.org/); `uvx ...` needs [uv](https://docs.astral.sh/uv/). Install it, open a new NexQ so it sees the updated PATH, and Check again. |
+| "The server failed to start" and "It stopped right away (exit code N). Its last message: ..." | The server started and quit. Read the message: usually a missing or wrong key, a wrong path or a wrong argument. Edit the server (the pencil on its card) and Check again. |
+| "The server didn't answer in time" | The first run of an `npx` or `uvx` server downloads it, which can take close to a minute. A Check waits up to 60 seconds; try Check again once the download has finished. Meeting answers wait only 20 seconds, so Check a new server once before relying on it. |
+| "The server answered 401 Unauthorized" (or 403) on a URL server | The address or the header value (for example a token) is wrong or expired. |
+| "Needs sign-in, not supported yet" | The server wants an OAuth sign-in in a browser. NexQ doesn't support that yet; only servers that take a key or token in a header or variable work. |
+
+On Windows, write the server exactly as its README does, for example `{"command":"npx","args":["-y","some-package"]}`: the Claude tool that NexQ runs finds `npx` itself, and so does NexQ's check. `{"command":"cmd","args":["/c","npx","-y","some-package"]}` works too. Secret values (keys, tokens) are kept in the Windows credential store, not in NexQ's settings file.
+
 ## Privacy
 
 - NexQ never reads your `~/.claude` folder, your credentials, or any tokens. Sign-in happens only in Claude's own tool.
-- NexQ runs the unmodified `claude` program with all tools disabled, in an empty private folder. Claude cannot read your files, run commands, or browse on NexQ's behalf.
+- NexQ runs the unmodified `claude` program with all tools disabled, in an empty private folder. Claude cannot read your files, run commands, or browse on NexQ's behalf. The one exception is the notes folders and tool servers you add under [Personal sources](#personal-sources): a session that may use them can read those folders and call the tools you switched on, nothing else. What it reads there goes to Anthropic like the transcript does.
 - Claude API environment variables (such as `ANTHROPIC_API_KEY`) are removed from the process, so NexQ never passes an API key to Claude. The session uses whatever account you logged in with: if that login bills an API account rather than a Pro or Max plan, Settings and the footer show "This Claude login bills an API account, not your subscription." (amber, never "Connected"). It still works, at API prices; log in with your Claude account to use your subscription instead.
 - Images you paste or capture into Ask go to Anthropic with your question, like the transcript. A screenshot can include other people's video or documents. NexQ doesn't save them; the AI Log keeps only the text.
 - Transcript and context text you send is processed by Anthropic under your Claude account's terms, like any Claude conversation. Choose a local provider (Ollama, local Whisper) if audio and text must stay on your machine.

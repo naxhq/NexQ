@@ -12,12 +12,15 @@
 //! arrives, so a cancelled or dropped `ask` never leaves stale events behind for
 //! the next turn.
 
-use super::command::{build_args, configure_session_command, sandbox_dir, SessionConfig};
+use super::command::{
+    build_args, configure_session_command, configure_sources_env, sandbox_dir, SessionConfig,
+};
 use super::protocol::{
     classify_error, parse_line, user_message, user_message_with_images, AgentErrorKind, AgentEvent,
-    ImageAttachment, TurnResult,
+    ImageAttachment, McpServerState, ToolResult, ToolUse, TurnResult,
 };
 use crate::llm::provider::CancelToken;
+use crate::sources::private_files::{private_dir, remove_private_file, write_private_file};
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -34,6 +37,106 @@ const STDERR_TAIL_LINES: usize = 20;
 /// before any text. Empty, so callers that only want text skip it; real
 /// text deltas are never empty.
 pub const THINKING_SIGNAL: &str = "";
+
+/// Starts an `on_delta` token that is a tool use, not text. The `\u{1}`
+/// control characters never occur in model text, and callers that only want
+/// text check [`is_activity`] and skip it.
+pub const ACTIVITY_PREFIX: &str = "\u{1}nexq-tool\u{1}";
+
+/// Starts an `on_delta` token that says how a tool call ended.
+pub const RESULT_PREFIX: &str = "\u{1}nexq-result\u{1}";
+
+/// A tool result as an `on_delta` token.
+pub fn encode_tool_result(r: &ToolResult) -> String {
+    format!("{RESULT_PREFIX}{}", serde_json::json!({ "id": r.tool_use_id, "is_error": r.is_error }))
+}
+
+/// The tool result in an [`encode_tool_result`] token; `None` for anything else.
+pub fn decode_tool_result(token: &str) -> Option<ToolResult> {
+    let v: serde_json::Value = serde_json::from_str(token.strip_prefix(RESULT_PREFIX)?).ok()?;
+    Some(ToolResult {
+        tool_use_id: v["id"].as_str()?.to_string(),
+        is_error: v["is_error"].as_bool().unwrap_or(true),
+    })
+}
+
+/// Model text with the control character U+0001 removed, so it can never
+/// start (or imitate) an [`ACTIVITY_PREFIX`] token.
+pub fn strip_marker(text: String) -> String {
+    if text.contains('\u{1}') {
+        text.replace('\u{1}', "")
+    } else {
+        text
+    }
+}
+
+/// A tool use as an `on_delta` token.
+pub fn encode_activity(t: &ToolUse) -> String {
+    format!(
+        "{ACTIVITY_PREFIX}{}",
+        serde_json::json!({ "id": t.id, "name": t.name, "input": t.input })
+    )
+}
+
+/// The tool use in an [`encode_activity`] token; `None` for anything else.
+pub fn decode_activity(token: &str) -> Option<ToolUse> {
+    let v: serde_json::Value = serde_json::from_str(token.strip_prefix(ACTIVITY_PREFIX)?).ok()?;
+    Some(ToolUse {
+        id: v["id"].as_str().unwrap_or_default().to_string(),
+        name: v["name"].as_str()?.to_string(),
+        input: v.get("input").cloned().unwrap_or(serde_json::Value::Null),
+    })
+}
+
+/// Is this `on_delta` token a tool use or tool result rather than text or a
+/// thinking signal?
+pub fn is_activity(token: &str) -> bool {
+    token.starts_with(ACTIVITY_PREFIX) || token.starts_with(RESULT_PREFIX)
+}
+
+/// What `system/init` told us: every tool and each MCP server's status.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct InitInfo {
+    pub tools: Vec<String>,
+    pub mcp_servers: Vec<McpServerState>,
+}
+
+/// Names of the MCP servers that did not start (`failed`, or `needs-auth`:
+/// NexQ cannot sign in). A server still `pending` is not counted.
+pub fn failed_mcp_servers(info: &InitInfo) -> Vec<String> {
+    info.mcp_servers
+        .iter()
+        .filter(|s| matches!(s.status.as_str(), "failed" | "needs-auth"))
+        .map(|s| s.name.clone())
+        .collect()
+}
+
+/// The failed servers of `info` by the name the user gave them (`labels` maps a
+/// key to it; the key itself when unknown), as "Mira", "Mira and Wiki" or
+/// "A, B and C".
+pub fn failed_server_names(info: &InitInfo, labels: &[(String, String)]) -> String {
+    let names: Vec<String> = failed_mcp_servers(info)
+        .into_iter()
+        .map(|key| labels.iter().find(|(k, _)| *k == key).map(|(_, l)| l.clone()).unwrap_or(key))
+        .collect();
+    match names.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => names.join(""),
+    }
+}
+
+/// Is a with-sources session that started with `info` useless? True when some
+/// MCP server failed and nothing else is left: no notes folder, and no server
+/// that is connected (or still connecting). A session whose servers all start,
+/// or that still has a folder or another server, is usable: the failed
+/// servers' tools are simply absent.
+pub fn nothing_usable(has_folders: bool, info: &InitInfo) -> bool {
+    let failed = failed_mcp_servers(info);
+    if failed.is_empty() || has_folders {
+        return false;
+    }
+    info.mcp_servers.iter().all(|s| failed.contains(&s.name))
+}
 
 /// Turns the CLI's cumulative `total_cost_usd` (per process) into per-turn
 /// costs. One per process, so it starts over when a session (re)starts.
@@ -96,6 +199,12 @@ pub enum AgentError {
     /// A `result` with `is_error: true`, classified from its text.
     #[error("{1}")]
     Cli(AgentErrorKind, String),
+    /// A with-sources session came up with nothing usable: no notes folder and
+    /// every MCP server failed. `info` is its `system/init` (server statuses),
+    /// so a caller such as the server check reads them instead of parsing
+    /// `message`.
+    #[error("{message}")]
+    NoUsableSources { message: String, info: InitInfo },
 }
 
 impl AgentError {
@@ -118,6 +227,7 @@ impl AgentError {
                 AgentErrorKind::Other
             }
             AgentError::Cli(kind, _) => *kind,
+            AgentError::NoUsableSources { .. } => AgentErrorKind::Other,
         }
     }
 }
@@ -132,6 +242,8 @@ struct Shared {
     stderr_done: AtomicBool,
     exit_status: Mutex<Option<String>>,
     cost: Mutex<CostTracker>,
+    /// The latest `system/init`.
+    init: Mutex<InitInfo>,
 }
 
 impl Shared {
@@ -177,6 +289,8 @@ impl Shared {
 
 enum TurnMsg {
     Delta(String),
+    Tool(ToolUse),
+    ToolDone(ToolResult),
     Thinking,
     Done(Result<TurnResult, AgentError>),
 }
@@ -189,6 +303,9 @@ pub struct ClaudeSession {
     /// The FIFO turn lock; the holder owns the current turn's events.
     turn: Arc<AsyncMutex<mpsc::UnboundedReceiver<AgentEvent>>>,
     prompt_file: PathBuf,
+    /// The private mcp-config file (holds secrets): deleted when `system/init`
+    /// arrives, and on close and drop if it never did.
+    mcp_config_file: Option<PathBuf>,
     timeouts: SessionTimeouts,
 }
 
@@ -220,9 +337,27 @@ impl ClaudeSession {
             ))
         })?;
 
-        let args = build_args(&cfg, &prompt_file);
+        // The mcp-config holds each server's own secret values, so it goes in
+        // the private folder (never the sandbox the model can read) and never
+        // in the process env.
+        let mcp_config_file = match cfg.sources.as_ref().and_then(|s| s.mcp_config_json.as_deref()) {
+            Some(json) => match write_private_file(&private_dir(), json) {
+                Ok(path) => Some(path),
+                Err(e) => {
+                    let _ = std::fs::remove_file(&prompt_file);
+                    return Err(AgentError::Spawn(format!("cannot write the sources config: {e}")));
+                }
+            },
+            None => None,
+        };
+        let args = build_args(&cfg, &prompt_file, mcp_config_file.as_deref());
         let thinking = cfg.thinking;
-        let started = tokio::task::spawn_blocking(move || start_process(&bin, &args, thinking))
+        // `None` for a plain session, else whether a notes folder is among its sources.
+        let sources_folders = cfg.sources.as_ref().map(|s| !s.add_dirs.is_empty());
+        let server_labels = cfg.sources.as_ref().map(|s| s.server_labels.clone()).unwrap_or_default();
+        // `Some(MCP_TIMEOUT override)` for a with-sources session.
+        let with_sources = cfg.sources.as_ref().map(|s| s.mcp_startup_timeout_ms);
+        let started = tokio::task::spawn_blocking(move || start_process(&bin, &args, thinking, with_sources))
             .await
             .map_err(|e| AgentError::Spawn(format!("spawn task failed: {e}")))
             .and_then(|r| r);
@@ -230,6 +365,9 @@ impl ClaudeSession {
             Ok(parts) => parts,
             Err(e) => {
                 let _ = std::fs::remove_file(&prompt_file);
+                if let Some(file) = &mcp_config_file {
+                    remove_private_file(file);
+                }
                 return Err(e);
             }
         };
@@ -240,12 +378,32 @@ impl ClaudeSession {
             stdin_tx: Mutex::new(Some(stdin_tx)),
             turn: Arc::new(AsyncMutex::new(events)),
             prompt_file,
+            mcp_config_file,
             timeouts,
         };
 
         let init = tokio::time::timeout(timeouts.init, session.prime())
             .await
             .unwrap_or(Err(AgentError::Timeout));
+
+        // A with-sources session whose MCP servers all failed (and has no notes
+        // folder) has nothing to offer: report that, with the statuses. If
+        // something is left it starts, and the failed servers' tools are
+        // absent (the caller tells the user which ones).
+        let init = init.and_then(|()| match sources_folders {
+            Some(has_folders) => {
+                let info = session.init_info();
+                if nothing_usable(has_folders, &info) {
+                    Err(AgentError::NoUsableSources {
+                        message: format!("{} didn't start", failed_server_names(&info, &server_labels)),
+                        info,
+                    })
+                } else {
+                    Ok(())
+                }
+            }
+            None => Ok(()),
+        });
 
         match init {
             Ok(()) => Ok(session),
@@ -263,7 +421,7 @@ impl ClaudeSession {
         let wait = async {
             loop {
                 match rx.recv().await {
-                    Some(TurnMsg::Delta(_)) | Some(TurnMsg::Thinking) => {}
+                    Some(TurnMsg::Delta(_)) | Some(TurnMsg::Tool(_)) | Some(TurnMsg::ToolDone(_)) | Some(TurnMsg::Thinking) => {}
                     Some(TurnMsg::Done(r)) => return r,
                     None => return Err(AgentError::Crashed(self.shared.crash_reason())),
                 }
@@ -322,6 +480,12 @@ impl ClaudeSession {
                         quiet = true;
                         on_delta(&text);
                     }
+                    Some(TurnMsg::Tool(tool)) => {
+                        // Tool use means the model is working: no thinking signal after it.
+                        quiet = true;
+                        on_delta(&encode_activity(&tool));
+                    }
+                    Some(TurnMsg::ToolDone(result)) => on_delta(&encode_tool_result(&result)),
                     Some(TurnMsg::Done(result)) => return into_outcome(result),
                     None => return Err(AgentError::Crashed(self.shared.crash_reason())),
                 },
@@ -363,6 +527,20 @@ impl ClaudeSession {
         }
         self.shared.alive.store(false, Ordering::SeqCst);
         remove_prompt_file(&self.prompt_file);
+        if let Some(file) = &self.mcp_config_file {
+            remove_private_file(file);
+        }
+    }
+
+    /// The tools and MCP server states of the latest `system/init`.
+    pub fn init_info(&self) -> InitInfo {
+        self.shared.init.lock().unwrap().clone()
+    }
+
+    /// Where this session's private mcp-config file is (only the path: its
+    /// content holds secrets). `None` for a session without MCP servers.
+    pub fn mcp_config_path(&self) -> Option<&Path> {
+        self.mcp_config_file.as_deref()
     }
 
     /// The model this session was started with (as configured, e.g. `haiku`).
@@ -377,9 +555,16 @@ impl ClaudeSession {
         let mut init_seen = false;
         loop {
             match events.recv().await {
-                Some(AgentEvent::Init { session_id, model }) => {
+                Some(AgentEvent::Init { session_id, model, tools, mcp_servers }) => {
                     log::info!("claude session {session_id} ready (model {model})");
+                    *self.shared.init.lock().unwrap() = InitInfo { tools, mcp_servers };
                     init_seen = true;
+                    // The CLI keeps its MCP config in memory from here on (it
+                    // restarts a dead server without re-reading the file), so
+                    // the file with the secrets in it goes now, not at close.
+                    if let Some(file) = &self.mcp_config_file {
+                        remove_private_file(file);
+                    }
                 }
                 Some(AgentEvent::TurnComplete(result)) if init_seen => {
                     return into_outcome(Ok(self.shared.settle_cost(result))).map(|_| ());
@@ -448,6 +633,9 @@ impl Drop for ClaudeSession {
         }
         self.shared.alive.store(false, Ordering::SeqCst);
         remove_prompt_file(&self.prompt_file);
+        if let Some(file) = &self.mcp_config_file {
+            remove_private_file(file);
+        }
     }
 }
 
@@ -473,12 +661,25 @@ async fn drive_turn(
         tokio::select! {
             event = tokio::time::timeout(wait, events.recv()) => match event {
                 Ok(Some(AgentEvent::TextDelta(text))) => {
+                    // Model text can't carry the activity marker: a tool line
+                    // or a source chip only ever comes from a real tool use.
+                    let text = strip_marker(text);
                     if !text.is_empty() {
                         let _ = tx.send(TurnMsg::Delta(text));
                     }
                 }
                 Ok(Some(AgentEvent::ThinkingDelta)) => {
                     let _ = tx.send(TurnMsg::Thinking);
+                }
+                Ok(Some(AgentEvent::ToolUses(uses))) => {
+                    for tool in uses {
+                        let _ = tx.send(TurnMsg::Tool(tool));
+                    }
+                }
+                Ok(Some(AgentEvent::ToolResults(results))) => {
+                    for result in results {
+                        let _ = tx.send(TurnMsg::ToolDone(result));
+                    }
                 }
                 Ok(Some(AgentEvent::TurnComplete(result))) => break Ok(shared.settle_cost(result)),
                 Ok(Some(_)) => {}
@@ -530,10 +731,18 @@ type Started = (
 
 /// Spawn the child (no shell, no window, sandbox cwd, stripped env) and its
 /// three pipe threads. Blocking; run on a blocking thread.
-fn start_process(bin: &Path, args: &[String], thinking: bool) -> Result<Started, AgentError> {
+fn start_process(
+    bin: &Path,
+    args: &[String],
+    thinking: bool,
+    with_sources: Option<Option<u32>>,
+) -> Result<Started, AgentError> {
     let mut cmd = Command::new(bin);
     cmd.args(args);
     configure_session_command(&mut cmd, &sandbox_dir(), thinking);
+    if let Some(startup_timeout_ms) = with_sources {
+        configure_sources_env(&mut cmd, startup_timeout_ms);
+    }
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -556,6 +765,7 @@ fn start_process(bin: &Path, args: &[String], thinking: bool) -> Result<Started,
         stderr_done: AtomicBool::new(false),
         exit_status: Mutex::new(None),
         cost: Mutex::new(CostTracker::default()),
+        init: Mutex::new(InitInfo::default()),
     });
     let (stdin_tx, stdin_rx) = std_mpsc::channel::<String>();
     let (event_tx, event_rx) = mpsc::unbounded_channel();
@@ -736,6 +946,7 @@ mod tests {
             stderr_done: AtomicBool::new(true),
             exit_status: Mutex::new(None),
             cost: Mutex::new(CostTracker::default()),
+            init: Mutex::new(InitInfo::default()),
         };
         let first = shared.settle_cost(TurnResult { total_cost_usd: 0.0100, ..Default::default() });
         assert_eq!(first.cost_usd, 0.0100);
@@ -747,6 +958,83 @@ mod tests {
         let second = shared.settle_cost(real);
         assert!((second.cost_usd - 0.00933).abs() < 1e-9, "{}", second.cost_usd);
         assert_eq!(second.total_cost_usd, 0.01933);
+    }
+
+    #[test]
+    fn activity_round_trips_and_is_never_text() {
+        let t = ToolUse { id: "toolu_1".into(), name: "Read".into(), input: serde_json::json!({"file_path": "D:\\V\\a b.md"}) };
+        let enc = encode_activity(&t);
+        assert!(is_activity(&enc) && !enc.is_empty());
+        assert_eq!(decode_activity(&enc), Some(t.clone()));
+        assert_eq!(decode_activity("plain text"), None);
+        assert_eq!(decode_activity(&format!("{ACTIVITY_PREFIX}not json")), None);
+        assert!(!is_activity("") && !is_activity("hello"));
+        let done = ToolResult { tool_use_id: "toolu_1".into(), is_error: true };
+        let enc = encode_tool_result(&done);
+        assert!(is_activity(&enc));
+        assert_eq!(decode_tool_result(&enc), Some(done));
+        assert_eq!(decode_tool_result(&encode_activity(&t)), None);
+        assert_eq!(decode_activity(&enc), None);
+    }
+
+    #[test]
+    fn nothing_usable_needs_a_failed_server_and_nothing_else() {
+        let state = |name: &str, status: &str| McpServerState { name: name.into(), status: status.into() };
+        let info = |servers: Vec<McpServerState>| InitInfo { tools: vec![], mcp_servers: servers };
+        // Nothing failed.
+        assert!(!nothing_usable(false, &info(vec![state("a", "connected")])));
+        assert!(!nothing_usable(false, &info(vec![])));
+        // The only server failed.
+        assert!(nothing_usable(false, &info(vec![state("a", "failed")])));
+        assert!(nothing_usable(false, &info(vec![state("a", "failed"), state("b", "needs-auth")])));
+        // A folder, a connected server or one still connecting is left.
+        assert!(!nothing_usable(true, &info(vec![state("a", "failed")])));
+        assert!(!nothing_usable(false, &info(vec![state("a", "failed"), state("b", "connected")])));
+        assert!(!nothing_usable(false, &info(vec![state("a", "failed"), state("b", "pending")])));
+    }
+
+    #[test]
+    fn model_text_cannot_carry_the_activity_marker() {
+        let spoof = format!("{ACTIVITY_PREFIX}{{\"name\":\"mcp__mira__x\",\"input\":{{}}}}");
+        let clean = strip_marker(spoof);
+        assert!(!is_activity(&clean) && !clean.contains('\u{1}'), "{clean:?}");
+        assert_eq!(strip_marker("plain answer".to_string()), "plain answer");
+        assert_eq!(strip_marker("\u{1}".to_string()), "");
+    }
+
+    #[test]
+    fn failed_server_names_use_labels() {
+        let st = |n: &str, s: &str| McpServerState { name: n.into(), status: s.into() };
+        let info = InitInfo { tools: vec![], mcp_servers: vec![st("mira", "failed"), st("wiki", "needs-auth"), st("c", "failed"), st("ok", "connected")] };
+        let labels = vec![("mira".to_string(), "Mira".to_string()), ("wiki".to_string(), "Wiki".to_string())];
+        assert_eq!(failed_server_names(&info, &labels), "Mira, Wiki and c");
+        let one = InitInfo { tools: vec![], mcp_servers: vec![st("mira", "failed")] };
+        assert_eq!(failed_server_names(&one, &labels), "Mira");
+    }
+
+    #[test]
+    fn failed_servers_from_init() {
+        let AgentEvent::Init { tools, mcp_servers, .. } =
+            parse_line(include_str!("testdata/init_mcp_failed.json")).unwrap()
+        else {
+            panic!("not an init");
+        };
+        let info = InitInfo { tools, mcp_servers };
+        assert_eq!(failed_mcp_servers(&info), vec!["broken".to_string()]);
+        let AgentEvent::Init { tools, mcp_servers, .. } =
+            parse_line(include_str!("testdata/init_with_mcp.json")).unwrap()
+        else {
+            panic!("not an init");
+        };
+        assert!(failed_mcp_servers(&InitInfo { tools, mcp_servers }).is_empty());
+        let auth = InitInfo {
+            tools: vec![],
+            mcp_servers: vec![
+                McpServerState { name: "a".into(), status: "needs-auth".into() },
+                McpServerState { name: "b".into(), status: "pending".into() },
+            ],
+        };
+        assert_eq!(failed_mcp_servers(&auth), vec!["a".to_string()]);
     }
 
     #[test]

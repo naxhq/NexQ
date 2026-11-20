@@ -92,6 +92,9 @@ windows = { version = "0.62", features = [
     # Screen capture for the Ask shortcut (GDI BitBlt, monitors, per-monitor DPI)
     "Win32_Graphics_Gdi",
     "Win32_UI_HiDpi",
+    # Job object: a Check's diagnose run is killed with every process it started
+    "Win32_System_JobObjects",
+    "Win32_Security",
 ] }
 
 # macOS-specific

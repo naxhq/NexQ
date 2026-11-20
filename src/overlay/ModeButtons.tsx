@@ -11,6 +11,7 @@ import { sendAsk } from "./sendAsk";
 import { DEFAULT_CONTEXT_SCOPE, scopeHint } from "../lib/contextScope";
 import { showToast } from "../stores/toastStore";
 import { ContextScopePicker } from "./ContextScopePicker";
+import { SourcePills } from "../sources/SourcePills";
 import type { IntelligenceMode } from "../lib/types";
 import {
   Loader2,
@@ -228,6 +229,7 @@ export function ModeButtons() {
           );
         })}
         <ContextScopePicker />
+        <SourcePills scope="live" />
       </div>
 
       {/* Inline Ask input */}

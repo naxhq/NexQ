@@ -78,10 +78,7 @@ impl Default for ClaudeCliProvider {
 
 /// The session serving every caller without a meeting scope.
 pub fn utility_key() -> SessionKey {
-    SessionKey {
-        scope: SessionScope::Utility,
-        tier: Tier::Fast,
-    }
+    SessionKey::plain(SessionScope::Utility, Tier::Fast)
 }
 
 /// One user message for the session: system messages become a leading
@@ -116,6 +113,7 @@ pub async fn ask_utility(
     let init = SessionInit {
         system_prompt: UTILITY_SYSTEM_PROMPT.to_string(),
         preload: Vec::new(),
+        sources: None,
     };
     // Not raced against `cancel`: dropping a spawn mid-way would leave the
     // session status stuck on "starting". Cancellation is checked right after.
@@ -207,6 +205,10 @@ impl StreamTiming {
     /// Note one delta. Returns true for the first thinking signal (an empty
     /// delta before any text): the caller reports thinking once.
     pub fn on_delta(&self, token: &str) -> bool {
+        // A tool use is neither text nor thinking.
+        if crate::llm::cli_agent::session::is_activity(token) {
+            return false;
+        }
         if token.is_empty() {
             return self.first_token_ms.get().is_none()
                 && !self.thinking.swap(true, std::sync::atomic::Ordering::SeqCst);
@@ -307,7 +309,7 @@ impl LLMProvider for ClaudeCliProvider {
                 }
                 if thinking {
                     emit_thinking(&app, &params);
-                } else if !token.is_empty() {
+                } else if !token.is_empty() && !crate::llm::cli_agent::session::is_activity(token) {
                     emit_token(&app, &params, token, sink.as_ref());
                 }
             })
@@ -625,5 +627,17 @@ mod tests {
         let late = StreamTiming::new(Instant::now());
         late.on_delta("x");
         assert!(!late.on_delta(""));
+    }
+
+    #[test]
+    fn stream_timing_ignores_activity() {
+        use crate::llm::cli_agent::protocol::ToolUse;
+        use crate::llm::cli_agent::session::encode_activity;
+        let timing = StreamTiming::new(Instant::now());
+        let tool = ToolUse { id: "t1".into(), name: "Grep".into(), input: serde_json::json!({"pattern": "x"}) };
+        assert!(!timing.on_delta(&encode_activity(&tool)));
+        assert_eq!(timing.first_token_ms(), None);
+        // A thinking signal after a tool use is still reported.
+        assert!(timing.on_delta(""));
     }
 }

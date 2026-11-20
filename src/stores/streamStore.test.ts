@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useStreamStore, RESPONSE_HISTORY_CAP } from "./streamStore";
+import type { SourceActivity } from "../lib/types";
 
 const T0 = 1_700_000_000_000;
 const s = () => useStreamStore.getState();
@@ -157,6 +158,106 @@ describe("streamStore", () => {
       phase: "idle",
       currentContent: "",
       currentId: null,
+    });
+  });
+
+  describe("activity lines and source chips", () => {
+    const search = (label: string, path: string): SourceActivity => ({
+      kind: "notes",
+      label,
+      chip: { kind: "notes", label: path.split("\\").pop()!, path },
+    });
+    const tool: SourceActivity = {
+      kind: "tool",
+      label: "Mira: person_brief",
+      chip: { kind: "tool", label: "Mira: person_brief", path: null },
+    };
+
+    it("activity for another request is ignored; ours is listed and its chips are kept on the saved response", () => {
+      s().setPending("Assist", "mine");
+      s().startStream("Assist", "m", "p", { requestId: "mine" });
+      s().addActivity("someone-else", search("Reading Other.md", "D:\\V\\Other.md"));
+      s().addActivity("mine", search("Searching notes for 'Dana'", "D:\\V\\Dana.md"));
+      s().addActivity("mine", tool);
+      s().addActivity("mine", search("Reading Dana.md", "D:\\V\\Dana.md"));
+      expect(s().currentActivity.map((a) => a.label)).toEqual([
+        "Searching notes for 'Dana'",
+        "Mira: person_brief",
+        "Reading Dana.md",
+      ]);
+      s().appendToken("Dana owns it.");
+      s().endStream(5);
+      expect(s().responseHistory[0].source_chips).toEqual([
+        { kind: "notes", label: "Dana.md", path: "D:\\V\\Dana.md" },
+        { kind: "tool", label: "Mira: person_brief", path: null },
+      ]);
+    });
+
+    it("a chip-only activity adds the chip but no line, and a line without one leaves no chip", () => {
+      s().setPending("Assist", "r9");
+      s().startStream("Assist", "m", "p", { requestId: "r9" });
+      // The call started: a line, no chip yet (it may still be denied).
+      s().addActivity("r9", { kind: "tool", label: "Mira: add_task", chip: null });
+      expect(s().currentChips).toEqual([]);
+      // A call that worked: its chip arrives on its own.
+      s().addActivity("r9", { kind: "tool", label: "Mira: person_brief", chip: tool.chip, chip_only: true });
+      expect(s().currentActivity.map((a) => a.label)).toEqual(["Mira: add_task"]);
+      expect(s().currentChips).toEqual([tool.chip]);
+    });
+
+    it("activity that arrives before llm_stream_start is held by request id and shown once it starts", () => {
+      s().setPending("Assist", "r1");
+      s().addActivity("r1", { kind: "notice", label: "Mira did not start, so its tools are not available", chip: null });
+      s().addActivity("r1", search("Reading Dana.md", "D:\\V\\Dana.md"));
+      s().addActivity("r2", tool); // another request's: must not leak into r1
+      expect(s().currentActivity).toEqual([]);
+
+      s().startStream("Assist", "m", "p", { requestId: "r1" });
+      expect(s().currentNotices).toEqual(["Mira did not start, so its tools are not available"]);
+      expect(s().currentActivity.map((a) => a.label)).toEqual(["Reading Dana.md"]);
+      s().startStream("Assist", "m", "p", { requestId: "r2" });
+      expect(s().currentActivity.map((a) => a.label)).toEqual(["Mira: person_brief"]);
+    });
+
+    it("a notice is a quiet line, not an activity line, and has no chip; it is kept with the answer", () => {
+      s().setPending("Assist", "r1");
+      s().startStream("Assist", "m", "p", { requestId: "r1" });
+      s().addActivity("r1", { kind: "notice", label: "Your notes were not used.", chip: null });
+      s().addActivity("r1", { kind: "notice", label: "Your notes were not used.", chip: null });
+      expect(s().currentActivity).toEqual([]);
+      expect(s().currentNotices).toEqual(["Your notes were not used."]);
+      s().appendToken("answer");
+      s().endStream(5);
+      expect(s().responseHistory[0].source_notices).toEqual(["Your notes were not used."]);
+      expect(s().responseHistory[0].source_chips).toBeUndefined();
+    });
+
+    it("the same note read twice is one chip, and the next request starts clean", () => {
+      s().setPending("Assist", "r1");
+      s().startStream("Assist", "m", "p", { requestId: "r1" });
+      s().addActivity("r1", search("Reading Dana.md", "D:\\V\\Dana.md"));
+      s().addActivity("r1", search("Reading Dana.md", "D:\\V\\Dana.md"));
+      expect(s().currentChips).toHaveLength(1);
+      s().appendToken("x");
+      s().endStream(1);
+
+      s().setPending("Assist", "r2");
+      expect(s().currentActivity).toEqual([]);
+      expect(s().currentChips).toEqual([]);
+      expect(s().currentNotices).toEqual([]);
+    });
+
+    it("an answer that used no sources has no chips or notices", () => {
+      answer("Assist", "plain");
+      expect(s().responseHistory[0].source_chips).toBeUndefined();
+      expect(s().responseHistory[0].source_notices).toBeUndefined();
+    });
+
+    it("an activity line without a request id is ignored", () => {
+      s().setPending("Assist", "r1");
+      s().startStream("Assist", "m", "p", { requestId: "r1" });
+      s().addActivity(null, tool);
+      expect(s().currentActivity).toEqual([]);
     });
   });
 });

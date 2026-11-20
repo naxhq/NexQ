@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useStreamStore, type StreamPhase } from "../stores/streamStore";
+import { useAgentStore } from "../stores/agentStore";
 import { getModeLabel } from "../lib/utils";
 import { actionLabel } from "../lib/userAction";
 import { formatDuration, linesLabel } from "./responseFormat";
@@ -33,11 +34,20 @@ export function ResponseProgress() {
   const mode = useStreamStore((s) => s.currentMode);
   const startedAt = useStreamStore((s) => s.requestStartedAt);
   const meta = useStreamStore((s) => s.streamMeta);
+  const asked = useStreamStore((s) => s.requestSources);
+  // An answer with a pill on waits for the with-sources session while it starts
+  // (the Fast one, or the Deep one a Recap uses).
+  const sourcesStarting = useAgentStore((s) =>
+    Object.values(s.sessions).some((x) => x.with_sources && x.scope === "live" && x.state === "starting"),
+  );
   const running = phase !== "idle";
   const elapsed = useElapsed(startedAt, running);
 
   if (!running) return null;
 
+  const loadingSources =
+    !!asked && (asked.notes || asked.tools) && sourcesStarting && (phase === "sending" || phase === "waiting");
+  const phaseText = loadingSources ? "Loading your sources" : PHASE_TEXT[phase];
   const label = mode ? actionLabel(mode) || getModeLabel(mode) : "Answer";
   const details = meta
     ? [
@@ -48,15 +58,15 @@ export function ResponseProgress() {
     : [];
 
   return (
-    <div className="space-y-0.5" role="status" aria-live="polite" aria-label={`${label}: ${PHASE_TEXT[phase]}`}>
+    <div className="space-y-0.5" role="status" aria-live="polite" aria-label={`${label}: ${phaseText}`}>
       <div className="flex items-center gap-2">
         <span
           aria-hidden="true"
           className={`h-1.5 w-1.5 shrink-0 rounded-full bg-primary ${phase === "writing" ? "opacity-80" : "progress-breathe"}`}
         />
         <span className="text-meta font-semibold text-primary">{label}</span>
-        <span key={phase} className="progress-phase-enter min-w-0 truncate text-xs text-foreground/65">
-          {PHASE_TEXT[phase]}
+        <span key={phaseText} className="progress-phase-enter min-w-0 truncate text-xs text-foreground/65">
+          {phaseText}
         </span>
         <span className="ml-auto shrink-0 font-mono text-meta tabular-nums text-muted-foreground/55" aria-hidden="true">
           {formatDuration(elapsed)}

@@ -40,6 +40,12 @@ import type {
   ClaudeCliStatus,
   ClaudeModelInfo,
   MeetingChatMessage,
+  ClaudeCodeMcpServer,
+  McpServer,
+  McpServerForm,
+  NotesFolderInfo,
+  PersonalSourcesConfig,
+  SourceToggles,
 } from "./types";
 
 // == IPC: Audio (Sub-PRD 3) ==
@@ -265,6 +271,8 @@ export async function generateAssist(
     transcriptSegments: JSON.stringify(segments),
     requestId,
     ...(opts.pastMeetingId ? { pastMeetingId: opts.pastMeetingId } : {}),
+    // No `sources`: an automatic answer, which never uses personal sources.
+    ...(opts.sources ? { sources: opts.sources } : {}),
     // No scope (or `default`): the backend keeps the action's own window.
     ...(opts.scope && opts.scope.kind !== "default" ? { scope: opts.scope } : {}),
     ...(opts.images && opts.images.length > 0 ? { images: opts.images } : {}),
@@ -881,6 +889,102 @@ export async function closePastMeetingSession(meetingId: string): Promise<void> 
   return invoke("close_past_meeting_session", { meetingId });
 }
 
+// == IPC: Personal sources (notes folders + MCP servers) ==
+
+/** Whether a folder exists, how many notes it holds, and why it can't be a notes folder (`problem`). */
+export async function inspectNotesFolder(path: string): Promise<NotesFolderInfo> {
+  return invoke<NotesFolderInfo>("inspect_notes_folder", { path });
+}
+
+/**
+ * Add the servers in pasted `mcpServers` JSON. Secret values are stored in
+ * Credential Manager and are not in the returned servers. New keys avoid the
+ * keys the backend has saved (see `setPersonalSources`).
+ */
+export async function importMcpServersJson(json: string): Promise<McpServer[]> {
+  return invoke<McpServer[]>("import_mcp_servers_json", { json });
+}
+
+/**
+ * Save the add/edit server form; secrets go to Credential Manager, the result
+ * holds names only. An edit (`form.id`) must name a server the backend has
+ * saved (`setPersonalSources`): its key comes from there, `form.key` is
+ * ignored. If the edit changes the command, arguments, URL or plain
+ * environment, stored secrets are not kept: it rejects with "Enter the secrets
+ * again: ..." until every secret is typed in the form.
+ */
+export async function saveMcpServerForm(form: McpServerForm): Promise<McpServer> {
+  return invoke<McpServer>("save_mcp_server_form", { form });
+}
+
+/** The user-scope MCP servers in Claude Code's config (read only when called). */
+export async function listClaudeCodeMcpServers(): Promise<ClaudeCodeMcpServer[]> {
+  return invoke<ClaudeCodeMcpServer[]>("list_claude_code_mcp_servers");
+}
+
+/** Copy the named Claude Code servers into NexQ (OAuth ones come back off, `needs_sign_in`). */
+export async function importClaudeCodeMcpServers(names: string[]): Promise<McpServer[]> {
+  return invoke<McpServer[]>("import_claude_code_mcp_servers", { names });
+}
+
+/**
+ * Start a server like a session would and list its tools (up to 60 s). The
+ * backend runs the server it has saved under `serverId` (call
+ * `setPersonalSources` first when it was just added) with its stored secrets.
+ * To check an unsaved or edited form instead, pass `draft`: it runs with the
+ * secrets typed in it, and stored secrets only if the draft starts the same
+ * thing as the saved server. A failing server does not reject: the result's
+ * `last_check` has `ok: false` and the `error`.
+ */
+export async function checkMcpServer(serverId: string | null, draft: McpServerForm | null = null): Promise<McpServer> {
+  return invoke<McpServer>("check_mcp_server", { serverId, draft });
+}
+
+/**
+ * Which environment variable names hold a secret (so their values are hidden
+ * and kept in Credential Manager). The backend decides; there is no copy of
+ * the rule here.
+ */
+export async function classifySecretNames(names: string[]): Promise<boolean[]> {
+  return invoke<boolean[]>("classify_secret_names", { names });
+}
+
+/** The webview dropped servers the backend handed it without saving them: free their keys. */
+export async function discardPendingMcpServers(ids: string[]): Promise<void> {
+  return invoke("discard_pending_mcp_servers", { ids });
+}
+
+/** Forget the saved secrets of a saved server that is being removed (call before saving the removal). */
+export async function deleteMcpSecrets(serverId: string): Promise<void> {
+  return invoke("delete_mcp_secrets", { serverId });
+}
+
+/**
+ * Give the backend the sources the user set up. Call it at startup and after
+ * every change: it is the saved config the other commands look servers up in
+ * (keys, checks, secrets), and it restarts the with-sources Claude session
+ * when something that goes into it changed. Removing a server here forgets
+ * its saved secrets. Rejects on an invalid or duplicate server key.
+ */
+export async function setPersonalSources(config: PersonalSourcesConfig): Promise<void> {
+  return invoke("set_personal_sources", { config });
+}
+
+/**
+ * Try the with-sources Claude session again now (from its error state). After
+ * a failed start, answers with a pill on use the plain session for about 2
+ * minutes (their notice says when the next try is), then one retry runs on its
+ * own. This forgets the failure and restarts the session at once.
+ */
+export async function retrySourcesSession(): Promise<void> {
+  return invoke("retry_sources_session");
+}
+
+/** Open a note with the default app; only a file inside an enabled notes folder. */
+export async function openSourceFile(path: string): Promise<void> {
+  return invoke("open_source_file", { path });
+}
+
 // == IPC: Ask this meeting ==
 
 /**
@@ -888,8 +992,13 @@ export async function closePastMeetingSession(meetingId: string): Promise<void> 
  * `llm_stream_*` events tagged with `requestId` — subscribe before calling.
  * Resolves once the answer is saved (stop with `cancelGeneration`).
  */
-export async function askMeeting(meetingId: string, question: string, requestId: string): Promise<void> {
-  return invoke("ask_meeting", { meetingId, question, requestId });
+export async function askMeeting(
+  meetingId: string,
+  question: string,
+  requestId: string,
+  sources?: SourceToggles,
+): Promise<void> {
+  return invoke("ask_meeting", { meetingId, question, requestId, ...(sources ? { sources } : {}) });
 }
 
 /** The meeting's saved "Ask this meeting" chat, oldest first. */

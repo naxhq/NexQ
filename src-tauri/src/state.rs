@@ -18,6 +18,7 @@ use crate::llm::gemini_cache::CachedContent;
 use crate::llm::openrouter_models::OpenRouterModelCache;
 use crate::llm::LLMRouter;
 use crate::rag::RagManager;
+use crate::sources::config::{McpServer, PersonalSourcesConfig};
 use crate::translation::TranslationRouter;
 use crate::translation::opus_mt_manager::OpusMtManager;
 use crate::stt::groq_whisper::GroqConfig;
@@ -143,6 +144,24 @@ pub struct AppState {
     pub live_meeting: Arc<Mutex<Option<LiveMeeting>>>,
     /// The fallback provider client last built (reused while unchanged).
     pub claude_fallback: Arc<Mutex<Option<CachedFallback>>>,
+    /// Notes folders and MCP servers the user set up (`set_personal_sources`).
+    pub personal_sources: Arc<RwLock<PersonalSourcesConfig>>,
+    /// Bumped when the saved secrets of an enabled MCP server change (they
+    /// are not in `personal_sources`, so its fingerprint can't see them).
+    pub sources_secrets_rev: Arc<AtomicU64>,
+    /// Servers an import or the form returned that the webview has not saved
+    /// yet (newest last, at most `PENDING_SERVERS_MAX`), with when each was
+    /// handed over. A Check or an edit finds them here by id. Each reserves its
+    /// key for `PENDING_KEY_HOLD` (so two servers added together get different
+    /// keys); one the webview never saves stops reserving it then, so a
+    /// discarded server doesn't push the real one to `name-2`.
+    pub pending_servers: Arc<Mutex<Vec<(McpServer, std::time::Instant)>>>,
+    /// The sources (and secrets revision) the with-sources sessions were last
+    /// started or restarted for.
+    pub sources_applied: Arc<Mutex<(PersonalSourcesConfig, u64)>>,
+    /// A with-sources session that just failed to start: answers skip it for
+    /// a while instead of waiting on it again.
+    pub sources_cooldown: Arc<crate::llm::cli_agent::routing::SourcesCooldown>,
 }
 
 /// The meeting between `start_meeting` and `end_meeting`.
@@ -201,6 +220,11 @@ impl AppState {
             meeting_sessions: Arc::new(MeetingSessions::default()),
             live_meeting: Arc::new(Mutex::new(None)),
             claude_fallback: Arc::new(Mutex::new(None)),
+            personal_sources: Arc::new(RwLock::new(PersonalSourcesConfig::default())),
+            sources_secrets_rev: Arc::new(AtomicU64::new(0)),
+            sources_applied: Arc::new(Mutex::new((PersonalSourcesConfig::default(), 0))),
+            sources_cooldown: Arc::new(Default::default()),
+            pending_servers: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }

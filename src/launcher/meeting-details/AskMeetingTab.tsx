@@ -1,19 +1,25 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { withoutImages } from "../../lib/answerMarkdown";
+import { findSourcesSession } from "../../lib/sourcePills";
+import { useAgentStore } from "../../stores/agentStore";
 import type { Components } from "react-markdown";
 import { ArrowUp, Loader2, MessageCircleQuestion, Square } from "lucide-react";
 import type { ChatItem, MeetingChatState } from "../../hooks/useMeetingChat";
 import { mdComponents, stripThinkTags } from "./SummaryView";
+import { SourcePills } from "../../sources/SourcePills";
+import { SourceChips } from "../../sources/SourceChips";
+import { SourceActivityLines, SourceNotices } from "../../sources/SourceActivityLines";
 
 /** Summary markdown styles, with headings and paragraphs sized for a chat answer. */
-const answerMd: Components = {
+const answerMd: Components = withoutImages({
   ...mdComponents,
   h1: ({ children }) => <h3 className="mt-4 mb-1.5 text-sm font-semibold text-foreground">{children}</h3>,
   h2: ({ children }) => <h3 className="mt-4 mb-1.5 text-sm font-semibold text-foreground">{children}</h3>,
   h3: ({ children }) => <h4 className="mt-3 mb-1 text-sm font-medium text-foreground/90">{children}</h4>,
   p: ({ children }) => <p className="mb-2.5 text-sm leading-relaxed text-foreground/85 last:mb-0">{children}</p>,
-};
+});
 
 const SUGGESTIONS = ["What was decided?", "What are the open questions?", "Who agreed to do what?"];
 
@@ -22,6 +28,8 @@ const PIN_THRESHOLD = 80;
 
 interface AskMeetingTabProps {
   chat: MeetingChatState;
+  /** The meeting being asked about: its Notes and Tools pills follow that meeting's sources session. */
+  meetingId?: string | null;
   /** Why asking is unavailable right now (e.g. no transcript), if it is. */
   unavailableReason?: string | null;
   /** Another AI task of this view is running; asking waits for it. */
@@ -29,13 +37,15 @@ interface AskMeetingTabProps {
 }
 
 /** "Ask this meeting": a chat about a past meeting, saved with it. */
-export function AskMeetingTab({ chat, unavailableReason = null, otherTaskRunning = false }: AskMeetingTabProps) {
+export function AskMeetingTab({ chat, meetingId = null, unavailableReason = null, otherTaskRunning = false }: AskMeetingTabProps) {
   const { items, loading, loadError, isAsking, session, ask, stop } = chat;
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const pinnedRef = useRef(true);
 
+  // This meeting's with-sources session is still starting: an answer that asked for sources waits for it.
+  const sourcesStarting = useAgentStore((s) => findSourcesSession(s.sessions, "past", meetingId)?.state === "starting");
   const blocked = !!unavailableReason || otherTaskRunning;
   const canSend = !blocked && !isAsking && draft.trim().length > 0;
 
@@ -97,7 +107,7 @@ export function AskMeetingTab({ chat, unavailableReason = null, otherTaskRunning
             <EmptyState disabled={blocked || isAsking} onPick={submit} />
           )}
           {items.map((item) =>
-            item.role === "user" ? <Question key={item.id} item={item} /> : <Answer key={item.id} item={item} />,
+            item.role === "user" ? <Question key={item.id} item={item} /> : <Answer key={item.id} item={item} loadingSources={sourcesStarting} />,
           )}
         </div>
       </div>
@@ -111,6 +121,9 @@ export function AskMeetingTab({ chat, unavailableReason = null, otherTaskRunning
       >
         <div className="mx-auto max-w-2xl">
           <div className="flex items-end gap-2 rounded-xl border border-border/30 bg-card/40 py-1.5 pl-3.5 pr-1.5 transition-colors duration-150 focus-within:border-primary/40">
+            <div className="flex min-h-[28px] shrink-0 items-center">
+              <SourcePills scope="past" meetingId={meetingId} />
+            </div>
             <textarea
               ref={inputRef}
               rows={1}
@@ -192,15 +205,21 @@ function Question({ item }: { item: ChatItem }) {
   );
 }
 
-function Answer({ item }: { item: ChatItem }) {
+function Answer({ item, loadingSources }: { item: ChatItem; loadingSources: boolean }) {
   const text = stripThinkTags(item.content);
   const streaming = item.status === "streaming";
   return (
     <div data-status={item.status} className="min-w-0">
+      {item.notice && <SourceNotices notices={[item.notice]} />}
+      {streaming && (
+        <div className="mb-2">
+          <SourceActivityLines lines={item.activity ?? []} />
+        </div>
+      )}
       {streaming && !text ? (
         <div className="flex items-center gap-2 text-xs text-muted-foreground/60">
           <Loader2 className="h-3.5 w-3.5 animate-spin text-primary/70" />
-          Thinking…
+          {item.askedSources && loadingSources ? "Loading your sources…" : "Thinking…"}
         </div>
       ) : (
         text && (
@@ -211,6 +230,11 @@ function Answer({ item }: { item: ChatItem }) {
             {streaming && <span className="ml-0.5 inline-block h-3.5 w-0.5 animate-pulse bg-primary/60 align-middle" />}
           </div>
         )
+      )}
+      {!streaming && item.chips && item.chips.length > 0 && (
+        <div className="mt-2">
+          <SourceChips chips={item.chips} />
+        </div>
       )}
       {item.status === "stopped" && <p className="mt-1.5 text-[11px] text-muted-foreground/50">Stopped · not saved</p>}
       {item.error && <p className="mt-1.5 text-xs text-destructive/80">{item.error}</p>}

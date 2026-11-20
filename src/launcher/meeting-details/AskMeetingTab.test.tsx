@@ -20,6 +20,7 @@ function emit(name: string, payload: unknown) {
 
 // ── IPC stub ────────────────────────────────────────────────────────────────
 const ipc = vi.hoisted(() => ({
+  openSourceFile: vi.fn(),
   listMeetingChat: vi.fn(),
   askMeeting: vi.fn(),
   cancelGeneration: vi.fn(),
@@ -28,6 +29,7 @@ const ipc = vi.hoisted(() => ({
 
 vi.mock("../../lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../lib/ipc")>()),
+  openSourceFile: (...args: unknown[]) => ipc.openSourceFile(...args),
   listMeetingChat: (...args: unknown[]) => ipc.listMeetingChat(...args),
   askMeeting: (...args: unknown[]) => ipc.askMeeting(...args),
   cancelGeneration: () => ipc.cancelGeneration(),
@@ -36,10 +38,14 @@ vi.mock("../../lib/ipc", async (importOriginal) => ({
 
 import { AskMeetingTab } from "./AskMeetingTab";
 import { useMeetingChat } from "../../hooks/useMeetingChat";
+import { useSourcesStore, DEFAULT_SOURCES_CONFIG } from "../../stores/sourcesStore";
+import { useConfigStore } from "../../stores/configStore";
+import { agentSessionKey, useAgentStore } from "../../stores/agentStore";
+import type { AgentSessionStatus } from "../../lib/types";
 
 function Harness({ trackSession = false }: { trackSession?: boolean }) {
   const chat = useMeetingChat("m1", { trackSession });
-  return <AskMeetingTab chat={chat} />;
+  return <AskMeetingTab chat={chat} meetingId="m1" />;
 }
 
 const saved: MeetingChatMessage[] = [
@@ -148,6 +154,8 @@ describe("AskMeetingTab", () => {
       model: "sonnet",
       detail: null,
       error_kind: null,
+      with_sources: false,
+      sources_notice: null,
       usage: { input_tokens: 0, output_tokens: 0, cost_usd: 0 },
     });
     act(() => emit("agent_session_status", status("starting")));
@@ -156,5 +164,79 @@ describe("AskMeetingTab", () => {
     expect(screen.getByText("Session starting…")).toBeInTheDocument();
     act(() => emit("agent_session_status", status("ready")));
     expect(await screen.findByText("Ready")).toBeInTheDocument();
+  });
+
+  it("past-meeting chat answers show activity while streaming, then chips and the notice", async () => {
+    let requestId = "";
+    ipc.askMeeting.mockImplementation((_m: string, _q: string, id: string) => {
+      requestId = id;
+      return new Promise<void>(() => {});
+    });
+    ipc.openSourceFile.mockResolvedValue(undefined);
+    render(<Harness />);
+    await screen.findByText("When do we ship?");
+    fireEvent.change(screen.getByRole("textbox", { name: /ask about this meeting/i }), { target: { value: "Who is Dana?" } });
+    fireEvent.click(screen.getByRole("button", { name: /send question/i }));
+    await waitFor(() => expect(ipc.askMeeting).toHaveBeenCalled());
+
+    act(() => {
+      emit("llm_stream_activity", {
+        request_id: "someone-else",
+        activity: { kind: "tool", label: "LEAK: tool", chip: { kind: "tool", label: "LEAK", path: null } },
+      });
+      emit("llm_stream_activity", {
+        request_id: requestId,
+        activity: { kind: "notice", label: "Mira did not start, so its tools are not available.", chip: null },
+      });
+      emit("llm_stream_activity", {
+        request_id: requestId,
+        activity: {
+          kind: "notes",
+          label: "Reading Dana.md",
+          chip: { kind: "notes", label: "Dana.md", path: "D:\\V\\Dana.md" },
+        },
+      });
+      emit("llm_stream_token", { token: "Dana is the PM.", request_id: requestId });
+    });
+    expect(await screen.findByText("Reading Dana.md")).toBeInTheDocument();
+    expect(screen.queryByText(/LEAK/)).toBeNull();
+    expect(screen.getByText("Mira did not start, so its tools are not available.")).toBeInTheDocument();
+
+    act(() => {
+      emit("llm_stream_end", { total_tokens: 5, latency_ms: 5, request_id: requestId, cancelled: false });
+    });
+    expect(screen.queryByText("Reading Dana.md")).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: /Dana\.md/ }));
+    expect(ipc.openSourceFile).toHaveBeenCalledWith("D:\\V\\Dana.md");
+    expect(screen.getByText("Mira did not start, so its tools are not available.")).toBeInTheDocument();
+  });
+  it("an answer that asked for sources says Loading your sources while that session starts", async () => {
+    ipc.askMeeting.mockImplementation(() => new Promise<void>(() => {}));
+    useConfigStore.setState({ llmProvider: "claude_cli" });
+    useSourcesStore.setState({
+      config: { ...DEFAULT_SOURCES_CONFIG, notes_folders: [{ id: "f", label: "Vault", path: "D:\V", enabled: true }] },
+      toggles: { notes: true, tools: false },
+    });
+    const starting = {
+      scope: "past",
+      meeting_id: "m1",
+      tier: "deep",
+      state: "starting",
+      model: "sonnet",
+      detail: null,
+      error_kind: null,
+      with_sources: true,
+      sources_notice: null,
+      usage: { input_tokens: 0, output_tokens: 0, cost_usd: 0 },
+    } as unknown as AgentSessionStatus;
+    useAgentStore.setState({ sessions: { [agentSessionKey(starting)]: starting } });
+    render(<Harness />);
+    await screen.findByText("When do we ship?");
+    fireEvent.change(screen.getByRole("textbox", { name: /ask about this meeting/i }), { target: { value: "Who is Dana?" } });
+    fireEvent.click(screen.getByRole("button", { name: /send question/i }));
+    expect(await screen.findByText("Loading your sources…")).toBeInTheDocument();
+    expect(screen.queryByText("Thinking…")).toBeNull();
+    useAgentStore.setState({ sessions: {} });
+    useSourcesStore.setState({ config: DEFAULT_SOURCES_CONFIG, toggles: { notes: false, tools: false } });
   });
 });

@@ -14,12 +14,12 @@
 //! Sessions are stored as `Arc<dyn SessionHandle>` and created by a
 //! [`SessionSpawner`], so the manager is testable without a process.
 
-use super::command::SessionConfig;
+use super::command::{SessionConfig, SourcesLaunch};
 use super::context::DeltaCursor;
 use super::detect::find_claude_binary;
 use super::models::{effective_effort, ModelCatalog};
 use super::protocol::{AgentErrorKind, ImageAttachment, TurnResult};
-use super::session::{AgentError, ClaudeSession};
+use super::session::{failed_mcp_servers, AgentError, ClaudeSession, InitInfo, SessionTimeouts};
 use crate::llm::provider::CancelToken;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -35,6 +35,12 @@ pub const PAST_IDLE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 pub const REAP_INTERVAL: Duration = Duration::from_secs(60);
 /// Tauri event carrying [`AgentSessionStatus`].
 pub const STATUS_EVENT: &str = "agent_session_status";
+/// How long a with-sources session may take to come up. MCP servers connect
+/// during start (`MCP_TIMEOUT` is 20 s) and `system/init` waits for them, so
+/// a slow server holds it up to that long; the plain session's 20 s would turn
+/// it into a launch error. Plain sessions keep [`SessionTimeouts::default`].
+/// A Check has its own, longer limit (`mcp_check::CHECK_INIT_TIMEOUT`).
+pub const SOURCES_INIT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// What a session is for.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -83,6 +89,26 @@ impl Tier {
 pub struct SessionKey {
     pub scope: SessionScope,
     pub tier: Tier,
+    /// The with-sources variant: runs beside the plain session of the same
+    /// scope and tier (notes folders and MCP tools, see `crate::sources`).
+    pub with_sources: bool,
+}
+
+impl SessionKey {
+    /// The plain session of `scope` and `tier`.
+    pub fn plain(scope: SessionScope, tier: Tier) -> Self {
+        Self { scope, tier, with_sources: false }
+    }
+
+    /// The with-sources session of `scope` and `tier`.
+    pub fn sources(scope: SessionScope, tier: Tier) -> Self {
+        Self { scope, tier, with_sources: true }
+    }
+
+    /// The other variant of the same scope and tier.
+    pub fn sibling(&self) -> Self {
+        Self { scope: self.scope.clone(), tier: self.tier, with_sources: !self.with_sources }
+    }
 }
 
 /// Claude CLI model settings (persisted by the settings UI).
@@ -224,6 +250,15 @@ pub struct AgentSessionStatus {
     /// `"not_logged_in"`, ...); set exactly when `detail` is.
     #[serde(default)]
     pub error_kind: Option<String>,
+    /// The with-sources session of the scope and tier (notes folders and MCP
+    /// tools), not the plain one.
+    #[serde(default)]
+    pub with_sources: bool,
+    /// For a running with-sources session that came up without something: the
+    /// servers that did not start and the sources left out ("Mira didn't
+    /// start, so its tools aren't available"). `None` when all is in.
+    #[serde(default)]
+    pub sources_notice: Option<String>,
     /// Cumulative usage of the whole scope (all tiers).
     pub usage: SessionUsage,
 }
@@ -234,6 +269,9 @@ pub struct SessionInit {
     pub system_prompt: String,
     /// Context messages appended (`shouldQuery:false`) right after spawn.
     pub preload: Vec<String>,
+    /// What a with-sources session launches with. `ensure` uses it only for a
+    /// `key.with_sources` key; a plain session ignores it.
+    pub sources: Option<SourcesLaunch>,
 }
 
 /// Streaming text callback. A named alias so `async_trait` leaves the
@@ -271,6 +309,11 @@ pub trait SessionHandle: Send + Sync {
     fn is_alive(&self) -> bool;
     async fn close(&self);
     fn model(&self) -> String;
+    /// The tools and MCP server states of the latest `system/init`. Empty for
+    /// a handle that has none (fakes).
+    fn init_info(&self) -> InitInfo {
+        InitInfo::default()
+    }
 }
 
 #[async_trait]
@@ -309,6 +352,10 @@ impl SessionHandle for ClaudeSession {
     fn model(&self) -> String {
         ClaudeSession::model(self).to_string()
     }
+
+    fn init_info(&self) -> InitInfo {
+        ClaudeSession::init_info(self)
+    }
 }
 
 /// Starts sessions for the manager.
@@ -331,7 +378,12 @@ impl SessionSpawner for ClaudeSpawner {
             .ok_or_else(|| {
                 AgentError::Spawn("Claude CLI not installed: claude.exe not found".into())
             })?;
-        Ok(Arc::new(ClaudeSession::spawn(bin, cfg).await?))
+        let timeouts = if cfg.sources.is_some() {
+            SessionTimeouts { init: SOURCES_INIT_TIMEOUT, ..SessionTimeouts::default() }
+        } else {
+            SessionTimeouts::default()
+        };
+        Ok(Arc::new(ClaudeSession::spawn_with_timeouts(bin, cfg, timeouts).await?))
     }
 }
 
@@ -388,6 +440,9 @@ struct Entry {
     in_flight: usize,
     /// Turns finished on this session (any outcome).
     turns: usize,
+    /// What a with-sources session came up without (see
+    /// [`AgentSessionStatus::sources_notice`]).
+    sources_notice: Option<String>,
 }
 
 pub struct AgentSessionManager {
@@ -475,6 +530,7 @@ impl AgentSessionManager {
             effort,
             system_prompt: init.system_prompt,
             thinking,
+            sources: if key.with_sources { init.sources.clone() } else { None },
         };
         let handle = match self.spawner.spawn(cfg).await {
             Ok(handle) => handle,
@@ -497,6 +553,14 @@ impl AgentSessionManager {
             return Err(shut_down_error());
         }
 
+        let sources_notice = match (&init.sources, key.with_sources) {
+            (Some(launch), true) => crate::sources::activity::sources_degraded_notice(
+                &launch.server_labels,
+                &failed_mcp_servers(&handle.init_info()),
+                &launch.left_out,
+            ),
+            _ => None,
+        };
         self.cursors.lock().unwrap().insert(
             key.clone(),
             Arc::new(AsyncMutex::new(DeltaCursor::default())),
@@ -510,6 +574,7 @@ impl AgentSessionManager {
                 last_used: Instant::now(),
                 in_flight: 0,
                 turns: 0,
+                sources_notice,
             },
         );
         self.emit(key, SessionState::Ready, &handle.model(), None);
@@ -565,7 +630,7 @@ impl AgentSessionManager {
         let on_delta: OnDelta = {
             let first_text = first_text.clone();
             Box::new(move |token: &str| {
-                if !token.is_empty() {
+                if !token.is_empty() && !crate::llm::cli_agent::session::is_activity(token) {
                     first_text.get_or_init(|| started.elapsed().as_millis() as u64);
                 }
                 on_delta(token)
@@ -659,16 +724,39 @@ impl AgentSessionManager {
     /// Close every tier of `scope` (meeting ended / left the meeting view). A
     /// session still starting for that scope is waited for and closed too.
     pub async fn close_scope(&self, scope: &SessionScope) {
+        for with_sources in [false, true] {
+            self.close_variant(scope, with_sources).await;
+        }
+        self.usage.lock().unwrap().remove(scope);
+    }
+
+    /// Close both tiers' with-sources sessions of `scope` and leave the plain
+    /// ones (the sources changed in settings; usage is kept).
+    pub async fn close_sources(&self, scope: &SessionScope) {
+        self.close_variant(scope, true).await;
+    }
+
+    async fn close_variant(&self, scope: &SessionScope, with_sources: bool) {
         for tier in [Tier::Fast, Tier::Deep] {
-            let key = SessionKey {
-                scope: scope.clone(),
-                tier,
-            };
+            let key = SessionKey { scope: scope.clone(), tier, with_sources };
             let lock = self.spawn_lock(&key);
             let _spawning = lock.lock().await;
             self.close_key(&key).await;
         }
-        self.usage.lock().unwrap().remove(scope);
+    }
+
+    /// Append `text` to `key`'s session context (`shouldQuery:false`) only if
+    /// that session is running: `Ok(false)` when there is none (never spawns).
+    pub async fn append_if_running(&self, key: &SessionKey, text: &str) -> Result<bool, AgentError> {
+        let handle = {
+            let entries = self.entries.lock().unwrap();
+            match entries.get(key) {
+                Some(entry) if entry.handle.is_alive() => entry.handle.clone(),
+                _ => return Ok(false),
+            }
+        };
+        handle.append_context(text).await?;
+        Ok(true)
     }
 
     /// Close every session (app exit). Sessions still starting are closed as
@@ -708,6 +796,11 @@ impl AgentSessionManager {
             log::info!("closing idle Claude session for {:?}", key.scope);
             self.close_removed(&key, entry).await;
         }
+    }
+
+    /// What `key`'s running with-sources session came up without, if anything.
+    pub fn sources_notice(&self, key: &SessionKey) -> Option<String> {
+        self.entries.lock().unwrap().get(key).and_then(|e| e.sources_notice.clone())
     }
 
     /// Turns finished on `key`'s current session (0 when none is running).
@@ -800,6 +893,8 @@ impl AgentSessionManager {
             model: model.to_string(),
             detail: error.as_ref().map(|e| e.text.clone()),
             error_kind: error.map(|e| e.kind.as_str().to_string()),
+            with_sources: key.with_sources,
+            sources_notice: self.sources_notice(key),
             usage: self.usage(&key.scope),
         }
     }
@@ -924,7 +1019,17 @@ mod tests {
                 // Still in flight across a scheduler turn.
                 tokio::task::yield_now().await;
             }
-            if prompt == "slow" {
+            if prompt == "activity-slow" {
+                // A tool use first, text 30 ms later.
+                let tool = crate::llm::cli_agent::protocol::ToolUse {
+                    id: "t1".into(),
+                    name: "Grep".into(),
+                    input: serde_json::json!({"pattern": "x"}),
+                };
+                on_delta(&crate::llm::cli_agent::session::encode_activity(&tool));
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                on_delta("a");
+            } else if prompt == "slow" {
                 // Thinks, then answers 30 ms in and finishes 60 ms in.
                 on_delta(crate::llm::cli_agent::session::THINKING_SIGNAL);
                 tokio::time::sleep(Duration::from_millis(30)).await;
@@ -963,6 +1068,8 @@ mod tests {
     struct FakeSpawner {
         spawned: Mutex<Vec<(SessionConfig, Arc<FakeSession>)>>,
         calls: AtomicUsize,
+        /// Refuse to start a with-sources session.
+        fail_sources: AtomicBool,
     }
 
     #[async_trait]
@@ -970,6 +1077,9 @@ mod tests {
         async fn spawn(&self, cfg: SessionConfig) -> Result<Arc<dyn SessionHandle>, AgentError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             tokio::task::yield_now().await;
+            if cfg.sources.is_some() && self.fail_sources.load(Ordering::SeqCst) {
+                return Err(AgentError::Spawn("MCP server mira failed to start".into()));
+            }
             let s = Arc::new(FakeSession {
                 model: cfg.model.clone(),
                 alive: AtomicBool::new(true),
@@ -1013,13 +1123,14 @@ mod tests {
     }
 
     fn key(scope: SessionScope, tier: Tier) -> SessionKey {
-        SessionKey { scope, tier }
+        SessionKey::plain(scope, tier)
     }
 
     fn init(preload: &[&str]) -> SessionInit {
         SessionInit {
             system_prompt: "sp".into(),
             preload: preload.iter().map(|s| s.to_string()).collect(),
+            sources: None,
         }
     }
 
@@ -1124,6 +1235,8 @@ mod tests {
             model: "haiku".into(),
             detail: None,
             error_kind: None,
+            with_sources: true,
+            sources_notice: None,
             usage: SessionUsage {
                 input_tokens: 1,
                 output_tokens: 2,
@@ -1148,6 +1261,154 @@ mod tests {
         assert_eq!(v["usage"]["last_latency_ms"], 0);
         assert_eq!(v["usage"]["last_request_at_ms"], 5);
         assert!(v["error_kind"].is_null());
+        assert_eq!(v["with_sources"], true);
+    }
+
+    #[test]
+    fn old_status_payload_defaults_with_sources_false() {
+        let old = r#"{"scope":"live","meeting_id":"m1","tier":"fast","state":"ready","model":"haiku","detail":null,"usage":{}}"#;
+        let s: AgentSessionStatus = serde_json::from_str(old).unwrap();
+        assert!(!s.with_sources);
+    }
+
+    fn seg(id: &str, text: &str) -> crate::llm::cli_agent::context::Seg {
+        crate::llm::cli_agent::context::Seg {
+            id: id.into(),
+            text: text.into(),
+            speaker: "Them".into(),
+            timestamp_ms: 1,
+        }
+    }
+
+    fn launch() -> SourcesLaunch {
+        SourcesLaunch {
+            add_dirs: vec!["D:/vault".into()],
+            allowed_tools: vec!["Read".into()],
+            ..Default::default()
+        }
+    }
+
+    fn init_with_sources() -> SessionInit {
+        SessionInit { sources: Some(launch()), ..init(&[]) }
+    }
+
+    #[test]
+    fn session_key_variants() {
+        let live = SessionScope::Live("m".into());
+        let plain = SessionKey::plain(live.clone(), Tier::Fast);
+        let sources = SessionKey::sources(live, Tier::Fast);
+        assert!(!plain.with_sources && sources.with_sources);
+        assert_eq!(plain.sibling(), sources);
+        assert_eq!(sources.sibling(), plain);
+        assert_ne!(plain, sources);
+    }
+
+    #[tokio::test]
+    async fn ensure_passes_sources_only_for_with_sources_keys() {
+        let (mgr, spawner, _) = setup();
+        let live = SessionScope::Live("m".into());
+        mgr.ensure(&SessionKey::plain(live.clone(), Tier::Fast), init_with_sources()).await.unwrap();
+        mgr.ensure(&SessionKey::sources(live, Tier::Fast), init_with_sources()).await.unwrap();
+        let spawned = spawner.spawned.lock().unwrap();
+        assert!(spawned[0].0.sources.is_none());
+        assert_eq!(spawned[1].0.sources, Some(launch()));
+    }
+
+    #[tokio::test]
+    async fn plain_and_sources_sessions_are_independent() {
+        let (mgr, spawner, _) = setup();
+        let live = SessionScope::Live("m".into());
+        let plain = SessionKey::plain(live.clone(), Tier::Fast);
+        let sources = SessionKey::sources(live, Tier::Fast);
+        mgr.ensure(&plain, init_with_sources()).await.unwrap();
+        mgr.ensure(&sources, init_with_sources()).await.unwrap();
+        assert_eq!(spawner.calls.load(Ordering::SeqCst), 2);
+        let segs = [seg("s1", "hello")];
+        assert_eq!(mgr.cursor(&plain).await.take_new(&segs).len(), 1);
+        // The with-sources cursor has not seen it.
+        assert_eq!(mgr.cursor(&sources).await.take_new(&segs).len(), 1);
+        assert_eq!(mgr.cursor(&plain).await.take_new(&segs).len(), 0);
+        mgr.ask(&plain, "hi", no_delta(), Arc::new(CancelToken::new())).await.unwrap();
+        assert_eq!(mgr.turns(&plain), 1);
+        assert_eq!(mgr.turns(&sources), 0);
+    }
+
+    #[tokio::test]
+    async fn close_scope_closes_all_four_and_close_sources_only_sources() {
+        let (mgr, _, _) = setup();
+        let live = SessionScope::Live("m".into());
+        let keys = [
+            SessionKey::plain(live.clone(), Tier::Fast),
+            SessionKey::plain(live.clone(), Tier::Deep),
+            SessionKey::sources(live.clone(), Tier::Fast),
+            SessionKey::sources(live.clone(), Tier::Deep),
+        ];
+        for k in &keys {
+            mgr.ensure(k, init_with_sources()).await.unwrap();
+        }
+        mgr.close_sources(&live).await;
+        let left: Vec<_> = mgr.snapshot().into_iter().map(|s| (s.tier, s.with_sources)).collect();
+        assert_eq!(left, vec![("fast".to_string(), false), ("deep".to_string(), false)]);
+        for k in &keys[2..] {
+            mgr.ensure(k, init_with_sources()).await.unwrap();
+        }
+        mgr.close_scope(&live).await;
+        assert!(mgr.snapshot().is_empty());
+    }
+
+    #[tokio::test]
+    async fn sources_spawn_failure_leaves_plain_session_ready() {
+        let (mgr, spawner, sink) = setup();
+        spawner.fail_sources.store(true, Ordering::SeqCst);
+        let live = SessionScope::Live("m".into());
+        let plain = SessionKey::plain(live.clone(), Tier::Fast);
+        let sources = SessionKey::sources(live, Tier::Fast);
+        mgr.ensure(&plain, init_with_sources()).await.unwrap();
+        assert!(mgr.ensure(&sources, init_with_sources()).await.is_err());
+        let errors: Vec<_> = sink.0.lock().unwrap().iter().filter(|s| s.state == "error").cloned().collect();
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].with_sources && errors[0].detail.as_deref().unwrap().contains("mira"));
+        let snap = mgr.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert_eq!((snap[0].state.as_str(), snap[0].with_sources), ("ready", false));
+        let turn = mgr.ask(&plain, "hello", no_delta(), Arc::new(CancelToken::new())).await.unwrap();
+        assert_eq!(turn.text, "hello");
+    }
+
+    #[tokio::test]
+    async fn append_if_running_never_spawns() {
+        let (mgr, spawner, _) = setup();
+        let k = SessionKey::plain(SessionScope::Live("m".into()), Tier::Fast);
+        assert_eq!(mgr.append_if_running(&k, "x").await, Ok(false));
+        assert_eq!(spawner.calls.load(Ordering::SeqCst), 0);
+        mgr.ensure(&k, init(&[])).await.unwrap();
+        assert_eq!(mgr.append_if_running(&k, "shared answer").await, Ok(true));
+        let spawned = spawner.spawned.lock().unwrap();
+        assert_eq!(*spawned[0].1.appended.lock().unwrap(), vec!["shared answer"]);
+        assert_eq!(spawner.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_with_sources_session_reports_what_was_left_out() {
+        let (mgr, _, sink) = setup();
+        let k = SessionKey::sources(SessionScope::Live("m".into()), Tier::Fast);
+        let launch = SourcesLaunch { left_out: vec!["Vault: folder not found".into()], ..launch() };
+        mgr.ensure(&k, SessionInit { sources: Some(launch), ..init(&[]) }).await.unwrap();
+        assert_eq!(mgr.sources_notice(&k).as_deref(), Some("Left out: Vault: folder not found"));
+        let ready = sink.0.lock().unwrap().iter().find(|s| s.state == "ready").cloned().unwrap();
+        assert_eq!(ready.sources_notice.as_deref(), Some("Left out: Vault: folder not found"));
+        assert_eq!(mgr.snapshot()[0].sources_notice, ready.sources_notice);
+        // A session with everything in, and a plain one, carry none.
+        let plain = SessionKey::plain(SessionScope::Live("m".into()), Tier::Fast);
+        mgr.ensure(&plain, init_with_sources()).await.unwrap();
+        assert_eq!(mgr.sources_notice(&plain), None);
+    }
+
+    #[test]
+    fn sources_init_timeout_is_longer_than_a_hung_servers_failure() {
+        // `system/init` waits for a hung MCP server up to MCP_TIMEOUT (20 s).
+        assert_eq!(SOURCES_INIT_TIMEOUT, Duration::from_secs(60));
+        assert!(SOURCES_INIT_TIMEOUT > SessionTimeouts::default().init);
     }
 
     #[tokio::test]
@@ -1272,6 +1533,21 @@ mod tests {
         assert_eq!(snap[0].state, "error");
         assert!(snap[0].detail.as_deref().unwrap().contains("boom"));
         assert_eq!(snap[0].error_kind.as_deref(), Some("crashed"));
+    }
+
+    #[tokio::test]
+    async fn ask_first_text_ignores_activity() {
+        let (mgr, _spawner, _sink) = setup();
+        let k = key(SessionScope::Live("act".into()), Tier::Fast);
+        mgr.ensure(&k, init(&[])).await.unwrap();
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let sink = seen.clone();
+        let on_delta: OnDelta = Box::new(move |t: &str| sink.lock().unwrap().push(t.to_string()));
+        let turn = mgr.ask(&k, "activity-slow", on_delta, Arc::new(CancelToken::new())).await.unwrap();
+        // The activity token reached the caller, but the first-text clock waited for "a".
+        assert!(crate::llm::cli_agent::session::is_activity(&seen.lock().unwrap()[0]));
+        let first = turn.first_text_ms.expect("text arrived");
+        assert!(first >= 25, "first text counted at {first} ms");
     }
 
     #[tokio::test]

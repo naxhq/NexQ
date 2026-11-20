@@ -30,6 +30,8 @@ import { useStreamStore } from "../stores/streamStore";
 import { useAIActionsStore } from "../stores/aiActionsStore";
 import { useQuestionStore } from "../stores/questionStore";
 import { useToastStore } from "../stores/toastStore";
+import { useConfigStore } from "../stores/configStore";
+import { DEFAULT_SOURCES_CONFIG, useSourcesStore } from "../stores/sourcesStore";
 import { resetMeetingScopedStores } from "../stores/resetMeeting";
 import { useTranscriptStore } from "../stores/transcriptStore";
 import type { GlobalDefaults, TranscriptSegment, TurnSignal } from "../lib/types";
@@ -441,5 +443,60 @@ describe("QuestionDetector", () => {
 
     act(() => useTranscriptStore.setState({ segments: [seg("So here's the situation. What would you do?")] }));
     expect(screen.getByText(/What would you do\?/)).toBeTruthy();
+  });
+});
+
+describe("Personal sources and automatic answers", () => {
+  const providerBefore = useConfigStore.getState().llmProvider;
+
+  /** Claude subscription, a notes folder and a ready tool, both pills on. */
+  function bothPillsOn() {
+    useConfigStore.setState({ llmProvider: "claude_cli" });
+    useSourcesStore.setState({
+      config: {
+        ...DEFAULT_SOURCES_CONFIG,
+        notes_folders: [{ id: "f1", label: "Vault", path: "D:\Vault", enabled: true }],
+        mcp_servers: [
+          {
+            id: "s1", key: "mira", label: "Mira", enabled: true, needs_sign_in: false, env: [],
+            transport: { type: "stdio", command: "node", args: [] },
+            tools: [{ name: "person_brief", full_name: "mcp__mira__person_brief", allowed: true }],
+            last_check: { ok: true, tool_count: 1, error: null, checked_at_ms: 1 },
+          },
+        ],
+      },
+      toggles: { notes: true, tools: true },
+    });
+  }
+
+  afterEach(() => {
+    useConfigStore.setState({ llmProvider: providerBefore });
+    useSourcesStore.setState({ config: DEFAULT_SOURCES_CONFIG, toggles: { notes: false, tools: false } });
+  });
+
+  it("Auto-Answer never sends sources, even with both pills on", async () => {
+    vi.useFakeTimers();
+    setAutoTrigger(true);
+    bothPillsOn();
+    render(<QuestionDetector />);
+    send(turnLine("Thanks. What would you do first?", "end"));
+    await settle();
+    expect(askedFor()).toEqual(["What would you do first?"]);
+    const opts = vi.mocked(runUserAction).mock.calls[0][2] as Record<string, unknown>;
+    expect(opts).not.toHaveProperty("sources");
+  });
+
+  it("clicking a question card is your own request, so it sends the pills that are on", async () => {
+    vi.useFakeTimers();
+    setAutoTrigger(false);
+    bothPillsOn();
+    useQuestionStore.getState().addQuestion(
+      { text: "Which database did you pick?", confidence: 1, timestamp_ms: 1, source: "Them" }, "them_old");
+    render(<QuestionDetector />);
+    fireEvent.click(screen.getByText(/Which database did you pick\?/));
+    await settle();
+    expect(vi.mocked(runUserAction)).toHaveBeenCalledWith(
+      "Assist", "Which database did you pick?", { sources: { notes: true, tools: true } },
+    );
   });
 });

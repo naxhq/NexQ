@@ -18,6 +18,7 @@ vi.mock("../lib/events", () => ({
   onStreamToken: register("token"),
   onStreamEnd: register("end"),
   onStreamSources: register("sources"),
+  onStreamActivity: register("activity"),
   onStreamError: register("error"),
   onStreamThinking: register("thinking"),
 }));

@@ -32,8 +32,10 @@ import {
   Radio,
   Play,
   FlaskConical,
+  BookOpen,
 } from "lucide-react";
 import { LauncherStealthButton } from "./LauncherStealthButton";
+import { PersonalSourcesEditor } from "../sources/PersonalSourcesEditor";
 
 // ── Favorites (localStorage) ──
 
@@ -514,6 +516,16 @@ export function LauncherView() {
                 </div>
               </div>
             )}
+
+            {/* Personal sources: notes folders and MCP servers the AI can use when you ask */}
+            <div className="dash-section-enter flex items-center gap-2 pt-3">
+              <BookOpen className="h-3 w-3 text-muted-foreground/60" />
+              <span className="text-meta font-semibold uppercase tracking-wider text-muted-foreground/60">
+                Personal sources
+              </span>
+              <div className="flex-1 border-t border-border/20" />
+            </div>
+            <PersonalSourcesEditor variant="compact" />
 
           </div>
         </div>

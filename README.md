@@ -200,6 +200,17 @@ DeepL, Google, Microsoft, any configured LLM, and OPUS-MT (offline, local models
 
 </details>
 
+## Personal sources
+
+Let the AI look things up in your own notes and tools while it answers you in a meeting or in a past-meeting chat, for example "who is Dana and what is open with her?".
+
+- **Claude subscription only.** Notes and tools work when the Claude CLI (your Claude subscription) is the AI provider. With any other provider your sources stay saved but are not used, and the app says so.
+- **Notes folders.** Add one or more folders of `.md` files, such as an Obsidian vault. The AI can search and read them. It cannot change them, and nothing is copied or indexed. A folder that holds your whole user folder, your Claude sign-in files or NexQ's own private files is refused.
+- **Tool servers (MCP).** Add servers by pasting the `mcpServers` JSON from a server's README, filling in a form, or importing them from Claude Code. A new server starts off, is checked right away, and shows its tools. Command and URL servers are supported. Servers that need an OAuth sign-in are not supported yet.
+- **Tool permissions.** Each tool has its own switch. Tools whose names suggest they change something (add, send, edit, delete) start off, and you should still read the list. A tool you leave off is never allowed.
+- **You choose per answer.** In the overlay and in past-meeting chat, the Notes and Tools pills decide whether an answer you ask for may use them. The pills stay as you left them. Automatic answers (detected questions, summaries, action items, bookmark suggestions) never use your sources. Looking things up can add a few seconds.
+- **Privacy.** Secret values (API keys, tokens, header values) are kept in the OS credential store, not in the settings file. While a session runs, they sit in a private file that is deleted as soon as the session has started. Your notes and tool results go to Claude as part of the answer, like the transcript does, so only add sources you are happy to share with it. NexQ tells the AI to treat text from notes, mail and tools as information, not as instructions, and limits what it may call, but a model can still be fooled by text it reads. Images in answers are never loaded.
+
 ## Privacy
 
 - **Nothing leaves your machine unless you choose a cloud provider.** With a local STT engine and a local LLM, NexQ works offline.
