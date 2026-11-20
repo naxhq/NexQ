@@ -51,25 +51,6 @@ describe("transcriptStore upsert", () => {
   });
 });
 
-describe("finalizing one side", () => {
-  beforeEach(() => useTranscriptStore.getState().clearSegments());
-
-  it("finishes the open lines of that speaker only", () => {
-    const { updateInterimSegment, finalizeSideInterim } = useTranscriptStore.getState();
-    updateInterimSegment({ ...seg("Sure thing", false, "you_1_acc_1"), speaker: "User" });
-    updateInterimSegment(seg("We ship", true));
-    updateInterimSegment(seg("We ship today", false));
-    updateInterimSegment(seg("and then", false, "them_1_acc_2"));
-    finalizeSideInterim("Them");
-    const lines = useTranscriptStore.getState().segments;
-    expect(lines.map((s) => [s.id, s.text, s.is_final, s.pending_text])).toEqual([
-      ["you_1_acc_1", "Sure thing", false, undefined],
-      ["them_1_acc_1", "We ship today", true, undefined],
-      ["them_1_acc_2", "and then", true, undefined],
-    ]);
-  });
-});
-
 describe("interim lifetime", () => {
   const you = (text: string, is_final = false) => seg(text, is_final, "you_1_acc_1");
   const texts = () => useTranscriptStore.getState().segments.map((s) => s.text);

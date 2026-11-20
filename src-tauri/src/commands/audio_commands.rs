@@ -9,7 +9,7 @@ use crate::audio::device_manager;
 use crate::audio::recording_mixer::{wall_clock_ms, CaptureTimes, MixSide, RecordingMixer};
 use crate::audio::session_monitor;
 use crate::audio::vad::{calculate_peak, calculate_rms, VoiceActivityDetector};
-use crate::audio::side_swap::{self, Side, SideSwapMsg, SwapOutcome, SwapSignal};
+use crate::audio::side_swap::{self, Side, SideSwapMsg, SwapSignal, Tagged};
 use crate::audio::{AudioCaptureManager, AudioLevel, AudioSource};
 use crate::stt::provider::STTProvider;
 use crate::stt::segment_accumulator::AccumulatorOutput;
@@ -1173,10 +1173,12 @@ pub async fn start_capture_per_party(
     }
 
     // Start STT streams
-    let (you_stt_tx, mut you_stt_rx) =
-        mpsc::channel::<crate::stt::provider::TranscriptResult>(256);
-    let (them_stt_tx, mut them_stt_rx) =
-        mpsc::channel::<crate::stt::provider::TranscriptResult>(256);
+    // Each side's results arrive tagged with the generation of the provider that made
+    // them (a side's provider can be swapped alone, see audio::side_swap).
+    let (you_stt_tx, mut you_stt_rx) = mpsc::channel::<Tagged>(256);
+    let (them_stt_tx, mut them_stt_rx) = mpsc::channel::<Tagged>(256);
+    let you_signal = Arc::new(SwapSignal::default());
+    let them_signal = Arc::new(SwapSignal::default());
 
     let mut you_stt_provider = you_stt;
     let mut them_stt_provider = them_stt;
@@ -1190,7 +1192,7 @@ pub async fn start_capture_per_party(
         crate::stt::emit_stt_debug(&app, "info", "stt",
             &format!("Starting 'You' STT ({})", you.stt_provider));
         provider.set_muted(you_muted_at_start);
-        match provider.start_stream(you_stt_tx.clone()).await {
+        match provider.start_stream(you_signal.attach(&you_stt_tx)).await {
             Ok(()) => {
                 log::info!("'You' party STT started ({})", you.stt_provider);
                 crate::stt::emit_stt_debug(&app, "info", "stt",
@@ -1215,7 +1217,7 @@ pub async fn start_capture_per_party(
         crate::stt::emit_stt_debug(&app, "info", "stt",
             &format!("Starting 'Them' STT ({})", them.stt_provider));
         provider.set_muted(them_muted_at_start);
-        match provider.start_stream(them_stt_tx.clone()).await {
+        match provider.start_stream(them_signal.attach(&them_stt_tx)).await {
             Ok(()) => {
                 log::info!("'Them' party STT started ({})", them.stt_provider);
                 crate::stt::emit_stt_debug(&app, "info", "stt",
@@ -1235,11 +1237,6 @@ pub async fn start_capture_per_party(
             }
         }
     }
-
-    // Told when a side's provider is swapped alone (set_party_language): the side's
-    // open line ends, and the new provider's own segment ids don't reuse the old one's.
-    let you_signal = Arc::new(SwapSignal::default());
-    let them_signal = Arc::new(SwapSignal::default());
 
     // Unique session prefix to avoid segment ID collisions across mid-meeting restarts.
     // Each restart of start_capture_per_party gets a distinct prefix, so segment IDs
@@ -1305,31 +1302,37 @@ pub async fn start_capture_per_party(
             } else {
                 // Direct path: web_speech / whisper_cpp handle their own segmentation
                 let mut counter = 0u64;
-                while let Some(result) = you_stt_rx.recv().await {
-                    tally.record(result.is_final);
-                    let prefix = side_swap::generation_prefix(&prefix, you_signal_for_task.generation());
-                    let seg_id = if let Some(ref custom_id) = result.segment_id {
-                        format!("you_{}_{}", prefix, custom_id)
-                    } else {
-                        if result.is_final {
-                            counter += 1;
-                        }
-                        if result.is_final {
-                            format!("you_{}_{}", prefix, counter)
+                side_swap::pump_direct(
+                    &mut you_stt_rx,
+                    &you_signal_for_task,
+                    |result| tally.record(result.is_final),
+                    |generation, result| {
+                        // A swapped provider's ids carry its generation, so they can't reuse the old one's.
+                        let prefix = side_swap::generation_prefix(&prefix, generation);
+                        let seg_id = if let Some(ref custom_id) = result.segment_id {
+                            format!("you_{}_{}", prefix, custom_id)
                         } else {
-                            format!("you_{}_{}", prefix, counter + 1)
-                        }
-                    };
-                    let event_name = if result.is_final {
-                        "transcript_final"
-                    } else {
-                        "transcript_update"
-                    };
-                    let payload = serde_json::json!({
-                        "segment": result_segment_json(&seg_id, "User", &result)
-                    });
-                    let _ = stt_app.emit(event_name, &payload);
-                }
+                            if result.is_final {
+                                counter += 1;
+                            }
+                            if result.is_final {
+                                format!("you_{}_{}", prefix, counter)
+                            } else {
+                                format!("you_{}_{}", prefix, counter + 1)
+                            }
+                        };
+                        let event_name = if result.is_final {
+                            "transcript_final"
+                        } else {
+                            "transcript_update"
+                        };
+                        let payload = serde_json::json!({
+                            "segment": result_segment_json(&seg_id, "User", &result)
+                        });
+                        let _ = stt_app.emit(event_name, &payload);
+                    },
+                )
+                .await;
             }
         });
     }
@@ -2546,7 +2549,9 @@ pub async fn set_source_muted(
 /// Returns `true` when the side was restarted, `false` when nothing was done and
 /// the caller has to do a full `start_capture_per_party` (no capture running, the
 /// side has no Rust provider, or the loop is gone). A new Auto-detect refusal is
-/// an error that starts with "Auto-detect doesn't work with", before anything is stopped.
+/// an error that starts with "Auto-detect doesn't work with", before anything is stopped;
+/// a new provider that fails to start is another error, after the side's old one has
+/// stopped, and the caller restarts the whole capture.
 #[command]
 pub async fn set_party_language(
     app: AppHandle,
@@ -2596,28 +2601,24 @@ pub async fn set_party_language(
         "[{}] Language change: restarting only this side's STT ({})",
         role, config.stt_provider
     ));
-    match side_swap::swap_side_provider(&sender, side, provider, &muted_flag).await {
-        SwapOutcome::Swapped => {
+    let answer = side_swap::swap_side_provider(&sender, side, provider, &muted_flag)
+        .await
+        .into_answer();
+    match &answer {
+        Ok(true) => {
             log::info!("'{}' STT restarted for a language change", label);
             crate::stt::emit_stt_debug(&app, "info", "stt",
                 &format!("'{}' STT restarted: {}", label, config.stt_provider));
-            Ok(true)
         }
-        SwapOutcome::StartFailed(e) => {
+        // The side has no STT now: the caller restarts the whole capture.
+        Err(e) => {
             log::warn!("Failed to restart '{}' STT: {}", label, e);
             crate::stt::emit_stt_debug(&app, "error", "stt",
-                &format!("'{}' STT failed to start: {}", label, e));
-            let _ = app.emit("stt_connection_status", serde_json::json!({
-                "provider": config.stt_provider,
-                "party": label,
-                "status": "error",
-                "message": format!("Failed to start STT: {}", e)
-            }));
-            // Like at a start: the side goes without STT, the meeting carries on.
-            Ok(true)
+                &format!("'{}' STT failed to restart ({}): restarting the capture", label, e));
         }
-        SwapOutcome::NotRunning => Ok(false),
+        Ok(false) => {}
     }
+    answer
 }
 
 /// Get the current mute status for both sources.

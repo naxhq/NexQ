@@ -123,8 +123,6 @@ export function useAudioConfigSync() {
           try {
             log("info", "config", `Language change: restarting only the ${side} side's STT...`);
             swapped = await setPartyLanguage(side, latestConfig[side], { skipYouStt: youSkipped });
-            // Rust ended the side's open line; lines the provider left open on screen end too.
-            if (swapped) useTranscriptStore.getState().finalizeSideInterim(side === "you" ? "User" : "Them");
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             // A refusal would be the same for a full swap, and nothing was stopped.

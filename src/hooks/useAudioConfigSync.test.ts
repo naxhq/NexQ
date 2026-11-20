@@ -5,7 +5,6 @@ import { setPartyLanguage, startCapturePerParty, stopCapture } from "../lib/ipc"
 import type { MeetingAudioConfig } from "../lib/types";
 import { useConfigStore } from "../stores/configStore";
 import { useMeetingStore } from "../stores/meetingStore";
-import { useTranscriptStore } from "../stores/transcriptStore";
 import { autoDetectProblem } from "../lib/sttLanguages";
 import { useAudioConfigSync } from "./useAudioConfigSync";
 
@@ -163,21 +162,6 @@ it("restarts only one side's speech-to-text for a language-only change", async (
   expect(setPartyLanguage).toHaveBeenCalledTimes(2);
 });
 
-it("ends the swapped side's open line on screen and leaves the other side's alone", async () => {
-  const line = (id: string, speaker: "User" | "Them") => ({
-    id, text: id, speaker, timestamp_ms: 1, is_final: false, confidence: 1,
-  });
-  useTranscriptStore.getState().clearSegments();
-  useTranscriptStore.getState().updateInterimSegment(line("you_1_acc_1", "User"));
-  useTranscriptStore.getState().updateInterimSegment(line("them_1_acc_1", "Them"));
-  renderHook(() => useAudioConfigSync());
-
-  await change(spanishThem);
-  const lines = useTranscriptStore.getState().segments;
-  expect(lines.map((s) => [s.id, s.is_final])).toEqual([["you_1_acc_1", false], ["them_1_acc_1", true]]);
-  useTranscriptStore.getState().clearSegments();
-});
-
 it("tells Rust the room is an in-person meeting's other side", async () => {
   useMeetingStore.setState({ audioMode: "in_person" });
   renderHook(() => useAudioConfigSync());
@@ -209,6 +193,21 @@ it("restarts the whole capture when both sides' languages change at once", async
     them: { ...config.them, language: "es-ES" },
   });
   expect(setPartyLanguage).not.toHaveBeenCalled();
+  expect(startCapturePerParty).toHaveBeenCalledTimes(1);
+});
+
+it("restarts the whole capture when the replacement provider can't start", async () => {
+  vi.mocked(startCapturePerParty).mockResolvedValue(undefined);
+  vi.mocked(setPartyLanguage).mockRejectedValueOnce("Failed to start STT: no connection");
+  renderHook(() => useAudioConfigSync());
+
+  await change(spanishThem);
+  expect(setPartyLanguage).toHaveBeenCalledTimes(1);
+  expect(startCapturePerParty).toHaveBeenCalledTimes(1);
+  expect(startCapturePerParty).toHaveBeenLastCalledWith(spanishThem.you, spanishThem.them, { skipYouStt: false });
+  expect(emit).not.toHaveBeenCalled();
+  // The full restart brought the new language up: it is what runs now.
+  await change(spanishThem);
   expect(startCapturePerParty).toHaveBeenCalledTimes(1);
 });
 
