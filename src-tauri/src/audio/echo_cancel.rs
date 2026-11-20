@@ -57,6 +57,10 @@ pub struct EchoCanceller {
     /// Fewest reference frames queued at a mic frame since the last check.
     fewest_queued: usize,
     mic_frames: u64,
+    /// Times the reference ran out, and times excess reference was dropped
+    /// (for the audio stats log).
+    refills: u64,
+    trims: u64,
 }
 
 impl EchoCanceller {
@@ -77,6 +81,8 @@ impl EchoCanceller {
             refilling: true,
             fewest_queued: usize::MAX,
             mic_frames: 0,
+            refills: 0,
+            trims: 0,
         }
     }
 
@@ -86,6 +92,7 @@ impl EchoCanceller {
         if self.reference.len() > MAX_QUEUED {
             let excess = self.reference.len() - CUSHION * FRAME;
             self.reference.drain(..excess);
+            self.trims += 1;
         }
     }
 
@@ -112,6 +119,9 @@ impl EchoCanceller {
     fn next_reference(&mut self) -> [i16; FRAME] {
         let queued = self.reference.len() / FRAME;
         if queued == 0 {
+            if !self.refilling {
+                self.refills += 1;
+            }
             self.refilling = true;
         } else if self.refilling && queued >= CUSHION {
             self.refilling = false;
@@ -123,6 +133,7 @@ impl EchoCanceller {
             if !self.refilling && self.fewest_queued > TOO_MANY {
                 let excess = (self.fewest_queued - CUSHION) * FRAME;
                 self.reference.drain(..excess);
+                self.trims += 1;
             }
             self.fewest_queued = usize::MAX;
         }
@@ -134,6 +145,11 @@ impl EchoCanceller {
             }
         }
         frame
+    }
+
+    /// How often the reference ran out and how often excess was dropped.
+    pub fn queue_stats(&self) -> (u64, u64) {
+        (self.refills, self.trims)
     }
 
     /// The mic audio still held back, unprocessed (when cancellation is
@@ -159,6 +175,11 @@ pub struct MicEchoFilter {
 impl MicEchoFilter {
     pub fn new() -> Self {
         Self { canceller: None }
+    }
+
+    /// Reference queue refills and trims so far, once cancellation has run.
+    pub fn queue_stats(&self) -> Option<(u64, u64)> {
+        self.canceller.as_ref().map(EchoCanceller::queue_stats)
     }
 
     pub fn reference(&mut self, enabled: bool, samples: &[i16]) {
@@ -658,6 +679,7 @@ mod tests {
             aec.push_reference(chunk);
             assert!(aec.reference.len() <= MAX_QUEUED, "{}", aec.reference.len());
         }
+        assert!(aec.queue_stats().1 >= 1, "the excess was dropped");
 
         let mic = speechlike(4, SAMPLE_RATE * 5, 3000.0);
         let mut settled = None;
@@ -673,6 +695,21 @@ mod tests {
             }
         }
         assert!(settled.is_some(), "ran past the first check");
+    }
+
+    #[test]
+    fn counts_refills_and_trims() {
+        let mut aec = EchoCanceller::new();
+        assert_eq!(aec.queue_stats(), (0, 0));
+        // The output goes quiet after a while: the queue runs out once.
+        for _ in 0..40 {
+            aec.push_reference(&[100; FRAME]);
+            aec.process_mic(&[100; FRAME]);
+        }
+        for _ in 0..40 {
+            aec.process_mic(&[100; FRAME]);
+        }
+        assert_eq!(aec.queue_stats().0, 1, "ran out once");
     }
 
     #[test]
