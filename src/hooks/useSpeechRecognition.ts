@@ -15,7 +15,7 @@ import { emit } from "@tauri-apps/api/event";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useTranscriptStore } from "../stores/transcriptStore";
 import { useConfigStore } from "../stores/configStore";
-import { AUTO_STT_LANGUAGE } from "../lib/sttLanguages";
+import { AUTO_STT_LANGUAGE, sideLanguage } from "../lib/sttLanguages";
 import { pushTranscript, ensureIpolicyOverride } from "../lib/ipc";
 
 // Web Speech API types (not in all TS libs)
@@ -72,6 +72,13 @@ function getSpeakerLabel(cfg: ReturnType<typeof useConfigStore.getState>["meetin
   return "User";
 }
 
+/** The language Web Speech recognises: that of the side it transcribes, else the shared one. */
+function webSpeechLanguage(state: ReturnType<typeof useConfigStore.getState>): string {
+  const cfg = state.meetingAudioConfig;
+  const side = cfg ? (getSpeakerLabel(cfg) === "Them" ? cfg.them : cfg.you) : null;
+  return sideLanguage(side, state.sttLanguage);
+}
+
 /**
  * Hook that runs browser-native speech recognition while a meeting is active.
  * Speaker label is determined by which party has web_speech configured —
@@ -79,7 +86,8 @@ function getSpeakerLabel(cfg: ReturnType<typeof useConfigStore.getState>["meetin
  */
 export function useSpeechRecognition() {
   const isRecording = useMeetingStore((s) => s.isRecording);
-  const sttLanguage = useConfigStore((s) => s.sttLanguage);
+  // This side's own language when it has one, else the shared transcription language.
+  const sttLanguage = useConfigStore(webSpeechLanguage);
 
   const audioMode = useMeetingStore((s) => s.audioMode);
 
@@ -289,7 +297,7 @@ export function useSpeechRecognition() {
               } catch {
                 // proceed anyway
               }
-              const language = useConfigStore.getState().sttLanguage;
+              const language = webSpeechLanguage(useConfigStore.getState());
               if (language === AUTO_STT_LANGUAGE) return;
               if (instanceIdRef.current !== myInstanceId || !shouldRestartRef.current || !recognitionRef.current) return;
 

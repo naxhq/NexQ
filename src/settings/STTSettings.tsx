@@ -13,6 +13,7 @@ import {
   autoDetectProblem,
   cartesiaSupportsLanguage,
   isDeepgramNova3,
+  sideLanguage,
 } from "../lib/sttLanguages";
 import {
   setSTTProvider,
@@ -323,9 +324,12 @@ export function STTSettings() {
   const autoDetectionSelected = sttLanguage === AUTO_STT_LANGUAGE;
   const inPerson = useMeetingStore((s) => skipYouStt(s.audioMode));
   // This page picks the "You" provider; the "Them" side is set in Audio & Devices.
+  // A side with a language of its own is judged by that one, not the shared one.
+  const youAuto = sideLanguage(meetingAudioConfig?.you, sttLanguage) === AUTO_STT_LANGUAGE;
+  const themAuto = sideLanguage(meetingAudioConfig?.them, sttLanguage) === AUTO_STT_LANGUAGE;
   const autoProblems = !autoDetectionSelected ? [] : [
-    inPerson ? null : autoDetectProblem(youSide, autoModels, "You"),
-    meetingAudioConfig
+    inPerson || !youAuto ? null : autoDetectProblem(youSide, autoModels, "You"),
+    meetingAudioConfig && themAuto
       ? autoDetectProblem(
           { provider: meetingAudioConfig.them.stt_provider, localModel: meetingAudioConfig.them.local_model_id },
           autoModels,

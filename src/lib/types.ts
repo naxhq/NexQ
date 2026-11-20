@@ -540,6 +540,12 @@ export interface PartyAudioConfig {
   is_input_device: boolean;
   stt_provider: STTProviderType;
   local_model_id?: string;
+  /**
+   * Transcription language for this side only (an STT_LANGUAGES value, "auto"
+   * included). Absent means the shared transcription language, as in configs
+   * saved before this setting.
+   */
+  language?: string;
 }
 
 export interface MeetingAudioConfig {

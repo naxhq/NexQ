@@ -1657,7 +1657,8 @@ async fn create_stt_provider_for_party(
 
     let stt_type = STTProviderType::from_str(&config.stt_provider)
         .ok_or_else(|| format!("Unknown STT provider: {}", config.stt_provider))?;
-    let stt_language = get_stt_language(state);
+    // This side's own language when it has one, else the shared transcription language.
+    let stt_language = config.effective_language(&get_stt_language(state));
     let deepgram_config = matches!(&stt_type, STTProviderType::Deepgram)
         .then(|| get_deepgram_config(state));
 
@@ -1786,8 +1787,12 @@ async fn create_stt_provider_for_party(
                 None => crate::stt::groq_whisper::GroqWhisperSTT::new(),
             };
             p.set_language(&lang);
+            if let Some(own) = config.own_language() {
+                p.pin_language(own);
+            }
             // Use shared config Arc — provider reads latest config on each API call,
-            // so settings changes take effect immediately without restarting
+            // so settings changes take effect immediately without restarting.
+            // A side with its own language keeps it (pinned above); the others follow the shared one.
             p.set_shared_config(state.shared_groq_config.clone());
             p.set_app_handle(app.clone());
             p.set_party(party_role);
@@ -2504,6 +2509,53 @@ mod tests {
         assert!(whisper_auto_refusal("ggml-base.en.bin", "Them").contains("the base.en Whisper model, used for Them"));
     }
 
+    /// What the Auto-detect check of `create_stt_provider_for_party` does for a side.
+    fn auto_check(side: &PartyAudioConfig, shared: &str, role: &str) -> Result<(), String> {
+        let provider = crate::stt::provider::STTProviderType::from_str(&side.stt_provider).unwrap();
+        if side.effective_language(shared).eq_ignore_ascii_case("auto") {
+            validate_auto_language_provider(&provider, "", role)
+        } else {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn auto_detect_is_checked_with_each_sides_own_language() {
+        let mut you = party("web_speech", "default", true);
+        let mut them = party("web_speech", "default", false);
+        // Shared language is Auto-detect, no side has its own: both are refused.
+        assert!(auto_check(&you, "auto", "You").unwrap_err().ends_with(AUTO_DETECT_ADVICE));
+        assert!(auto_check(&them, "auto", "Them").is_err());
+        // "You" speaks English: no Auto-detect, so no refusal for You; Them still is.
+        you.language = Some("en-US".into());
+        assert!(auto_check(&you, "auto", "You").is_ok());
+        assert!(auto_check(&them, "auto", "Them").unwrap_err().contains("used for Them."));
+        // A fixed shared language with Auto-detect on one side only refuses that side.
+        them.language = Some("auto".into());
+        assert!(auto_check(&you, "es-ES", "You").is_ok());
+        assert!(auto_check(&them, "es-ES", "Room").unwrap_err().contains("used for Room."));
+        // A provider that can detect the language passes with Auto-detect on its side.
+        them.stt_provider = "groq_whisper".into();
+        assert!(auto_check(&them, "es-ES", "Them").is_ok());
+        // The refusal for one side is the kind a swap tolerates or reports, per side.
+        let refusal = auto_check(&party("web_speech", "d", true), "auto", "You").unwrap_err();
+        let side = resolve_side::<u8>(Err(refusal), false, None).unwrap();
+        assert!(side.provider.is_none() && side.announce);
+    }
+
+    #[test]
+    fn each_side_resolves_its_own_language() {
+        let mut you = party("deepgram", "default", true);
+        let mut them = party("deepgram", "default", false);
+        you.language = Some("en-US".into());
+        them.language = Some("es-ES".into());
+        assert_eq!(you.effective_language("fr-FR"), "en-US");
+        assert_eq!(them.effective_language("fr-FR"), "es-ES");
+        // A saved config from before this setting has none: both follow the shared language.
+        you.language = None;
+        assert_eq!(you.effective_language("fr-FR"), "fr-FR");
+    }
+
     #[test]
     fn a_provider_that_works_passes_through() {
         let side = resolve_side(Ok(Some(1)), false, None).unwrap();
@@ -2609,6 +2661,7 @@ mod tests {
             is_input_device,
             stt_provider: stt_provider.to_string(),
             local_model_id: None,
+            language: None,
         }
     }
 

@@ -67,6 +67,62 @@ it("tells the user when Auto-detect silences a running Web Speech side", async (
   expect(emit).toHaveBeenCalledTimes(1);
 });
 
+it("recognises the language of the side it transcribes, not the shared one", async () => {
+  useConfigStore.setState({
+    sttLanguage: "en-US",
+    meetingAudioConfig: { ...config, you: { ...config.you, language: "es-ES" } },
+  });
+  renderHook(() => useSpeechRecognition());
+  expect(started).toHaveLength(1);
+  expect((started[0] as FakeRecognition).lang).toBe("es-ES");
+
+  // The other side's language is not Web Speech's business.
+  await act(async () =>
+    useConfigStore.setState({
+      meetingAudioConfig: { ...config, you: { ...config.you, language: "es-ES" }, them: { ...config.them, language: "fr-FR" } },
+    }),
+  );
+  expect(started).toHaveLength(1);
+
+  // Changing this side's language restarts recognition in the new one.
+  await act(async () =>
+    useConfigStore.setState({ meetingAudioConfig: { ...config, you: { ...config.you, language: "de-DE" } } }),
+  );
+  expect(started).toHaveLength(2);
+  expect((started[1] as FakeRecognition).lang).toBe("de-DE");
+
+  // Back to "Same as…": the shared language.
+  await act(async () => useConfigStore.setState({ meetingAudioConfig: config }));
+  expect((started[2] as FakeRecognition).lang).toBe("en-US");
+  await act(async () => useConfigStore.setState({ sttLanguage: "it-IT" }));
+  expect((started[3] as FakeRecognition).lang).toBe("it-IT");
+});
+
+it("follows the room side's language when Web Speech transcribes Them", async () => {
+  const them: MeetingAudioConfig = {
+    ...config,
+    you: { ...config.you, stt_provider: "deepgram", language: "en-US" },
+    them: { ...config.them, stt_provider: "web_speech", is_input_device: true, language: "pt-BR" },
+  };
+  useConfigStore.setState({ sttLanguage: "en-US", meetingAudioConfig: them });
+  renderHook(() => useSpeechRecognition());
+  expect((started[0] as FakeRecognition).lang).toBe("pt-BR");
+});
+
+it("is silenced by Auto-detect on its own side while the shared language is fixed", async () => {
+  renderHook(() => useSpeechRecognition());
+  expect(started).toHaveLength(1);
+  await act(async () =>
+    useConfigStore.setState({ meetingAudioConfig: { ...config, you: { ...config.you, language: "auto" } } }),
+  );
+  expect(emit).toHaveBeenCalledWith(
+    "capture_warning",
+    "Stopped transcribing You: Web Speech can't detect the language. " +
+    "Pick a language (it applies right away) or choose another provider for You.",
+  );
+  expect(started).toHaveLength(1);
+});
+
 it("stays quiet when Web Speech was not running", async () => {
   useConfigStore.setState({ sttLanguage: "auto" });
   renderHook(() => useSpeechRecognition());

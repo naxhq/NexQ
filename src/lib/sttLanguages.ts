@@ -26,6 +26,22 @@ export const STT_LANGUAGES = [
   { value: "vi-VN", label: "Vietnamese" },
 ];
 
+/** The per-side picker's value for "use the shared transcription language". */
+export const SAME_AS_SHARED_LANGUAGE = "";
+
+/**
+ * The language one side (You / Them / Room) is transcribed in: its own when it
+ * has one, otherwise the shared transcription language. Mirrors
+ * `PartyAudioConfig::effective_language` in src-tauri/src/audio/mod.rs.
+ */
+export function sideLanguage(
+  side: { language?: string | null } | null | undefined,
+  sharedLanguage: string,
+): string {
+  const own = side?.language?.trim();
+  return own || sharedLanguage;
+}
+
 export function isDeepgramNova3(model?: string | null): boolean {
   return model === "nova-3" || model === "nova-3-general";
 }
@@ -142,6 +158,59 @@ export function autoDetectProblem(
   if (side.provider === "parakeet_tdt") name = "Parakeet CTC 110M";
   const advice = side.provider === "whisper_cpp" ? AUTO_DETECT_WHISPER_ADVICE : AUTO_DETECT_ADVICE;
   return `${AUTO_DETECT_REFUSAL_PREFIX} ${name}, used for ${label}. ${advice}`;
+}
+
+export interface SideLanguageHint {
+  /** "warning": the side won't transcribe well. "info": a tip. */
+  tone: "warning" | "info";
+  text: string;
+}
+
+/**
+ * What to tell the person about a side's provider and language together
+ * (the same hints the STT Providers page shows for the shared language), or
+ * null. Auto-detect has its own message, `autoDetectProblem`.
+ */
+export function sideLanguageHint(
+  side: AutoDetectSide,
+  language: string,
+  models: AutoDetectModels,
+): SideLanguageHint | null {
+  if (language === AUTO_STT_LANGUAGE) return null;
+  const model = autoDetectModelFor(side, models);
+  switch (side.provider) {
+    case "parakeet_tdt":
+      if (language === "vi-VN") {
+        return {
+          tone: "warning",
+          text: "The included Parakeet models do not support Vietnamese. Choose a multilingual Whisper model, Deepgram Nova-3, or Azure Speech.",
+        };
+      }
+      if ((model ?? "parakeet-tdt-0.6b-v3-int8").includes("ctc-110m") && !language.toLowerCase().startsWith("en")) {
+        return {
+          tone: "warning",
+          text: "Parakeet CTC 110M is English-only. Choose Parakeet TDT 0.6B v3 for multilingual transcription.",
+        };
+      }
+      return null;
+    case "deepgram":
+      if (language === "vi-VN") {
+        return { tone: "info", text: "Select a Deepgram model that supports Vietnamese, such as Nova-3." };
+      }
+      if (language === "uk-UA" && model?.startsWith("flux-")) {
+        return { tone: "warning", text: "Switch from Flux to Nova-3 for Ukrainian transcription." };
+      }
+      return null;
+    case "cartesia":
+      return cartesiaSupportsLanguage(language)
+        ? null
+        : {
+            tone: "warning",
+            text: "Cartesia transcribes only English, French, Hindi, Japanese and Spanish. Choose another provider for this language.",
+          };
+    default:
+      return null;
+  }
 }
 
 const REFUSAL_SENTENCE = new RegExp(

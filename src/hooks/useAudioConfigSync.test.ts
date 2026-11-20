@@ -100,6 +100,31 @@ it("applies a change made while a swap is running once that swap ends", async ()
   expect(startCapturePerParty).toHaveBeenLastCalledWith(later.you, later.them, { skipYouStt: false });
 });
 
+it("restarts the capture when a side's language changes, like a provider change", async () => {
+  vi.mocked(startCapturePerParty).mockResolvedValue(undefined);
+  renderHook(() => useAudioConfigSync());
+
+  // The older config (no language) is what the meeting started with: no swap.
+  await act(() => vi.advanceTimersByTimeAsync(300));
+  expect(startCapturePerParty).not.toHaveBeenCalled();
+
+  const spanishThem: MeetingAudioConfig = { ...config, them: { ...config.them, language: "es-ES" } };
+  await change(spanishThem);
+  expect(startCapturePerParty).toHaveBeenCalledTimes(1);
+  expect(startCapturePerParty).toHaveBeenLastCalledWith(
+    config.you,
+    { ...config.them, language: "es-ES" },
+    { skipYouStt: false },
+  );
+  expect(vi.mocked(startCapturePerParty).mock.calls[0][0]).not.toHaveProperty("language");
+
+  // Another language on the same side swaps again; the same config doesn't.
+  await change({ ...spanishThem, them: { ...spanishThem.them, language: "auto" } });
+  expect(startCapturePerParty).toHaveBeenCalledTimes(2);
+  await change({ ...spanishThem, them: { ...spanishThem.them, language: "auto" } });
+  expect(startCapturePerParty).toHaveBeenCalledTimes(2);
+});
+
 it("retries a failure that may have stopped the capture, and says so", async () => {
   vi.mocked(startCapturePerParty).mockRejectedValueOnce("Audio device busy").mockResolvedValue(undefined);
   renderHook(() => useAudioConfigSync());

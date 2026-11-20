@@ -41,6 +41,24 @@ pub struct PartyAudioConfig {
     /// Only used when stt_provider is a local engine like "whisper_cpp".
     #[serde(default)]
     pub local_model_id: Option<String>,
+    /// Transcription language for this side only (e.g. "es-ES", or "auto").
+    /// None or empty means the shared transcription language. Configs saved by
+    /// older versions don't have it, hence the default.
+    #[serde(default)]
+    pub language: Option<String>,
+}
+
+impl PartyAudioConfig {
+    /// The language this side is transcribed in: its own when it has one,
+    /// otherwise the shared transcription language.
+    pub fn effective_language(&self, shared: &str) -> String {
+        self.own_language().unwrap_or(shared).to_string()
+    }
+
+    /// The language picked for this side alone, if any.
+    pub fn own_language(&self) -> Option<&str> {
+        self.language.as_deref().map(str::trim).filter(|own| !own.is_empty())
+    }
 }
 
 /// Information about an active audio session on the system (per-app awareness).
@@ -783,5 +801,35 @@ mod tests {
     fn gap_silence_is_capped_at_a_minute() {
         assert_eq!(gap_silence(std::time::Duration::from_millis(250)).len(), 4_000);
         assert_eq!(gap_silence(std::time::Duration::from_secs(600)).len(), 60 * 16_000);
+    }
+
+    #[test]
+    fn a_config_saved_before_per_side_languages_still_loads() {
+        // Exactly what an older version stored: no `language`, no `local_model_id`.
+        let old = r#"{"role":"Them","device_id":"default","is_input_device":false,"stt_provider":"deepgram"}"#;
+        let config: PartyAudioConfig = serde_json::from_str(old).unwrap();
+        assert_eq!(config.language, None);
+        assert_eq!(config.effective_language("fr-FR"), "fr-FR");
+    }
+
+    #[test]
+    fn a_side_language_wins_over_the_shared_one() {
+        let json = |language: &str| {
+            format!(
+                r#"{{"role":"You","device_id":"d","is_input_device":true,"stt_provider":"deepgram","language":{language}}}"#
+            )
+        };
+        let own: PartyAudioConfig = serde_json::from_str(&json(r#""es-ES""#)).unwrap();
+        assert_eq!(own.effective_language("en-US"), "es-ES");
+        let auto: PartyAudioConfig = serde_json::from_str(&json(r#""auto""#)).unwrap();
+        assert_eq!(auto.effective_language("en-US"), "auto");
+        // null, empty and blank all mean "same as the shared language".
+        for same in ["null", r#""""#, r#""  ""#] {
+            let config: PartyAudioConfig = serde_json::from_str(&json(same)).unwrap();
+            assert_eq!(config.effective_language("de-DE"), "de-DE", "{same}");
+        }
+        // The shared language can itself be Auto-detect.
+        let none: PartyAudioConfig = serde_json::from_str(&json("null")).unwrap();
+        assert_eq!(none.effective_language("auto"), "auto");
     }
 }

@@ -55,8 +55,10 @@ export function useAudioConfigSync() {
     const log = useDevLogStore.getState().addEntry;
     const desc = `you=${meetingAudioConfig.you.stt_provider}` +
       (meetingAudioConfig.you.local_model_id ? `(${meetingAudioConfig.you.local_model_id})` : "") +
+      (meetingAudioConfig.you.language ? ` [${meetingAudioConfig.you.language}]` : "") +
       `, them=${meetingAudioConfig.them.stt_provider}` +
-      (meetingAudioConfig.them.local_model_id ? `(${meetingAudioConfig.them.local_model_id})` : "");
+      (meetingAudioConfig.them.local_model_id ? `(${meetingAudioConfig.them.local_model_id})` : "") +
+      (meetingAudioConfig.them.language ? ` [${meetingAudioConfig.them.language}]` : "");
     log("info", "config", `STT config changed → ${desc}`);
 
     // Cancel any existing debounce — the new config supersedes it

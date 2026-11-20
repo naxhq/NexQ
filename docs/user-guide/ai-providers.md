@@ -42,6 +42,14 @@ These can't detect the language: Web Speech, Windows Speech, Azure Speech, Sherp
 
 **For speech that switches languages mid-sentence**, such as Ukrainian with English technical terms, use **Deepgram Nova-3** with **Auto-detect**. This combination enables [Nova-3 multilingual transcription](https://developers.deepgram.com/docs/nova-3-language-prompting), which Deepgram bills at a higher rate than single-language Nova-3 (see [Deepgram's pricing](https://deepgram.com/pricing)).
 
+### A different language for each side
+
+When you and the others speak different languages, give each side its own. Open **Settings > Audio & Devices** and use the **Language** menu on each card: **You**, **Them**, or **Room** in an in-person meeting. The menu starts on **Same as transcription language**, which follows the shared language above, so nothing changes until you pick one.
+
+For example, if you speak English and the others speak Spanish, leave You on English (or the shared language) and set Them to **Spanish**. Each side's provider then listens in its own language. A side can also be set to **Auto-detect**, which needs a provider that can detect the language (see the list above); the other side keeps its own language.
+
+Changing a side's language during a meeting briefly restarts transcription, the same as changing a provider, so you don't need to start a new meeting. The language hints on each card (for example, Flux doesn't transcribe Ukrainian) follow that side's own language.
+
 ## LLM Provider Comparison
 
 ![LLM Providers settings panel](../../website/public/screenshots/Setting/Setting-LLM%20Providers.png)

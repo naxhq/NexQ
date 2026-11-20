@@ -11,6 +11,8 @@ import {
   STT_LANGUAGES,
   autoDetectProblem,
   cartesiaSupportsLanguage,
+  sideLanguage,
+  sideLanguageHint,
   supportsSTTAutoDetection,
 } from "./sttLanguages";
 
@@ -110,5 +112,45 @@ describe("cartesiaSupportsLanguage", () => {
     for (const lang of unsupported) {
       expect(cartesiaSupportsLanguage(lang)).toBe(false);
     }
+  });
+});
+
+describe("sideLanguage", () => {
+  it("is the side's own language, else the shared one", () => {
+    expect(sideLanguage({ language: "es-ES" }, "en-US")).toBe("es-ES");
+    expect(sideLanguage({ language: "auto" }, "en-US")).toBe("auto");
+    // A config saved before this setting has no language.
+    expect(sideLanguage({}, "en-US")).toBe("en-US");
+    expect(sideLanguage({ language: "" }, "fr-FR")).toBe("fr-FR");
+    expect(sideLanguage({ language: "  " }, "fr-FR")).toBe("fr-FR");
+    expect(sideLanguage(null, "de-DE")).toBe("de-DE");
+    expect(sideLanguage({}, "auto")).toBe("auto");
+  });
+});
+
+describe("sideLanguageHint", () => {
+  const none = {};
+  it("warns about Flux and Ukrainian, Cartesia languages, Parakeet CTC and Vietnamese", () => {
+    expect(sideLanguageHint({ provider: "deepgram" }, "uk-UA", { deepgram: "flux-general-multi" })).toEqual({
+      tone: "warning",
+      text: "Switch from Flux to Nova-3 for Ukrainian transcription.",
+    });
+    expect(sideLanguageHint({ provider: "deepgram" }, "uk-UA", { deepgram: "nova-3" })).toBeNull();
+    expect(sideLanguageHint({ provider: "cartesia" }, "de-DE", none)?.tone).toBe("warning");
+    expect(sideLanguageHint({ provider: "cartesia" }, "es-ES", none)).toBeNull();
+    expect(
+      sideLanguageHint({ provider: "parakeet_tdt", localModel: "parakeet-tdt-ctc-110m-int8" }, "es-ES", none)?.text,
+    ).toMatch(/English-only/);
+    expect(
+      sideLanguageHint({ provider: "parakeet_tdt", localModel: "parakeet-tdt-ctc-110m-int8" }, "en-GB", none),
+    ).toBeNull();
+    expect(sideLanguageHint({ provider: "parakeet_tdt" }, "vi-VN", none)?.text).toMatch(/Vietnamese/);
+    expect(sideLanguageHint({ provider: "deepgram" }, "vi-VN", { deepgram: "nova-3" })?.tone).toBe("info");
+  });
+
+  it("leaves Auto-detect to autoDetectProblem and fine pairs alone", () => {
+    expect(sideLanguageHint({ provider: "cartesia" }, "auto", none)).toBeNull();
+    expect(sideLanguageHint({ provider: "web_speech" }, "uk-UA", none)).toBeNull();
+    expect(sideLanguageHint({ provider: "groq_whisper" }, "es-ES", none)).toBeNull();
   });
 });
