@@ -79,23 +79,23 @@ fn cfg(mode: &str, record: Option<&Path>) -> SessionConfig {
     }
 }
 
-/// The private mcp-config file exists while the session runs, holds the
-/// config, and is gone after `close` and after a plain drop.
+/// The private mcp-config file (it holds secrets) is gone as soon as the
+/// session's init has arrived (the CLI keeps the config in memory), and still
+/// gone after `close` and after a plain drop.
 #[tokio::test]
-async fn private_mcp_config_file_is_deleted_on_close_and_drop() {
+async fn private_mcp_config_file_is_deleted_once_init_arrived() {
     let json = r#"{"mcpServers":{"a":{"command":"x","env":{"API_KEY":"va"}}}}"#;
     let sources = SourcesLaunch { mcp_config_json: Some(json.into()), ..Default::default() };
     let with = |mode| SessionConfig { sources: Some(sources.clone()), ..cfg(mode, None) };
 
     let closed = ClaudeSession::spawn(fake_bin(), with("normal")).await.unwrap();
     let path = closed.mcp_config_path().expect("mcp config path").to_path_buf();
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), json);
+    assert!(!path.exists(), "secrets file left on disk after init");
     closed.close().await;
     assert!(!path.exists(), "file left after close");
 
     let dropped = ClaudeSession::spawn(fake_bin(), with("normal")).await.unwrap();
     let path = dropped.mcp_config_path().unwrap().to_path_buf();
-    assert!(path.exists());
     drop(dropped);
     assert!(!path.exists(), "file left after drop");
 
@@ -139,7 +139,7 @@ fake_mcp={mcp}"), None)
     };
     match err {
         AgentError::NoUsableSources { message, info } => {
-            assert!(message.contains("mira"), "{message}");
+            assert_eq!(message, "Mira didn't start");
             assert_eq!(info.mcp_servers.len(), 1);
             assert_eq!(info.mcp_servers[0].status, "failed");
         }

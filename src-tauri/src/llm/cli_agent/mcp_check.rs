@@ -8,6 +8,7 @@
 use super::command::SessionConfig;
 use super::detect::find_claude_binary;
 use super::manager::SOURCES_INIT_TIMEOUT;
+use super::mcp_diagnose::diagnose_start;
 use super::session::{AgentError, ClaudeSession, InitInfo, SessionTimeouts};
 use crate::sources::config::McpServer;
 use crate::sources::launch::single_server_launch;
@@ -55,7 +56,7 @@ pub async fn list_server_tools(
         sources: Some(launch),
     };
     let timeouts = SessionTimeouts { init: SOURCES_INIT_TIMEOUT, ..SessionTimeouts::default() };
-    match ClaudeSession::spawn_with_timeouts(bin, cfg, timeouts).await {
+    let failure = match ClaudeSession::spawn_with_timeouts(bin, cfg, timeouts).await {
         Ok(session) => {
             let info = session.init_info();
             session.close().await;
@@ -64,7 +65,16 @@ pub async fn list_server_tools(
         // Nothing usable left: the statuses say why, no error text to parse.
         Err(AgentError::NoUsableSources { info, .. }) => tools_of_server(&info, &server.key),
         Err(AgentError::Timeout) => Err("The server took too long to start.".to_string()),
-        Err(e) => Err(e.to_string()),
+        // Claude itself is the problem, not the server: no point diagnosing it.
+        Err(e) => return Err(e.to_string()),
+    };
+    match failure {
+        Ok(tools) => Ok(tools),
+        // The CLI says only "failed", so start the server alone and look.
+        Err(message) => Err(match diagnose_start(server, secret).await {
+            Some(cause) => format!("{message} {cause}"),
+            None => message,
+        }),
     }
 }
 

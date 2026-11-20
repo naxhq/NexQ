@@ -75,6 +75,16 @@ pub const STRIPPED_ENV: [&str; 7] = [
     "CLAUDE_CODE_USE_FOUNDRY",
 ];
 
+/// How long the CLI waits for an MCP server to start (`MCP_TIMEOUT`, ms). A hung
+/// server then shows as `failed` in about this long, not 30 s.
+pub const MCP_STARTUP_TIMEOUT_MS: &str = "20000";
+/// How long one MCP tool call may take (`MCP_TOOL_TIMEOUT`, ms). A hung tool
+/// ends the call with an error instead of holding the answer for minutes.
+pub const MCP_TOOL_TIMEOUT_MS: &str = "20000";
+/// Most tokens one MCP tool result may bring (`MAX_MCP_OUTPUT_TOKENS`); a live
+/// answer has no use for more, and a huge result is slow to read.
+pub const MCP_MAX_OUTPUT_TOKENS: &str = "10000";
+
 /// Exact launch args (never `--bare`). The system prompt travels via file.
 ///
 /// A plain session (`cfg.sources == None`) is `--safe-mode`, no tools, every
@@ -172,9 +182,29 @@ pub fn configure_session_command(cmd: &mut std::process::Command, sandbox: &Path
     }
 }
 
+/// The limits a with-sources session runs its MCP servers under (see the
+/// constants above); a plain session has no MCP servers and gets none.
+pub fn configure_sources_env(cmd: &mut std::process::Command) {
+    cmd.env("MCP_TIMEOUT", MCP_STARTUP_TIMEOUT_MS)
+        .env("MCP_TOOL_TIMEOUT", MCP_TOOL_TIMEOUT_MS)
+        .env("MAX_MCP_OUTPUT_TOKENS", MCP_MAX_OUTPUT_TOKENS);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_with_sources_session_limits_its_mcp_servers() {
+        let mut cmd = std::process::Command::new("claude.exe");
+        configure_sources_env(&mut cmd);
+        let env = |key: &str| {
+            cmd.get_envs().find(|(k, _)| *k == key).and_then(|(_, v)| v.map(|v| v.to_string_lossy().into_owned()))
+        };
+        assert_eq!(env("MCP_TIMEOUT").as_deref(), Some("20000"));
+        assert_eq!(env("MCP_TOOL_TIMEOUT").as_deref(), Some("20000"));
+        assert_eq!(env("MAX_MCP_OUTPUT_TOKENS").as_deref(), Some("10000"));
+    }
 
     fn cfg() -> SessionConfig {
         SessionConfig {

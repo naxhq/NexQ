@@ -12,7 +12,9 @@
 //! arrives, so a cancelled or dropped `ask` never leaves stale events behind for
 //! the next turn.
 
-use super::command::{build_args, configure_session_command, sandbox_dir, SessionConfig};
+use super::command::{
+    build_args, configure_session_command, configure_sources_env, sandbox_dir, SessionConfig,
+};
 use super::protocol::{
     classify_error, parse_line, user_message, user_message_with_images, AgentErrorKind, AgentEvent,
     ImageAttachment, McpServerState, ToolUse, TurnResult,
@@ -40,6 +42,16 @@ pub const THINKING_SIGNAL: &str = "";
 /// control characters never occur in model text, and callers that only want
 /// text check [`is_activity`] and skip it.
 pub const ACTIVITY_PREFIX: &str = "\u{1}nexq-tool\u{1}";
+
+/// Model text with the control character U+0001 removed, so it can never
+/// start (or imitate) an [`ACTIVITY_PREFIX`] token.
+pub fn strip_marker(text: String) -> String {
+    if text.contains('\u{1}') {
+        text.replace('\u{1}', "")
+    } else {
+        text
+    }
+}
 
 /// A tool use as an `on_delta` token.
 pub fn encode_activity(t: &ToolUse) -> String {
@@ -78,6 +90,20 @@ pub fn failed_mcp_servers(info: &InitInfo) -> Vec<String> {
         .filter(|s| matches!(s.status.as_str(), "failed" | "needs-auth"))
         .map(|s| s.name.clone())
         .collect()
+}
+
+/// The failed servers of `info` by the name the user gave them (`labels` maps a
+/// key to it; the key itself when unknown), as "Mira", "Mira and Wiki" or
+/// "A, B and C".
+pub fn failed_server_names(info: &InitInfo, labels: &[(String, String)]) -> String {
+    let names: Vec<String> = failed_mcp_servers(info)
+        .into_iter()
+        .map(|key| labels.iter().find(|(k, _)| *k == key).map(|(_, l)| l.clone()).unwrap_or(key))
+        .collect();
+    match names.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => names.join(""),
+    }
 }
 
 /// Is a with-sources session that started with `info` useless? True when some
@@ -307,7 +333,9 @@ impl ClaudeSession {
         let thinking = cfg.thinking;
         // `None` for a plain session, else whether a notes folder is among its sources.
         let sources_folders = cfg.sources.as_ref().map(|s| !s.add_dirs.is_empty());
-        let started = tokio::task::spawn_blocking(move || start_process(&bin, &args, thinking))
+        let server_labels = cfg.sources.as_ref().map(|s| s.server_labels.clone()).unwrap_or_default();
+        let with_sources = cfg.sources.is_some();
+        let started = tokio::task::spawn_blocking(move || start_process(&bin, &args, thinking, with_sources))
             .await
             .map_err(|e| AgentError::Spawn(format!("spawn task failed: {e}")))
             .and_then(|r| r);
@@ -345,10 +373,7 @@ impl ClaudeSession {
                 let info = session.init_info();
                 if nothing_usable(has_folders, &info) {
                     Err(AgentError::NoUsableSources {
-                        message: format!(
-                            "MCP server {} failed to start",
-                            failed_mcp_servers(&info).join(", ")
-                        ),
+                        message: format!("{} didn't start", failed_server_names(&info, &server_labels)),
                         info,
                     })
                 } else {
@@ -511,6 +536,12 @@ impl ClaudeSession {
                     log::info!("claude session {session_id} ready (model {model})");
                     *self.shared.init.lock().unwrap() = InitInfo { tools, mcp_servers };
                     init_seen = true;
+                    // The CLI keeps its MCP config in memory from here on (it
+                    // restarts a dead server without re-reading the file), so
+                    // the file with the secrets in it goes now, not at close.
+                    if let Some(file) = &self.mcp_config_file {
+                        remove_private_file(file);
+                    }
                 }
                 Some(AgentEvent::TurnComplete(result)) if init_seen => {
                     return into_outcome(Ok(self.shared.settle_cost(result))).map(|_| ());
@@ -607,6 +638,9 @@ async fn drive_turn(
         tokio::select! {
             event = tokio::time::timeout(wait, events.recv()) => match event {
                 Ok(Some(AgentEvent::TextDelta(text))) => {
+                    // Model text can't carry the activity marker: a tool line
+                    // or a source chip only ever comes from a real tool use.
+                    let text = strip_marker(text);
                     if !text.is_empty() {
                         let _ = tx.send(TurnMsg::Delta(text));
                     }
@@ -669,10 +703,18 @@ type Started = (
 
 /// Spawn the child (no shell, no window, sandbox cwd, stripped env) and its
 /// three pipe threads. Blocking; run on a blocking thread.
-fn start_process(bin: &Path, args: &[String], thinking: bool) -> Result<Started, AgentError> {
+fn start_process(
+    bin: &Path,
+    args: &[String],
+    thinking: bool,
+    with_sources: bool,
+) -> Result<Started, AgentError> {
     let mut cmd = Command::new(bin);
     cmd.args(args);
     configure_session_command(&mut cmd, &sandbox_dir(), thinking);
+    if with_sources {
+        configure_sources_env(&mut cmd);
+    }
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -915,6 +957,25 @@ mod tests {
         assert!(!nothing_usable(true, &info(vec![state("a", "failed")])));
         assert!(!nothing_usable(false, &info(vec![state("a", "failed"), state("b", "connected")])));
         assert!(!nothing_usable(false, &info(vec![state("a", "failed"), state("b", "pending")])));
+    }
+
+    #[test]
+    fn model_text_cannot_carry_the_activity_marker() {
+        let spoof = format!("{ACTIVITY_PREFIX}{{\"name\":\"mcp__mira__x\",\"input\":{{}}}}");
+        let clean = strip_marker(spoof);
+        assert!(!is_activity(&clean) && !clean.contains('\u{1}'), "{clean:?}");
+        assert_eq!(strip_marker("plain answer".to_string()), "plain answer");
+        assert_eq!(strip_marker("\u{1}".to_string()), "");
+    }
+
+    #[test]
+    fn failed_server_names_use_labels() {
+        let st = |n: &str, s: &str| McpServerState { name: n.into(), status: s.into() };
+        let info = InitInfo { tools: vec![], mcp_servers: vec![st("mira", "failed"), st("wiki", "needs-auth"), st("c", "failed"), st("ok", "connected")] };
+        let labels = vec![("mira".to_string(), "Mira".to_string()), ("wiki".to_string(), "Wiki".to_string())];
+        assert_eq!(failed_server_names(&info, &labels), "Mira, Wiki and c");
+        let one = InitInfo { tools: vec![], mcp_servers: vec![st("mira", "failed")] };
+        assert_eq!(failed_server_names(&one, &labels), "Mira");
     }
 
     #[test]

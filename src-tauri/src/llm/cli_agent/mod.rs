@@ -8,6 +8,7 @@ pub mod context;
 pub mod detect;
 pub mod manager;
 pub mod mcp_check;
+pub mod mcp_diagnose;
 pub mod models;
 pub mod protocol;
 pub mod provider;
