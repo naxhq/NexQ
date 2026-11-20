@@ -30,7 +30,23 @@ export function replaceMcpServer(server: McpServer): Promise<void> {
 
 /** What starts a server: a change here makes an older Check's answer about something else. */
 function launchSignature(s: McpServer): string {
-  return JSON.stringify([s.transport, s.env]);
+  return stableJson([s.transport, s.env]);
+}
+
+/**
+ * JSON with object keys sorted and missing values read as null: a config read
+ * back from disk has its keys in another order than the backend's answer.
+ */
+function stableJson(value: unknown): string {
+  if (value === undefined || value === null) return "null";
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined && v !== null)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 /**
