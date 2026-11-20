@@ -266,7 +266,7 @@ pub(crate) fn start_session_in_background(
         match state.agent_sessions.ensure(&key, init).await {
             Ok(_) => {
                 if key.with_sources {
-                    state.sources_cooldown.clear();
+                    state.sources_cooldown.clear_key(&key);
                 }
                 // Closed (and not reopened) while it was starting: close it
                 // now; live sessions are never reaped.
@@ -298,18 +298,15 @@ pub(crate) fn start_session_in_background(
 /// retry runs (unless the failure was cleared or replaced meanwhile).
 pub(crate) fn note_sources_failure(app: &AppHandle, key: &SessionKey, reason: &str) {
     let state = app.state::<AppState>();
-    let generation = state.sources_cooldown.fail(reason, std::time::Instant::now());
+    let generation = state.sources_cooldown.fail(key, reason, std::time::Instant::now());
     let wait = state.sources_cooldown.duration();
-    // A Live retry is the Fast session; other scopes retry their own key.
-    let retry_key = match &key.scope {
-        SessionScope::Live(_) => SessionKey::sources(key.scope.clone(), Tier::Fast),
-        _ => key.clone(),
-    };
+    // The retry starts the same session key (its start clears that key's failure).
+    let retry_key = key.clone();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(wait).await;
         let state = app.state::<AppState>();
-        if !state.sources_cooldown.begin_retry(generation) {
+        if !state.sources_cooldown.begin_retry(&retry_key, generation) {
             return;
         }
         retry_sources_key(&app, retry_key);

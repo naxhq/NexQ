@@ -491,7 +491,7 @@ pub(crate) async fn run_session_assist<'a>(
         // A with-sources session that just failed is not tried again at once:
         // the plain session answers, with the reason and when it retries.
         if key.with_sources {
-            if let Some(text) = state.sources_cooldown.gate(std::time::Instant::now()) {
+            if let Some(text) = state.sources_cooldown.gate(&key, std::time::Instant::now()) {
                 emit_activity(app, &params, notice(text));
                 key = key.sibling();
                 continue;
@@ -698,7 +698,7 @@ pub(crate) async fn session_assist(state: &AppState, app: &AppHandle, req: Sessi
             let (prompt, model) = sent.lock().ok().and_then(|mut s| s.take()).unwrap_or_default();
             // Shorten and FollowUp follow the session that produced this answer,
             // and the other Fast/Deep session is told it so either can follow up.
-            state.meeting_sessions.set_last_answer(&key.scope, key.with_sources);
+            state.meeting_sessions.note_answer(mode, &key.scope, key.with_sources);
             if !turn.text.trim().is_empty() && !routing::BACKGROUND_MODES.contains(mode) {
                 let message = routing::shared_answer(mode, req.custom_question, &turn.text);
                 let manager = state.agent_sessions.clone();
