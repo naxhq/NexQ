@@ -436,6 +436,71 @@ async fn real_claude_models() {
     assert!(models.iter().any(|m| m.value == "sonnet"));
 }
 
+/// A solid-colour PNG, base64 encoded (no `data:` prefix).
+fn solid_png_base64(width: u32, height: u32, rgba: [u8; 4]) -> String {
+    let img = image::RgbaImage::from_pixel(width, height, image::Rgba(rgba));
+    let mut png = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut png, image::ImageFormat::Png).expect("encode png");
+    let bytes = png.into_inner();
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = (chunk[0] as u32) << 16
+            | (*chunk.get(1).unwrap_or(&0) as u32) << 8
+            | *chunk.get(2).unwrap_or(&0) as u32;
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+/// Manual smoke test of Ask images against the real, logged-in `claude`, with
+/// the app's own launch args and stream-json (two Haiku requests):
+/// `cargo test --test claude_session real_claude_image -- --ignored --nocapture`
+#[tokio::test]
+#[ignore]
+async fn real_claude_image() {
+    use nexq_lib::llm::cli_agent::protocol::ImageAttachment;
+    let bin = find_claude_binary().expect("claude.exe not found");
+    let cfg = SessionConfig {
+        model: "haiku".into(),
+        effort: Some("low".into()),
+        system_prompt: "You are a terse assistant. Answer in as few words as possible.".into(),
+        thinking: false,
+    };
+    let session = ClaudeSession::spawn(bin, cfg).await.expect("spawn real claude");
+
+    // A small red square: answered from the picture.
+    let red = ImageAttachment { media_type: "image/png".into(), data: solid_png_base64(64, 64, [255, 0, 0, 255]) };
+    let (_, on_delta) = collector();
+    let turn = session
+        .ask_with_images("What color is this square? Answer with one word.", &[red], on_delta, token())
+        .await
+        .expect("image turn");
+    println!("red square -> {:?}", turn.text);
+    assert!(turn.text.to_lowercase().contains("red"), "not read from the image: {}", turn.text);
+
+    // 1000x9000: over the API's 8000 px limit. What does the CLI report?
+    let tall = ImageAttachment { media_type: "image/png".into(), data: solid_png_base64(1000, 9000, [0, 0, 255, 255]) };
+    let (_, on_delta) = collector();
+    let result = session
+        .ask_with_images("What color is this? One word.", &[tall], on_delta, token())
+        .await;
+    println!("1000x9000 -> {result:?}");
+
+    // Bytes that are not an image (a base64 body Claude can't decode): the
+    // error path `ask_meeting_session` turns into "Claude couldn't use the attached image".
+    let broken = ImageAttachment { media_type: "image/png".into(), data: "bm90IGEgcG5n".into() };
+    let (_, on_delta) = collector();
+    let result = session
+        .ask_with_images("What color is this? One word.", &[broken], on_delta, token())
+        .await;
+    println!("not an image -> {result:?}");
+    session.close().await;
+}
+
 /// Manual smoke test against the real, logged-in `claude` (costs a few tokens):
 /// `cargo test --test claude_session real_claude -- --ignored`
 #[tokio::test]

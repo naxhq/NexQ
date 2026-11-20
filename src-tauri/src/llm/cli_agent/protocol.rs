@@ -148,9 +148,10 @@ pub struct ImageAttachment {
 /// Most images one question can carry. Keep in step with `MAX_IMAGES` in
 /// `src/lib/imageAttachments.ts`.
 pub const MAX_IMAGES: usize = 3;
-/// Longest base64 body accepted for one image: a 5 MB file (`MAX_IMAGE_BYTES`
-/// in `src/lib/imageAttachments.ts`) is about 6.7 MB of base64.
-pub const MAX_IMAGE_BASE64_LEN: usize = 7_000_000;
+/// Longest base64 body accepted for one image: the API's 5 MB limit
+/// (5_242_880). The frontend downsizes pasted images well below it
+/// (`src/lib/imageAttachments.ts`); this is the safety net.
+pub const MAX_IMAGE_BASE64_LEN: usize = 5_242_880;
 /// Image types the Claude API takes. Keep in step with `ALLOWED_IMAGE_TYPES`
 /// in `src/lib/imageAttachments.ts`.
 pub const ALLOWED_IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];

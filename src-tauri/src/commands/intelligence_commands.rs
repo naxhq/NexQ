@@ -314,6 +314,17 @@ pub(crate) fn request_route(state: &AppState, mode: &str, scope: &SessionScope) 
     choose_route(&active, state.claude_health.get(), scope, mode, &cfg)
 }
 
+/// Why a request with images can't be answered statelessly: another provider
+/// is active (it can't take images), or it is Claude but its session isn't
+/// available for this request (outage, fallback, meeting too long).
+pub(crate) fn images_refusal(active: Option<&ProviderType>) -> &'static str {
+    if active == Some(&ProviderType::ClaudeCli) {
+        "Claude can't read images right now. Try again in a moment, or remove the image and ask again."
+    } else {
+        "Images work only with Claude (subscription). Choose it in Settings > LLM, or remove the image and ask again."
+    }
+}
+
 /// Fallback provider, model and display name for `config` (type only): the
 /// API key comes from the credential store; the model is the configured
 /// fallback model, else the provider's first listed model. The result is
@@ -874,11 +885,13 @@ pub async fn generate_assist(
     // Only a Claude session carries images; no other route can send them, and
     // answering without the image would silently ignore what the user attached.
     if !images.is_empty() {
-        let message = "Attached images can only be sent through a Claude (subscription) session. \
-            Check that Claude is the active provider and connected, or send the question without the image."
-            .to_string();
+        let active = state
+            .llm
+            .as_ref()
+            .and_then(|l| l.lock().ok())
+            .and_then(|r| r.active_provider_type().cloned());
         drop(generation_guard);
-        return Err(message);
+        return Err(images_refusal(active.as_ref()).to_string());
     }
 
     // Determine transcript window: per-action override or global default,
@@ -1291,6 +1304,13 @@ mod tests {
         assert_eq!(default_window_seconds("BookmarkSuggestions", None, 300), 0);
         assert_eq!(default_window_seconds("MeetingSummary", Some(120), 300), 120);
         assert_eq!(default_window_seconds("Assist", None, 300), 300);
+    }
+
+    #[test]
+    fn images_refusal_names_the_provider_problem() {
+        assert!(images_refusal(Some(&ProviderType::Openai)).starts_with("Images work only with Claude"));
+        assert!(images_refusal(None).starts_with("Images work only with Claude"));
+        assert!(images_refusal(Some(&ProviderType::ClaudeCli)).starts_with("Claude can't read images right now"));
     }
 
     #[test]

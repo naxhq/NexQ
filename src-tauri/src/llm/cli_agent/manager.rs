@@ -252,14 +252,20 @@ pub trait SessionHandle: Send + Sync {
         cancel: Arc<CancelToken>,
     ) -> Result<TurnResult, AgentError>;
     /// [`SessionHandle::ask`] with images sent along. A handle that can't
-    /// carry images asks the text alone.
+    /// carry images refuses them instead of answering without.
     async fn ask_with_images(
         &self,
         prompt: &str,
-        _images: &[ImageAttachment],
+        images: &[ImageAttachment],
         on_delta: OnDelta,
         cancel: Arc<CancelToken>,
     ) -> Result<TurnResult, AgentError> {
+        if !images.is_empty() {
+            return Err(AgentError::Cli(
+                AgentErrorKind::Other,
+                "This Claude session can't take images".to_string(),
+            ));
+        }
         self.ask(prompt, on_delta, cancel).await
     }
     fn is_alive(&self) -> bool;

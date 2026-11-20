@@ -455,6 +455,16 @@ fn delivered(result: &Result<TurnResult, AgentError>) -> bool {
     )
 }
 
+/// What the user sees when Claude answers a request with images by an error
+/// result: a hint about the image when the error mentions one, else Claude's text.
+fn image_refusal(raw: &str) -> String {
+    if raw.to_lowercase().contains("image") {
+        "Claude couldn't use the attached image. Remove it or paste a smaller one, then send again.".to_string()
+    } else {
+        raw.to_string()
+    }
+}
+
 /// Take `key`'s session out of service (closed in the background) so the
 /// next `ensure` starts it again from its record.
 fn retire(manager: &AgentSessionManager, key: &SessionKey) {
@@ -536,7 +546,12 @@ pub async fn ask_meeting_session(
             let result = manager
                 .ask_with_images(key, &text, images, on_delta, cancel.clone())
                 .await;
-            if delivered(&result) {
+            // An image Claude refused (too big, unreadable) is not in a usable
+            // history: roll the request back like an undelivered one.
+            let refused = !images.is_empty()
+                && !streamed.load(Ordering::SeqCst)
+                && matches!(&result, Err(AgentError::Cli(AgentErrorKind::Other, _)));
+            if delivered(&result) && !refused {
                 sessions.record_sent(key, &text, cursor.sent_lines().clone());
             } else {
                 *cursor = before;
@@ -563,6 +578,11 @@ pub async fn ask_meeting_session(
         // Before the overflow case: text already on screen is never re-answered.
         if streamed.load(Ordering::SeqCst) {
             return Err(AskFailure::AfterOutput(err));
+        }
+        if let (false, AgentError::Cli(AgentErrorKind::Other, raw)) = (images.is_empty(), &err) {
+            log::warn!("Claude refused a request with images: {raw}");
+            retire(manager, key);
+            return Err(AskFailure::Error(AgentError::Cli(AgentErrorKind::Other, image_refusal(raw))));
         }
         if matches!(err, AgentError::Cli(AgentErrorKind::ContextOverflow, _)) {
             log::warn!("Claude session {key:?} is full ({err}); resetting it to a short replay");
@@ -1582,6 +1602,50 @@ mod tests {
         assert!(sessions.get(&key).unwrap().sent.contains_key("a"));
         ask(&manager, &sessions, &key, &[seg("a", 0)]).await.unwrap();
         assert!(!last_prompt(&script).contains("## New transcript"));
+    }
+
+    #[tokio::test]
+    async fn routing_refused_image_rolls_the_request_back_and_restarts_the_session() {
+        let (manager, sessions, script, key) = setup(&[]);
+        script.fail_next(AgentError::Cli(
+            AgentErrorKind::Other,
+            "API Error: 400 messages.0.content.0.image.source.base64: image exceeds 5 MB maximum".into(),
+        ));
+        let images = [ImageAttachment { media_type: "image/png".into(), data: "AAAA".into() }];
+        let failure = ask_meeting_session(
+            &manager,
+            &sessions,
+            &key,
+            &[seg("a", 0)],
+            |new| compose_delta(new, &[], "Help.", Some("What is this?"), None),
+            |_, _, _| {},
+            || Box::new(|_: &str| {}),
+            Arc::new(CancelToken::new()),
+            &images,
+        )
+        .await
+        .unwrap_err();
+        match failure {
+            AskFailure::Error(AgentError::Cli(AgentErrorKind::Other, msg)) => {
+                assert_eq!(
+                    msg,
+                    "Claude couldn't use the attached image. Remove it or paste a smaller one, then send again."
+                );
+            }
+            _ => panic!("expected the image refusal"),
+        }
+        assert!(!sessions.get(&key).unwrap().sent.contains_key("a"), "nothing recorded");
+        // The next text-only request starts a fresh session and carries the segments.
+        ask(&manager, &sessions, &key, &[seg("a", 0)]).await.unwrap();
+        assert_eq!(script.spawns.load(Ordering::SeqCst), 2, "the session was restarted");
+        assert!(last_prompt(&script).contains("## New transcript"), "segments were rolled back");
+        assert_eq!(*script.image_counts.lock().unwrap(), vec![1, 0]);
+    }
+
+    #[test]
+    fn routing_image_refusal_keeps_claudes_text_when_it_is_not_about_an_image() {
+        assert_eq!(image_refusal("request refused"), "request refused");
+        assert!(image_refusal("Could not process Image").contains("attached image"));
     }
 
     #[tokio::test]
