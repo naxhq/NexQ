@@ -8,6 +8,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 import {
   askMeeting,
   checkMcpServer,
+  classifySecretNames,
+  discardPendingMcpServers,
   deleteMcpSecrets,
   importClaudeCodeMcpServers,
   importMcpServersJson,
@@ -85,6 +87,10 @@ describe("personal sources ipc", () => {
     expect(invoke).toHaveBeenLastCalledWith("list_claude_code_mcp_servers");
     await deleteMcpSecrets("i");
     expect(invoke).toHaveBeenLastCalledWith("delete_mcp_secrets", { serverId: "i" });
+    await classifySecretNames(["API_KEY"]);
+    expect(invoke).toHaveBeenLastCalledWith("classify_secret_names", { names: ["API_KEY"] });
+    await discardPendingMcpServers(["i"]);
+    expect(invoke).toHaveBeenLastCalledWith("discard_pending_mcp_servers", { ids: ["i"] });
     await retrySourcesSession();
     expect(invoke).toHaveBeenLastCalledWith("retry_sources_session");
     await openSourceFile("D:/v/a.md");

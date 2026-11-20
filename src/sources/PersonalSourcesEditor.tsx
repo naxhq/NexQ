@@ -62,6 +62,8 @@ export function PersonalSourcesEditor({ variant }: PersonalSourcesEditorProps) {
   const [infos, setInfos] = useState<Record<string, NotesFolderInfo>>({});
   const [folderError, setFolderError] = useState<string | null>(null);
   const [checking, setChecking] = useState<Set<string>>(new Set());
+  // Servers whose tool list opens by itself once their first Check worked.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [guide, setGuide] = useState<"notes" | "tools" | null>(null);
   const [dialog, setDialog] = useState<{ editing?: McpServer } | null>(null);
   const [showNotice, setShowNotice] = useState(false);
@@ -116,11 +118,12 @@ export function PersonalSourcesEditor({ variant }: PersonalSourcesEditorProps) {
     await addNotesFolder({ id, label: folderNameOf(picked), path: picked, enabled: true });
   };
 
-  const check = async (server: McpServer) => {
+  const check = async (server: McpServer, expand = false) => {
     setChecking((prev) => new Set(prev).add(server.id));
     try {
       const result = await checkMcpServer(server.id);
       await replaceMcpServer(result);
+      if (expand && result.last_check?.ok) setExpanded((prev) => new Set(prev).add(server.id));
     } catch (e) {
       showToast(`Couldn't check ${server.label}: ${errorText(e)}`, "error");
     } finally {
@@ -213,6 +216,7 @@ export function PersonalSourcesEditor({ variant }: PersonalSourcesEditorProps) {
                   key={s.id}
                   server={s}
                   checking={checking.has(s.id)}
+                  autoOpen={expanded.has(s.id)}
                   onToggle={(enabled) => void patchMcpServer(s.id, (cur) => ({ ...cur, enabled }))}
                   onCheck={() => void check(s)}
                   onEdit={() => setDialog({ editing: s })}
@@ -235,9 +239,12 @@ export function PersonalSourcesEditor({ variant }: PersonalSourcesEditorProps) {
         <AddMcpServerDialog
           editing={dialog.editing}
           onClose={() => setDialog(null)}
-          onAdded={() => {
+          onAdded={(servers) => {
             // Only an added server, not an edit of one the user already knew.
             if (!dialog.editing && !useSourcesStore.getState().config.mcp_notice_seen) setShowNotice(true);
+            // A new or edited server starts off: check it now and show its tools,
+            // so the switch can be turned on.
+            for (const s of servers) if (!s.needs_sign_in) void check(s, true);
           }}
         />
       )}

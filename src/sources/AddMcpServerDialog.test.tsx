@@ -14,6 +14,8 @@ const ipc = vi.hoisted(() => ({
   saveMcpServerForm: vi.fn(),
   listClaudeCodeMcpServers: vi.fn(),
   importClaudeCodeMcpServers: vi.fn(),
+  classifySecretNames: vi.fn(),
+  discardPendingMcpServers: vi.fn(),
 }));
 vi.mock("../lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/ipc")>()),
@@ -41,6 +43,9 @@ const TOKEN = "tok-123-super-secret";
 beforeEach(() => {
   vi.clearAllMocks();
   ipc.setPersonalSources.mockResolvedValue(undefined);
+  ipc.discardPendingMcpServers.mockResolvedValue(undefined);
+  // The backend's rule, as a stand-in.
+  ipc.classifySecretNames.mockImplementation(async (names: string[]) => names.map((n) => /TOKEN|KEY/.test(n)));
   useSourcesStore.setState({ config: DEFAULT_SOURCES_CONFIG, pushError: null });
 });
 
@@ -97,6 +102,36 @@ describe("AddMcpServerDialog", () => {
     });
     expect(JSON.stringify(useSourcesStore.getState().config)).not.toContain(TOKEN);
     expect(useSourcesStore.getState().config.mcp_servers).toHaveLength(1);
+  });
+
+  it("the backend decides which variables are secret; unanswered ones stay hidden", async () => {
+    render(<AddMcpServerDialog onClose={() => {}} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Form" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add variable" }));
+    fireEvent.change(screen.getByLabelText("Environment variables name 1"), { target: { value: "REGION" } });
+    // Until the backend answers, the value is hidden.
+    expect(screen.getByLabelText("Environment variables value 1")).toHaveAttribute("type", "password");
+    await waitFor(() => expect(screen.getByLabelText("Environment variables value 1")).toHaveAttribute("type", "text"));
+    expect(ipc.classifySecretNames).toHaveBeenCalledWith(["REGION"]);
+    fireEvent.change(screen.getByLabelText("Environment variables name 1"), { target: { value: "API_KEY" } });
+    await waitFor(() => expect(ipc.classifySecretNames).toHaveBeenCalledWith(["API_KEY"]));
+    expect(screen.getByLabelText("Environment variables value 1")).toHaveAttribute("type", "password");
+  });
+
+  it("servers the webview could not save are given back to the backend", async () => {
+    ipc.importMcpServersJson.mockResolvedValue([server()]);
+    // The save of the config fails for good (the store throws).
+    const realSetConfig = useSourcesStore.getState().setConfig;
+    useSourcesStore.setState({ setConfig: () => Promise.reject(new Error("disk full")) });
+    try {
+      render(<AddMcpServerDialog onClose={() => {}} />);
+      fireEvent.change(screen.getByLabelText("Server JSON"), { target: { value: "{}" } });
+      fireEvent.click(screen.getByRole("button", { name: "Add servers" }));
+      await waitFor(() => expect(ipc.discardPendingMcpServers).toHaveBeenCalledWith(["s1"]));
+      expect(await screen.findByText("disk full")).toBeInTheDocument();
+    } finally {
+      useSourcesStore.setState({ setConfig: realSetConfig });
+    }
   });
 
   it("an edit that needs the secrets again shows the reason next to the secret fields and keeps the dialog open", async () => {

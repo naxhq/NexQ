@@ -3,6 +3,8 @@ import { Loader2, Plus, X } from "lucide-react";
 import type { ClaudeCodeMcpServer, FormPair, McpServer, McpServerForm } from "../lib/types";
 import {
   checkMcpServer,
+  classifySecretNames,
+  discardPendingMcpServers,
   importClaudeCodeMcpServers,
   importMcpServersJson,
   listClaudeCodeMcpServers,
@@ -22,7 +24,6 @@ interface AddMcpServerDialogProps {
   editing?: McpServer;
 }
 
-const SECRET_NAME = /KEY|TOKEN|SECRET|PASSWORD/i;
 /** The backend's wording when an edit needs its secrets typed again. */
 const SECRETS_AGAIN = /^Enter the secrets again/i;
 
@@ -87,9 +88,31 @@ export function AddMcpServerDialog({ onClose, onAdded, editing }: AddMcpServerDi
       ];
   const activeTab: Tab = editing ? "form" : tab;
 
+  // Which variable names hold a secret is the backend's call. A name it hasn't
+  // answered for yet is hidden like a secret until it has.
+  const [secretFlags, setSecretFlags] = useState<Record<string, boolean>>({});
+  const envNames = env.map((p) => p.name.trim()).filter(Boolean);
+  const envNamesKey = envNames.join("|");
+  useEffect(() => {
+    const unknown = envNames.filter((n) => !(n in secretFlags));
+    if (unknown.length === 0) return;
+    classifySecretNames(unknown)
+      .then((flags) =>
+        setSecretFlags((prev) => ({ ...prev, ...Object.fromEntries(unknown.map((n, i) => [n, flags[i] === true])) })),
+      )
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [envNamesKey]);
+
   const finish = async (servers: McpServer[], replace = false) => {
-    if (replace) for (const s of servers) await replaceMcpServer(s);
-    else await addMcpServers(servers);
+    try {
+      if (replace) for (const s of servers) await replaceMcpServer(s);
+      else await addMcpServers(servers);
+    } catch (e) {
+      // Not saved: the backend must not keep their keys.
+      if (!replace) void discardPendingMcpServers(servers.map((s) => s.id)).catch(() => {});
+      throw e;
+    }
     onAdded?.(servers);
     onClose();
   };
@@ -283,7 +306,7 @@ export function AddMcpServerDialog({ onClose, onAdded, editing }: AddMcpServerDi
             addLabel={kind === "http" ? "Add header" : "Add variable"}
             pairs={kind === "http" ? headers : env}
             onChange={kind === "http" ? setHeaders : setEnv}
-            isSecret={(name) => kind === "http" || SECRET_NAME.test(name)}
+            isSecret={(name) => kind === "http" || (name.trim() !== "" && secretFlags[name.trim()] !== false)}
             keepHint={!!editing}
             invalidSecrets={!!secretsError}
           />

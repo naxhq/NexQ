@@ -59,6 +59,7 @@ beforeEach(() => {
   ipc.inspectNotesFolder.mockResolvedValue(info());
   ipc.setPersonalSources.mockResolvedValue(undefined);
   ipc.deleteMcpSecrets.mockResolvedValue(undefined);
+  ipc.checkMcpServer.mockImplementation(async (id: string) => server({ id }));
   useConfigStore.setState({ llmProvider: "claude_cli" });
   useSourcesStore.setState({ config: DEFAULT_SOURCES_CONFIG, toggles: { notes: false, tools: false }, pushError: null });
 });
@@ -141,7 +142,7 @@ describe("PersonalSourcesEditor", () => {
       }),
     );
     render(<PersonalSourcesEditor variant="full" />);
-    expect(screen.getByText("Not checked")).toBeInTheDocument();
+    expect(screen.getByText("Not checked yet. Check it to switch it on")).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Use Mira" })).toBeDisabled();
 
     fireEvent.click(screen.getByRole("button", { name: "Check" }));
@@ -153,6 +154,36 @@ describe("PersonalSourcesEditor", () => {
     expect(sw).toBeEnabled();
     fireEvent.click(sw);
     await waitFor(() => expect(useSourcesStore.getState().config.mcp_servers[0].enabled).toBe(true));
+  });
+
+  it("a server that was just added is checked at once, its tools open, and it can then be switched on", async () => {
+    ipc.importMcpServersJson.mockResolvedValue([server({ id: "n1", key: "notes", label: "Notes server", enabled: false })]);
+    ipc.checkMcpServer.mockResolvedValue(
+      server({
+        id: "n1",
+        key: "notes",
+        label: "Notes server",
+        last_check: { ok: true, tool_count: 2, error: null, checked_at_ms: 1 },
+        tools: [
+          { name: "get_note", full_name: "mcp__notes__get_note", allowed: true },
+          { name: "delete_note", full_name: "mcp__notes__delete_note", allowed: false },
+        ],
+      }),
+    );
+    setConfig({});
+    render(<PersonalSourcesEditor variant="full" />);
+    fireEvent.click(screen.getByRole("button", { name: /add server/i }));
+    fireEvent.change(screen.getByLabelText("Server JSON"), { target: { value: '{"mcpServers":{}}' } });
+    fireEvent.click(screen.getByRole("button", { name: "Add servers" }));
+
+    expect(await screen.findByText("Ready with 2 tools")).toBeInTheDocument();
+    expect(ipc.checkMcpServer).toHaveBeenCalledWith("n1");
+    // The list is already open, so what the AI may call is in front of the user.
+    expect(screen.getByText("get_note")).toBeInTheDocument();
+    expect(screen.getByText("delete_note")).toBeInTheDocument();
+    const sw = screen.getByRole("switch", { name: "Use Notes server" });
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    expect(sw).toBeEnabled();
   });
 
   it("a failed Check shows the error and keeps the server off", async () => {

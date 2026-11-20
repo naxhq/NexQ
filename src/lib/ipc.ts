@@ -940,6 +940,20 @@ export async function checkMcpServer(serverId: string | null, draft: McpServerFo
   return invoke<McpServer>("check_mcp_server", { serverId, draft });
 }
 
+/**
+ * Which environment variable names hold a secret (so their values are hidden
+ * and kept in Credential Manager). The backend decides; there is no copy of
+ * the rule here.
+ */
+export async function classifySecretNames(names: string[]): Promise<boolean[]> {
+  return invoke<boolean[]>("classify_secret_names", { names });
+}
+
+/** The webview dropped servers the backend handed it without saving them: free their keys. */
+export async function discardPendingMcpServers(ids: string[]): Promise<void> {
+  return invoke("discard_pending_mcp_servers", { ids });
+}
+
 /** Forget the saved secrets of a saved server that is being removed (call before saving the removal). */
 export async function deleteMcpSecrets(serverId: string): Promise<void> {
   return invoke("delete_mcp_secrets", { serverId });

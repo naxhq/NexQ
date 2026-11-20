@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { ChevronDown, Loader2, Pencil, Wrench, X } from "lucide-react";
 import type { McpServer } from "../lib/types";
 import { SourceSwitch } from "./SourceSwitch";
@@ -11,6 +11,8 @@ interface McpServerCardProps {
   onEdit: () => void;
   onRemove: () => void;
   onToolToggle: (toolName: string, allowed: boolean) => void;
+  /** Open the tool list (a new server's first successful Check). */
+  autoOpen?: boolean;
 }
 
 export const NEEDS_SIGN_IN_TEXT = "Needs sign-in, not supported yet";
@@ -25,13 +27,17 @@ function statusOf(server: McpServer, checking: boolean): { text: string; tone: "
   if (checking) return { text: "Checking...", tone: "quiet" };
   if (server.needs_sign_in) return { text: NEEDS_SIGN_IN_TEXT, tone: "bad" };
   const c = server.last_check;
-  if (!c) return { text: "Not checked", tone: "quiet" };
+  if (!c) return { text: server.enabled ? "Not checked" : "Not checked yet. Check it to switch it on", tone: "quiet" };
   if (c.ok) return { text: `Ready with ${c.tool_count} ${c.tool_count === 1 ? "tool" : "tools"}`, tone: "ok" };
   return { text: `Failed: ${c.error ?? "the server did not start"}`, tone: "bad" };
 }
 
-export function McpServerCard({ server, checking, onToggle, onCheck, onEdit, onRemove, onToolToggle }: McpServerCardProps) {
+export function McpServerCard({ server, checking, onToggle, onCheck, onEdit, onRemove, onToolToggle, autoOpen = false }: McpServerCardProps) {
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (autoOpen) setOpen(true);
+  }, [autoOpen]);
+  const statusId = useId();
   const [confirmRemove, setConfirmRemove] = useState(false);
   const status = statusOf(server, checking);
   const ready = !!server.last_check?.ok && !server.needs_sign_in;
@@ -56,6 +62,7 @@ export function McpServerCard({ server, checking, onToggle, onCheck, onEdit, onR
             {summaryOf(server)}
           </div>
           <div
+            id={statusId}
             className={`mt-1 flex items-center gap-1.5 text-xs ${
               status.tone === "ok" ? "text-success" : status.tone === "bad" ? "text-destructive" : "text-muted-foreground/80"
             }`}
@@ -69,6 +76,7 @@ export function McpServerCard({ server, checking, onToggle, onCheck, onEdit, onR
             checked={server.enabled}
             disabled={cantEnable}
             onChange={onToggle}
+            describedBy={statusId}
             label={`Use ${server.label}`}
           />
         </div>
