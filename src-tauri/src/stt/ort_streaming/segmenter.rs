@@ -2,6 +2,7 @@
 // CTC in ctc.rs). Audio arrives in arbitrary chunks; this buffers it, decides
 // where a segment ends, hands the finished segment to a recognizer, and sends
 // the text on. The decoders keep only their model contract and `recognize`.
+// The token helpers they both need (`argmax`, `decode_tokens`) live here too.
 
 use super::{AudioMessage, TranscriptResult, SAMPLE_RATE};
 use std::collections::HashMap;
@@ -10,7 +11,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 /// Mean power below this is silence (no decoding, counts toward a pause).
-pub(super) const SILENCE_ENERGY: f64 = 1e-6;
+const SILENCE_ENERGY: f64 = 1e-6;
 
 /// Samples of consecutive silence (0.8 s) that end a segment...
 const PAUSE_SAMPLES: usize = 12_800;
@@ -40,7 +41,7 @@ pub(super) fn decode_tokens(ids: &[i64], vocab: &HashMap<i64, String>) -> String
     text.trim().to_owned()
 }
 
-pub(super) fn epoch_ms() -> u64 {
+fn epoch_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
 }
 
@@ -240,7 +241,17 @@ mod tests {
         let sent = Instant::now();
         tx.send(AudioMessage::Samples(speech(500))).unwrap();
         // The sender stays open, so only the idle timer can flush this.
-        let result = result_rx.blocking_recv().expect("the idle flush sends a result");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let result = loop {
+            match result_rx.try_recv() {
+                Ok(result) => break result,
+                Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+                Err(_) => {
+                    let _ = tx.send(AudioMessage::Stop);
+                    panic!("the idle flush sent nothing within 5 s");
+                }
+            }
+        };
         assert!(sent.elapsed() >= Duration::from_millis(700), "flushed after {:?}", sent.elapsed());
         assert_eq!(result.text, "idle");
         tx.send(AudioMessage::Stop).unwrap();
