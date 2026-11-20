@@ -10,7 +10,7 @@ import type {
   PersonalSourcesConfig,
   SourceToggles,
 } from "../lib/types";
-import { mcpServersNeedingApproval, setPersonalSources } from "../lib/ipc";
+import { setPersonalSources } from "../lib/ipc";
 import { useConfigStore } from "./configStore";
 
 // Same plugin-store file as `configStore`, so the launcher and the overlay see
@@ -94,7 +94,6 @@ function normalizeCheck(raw: unknown): McpCheckStatus | null {
     tool_count: typeof raw.tool_count === "number" ? raw.tool_count : 0,
     error: typeof raw.error === "string" ? raw.error : null,
     checked_at_ms: typeof raw.checked_at_ms === "number" ? raw.checked_at_ms : 0,
-    not_approved: raw.not_approved === true,
   };
 }
 
@@ -159,8 +158,6 @@ interface SourcesState {
   loaded: boolean;
   /** Why the backend refused the last config (an invalid or duplicate server key); `null` when it took it. */
   pushError: string | null;
-  /** Saved servers the user has not allowed to run yet (the backend says); their Check asks. */
-  needsApproval: string[];
   load: () => Promise<void>;
   /** Set, save and give to the backend. Resolves once the backend has answered; never rejects. */
   setConfig: (c: PersonalSourcesConfig) => Promise<void>;
@@ -217,7 +214,6 @@ function pushToBackend(config: PersonalSourcesConfig): Promise<void> {
     try {
       await setPersonalSources(config);
       useSourcesStore.setState({ pushError: null });
-      await refreshApprovals();
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       console.warn("[sourcesStore] Backend refused the sources:", message);
@@ -226,15 +222,6 @@ function pushToBackend(config: PersonalSourcesConfig): Promise<void> {
   };
   pushChain = pushChain.then(run, run);
   return pushChain;
-}
-
-/** Ask the backend which servers still need the user's OK. Never rejects. */
-export async function refreshApprovals(): Promise<void> {
-  try {
-    useSourcesStore.setState({ needsApproval: await mcpServersNeedingApproval() });
-  } catch (e) {
-    console.warn("[sourcesStore] Couldn't read which servers need approval:", e);
-  }
 }
 
 let unlisten: Array<() => void> = [];
@@ -271,7 +258,6 @@ export const useSourcesStore = create<SourcesState>((set, get) => ({
   toggles: DEFAULT_SOURCE_TOGGLES,
   loaded: false,
   pushError: null,
-  needsApproval: [],
 
   load: async () => {
     try {

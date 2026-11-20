@@ -1224,8 +1224,6 @@ export interface McpCheckStatus {
   tool_count: number;
   error: string | null;
   checked_at_ms: number;
-  /** The user said no to running the server, so nothing was started. */
-  not_approved: boolean;
 }
 
 export interface McpServer {

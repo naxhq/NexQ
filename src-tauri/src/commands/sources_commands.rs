@@ -15,9 +15,6 @@
 
 use crate::credentials::CredentialManager;
 use crate::llm::cli_agent::mcp_check::list_server_tools;
-use crate::sources::approval::{
-    ApprovalPrompt, Approvals, ApprovedServer, NotApproved, NOT_APPROVED_TEXT,
-};
 use crate::sources::config::{
     is_valid_tool_full_name, EnvVar, McpCheckStatus, McpServer, McpTransport, PersonalSourcesConfig,
 };
@@ -706,7 +703,6 @@ fn apply_check(server: &McpServer, found: Result<Vec<String>, String>, now_ms: u
                 tool_count: out.tools.len(),
                 error: None,
                 checked_at_ms: now_ms,
-                not_approved: false,
             });
         }
         Err(error) => {
@@ -715,66 +711,10 @@ fn apply_check(server: &McpServer, found: Result<Vec<String>, String>, now_ms: u
                 tool_count: 0,
                 error: Some(error),
                 checked_at_ms: now_ms,
-                not_approved: false,
             });
         }
     }
     out
-}
-
-/// `server` after the user said no to running it: nothing was started, the
-/// tools stay as they were.
-fn denied_check(server: &McpServer, now_ms: u64) -> McpServer {
-    let mut out = server.clone();
-    out.last_check = Some(McpCheckStatus {
-        ok: false,
-        tool_count: 0,
-        error: Some(NOT_APPROVED_TEXT.to_string()),
-        checked_at_ms: now_ms,
-        not_approved: true,
-    });
-    out
-}
-
-/// The Check of one server: get the user's OK first (`ask` is the native
-/// dialog), and start nothing unless they gave it. `run` starts the server and
-/// lists its tools; it only gets an [`ApprovedServer`]. The second value says
-/// whether this Check made the server approved.
-async fn run_check<'a, Ask, AskFut, Run, RunFut>(
-    server: &'a McpServer,
-    approvals: &Approvals,
-    ask: Ask,
-    run: Run,
-    now_ms: u64,
-) -> (McpServer, bool)
-where
-    Ask: FnOnce(ApprovalPrompt) -> AskFut,
-    AskFut: std::future::Future<Output = bool>,
-    Run: FnOnce(ApprovedServer<'a>) -> RunFut,
-    RunFut: std::future::Future<Output = Result<Vec<String>, String>>,
-{
-    let was_approved = approvals.is_approved(server);
-    match approvals.ensure(server, ask).await {
-        Ok(approved) => (apply_check(server, run(approved).await, now_ms), !was_approved),
-        Err(NotApproved) => (denied_check(server, now_ms), false),
-    }
-}
-
-/// Show the native "Run this MCP server?" dialog over `window`. A dialog that
-/// never answers (the window went away) counts as no.
-async fn ask_with_dialog(app: &AppHandle, window: &tauri::WebviewWindow, prompt: ApprovalPrompt) -> bool {
-    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .message(prompt.body)
-        .title(prompt.title)
-        .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom("Allow".into(), "Don't run".into()))
-        .parent(window)
-        .show(move |allowed| {
-            let _ = tx.send(allowed);
-        });
-    rx.await.unwrap_or(false)
 }
 
 fn now_ms() -> u64 {
@@ -827,10 +767,7 @@ fn check_secret(plan: &CheckPlan, store: &dyn SecretStore, id: &str) -> Option<S
     plan.typed.get(id).cloned().or_else(|| plan.use_stored.then(|| store.get(id)).flatten())
 }
 
-/// Start a server the way a session would and list its tools (up to 60 s). A
-/// server whose command, arguments, URL or secret names the user has not
-/// allowed yet asks first, in a native dialog over the window that asked;
-/// "Don't run" returns a status with `not_approved` set and starts nothing.
+/// Start a server the way a session would and list its tools (up to 60 s).
 /// `server_id` names a saved server, found in backend state. `draft` checks an
 /// unsaved or edited form instead (with `server_id` set to the server being
 /// edited, if any), using the secrets typed in it. Never an `Err` for a server
@@ -841,8 +778,6 @@ pub async fn check_mcp_server(
     server_id: Option<String>,
     draft: Option<McpServerForm>,
     state: State<'_, AppState>,
-    app: AppHandle,
-    window: tauri::WebviewWindow,
 ) -> Result<McpServer, String> {
     let saved = match &server_id {
         Some(id) => Some(saved_server(&state, id).ok_or("NexQ doesn't have this server saved yet. Save your sources first.")?),
@@ -851,27 +786,8 @@ pub async fn check_mcp_server(
     let store = SystemSecrets::new();
     let plan = plan_check(saved.as_ref(), draft.as_ref(), &saved_keys(&state), &|id| store.get(id).is_some())?;
     let secret = |id: &str| check_secret(&plan, &store, id);
-    let (result, newly_approved) = run_check(
-        &plan.server,
-        &state.mcp_approvals,
-        |prompt| ask_with_dialog(&app, &window, prompt),
-        |approved| async move { list_server_tools(&approved, &secret).await },
-        now_ms(),
-    )
-    .await;
-    // A server that was left out of the sessions for lack of an OK joins them.
-    if newly_approved && result.enabled {
-        state.sources_secrets_rev.fetch_add(1, Ordering::SeqCst);
-    }
-    Ok(result)
-}
-
-/// Ids of the saved servers the user has not approved to run yet (their card
-/// reads "Needs your OK. Run Check."). Backend state decides, never the webview.
-#[command]
-pub fn mcp_servers_needing_approval(state: State<'_, AppState>) -> Vec<String> {
-    let Ok(cfg) = state.personal_sources.read() else { return Vec::new() };
-    cfg.mcp_servers.iter().filter(|s| !state.mcp_approvals.is_approved(s)).map(|s| s.id.clone()).collect()
+    let found = list_server_tools(&plan.server, &secret).await;
+    Ok(apply_check(&plan.server, found, now_ms()))
 }
 
 /// Forget the saved secrets of a saved server that is being removed. The
@@ -1166,7 +1082,7 @@ mod tests {
                 EnvVar { name: "OLD_TOKEN".into(), value: None, secret: true },
             ],
             tools: vec![McpTool { name: "kb".into(), full_name: "mcp__mira__kb".into(), allowed: true }],
-            last_check: Some(McpCheckStatus { ok: true, tool_count: 1, error: None, checked_at_ms: 5, not_approved: false }),
+            last_check: Some(McpCheckStatus { ok: true, tool_count: 1, error: None, checked_at_ms: 5 }),
             ..Default::default()
         };
         let form = McpServerForm {
@@ -1277,7 +1193,7 @@ mod tests {
         assert_eq!(ok.tools.len(), 2);
         assert!(!ok.tools[0].allowed, "an earlier switch is kept");
         assert!(!ok.tools[1].allowed, "a write-looking new tool starts off");
-        assert_eq!(ok.last_check, Some(McpCheckStatus { ok: true, tool_count: 2, error: None, checked_at_ms: 7, not_approved: false }));
+        assert_eq!(ok.last_check, Some(McpCheckStatus { ok: true, tool_count: 2, error: None, checked_at_ms: 7 }));
 
         let failed = apply_check(&ok, Err("The server failed to start.".into()), 9);
         assert_eq!(failed.tools, ok.tools);
@@ -1528,7 +1444,7 @@ mod tests {
         assert!(needs_sources_restart(&folder_cfg, &renamed));
         let mut checked = folder_cfg.clone();
         checked.mcp_servers[0].last_check =
-            Some(McpCheckStatus { ok: true, tool_count: 1, error: None, checked_at_ms: 3, not_approved: false });
+            Some(McpCheckStatus { ok: true, tool_count: 1, error: None, checked_at_ms: 3 });
         checked.mcp_notice_seen = true;
         assert!(!needs_sources_restart(&folder_cfg, &checked));
         let mut switched = folder_cfg.clone();
@@ -1643,84 +1559,5 @@ mod tests {
         }
         assert!(saved_server(&state, "p0").is_none());
         assert!(saved_server(&state, &format!("p{}", PENDING_SERVERS_MAX + 4)).is_some());
-    }
-
-    #[tokio::test]
-    async fn a_check_of_an_unapproved_server_asks_first_and_runs_nothing_on_no() {
-        let approvals = Approvals::in_memory();
-        let server = saved_mira();
-        let ran = std::sync::atomic::AtomicBool::new(false);
-        let (result, newly) = run_check(
-            &server,
-            &approvals,
-            |_| async { false },
-            |_| async {
-                ran.store(true, Ordering::SeqCst);
-                Ok(vec!["mcp__mira__kb_search".to_string()])
-            },
-            9,
-        )
-        .await;
-        assert!(!ran.load(Ordering::SeqCst), "the server must not start");
-        assert!(!newly && !approvals.is_approved(&server));
-        let status = result.last_check.unwrap();
-        assert!(!status.ok && status.not_approved);
-        assert_eq!(status.error.as_deref(), Some("Not approved. Run Check to review it again."));
-        assert_eq!(result.tools, server.tools);
-    }
-
-    #[tokio::test]
-    async fn allow_runs_the_check_once_and_the_next_check_does_not_ask() {
-        let approvals = Approvals::in_memory();
-        let server = saved_mira();
-        let asked = std::sync::atomic::AtomicUsize::new(0);
-        let found = || async { Ok(vec!["mcp__mira__kb_search".to_string()]) };
-        let (first, newly) = run_check(
-            &server,
-            &approvals,
-            |p| {
-                asked.fetch_add(1, Ordering::SeqCst);
-                assert!(p.body.contains("node s.js"));
-                async { true }
-            },
-            |_| found(),
-            1,
-        )
-        .await;
-        assert!(newly && first.last_check.as_ref().unwrap().ok);
-        assert_eq!(first.tools.len(), 1);
-        assert!(approvals.is_approved(&server));
-
-        let (second, newly) = run_check(
-            &server,
-            &approvals,
-            |_| {
-                asked.fetch_add(1, Ordering::SeqCst);
-                async { true }
-            },
-            |_| found(),
-            2,
-        )
-        .await;
-        assert!(!newly && second.last_check.unwrap().ok);
-        assert_eq!(asked.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn a_changed_command_must_be_approved_again_but_a_rename_need_not() {
-        let approvals = Approvals::in_memory();
-        let server = saved_mira();
-        let ok = || async { Ok(vec![]) };
-        run_check(&server, &approvals, |_| async { true }, |_| ok(), 1).await;
-
-        let mut renamed = server.clone();
-        renamed.label = "Other name".into();
-        let (r, _) = run_check(&renamed, &approvals, |_| async { panic!("asked") }, |_| ok(), 2).await;
-        assert!(r.last_check.unwrap().ok);
-
-        let mut moved = server.clone();
-        moved.transport = McpTransport::Stdio { command: "node".into(), args: vec!["other.js".into()] };
-        let (r, _) = run_check(&moved, &approvals, |_| async { false }, |_| ok(), 3).await;
-        assert!(r.last_check.unwrap().not_approved);
     }
 }

@@ -12,7 +12,7 @@ import {
 } from "../lib/ipc";
 import { SourcesModal } from "./SourcesModal";
 import { addMcpServers, errorText, replaceMcpServer } from "./sourcesActions";
-import { NEEDS_SIGN_IN_TEXT, NOT_APPROVED_TEXT } from "./McpServerCard";
+import { NEEDS_SIGN_IN_TEXT } from "./McpServerCard";
 
 type Tab = "json" | "form" | "claude";
 
@@ -169,9 +169,7 @@ export function AddMcpServerDialog({ onClose, onAdded, editing }: AddMcpServerDi
       setCheckResult(
         c?.ok
           ? { ok: true, text: `Ready with ${c.tool_count} ${c.tool_count === 1 ? "tool" : "tools"}` }
-          : c?.not_approved
-            ? { ok: false, text: NOT_APPROVED_TEXT }
-            : { ok: false, text: `Failed: ${c?.error ?? "the server did not start"}` },
+          : { ok: false, text: `Failed: ${c?.error ?? "the server did not start"}` },
       );
     } catch (e) {
       setCheckResult({ ok: false, text: `Failed: ${errorText(e)}` });

@@ -941,16 +941,6 @@ export async function checkMcpServer(serverId: string | null, draft: McpServerFo
 }
 
 /**
- * Ids of the saved servers the user has not allowed to run yet. The backend
- * decides (a native dialog opens on the server's Check); there is no way to
- * record an approval from here.
- */
-export async function mcpServersNeedingApproval(): Promise<string[]> {
-  const ids = await invoke<unknown>("mcp_servers_needing_approval");
-  return Array.isArray(ids) ? ids.filter((i): i is string => typeof i === "string") : [];
-}
-
-/**
  * Which environment variable names hold a secret (so their values are hidden
  * and kept in Credential Manager). The backend decides; there is no copy of
  * the rule here.

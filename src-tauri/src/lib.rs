@@ -159,8 +159,6 @@ pub fn run() {
                 log::info!("Removed {stale} leftover private session file(s)");
             }
             let mut app_state = AppState::new();
-            app_state.mcp_approvals =
-                Arc::new(sources::approval::Approvals::load(&sources::approval::default_path()));
 
             // -- Initialize DatabaseManager --
             let app_data_dir = app
@@ -715,7 +713,6 @@ pub fn run() {
             sources_commands::list_claude_code_mcp_servers,
             sources_commands::import_claude_code_mcp_servers,
             sources_commands::check_mcp_server,
-            sources_commands::mcp_servers_needing_approval,
             sources_commands::classify_secret_names,
             sources_commands::discard_pending_mcp_servers,
             sources_commands::delete_mcp_secrets,

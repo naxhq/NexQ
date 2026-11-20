@@ -21,7 +21,6 @@ const ipc = vi.hoisted(() => ({
   inspectNotesFolder: vi.fn(),
   setPersonalSources: vi.fn(),
   checkMcpServer: vi.fn(),
-  mcpServersNeedingApproval: vi.fn(),
   deleteMcpSecrets: vi.fn(),
   importMcpServersJson: vi.fn(),
   saveMcpServerForm: vi.fn(),
@@ -68,12 +67,11 @@ beforeEach(() => {
   ipc.inspectNotesFolder.mockResolvedValue(info());
   ipc.setPersonalSources.mockResolvedValue(undefined);
   ipc.deleteMcpSecrets.mockResolvedValue(undefined);
-  ipc.mcpServersNeedingApproval.mockResolvedValue([]);
   ipc.checkMcpServer.mockImplementation(async (id: string) => server({ id }));
   storeFlags.failSet = false;
   useToastStore.setState({ toasts: [] });
   useConfigStore.setState({ llmProvider: "claude_cli" });
-  useSourcesStore.setState({ config: DEFAULT_SOURCES_CONFIG, toggles: { notes: false, tools: false }, pushError: null, needsApproval: [] });
+  useSourcesStore.setState({ config: DEFAULT_SOURCES_CONFIG, toggles: { notes: false, tools: false }, pushError: null });
 });
 
 afterEach(() => cleanup());
@@ -145,7 +143,7 @@ describe("PersonalSourcesEditor", () => {
     setConfig({ mcp_servers: [server()] });
     ipc.checkMcpServer.mockResolvedValue(
       server({
-        last_check: { ok: true, tool_count: 3, error: null, checked_at_ms: 1, not_approved: false },
+        last_check: { ok: true, tool_count: 3, error: null, checked_at_ms: 1 },
         tools: [
           { name: "person_brief", full_name: "mcp__mira__person_brief", allowed: true },
           { name: "add_task", full_name: "mcp__mira__add_task", allowed: false },
@@ -175,7 +173,7 @@ describe("PersonalSourcesEditor", () => {
         id: "n1",
         key: "notes",
         label: "Notes server",
-        last_check: { ok: true, tool_count: 2, error: null, checked_at_ms: 1, not_approved: false },
+        last_check: { ok: true, tool_count: 2, error: null, checked_at_ms: 1 },
         tools: [
           { name: "get_note", full_name: "mcp__notes__get_note", allowed: true },
           { name: "delete_note", full_name: "mcp__notes__delete_note", allowed: false },
@@ -198,43 +196,9 @@ describe("PersonalSourcesEditor", () => {
     expect(sw).toBeEnabled();
   });
 
-  it("a server the backend hasn't approved says so, even after an earlier good Check, and can't be switched on", async () => {
-    ipc.mcpServersNeedingApproval.mockResolvedValue(["s1"]);
-    setConfig({
-      mcp_servers: [server({ last_check: { ok: true, tool_count: 1, error: null, checked_at_ms: 1, not_approved: false } })],
-    });
-    useSourcesStore.setState({ needsApproval: ["s1"] });
-    render(<PersonalSourcesEditor variant="full" />);
-    expect(screen.getByRole("status")).toHaveTextContent("Needs your OK. Run Check.");
-    expect(screen.getByRole("button", { name: "Check" })).toBeEnabled();
-    expect(screen.getByRole("switch", { name: "Use Mira" })).toBeDisabled();
-  });
-
-  it("a Check the user refused reads Not approved, and an allowed one makes the server ready", async () => {
-    ipc.mcpServersNeedingApproval.mockResolvedValue(["s1"]);
-    setConfig({ mcp_servers: [server()] });
-    useSourcesStore.setState({ needsApproval: ["s1"] });
-    ipc.checkMcpServer.mockResolvedValueOnce(
-      server({ last_check: { ok: false, tool_count: 0, error: "Not approved. Run Check to review it again.", checked_at_ms: 1, not_approved: true } }),
-    );
-    render(<PersonalSourcesEditor variant="full" />);
-    fireEvent.click(screen.getByRole("button", { name: "Check" }));
-    expect(await screen.findByText("Not approved. Run Check to review it again.")).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "Use Mira" })).toBeDisabled();
-
-    // Check again, allow: the backend no longer lists it.
-    ipc.mcpServersNeedingApproval.mockResolvedValue([]);
-    ipc.checkMcpServer.mockResolvedValueOnce(
-      server({ last_check: { ok: true, tool_count: 2, error: null, checked_at_ms: 2, not_approved: false } }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Check" }));
-    expect(await screen.findByText("Ready with 2 tools")).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "Use Mira" })).toBeEnabled();
-  });
-
   it("a failed Check shows the error and keeps the server off", async () => {
     setConfig({ mcp_servers: [server()] });
-    ipc.checkMcpServer.mockResolvedValue(server({ last_check: { ok: false, tool_count: 0, error: "spawn node ENOENT", checked_at_ms: 1, not_approved: false } }));
+    ipc.checkMcpServer.mockResolvedValue(server({ last_check: { ok: false, tool_count: 0, error: "spawn node ENOENT", checked_at_ms: 1 } }));
     render(<PersonalSourcesEditor variant="full" />);
     fireEvent.click(screen.getByRole("button", { name: "Check" }));
     expect(await screen.findByText("Failed: spawn node ENOENT")).toBeInTheDocument();
@@ -247,7 +211,7 @@ describe("PersonalSourcesEditor", () => {
       mcp_servers: [
         server({
           enabled: true,
-          last_check: { ok: true, tool_count: 2, error: null, checked_at_ms: 1, not_approved: false },
+          last_check: { ok: true, tool_count: 2, error: null, checked_at_ms: 1 },
           tools: [
             { name: "person_brief", full_name: "mcp__mira__person_brief", allowed: true },
             { name: "add_task", full_name: "mcp__mira__add_task", allowed: false },
@@ -270,7 +234,7 @@ describe("PersonalSourcesEditor", () => {
       { name: "person_brief", full_name: "mcp__mira__person_brief", allowed: true },
       { name: "tasks", full_name: "mcp__mira__tasks", allowed: true },
     ];
-    const known = { ok: true, tool_count: 2, error: null, checked_at_ms: 1, not_approved: false };
+    const known = { ok: true, tool_count: 2, error: null, checked_at_ms: 1 };
     setConfig({ mcp_servers: [server({ enabled: true, last_check: known, tools })] });
     let finish: (s: McpServer) => void = () => {};
     ipc.checkMcpServer.mockReturnValue(new Promise<McpServer>((resolve) => (finish = resolve)));
@@ -282,7 +246,7 @@ describe("PersonalSourcesEditor", () => {
     await waitFor(() => expect(useSourcesStore.getState().config.mcp_servers[0].tools[1].allowed).toBe(false));
     // The Check answers from the copy it started with: both tools still allowed.
     await act(async () => {
-      finish(server({ enabled: true, last_check: { ...known, checked_at_ms: 2, not_approved: false }, tools }));
+      finish(server({ enabled: true, last_check: { ...known, checked_at_ms: 2 }, tools }));
     });
     const now = useSourcesStore.getState().config.mcp_servers[0];
     expect(now.tools.map((t) => t.allowed)).toEqual([true, false]);
@@ -292,7 +256,7 @@ describe("PersonalSourcesEditor", () => {
 
   it("an OAuth import is listed but can't be enabled", () => {
     setConfig({
-      mcp_servers: [server({ needs_sign_in: true, last_check: { ok: true, tool_count: 1, error: null, checked_at_ms: 1, not_approved: false } })],
+      mcp_servers: [server({ needs_sign_in: true, last_check: { ok: true, tool_count: 1, error: null, checked_at_ms: 1 } })],
     });
     render(<PersonalSourcesEditor variant="full" />);
     expect(screen.getByText("Needs sign-in, not supported yet")).toBeInTheDocument();

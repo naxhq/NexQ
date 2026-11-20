@@ -4,7 +4,7 @@ import { FolderPlus, HelpCircle, Plus } from "lucide-react";
 import type { McpServer, NotesFolderInfo } from "../lib/types";
 import { checkMcpServer, deleteMcpSecrets, inspectNotesFolder } from "../lib/ipc";
 import { useConfigStore } from "../stores/configStore";
-import { refreshApprovals, useSourcesStore } from "../stores/sourcesStore";
+import { useSourcesStore } from "../stores/sourcesStore";
 import { showToast } from "../stores/toastStore";
 import { NotesFolderCard } from "./NotesFolderCard";
 import { McpServerCard } from "./McpServerCard";
@@ -55,7 +55,6 @@ const addButton =
 export function PersonalSourcesEditor({ variant }: PersonalSourcesEditorProps) {
   const config = useSourcesStore((s) => s.config);
   const pushError = useSourcesStore((s) => s.pushError);
-  const needsApproval = useSourcesStore((s) => s.needsApproval);
   const provider = useConfigStore((s) => s.llmProvider);
   const gatingId = useId();
   const gated = provider !== "claude_cli";
@@ -124,8 +123,6 @@ export function PersonalSourcesEditor({ variant }: PersonalSourcesEditorProps) {
     try {
       const result = await checkMcpServer(server.id);
       await applyCheckResult(result);
-      // The Check may just have been allowed: the card reads the backend's answer.
-      await refreshApprovals();
       if (expand && result.last_check?.ok) setExpanded((prev) => new Set(prev).add(server.id));
     } catch (e) {
       showToast(`Couldn't check ${server.label}: ${errorText(e)}`, "error");
@@ -226,7 +223,6 @@ export function PersonalSourcesEditor({ variant }: PersonalSourcesEditorProps) {
                   key={s.id}
                   server={s}
                   checking={checking.has(s.id)}
-                  needsApproval={needsApproval.includes(s.id)}
                   autoOpen={expanded.has(s.id)}
                   onToggle={(enabled) => void patchMcpServer(s.id, (cur) => ({ ...cur, enabled }))}
                   onCheck={() => void check(s)}

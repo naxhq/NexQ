@@ -162,9 +162,6 @@ pub struct AppState {
     /// A with-sources session that just failed to start: answers skip it for
     /// a while instead of waiting on it again.
     pub sources_cooldown: Arc<crate::llm::cli_agent::routing::SourcesCooldown>,
-    /// MCP servers the user allowed to run (by what they execute). Only a
-    /// native dialog answered Allow records one; see `sources::approval`.
-    pub mcp_approvals: Arc<crate::sources::approval::Approvals>,
 }
 
 /// The meeting between `start_meeting` and `end_meeting`.
@@ -228,7 +225,6 @@ impl AppState {
             sources_applied: Arc::new(Mutex::new((PersonalSourcesConfig::default(), 0))),
             sources_cooldown: Arc::new(Default::default()),
             pending_servers: Arc::new(Mutex::new(Vec::new())),
-            mcp_approvals: Arc::new(crate::sources::approval::Approvals::in_memory()),
         }
     }
 }
