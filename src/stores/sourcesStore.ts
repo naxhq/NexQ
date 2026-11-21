@@ -209,10 +209,31 @@ async function persist(key: string, value: unknown, strict = false): Promise<voi
 /** Pushes reach the backend in the order they were made. */
 let pushChain: Promise<void> = Promise.resolve();
 
+/**
+ * At startup the window can ask before the backend has finished setting up
+ * (Tauri: "state not managed ... call `.manage()`"). That's not a refusal:
+ * wait and send again, for up to ~30 s.
+ */
+const STARTING_RE = /state not managed/i;
+const STARTING_WAIT_MS = 150;
+const STARTING_TRIES = 200;
+
+async function sendWhenReady(config: PersonalSourcesConfig): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await setPersonalSources(config);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (!STARTING_RE.test(message) || attempt >= STARTING_TRIES) throw e;
+      await new Promise((r) => setTimeout(r, STARTING_WAIT_MS));
+    }
+  }
+}
+
 function pushToBackend(config: PersonalSourcesConfig): Promise<void> {
   const run = async () => {
     try {
-      await setPersonalSources(config);
+      await sendWhenReady(config);
       useSourcesStore.setState({ pushError: null });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);

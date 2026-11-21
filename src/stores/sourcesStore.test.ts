@@ -8,7 +8,7 @@ import type { McpServer, PersonalSourcesConfig } from "../lib/types";
 const saved = vi.hoisted(() => new Map<string, unknown>());
 const keyListeners = vi.hoisted(() => [] as Array<{ key: string; cb: (v: unknown) => void }>);
 const invokeCalls = vi.hoisted(() => [] as Array<{ cmd: string; args: unknown }>);
-const backend = vi.hoisted(() => ({ reject: null as string | null }));
+const backend = vi.hoisted(() => ({ reject: null as string | null, startingFor: 0 }));
 const writes = vi.hoisted(() => ({ count: 0 }));
 
 vi.mock("@tauri-apps/plugin-store", () => ({
@@ -34,6 +34,10 @@ vi.mock("@tauri-apps/plugin-store", () => ({
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string, args: unknown) => {
     invokeCalls.push({ cmd, args });
+    if (cmd === "set_personal_sources" && backend.startingFor > 0) {
+      backend.startingFor -= 1;
+      throw "state not managed for field `state` on command `set_personal_sources`. You must call `.manage()` before using this command";
+    }
     if (cmd === "set_personal_sources" && backend.reject) throw new Error(backend.reject);
     return null;
   }),
@@ -82,6 +86,7 @@ beforeEach(() => {
   keyListeners.length = 0;
   invokeCalls.length = 0;
   backend.reject = null;
+  backend.startingFor = 0;
   writes.count = 0;
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -145,6 +150,15 @@ describe("sourcesStore", () => {
     await openWindow();
     expect(pushes()).toHaveLength(1);
     expect(writes.count).toBe(0);
+  });
+
+  it("waits for a backend that is still starting instead of showing its error", async () => {
+    saved.set("personalSources", config({ mcp_servers: [server()] }));
+    backend.startingFor = 2;
+    const w = await openWindow();
+    const pushes = invokeCalls.filter((c) => c.cmd === "set_personal_sources");
+    expect(pushes).toHaveLength(3);
+    expect(w.useSourcesStore.getState().pushError).toBeNull();
   });
 
   it("keeps the backend's refusal for the editor to show", async () => {
