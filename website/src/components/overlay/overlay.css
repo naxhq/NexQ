@@ -1,0 +1,1296 @@
+/*
+ * The overlay recreation. Mirrors src/overlay/*.tsx and src/index.css of the app: glass panel,
+ * rounded-xl, border-border/20, panels at card/20, 10 / 12 / 13 px text, speaker colours.
+ *
+ * Everything is in em. The window's font size follows its container (cqw), so the whole thing scales
+ * as one picture and line breaks stay the same at every size. Below 520px of container width it
+ * switches to one column at a readable size (the app's own panels wrap the same way).
+ *
+ * Text colours that the app draws very faint (45% to 60% alpha) are raised here to pass AA on this
+ * background; the hue and the hierarchy are the app's.
+ *
+ * Which moment is on screen is `data-view` on .ov (h0 h1 a b c d e). Groups (.ov-g) say which views
+ * they belong to in `data-for`. Only transform and opacity move.
+ */
+
+.ov-fit {
+  container-type: inline-size;
+  width: 100%;
+}
+
+.ov {
+  --ov-fs: clamp(12px, 2.35cqw, 15px);
+  --ov-mut: 215 14% 64%;
+  /* Blue text on its own 10-20% tint: the app's blue, a little lighter so it passes AA. */
+  --ov-blue: 217 92% 71%;
+  --ov-spring: var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 39em;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: var(--ov-fs);
+  line-height: 1.4;
+  color: hsl(var(--foreground));
+  text-align: left;
+  border-radius: 0.75em;
+  overflow: hidden;
+  /* The nx-glass blur needs something behind it: see .nx-screen in stage.css. */
+}
+.ov:focus-visible {
+  outline: 2px solid hsl(var(--primary));
+  outline-offset: 3px;
+  border-radius: 0.75em;
+}
+.ov *,
+.ov *::before,
+.ov *::after {
+  box-sizing: border-box;
+}
+.ov p,
+.ov ul {
+  margin: 0;
+}
+.ov .ov-i {
+  width: 1.08em;
+  height: 1.08em;
+  flex: none;
+}
+.ov .ov-i--s {
+  width: 0.92em;
+  height: 0.92em;
+}
+.ov .ov-i--l {
+  width: 1.5em;
+  height: 1.5em;
+}
+.ov .ov-i--xl {
+  width: 1.7em;
+  height: 1.7em;
+}
+
+/* ─── Header (OverlayView.tsx L196-335) ─── */
+.ov-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75em;
+  padding: 0.5em 0.9em;
+  border-bottom: 1px solid hsl(var(--border) / 0.12);
+}
+.ov-hl {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.65em;
+}
+.ov-hr {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.1em;
+}
+.ov-grip {
+  width: 0.95em;
+  height: 0.95em;
+  flex: none;
+  color: hsl(var(--ov-mut) / 0.5);
+}
+.ov-title {
+  font-size: 0.92em;
+  font-weight: 600;
+  color: hsl(var(--foreground) / 0.9);
+}
+.ov-rec {
+  display: flex;
+  align-items: center;
+  gap: 0.45em;
+  padding: 0.18em 0.7em;
+  border-radius: 999px;
+  background: hsl(var(--destructive) / 0.2);
+  box-shadow: 0 0 0 1px hsl(var(--destructive) / 0.12);
+  font-size: 0.77em;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: hsl(0 90% 70%);
+}
+.ov-ping {
+  position: relative;
+  display: inline-flex;
+  width: 0.85em;
+  height: 0.85em;
+}
+.ov-ping i,
+.ov-ping b {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: hsl(var(--destructive));
+}
+.ov-ping i {
+  opacity: 0.75;
+  animation: ov-ping 2.4s var(--ov-spring) infinite;
+}
+.ov-badge {
+  padding: 0.18em 0.5em;
+  border-radius: 0.3em;
+  background: rgb(74 108 247 / 0.15);
+  font-size: 0.7em;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #93a6ff;
+}
+.ov-time {
+  font-family: var(--font-mono, 'Martian Mono', ui-monospace, monospace);
+  font-size: 0.73em;
+  font-weight: 450;
+  font-variant-numeric: tabular-nums;
+  color: hsl(var(--ov-mut) / 0.9);
+}
+.ov-hb {
+  display: grid;
+  width: 2.15em;
+  height: 2.15em;
+  place-items: center;
+  border-radius: 0.5em;
+  color: hsl(var(--ov-mut) / 0.75);
+  transition:
+    background-color 0.4s var(--ov-spring),
+    color 0.4s var(--ov-spring);
+}
+.ov-hb .ov-i {
+  width: 1.08em;
+  height: 1.08em;
+}
+.ov-hb .s-on,
+.ov[data-stealth='on'] .ov-hb .s-off {
+  display: none;
+}
+.ov[data-stealth='on'] .ov-hb .s-on {
+  display: block;
+}
+.ov[data-stealth='on'] .ov-hb--stealth {
+  background: hsl(var(--primary) / 0.12);
+  color: hsl(var(--ov-blue));
+}
+.ov-sep {
+  width: 1px;
+  height: 1em;
+  margin: 0 0.25em;
+  background: hsl(var(--border) / 0.3);
+}
+.ov-tbtn {
+  display: flex;
+  align-items: center;
+  gap: 0.35em;
+  margin-left: 0.2em;
+  padding: 0.3em 0.55em;
+  border-radius: 0.45em;
+  font-size: 0.92em;
+  font-weight: 500;
+  color: hsl(var(--ov-mut) / 0.85);
+  transition:
+    background-color 0.5s var(--ov-spring),
+    color 0.5s var(--ov-spring),
+    box-shadow 0.5s var(--ov-spring);
+}
+.ov[data-view='a'] .ov-tbtn {
+  background: hsl(var(--primary) / 0.1);
+  box-shadow: 0 0 0 1px hsl(var(--primary) / 0.22);
+  color: hsl(var(--ov-blue));
+}
+.ov-end {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  margin-left: 0.3em;
+  padding: 0.4em 0.8em;
+  border-radius: 0.55em;
+  border: 1px solid hsl(var(--destructive) / 0.2);
+  background: hsl(var(--destructive) / 0.1);
+  font-size: 0.92em;
+  font-weight: 600;
+  color: hsl(0 90% 72%);
+}
+
+/* ─── Body: two panels (OverlayView.tsx L338-382) ─── */
+.ov-body {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: 0.65em;
+  padding: 0.65em 0.75em;
+}
+.ov-panel {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 0.75em;
+  background: hsl(var(--card) / 0.2);
+}
+.ov-ph {
+  flex: none;
+  padding: 0.5em 0.9em;
+  border-bottom: 1px solid hsl(var(--border) / 0.2);
+  font-size: 0.77em;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: hsl(var(--ov-mut) / 0.8);
+}
+.ov-lines {
+  position: relative;
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  align-content: start;
+  padding: 0.55em 0.5em 0.5em;
+  overflow: hidden;
+}
+.ov-right {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.65em;
+}
+
+/* Moments: stacked in one grid cell, only the matching one shows. */
+.ov-stack,
+.ov-lines {
+  isolation: isolate;
+}
+.ov-stack {
+  display: grid;
+  width: 100%;
+}
+.ov-g {
+  grid-area: 1 / 1;
+  min-width: 0;
+  opacity: 0;
+  visibility: hidden;
+  transform: translate3d(0, 0.45em, 0);
+  transition:
+    opacity 0.45s var(--ov-spring),
+    transform 0.7s var(--ov-spring),
+    visibility 0s linear 0.45s;
+  pointer-events: none;
+}
+.ov-lines > .ov-g {
+  align-self: start;
+}
+.ov-stack > .ov-g {
+  align-self: start;
+}
+.ov-stack > .ov-empty,
+.ov-stack > .ov-hero-ans {
+  align-self: stretch;
+}
+.ov[data-view='h0'] .ov-g[data-for~='h0'],
+.ov[data-view='h1'] .ov-g[data-for~='h1'],
+.ov[data-view='a'] .ov-g[data-for~='a'],
+.ov[data-view='b'] .ov-g[data-for~='b'],
+.ov[data-view='c'] .ov-g[data-for~='c'],
+.ov[data-view='d'] .ov-g[data-for~='d'],
+.ov[data-view='e'] .ov-g[data-for~='e'] {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition-delay: 0.12s, 0.12s, 0s;
+  pointer-events: auto;
+}
+/* Transcript line (TranscriptLine.tsx L228-251, 262-276, 301-316) */
+.ov-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7em;
+  padding: 0.5em 0.55em;
+  border-left: 3px solid color-mix(in srgb, var(--sp) 40%, transparent);
+  border-radius: 0.5em;
+}
+.ov-line[data-who='you'] {
+  --sp: var(--you);
+}
+.ov-line[data-who='them'] {
+  --sp: var(--them);
+}
+.ov-ts {
+  margin-top: 0.22em;
+  font-size: 0.85em;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  color: hsl(var(--ov-mut) / 0.78);
+}
+.ov-who {
+  margin-top: 0.22em;
+  flex: none;
+  font-size: 0.85em;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--sp);
+}
+.ov-lt {
+  min-width: 0;
+  flex: 1;
+}
+.ov-tx {
+  font-size: 1em;
+  line-height: 1.55;
+  color: #e4e4e7;
+}
+/* Words still being recognised: the app draws them italic at 45%; raised to 60% for contrast. */
+.ov-tail {
+  font-style: italic;
+  line-height: 1.55;
+  color: #e4e4e7;
+  opacity: 0.6;
+}
+.ov-trl {
+  margin-top: 0.25em;
+  font-size: 0.92em;
+  line-height: 1.5;
+  color: var(--translation, #fbbf24);
+}
+.js .ov-line[data-live] {
+  opacity: 0;
+  transform: translate3d(0, 0.35em, 0);
+  transition:
+    opacity 0.35s var(--ov-spring),
+    transform 0.55s var(--ov-spring);
+}
+.js .ov-line[data-live].is-on {
+  opacity: 1;
+  transform: none;
+}
+
+/* ─── Question card (QuestionDetector.tsx L138, L267-298) ─── */
+.ov-q {
+  flex: none;
+  position: relative;
+  padding: 0.65em 0.85em;
+  border: 1px solid hsl(var(--info) / 0.1);
+  border-radius: 0.75em;
+  background: hsl(var(--info) / 0.05);
+}
+.ov-qrow {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75em;
+}
+.ov-qi {
+  position: relative;
+  flex: none;
+  margin-top: 0.1em;
+  color: hsl(var(--info));
+}
+.ov-qi--idle {
+  color: hsl(var(--ov-mut) / 0.6);
+}
+.ov-qdot {
+  position: absolute;
+  top: -0.1em;
+  right: -0.1em;
+  width: 0.55em;
+  height: 0.55em;
+  border-radius: 999px;
+  background: hsl(var(--info));
+  animation: ov-pulse 2s ease-in-out infinite;
+}
+.ov-qok {
+  position: absolute;
+  top: -0.2em;
+  right: -0.25em;
+  display: grid;
+  width: 0.95em;
+  height: 0.95em;
+  place-items: center;
+  border-radius: 999px;
+  background: hsl(var(--success));
+  color: #fff;
+}
+.ov-qok .ov-i {
+  width: 0.6em;
+  height: 0.6em;
+  stroke-width: 3.5;
+}
+.ov-qt {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.96em;
+  font-weight: 500;
+  line-height: 1.5;
+  color: hsl(var(--foreground) / 0.92);
+}
+.ov-qt--idle {
+  align-self: center;
+  font-size: 0.92em;
+  font-weight: 400;
+  color: hsl(var(--ov-mut) / 0.8);
+}
+.ov-qa {
+  min-width: 5.9em;
+  justify-content: center;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  align-self: flex-start;
+  gap: 0.4em;
+  padding: 0.35em 0.6em;
+  border: 1px solid hsl(var(--info) / 0.2);
+  border-radius: 0.55em;
+  background: hsl(var(--info) / 0.1);
+  font: inherit;
+  font-size: 0.92em;
+  font-weight: 600;
+  color: hsl(var(--info));
+  transition:
+    background-color 0.3s var(--ov-spring),
+    color 0.3s var(--ov-spring),
+    border-color 0.3s var(--ov-spring);
+}
+button.ov-qa:hover {
+  background: hsl(var(--info) / 0.2);
+}
+.ov-qa .qa-a,
+.ov-qa .qa-b {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+}
+.ov-qa .qa-b {
+  display: none;
+}
+.ov-qa--done,
+.ov[data-ans]:not([data-ans='idle']) .ov-qa[data-assist] {
+  border-color: hsl(var(--success) / 0.22);
+  background: hsl(var(--success) / 0.1);
+  color: hsl(var(--success));
+}
+.ov[data-ans]:not([data-ans='idle']) .ov-qa[data-assist] .qa-a {
+  display: none;
+}
+.ov[data-ans]:not([data-ans='idle']) .ov-qa[data-assist] .qa-b {
+  display: inline-flex;
+}
+
+/* ─── Answer panel ─── */
+.ov-ai {
+  position: relative;
+  flex: 1;
+  overflow: visible;
+}
+.ov-modes {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.05em;
+  padding: 0.4em 0.45em;
+  border-bottom: 1px solid hsl(var(--border) / 0.2);
+}
+.ov-mode {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.25em;
+  padding: 0.34em 0.46em;
+  min-height: 24px; /* WCAG 2.2 target size, even when the overlay scales down */
+  border: 0;
+  border-radius: 0.55em;
+  background: none;
+  font: inherit;
+  font-size: 0.77em;
+  font-weight: 500;
+  line-height: 1.3;
+  color: hsl(var(--ov-mut) / 0.85);
+  transition:
+    background-color 0.3s var(--ov-spring),
+    color 0.3s var(--ov-spring),
+    box-shadow 0.3s var(--ov-spring);
+}
+.ov-mode:hover {
+  background: hsl(var(--muted) / 0.6);
+  color: hsl(var(--foreground));
+}
+.ov-mode.is-active,
+.ov-mode.is-lit {
+  background: hsl(var(--primary) / 0.2);
+  color: hsl(var(--ov-blue));
+  box-shadow:
+    0 0 0 1px hsl(var(--primary) / 0.3),
+    0 1px 3px hsl(var(--primary) / 0.12);
+}
+.ov-mode.is-run .ov-i {
+  display: none;
+}
+.ov-mode.is-run::before {
+  content: '';
+  width: 0.85em;
+  height: 0.85em;
+  flex: none;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 999px;
+  animation: ov-spin 0.8s linear infinite;
+}
+.ov-mode:focus-visible {
+  outline: 2px solid hsl(var(--primary));
+  outline-offset: 1px;
+}
+/* Key hints are a site annotation, not app UI: they only exist in the "one key" moment. */
+.ov-key {
+  position: absolute;
+  top: -1.55em;
+  left: 50%;
+  z-index: 3;
+  padding: 0.05em 0.45em;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.35em;
+  background: hsl(var(--card));
+  box-shadow: 0 1px 0 hsl(var(--border));
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.9em;
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+  color: hsl(var(--foreground));
+  opacity: 0;
+  transform: translate3d(-50%, -0.3em, 0);
+  pointer-events: none;
+}
+.ov[data-view='c'] .ov-key {
+  animation: ov-key 0.62s var(--ov-spring) both;
+  animation-delay: calc(0.5s + var(--k, 0) * 0.62s);
+}
+.ov-mode:nth-of-type(1) { --k: 0; }
+.ov-mode:nth-of-type(2) { --k: 1; }
+.ov-mode:nth-of-type(3) { --k: 2; }
+.ov-mode:nth-of-type(4) { --k: 3; }
+.ov-mode:nth-of-type(5) { --k: 4; }
+.ov-mode:nth-of-type(6) { --k: 5; }
+.ov[data-view='c'] .ov-mode {
+  animation: ov-lit 0.62s var(--ov-spring) both;
+  animation-delay: calc(0.5s + var(--k, 0) * 0.62s);
+}
+
+.ov-scope {
+  display: flex;
+  align-items: center;
+  gap: 0.3em;
+  min-width: 7.6em;
+  margin-left: auto;
+  padding: 0.34em 0.5em;
+  border-radius: 0.55em;
+  font-size: 0.77em;
+  font-weight: 500;
+  color: hsl(var(--ov-mut) / 0.85);
+  transition:
+    background-color 0.5s var(--ov-spring),
+    color 0.5s var(--ov-spring);
+}
+.ov-scope .sc-b {
+  display: none;
+}
+.ov[data-view='c'] .ov-scope {
+  animation: ov-scope 0.01s linear 4.3s both;
+}
+@keyframes ov-scope {
+  to {
+    background: hsl(var(--primary) / 0.1);
+    box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0.22);
+    color: hsl(var(--ov-blue));
+  }
+}
+.ov[data-view='c'] .ov-scope .sc-a {
+  animation: ov-off 0.01s linear 4.3s both;
+}
+.ov[data-view='c'] .ov-scope .sc-b {
+  display: inline;
+  opacity: 0;
+  animation: ov-on 0.01s linear 4.3s both;
+}
+.ov-pills {
+  display: flex;
+  align-items: center;
+  gap: 0.25em;
+}
+.ov-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.28em;
+  min-height: 1.9em;
+  padding: 0.34em 0.5em;
+  border-radius: 0.55em;
+  font-size: 0.77em;
+  font-weight: 500;
+  color: hsl(var(--ov-mut) / 0.85);
+  transition:
+    background-color 0.6s var(--ov-spring),
+    color 0.6s var(--ov-spring),
+    box-shadow 0.6s var(--ov-spring);
+}
+.ov[data-view='d'] .ov-pill--notes,
+.ov[data-view='e'] .ov-pill--notes {
+  background: hsl(var(--highlight) / 0.2);
+  color: hsl(var(--highlight));
+  box-shadow:
+    0 0 0 1px hsl(var(--highlight) / 0.3),
+    0 1px 3px hsl(var(--highlight) / 0.1);
+  transition-delay: 0.5s;
+}
+.ov[data-view='d'] .ov-pill--tools,
+.ov[data-view='e'] .ov-pill--tools {
+  background: hsl(var(--primary) / 0.2);
+  color: hsl(var(--ov-blue));
+  box-shadow:
+    0 0 0 1px hsl(var(--primary) / 0.3),
+    0 1px 3px hsl(var(--primary) / 0.1);
+  transition-delay: 0.95s;
+}
+
+/* Scope picker popover (open in the "one key" moment) */
+.ov-pop {
+  position: absolute;
+  top: 4.9em;
+  right: 0.55em;
+  z-index: 4;
+  width: 17.5em;
+  padding: 0.4em;
+  border: 1px solid hsl(var(--border) / 0.4);
+  border-radius: 0.9em;
+  background: hsl(var(--card));
+  box-shadow: 0 14px 34px -8px rgb(0 0 0 / 0.65);
+  opacity: 0;
+  visibility: hidden;
+  transform: translate3d(0, -0.4em, 0) scale(0.98);
+  transform-origin: top right;
+  transition:
+    opacity 0.35s var(--ov-spring),
+    transform 0.5s var(--ov-spring),
+    visibility 0s linear 0.35s;
+}
+.ov[data-view='c'] .ov-pop {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition-delay: 4.1s, 4.1s, 0s;
+}
+.ov-pop-h {
+  padding: 0.2em 0.55em 0.35em;
+  font-size: 0.75em;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: hsl(var(--ov-mut) / 0.8);
+}
+.ov-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6em;
+  padding: 0.4em 0.55em;
+  border-radius: 0.55em;
+  font-size: 0.92em;
+  color: hsl(var(--foreground) / 0.85);
+}
+.ov-opt small {
+  display: block;
+  font-size: 0.82em;
+  color: hsl(var(--ov-mut) / 0.8);
+}
+.ov-opt i {
+  position: relative;
+  flex: none;
+  width: 0.85em;
+  height: 0.85em;
+  margin-top: 0.22em;
+  border: 1px solid hsl(var(--ov-mut) / 0.4);
+  border-radius: 999px;
+}
+.ov-opt.is-on {
+  background: hsl(var(--primary) / 0.1);
+  color: hsl(var(--foreground));
+}
+.ov-opt.is-on i {
+  border-color: hsl(var(--primary) / 0.7);
+}
+.ov-opt.is-on i::after {
+  content: '';
+  position: absolute;
+  inset: 0.18em;
+  border-radius: 999px;
+  background: hsl(var(--primary));
+}
+
+/* Ask box (ModeButtons.tsx L224-263) */
+.ov-ask {
+  display: none;
+  flex: none;
+  align-items: center;
+  gap: 0.4em;
+  margin: 0.45em 0.55em 0;
+  padding: 0.35em 0.6em;
+  border: 1px solid hsl(var(--info) / 0.2);
+  border-radius: 0.55em;
+  background: hsl(var(--info) / 0.05);
+}
+.ov[data-ask='on'] .ov-ask {
+  display: flex;
+}
+.ov-askin {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 0.92em;
+  color: hsl(var(--foreground) / 0.9);
+  outline: none;
+}
+.ov-askin::placeholder {
+  color: hsl(var(--ov-mut) / 0.75);
+}
+.ov-askb {
+  color: hsl(var(--info) / 0.85);
+}
+
+/* Response area (AIResponsePanel.tsx) */
+.ov-resp {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  padding: 0.8em;
+  overflow: hidden;
+}
+.ov-resp > .ov-stack {
+  height: 100%;
+}
+.ov-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6em;
+  height: 100%;
+  font-size: 0.92em;
+  color: hsl(var(--ov-mut) / 0.8);
+  text-align: center;
+}
+.ov-empty .ov-i--xl {
+  color: hsl(var(--primary) / 0.55);
+}
+.ov-kbd {
+  margin: 0 0.2em;
+  padding: 0.1em 0.5em;
+  border: 1px solid hsl(var(--border) / 0.4);
+  border-radius: 0.3em;
+  background: hsl(var(--secondary) / 0.4);
+  font-family: 'Cascadia Code', 'Fira Code', Consolas, ui-monospace, monospace;
+  font-size: 0.8em;
+  color: hsl(var(--foreground) / 0.8);
+}
+.ov-hero-ans > .ov-hs-idle,
+.ov-hero-ans > .ov-hs-run,
+.ov-hero-ans > .ov-hs-done,
+.ov-hero-ans > .ov-anss {
+  display: none;
+}
+.ov[data-ans='idle'] .ov-hero-ans > .ov-hs-idle {
+  display: flex;
+}
+.ov[data-ans='sending'] .ov-hero-ans > .ov-hs-run,
+.ov[data-ans='waiting'] .ov-hero-ans > .ov-hs-run,
+.ov[data-ans='thinking'] .ov-hero-ans > .ov-hs-run,
+.ov[data-ans='writing'] .ov-hero-ans > .ov-hs-run {
+  display: block;
+}
+.ov[data-ans='writing'] .ov-hero-ans > .ov-anss,
+.ov[data-ans='done'] .ov-hero-ans > .ov-anss {
+  display: block;
+}
+.ov[data-ans='done'] .ov-hero-ans > .ov-hs-done {
+  display: flex;
+}
+.ov-hero-ans .ov-empty {
+  height: 100%;
+}
+.ov-prog {
+  margin-bottom: 0.65em;
+}
+.ov-progr {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+}
+.ov-pdot {
+  width: 0.45em;
+  height: 0.45em;
+  flex: none;
+  border-radius: 999px;
+  background: hsl(var(--primary));
+  animation: ov-breathe 1.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+.ov[data-ans='writing'] .ov-pdot {
+  animation: none;
+  opacity: 0.8;
+}
+.ov-plab {
+  font-size: 0.77em;
+  font-weight: 600;
+  color: hsl(var(--ov-blue));
+}
+.ov-phase {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.92em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: hsl(var(--foreground) / 0.72);
+}
+.ov-elapsed {
+  margin-left: auto;
+  font-family: 'Cascadia Code', 'Fira Code', Consolas, ui-monospace, monospace;
+  font-size: 0.77em;
+  font-variant-numeric: tabular-nums;
+  color: hsl(var(--ov-mut) / 0.8);
+}
+.ov-pdet {
+  padding-left: 0.95em;
+  margin-top: 0.15em;
+  font-size: 0.77em;
+  line-height: 1.35;
+  color: hsl(var(--ov-mut) / 0.8);
+}
+.ov-head2 {
+  display: flex;
+  align-items: center;
+  gap: 0.6em;
+  margin-bottom: 0.55em;
+}
+.ov-badge2 {
+  flex: none;
+  padding: 0.18em 0.7em;
+  border-radius: 999px;
+  background: hsl(var(--primary) / 0.12);
+  font-size: 0.77em;
+  font-weight: 500;
+  color: hsl(var(--ov-blue));
+}
+.ov-timing {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.77em;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: hsl(var(--ov-mut) / 0.8);
+}
+.ov-copy {
+  margin-left: auto;
+  color: hsl(var(--ov-mut) / 0.6);
+}
+.ov-ans {
+  display: none;
+  font-size: 0.92em;
+  line-height: 1.6;
+  color: #d4d4d8;
+}
+.ov-ans--static {
+  display: block;
+}
+.ov[data-mode='Assist'] .ov-ans[data-answer='Assist'],
+.ov[data-mode='WhatToSay'] .ov-ans[data-answer='WhatToSay'],
+.ov[data-mode='Shorten'] .ov-ans[data-answer='Shorten'],
+.ov[data-mode='FollowUp'] .ov-ans[data-answer='FollowUp'],
+.ov[data-mode='Recap'] .ov-ans[data-answer='Recap'] {
+  display: block;
+}
+.ov-ans .b,
+.ov-ans .w.b {
+  font-weight: 600;
+  color: #fff;
+}
+.ov-ans .w.off {
+  visibility: hidden;
+}
+.ov-caret {
+  display: none;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: hsl(var(--primary) / 0.7);
+  animation: ov-pulse 1s ease-in-out infinite;
+}
+.ov[data-ans='writing'] .ov-caret {
+  display: inline-block;
+}
+
+/* Sources: activity lines, chips (SourceActivityLines.tsx, SourceChips.tsx) */
+.ov-act {
+  padding: 0 0 0 0.95em;
+  margin: 0 0 0.55em;
+  list-style: none;
+}
+.ov-act li {
+  font-size: 0.77em;
+  line-height: 1.5;
+  color: hsl(var(--ov-mut) / 0.9);
+}
+.ov[data-view='d'] .ov-act li {
+  animation: ov-in 0.5s var(--ov-spring) both;
+  animation-delay: calc(0.5s + var(--i, 0) * 0.55s);
+}
+.ov[data-view='d'] .ov-ans--static,
+.ov[data-view='e'] .ov-ans--static {
+  animation: ov-in 0.6s var(--ov-spring) both;
+  animation-delay: 2.3s;
+}
+.ov[data-view='e'] .ov-act li,
+.ov[data-view='e'] .ov-ans--static,
+.ov[data-view='e'] .ov-chip2 {
+  animation: none;
+}
+.ov[data-view='d'] .ov-chip2 {
+  animation: ov-in 0.5s var(--ov-spring) both;
+  animation-delay: 2.7s;
+}
+.ov-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4em;
+  margin-top: 0.6em;
+  padding-top: 0.55em;
+  border-top: 1px solid hsl(var(--border) / 0.1);
+}
+.ov-chip2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  padding: 0.18em 0.65em;
+  border-radius: 999px;
+  font-size: 0.77em;
+  font-weight: 500;
+}
+.ov-chip2--notes {
+  background: hsl(var(--highlight) / 0.15);
+  color: hsl(var(--highlight));
+}
+.ov-chip2--tool {
+  background: hsl(var(--primary) / 0.15);
+  color: hsl(var(--ov-blue));
+}
+
+/* ─── Footer (ServiceStatusBar.tsx compact, SideLanguagePicker.tsx) ─── */
+.ov-foot {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45em 0.6em;
+  padding: 0.5em 0.75em;
+  border-top: 1px solid hsl(var(--border) / 0.2);
+}
+.ov-svc {
+  --c: hsl(var(--primary));
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  padding: 0.28em 0.75em;
+  border: 1px solid color-mix(in srgb, var(--c) 25%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--c) 9%, transparent);
+  font-size: 0.92em;
+  font-weight: 500;
+  color: hsl(var(--foreground) / 0.9);
+  white-space: nowrap;
+}
+.ov-svc--you {
+  --c: var(--you);
+}
+.ov-svc--them {
+  --c: var(--them);
+}
+.ov-sdot {
+  width: 0.5em;
+  height: 0.5em;
+  flex: none;
+  border-radius: 999px;
+  background: var(--c);
+}
+.ov-svc .ov-i {
+  color: hsl(var(--foreground) / 0.6);
+}
+.ov-lang--them {
+  min-width: 3.6em;
+}
+.ov-who2 {
+  font-size: 0.8em;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--c);
+}
+.ov-sub {
+  font-size: 0.8em;
+  color: hsl(var(--foreground) / 0.65);
+}
+.ov-fsep {
+  width: 1px;
+  height: 1em;
+  background: hsl(var(--border) / 0.3);
+}
+.ov-lang {
+  display: flex;
+  align-items: center;
+  gap: 0.28em;
+  padding: 0.2em 0.55em;
+  border-radius: 999px;
+  font-size: 0.77em;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: hsl(var(--ov-mut) / 0.9);
+}
+.ov-lang .l-rs,
+.ov-lang .l-es {
+  display: none;
+}
+.ov[data-view='a'] .ov-lang--them {
+  display: inline-grid;
+  grid-template-columns: auto auto;
+  background: hsl(var(--muted) / 0.5);
+  color: hsl(var(--foreground) / 0.9);
+}
+.ov[data-view='a'] .ov-lang--them .ov-i {
+  margin-right: 0.3em;
+}
+.ov[data-view='a'] .ov-lang--them > span {
+  grid-column: 2;
+  grid-row: 1;
+}
+.ov[data-view='a'] .ov-lang--them .l-rs,
+.ov[data-view='a'] .ov-lang--them .l-es {
+  display: inline;
+  opacity: 0;
+}
+.ov[data-view='a'] .l-en {
+  animation: ov-off 0.01s linear 1s both;
+}
+.ov[data-view='a'] .l-rs {
+  animation: ov-rs 2.2s linear both;
+}
+.ov[data-view='a'] .l-es {
+  animation: ov-on 0.01s linear 2.2s both;
+}
+.ov[data-view='a'] .ov-trl {
+  animation: ov-in 0.6s var(--ov-spring) both;
+  animation-delay: 2.5s;
+}
+.ov[data-view='a'] .ov-line:nth-child(3) .ov-trl {
+  animation-delay: 3s;
+}
+
+@keyframes ov-ping {
+  0% { transform: scale(1); opacity: 0.6; }
+  70%, 100% { transform: scale(2.6); opacity: 0; }
+}
+@keyframes ov-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+@keyframes ov-breathe {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1); }
+}
+@keyframes ov-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes ov-in {
+  from { opacity: 0; transform: translate3d(0, 0.35em, 0); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes ov-on {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes ov-rs {
+  0%, 45% { opacity: 0; }
+  46%, 99% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@keyframes ov-off {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes ov-key {
+  0% { opacity: 0; transform: translate3d(-50%, 0.3em, 0); }
+  22%, 72% { opacity: 1; transform: translate3d(-50%, 0, 0); }
+  100% { opacity: 0; transform: translate3d(-50%, 0, 0); }
+}
+@keyframes ov-lit {
+  0% { background: transparent; box-shadow: none; }
+  30%, 60% {
+    background: hsl(var(--primary) / 0.2);
+    color: hsl(var(--primary));
+    box-shadow: 0 0 0 1px hsl(var(--primary) / 0.3);
+  }
+  100% { background: transparent; box-shadow: none; }
+}
+
+/* ─── One column below 560px of container width, at a readable size ─── */
+@container (max-width: 519px) {
+  .ov {
+    --ov-fs: 12.5px;
+    height: 41em;
+  }
+  .ov-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1.15fr) minmax(0, 1fr);
+  }
+  .ov-head {
+    padding: 0.5em 0.7em;
+  }
+  .ov-grip,
+  .ov-badge,
+  .ov-wide,
+  .ov-tbtn,
+  .ov-sep {
+    display: none;
+  }
+  .ov-key {
+    display: none;
+  }
+}
+
+/* Mini window (stealth demo, frames): the same overlay in a small frame. */
+.ov--frame {
+  height: auto;
+  font-size: 12.5px;
+  --ov-fs: 12.5px;
+}
+.ov--frame .ov-g {
+  position: relative;
+  grid-area: auto;
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  pointer-events: auto;
+}
+.ov--frame .ov-lines {
+  display: block;
+  mask-image: none;
+  -webkit-mask-image: none;
+}
+.ov--frame .ov-line:first-child {
+  margin-top: 0;
+}
+.ov--frame .ov-stack {
+  display: block;
+}
+
+/* Paused or hidden tab: loops stop, nothing else changes. */
+[data-paused] .ov *,
+[data-paused] .ov *::before {
+  animation-play-state: paused !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ov *,
+  .ov *::before,
+  .ov *::after {
+    animation-delay: 0s !important;
+    transition-delay: 0s !important;
+    transition-duration: 0.001ms !important;
+  }
+  .ov-ping i,
+  .ov-pdot,
+  .ov-qdot,
+  .ov-caret {
+    animation: none !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .ov {
+    forced-color-adjust: none;
+    background: Canvas;
+    border: 1px solid CanvasText;
+    color: CanvasText;
+  }
+}
+
+/* ─── Stills (BeatFrame.astro): the same pieces, cropped, nothing moving ─── */
+.ov--frame *,
+.ov--frame *::before,
+.ov--frame *::after {
+  animation: none !important;
+  transition: none !important;
+}
+.ov--frame .ov-ping i {
+  display: none;
+}
+.ov--still {
+  display: block;
+}
+.ov-lines--still {
+  display: block;
+  padding: 0.7em 0.55em 0.5em;
+  mask-image: none;
+  -webkit-mask-image: none;
+}
+.ov--still .ov-q,
+.ov--still .ov-q--still {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+.ov--still .ov-ai {
+  display: block;
+  background: none;
+}
+.ov--still .ov-pop {
+  position: static;
+  width: auto;
+  margin: 0.5em;
+  box-shadow: none;
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+}
+.ov--still .ov-key {
+  position: static;
+  display: inline-block;
+  margin-left: 0.2em;
+  opacity: 1;
+  transform: none;
+}
+.ov--still .ov-mode {
+  padding-right: 0.45em;
+}
+.ov--still .ov-scope .sc-b {
+  display: inline;
+  opacity: 1 !important;
+}
+.ov--still[data-still='c'] .ov-scope {
+  background: hsl(var(--primary) / 0.1);
+  box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0.22);
+  color: hsl(var(--ov-blue));
+}
+.ov--still .ov-lang--them {
+  background: hsl(var(--muted) / 0.5);
+  color: hsl(var(--foreground) / 0.9);
+}
+.ov--still .ov-lang--them .l-es {
+  display: inline;
+  opacity: 1 !important;
+}
+.ov--still .ov-resp--still {
+  padding: 0.8em;
+}
+.ov--still .ov-g {
+  position: static;
+}

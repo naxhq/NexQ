@@ -1,0 +1,190 @@
+// After the call (AfterCall.astro): the sample recording. A playhead, a transcript that follows it,
+// tabs, and the click-to-play demo video. No audio: the playhead runs fast.
+// Without JS the markup shows its resting state (playhead at 42%, every panel stacked).
+const root = document.querySelector<HTMLElement>('[data-ac]');
+if (root) {
+  const DUR = Number(root.dataset.dur);
+  const REST = 0.42;
+  const RATE = DUR / 30; // sample seconds per real second
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const $ = <T extends HTMLElement>(s: string) => root.querySelector<T>(s)!;
+
+  const pane = $('[data-ac-lines]');
+  const lines = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-t]'));
+  const times = lines.map((l) => Number(l.dataset.t));
+  const slider = $('[data-ac-slider]');
+  const clock = $('[data-ac-now]');
+  const play = $<HTMLButtonElement>('[data-ac-play]');
+
+  let t = REST * DUR;
+  let playing = false;
+  let manual = reduce; // once the visitor takes over (or reduced motion), scrolling no longer moves the playhead
+  let onscreen = false;
+  let active = lines.findIndex((l) => l.getAttribute('aria-current') === 'true');
+  let raf = 0;
+  let last = 0;
+
+  const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+  const follow = (smooth: boolean) => {
+    const li = lines[active]?.parentElement;
+    if (!li || !pane.offsetParent) return;
+    pane.scrollTo({
+      top: li.offsetTop - (pane.clientHeight - li.offsetHeight) / 2,
+      behavior: smooth && !reduce ? 'smooth' : 'auto',
+    });
+  };
+
+  const render = (smooth = false) => {
+    root.style.setProperty('--progress', String(t / DUR));
+    clock.textContent = fmt(t);
+    slider.setAttribute('aria-valuenow', String(Math.floor(t)));
+    slider.setAttribute('aria-valuetext', `${fmt(t)} of ${fmt(DUR)}`);
+    let a = -1;
+    for (let i = 0; i < times.length; i++) if (times[i] <= t) a = i;
+    if (a !== active) {
+      lines[active]?.removeAttribute('aria-current');
+      active = a;
+      lines[a]?.setAttribute('aria-current', 'true');
+      follow(smooth);
+    }
+  };
+
+  const seek = (s: number, smooth = true) => {
+    t = Math.max(0, Math.min(DUR, s));
+    manual = true;
+    render(smooth);
+  };
+
+  // One rAF loop, only while playing, on screen and the tab is visible.
+  const tick = (now: number) => {
+    t = Math.min(DUR, t + ((now - last) / 1000) * RATE);
+    last = now;
+    render(true);
+    if (t >= DUR) setPlaying(false);
+    else raf = requestAnimationFrame(tick);
+  };
+  const sync = () => {
+    const run = playing && onscreen && !document.hidden;
+    if (run && !raf) {
+      last = performance.now();
+      raf = requestAnimationFrame(tick);
+    } else if (!run && raf) {
+      cancelAnimationFrame(raf);
+      raf = 0;
+    }
+  };
+  const setPlaying = (v: boolean) => {
+    playing = v;
+    if (!v && raf) {
+      cancelAnimationFrame(raf);
+      raf = 0;
+    }
+    play.toggleAttribute('data-playing', v);
+    play.setAttribute('aria-label', v ? 'Pause' : 'Play');
+    if (v) {
+      manual = true;
+      if (t >= DUR - 1) t = 0;
+    }
+    sync();
+  };
+  play.addEventListener('click', () => setPlaying(!playing));
+  document.addEventListener('visibilitychange', sync);
+
+  new IntersectionObserver((e) => {
+    onscreen = e[0].isIntersecting;
+    sync();
+    if (onscreen) onScroll();
+  }).observe(root);
+
+  // Scrolling moves the playhead until the visitor takes over: 0 as the window enters, 1 as it leaves.
+  let pending = 0;
+  function onScroll() {
+    if (manual || pending || !onscreen) return;
+    pending = requestAnimationFrame(() => {
+      pending = 0;
+      const r = root!.getBoundingClientRect();
+      const vh = innerHeight;
+      const p = (0.85 * vh - r.top) / (0.35 * vh + r.height);
+      t = Math.max(0, Math.min(1, p)) * DUR;
+      render(false);
+    });
+  }
+  addEventListener('scroll', onScroll, { passive: true });
+
+  // Rows and bookmarks seek.
+  lines.forEach((l, i) => l.addEventListener('click', () => seek(times[i])));
+  root.querySelectorAll<HTMLElement>('[data-seek]').forEach((b) =>
+    b.addEventListener('click', () => {
+      showTab(0);
+      seek(Number(b.dataset.seek));
+    }),
+  );
+
+  // The waveform is a slider: drag or click, arrows, Page keys, Home and End.
+  const at = (x: number) => {
+    const r = slider.getBoundingClientRect();
+    seek(((x - r.left) / r.width) * DUR, false);
+  };
+  slider.addEventListener('pointerdown', (e) => {
+    slider.setPointerCapture(e.pointerId);
+    at(e.clientX);
+  });
+  slider.addEventListener('pointermove', (e) => {
+    if (slider.hasPointerCapture(e.pointerId)) at(e.clientX);
+  });
+  slider.addEventListener('keydown', (e) => {
+    const step = { ArrowLeft: -30, ArrowDown: -30, ArrowRight: 30, ArrowUp: 30, PageDown: -300, PageUp: 300 }[e.key];
+    if (step !== undefined) seek(t + step);
+    else if (e.key === 'Home') seek(0);
+    else if (e.key === 'End') seek(DUR);
+    else return;
+    e.preventDefault();
+  });
+
+  // Tabs.
+  const tabs = Array.from(root.querySelectorAll<HTMLElement>('[role="tab"]'));
+  const feats = Array.from(document.querySelectorAll<HTMLElement>('[data-go]'));
+  function showTab(i: number, focus = false) {
+    tabs.forEach((b, j) => {
+      b.setAttribute('aria-selected', String(j === i));
+      b.tabIndex = j === i ? 0 : -1;
+      root!.querySelector(`#${b.getAttribute('aria-controls')}`)?.toggleAttribute('data-on', j === i);
+    });
+    feats.forEach((f) => (f.dataset.go === tabs[i].dataset.tab ? f.setAttribute('aria-current', 'true') : f.removeAttribute('aria-current')));
+    if (focus) tabs[i].focus();
+    if (i === 0) follow(false);
+  }
+  tabs.forEach((b, i) => b.addEventListener('click', () => showTab(i)));
+  $('[data-ac-tabs]').addEventListener('keydown', (e) => {
+    const i = tabs.indexOf(document.activeElement as HTMLElement);
+    if (i < 0) return;
+    const n = e.key === 'ArrowRight' ? (i + 1) % tabs.length : e.key === 'ArrowLeft' ? (i + tabs.length - 1) % tabs.length : e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : -1;
+    if (n < 0) return;
+    e.preventDefault();
+    showTab(n, true);
+  });
+  feats.forEach((f) => f.addEventListener('click', () => showTab(tabs.findIndex((b) => b.dataset.tab === f.dataset.go))));
+  showTab(0);
+  if (active >= 0) follow(false);
+}
+
+// The demo video: nothing is fetched until the visitor clicks.
+const frame = document.querySelector<HTMLElement>('[data-ac-video]');
+frame?.querySelector('button')?.addEventListener('click', () => {
+  const v = document.createElement('video');
+  v.controls = true;
+  v.autoplay = true;
+  v.poster = frame.dataset.poster!;
+  v.setAttribute('aria-label', 'NexQ demo, recorded in demo mode on an earlier version');
+  for (const [src, type] of [[frame.dataset.webm!, 'video/webm'], [frame.dataset.mp4!, 'video/mp4']]) {
+    const s = document.createElement('source');
+    s.src = src;
+    s.type = type;
+    v.append(s);
+  }
+  frame.replaceChildren(v);
+  v.focus();
+});
+
+export {};

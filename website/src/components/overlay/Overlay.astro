@@ -1,0 +1,209 @@
+---
+/**
+ * The overlay, rebuilt in plain DOM so it can be crisp, readable and alive. It mirrors the app's
+ * meeting overlay (src/overlay/OverlayView.tsx) in structure, labels, colours, alphas and radii.
+ * Everything is sized in em, so the whole window scales with its container (see overlay.css).
+ *
+ * The HTML is the FINAL state of every moment (no-JS and reduced motion show it as is). callDemo.ts
+ * rewinds the hero scene and plays it. Which moment shows is `data-view` on .ov:
+ *   h0 / h1  hero, before / after the question   a b c d e  the beats of the call
+ */
+import './overlay.css';
+import OvIcon from './OvIcon.astro';
+import OvLine from './OvLine.astro';
+import {
+  HERO_LINES, HERO_QUESTION, A_LINES, B_LINES, B_QUESTION, D_LINES, D_QUESTION,
+  ANSWERS, C_ANSWER, D_ANSWER, tokens, mmss, TIMES,
+} from './content';
+
+// Order, labels and keys: src/stores/aiActionsStore.ts L96-141, src/overlay/ModeButtons.tsx L29-48.
+const MODES = [
+  { mode: 'Assist', label: 'Assist', icon: 'sparkles', key: 'Space', aria: 'Assist (Space)' },
+  { mode: 'WhatToSay', label: 'Say', icon: 'message', key: '1', aria: 'Say (1)' },
+  { mode: 'Shorten', label: 'Short', icon: 'scissors', key: '2', aria: 'Short (2)' },
+  { mode: 'FollowUp', label: 'F/U', icon: 'corner', key: '3', aria: 'F/U (3)' },
+  { mode: 'Recap', label: 'Recap', icon: 'list', key: '4', aria: 'Recap (4)' },
+  { mode: 'AskQuestion', label: 'Ask', icon: 'help', key: '5', aria: 'Ask (5)' },
+];
+---
+
+<div class="ov-fit">
+  <div
+    class="ov nx-glass"
+    id="nx-overlay"
+    role="group"
+    tabindex="0"
+    aria-label="Sample conversation: a rebuilt NexQ overlay. Press Space, or keys 1 to 5, while it has focus."
+    data-view="h1"
+    data-ans="done"
+    data-mode="Assist"
+    data-stealth="off"
+  >
+    <!-- Header: src/overlay/OverlayView.tsx L196-335 -->
+    <div class="ov-head">
+      <div class="ov-hl">
+        <svg class="ov-grip" viewBox="0 0 12 12" aria-hidden="true"><g fill="currentColor"><circle cx="2.5" cy="4" r="1" /><circle cx="6" cy="4" r="1" /><circle cx="9.5" cy="4" r="1" /><circle cx="2.5" cy="8" r="1" /><circle cx="6" cy="8" r="1" /><circle cx="9.5" cy="8" r="1" /></g></svg>
+        <span class="ov-title">NexQ</span>
+        <span class="ov-rec" role="status" aria-label="Recording in progress"><span class="ov-ping" aria-hidden="true"><i></i><b></b></span>REC</span>
+        <span class="ov-badge" aria-label="Online meeting">ONLINE</span>
+        <span class="ov-time" data-timer>{mmss(TIMES.h)}</span>
+      </div>
+      <div class="ov-hr" aria-hidden="true">
+        <span class="ov-hb"><OvIcon name="mic" /></span>
+        <span class="ov-hb"><OvIcon name="volume" /></span>
+        <span class="ov-sep"></span>
+        <span class="ov-hb ov-hb--stealth"><OvIcon name="screen-share" class="ov-i s-off" /><OvIcon name="screen-share-off" class="ov-i s-on" /></span>
+        <span class="ov-tbtn"><OvIcon name="globe" class="ov-i ov-i--s" />Translate</span>
+        <span class="ov-end"><OvIcon name="square" class="ov-i ov-i--s" />End</span>
+      </div>
+    </div>
+
+    <div class="ov-body">
+      <!-- Transcript: src/overlay/TranscriptPanel.tsx, TranscriptLine.tsx -->
+      <section class="ov-panel ov-trp" aria-label="Transcript">
+        <div class="ov-ph" aria-hidden="true">Transcript</div>
+        <div class="ov-lines">
+          <div class="ov-g" data-for="h0 h1">{HERO_LINES.map((l) => <OvLine line={l} live />)}</div>
+          <div class="ov-g" data-for="a">{A_LINES.map((l) => <OvLine line={l} />)}</div>
+          <div class="ov-g" data-for="b c">{B_LINES.map((l) => <OvLine line={l} />)}</div>
+          <div class="ov-g" data-for="d e">{D_LINES.map((l) => <OvLine line={l} />)}</div>
+        </div>
+      </section>
+
+      <div class="ov-right">
+        <!-- Question card: src/overlay/QuestionDetector.tsx L138 (info 5%, border info 10%), L267-298 -->
+        <div class="ov-q" role="region" aria-label="Detected questions">
+          <div class="ov-stack">
+            <div class="ov-g ov-qrow" data-for="h0 a">
+              <span class="ov-qi ov-qi--idle"><OvIcon name="help" class="ov-i ov-i--l" /></span>
+              <p class="ov-qt ov-qt--idle">Listening for questions from the other party</p>
+            </div>
+            <div class="ov-g ov-qrow ov-qrow--has" data-for="h1">
+              <span class="ov-qi"><OvIcon name="help" class="ov-i ov-i--l" /><i class="ov-qdot"></i></span>
+              <p class="ov-qt">&ldquo;{HERO_QUESTION}&rdquo;</p>
+              <button type="button" class="ov-qa" data-assist aria-label="Assist this question">
+                <span class="qa-a"><OvIcon name="sparkles" class="ov-i ov-i--s" />Assist</span>
+                <span class="qa-b"><OvIcon name="check" class="ov-i ov-i--s" />Answered</span>
+              </button>
+            </div>
+            <div class="ov-g ov-qrow ov-qrow--has" data-for="b">
+              <span class="ov-qi"><OvIcon name="help" class="ov-i ov-i--l" /><i class="ov-qdot"></i></span>
+              <p class="ov-qt">&ldquo;{B_QUESTION}&rdquo;</p>
+              <span class="ov-qa" aria-hidden="true"><span class="qa-a" style="display:inline-flex"><OvIcon name="sparkles" class="ov-i ov-i--s" />Assist</span></span>
+            </div>
+            <div class="ov-g ov-qrow ov-qrow--has" data-for="c">
+              <span class="ov-qi"><OvIcon name="help" class="ov-i ov-i--l" /><i class="ov-qok"><OvIcon name="check" class="ov-i" /></i></span>
+              <p class="ov-qt">&ldquo;{B_QUESTION}&rdquo;</p>
+              <span class="ov-qa ov-qa--done" aria-hidden="true"><span style="display:inline-flex"><OvIcon name="check" class="ov-i ov-i--s" />Answered</span></span>
+            </div>
+            <div class="ov-g ov-qrow ov-qrow--has" data-for="d e">
+              <span class="ov-qi"><OvIcon name="help" class="ov-i ov-i--l" /><i class="ov-qok"><OvIcon name="check" class="ov-i" /></i></span>
+              <p class="ov-qt">&ldquo;{D_QUESTION}&rdquo;</p>
+              <span class="ov-qa ov-qa--done" aria-hidden="true"><span style="display:inline-flex"><OvIcon name="check" class="ov-i ov-i--s" />Answered</span></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Answer panel: ModeButtons.tsx, SourcePills.tsx, ContextScopePicker.tsx, AIResponsePanel.tsx -->
+        <section class="ov-panel ov-ai" aria-label="AI answer">
+          <div class="ov-modes">
+            {MODES.map((m) => (
+              <button type="button" class="ov-mode" data-mode-btn={m.mode} aria-label={m.aria} aria-pressed="false">
+                <OvIcon name={m.icon} class="ov-i ov-i--s" /><span>{m.label}</span><kbd class="ov-key" aria-hidden="true">{m.key}</kbd>
+              </button>
+            ))}
+            <span class="ov-scope" aria-hidden="true">
+              <OvIcon name="clock" class="ov-i ov-i--s" />
+              <span class="sc-a">Action default</span><span class="sc-b">Last 5 min</span>
+            </span>
+            <span class="ov-pills" role="group" aria-label="Personal sources for your next answer">
+              <span class="ov-pill ov-pill--notes" data-pill="notes"><OvIcon name="book" class="ov-i ov-i--s" />Notes</span>
+              <span class="ov-pill ov-pill--tools" data-pill="tools"><OvIcon name="wrench" class="ov-i ov-i--s" />Tools</span>
+            </span>
+          </div>
+
+          <div class="ov-ask" data-ask-box>
+            <input type="text" class="ov-askin" placeholder="Ask about the meeting..." aria-label="Ask a question (sample, does not send)" maxlength="200" />
+            <span class="ov-askb" aria-hidden="true"><OvIcon name="send" class="ov-i ov-i--s" /></span>
+          </div>
+
+          <div class="ov-resp">
+            <div class="ov-stack">
+              <!-- Hero: idle, progress, streamed text, done. data-ans on .ov picks the part. -->
+              <div class="ov-g ov-hero-ans" data-for="h0 h1">
+                <div class="ov-empty ov-hs-idle">
+                  <OvIcon name="sparkles" class="ov-i ov-i--xl" />
+                  <p>Press <kbd class="ov-kbd">Space</kbd> for AI assistance</p>
+                </div>
+                <div class="ov-prog ov-hs-run" role="status" aria-live="off">
+                  <div class="ov-progr"><i class="ov-pdot"></i><span class="ov-plab" data-prog-label>Assist</span><span class="ov-phase" data-phase>Sending…</span><span class="ov-elapsed" data-elapsed aria-hidden="true">0.0 s</span></div>
+                  <p class="ov-pdet">Sonnet · Claude · 3 new transcript lines sent</p>
+                </div>
+                <div class="ov-head2 ov-hs-done">
+                  <span class="ov-badge2" data-done-label>Assist</span>
+                  <span class="ov-timing" data-done-timing>2.9 s · first words 0.8 s</span>
+                  <span class="ov-copy" aria-hidden="true"><OvIcon name="copy" class="ov-i ov-i--s" /></span>
+                </div>
+                <div class="ov-anss">
+                  {Object.entries(ANSWERS).map(([mode, a]) => (
+                    <p class="ov-ans" data-answer={mode}>
+                      {tokens(a.text).map((t) => <span class={t.b ? 'w b' : 'w'}>{t.w} </span>)}
+                    </p>
+                  ))}
+                  <i class="ov-caret" aria-hidden="true"></i>
+                </div>
+              </div>
+
+              <div class="ov-g ov-empty" data-for="a b">
+                <OvIcon name="sparkles" class="ov-i ov-i--xl" />
+                <p>Press <kbd class="ov-kbd">Space</kbd> for AI assistance</p>
+              </div>
+
+              <div class="ov-g ov-done" data-for="c">
+                <div class="ov-head2"><span class="ov-badge2">{C_ANSWER.label}</span><span class="ov-timing">{C_ANSWER.timing}</span><span class="ov-copy" aria-hidden="true"><OvIcon name="copy" class="ov-i ov-i--s" /></span></div>
+                <p class="ov-ans ov-ans--static">{tokens(C_ANSWER.text).map((t) => <span class={t.b ? 'b' : ''}>{t.w} </span>)}</p>
+              </div>
+
+              <div class="ov-g ov-done" data-for="d e">
+                <div class="ov-head2"><span class="ov-badge2">{D_ANSWER.label}</span><span class="ov-timing">{D_ANSWER.timing}</span><span class="ov-copy" aria-hidden="true"><OvIcon name="copy" class="ov-i ov-i--s" /></span></div>
+                <ul class="ov-act" aria-label="What the answer did with your sources">
+                  {D_ANSWER.activity.map((a, i) => <li style={`--i:${i}`}>{a}</li>)}
+                </ul>
+                <p class="ov-ans ov-ans--static">{tokens(D_ANSWER.text).map((t) => <span class={t.b ? 'b' : ''}>{t.w} </span>)}</p>
+                <div class="ov-chips" aria-label="Sources used">
+                  {D_ANSWER.chips.map((c) => (
+                    <span class={c.kind === 'notes' ? 'ov-chip2 ov-chip2--notes' : 'ov-chip2 ov-chip2--tool'}>
+                      <OvIcon name={c.kind === 'notes' ? 'book' : 'wrench'} class="ov-i ov-i--s" />{c.label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Scope picker, open: ContextScopePicker.tsx L26-40 (labels), L214-232 -->
+          <div class="ov-pop" aria-hidden="true">
+            <p class="ov-pop-h">Focus the next answers on</p>
+            <div class="ov-opt"><i></i><span>Action default<small>Claude decides from the whole meeting</small></span></div>
+            <div class="ov-opt"><i></i><span>Since last answer<small>New talk since any answer</small></span></div>
+            <div class="ov-opt is-on"><i></i><span>Last 5 min</span></div>
+            <div class="ov-opt"><i></i><span>Whole meeting<small>Everything said so far</small></span></div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <!-- Footer status bar: src/components/ServiceStatusBar.tsx (compact), SideLanguagePicker.tsx -->
+    <div class="ov-foot" aria-label="Services">
+      <span class="ov-svc ov-svc--ai"><i class="ov-sdot"></i><OvIcon name="brain" class="ov-i ov-i--s" /><span>Claude</span><span class="ov-sub">Sonnet</span></span>
+      <span class="ov-fsep"></span>
+      <span class="ov-svc ov-svc--you"><i class="ov-sdot"></i><span class="ov-who2">YOU</span><span>Deepgram</span></span>
+      <span class="ov-lang"><OvIcon name="languages" class="ov-i ov-i--s" /><span>EN</span></span>
+      <span class="ov-fsep"></span>
+      <span class="ov-svc ov-svc--them"><i class="ov-sdot"></i><span class="ov-who2">THEM</span><span>Deepgram</span></span>
+      <span class="ov-lang ov-lang--them"><OvIcon name="languages" class="ov-i ov-i--s" /><span class="l-en">EN</span><span class="l-rs">Restarting…</span><span class="l-es">ES</span></span>
+    </div>
+
+    <p class="sr-only" aria-live="polite" data-sr></p>
+  </div>
+</div>

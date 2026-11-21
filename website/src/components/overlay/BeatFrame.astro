@@ -1,0 +1,102 @@
+---
+/**
+ * A still of one moment of the overlay, for phones and for visitors without JavaScript (on a wide
+ * screen with JavaScript the pinned overlay shows these moments instead). Same markup and classes as
+ * Overlay.astro, so it is the same UI, cropped to the part the beat is about.
+ */
+import './overlay.css';
+import OvIcon from './OvIcon.astro';
+import OvLine from './OvLine.astro';
+import { A_LINES, B_QUESTION, D_ANSWER, tokens } from './content';
+
+interface Props {
+  beat: 'a' | 'b' | 'c' | 'd';
+}
+const { beat } = Astro.props;
+
+const MODES = [
+  { label: 'Assist', icon: 'sparkles', key: 'Space' },
+  { label: 'Say', icon: 'message', key: '1' },
+  { label: 'Short', icon: 'scissors', key: '2' },
+  { label: 'F/U', icon: 'corner', key: '3' },
+  { label: 'Recap', icon: 'list', key: '4' },
+  { label: 'Ask', icon: 'help', key: '5' },
+];
+---
+
+<div class="ov ov--frame ov--still nx-glass" data-view={beat} data-still={beat}>
+  {
+    beat === 'a' && (
+      <>
+        <div class="ov-lines ov-lines--still">
+          <div class="ov-g">{A_LINES.map((l) => <OvLine line={l} />)}</div>
+        </div>
+        <div class="ov-foot" aria-label="Services">
+          <span class="ov-svc ov-svc--you"><i class="ov-sdot"></i><span class="ov-who2">YOU</span><span>Deepgram</span></span>
+          <span class="ov-lang"><OvIcon name="languages" class="ov-i ov-i--s" /><span>EN</span></span>
+          <span class="ov-fsep"></span>
+          <span class="ov-svc ov-svc--them"><i class="ov-sdot"></i><span class="ov-who2">THEM</span><span>Deepgram</span></span>
+          <span class="ov-lang ov-lang--them"><OvIcon name="languages" class="ov-i ov-i--s" /><span class="l-es">ES</span></span>
+        </div>
+      </>
+    )
+  }
+  {
+    beat === 'b' && (
+      <div class="ov-q ov-q--still" role="region" aria-label="A detected question">
+        <div class="ov-g ov-qrow ov-qrow--has">
+          <span class="ov-qi"><OvIcon name="help" class="ov-i ov-i--l" /><i class="ov-qdot"></i></span>
+          <p class="ov-qt">&ldquo;{B_QUESTION}&rdquo;</p>
+          <span class="ov-qa" aria-hidden="true"><span class="qa-a"><OvIcon name="sparkles" class="ov-i ov-i--s" />Assist</span></span>
+        </div>
+      </div>
+    )
+  }
+  {
+    beat === 'c' && (
+      <section class="ov-panel ov-ai ov-ai--still" aria-label="Actions and transcript scope">
+        <div class="ov-modes" role="list">
+          {MODES.map((m) => (
+            <span class="ov-mode" role="listitem"><OvIcon name={m.icon} class="ov-i ov-i--s" /><span>{m.label}</span><kbd class="ov-key">{m.key}</kbd></span>
+          ))}
+          <span class="ov-scope"><OvIcon name="clock" class="ov-i ov-i--s" /><span class="sc-b">Last 5 min</span></span>
+        </div>
+        <div class="ov-pop">
+          <p class="ov-pop-h">Focus the next answers on</p>
+          <div class="ov-opt"><i></i><span>Action default<small>Claude decides from the whole meeting</small></span></div>
+          <div class="ov-opt"><i></i><span>Since last answer<small>New talk since any answer</small></span></div>
+          <div class="ov-opt is-on"><i></i><span>Last 5 min</span></div>
+          <div class="ov-opt"><i></i><span>Whole meeting<small>Everything said so far</small></span></div>
+        </div>
+      </section>
+    )
+  }
+  {
+    beat === 'd' && (
+      <section class="ov-panel ov-ai ov-ai--still" aria-label="An answer that used notes and a tool">
+        <div class="ov-modes">
+          <span class="ov-pills" role="group" aria-label="Personal sources for this answer">
+            <span class="ov-pill ov-pill--notes"><OvIcon name="book" class="ov-i ov-i--s" />Notes</span>
+            <span class="ov-pill ov-pill--tools"><OvIcon name="wrench" class="ov-i ov-i--s" />Tools</span>
+          </span>
+        </div>
+        <div class="ov-resp ov-resp--still">
+          <div class="ov-g ov-done">
+            <div class="ov-head2"><span class="ov-badge2">{D_ANSWER.label}</span><span class="ov-timing">{D_ANSWER.timing}</span></div>
+            <ul class="ov-act" aria-label="What the answer did with your sources">
+              {D_ANSWER.activity.map((a) => <li>{a}</li>)}
+            </ul>
+            <p class="ov-ans ov-ans--static">{tokens(D_ANSWER.text).map((t) => <span class={t.b ? 'b' : ''}>{t.w} </span>)}</p>
+            <div class="ov-chips" aria-label="Sources used">
+              {D_ANSWER.chips.map((c) => (
+                <span class={c.kind === 'notes' ? 'ov-chip2 ov-chip2--notes' : 'ov-chip2 ov-chip2--tool'}>
+                  <OvIcon name={c.kind === 'notes' ? 'book' : 'wrench'} class="ov-i ov-i--s" />{c.label}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+    )
+  }
+</div>

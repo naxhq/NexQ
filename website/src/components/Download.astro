@@ -1,12 +1,258 @@
 ---
-// PLACEHOLDER from the foundation task. Replace this file with the real section.
-// Keep the id (`download`) and the aria-labelledby heading so nav links and a11y keep working.
-import { SECTION } from '../data/site';
+/**
+ * #download: two builds, one wave. Both buttons go to the latest release page (no direct asset
+ * URLs, which change with every version). The visitor's platform is highlighted by
+ * scripts/dl-detect.ts; without JS Windows keeps the blue button.
+ */
+import Icon from './Icon.astro';
+import Wave from './Wave.astro';
+import { CURRENT_VERSION } from '../data/releases';
+import { RELEASES_LATEST, RELEASES_URL, CONTRIBUTING, SECTION } from '../data/site';
 ---
 
-<section id={SECTION.download} class="section" aria-labelledby="download-title">
+<section id={SECTION.download} class="section border-t border-border" aria-labelledby="download-title">
   <div class="wrap">
-    <p class="eyebrow">download</p>
+    <p class="eyebrow">install</p>
     <h2 id="download-title" class="h2 mt-3">Download NexQ</h2>
+    <p class="lede">Free and open source. Pick your system, run the installer, and start your next call with it open.</p>
+
+    <div class="dl mt-12" data-dl>
+      <div class="dl-grid">
+        <!-- src: README.md L119-123 (x64-setup.exe, SmartScreen, not code-signed); docs/user-guide/getting-started.md L16-27 (per-user NSIS installer, no admin rights, More info then Run anyway) -->
+        <article class="dl-card dl-card--windows" aria-labelledby="dl-win">
+          <div class="dl-head">
+            <Icon name="windows" class="h-7 w-7" />
+            <h3 id="dl-win" class="dl-title">Windows</h3>
+            <span class="dl-here">Your system</span>
+          </div>
+          <p class="dl-spec">Windows 10 and 11, x64</p>
+          <ul class="dl-list">
+            <li>A per-user installer. No admin rights needed.</li>
+            <li>
+              Windows may show a SmartScreen warning, because the installer is not code-signed yet. Choose
+              <strong>More info</strong>, then <strong>Run anyway</strong>.
+            </li>
+          </ul>
+          <a href={RELEASES_LATEST} target="_blank" rel="noopener" class="btn-primary dl-btn" data-dl-btn="windows">
+            <Icon name="download" class="h-[18px] w-[18px]" />
+            Download for Windows
+          </a>
+        </article>
+
+        <!-- src: README.md L125-132 (Apple Silicon beta, .dmg, not notarized so Gatekeeper blocks it, xattr -cr, mic access); site FAQ "Intel Macs and Linux are not supported yet" -->
+        <article class="dl-card dl-card--mac" aria-labelledby="dl-mac">
+          <div class="dl-head">
+            <Icon name="apple" class="h-7 w-7" />
+            <h3 id="dl-mac" class="dl-title">macOS</h3>
+            <span class="tag">Beta</span>
+            <span class="dl-here">Your system</span>
+          </div>
+          <p class="dl-spec">Apple Silicon. Intel Macs are not supported yet.</p>
+          <ul class="dl-list">
+            <li>
+              The beta is not notarized, so Gatekeeper blocks the first launch. After you drag NexQ into Applications,
+              clear the quarantine flag once:
+              <code class="dl-code">xattr -cr /Applications/NexQ.app</code>
+            </li>
+            <li>Allow microphone access when macOS asks.</li>
+          </ul>
+          <a href={RELEASES_LATEST} target="_blank" rel="noopener" class="btn-ghost dl-btn" data-dl-btn="mac">
+            <Icon name="download" class="h-[18px] w-[18px]" />
+            Download for Mac
+          </a>
+        </article>
+      </div>
+
+      <!-- src: src/components/UpdateDialog.tsx L16-33 (the release wave doubles as the progress bar), scripts/nsis-release-info.mjs L60 (the installer draws releaseWave(version, 72)) -->
+      <div class="dl-wave-row">
+        <div class="dl-wave-text">
+          <p class="eyebrow">v{CURRENT_VERSION}</p>
+          <p class="dl-wave-line">Your installer shows this wave.</p>
+          <p class="dl-wave-note">It fills as NexQ installs, and the update dialog draws the same one.</p>
+        </div>
+        <div class="dl-wave" data-dl-wave>
+          <Wave version={CURRENT_VERSION} size="lg" />
+        </div>
+      </div>
+    </div>
+
+    <p class="dl-more">
+      <a href={RELEASES_URL} target="_blank" rel="noopener" class="link">Other builds and checksums</a>
+      <a href={CONTRIBUTING} target="_blank" rel="noopener" class="link">Build from source</a>
+    </p>
   </div>
 </section>
+
+<script>
+  import '../scripts/dl-detect.ts';
+</script>
+
+<style is:global>
+  .dl {
+    overflow: hidden;
+    border: 1px solid hsl(var(--border));
+    border-radius: 1.25rem;
+  }
+  .dl-grid {
+    grid-template-columns: minmax(0, 1fr);
+    display: grid;
+  }
+  .dl-card {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1.5rem;
+    transition: background-color 0.3s var(--ease-spring);
+  }
+  .dl-card + .dl-card {
+    border-top: 1px solid hsl(var(--border));
+  }
+  .dl-head {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .dl-title {
+    font-size: 1.5rem;
+    font-weight: 750;
+    letter-spacing: -0.03em;
+    line-height: 1.1;
+  }
+  /* The slot is always laid out; only its visibility changes, so detection moves nothing. */
+  .dl-here {
+    visibility: hidden;
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: hsl(var(--foreground));
+  }
+  .dl[data-os='windows'] .dl-card--windows .dl-here,
+  .dl[data-os='mac'] .dl-card--mac .dl-here {
+    visibility: visible;
+  }
+  .dl[data-os='windows'] .dl-card--windows,
+  .dl[data-os='mac'] .dl-card--mac {
+    background-color: hsl(var(--card));
+  }
+  .dl-spec {
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    color: hsl(var(--muted-foreground));
+  }
+  .dl-list {
+    grid-template-columns: minmax(0, 1fr);
+    display: grid;
+    flex: 1 1 auto;
+    gap: 0.875rem;
+    align-content: start;
+    padding: 0;
+    list-style: none;
+    font-size: 0.9375rem;
+    line-height: 1.55;
+    color: hsl(var(--muted-foreground));
+  }
+  .dl-list strong {
+    font-weight: 600;
+    color: hsl(var(--foreground));
+  }
+  .dl-code {
+    display: block;
+    margin-top: 0.625rem;
+    overflow-x: auto;
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.5rem;
+    background: hsl(var(--background));
+    padding: 0.625rem 0.75rem;
+    font-size: 0.8125rem;
+    line-height: 1.4;
+    color: hsl(var(--foreground));
+    user-select: all;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .dl-btn {
+    align-self: flex-start;
+    width: 100%;
+  }
+  .dl-wave-row {
+    grid-template-columns: minmax(0, 1fr);
+    display: grid;
+    gap: 1.25rem;
+    border-top: 1px solid hsl(var(--border));
+    padding: 1.5rem;
+  }
+  .dl-wave-line {
+    margin-top: 0.375rem;
+    font-size: 1.25rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+  }
+  .dl-wave-note {
+    margin-top: 0.375rem;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    color: hsl(var(--muted-foreground));
+  }
+  .dl-wave .nx-wave {
+    --wave-h: 4rem;
+    --wave-gap: 3px;
+    transition: --progress 2.4s var(--ease-spring);
+  }
+  .dl-wave .nx-wave__bar {
+    min-width: 2px;
+  }
+  /* The wave is "unplayed" until it scrolls into view, then fills once. Without JS it shows full. */
+  .js .dl-wave:not(.is-in) .nx-wave {
+    --progress: 0 !important;
+  }
+  .dl-more {
+    margin-top: 1.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.75rem;
+    font-size: 0.9375rem;
+  }
+  .dl-more a {
+    display: inline-flex;
+    min-height: 2.75rem;
+    align-items: center;
+  }
+
+  @media (min-width: 768px) {
+    .dl-grid {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+    .dl-card {
+    min-width: 0;
+      padding: 2rem;
+    }
+    .dl-card + .dl-card {
+      border-top: 0;
+      border-left: 1px solid hsl(var(--border));
+    }
+    .dl-btn {
+      width: auto;
+    }
+    .dl-wave-row {
+      grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
+      align-items: center;
+      gap: 2.5rem;
+      padding: 2rem;
+    }
+    .dl-wave .nx-wave {
+      --wave-h: 5rem;
+      --wave-gap: 4px;
+    }
+  }
+
+  @media (forced-colors: active) {
+    .dl,
+    .dl-card + .dl-card,
+    .dl-wave-row,
+    .dl-code {
+      border-color: ButtonText;
+    }
+  }
+</style>

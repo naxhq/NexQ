@@ -1,11 +1,31 @@
 ---
-// PLACEHOLDER from the foundation task. Replace this file with the real section.
-// Keep the id (`final-cta`) and the aria-labelledby heading so nav links and a11y keep working.
+/**
+ * The close. Plain and confident: one blue action, one quiet link, the logo, no decoration.
+ * On phones the button says what the nav says ("Get it for Windows or Mac").
+ */
+import Icon from './Icon.astro';
+import { CURRENT_VERSION } from '../data/releases';
+import { REPO, SECTION } from '../data/site';
+
+const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
 ---
 
-<section id="final-cta" class="section" aria-labelledby="final-cta-title">
+<section id="final-cta" class="section border-t border-border" aria-labelledby="final-cta-title">
   <div class="wrap">
-    <p class="eyebrow">end of call</p>
-    <h2 id="final-cta-title" class="h2 mt-3">Ready when your next call is</h2>
+    <img src={`${base}img/logo-96.png`} alt="" width="56" height="56" loading="lazy" decoding="async" class="rounded-[14px]" />
+    <h2 id="final-cta-title" class="display mt-8 max-w-[14ch] text-balance">Walk into your next call prepared.</h2>
+    <p class="lede">Free, open source, and no bot joins your call. Windows and Mac.</p>
+    <div class="mt-9 flex flex-col gap-3 sm:flex-row sm:items-center">
+      <a href={`#${SECTION.download}`} class="btn-primary min-h-[52px] px-6 text-base">
+        <Icon name="download" class="h-5 w-5" />
+        <span class="sm:hidden">Get it for Windows or Mac</span>
+        <span class="hidden sm:inline">Download NexQ</span>
+      </a>
+      <a href={REPO} target="_blank" rel="noopener" class="btn-ghost min-h-[52px] px-6 text-base">
+        <Icon name="github" class="h-5 w-5" />
+        Star on GitHub
+      </a>
+    </div>
+    <p class="eyebrow mt-6">v{CURRENT_VERSION} · MIT license</p>
   </div>
 </section>

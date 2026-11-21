@@ -398,11 +398,19 @@
  * Bars before the playhead take --wave-played (or their own --bar, e.g. you/them).
  * Without JS the wave renders at its default --progress (1, fully played).
  */
+/* One registration for every wave: lets --progress transition (a version sweep, a playhead).
+   Bar heights never animate. */
+@property --progress {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 1;
+}
 .nx-wave {
   --progress: 1;
   display: flex;
   align-items: center;
-  gap: var(--wave-gap, 3px);
+  /* The gap shrinks with the box, so 72 bars always fit (a fixed gap overflowed narrow phones). */
+  gap: min(var(--wave-gap, 3px), 0.7%);
   height: var(--wave-h, 40px);
   width: 100%;
 }
@@ -411,7 +419,7 @@
 .nx-wave--lg { --wave-h: 96px; --wave-gap: 4px; }
 .nx-wave__bar {
   flex: 1 1 0;
-  min-width: 1px;
+  min-width: 0;
   height: calc(var(--h) * 100%);
   min-height: 3px;
   border-radius: 9999px;

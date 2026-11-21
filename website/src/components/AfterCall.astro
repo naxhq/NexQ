@@ -1,12 +1,937 @@
 ---
-// PLACEHOLDER from the foundation task. Replace this file with the real section.
-// Keep the id (`after`) and the aria-labelledby heading so nav links and a11y keep working.
+/**
+ * #after: "after 47:12". A DOM recreation of the past-meeting view (not a screenshot, so it stays
+ * crisp and can move): header, tabs, transcript that follows a playhead, and the player bar.
+ *
+ * Source of the real thing (names, order, colours):
+ *   tabs ........ src/launcher/meeting-details/MeetingTabBar.tsx (Transcript, Summary, Ask, AI Log,
+ *                 Speakers, Actions, Bookmarks)
+ *   rows ........ TranscriptRow.tsx (timestamp, bookmark mark, speaker, text; active row has a left
+ *                 border and a tint; clicking a row seeks)
+ *   player ...... src/components/AudioPlayer.tsx (play, time, waveform 36px, duration) and
+ *                 WaveformCanvas.tsx (played bars, bookmark dots amber, topic dividers emerald,
+ *                 click and drag to seek). The app paints played bars indigo; here progress is the
+ *                 site's blue.
+ *   Ask tab ..... AskMeetingTab.tsx (question bubble on the right, "Ask about this meeting…")
+ *   AI Log ...... AIInteractionLog.tsx (mode label, question, latency, provider/model; "Ask this meeting" group)
+ *   actions ..... ActionItemsTab.tsx (checkbox, text, assignee); types.ts ActionItem
+ * Features list: README.md L54-L98 ("Audio recording with synced transcript playback", "Bookmarks,
+ *   action items and topic sections", "Searchable meeting history, summaries and 'Ask a past
+ *   meeting'", "AI Call Log: inspect every prompt, latency and token count").
+ *
+ * The meeting is made up for this page. The existing screenshots in public/ predate the Ask tab and
+ * show demo-mode data, so they are not used here.
+ */
 import { SECTION } from '../data/site';
+
+const DUR = 2832; // 47:12, in seconds
+const START = 0.42; // where the playhead rests without JS and with reduced motion
+
+const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
+// [seconds, who, text, bookmarked]
+const LINES: [number, 'you' | 'them', string, boolean?][] = [
+  [42, 'them', 'Thanks for joining. First item is the launch date for the new onboarding.'],
+  [190, 'you', 'QA found two blockers last week. Both are fixed, but the retest is not done.'],
+  [505, 'them', 'Can we still ship on the 12th?'],
+  [845, 'you', 'If the retest passes by Friday, yes. I would rather not promise it before that.', true],
+  [1188, 'them', 'Fine. What about the pricing page copy?'],
+  [1470, 'you', 'Legal needs one more day. I will send them the draft this afternoon.'],
+  [1755, 'them', 'Who owns the support docs?', true],
+  [2020, 'you', 'I can take them. I will have a first version by Wednesday.'],
+  [2282, 'them', 'Great. Last thing: the rollout. Ten percent first?'],
+  [2540, 'you', 'Ten percent for two days, then everyone if the error rate stays flat.', true],
+  [2755, 'them', 'Agreed. Let’s write that down and wrap up.'],
+];
+const TOPICS: [number, string][] = [
+  [0, 'Launch date'],
+  [1188, 'Pricing copy'],
+  [1755, 'Support docs'],
+  [2282, 'Rollout'],
+];
+const BOOKMARKS: [number, string][] = [
+  [845, 'Do not promise the date before the retest'],
+  [1755, 'Support docs need an owner'],
+  [2540, 'Rollout: 10% for two days, then everyone'],
+];
+const ACTIONS: { text: string; who: 'you' | 'them'; name: string; t: number; done?: boolean }[] = [
+  { text: 'Finish the onboarding retest by Friday', who: 'you', name: 'You', t: 845 },
+  { text: 'Send the pricing page draft to legal', who: 'you', name: 'You', t: 1470 },
+  { text: 'Write the first version of the support docs', who: 'you', name: 'You', t: 2020 },
+  { text: 'Fix the two onboarding blockers', who: 'you', name: 'You', t: 190, done: true },
+];
+const LOG: { label: string; title: string; ms: string; meta: string }[] = [
+  { label: 'Say', title: 'Can we still ship on the 12th?', ms: '1240ms', meta: 'ollama/llama3.2' },
+  { label: 'F/U', title: 'Who owns the support docs?', ms: '980ms', meta: 'ollama/llama3.2' },
+  { label: 'Recap', title: 'Rollout: ten percent first?', ms: '2110ms', meta: 'ollama/llama3.2' },
+];
+
+// A speech-shaped waveform, seeded so the build is stable. Not the release wave: that one means a version.
+const N = 120;
+let seed = 4721;
+const rnd = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296);
+let env = 0.4;
+const raw: number[] = [];
+for (let i = 0; i < N; i++) {
+  // Phrases: a few bars rise and fall, then a pause.
+  const phrase = Math.abs(Math.sin(i * 0.19 + 0.4)) ** 1.4;
+  const quiet = Math.sin(i * 0.37 + 1.3) + Math.sin(i * 0.11) * 0.8 < -0.7;
+  env = env * 0.35 + rnd() * 0.65;
+  raw.push(quiet ? 0.015 + rnd() * 0.04 : 0.04 + phrase * env * 0.96);
+}
+const top = Math.max(...raw);
+const H = 36;
+const SLOT = 2;
+const bars = raw
+  .map((a, i) => {
+    const h = Math.max(1.5, Math.sqrt(a / top) * H * 0.92);
+    return `M${(i * SLOT + 0.2).toFixed(2)} ${((H - h) / 2).toFixed(2)}h1.6v${h.toFixed(2)}h-1.6z`;
+  })
+  .join('');
+
+const pct = (t: number) => `${((t / DUR) * 100).toFixed(2)}%`;
+const startSec = START * DUR;
+const activeIdx = LINES.reduce((a, l, i) => (l[0] <= startSec ? i : a), -1);
+
+const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
+
+const FEATURES: { tab: string; title: string; text: string }[] = [
+  { tab: 'transcript', title: 'A recording that follows the transcript', text: 'Click a line to jump to that moment. Drag the waveform and the transcript scrolls with you.' },
+  { tab: 'summary', title: 'Summary', text: 'Generate one from the transcript when you want it.' },
+  { tab: 'actions', title: 'Action items', text: 'Pulled out of the conversation with who they belong to. Tick them off.' },
+  { tab: 'bookmarks', title: 'Bookmarks and topic sections', text: 'Mark a moment yourself or let the AI suggest them. The green lines on the waveform are where the subject changed.' },
+  { tab: 'ask', title: 'Ask a past meeting', text: 'Chat with the meeting. Questions and answers are saved with it.' },
+  { tab: 'ai', title: 'AI Call Log', text: 'Every prompt, latency and token count behind an answer you asked for.' },
+];
+const TABS = [
+  { id: 'transcript', label: 'Transcript', count: LINES.length },
+  { id: 'summary', label: 'Summary' },
+  { id: 'ask', label: 'Ask' },
+  { id: 'ai', label: 'AI Log', count: LOG.length + 1 },
+  { id: 'actions', label: 'Actions', count: ACTIONS.length },
+  { id: 'bookmarks', label: 'Bookmarks', count: BOOKMARKS.length },
+];
 ---
 
-<section id={SECTION.after} class="section" aria-labelledby="after-title">
+<section id={SECTION.after} class="section ac-sec" aria-labelledby="after-title">
   <div class="wrap">
     <p class="eyebrow">after 47:12</p>
-    <h2 id="after-title" class="h2 mt-3">After the call</h2>
+    <h2 id="after-title" class="h2 mt-3 max-w-[20ch]">Everything is still there afterwards</h2>
+    <p class="lede">
+      The call ends and the work is not over. NexQ keeps the recording, with a transcript that follows it, and
+      the notes you would otherwise write by hand.
+    </p>
+
+    <div class="ac-grid">
+      <div class="ac-main" data-reveal>
+        <div
+          class="ac"
+          data-ac
+          data-dur={DUR}
+          style={`--progress:${START}`}
+          role="group"
+          aria-label="Sample past meeting, Weekly product sync, 47 minutes 12 seconds. A made-up example."
+        >
+          <header class="ac-head">
+            <svg class="ac-back" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M13 8H3m4-4L3 8l4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            <div>
+              <p class="ac-title">Weekly product sync</p>
+              <p class="ac-meta">2h ago · 47:12 · {LINES.length} segments</p>
+            </div>
+          </header>
+
+          <div class="ac-tabs" role="tablist" aria-label="Meeting views" data-ac-tabs>
+            {TABS.map((t, i) => (
+              <button type="button" role="tab" id={`ac-tab-${t.id}`} aria-controls={`ac-panel-${t.id}`} aria-selected={i === 0 ? 'true' : 'false'} tabindex={i === 0 ? 0 : -1} data-tab={t.id}>
+                {t.label}{t.count !== undefined && <span class="ac-count">{t.count}</span>}
+              </button>
+            ))}
+          </div>
+
+          <div class="ac-body">
+            <!-- Transcript -->
+            <div class="ac-panel" role="tabpanel" id="ac-panel-transcript" aria-labelledby="ac-tab-transcript" data-on data-ac-lines tabindex="-1">
+              <h4 class="ac-nojs-h">Transcript</h4>
+              <ol class="ac-lines">
+                {LINES.map(([t, who, text, bm], i) => (
+                  <li>
+                    <button type="button" class="ac-line" data-t={t} aria-current={i === activeIdx ? 'true' : undefined} aria-label={`${fmt(t)} ${who === 'you' ? 'You' : 'Dana'}: ${text}`}>
+                      <span class="ac-ts">{fmt(t)}</span>
+                      {bm ? <svg class="ac-bm" viewBox="0 0 10 12" width="10" height="12" aria-hidden="true"><path d="M1.5 1h7v10L5 8.5 1.5 11z" fill="currentColor" /></svg> : <span class="ac-bm" aria-hidden="true"></span>}
+                      <span class="ac-who" data-w={who} aria-hidden="true">{who === 'you' ? 'You' : 'Dana'}</span>
+                      <span class="ac-tx" aria-hidden="true">{text}</span>
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            </div>
+
+            <!-- Summary -->
+            <div class="ac-panel" role="tabpanel" id="ac-panel-summary" aria-labelledby="ac-tab-summary" tabindex="-1">
+              <h4 class="ac-nojs-h">Summary</h4>
+              <div class="ac-prose">
+                <p>The team agreed to ship the new onboarding on the 12th, as long as the retest of two fixed blockers passes by Friday. Pricing page copy needs one more day of legal review, and support docs have an owner.</p>
+                <p class="ac-prose__h">Key points</p>
+                <ul>
+                  <li>Launch date holds if the retest passes by Friday.</li>
+                  <li>Pricing copy goes to legal today.</li>
+                  <li>First version of the support docs is due Wednesday.</li>
+                  <li>Rollout starts at 10% for two days, then goes to everyone if the error rate stays flat.</li>
+                </ul>
+              </div>
+            </div>
+
+            <!-- Ask -->
+            <div class="ac-panel" role="tabpanel" id="ac-panel-ask" aria-labelledby="ac-tab-ask" tabindex="-1">
+              <h4 class="ac-nojs-h">Ask</h4>
+              <div class="ac-chat">
+                <p class="ac-q">What was decided?</p>
+                <div class="ac-prose">
+                  <p>Three things:</p>
+                  <ul>
+                    <li>Ship on the 12th if the retest passes by Friday.</li>
+                    <li>Send the pricing page draft to legal this afternoon.</li>
+                    <li>Roll out to 10% for two days, then to everyone if the error rate stays flat.</li>
+                  </ul>
+                </div>
+                <p class="ac-ask" aria-hidden="true">Ask about this meeting…</p>
+              </div>
+            </div>
+
+            <!-- AI Log -->
+            <div class="ac-panel" role="tabpanel" id="ac-panel-ai" aria-labelledby="ac-tab-ai" tabindex="-1">
+              <h4 class="ac-nojs-h">AI Log</h4>
+              <ul class="ac-log">
+                {LOG.map((l) => (
+                  <li>
+                    <span class="ac-pill">{l.label}</span>
+                    <span class="ac-log__t">{l.title}</span>
+                    <span class="ac-log__m">{l.ms} · {l.meta}</span>
+                  </li>
+                ))}
+              </ul>
+              <p class="ac-log__g">Ask this meeting</p>
+              <ul class="ac-log">
+                <li>
+                  <span class="ac-pill">Ask</span>
+                  <span class="ac-log__t">What was decided?</span>
+                  <span class="ac-log__m">ollama/llama3.2</span>
+                </li>
+              </ul>
+            </div>
+
+            <!-- Actions -->
+            <div class="ac-panel" role="tabpanel" id="ac-panel-actions" aria-labelledby="ac-tab-actions" tabindex="-1">
+              <h4 class="ac-nojs-h">Actions</h4>
+              <ul class="ac-acts">
+                {ACTIONS.map((a) => (
+                  <li data-done={a.done ? '' : undefined}>
+                    <span class="ac-check" aria-hidden="true">{a.done && <svg viewBox="0 0 12 12" width="10" height="10"><path d="M2.5 6.5l2.5 2.5 4.5-5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>}</span>
+                    <span class="ac-acts__t">{a.text}{a.done && <span class="sr-only"> (done)</span>}</span>
+                    <span class="ac-who" data-w={a.who}>{a.name}</span>
+                    <button type="button" class="ac-ts ac-ts--btn" data-seek={a.t} aria-label={`Jump to ${fmt(a.t)}`}>{fmt(a.t)}</button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <!-- Bookmarks -->
+            <div class="ac-panel" role="tabpanel" id="ac-panel-bookmarks" aria-labelledby="ac-tab-bookmarks" tabindex="-1">
+              <h4 class="ac-nojs-h">Bookmarks</h4>
+              <ul class="ac-bms">
+                {BOOKMARKS.map(([t, note]) => (
+                  <li>
+                    <button type="button" data-seek={t}>
+                      <span class="ac-ts">{fmt(t)}</span>
+                      <svg class="ac-bm ac-bm--on" viewBox="0 0 10 12" width="10" height="12" aria-hidden="true"><path d="M1.5 1h7v10L5 8.5 1.5 11z" fill="currentColor" /></svg>
+                      <span>{note}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+
+          <!-- Player bar: the app's AudioPlayer. -->
+          <div class="ac-player">
+            <button type="button" class="ac-play" data-ac-play aria-label="Play">
+              <svg class="ac-play__i ac-play__i--play" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M3 1.5v9l7.5-4.5z" fill="currentColor" /></svg>
+              <svg class="ac-play__i ac-play__i--pause" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M3 1.5h2v9H3zm4 0h2v9H7z" fill="currentColor" /></svg>
+            </button>
+            <span class="ac-clock" data-ac-now aria-hidden="true">{fmt(Math.floor(startSec))}</span>
+            <div
+              class="ac-wave"
+              data-ac-slider
+              role="slider"
+              tabindex="0"
+              aria-label="Playback position"
+              aria-valuemin="0"
+              aria-valuemax={DUR}
+              aria-valuenow={Math.floor(startSec)}
+              aria-valuetext={`${fmt(Math.floor(startSec))} of ${fmt(DUR)}`}
+            >
+              <svg class="ac-wave__rest" viewBox={`0 0 ${N * SLOT} ${H}`} preserveAspectRatio="none" aria-hidden="true" focusable="false"><path d={bars}></path></svg>
+              <svg class="ac-wave__done" viewBox={`0 0 ${N * SLOT} ${H}`} preserveAspectRatio="none" aria-hidden="true" focusable="false"><path d={bars}></path></svg>
+              {TOPICS.slice(1).map(([t]) => <i class="ac-topic" style={`left:${pct(t)}`} aria-hidden="true"></i>)}
+              {BOOKMARKS.map(([t]) => <i class="ac-dot" style={`left:${pct(t)}`} aria-hidden="true"></i>)}
+              <i class="ac-head-line" aria-hidden="true"></i>
+            </div>
+            <span class="ac-dur" aria-hidden="true">{fmt(DUR)}</span>
+          </div>
+        </div>
+        <p class="ac-cap">
+          A made-up meeting. There is no sound here: the playhead runs fast so you can watch the transcript follow it.
+          Green lines mark topic changes, amber dots mark bookmarks.
+        </p>
+      </div>
+
+      <ol class="ac-feats" data-reveal>
+        {FEATURES.map((f) => (
+          <li>
+            <button type="button" data-go={f.tab}>
+              <span class="ac-feats__t">{f.title}</span>
+              <span class="ac-feats__d">{f.text}</span>
+            </button>
+          </li>
+        ))}
+      </ol>
+    </div>
+
+    <!-- The existing demo video, here and nowhere else. Click to play, nothing loads until then. -->
+    <figure class="ac-video" data-reveal>
+      <div class="ac-video__frame" data-ac-video data-webm={`${base}media/hero-demo.webm`} data-mp4={`${base}media/hero-demo.mp4`} data-poster={`${base}media/hero-demo-poster.webp`}>
+        <button type="button" class="ac-video__btn" aria-label="Play the demo video">
+          <img src={`${base}media/hero-demo-poster.webp`} width="1600" height="1162" loading="lazy" decoding="async" alt="" />
+          <span class="ac-video__icon" aria-hidden="true">
+            <svg viewBox="0 0 12 12" width="22" height="22"><path d="M3 1.5v9l7.5-4.5z" fill="currentColor" /></svg>
+          </span>
+        </button>
+        <noscript>
+          <video controls preload="none" width="1600" height="1162" poster={`${base}media/hero-demo-poster.webp`}>
+            <source src={`${base}media/hero-demo.webm`} type="video/webm" />
+            <source src={`${base}media/hero-demo.mp4`} type="video/mp4" />
+          </video>
+        </noscript>
+      </div>
+      <figcaption>Demo mode, recorded on an earlier version.</figcaption>
+    </figure>
   </div>
 </section>
+
+<style>
+  .ac-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3rem;
+    margin-top: 3.5rem;
+  }
+  @media (min-width: 1024px) {
+    .ac-grid {
+      grid-template-columns: minmax(0, 7fr) minmax(0, 4fr);
+      gap: 4rem;
+      align-items: start;
+    }
+  }
+
+  /* ─── The window. App fonts, because it stands in for the app. ─── */
+  .ac {
+    --ac-pad: 1.25rem;
+    /* Blue text on a blue tint needs to be lighter than the button blue to pass AA. */
+    --ac-blue-text: hsl(213 94% 76%);
+    overflow: hidden;
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.875rem;
+    background: hsl(var(--card));
+    font-family: var(--font-app);
+    font-size: 0.875rem;
+    line-height: 1.45;
+    box-shadow: 0 24px 60px -30px rgb(0 0 0 / 0.7);
+  }
+  .ac-head {
+    display: flex;
+    align-items: center;
+    gap: 0.875rem;
+    padding: 0.875rem var(--ac-pad);
+  }
+  .ac-back {
+    flex: none;
+    color: hsl(var(--muted-foreground));
+  }
+  .ac-title {
+    font-size: 1rem;
+    font-weight: 650;
+    line-height: 1.25;
+  }
+  .ac-meta {
+    font-size: 0.75rem;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .ac-tabs {
+    display: flex;
+    gap: 0.25rem;
+    padding: 0.375rem 0.75rem;
+    overflow-x: auto;
+    border-top: 1px solid hsl(var(--border) / 0.6);
+    border-bottom: 1px solid hsl(var(--border) / 0.6);
+    scrollbar-width: none;
+  }
+  .ac-tabs::-webkit-scrollbar {
+    display: none;
+  }
+  .ac-tabs button {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    min-height: 44px;
+    padding: 0 0.75rem;
+    border-radius: 0.5rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: hsl(var(--muted-foreground));
+    transition:
+      color 0.2s var(--ease-spring),
+      background-color 0.2s var(--ease-spring);
+  }
+  .ac-tabs button:hover {
+    color: hsl(var(--foreground));
+  }
+  .ac-tabs button[aria-selected='true'] {
+    color: var(--ac-blue-text);
+    background: hsl(var(--primary) / 0.1);
+  }
+  .ac-count {
+    padding: 0 0.375rem;
+    border-radius: 0.375rem;
+    background: hsl(var(--secondary));
+    font-size: 0.6875rem;
+    line-height: 1.4;
+    color: hsl(var(--muted-foreground));
+  }
+  :global(html:not(.js)) .ac-tabs {
+    display: none;
+  }
+
+  .ac-body {
+    position: relative;
+  }
+  .ac-panel {
+    overflow-y: auto;
+    padding: 0.5rem 0.5rem;
+    outline-offset: -2px;
+  }
+  /* Without JS the transcript scrolls and the other views are shown in full beneath it. */
+  .ac-panel[data-ac-lines] {
+    max-height: 21rem;
+  }
+  @media (max-width: 639px) {
+    .ac-panel[data-ac-lines] {
+      max-height: 26rem;
+    }
+  }
+  :global(.js) .ac-panel {
+    position: relative;
+    height: 21rem;
+    max-height: none;
+  }
+  @media (max-width: 639px) {
+    :global(.js) .ac-panel {
+      height: 26rem;
+    }
+  }
+  :global(.js) .ac-panel:not([data-on]) {
+    display: none;
+  }
+  :global(.js) .ac-panel[data-on] {
+    animation: ac-in 0.4s var(--ease-spring);
+  }
+  @keyframes ac-in {
+    from {
+      opacity: 0;
+      transform: translate3d(0, 6px, 0);
+    }
+  }
+  .ac-nojs-h {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: hsl(var(--muted-foreground));
+  }
+  :global(.js) .ac-nojs-h {
+    display: none;
+  }
+  .ac-panel + .ac-panel {
+    border-top: 1px solid hsl(var(--border) / 0.6);
+  }
+  :global(.js) .ac-panel + .ac-panel {
+    border-top: 0;
+  }
+
+  /* Transcript rows */
+  .ac-line {
+    position: relative;
+    display: grid;
+    grid-template-columns: 2.75rem 0.75rem auto 1fr;
+    column-gap: 0.625rem;
+    align-items: baseline;
+    width: 100%;
+    min-height: 44px;
+    padding: 0.5rem 0.75rem;
+    border-left: 2px solid transparent;
+    border-radius: 0.5rem;
+    text-align: left;
+    transition: background-color 0.2s var(--ease-spring);
+  }
+  .ac-line:hover {
+    background: hsl(var(--secondary) / 0.4);
+  }
+  .ac-line[aria-current='true'] {
+    border-left-color: hsl(var(--primary));
+    background: hsl(var(--primary) / 0.09);
+  }
+  .ac-ts {
+    font-size: 0.75rem;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    color: hsl(var(--muted-foreground));
+  }
+  .ac-line[aria-current='true'] .ac-ts {
+    color: var(--ac-blue-text);
+  }
+  .ac-bm {
+    display: block;
+    width: 10px;
+    height: 12px;
+    color: hsl(var(--primary));
+    opacity: 0.7;
+    align-self: center;
+  }
+  .ac-bm--on {
+    color: #f59e0b;
+    opacity: 1;
+  }
+  .ac-who {
+    font-size: 0.75rem;
+    font-weight: 700;
+  }
+  .ac-who[data-w='you'] {
+    color: var(--you);
+  }
+  .ac-who[data-w='them'] {
+    color: var(--them);
+  }
+  .ac-tx {
+    font-size: 0.9375rem;
+    color: hsl(var(--foreground) / 0.92);
+  }
+  @media (max-width: 559px) {
+    .ac-line {
+      grid-template-columns: 2.75rem 0.75rem 1fr;
+      row-gap: 0.125rem;
+    }
+    .ac-tx {
+      grid-column: 1 / -1;
+    }
+  }
+
+  /* Prose in Summary and Ask */
+  .ac-prose {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.9375rem;
+    color: hsl(var(--foreground) / 0.9);
+  }
+  .ac-prose p + p,
+  .ac-prose p + ul {
+    margin-top: 0.75rem;
+  }
+  .ac-prose ul {
+    list-style: disc;
+    padding-left: 1.25rem;
+  }
+  .ac-prose li {
+    margin-top: 0.25rem;
+  }
+  .ac-prose__h {
+    font-size: 0.75rem;
+    font-weight: 650;
+    color: hsl(var(--muted-foreground));
+  }
+  .ac-chat {
+    display: flex;
+    min-height: 100%;
+    flex-direction: column;
+    gap: 0.875rem;
+    padding: 0.75rem;
+  }
+  .ac-chat .ac-prose {
+    padding: 0;
+  }
+  .ac-q {
+    align-self: flex-end;
+    max-width: 85%;
+    padding: 0.5rem 0.875rem;
+    border-radius: 1rem 1rem 0.25rem 1rem;
+    background: hsl(var(--primary) / 0.1);
+    font-size: 0.875rem;
+  }
+  .ac-ask {
+    margin-top: auto;
+    padding: 0.625rem 0.875rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.75rem;
+    font-size: 0.875rem;
+    color: hsl(var(--muted-foreground));
+  }
+
+  /* AI Log */
+  .ac-log {
+    padding: 0.25rem 0.5rem;
+  }
+  .ac-log li {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.125rem 0.75rem;
+    align-items: baseline;
+    padding: 0.625rem 0.75rem;
+    border-radius: 0.5rem;
+  }
+  .ac-log li + li {
+    margin-top: 0.125rem;
+    background: transparent;
+  }
+  .ac-pill {
+    padding: 0 0.5rem;
+    border-radius: 0.375rem;
+    background: hsl(var(--primary) / 0.12);
+    font-size: 0.6875rem;
+    font-weight: 650;
+    line-height: 1.5;
+    color: var(--ac-blue-text);
+  }
+  .ac-log__t {
+    font-size: 0.9375rem;
+  }
+  .ac-log__m {
+    grid-column: 2;
+    font-family: var(--font-app-mono);
+    font-size: 0.6875rem;
+    color: hsl(var(--muted-foreground));
+  }
+  .ac-log__g {
+    padding: 0.75rem 1.25rem 0;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    color: hsl(var(--muted-foreground));
+  }
+
+  /* Actions */
+  .ac-acts {
+    padding: 0.25rem 0.5rem;
+  }
+  .ac-acts li {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    gap: 0.75rem;
+    align-items: center;
+    min-height: 44px;
+    padding: 0.375rem 0.75rem;
+  }
+  .ac-acts li[data-done] .ac-acts__t {
+    text-decoration: line-through;
+    opacity: 0.6;
+  }
+  .ac-acts__t {
+    font-size: 0.9375rem;
+  }
+  .ac-check {
+    display: grid;
+    width: 1rem;
+    height: 1rem;
+    place-items: center;
+    border: 1px solid hsl(var(--muted-foreground) / 0.6);
+    border-radius: 9999px;
+  }
+  li[data-done] > .ac-check {
+    border-color: hsl(var(--primary));
+    background: hsl(var(--primary));
+    color: #fff;
+  }
+  .ac-ts--btn {
+    min-height: 44px;
+    min-width: 44px;
+    border-radius: 0.375rem;
+  }
+  .ac-ts--btn:hover {
+    color: hsl(var(--foreground));
+  }
+  @media (max-width: 559px) {
+    .ac-acts li {
+      grid-template-columns: auto 1fr auto;
+    }
+    .ac-acts .ac-who {
+      display: none;
+    }
+  }
+
+  /* Bookmarks */
+  .ac-bms {
+    padding: 0.25rem 0.5rem;
+  }
+  .ac-bms button {
+    display: grid;
+    grid-template-columns: 2.75rem 0.75rem 1fr;
+    column-gap: 0.625rem;
+    align-items: baseline;
+    width: 100%;
+    min-height: 44px;
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.5rem;
+    text-align: left;
+    font-size: 0.9375rem;
+  }
+  .ac-bms button:hover {
+    background: hsl(var(--secondary) / 0.4);
+  }
+
+  /* Player bar */
+  .ac-player {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.5rem var(--ac-pad);
+    border-top: 1px solid hsl(var(--border) / 0.6);
+    background: hsl(var(--card));
+  }
+  .ac-play {
+    display: grid;
+    width: 44px;
+    height: 44px;
+    flex: none;
+    place-items: center;
+    border-radius: 9999px;
+    color: hsl(var(--foreground));
+    transition: background-color 0.2s var(--ease-spring);
+  }
+  .ac-play:hover {
+    background: hsl(var(--primary) / 0.18);
+  }
+  .ac-play__i--pause {
+    display: none;
+  }
+  .ac-play[data-playing] .ac-play__i--pause {
+    display: block;
+  }
+  .ac-play[data-playing] .ac-play__i--play {
+    display: none;
+  }
+  :global(html:not(.js)) .ac-play {
+    display: none;
+  }
+  .ac-clock,
+  .ac-dur {
+    flex: none;
+    width: 2.5rem;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: hsl(var(--muted-foreground));
+  }
+  .ac-clock {
+    text-align: right;
+  }
+  .ac-wave {
+    position: relative;
+    flex: 1 1 0;
+    min-width: 0;
+    height: 36px;
+    cursor: pointer;
+    touch-action: none;
+    border-radius: 4px;
+  }
+  .ac-wave svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  .ac-wave__rest path {
+    fill: hsl(0 0% 100% / 0.14);
+  }
+  .ac-wave__done path {
+    fill: hsl(var(--primary));
+  }
+  .ac-wave__done {
+    /* Reveal the played part. Paint only, no layout. */
+    clip-path: inset(0 calc((1 - var(--progress)) * 100%) 0 0);
+  }
+  .ac-topic {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: rgb(16 185 129 / 0.55);
+    pointer-events: none;
+  }
+  .ac-dot {
+    position: absolute;
+    top: 0;
+    width: 5px;
+    height: 5px;
+    margin-left: -2.5px;
+    border-radius: 9999px;
+    background: #f59e0b;
+    pointer-events: none;
+  }
+  .ac-head-line {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    transform: translate3d(calc(var(--progress) * 100%), 0, 0);
+    pointer-events: none;
+  }
+  .ac-head-line::before {
+    content: '';
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    left: -1px;
+    width: 2px;
+    border-radius: 1px;
+    background: hsl(var(--primary));
+  }
+
+  @media (max-width: 479px) {
+    .ac {
+      --ac-pad: 0.5rem;
+    }
+    .ac-player {
+      gap: 0.25rem;
+    }
+    .ac-dur {
+      display: none;
+    }
+  }
+
+  .ac-cap {
+    margin-top: 0.875rem;
+    max-width: 44rem;
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    color: hsl(var(--muted-foreground));
+  }
+
+  /* Feature list: typographic, each line also opens its tab in the window. */
+  .ac-feats {
+    border-top: 1px solid hsl(var(--border));
+  }
+  .ac-feats li {
+    border-bottom: 1px solid hsl(var(--border));
+  }
+  .ac-feats button {
+    display: block;
+    width: 100%;
+    padding: 1rem 0.25rem;
+    border-radius: 0;
+    text-align: left;
+    cursor: default;
+  }
+  :global(.js) .ac-feats button {
+    cursor: pointer;
+  }
+  .ac-feats__t {
+    display: block;
+    font-size: 1.0625rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    transition: color 0.2s var(--ease-spring);
+  }
+  .ac-feats__d {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.9375rem;
+    line-height: 1.5;
+    color: hsl(var(--muted-foreground));
+  }
+  .ac-feats button[aria-current='true'] .ac-feats__t {
+    color: hsl(var(--primary));
+  }
+  .ac-feats button:hover .ac-feats__t {
+    color: hsl(var(--foreground));
+  }
+  .ac-feats button[aria-current='true']:hover .ac-feats__t {
+    color: hsl(var(--primary));
+  }
+
+  /* Video */
+  .ac-video {
+    margin-top: 5rem;
+    max-width: 44rem;
+  }
+  .ac-video__frame {
+    position: relative;
+    overflow: hidden;
+    aspect-ratio: 1600 / 1162;
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.875rem;
+    background: hsl(var(--card));
+  }
+  .ac-video__frame video,
+  .ac-video__frame img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .ac-video__btn {
+    position: relative;
+    display: block;
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+  }
+  :global(html:not(.js)) .ac-video__btn {
+    display: none;
+  }
+  .ac-video__icon {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    display: grid;
+    width: 4.5rem;
+    height: 4.5rem;
+    place-items: center;
+    border-radius: 9999px;
+    background: hsl(var(--primary-btn));
+    color: #fff;
+    transform: translate(-50%, -50%);
+    transition: transform 0.3s var(--ease-spring);
+  }
+  .ac-video__btn:hover .ac-video__icon {
+    transform: translate(-50%, -50%) scale(1.06);
+  }
+  .ac-video figcaption {
+    margin-top: 0.75rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: hsl(var(--muted-foreground));
+  }
+
+  @media (forced-colors: active) {
+    .ac-wave__done path {
+      fill: Highlight;
+      forced-color-adjust: none;
+    }
+    .ac-head-line::before {
+      background: Highlight;
+      forced-color-adjust: none;
+    }
+    .ac-line[aria-current='true'] {
+      border-left-color: Highlight;
+    }
+  }
+</style>
+
+<script>
+  import '../scripts/after-player.ts';
+</script>

@@ -158,12 +158,21 @@ export const RELEASE_ONELINERS: Record<string, string> = {
   '2.40.0': 'Choose how much each AI provider thinks.',
   '2.39.0': 'Switch each side’s language from the overlay.',
   '2.38.0': 'Screenshots in Ask, auto-detect language, echo cancellation that holds up.',
+  '2.37.0': 'Click the tray icon to bring NexQ back.',
   '2.36.0': 'Echo cancellation, and stealth also leaves the taskbar.',
+  '2.35.0': 'NexQ’s own installer, and a what’s new before you update.',
   '2.34.0': 'Auto-Answer replies the moment the speaker finishes.',
+  '2.33.0': 'Auto-Answer is off by default, and Cartesia stops billing while muted.',
+  '2.32.0': 'Question detection and Auto-Answer become separate switches.',
+  '2.31.0': 'Cartesia ink-2 joins the speech engines, with Chinese and Japanese questions.',
+  '2.30.0': 'Vietnamese transcription.',
   '2.29.0': 'Assist from any app with one shortcut.',
+  '2.28.0': 'A warning when audio comes in but the engine returns nothing.',
+  '2.27.0': 'A rotating log file, and Diagnostics in Settings, About.',
   '2.26.0': 'NexQ notices Zoom, Teams, Meet and Webex calls.',
   '2.25.0': 'macOS arrives, and the overlay can hide from screen share.',
   '2.24.0': 'Thinking control, real usage numbers, a scope picker.',
+  '2.23.0': 'Claude models read from the CLI, with effort set per model.',
   '2.22.0': 'Your Claude subscription, and updates that never interrupt.',
 };
 
@@ -182,7 +191,7 @@ export const FAQ: { q: string; a: string }[] = [
   },
   {
     q: 'Can other people see NexQ when I share my screen?',
-    a: 'With Hide from screen share on, the overlay stays on your screen and is kept out of screen shares, recordings and screenshots. On Windows 10 version 2004 or later this works with the usual tools. On a Mac, some recorders built on ScreenCaptureKit may still capture the window, so test it before you rely on it. Please check that using NexQ is allowed in your call or exam.',
+    a: 'With Hide from screen share on, the overlay stays on your screen and is kept out of screen shares, recordings and screenshots. On Windows 10 version 2004 or later this works with the usual tools. On macOS 14 and later, some recorders that use ScreenCaptureKit can still capture NexQ, so try a test share first. Please check that using NexQ is allowed in your call or exam.',
   },
   {
     q: 'Which platforms are supported?',
@@ -194,11 +203,15 @@ export const FAQ: { q: string; a: string }[] = [
   },
   {
     q: 'How does the Claude subscription option work?',
-    a: 'NexQ starts the official claude command-line tool on your PC, with its tools turned off, in an empty private folder. You sign in inside Claude’s own tool, so NexQ never sees your credentials. The only things it can reach are the notes folders and tools you add under Personal sources, and you choose per answer whether to use them. Usage counts toward your plan. NexQ shows the numbers Claude reports as an estimate, and switches to a fallback provider you choose if Claude is unavailable.',
+    a: 'NexQ starts the official claude command-line tool on your PC, with its tools turned off, in an empty private folder. You sign in inside Claude’s own tool, so NexQ never sees your credentials. The only things it can reach are the notes folders and tools you add under Personal sources, and you choose per answer whether to use them. What it reads in your notes and tools goes to Anthropic, like the transcript does. Usage counts toward your plan. NexQ shows the numbers Claude reports as an estimate, and switches to a fallback provider you choose if Claude is unavailable.',
   },
   {
     q: 'Why does Windows show a SmartScreen warning?',
     a: 'NexQ is not code-signed yet, which is common for open-source apps. Click “More info”, then “Run anyway”. You can also build it from source, since all the code is on GitHub. Updates are signed with an Ed25519 key and checked before they install.',
+  },
+  {
+    q: 'Why does my Mac say NexQ can’t be opened?',
+    a: 'The macOS beta is not notarized, so Gatekeeper blocks the first launch. After you drag NexQ into Applications, run xattr -cr /Applications/NexQ.app once, then open it.',
   },
   {
     q: 'How do updates work?',

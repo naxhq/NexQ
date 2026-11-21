@@ -1,11 +1,184 @@
 ---
-// PLACEHOLDER from the foundation task. Replace this file with the real hero.
-// Keep id `hero`; the page's single <h1> lives here.
-import { SECTION } from '../data/site';
+/**
+ * Hero + "Scroll the call" as ONE stage. The overlay is a single element, pinned beside the hero and
+ * then beside every beat, so it is the same object from the first word to the stealth demo. That needs
+ * one grid parent, which is why this file renders both sections (CallStory.astro renders nothing).
+ *
+ *   #hero  headline, version pill, download, proof, the release wave
+ *   #call  five beats, each with a timestamp, one headline, one sentence, at most three facts
+ *   pinned the overlay (overlay/Overlay.astro) and its controls; callDemo.ts plays it
+ *
+ * Styles: overlay/stage.css (layout) and overlay/overlay.css (the overlay). Script: scripts/callDemo.ts.
+ */
+import Wave from './Wave.astro';
+import Icon from './Icon.astro';
+import Overlay from './overlay/Overlay.astro';
+import BeatFrame from './overlay/BeatFrame.astro';
+import StealthPanes from './overlay/StealthPanes.astro';
+import OvIcon from './overlay/OvIcon.astro';
+import { heroSpeakers, TIMES } from './overlay/content';
+import './overlay/stage.css';
+import { SECTION, REPO, RELEASES_LATEST, COUNTS } from '../data/site';
+import { CURRENT_VERSION } from '../data/releases';
+
+const speakers = heroSpeakers();
 ---
 
-<section id={SECTION.hero} class="section pt-32" aria-labelledby="hero-title">
-  <div class="wrap">
-    <h1 id="hero-title" class="display">Your side of the screen.</h1>
+<div class="wrap nx-stage" data-stage data-beat="h" data-stealth="on">
+  <section id={SECTION.hero} class="nx-hero" aria-labelledby="hero-title" data-t={0}>
+    <a href="#knows" class="nx-pill">
+      <span class="tag">v{CURRENT_VERSION}</span>
+      <span>Your notes and tools, in the answer</span>
+    </a>
+    <h1 id="hero-title" class="display">The answer stays on your side of the screen.</h1>
+    <p class="nx-sub">
+      NexQ transcribes both sides of your call and answers in a keypress, in a private overlay that is hidden from screen share.
+      Local models, any API or your Claude subscription. Free and open source.
+    </p>
+    <div class="nx-cta">
+      <a href={RELEASES_LATEST} class="btn-primary">
+        <span data-os="win"><Icon name="windows" class="h-[18px] w-[18px]" />Download for Windows</span>
+        <span data-os="mac" hidden><Icon name="apple" class="h-[18px] w-[18px]" />Download for Mac</span>
+      </a>
+      <a href={REPO} class="btn-ghost" target="_blank" rel="noopener"><span><Icon name="star" class="h-[18px] w-[18px]" />Star on GitHub</span></a>
+    </div>
+    <p class="nx-small">Windows 10 and 11, macOS on Apple Silicon (beta). <a class="link" href={`#${SECTION.download}`}>Other options</a></p>
+
+    <ul class="nx-proof" aria-label="At a glance">
+      <li><b>{COUNTS.stt}</b> speech engines</li>
+      <li><b>{COUNTS.llm}</b> AI providers</li>
+      <li><b>0</b> bots in your call</li>
+      <li><b>MIT</b> licensed</li>
+    </ul>
+
+    <div class="nx-wavewrap">
+      <span class="tag">v{CURRENT_VERSION}</span>
+      <Wave
+        version={CURRENT_VERSION}
+        size="md"
+        speakers={speakers}
+        label={`Release waveform for v${CURRENT_VERSION}. In the sample conversation, orange is them and green is you.`}
+      />
+    </div>
+  </section>
+
+  <div class="nx-pin" data-pin>
+    <div class="nx-screen">
+      <div class="nx-skel" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+      <Overlay />
+      <StealthPanes class="nx-panes--pin" />
+    </div>
+    <div class="nx-bar">
+      <p class="nx-cap">
+        <strong>Sample conversation</strong>
+        <span class="nx-hint" data-hint>Question caught. Click Assist, or press Space in the overlay.</span>
+      </p>
+      <div class="nx-bar__ctl">
+        <button type="button" class="nx-pause" data-pause aria-pressed="false" aria-label="Pause the sample">
+          <svg class="i-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" /></svg>
+          <svg class="i-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4v16l13-8z" /></svg>
+        </button>
+        <button type="button" class="btn-primary nx-assist" data-assist-main>
+          <OvIcon name="sparkles" class="h-[18px] w-[18px]" />Assist <kbd class="kbd">Space</kbd>
+        </button>
+      </div>
+    </div>
   </div>
-</section>
+
+  <section id={SECTION.call} class="nx-call" aria-labelledby="call-title">
+    <header class="nx-callhead">
+      <p class="eyebrow">00:38</p>
+      <h2 id="call-title" class="h2 mt-3">Scroll through one call.</h2>
+      <p class="lede">
+        The overlay beside this text is a rebuild of the real one. Each moment of the call changes it.
+      </p>
+    </header>
+
+    <!-- Beat a: src/overlay/SideLanguagePicker.tsx, docs/user-guide/ai-providers.md (a different language for each side), audio-setup.md (Echo or Feedback) -->
+    <article class="nx-beat" data-beat-id="a" data-t={TIMES.a} data-hint="Each side has its own language" aria-labelledby="beat-a">
+      <p class="eyebrow">04:12</p>
+      <h3 id="beat-a" class="h3">Each side in its own language.</h3>
+      <p class="nx-beat__lede">
+        You and the other side are transcribed separately, so you can speak English while they speak Spanish. Change a side from the overlay and only that side restarts.
+      </p>
+      <ul class="nx-facts">
+        <li>Live translation shows under each line, from DeepL, Google, Microsoft, your own AI or offline OPUS-MT.</li>
+        <li>Some speech engines detect the language for you, such as Deepgram Nova-3, Cartesia, Parakeet v3 and Groq.</li>
+      </ul>
+      <p class="nx-also"><b>Also:</b> echo cancellation keeps the other side out of your microphone, and you can rename speakers.</p>
+      <div class="nx-still"><BeatFrame beat="a" /></div>
+    </article>
+
+    <!-- Beat b: docs/user-guide/configuration.md (AI Actions), interview-copilot.md (question cards) -->
+    <article class="nx-beat" data-beat-id="b" data-t={TIMES.b} data-hint="A question becomes a card" aria-labelledby="beat-b">
+      <p class="eyebrow">12:40</p>
+      <h3 id="beat-b" class="h3">The question, caught.</h3>
+      <p class="nx-beat__lede">
+        When the other side asks something, it shows up as a card. Click it for an answer, or let NexQ answer by itself.
+      </p>
+      <ul class="nx-facts">
+        <li>Question Detection turns questions from the other side into cards.</li>
+        <li>Auto-Answer is off by default and needs Question Detection.</li>
+        <li>It answers after 1.5 seconds of quiet, or as soon as Cartesia or Deepgram Flux hear the speaker finish.</li>
+      </ul>
+      <div class="nx-still"><BeatFrame beat="b" /></div>
+    </article>
+
+    <!-- Beat c: docs/user-guide/keyboard-shortcuts.md, claude-subscription.md (screenshots), src/overlay/ContextScopePicker.tsx -->
+    <article class="nx-beat" data-beat-id="c" data-t={TIMES.c} data-hint="One key for each action" aria-labelledby="beat-c">
+      <p class="eyebrow">23:05</p>
+      <h3 id="beat-c" class="h3">One key.</h3>
+      <p class="nx-beat__lede">
+        Press <kbd class="kbd">Space</kbd> and NexQ answers. Keys <kbd class="kbd">1</kbd> to <kbd class="kbd">5</kbd> pick Say, Short, F/U, Recap or Ask. They work while the overlay has focus.
+      </p>
+      <ul class="nx-facts">
+        <li><kbd class="kbd">Ctrl</kbd> or <kbd class="kbd">⌘</kbd> <kbd class="kbd">Shift</kbd> <kbd class="kbd">Space</kbd> asks from any app, without switching windows.</li>
+        <li>The scope picker sets what the answer looks at: the last few minutes, since your last answer, or the whole call.</li>
+        <li><kbd class="kbd">Ctrl</kbd> <kbd class="kbd">Shift</kbd> <kbd class="kbd">S</kbd> puts a screenshot of your screen into Ask. Windows only, on your Claude subscription.</li>
+      </ul>
+      <div class="nx-still"><BeatFrame beat="c" /></div>
+    </article>
+
+    <!-- Beat d: docs/user-guide/claude-subscription.md (Personal sources), rag-context.md, README.md (Gemini Context Cache) -->
+    <article class="nx-beat" id="knows" data-beat-id="d" data-t={TIMES.d} data-hint="Notes and Tools, in the answer" aria-labelledby="beat-d">
+      <p class="eyebrow">31:20</p>
+      <h3 id="beat-d" class="h3">What it knows.</h3>
+      <p class="nx-beat__lede">
+        Load documents and NexQ searches them on your PC. Add a notes folder or a tool and, on your Claude subscription, answers can look things up too.
+      </p>
+      <span class="tag">New in 2.41 · Claude subscription</span>
+      <ul class="nx-facts">
+        <li>Documents you load are indexed locally with vector and keyword search, and work with any AI. Gemini can also cache them.</li>
+        <li>A notes folder, such as an Obsidian vault, is read only. Tools are MCP servers, and tools that look like they change something (add, send, edit, delete) start off.</li>
+        <li>Switch Notes and Tools on for an answer you ask for. A lookup can add a few seconds, and automatic answers never use them.</li>
+      </ul>
+      <div class="nx-still"><BeatFrame beat="d" /></div>
+    </article>
+
+    <!-- Beat e: README.md (Stealth Mode), docs/user-guide/keyboard-shortcuts.md, interview-copilot.md -->
+    <article class="nx-beat" id="stealth" data-beat-id="e" data-t={TIMES.e} data-hint="Only you see the overlay, when it is on" aria-labelledby="beat-e">
+      <p class="eyebrow">38:05</p>
+      <h3 id="beat-e" class="h3">Gone from the share.</h3>
+      <p class="nx-beat__lede">
+        Turn on Hide from screen share and the overlay stays on your screen, but it is left out of what you share, record or screenshot.
+      </p>
+      <button type="button" class="nx-toggle" data-stealth-toggle aria-pressed="true">
+        <span class="nx-switch" aria-hidden="true"></span>Hide from screen share
+      </button>
+      <p class="nx-status" data-stealth-status role="status">On. The overlay stays on your screen and is left out of what they see.</p>
+      <p class="nx-nojs">With Hide from screen share on, the overlay is in the first screen and not in the second.</p>
+      <StealthPanes class="nx-panes--beat" />
+      <ul class="nx-facts">
+        <li>
+          <kbd class="kbd">Ctrl</kbd> or <kbd class="kbd">⌘</kbd> <kbd class="kbd">Shift</kbd> <kbd class="kbd">H</kbd> switches it. NexQ also leaves the taskbar on Windows (Alt+Tab still finds it) and the Dock and Cmd+Tab on macOS.
+        </li>
+        <li>On Windows 10 version 2004 or later it works with the usual screen-share tools. On macOS 14 and later, some recorders built on ScreenCaptureKit can still capture it, so run a test share first.</li>
+        <li>It keeps your screen private. Check that using NexQ is allowed in your call or exam.</li>
+      </ul>
+    </article>
+  </section>
+</div>
+
+<script>
+  import '../scripts/callDemo.ts';
+</script>
