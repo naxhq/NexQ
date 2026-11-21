@@ -1,45 +1,151 @@
 @import 'tailwindcss';
 
-/* Keep v3 hover behaviour: apply on :hover everywhere, not only on hover-capable devices. */
-@custom-variant hover (&:hover);
-
 /*
- * Tailwind theme. Mirrors the tokens below (hex so opacity modifiers work).
- * Warm slate-blue neutrals. Every accent carries meaning:
- * blue = primary action / brand, green = live / success,
- * amber = the other party / caution, red = recording / destructive.
+ * NexQ website: design tokens and shared utilities.
+ *
+ * The site is dark only and uses the app's own palette (src/index.css, `.dark` block),
+ * so the page looks like the product. Colour carries meaning, never decoration:
+ *
+ *   blue (primary)  action only: the Download button, focus ring, progress
+ *   green (you)     your side of the call, live
+ *   orange (them)   the other side of the call
+ *   amber           translated text
+ *   sky (info)      the detected-question card
+ *   yellow          notes (the "Notes" pill and chips)
+ *   red (rec)       recording, destructive
+ *
+ * No gradients as decoration, no grain, no orbs, no glass outside the overlay mock.
+ * Section authors: use the Tailwind names below (bg-background, text-muted-foreground,
+ * border-border, text-you ...) or the classes in the "Components" layer.
  */
-@theme {
-  --color-bg: #0b0d13;
-  --color-bg-raised: #11141c;
-  --color-bg-sunken: #08090e;
-  --color-bg-panel: #161a24;
 
-  --color-ink: #eef1f7;
-  --color-ink-2: #a3aabd;
-  --color-ink-3: #838aa0;
+/* ─── Fonts (self-hosted, Latin subset) ───
+ * Files come from @fontsource-variable. Layout.astro preloads the Schibsted file.
+ * The "Fallback" faces are local system fonts stretched to the same metrics, so the
+ * swap to the web font does not move the layout (size-adjust + ascent/descent override).
+ */
+@font-face {
+  font-family: 'Schibsted Grotesk';
+  font-style: normal;
+  font-weight: 400 900;
+  font-display: swap;
+  src: url('../../node_modules/@fontsource-variable/schibsted-grotesk/files/schibsted-grotesk-latin-wght-normal.woff2')
+    format('woff2-variations');
+}
+@font-face {
+  font-family: 'Martian Mono';
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url('../../node_modules/@fontsource-variable/martian-mono/files/martian-mono-latin-wght-normal.woff2')
+    format('woff2-variations');
+}
+/* Arial, scaled to Schibsted Grotesk's average glyph width. */
+@font-face {
+  font-family: 'Schibsted Grotesk Fallback';
+  src: local('Arial'), local('Helvetica Neue'), local('Helvetica');
+  size-adjust: 104.49%;
+  ascent-override: 93.46%;
+  descent-override: 24.67%;
+  line-gap-override: 0%;
+}
+/* Courier New, scaled to Martian Mono's width. */
+@font-face {
+  font-family: 'Martian Mono Fallback';
+  src: local('Courier New'), local('Courier');
+  size-adjust: 116.67%;
+  ascent-override: 85.71%;
+  descent-override: 17.14%;
+  line-gap-override: 0%;
+}
 
-  --color-line: rgba(160, 175, 215, 0.1);
-  --color-line-strong: rgba(160, 175, 215, 0.18);
+/* ─── Tokens ───
+ * Raw HSL triplets, the same names and values as the app's `.dark` theme.
+ * Use them as hsl(var(--background)) or hsl(var(--border) / 0.2).
+ */
+:root {
+  color-scheme: dark;
 
-  --color-brand: #3b82f6;
-  --color-brand-ink: #7aa7ff;
-  --color-brand-btn: #2563eb;
+  /* App palette (src/index.css .dark) */
+  --background: 222 47% 6%;
+  --foreground: 210 20% 96%;
+  --card: 222 40% 8%;
+  --card-foreground: 210 20% 96%;
+  --secondary: 220 26% 14%;
+  --muted: 220 20% 16%;
+  --muted-foreground: 215 14% 64%;
+  --border: 220 20% 18%;
+  --primary: 217 91% 60%;
+  --primary-foreground: 0 0% 100%;
+  /* Fill for the one blue button. #2563eb: white text on it passes AA (5.2:1); the app's
+     60% blue with white text does not (3.7:1). Hover uses the app's --primary. */
+  --primary-btn: 221 83% 53%;
+  --info: 199 89% 53%;
+  --highlight: 48 96% 60%;
+  --success: 160 84% 45%;
+  --warning: 38 92% 55%;
+  --destructive: 0 72% 51%;
 
-  --color-live: #3ddc97;
-  --color-them: #f2b84b;
-  --color-rec: #f26d6d;
+  /* Site semantics (what the colours mean in the overlay mock) */
+  --you: #22c55e;
+  --them: #f97316;
+  --translation: #fbbf24;
+  --rec: #ef4444;
 
-  --font-sans: Geist, ui-sans-serif, system-ui, 'Segoe UI', sans-serif;
-  --font-mono: 'Geist Mono', ui-monospace, 'Cascadia Code', Menlo, monospace;
-  --font-serif: 'Instrument Serif', ui-serif, Georgia, serif;
+  /* Overlay mock: interim (not yet final) transcript text. Raise if it fails AA. */
+  --interim-alpha: 0.45;
+
+  /* Spring, critically damped: quick start, no overshoot, never bounce. */
+  --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
+  --nav-h: 4rem;
+
+  /* Release wave (see Wave.astro) */
+  --wave-rest: hsl(var(--muted-foreground) / 0.35);
+  --wave-played: hsl(var(--primary));
+}
+
+/* People who ask for more contrast get lighter secondary text and stronger borders. */
+@media (prefers-contrast: more) {
+  :root {
+    --muted-foreground: 215 20% 82%;
+    --border: 220 20% 40%;
+    --interim-alpha: 0.7;
+    --wave-rest: hsl(var(--muted-foreground) / 0.6);
+  }
+}
+
+/* ─── Tailwind theme ─── */
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-secondary: hsl(var(--secondary));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-border: hsl(var(--border));
+  --color-primary: hsl(var(--primary));
+  --color-primary-btn: hsl(var(--primary-btn));
+  --color-info: hsl(var(--info));
+  --color-highlight: hsl(var(--highlight));
+  --color-success: hsl(var(--success));
+  --color-warning: hsl(var(--warning));
+  --color-destructive: hsl(var(--destructive));
+  --color-you: var(--you);
+  --color-them: var(--them);
+  --color-translation: var(--translation);
+  --color-rec: var(--rec);
+
+  /* Site text: Schibsted Grotesk. Mono: Martian Mono (timestamps, versions, kbd). */
+  --font-sans: 'Schibsted Grotesk', 'Schibsted Grotesk Fallback', ui-sans-serif, system-ui, 'Segoe UI', sans-serif;
+  --font-mono: 'Martian Mono', 'Martian Mono Fallback', ui-monospace, 'Cascadia Code', Consolas, monospace;
+  /* The overlay mock only: the app's real stack, so the demo looks like the app. */
+  --font-app: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-app-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, 'SF Mono', ui-monospace, monospace;
 
   --container-page: 72rem;
+  --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
 
-  /*
-   * Tailwind v3 font-size line-heights (absolute rem). v4 defaults are unitless ratios,
-   * which change text that overrides the size or inherits the line-height (chips, kbd).
-   */
+  /* Tailwind v3 line-heights as absolute rem (v4 defaults are unitless ratios). */
   --text-xs--line-height: 1rem;
   --text-sm--line-height: 1.25rem;
   --text-base--line-height: 1.5rem;
@@ -48,70 +154,52 @@
   --text-2xl--line-height: 2rem;
   --text-3xl--line-height: 2.25rem;
   --text-4xl--line-height: 2.5rem;
-
-  /* Critically damped spring approximation: fast start, no overshoot. */
-  --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* ─── Tokens ─── */
-:root {
-  color-scheme: dark;
-
-  --bg: #0b0d13;
-  --bg-raised: #11141c;
-  --bg-sunken: #08090e;
-  --panel: #161a24;
-
-  --ink: #eef1f7;
-  --ink-2: #a3aabd;
-  --ink-3: #838aa0;
-
-  --line: rgba(160, 175, 215, 0.1);
-  --line-strong: rgba(160, 175, 215, 0.18);
-
-  --blue: #3b82f6;
-  --blue-ink: #7aa7ff;
-  --blue-btn: #2563eb;
-  --green: #3ddc97;
-  --amber: #f2b84b;
-  --red: #f26d6d;
-
-  --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
-  --nav-h: 4rem;
-}
+/* Keep v3 hover behaviour: apply on :hover everywhere, not only on hover-capable devices. */
+@custom-variant hover (&:hover);
 
 /* ─── Base ─── */
 @layer base {
-  /* Tailwind v3 preflight gave buttons a pointer cursor; v4 does not. */
+  /* Tailwind v4 preflight uses currentColor for borders; use the token instead. */
+  *,
+  ::before,
+  ::after {
+    border-color: hsl(var(--border));
+  }
+
   button:not(:disabled),
-  [role='button']:not(:disabled) {
+  [role='button']:not(:disabled),
+  summary {
     cursor: pointer;
   }
 
   html {
-    background-color: var(--bg);
+    background-color: hsl(var(--background));
     scroll-behavior: smooth;
     scroll-padding-top: calc(var(--nav-h) + 1rem);
     -webkit-text-size-adjust: 100%;
   }
 
   body {
-    background-color: var(--bg);
-    color: var(--ink);
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
     font-family: var(--font-sans);
-    font-feature-settings: 'ss01', 'cv11';
+    font-size: 1rem;
+    line-height: 1.6;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    overflow-x: hidden;
+    overflow-x: clip;
   }
 
   ::selection {
-    background-color: rgba(59, 130, 246, 0.45);
-    color: var(--ink);
+    background-color: hsl(var(--primary) / 0.4);
+    color: hsl(var(--foreground));
   }
 
+  /* One focus style everywhere: a 2px blue ring, offset so it never touches the text. */
   :focus-visible {
-    outline: 2px solid var(--blue-ink);
+    outline: 2px solid hsl(var(--primary));
     outline-offset: 3px;
     border-radius: 6px;
   }
@@ -119,12 +207,10 @@
   h1, h2, h3 {
     text-wrap: balance;
   }
-
   p {
     text-wrap: pretty;
   }
-
-  kbd {
+  kbd, code {
     font-family: var(--font-mono);
   }
 }
@@ -135,81 +221,220 @@
     @apply mx-auto w-full max-w-page px-4 sm:px-6;
   }
 
+  /* Vertical rhythm for a top-level section. */
   .section {
-    @apply py-24 sm:py-32;
+    @apply py-20 sm:py-28;
   }
 
-  .eyebrow {
-    @apply font-mono text-xs font-medium uppercase tracking-[0.14em] text-ink-3;
+  /*
+   * Type scale. Display sizes use Schibsted Grotesk 800/900 with tight tracking.
+   * Body copy is 400, UI labels 500 to 600.
+   *   .display  hero headline        .h2  section headline
+   *   .h3       beat / card title    .lede  one sentence under a headline
+   */
+  .display {
+    font-size: clamp(2.75rem, 7.5vw + 0.5rem, 6rem);
+    font-weight: 850;
+    line-height: 0.96;
+    letter-spacing: -0.045em;
   }
-
   .h2 {
-    @apply text-[2rem] font-semibold leading-[1.08] tracking-[-0.03em] text-ink sm:text-5xl sm:leading-none;
+    font-size: clamp(2rem, 4.2vw + 0.5rem, 3.75rem);
+    font-weight: 800;
+    line-height: 1.02;
+    letter-spacing: -0.04em;
   }
-
+  .h3 {
+    font-size: clamp(1.375rem, 1.6vw + 0.9rem, 1.875rem);
+    font-weight: 750;
+    line-height: 1.12;
+    letter-spacing: -0.03em;
+  }
   .lede {
-    @apply mt-5 max-w-2xl text-lg leading-relaxed text-ink-2;
+    margin-top: 1.25rem;
+    max-width: 38rem;
+    font-size: clamp(1.0625rem, 0.5vw + 1rem, 1.25rem);
+    line-height: 1.55;
+    color: hsl(var(--muted-foreground));
   }
 
-  /* .btn-primary and .btn-ghost share the .btn base (v4 cannot @apply a custom class). */
-  .btn,
+  /*
+   * Eyebrow as a meeting timestamp: "00:00", "after 47:12", "v2.41". Martian Mono,
+   * NOT uppercase, small, muted. Write the time as text, e.g. <p class="eyebrow">04:12</p>.
+   */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    font-weight: 450;
+    letter-spacing: 0;
+    font-variant-numeric: tabular-nums;
+    color: hsl(var(--muted-foreground));
+  }
+
+  /* Buttons. Blue is for the one action: Download. .btn-primary is the only blue CTA. */
   .btn-primary,
   .btn-ghost {
-    @apply inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl px-5 text-[0.9375rem] font-medium transition-[background-color,border-color,transform,scale,box-shadow] duration-200 ease-spring active:scale-[0.98];
+    display: inline-flex;
+    min-height: 44px;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border-radius: 0.75rem;
+    padding: 0 1.25rem;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    line-height: 1;
+    text-decoration: none;
+    transition:
+      background-color 0.2s var(--ease-spring),
+      border-color 0.2s var(--ease-spring),
+      transform 0.2s var(--ease-spring);
   }
-
   .btn-primary {
-    @apply bg-brand-btn text-white shadow-[0_1px_0_0_rgba(255,255,255,0.18)_inset,0_8px_24px_-8px_rgba(37,99,235,0.6)] hover:bg-[#3471f0];
+    background-color: hsl(var(--primary-btn));
+    color: hsl(var(--primary-foreground));
   }
-
+  .btn-primary:hover {
+    background-color: hsl(var(--primary));
+  }
   .btn-ghost {
-    @apply border border-line-strong text-ink hover:border-[rgba(160,175,215,0.32)] hover:bg-bg-raised;
+    border: 1px solid hsl(var(--border));
+    color: hsl(var(--foreground));
+  }
+  .btn-ghost:hover {
+    border-color: hsl(var(--muted-foreground) / 0.5);
+    background-color: hsl(var(--card));
+  }
+  .btn-primary:active,
+  .btn-ghost:active {
+    transform: scale(0.98);
   }
 
+  /* Keyboard key. Use for hotkeys: <kbd class="kbd">Ctrl</kbd> */
   .kbd {
-    @apply inline-flex min-w-[1.6em] items-center justify-center rounded-md border border-line-strong bg-bg-panel px-1.5 py-0.5 font-mono text-[0.75em] font-medium text-ink shadow-[0_1px_0_0_var(--line-strong)];
-  }
-
-  .chip {
-    @apply inline-flex items-center gap-1.5 rounded-full border border-line px-3 py-1 text-sm text-ink-2;
+    display: inline-flex;
+    min-width: 1.6em;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.375rem;
+    background-color: hsl(var(--card));
+    padding: 0.125rem 0.375rem;
+    font-family: var(--font-mono);
+    font-size: 0.75em;
+    font-weight: 500;
+    line-height: 1.4;
+    color: hsl(var(--foreground));
+    box-shadow: 0 1px 0 0 hsl(var(--border));
   }
 
   .link {
-    @apply text-brand-ink underline decoration-brand-ink/30 underline-offset-4 transition-colors hover:decoration-brand-ink;
+    color: hsl(var(--primary));
+    text-decoration: underline;
+    text-decoration-color: hsl(var(--primary) / 0.35);
+    text-underline-offset: 4px;
+    transition: text-decoration-color 0.2s var(--ease-spring);
+  }
+  .link:hover {
+    text-decoration-color: hsl(var(--primary));
   }
 
-  .frame {
-    @apply overflow-hidden rounded-2xl border border-line-strong bg-bg-sunken shadow-[0_40px_120px_-40px_rgba(0,0,0,0.9),0_0_0_1px_rgba(0,0,0,0.4)];
+  /* Small mono label for versions and meta, e.g. "v2.41.2". */
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: 9999px;
+    padding: 0.125rem 0.625rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: hsl(var(--muted-foreground));
+  }
+
+  /*
+   * The overlay's glass. ONLY for the overlay mock: it matches the real window
+   * (src/overlay): 90% background, blur 12px, saturate 1.1, rounded-xl, 20% border.
+   * Nothing else on the page gets glass.
+   */
+  .nx-glass {
+    background: hsl(var(--background) / 0.9);
+    -webkit-backdrop-filter: blur(12px) saturate(1.1);
+    backdrop-filter: blur(12px) saturate(1.1);
+    border: 1px solid hsl(var(--border) / 0.2);
+    border-radius: 0.75rem;
+    box-shadow:
+      0 24px 60px -20px rgb(0 0 0 / 0.7),
+      0 2px 8px rgb(0 0 0 / 0.35);
   }
 }
 
-/* ─── Live dot (green = live) ─── */
-.live-dot {
+/* ─── Recording dot (red). The ping is the only looping motion in the overlay chrome. ─── */
+.rec-dot {
   position: relative;
   display: inline-block;
   width: 0.5rem;
   height: 0.5rem;
   border-radius: 9999px;
-  background: var(--green);
+  background: var(--rec);
 }
-.live-dot::after {
+.rec-dot::after {
   content: '';
   position: absolute;
   inset: 0;
   border-radius: inherit;
   background: inherit;
-  animation: live-ping 2.4s var(--ease-spring) infinite;
+  animation: rec-ping 2.4s var(--ease-spring) infinite;
 }
-@keyframes live-ping {
+@keyframes rec-ping {
   0% { transform: scale(1); opacity: 0.6; }
   70%, 100% { transform: scale(2.6); opacity: 0; }
 }
 
-/* ─── Reveal on scroll (only when JS is running) ─── */
+/* ─── Release wave (markup in Wave.astro) ───
+ * A row of bars from releaseWave(). Nothing here changes a bar's height: only the
+ * colour moves, as a playhead. Section scripts set --progress (0 to 1) on the element:
+ *   el.style.setProperty('--progress', String(t))
+ * Bars before the playhead take --wave-played (or their own --bar, e.g. you/them).
+ * Without JS the wave renders at its default --progress (1, fully played).
+ */
+.nx-wave {
+  --progress: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--wave-gap, 3px);
+  height: var(--wave-h, 40px);
+  width: 100%;
+}
+.nx-wave--sm { --wave-h: 20px; --wave-gap: 2px; }
+.nx-wave--md { --wave-h: 40px; --wave-gap: 3px; }
+.nx-wave--lg { --wave-h: 96px; --wave-gap: 4px; }
+.nx-wave__bar {
+  flex: 1 1 0;
+  min-width: 1px;
+  height: calc(var(--h) * 100%);
+  min-height: 3px;
+  border-radius: 9999px;
+  /* 1 when this bar is behind the playhead, else 0 (steep clamp, no transition). */
+  --on: clamp(0, calc((var(--progress) - var(--p)) * 1000), 1);
+  background-color: color-mix(
+    in oklab,
+    var(--bar, var(--wave-played)) calc(var(--on) * 100%),
+    var(--wave-rest)
+  );
+}
+.nx-wave[data-tone='you'] { --wave-played: var(--you); }
+.nx-wave[data-tone='them'] { --wave-played: var(--them); }
+.nx-wave__bar[data-s='you'] { --bar: var(--you); }
+.nx-wave__bar[data-s='them'] { --bar: var(--them); }
+
+/* ─── Reveal on scroll (only when the `js` class is on <html>; Layout adds it) ─── */
 .js [data-reveal] {
   opacity: 0;
-  transform: translate3d(0, 20px, 0);
-  transition: opacity 0.7s var(--ease-spring), transform 0.9s var(--ease-spring);
+  transform: translate3d(0, 16px, 0);
+  transition:
+    opacity 0.7s var(--ease-spring),
+    transform 0.9s var(--ease-spring);
   transition-delay: var(--reveal-delay, 0ms);
 }
 .js [data-reveal].is-in {
@@ -217,17 +442,7 @@
   transform: none;
 }
 
-/* ─── Hero entrance ─── */
-.hero-in {
-  animation: hero-in 0.9s var(--ease-spring) both;
-  animation-delay: var(--d, 0ms);
-}
-@keyframes hero-in {
-  from { opacity: 0; transform: translate3d(0, 16px, 0); }
-  to { opacity: 1; transform: none; }
-}
-
-/* ─── FAQ disclosure ─── */
+/* ─── FAQ disclosure (used by FAQ.astro) ─── */
 .faq summary {
   list-style: none;
 }
@@ -241,7 +456,7 @@
   transform: rotate(45deg);
 }
 
-/* ─── Reduced motion: no animation anywhere ─── */
+/* ─── Reduced motion: final states, no movement ─── */
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
@@ -250,12 +465,49 @@
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
   .js [data-reveal] {
     opacity: 1;
     transform: none;
   }
-  .live-dot::after {
+  .rec-dot::after {
     display: none;
+  }
+}
+
+/* ─── Forced colors (Windows High Contrast): use system colours, drop effects ─── */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline-color: Highlight;
+  }
+  .btn-primary {
+    border: 1px solid ButtonText;
+    background-color: ButtonFace;
+    color: ButtonText;
+  }
+  .btn-primary:hover {
+    background-color: Highlight;
+    color: HighlightText;
+  }
+  .btn-ghost,
+  .kbd,
+  .tag {
+    border-color: ButtonText;
+  }
+  .nx-glass {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: Canvas;
+    border-color: CanvasText;
+    box-shadow: none;
+  }
+  .nx-wave__bar {
+    background-color: CanvasText;
+    forced-color-adjust: none;
+  }
+  .rec-dot {
+    background: Highlight;
+    forced-color-adjust: none;
   }
 }

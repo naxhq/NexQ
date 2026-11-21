@@ -1,63 +1,12 @@
 ---
-import Icon from './Icon.astro';
-import { REPO } from '../data/site';
-
-const points = [
-  {
-    icon: 'speaker',
-    title: 'No bot in the call',
-    body: 'Audio is captured on your own device. Nobody gets a join request, and it works with any meeting app.',
-  },
-  {
-    icon: 'shield',
-    title: 'You decide where data goes',
-    body: 'Pair a local speech engine with Ollama or LM Studio and nothing leaves your computer. Cloud providers only see what you send them.',
-  },
-  {
-    icon: 'file',
-    title: 'Stored on your machine',
-    body: 'Meetings, transcripts and recordings live in a local database and folder. There is no NexQ cloud and no account.',
-  },
-  {
-    icon: 'key',
-    title: 'Keys in the OS vault',
-    body: 'On Windows, API keys are kept in the Windows Credential Manager, not in plain-text files.',
-  },
-  {
-    icon: 'refresh',
-    title: 'Signed updates',
-    body: 'Updates are signed and verified before install, and never run during a meeting.',
-  },
-  {
-    icon: 'github',
-    title: 'Open to inspection',
-    body: 'Every line is on GitHub under the MIT license. Read it, audit it, or build it yourself.',
-  },
-] as const;
+// PLACEHOLDER from the foundation task. Replace this file with the real section.
+// Keep the id (`privacy`) and the aria-labelledby heading so nav links and a11y keep working.
+import { SECTION } from '../data/site';
 ---
 
-<section id="privacy" class="section border-t border-line" aria-labelledby="privacy-title">
+<section id={SECTION.privacy} class="section" aria-labelledby="privacy-title">
   <div class="wrap">
-    <div class="grid gap-12 lg:grid-cols-12 lg:gap-16">
-      <div class="lg:col-span-4" data-reveal>
-        <p class="eyebrow">Privacy</p>
-        <h2 id="privacy-title" class="h2 mt-4">Local-first, by design.</h2>
-        <p class="lede">
-          A meeting assistant hears everything. That is exactly why NexQ runs on your computer and is open source.
-        </p>
-        <a href={REPO} target="_blank" rel="noopener" class="link mt-6 inline-flex items-center gap-1">
-          Read the source <Icon name="arrow-up-right" class="h-3.5 w-3.5" />
-        </a>
-      </div>
-      <ul class="grid gap-x-10 gap-y-0 sm:grid-cols-2 lg:col-span-8">
-        {points.map((p, i) => (
-          <li class="border-t border-line py-7" data-reveal style={`--reveal-delay: ${(i % 2) * 70}ms`}>
-            <Icon name={p.icon} class="h-5 w-5 text-ink-2" />
-            <h3 class="mt-4 font-medium text-ink">{p.title}</h3>
-            <p class="mt-2 text-[0.9375rem] leading-relaxed text-ink-2">{p.body}</p>
-          </li>
-        ))}
-      </ul>
-    </div>
+    <p class="eyebrow">privacy</p>
+    <h2 id="privacy-title" class="h2 mt-3">Private by design</h2>
   </div>
 </section>

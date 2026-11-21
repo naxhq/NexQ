@@ -1,0 +1,52 @@
+---
+/**
+ * A release's waveform as static, accessible markup. Bars come from the app's own
+ * releaseWave() (see data/releases.ts). Heights never change; only the colour moves,
+ * like a playhead.
+ *
+ * Props
+ *   version   full version string, e.g. "2.41.2" (also the seed of the shape)
+ *   size      'sm' (20px) | 'md' (40px, default) | 'lg' (96px). Or set --wave-h on a parent.
+ *   progress  initial playhead 0..1 (default 1: fully played, which is what no-JS shows)
+ *   tone      'primary' (default, blue) | 'you' (green) | 'them' (orange): colour of played bars
+ *   speakers  optional per-bar speaker: ('you' | 'them' | null)[]; played bars of that speaker
+ *             take the speaker colour (green / orange)
+ *   count     number of bars (default 72)
+ *   label     override the aria-label (default "Release waveform for v2.41.2")
+ *   class     extra classes
+ *
+ * Animating (section authors): the root has `data-wave` and a `--progress` custom property.
+ *   const wave = document.querySelector<HTMLElement>('[data-wave]');
+ *   wave.style.setProperty('--progress', String(t)); // t in 0..1, from your rAF loop
+ * Colours: override --wave-played / --wave-rest on the element. Styles are in global.css.
+ * Do not animate heights, and do not use it as a decorative divider.
+ */
+import { waveFor } from '../data/releases';
+
+interface Props {
+  version: string;
+  size?: 'sm' | 'md' | 'lg';
+  progress?: number;
+  tone?: 'primary' | 'you' | 'them';
+  speakers?: Array<'you' | 'them' | null | undefined>;
+  count?: number;
+  label?: string;
+  class?: string;
+}
+
+const { version, size = 'md', progress = 1, tone = 'primary', speakers, count = 72, label, class: className = '' } = Astro.props;
+const bars = waveFor(version, count);
+---
+
+<div
+  class:list={['nx-wave', `nx-wave--${size}`, className]}
+  role="img"
+  aria-label={label ?? `Release waveform for v${version}`}
+  data-wave={version}
+  data-tone={tone === 'primary' ? undefined : tone}
+  style={`--progress:${progress}`}
+>
+  {bars.map((h, i) => (
+    <span class="nx-wave__bar" data-s={speakers?.[i] ?? undefined} style={`--h:${h};--p:${(i / bars.length).toFixed(4)}`}></span>
+  ))}
+</div>

@@ -1,16 +1,17 @@
 ---
+// Page order = the story of one call: first word to recap. Each section is its own
+// component (and its own id, see SECTION in data/site.ts).
 import Layout from '../layouts/Layout.astro';
 import Navbar from '../components/Navbar.astro';
 import Hero from '../components/Hero.astro';
-import Features from '../components/Features.astro';
-import Models from '../components/Models.astro';
-import Stealth from '../components/Stealth.astro';
+import CallStory from '../components/CallStory.astro';
+import YourAI from '../components/YourAI.astro';
+import AfterCall from '../components/AfterCall.astro';
+import MadeFor from '../components/MadeFor.astro';
 import Privacy from '../components/Privacy.astro';
-import UseCases from '../components/UseCases.astro';
-import Compare from '../components/Compare.astro';
-import WhatsNew from '../components/WhatsNew.astro';
+import Releases from '../components/Releases.astro';
 import Download from '../components/Download.astro';
-import Community from '../components/Community.astro';
+import Compare from '../components/Compare.astro';
 import FAQ from '../components/FAQ.astro';
 import FinalCTA from '../components/FinalCTA.astro';
 import Footer from '../components/Footer.astro';
@@ -20,15 +21,14 @@ import Footer from '../components/Footer.astro';
   <Navbar />
   <main id="main" tabindex="-1" class="outline-hidden">
     <Hero />
-    <Features />
-    <Models />
-    <Stealth />
+    <CallStory />
+    <YourAI />
+    <AfterCall />
+    <MadeFor />
     <Privacy />
-    <UseCases />
-    <WhatsNew />
+    <Releases />
     <Download />
     <Compare />
-    <Community />
     <FAQ />
     <FinalCTA />
   </main>

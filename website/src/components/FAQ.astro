@@ -1,28 +1,29 @@
 ---
 import Icon from './Icon.astro';
-import { FAQ, DOCS } from '../data/site';
+import { FAQ, DOCS, SECTION } from '../data/site';
+// Renders the same FAQ array that Layout.astro turns into FAQPage JSON-LD.
 ---
 
-<section id="faq" class="section border-t border-line" aria-labelledby="faq-title">
+<section id={SECTION.faq} class="section border-t border-border" aria-labelledby="faq-title">
   <div class="wrap">
     <div class="grid gap-12 lg:grid-cols-12 lg:gap-16">
-      <div class="lg:col-span-4" data-reveal>
-        <p class="eyebrow">FAQ</p>
-        <h2 id="faq-title" class="h2 mt-4">Questions, answered.</h2>
+      <div class="lg:col-span-4">
+        <p class="eyebrow">questions</p>
+        <h2 id="faq-title" class="h2 mt-3">Questions, answered.</h2>
         <p class="lede">
           Anything else? The <a href={DOCS} target="_blank" rel="noopener" class="link">user guide</a> goes deeper.
         </p>
       </div>
       <div class="faq lg:col-span-8">
         {FAQ.map((f) => (
-          <details class="group border-t border-line last:border-b">
-            <summary class="flex min-h-[64px] cursor-pointer items-center justify-between gap-6 py-5 text-left text-[1.0625rem] font-medium text-ink transition-colors hover:text-white">
-              <h3 class="font-medium">{f.q}</h3>
-              <span class="faq-icon flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-line-strong text-ink-2">
+          <details class="border-t border-border last:border-b">
+            <summary class="flex min-h-[64px] items-center justify-between gap-6 py-5 text-left text-[1.0625rem] font-semibold text-foreground">
+              <h3 class="font-semibold">{f.q}</h3>
+              <span class="faq-icon flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground">
                 <Icon name="plus" class="h-4 w-4" />
               </span>
             </summary>
-            <p class="max-w-2xl pb-6 pr-12 text-[0.9375rem] leading-relaxed text-ink-2">{f.a}</p>
+            <p class="max-w-2xl pb-6 pr-12 text-[0.9375rem] leading-relaxed text-muted-foreground">{f.a}</p>
           </details>
         ))}
       </div>

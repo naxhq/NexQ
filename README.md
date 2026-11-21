@@ -194,7 +194,7 @@ DeepL, Google, Microsoft, any configured LLM, and OPUS-MT (offline, local models
 | Open source | Yes | No | No | No |
 | Fully local option | Yes | No | No | Partial |
 | No bot joins the call | Yes | No | Yes | Yes |
-| Choice of STT / LLM | 10 / 9 | Fixed | Fixed | Fixed |
+| Choice of STT / LLM | 11 / 9 | Fixed | Fixed | Fixed |
 | Local LLM | Yes | No | No | No |
 | Your own documents as context | Yes | No | No | No |
 
