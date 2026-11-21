@@ -1,3 +1,9 @@
+## [2.41.2](https://github.com/naxhq/NexQ/compare/v2.41.1...v2.41.2) (2026-11-21)
+
+
+### Bug Fixes
+
+* **sources:** wait for the backend at startup before sending the sources ([#131](https://github.com/naxhq/NexQ/issues/131)) ([0b3b366](https://github.com/naxhq/NexQ/commit/0b3b36628a91309e3696514c2da087b53f024e7c))
 ## [2.41.1](https://github.com/naxhq/NexQ/compare/v2.41.0...v2.41.1) (2026-11-20)
 
 
