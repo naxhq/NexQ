@@ -3,24 +3,32 @@ import {
   register,
   unregister,
 } from "@tauri-apps/plugin-global-shortcut";
+import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useMeetingStore } from "../stores/meetingStore";
+import { useDemoStore } from "../demo/demoStore";
 import { useAIActionsStore } from "../stores/aiActionsStore";
 import { isQuitPending } from "../lib/ipc";
 import { runYourAction } from "../lib/autoAnswer";
-import { isOverlayVisible, meetingShortcutAction, showLauncherWindow, showMeetingOverlay, switchShortcutTarget } from "../lib/windows";
+import { TOGGLE_SETTINGS_EVENT, isOverlayVisible, isWindowShown, meetingShortcutAction, showLauncherWindow, showMeetingOverlay, switchShortcutTarget } from "../lib/windows";
 import { endMeetingFromThisWindow } from "./useUpdater";
 import { showToast } from "../stores/toastStore";
 import { useConfigStore } from "../stores/configStore";
 import { formatShortcut, normalizeAccelerator, reservedShortcutAction, screenCaptureSupported } from "../lib/shortcutLabel";
 import { providerReadsImages } from "../lib/imageAttachments";
+import { modeForKeyEvent } from "../lib/hotkeys";
 import { captureScreenIntoAsk } from "../lib/screenCapture";
 
-/** Ctrl+M: end the running meeting (in every window that holds it) or start one. */
+/**
+ * Ctrl+M: end the running meeting (in every window that holds it) or start one.
+ * A demo's fake meeting is not a running meeting: the press starts a real one
+ * (startMeetingFlow leaves the demo first).
+ */
 async function toggleMeetingFromShortcut(): Promise<void> {
   const store = useMeetingStore.getState();
-  const quitPending = store.activeMeeting ? false : await isQuitPending().catch(() => false);
-  switch (meetingShortcutAction(!!store.activeMeeting, quitPending)) {
+  const hasMeeting = !!store.activeMeeting && !useDemoStore.getState().isDemoActive;
+  const quitPending = hasMeeting ? false : await isQuitPending().catch(() => false);
+  switch (meetingShortcutAction(hasMeeting, quitPending)) {
     case "end":
       if (!(await endMeetingFromThisWindow())) {
         showToast("Couldn't finish saving the meeting", "error");
@@ -32,6 +40,35 @@ async function toggleMeetingFromShortcut(): Promise<void> {
     case "ignore":
       break;
   }
+}
+
+/**
+ * Opens Settings in this window, or closes them: the dashboard's Settings page,
+ * or the meeting overlay's Settings panel (the demo draws the overlay in the
+ * launcher, so both can happen there).
+ */
+export function toggleSettingsHere(): void {
+  const store = useMeetingStore.getState();
+  if (store.currentView === "settings") store.setCurrentView(store.previousView || "launcher");
+  else if (store.settingsOpen) store.setSettingsOpen(false);
+  else store.openSettings();
+}
+
+/**
+ * Ctrl+, wherever the user is. The launcher holds the global key (two windows
+ * registering the same key leave it to whichever registered last); it opens
+ * the dashboard's Settings, or hands the press to the overlay window while
+ * the meeting overlay is the window on screen.
+ */
+async function toggleSettingsFromShortcut(): Promise<void> {
+  if (await isOverlayVisible()) {
+    await emit(TOGGLE_SETTINGS_EVENT);
+    return;
+  }
+  toggleSettingsHere();
+  // NexQ may be hidden (it has no taskbar button under stealth mode).
+  const settingsShowing = useMeetingStore.getState().currentView === "settings";
+  if (settingsShowing && !(await isWindowShown("launcher"))) await showLauncherWindow();
 }
 
 /** Stealth shortcut: hide NexQ from screen sharing, or show it again. */
@@ -198,15 +235,15 @@ export function useGlobalShortcut() {
           key: "CmdOrCtrl+,",
           handler: (event) => {
             if (event.state === "Pressed") {
-              const store = useMeetingStore.getState();
-              store.setSettingsOpen(!store.settingsOpen);
+              toggleSettingsFromShortcut().catch(() => {});
             }
           },
         },
       ];
 
       for (const { key, handler } of defs) {
-        if (key === "CmdOrCtrl+M" && !isLauncher) continue;
+        // The launcher holds these two keys; the overlay gets Settings by event.
+        if ((key === "CmdOrCtrl+M" || key === "CmdOrCtrl+,") && !isLauncher) continue;
         try {
           await unregister(key).catch(() => {}); // Clean up stale registration
           await register(key, handler);
@@ -226,6 +263,20 @@ export function useGlobalShortcut() {
     };
   }, []);
 
+  // Overlay window: the launcher passes on Ctrl+, while the overlay is showing.
+  useEffect(() => {
+    if (getCurrentWebviewWindow().label !== "overlay") return;
+    let cancelled = false;
+    let stop: (() => void) | undefined;
+    listen(TOGGLE_SETTINGS_EVENT, toggleSettingsHere)
+      .then((fn) => { if (cancelled) fn(); else stop = fn; })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      stop?.();
+    };
+  }, []);
+
   // Window-level shortcuts (work when window is active/focused)
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -240,49 +291,17 @@ export function useGlobalShortcut() {
       const actions = useAIActionsStore.getState().configs.actions;
       const isVisible = (mode: string) => actions[mode]?.visible !== false;
 
-      switch (e.code) {
-        case "Space":
-          if (isVisible("Assist")) {
-            e.preventDefault();
-            runYourAction("Assist").catch(() => {});
-          }
-          break;
-        case "Numpad1":
-        case "Digit1":
-          if (!e.ctrlKey && !e.metaKey && !e.altKey && isVisible("WhatToSay")) {
-            e.preventDefault();
-            runYourAction("WhatToSay").catch(() => {});
-          }
-          break;
-        case "Numpad2":
-        case "Digit2":
-          if (!e.ctrlKey && !e.metaKey && !e.altKey && isVisible("Shorten")) {
-            e.preventDefault();
-            runYourAction("Shorten").catch(() => {});
-          }
-          break;
-        case "Numpad3":
-        case "Digit3":
-          if (!e.ctrlKey && !e.metaKey && !e.altKey && isVisible("FollowUp")) {
-            e.preventDefault();
-            runYourAction("FollowUp").catch(() => {});
-          }
-          break;
-        case "Numpad4":
-        case "Digit4":
-          if (!e.ctrlKey && !e.metaKey && !e.altKey && isVisible("Recap")) {
-            e.preventDefault();
-            runYourAction("Recap").catch(() => {});
-          }
-          break;
-        case "Numpad5":
-        case "Digit5":
-          if (!e.ctrlKey && !e.metaKey && !e.altKey && isVisible("AskQuestion")) {
-            e.preventDefault();
-            // Open/focus the Ask input instead of triggering generation directly
-            window.dispatchEvent(new Event("nexq:toggle-ask-input"));
-          }
-          break;
+      // The keys come from Settings > Hotkeys (read now, so a change applies at once).
+      const mode = modeForKeyEvent(e, useConfigStore.getState().hotkeys);
+      if (!mode || !isVisible(mode)) return;
+      e.preventDefault();
+      // Holding the key must not start the action again and again.
+      if (e.repeat) return;
+      if (mode === "AskQuestion") {
+        // Open/focus the Ask input instead of triggering generation directly
+        window.dispatchEvent(new Event("nexq:toggle-ask-input"));
+      } else {
+        runYourAction(mode).catch(() => {});
       }
     }
 

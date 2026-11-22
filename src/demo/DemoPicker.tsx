@@ -3,11 +3,14 @@ import { X } from 'lucide-react';
 import { useDemoStore } from './demoStore';
 import { demoScenarios } from './scenarios';
 import { launchDemo } from './demoEngine';
+import { useMeetingStore } from '../stores/meetingStore';
 import type { DemoScenario } from './scenarios';
 
 export function DemoPicker() {
   const pickerOpen = useDemoStore((s) => s.pickerOpen);
   const closePicker = useDemoStore((s) => s.closePicker);
+  // Demo data would overwrite a live meeting's stores, so demos wait until it ends.
+  const meetingRunning = useMeetingStore((s) => s.activeMeeting !== null || s.meetingStarting);
 
   const [selectedScenarioId, setSelectedScenarioId] = useState<string>(demoScenarios[0]?.id ?? '');
   const [selectedMode, setSelectedMode] = useState<'screenshot' | 'play'>('screenshot');
@@ -56,10 +59,10 @@ export function DemoPicker() {
 
   // Launch selected scenario
   const handleStart = useCallback(() => {
-    if (!selectedScenario) return;
+    if (!selectedScenario || meetingRunning) return;
     const mode = selectedScenario.supportsPlay ? selectedMode : 'screenshot';
     launchDemo(selectedScenario, mode);
-  }, [selectedScenario, selectedMode]);
+  }, [selectedScenario, selectedMode, meetingRunning]);
 
   if (!pickerOpen) return null;
 
@@ -114,6 +117,12 @@ export function DemoPicker() {
           ))}
         </div>
 
+        {meetingRunning && (
+          <p role="status" className="px-6 pt-3 text-xs text-muted-foreground">
+            A meeting is running. End it before starting a demo.
+          </p>
+        )}
+
         {/* Footer: Mode toggle + Start */}
         <div className="flex items-center justify-between border-t border-border/20 px-6 py-4 mt-2">
           {/* Mode toggle — only visible when selected scenario supports play */}
@@ -138,7 +147,7 @@ export function DemoPicker() {
 
           <button
             onClick={handleStart}
-            disabled={!selectedScenario}
+            disabled={!selectedScenario || meetingRunning}
             className="rounded-lg bg-primary px-6 py-2 text-sm font-semibold text-primary-foreground transition-all hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
           >
             Start Demo

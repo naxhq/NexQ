@@ -207,3 +207,107 @@ describe("configStore: capture shortcut", () => {
     await vi.waitFor(() => expect(saved.get("captureShortcut")).toBe("CmdOrCtrl+Alt+X"));
   });
 });
+
+describe("configStore: hotkeys", () => {
+  beforeEach(() => {
+    saved.clear();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("starts with the keys the app really uses", async () => {
+    const store = await freshStore();
+    expect(store.getState().hotkeys).toEqual({
+      mode_assist: "Space",
+      mode_say: "1",
+      mode_shorten: "2",
+      mode_followup: "3",
+      mode_recap: "4",
+      mode_ask: "5",
+    });
+  });
+
+  it("an old config with no hotkeys loads the defaults", async () => {
+    saved.set("theme", "dark");
+    const store = await freshStore();
+    await store.getState().loadConfig();
+    expect(store.getState().hotkeys.mode_say).toBe("1");
+    expect(store.getState().hotkeys.mode_ask).toBe("5");
+  });
+
+  it("an old config with the unused Ctrl+1..5 values loads the defaults and is cleaned up", async () => {
+    saved.set("hotkeys", {
+      toggle_assist: "Space", start_end_meeting: "Ctrl+M", show_hide: "Ctrl+B", open_settings: "Ctrl+,", escape: "Escape",
+      mode_assist: "Space", mode_say: "Ctrl+1", mode_shorten: "Ctrl+2", mode_followup: "Ctrl+3", mode_recap: "Ctrl+4", mode_ask: "Ctrl+5",
+    });
+    const store = await freshStore();
+    await store.getState().loadConfig();
+    expect(store.getState().hotkeys).toMatchObject({ mode_say: "1", mode_shorten: "2", mode_followup: "3", mode_recap: "4", mode_ask: "5" });
+    expect(Object.keys(store.getState().hotkeys)).toHaveLength(6);
+    await vi.waitFor(() => expect(saved.get("hotkeys")).toEqual(store.getState().hotkeys));
+  });
+
+  it("a deliberate Ctrl+1 survives setHotkeys and the next load", async () => {
+    const store = await freshStore();
+    await store.getState().loadConfig();
+    store.getState().setHotkeys({ ...store.getState().hotkeys, mode_say: "Ctrl+1" });
+    expect(store.getState().hotkeys.mode_say).toBe("Ctrl+1");
+    await vi.waitFor(() => expect(saved.get("hotkeys")).toMatchObject({ mode_say: "Ctrl+1" }));
+
+    const reloaded = await freshStore();
+    await reloaded.getState().loadConfig();
+    expect(reloaded.getState().hotkeys.mode_say).toBe("Ctrl+1");
+    expect(saved.get("hotkeys")).toMatchObject({ mode_say: "Ctrl+1" });
+  });
+
+  it("restores a saved choice and persists a change", async () => {
+    saved.set("hotkeys", { mode_say: "Q" });
+    const store = await freshStore();
+    await store.getState().loadConfig();
+    expect(store.getState().hotkeys.mode_say).toBe("Q");
+    expect(store.getState().hotkeys.mode_shorten).toBe("2");
+
+    store.getState().setHotkeys({ ...store.getState().hotkeys, mode_recap: "R" });
+    await vi.waitFor(() => expect(saved.get("hotkeys")).toMatchObject({ mode_say: "Q", mode_recap: "R" }));
+  });
+});
+
+describe("configStore: STT migration and the preset chip", () => {
+  beforeEach(() => {
+    saved.clear();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const inPerson = (themProvider: string, preset: string | null) => ({
+    you: { role: "You", device_id: "default", is_input_device: true, stt_provider: "web_speech" },
+    them: { role: "Them", device_id: "mic_2", is_input_device: true, stt_provider: themProvider },
+    recording_enabled: false,
+    preset_name: preset,
+  });
+
+  it("clears the preset name when the migration swaps an engine (old In-Person config using whisper_cpp)", async () => {
+    saved.set("meetingAudioConfig", inPerson("whisper_cpp", "In-Person"));
+    const store = await freshStore();
+    await store.getState().loadConfig();
+
+    const config = store.getState().meetingAudioConfig;
+    expect(config?.them.stt_provider).toBe("deepgram");
+    expect(config?.preset_name).toBeNull();
+    expect((saved.get("meetingAudioConfig") as { preset_name: unknown }).preset_name).toBeNull();
+  });
+
+  it("keeps the preset name when nothing was migrated", async () => {
+    saved.set("meetingAudioConfig", inPerson("parakeet_tdt", "In-Person"));
+    const store = await freshStore();
+    await store.getState().loadConfig();
+
+    expect(store.getState().meetingAudioConfig?.preset_name).toBe("In-Person");
+  });
+});

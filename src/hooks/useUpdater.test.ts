@@ -64,6 +64,31 @@ describe("restartToUpdate", () => {
     expect(installUpdateNow).toHaveBeenCalledTimes(1);
   });
 
+  it("during a demo leaves the demo and installs, without a confirm or waiting on windows", async () => {
+    const { useDemoStore } = await import("../demo/demoStore");
+    useDemoStore.getState().activate("live-interview", "play");
+    useMeetingStore.setState({ activeMeeting: { id: "demo-meeting" } as never });
+
+    await restartToUpdate();
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(emitted).not.toContain("tray_stop_meeting");
+    expect(useDemoStore.getState().isDemoActive).toBe(false);
+    expect(installUpdateNow).toHaveBeenCalledTimes(1);
+  });
+
+  it("a stop request during a demo still reports this window as done", async () => {
+    const { useDemoStore } = await import("../demo/demoStore");
+    useDemoStore.getState().activate("live-interview", "play");
+    useMeetingStore.setState({ activeMeeting: { id: "demo-meeting" } as never });
+
+    await useMeetingStore.getState().endMeetingFlow();
+    await flush();
+
+    expect(useDemoStore.getState().isDemoActive).toBe(false);
+    expect(emitted).toContain("nexq:meeting_ended");
+  });
+
   it("does nothing when the user cancels the meeting prompt", async () => {
     useMeetingStore.setState({ activeMeeting: { id: "m1" } as never });
     confirm.mockResolvedValue(false);

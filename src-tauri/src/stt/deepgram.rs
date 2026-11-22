@@ -774,7 +774,7 @@ impl STTProvider for DeepgramSTT {
         self.pending_samples = 0;
 
         if self.api_key.is_empty() {
-            return Err("Deepgram API key not configured. Get a free API key at https://console.deepgram.com/signup ($200 free credit, no credit card required).".into());
+            return Err("Deepgram API key not configured. Get a free API key at https://console.deepgram.com/signup.".into());
         }
         if self.paused {
             // Flux, muted from the start: connect on the first unmute, not now.

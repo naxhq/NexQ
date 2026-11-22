@@ -1,8 +1,8 @@
-// Task 16: Bookmark hotkey hook
-// Listens for Ctrl+B keydown while recording and adds a bookmark at current offset.
-// Returns an addBookmarkAtNow() function for manual invocation (toolbar button).
+// Task 16: Bookmark hook
+// Returns addBookmarkAtNow(), which adds a bookmark at the current meeting offset
+// (the B key and the toolbar button call it).
 
-import { useEffect, useCallback } from "react";
+import { useCallback } from "react";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useBookmarkStore } from "../stores/bookmarkStore";
 import { showBookmarkToast } from "../overlay/BookmarkToast";
@@ -19,21 +19,8 @@ export function useBookmarkHotkey(): () => void {
     showBookmarkToast(bookmark.id, offsetMs);
   }, [isRecording, meetingStartTime, addBookmark]);
 
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.key === "b" && !e.shiftKey && !e.altKey) {
-        // Only fire when recording; don't fire in input/textarea elements
-        const target = e.target as HTMLElement;
-        const isInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
-        if (!isRecording || isInput) return;
-        e.preventDefault();
-        addBookmarkAtNow();
-      }
-    };
-
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [isRecording, addBookmarkAtNow]);
-
+  // No key handler here: Ctrl+B is the global "switch overlay / dashboard"
+  // shortcut (the OS takes the key before the window sees it), and the B key
+  // is handled by useMeetingShortcuts.
   return addBookmarkAtNow;
 }

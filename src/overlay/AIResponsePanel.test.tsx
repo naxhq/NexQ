@@ -171,4 +171,13 @@ describe("AIResponsePanel", () => {
     answer("Assist", "plain answer");
     expect(screen.queryByLabelText("Sources used")).toBeNull();
   });
+
+  it("the empty state names the key that runs Assist now", async () => {
+    const { useConfigStore } = await import("../stores/configStore");
+    render(<AIResponsePanel />);
+    expect(screen.getByText("Space").tagName).toBe("KBD");
+    act(() => useConfigStore.getState().setHotkeys({ ...useConfigStore.getState().hotkeys, mode_assist: "Q" }));
+    expect(screen.getByText("Q").tagName).toBe("KBD");
+    act(() => useConfigStore.getState().setHotkeys({ ...useConfigStore.getState().hotkeys, mode_assist: "Space" }));
+  });
 });

@@ -103,7 +103,7 @@ export function normalizeAccelerator(accelerator: string, mac = isMacPlatform())
  */
 export const RESERVED_SHORTCUTS: Record<string, string> = {
   "CmdOrCtrl+M": "Start / end meeting",
-  "CmdOrCtrl+B": "Show / hide overlay",
+  "CmdOrCtrl+B": "Switch between overlay and dashboard",
   "CmdOrCtrl+,": "Open settings",
   "CmdOrCtrl+Shift+L": "Dev log",
   "CmdOrCtrl+Shift+D": "Demo mode",

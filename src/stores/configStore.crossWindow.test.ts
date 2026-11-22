@@ -121,6 +121,44 @@ describe("configStore: active LLM across windows", () => {
   });
 });
 
+describe("configStore: hotkeys across windows", () => {
+  beforeEach(() => {
+    saved.clear();
+    keyListeners.length = 0;
+    invoke.mockClear();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("a binding edited in the launcher reaches the overlay and the next start", async () => {
+    const launcher = await openWindow();
+    const overlay = await openWindow();
+    expect(overlay.getState().hotkeys.mode_say).toBe("1");
+
+    launcher.getState().setHotkeys({ ...launcher.getState().hotkeys, mode_say: "Q" });
+    await vi.waitFor(() => expect(overlay.getState().hotkeys.mode_say).toBe("Q"));
+
+    const nextStart = await openWindow();
+    expect(nextStart.getState().hotkeys.mode_say).toBe("Q");
+  });
+
+  it("an unusable saved value arriving from another window is cleaned, not applied", async () => {
+    const overlay = await openWindow();
+    launcherWrite("hotkeys", { mode_say: "Tab", mode_shorten: "Q" });
+    await vi.waitFor(() => expect(overlay.getState().hotkeys.mode_shorten).toBe("Q"));
+    expect(overlay.getState().hotkeys.mode_say).toBe("1");
+  });
+});
+
+/** A write from some other window (the plugin-store notifies every listener). */
+function launcherWrite(key: string, value: unknown) {
+  saved.set(key, value);
+  for (const l of keyListeners) if (l.key === key) l.cb(structuredClone(value));
+}
+
 describe("configStore: Deepgram and local model picks across windows", () => {
   beforeEach(() => {
     saved.clear();

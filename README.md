@@ -191,7 +191,7 @@ With any other provider your sources stay saved but are not used. Details: [Clau
 
 ## Keyboard shortcuts
 
-On macOS, use <kbd>Cmd</kbd> in place of <kbd>Ctrl</kbd>. The three <kbd>Ctrl</kbd>+<kbd>Shift</kbd> shortcuts can be changed in Settings → General. In a meeting, with a NexQ window focused, <kbd>Space</kbd> runs Assist and <kbd>1</kbd> to <kbd>5</kbd> run the other actions ([full list](docs/user-guide/keyboard-shortcuts.md)).
+On macOS, use <kbd>Cmd</kbd> in place of <kbd>Ctrl</kbd>. The three <kbd>Ctrl</kbd>+<kbd>Shift</kbd> shortcuts can be changed in Settings → General. In a meeting, with a NexQ window focused, <kbd>Space</kbd> runs Assist and <kbd>1</kbd> to <kbd>5</kbd> run the other actions ([full list](docs/user-guide/keyboard-shortcuts.md)). The in-meeting keys can be changed in Settings → Hotkeys.
 
 | Shortcut | Action |
 |---|---|
@@ -242,7 +242,22 @@ Bug reports, docs, translations, new providers and macOS testing are all welcome
 - **Security reports:** privately, via [SECURITY.md](SECURITY.md)
 - More in [SUPPORT.md](SUPPORT.md)
 
+## Contributors
+
+<a href="https://github.com/naxhq/NexQ/graphs/contributors">
+  <img alt="NexQ contributors" src="https://contrib.rocks/image?repo=naxhq/NexQ">
+</a>
+
+## Star history
+
 If NexQ helps you, a star helps others find it.
+
+<a href="https://star-history.com/#naxhq/NexQ&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=naxhq/NexQ&type=Date&theme=dark">
+    <img alt="NexQ star history" src="https://api.star-history.com/svg?repos=naxhq/NexQ&type=Date" width="600">
+  </picture>
+</a>
 
 ## License
 

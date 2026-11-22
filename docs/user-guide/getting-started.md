@@ -13,7 +13,7 @@ NexQ is an AI Meeting Assistant and Real-Time Interview Copilot for Windows. It 
 
 ### 1. Download the Installer
 
-Download the latest `.exe` installer from the [GitHub Releases](https://github.com/VahidAlizadeh/NexQ/releases) page. The file is named `NexQ_x.x.x_x64-setup.exe`.
+Download the latest `.exe` installer from the [GitHub Releases](https://github.com/naxhq/NexQ/releases) page. The file is named `NexQ_x.x.x_x64-setup.exe`.
 
 ### 2. Run the Installer
 
@@ -43,15 +43,20 @@ Open Settings (click the gear icon or press `Ctrl+,`) to access all configuratio
 
 NexQ needs an STT provider to transcribe audio. The fastest way to get started:
 
-**Option A: Web Speech API (zero setup)**
+**Option A: Web Speech for you, a free local model for them**
 
 1. Open Settings (click the gear icon or press `Ctrl+,`)
-2. Under **Speech-to-Text**, select **Web Speech API** for both "You" (mic) and "Them" (system audio)
-3. No API key needed -- this uses the browser's built-in speech recognition
+2. Go to **STT Providers**, select **Parakeet TDT**, download the model (one-time, 465 MB) and click **Activate**
+3. Go to **Audio & Devices > Presets** and choose **Free**
+4. Web Speech transcribes "You" (mic) with no key. It can't hear system audio, so "Them" uses the Parakeet TDT local model, which works offline once downloaded
+
+The Free preset only saves the settings; it doesn't download the model for you.
+
+Web Speech can only be used by one party, and only with a microphone. For "Them" (system audio) pick a local model or a cloud provider such as Deepgram.
 
 **Option B: Deepgram or Groq (cloud, high accuracy)**
 
-1. Open Settings > Speech-to-Text
+1. Open Settings > STT Providers
 2. Select **Deepgram** or **Groq**
 3. Enter your API key (get one from [deepgram.com](https://deepgram.com) or [groq.com](https://groq.com))
 4. Click **Test Connection** to verify

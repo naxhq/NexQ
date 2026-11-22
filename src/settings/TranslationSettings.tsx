@@ -31,6 +31,7 @@ import {
 import { OpusMtModelManager } from "./OpusMtModelManager";
 import { listOpusMtModels } from "../lib/ipc";
 import type { OpusMtModelStatus } from "../lib/types";
+import { opusMtDescription } from "../lib/opusMt";
 
 // ── Provider definitions ──
 
@@ -50,7 +51,7 @@ const LOCAL_PROVIDERS: ProviderOption[] = [
   {
     value: "opus-mt",
     label: "OPUS-MT",
-    description: "100+ langs · Fully offline · Private",
+    description: opusMtDescription([]), // replaced by the real model count once the list loads
     requiresApiKey: false,
     isLocal: true,
     credentialKey: "",
@@ -550,7 +551,7 @@ export function TranslationSettings() {
                 {LOCAL_PROVIDERS.map((p) => (
                   <ProviderCard
                     key={p.value}
-                    provider={p}
+                    provider={p.value === "opus-mt" ? { ...p, description: opusMtDescription(opusMtModels) } : p}
                     isSelected={selectedProvider === p.value}
                     isActive={provider === p.value}
                     badge={getBadgeState(p)}

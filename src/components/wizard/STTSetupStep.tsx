@@ -1,19 +1,18 @@
 // Wizard Step 3: STT Configuration — per-party STT provider selection.
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, type KeyboardEvent } from "react";
 import { useConfigStore } from "../../stores/configStore";
 import { hasApiKey } from "../../lib/ipc";
 import type { STTProviderType, MeetingAudioConfig } from "../../lib/types";
 import {
   Globe,
-  Server,
   Cloud,
   Zap,
   CheckCircle,
   AlertCircle,
 } from "lucide-react";
 
-interface ProviderChoice {
+export interface ProviderChoice {
   value: STTProviderType;
   label: string;
   icon: React.ReactNode;
@@ -22,20 +21,14 @@ interface ProviderChoice {
   free: boolean;
 }
 
-const PROVIDERS: ProviderChoice[] = [
+// Only engines that survive the load-time migration in configStore.loadConfig:
+// whisper_cpp is batch-only (not live STT) and is switched away at the next launch.
+export const WIZARD_STT_PROVIDERS: ProviderChoice[] = [
   {
     value: "web_speech",
     label: "Web Speech API",
     icon: <Globe className="h-4 w-4" />,
     description: "Browser-native, works with microphone input",
-    requiresKey: false,
-    free: true,
-  },
-  {
-    value: "whisper_cpp",
-    label: "Whisper.cpp (Local)",
-    icon: <Server className="h-4 w-4" />,
-    description: "OpenAI Whisper running locally — offline, free",
     requiresKey: false,
     free: true,
   },
@@ -73,6 +66,41 @@ const PROVIDERS: ProviderChoice[] = [
   },
 ];
 
+const themProviders = WIZARD_STT_PROVIDERS.filter((p) => p.value !== "web_speech");
+
+/**
+ * Arrow-key navigation for a radiogroup (roving tabindex): Up/Left and Down/Right
+ * move to the previous/next radio and select it, Home/End jump to the first/last.
+ */
+function radioArrowKeys(e: KeyboardEvent<HTMLDivElement>) {
+  if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  const radios = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]'));
+  const current = radios.indexOf(document.activeElement as HTMLElement);
+  if (current < 0) return;
+  let next: number;
+  switch (e.key) {
+    case "ArrowDown":
+    case "ArrowRight":
+      next = (current + 1) % radios.length;
+      break;
+    case "ArrowUp":
+    case "ArrowLeft":
+      next = (current - 1 + radios.length) % radios.length;
+      break;
+    case "Home":
+      next = 0;
+      break;
+    case "End":
+      next = radios.length - 1;
+      break;
+    default:
+      return;
+  }
+  e.preventDefault();
+  radios[next].focus();
+  radios[next].click();
+}
+
 export function STTSetupStep() {
   const meetingAudioConfig = useConfigStore((s) => s.meetingAudioConfig);
   const setMeetingAudioConfig = useConfigStore((s) => s.setMeetingAudioConfig);
@@ -81,9 +109,10 @@ export function STTSetupStep() {
     meetingAudioConfig?.you.stt_provider ?? "web_speech"
   );
   const [themSTT, setThemSTT] = useState<STTProviderType>(
-    meetingAudioConfig?.them.stt_provider ?? "whisper_cpp"
+    meetingAudioConfig?.them.stt_provider ?? "deepgram"
   );
   const [keyStatus, setKeyStatus] = useState<Record<string, boolean>>({});
+  const [keysChecked, setKeysChecked] = useState(false);
 
   // Check which API keys are stored
   useEffect(() => {
@@ -98,6 +127,7 @@ export function STTSetupStep() {
         }
       }
       setKeyStatus(status);
+      setKeysChecked(true);
     }
     check();
   }, []);
@@ -132,51 +162,56 @@ export function STTSetupStep() {
         {/* Recommended free setup banner */}
         <div className="rounded-xl border border-success/20 bg-success/5 px-4 py-3">
           <p className="text-xs text-success leading-relaxed">
-            <strong>Recommended (Free):</strong> Web Speech for You + Windows
-            Native for Them. No API keys needed!
+            <strong>Recommended:</strong> Web Speech for You (free, no key) +
+            Deepgram for Them. Offline local models can be added later in
+            Settings.
           </p>
         </div>
 
         {/* YOU STT Selection */}
         <div>
-          <label className="mb-3 flex items-center gap-2.5 text-sm font-medium text-foreground">
+          <label id="stt-you-label" className="mb-3 flex items-center gap-2.5 text-sm font-medium text-foreground">
             <span className="rounded-lg bg-primary/10 px-2 py-1 text-meta font-semibold uppercase tracking-wide text-primary">
               You
             </span>
             STT Provider
           </label>
-          <div className="grid grid-cols-1 gap-2">
-            {PROVIDERS.map((p) => (
+          <div role="radiogroup" aria-labelledby="stt-you-label" onKeyDown={radioArrowKeys} className="grid grid-cols-1 gap-2">
+            {WIZARD_STT_PROVIDERS.map((p, i) => (
               <ProviderButton
                 key={p.value}
                 provider={p}
                 selected={youSTT === p.value}
+                tabStop={youSTT === p.value || (i === 0 && !WIZARD_STT_PROVIDERS.some((q) => q.value === youSTT))}
                 hasKey={p.requiresKey ? keyStatus[p.value] ?? false : true}
                 onSelect={() => setYouSTT(p.value)}
               />
             ))}
           </div>
+          <MissingKeyNote provider={youSTT} keyStatus={keyStatus} checked={keysChecked} />
         </div>
 
         {/* THEM STT Selection */}
         <div>
-          <label className="mb-3 flex items-center gap-2.5 text-sm font-medium text-foreground">
+          <label id="stt-them-label" className="mb-3 flex items-center gap-2.5 text-sm font-medium text-foreground">
             <span className="rounded-lg bg-muted px-2 py-1 text-meta font-semibold uppercase tracking-wide text-muted-foreground">
               Them
             </span>
             STT Provider
           </label>
-          <div className="grid grid-cols-1 gap-2">
-            {PROVIDERS.filter((p) => p.value !== "web_speech").map((p) => (
+          <div role="radiogroup" aria-labelledby="stt-them-label" onKeyDown={radioArrowKeys} className="grid grid-cols-1 gap-2">
+            {themProviders.map((p, i) => (
               <ProviderButton
                 key={p.value}
                 provider={p}
                 selected={themSTT === p.value}
+                tabStop={themSTT === p.value || (i === 0 && !themProviders.some((q) => q.value === themSTT))}
                 hasKey={p.requiresKey ? keyStatus[p.value] ?? false : true}
                 onSelect={() => setThemSTT(p.value)}
               />
             ))}
           </div>
+          <MissingKeyNote provider={themSTT} keyStatus={keyStatus} checked={keysChecked} />
           <p className="mt-1 text-meta text-muted-foreground">
             Web Speech API is not available for "Them" — it only works with the browser's microphone.
           </p>
@@ -186,19 +221,46 @@ export function STTSetupStep() {
   );
 }
 
+/** One plain line when the chosen engine needs an API key that is not saved yet. */
+function MissingKeyNote({
+  provider,
+  keyStatus,
+  checked,
+}: {
+  provider: STTProviderType;
+  keyStatus: Record<string, boolean>;
+  checked: boolean;
+}) {
+  const choice = WIZARD_STT_PROVIDERS.find((p) => p.value === provider);
+  if (!checked || !choice?.requiresKey || keyStatus[provider]) return null;
+  return (
+    <p role="status" className="mt-2 text-xs text-amber-700 dark:text-warning leading-relaxed">
+      {choice.label} needs an API key. Add it in Settings &gt; STT Providers. Free and
+      offline instead: in Settings &gt; STT Providers, download and activate Parakeet TDT
+      (one-time 465 MB), then pick Settings &gt; Audio &amp; Devices &gt; Presets &gt; Free.
+    </p>
+  );
+}
+
 function ProviderButton({
   provider,
   selected,
+  tabStop,
   hasKey,
   onSelect,
 }: {
   provider: ProviderChoice;
   selected: boolean;
+  tabStop: boolean;
   hasKey: boolean;
   onSelect: () => void;
 }) {
   return (
     <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      tabIndex={tabStop ? 0 : -1}
       onClick={onSelect}
       className={`flex items-center gap-3.5 rounded-xl border px-4 py-3.5 text-left transition-all duration-150 ${
         selected
@@ -220,10 +282,10 @@ function ProviderButton({
             </span>
           )}
           {provider.requiresKey && hasKey && (
-            <CheckCircle className="h-3 w-3 text-success" />
+            <CheckCircle role="img" aria-label="API key saved" className="h-3 w-3 text-success" />
           )}
           {provider.requiresKey && !hasKey && (
-            <AlertCircle className="h-3 w-3 text-yellow-500" />
+            <AlertCircle role="img" aria-label="API key missing" className="h-3 w-3 text-amber-700 dark:text-warning" />
           )}
         </div>
         <p className="text-xs text-muted-foreground truncate">

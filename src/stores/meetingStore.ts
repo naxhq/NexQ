@@ -75,6 +75,9 @@ interface MeetingState {
   toggleOverlayHidden: () => void;
   setSelectedMeetingId: (id: string | null) => void;
 
+  /** True from the start of startMeetingFlow until it settles; activeMeeting is only set after async setup. */
+  meetingStarting: boolean;
+
   // Async flows
   startMeetingFlow: (title?: string, audioMode?: AudioMode, scenario?: AIScenario) => Promise<void>;
   endMeetingFlow: () => Promise<void>;
@@ -84,6 +87,9 @@ interface MeetingState {
   startTimer: () => void;
   stopTimer: () => void;
 }
+
+// Overlapping starts keep the flag up until the last one settles.
+let startingFlows = 0;
 
 export const useMeetingStore = create<MeetingState>((set, get) => ({
   currentView: "launcher",
@@ -103,6 +109,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   overlayHidden: false,
   overlayMeetingId: null,
   selectedMeetingId: null,
+  meetingStarting: false,
 
   setOverlayMeetingId: (id) => set({ overlayMeetingId: id }),
 
@@ -141,139 +148,173 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   setSelectedMeetingId: (id) => set({ selectedMeetingId: id }),
 
   startMeetingFlow: async (title?: string, audioMode?: AudioMode, scenario?: AIScenario) => {
+    startingFlows += 1;
+    set({ meetingStarting: true });
     try {
-      // Resolve mode and scenario (fall back to current state if not provided)
-      const resolvedMode: AudioMode = audioMode ?? get().audioMode;
-      let resolvedScenario: AIScenario = scenario ?? get().aiScenario;
-
-      // 0. Set active scenario in scenarioStore + push prompts to Rust backend.
-      // Before start_meeting: a Claude CLI live session starts there with the
-      // scenario prompt as its system prompt.
+      // A real meeting replaces any running demo: leave the demo first so its
+      // snapshot is restored now, not over the real meeting on Exit Demo later.
       try {
-        const { useScenarioStore } = await import("./scenarioStore");
-        const scenarios = useScenarioStore.getState();
-        // A custom scenario can come from another window's list, or be gone by now.
-        await scenarios.loadScenarioConfig();
-        resolvedScenario = scenarios.resolveScenario(resolvedScenario);
-        scenarios.setActiveScenario(resolvedScenario);
-
-        // Push scenario prompts to Rust backend for scenario-aware intelligence
-        const template = useScenarioStore.getState().getActiveTemplate();
-        const { setActiveScenario } = await import("../lib/ipc");
-        await setActiveScenario(
-          template.system_prompt,
-          template.summary_prompt,
-          template.question_detection_prompt
-        );
-      } catch { /* non-critical */ }
-
-      // 0b. Flush ALL meeting-scoped state up-front, before the speaker store is
-      // initialized below, so nothing from the previous meeting leaks in.
-      // The overlay window does the same when it receives nexq:meeting_started.
-      try {
-        await resetMeetingScopedStores();
-      } catch (e) {
-        console.warn("[meetingStore] Failed to reset meeting-scoped stores:", e);
-      }
-
-      // 1. Create meeting record in SQLite
-      const meeting = await ipcStartMeeting(title);
-
-      // 1b. Store mode/scenario in state and persist to DB
-      set({ audioMode: resolvedMode, aiScenario: resolvedScenario });
-      try {
-        const { updateMeetingMode } = await import("../lib/ipc");
-        await updateMeetingMode(meeting.id, resolvedMode, resolvedScenario);
-      } catch { /* non-critical */ }
-
-      // 1c. Initialize speaker store for the resolved mode
-      try {
-        const hasSpeakers = initMeetingSpeakers(resolvedMode);
-        // Inform user if local STT won't support speaker separation
-        if (resolvedMode !== "online" && !hasSpeakers) {
-          const { showToast } = await import("../stores/toastStore");
-          showToast(
-            "Local STT doesn't support speaker separation — all speech labeled as Room.",
-            "info"
-          );
+        const { useDemoStore } = await import("../demo/demoStore");
+        if (useDemoStore.getState().isDemoActive) {
+          const { exitDemo } = await import("../demo/demoEngine");
+          exitDemo();
         }
       } catch { /* non-critical */ }
-
-      // 2. Sync recording toggle to backend before capture starts
-      const config = useConfigStore.getState();
       try {
-        const { setRecordingEnabled } = await import("../lib/ipc");
-        await setRecordingEnabled(config.recordingEnabled);
-      } catch { /* non-critical */ }
+        // Resolve mode and scenario (fall back to current state if not provided)
+        const resolvedMode: AudioMode = audioMode ?? get().audioMode;
+        let resolvedScenario: AIScenario = scenario ?? get().aiScenario;
 
-      // 3. Start audio capture — use per-party config if available, else legacy
-      try {
-        if (config.meetingAudioConfig) {
-          await startCapturePerParty(
-            config.meetingAudioConfig.you,
-            config.meetingAudioConfig.them,
-            { skipYouStt: skipYouStt(resolvedMode) }
+        // 0. Set active scenario in scenarioStore + push prompts to Rust backend.
+        // Before start_meeting: a Claude CLI live session starts there with the
+        // scenario prompt as its system prompt.
+        try {
+          const { useScenarioStore } = await import("./scenarioStore");
+          const scenarios = useScenarioStore.getState();
+          // A custom scenario can come from another window's list, or be gone by now.
+          await scenarios.loadScenarioConfig();
+          resolvedScenario = scenarios.resolveScenario(resolvedScenario);
+          scenarios.setActiveScenario(resolvedScenario);
+
+          // Push scenario prompts to Rust backend for scenario-aware intelligence
+          const template = useScenarioStore.getState().getActiveTemplate();
+          const { setActiveScenario } = await import("../lib/ipc");
+          await setActiveScenario(
+            template.system_prompt,
+            template.summary_prompt,
+            template.question_detection_prompt
           );
-          // In-person mode: mute "you" source — room mic captures everyone,
-          // separate mic capture is redundant and creates duplicate "You" transcripts.
-          if (resolvedMode === "in_person") {
-            try {
-              const { setSourceMuted } = await import("../lib/ipc");
-              await setSourceMuted("you", true);
-              // Also set the UI mute state
-              (await import("./configStore")).useConfigStore.setState({ mutedYou: true });
-            } catch { /* non-critical */ }
+        } catch { /* non-critical */ }
+
+        // 0b. Flush ALL meeting-scoped state up-front, before the speaker store is
+        // initialized below, so nothing from the previous meeting leaks in.
+        // The overlay window does the same when it receives nexq:meeting_started.
+        try {
+          await resetMeetingScopedStores();
+        } catch (e) {
+          console.warn("[meetingStore] Failed to reset meeting-scoped stores:", e);
+        }
+
+        // 1. Create meeting record in SQLite
+        const meeting = await ipcStartMeeting(title);
+
+        // 1b. Store mode/scenario in state and persist to DB
+        set({ audioMode: resolvedMode, aiScenario: resolvedScenario });
+        try {
+          const { updateMeetingMode } = await import("../lib/ipc");
+          await updateMeetingMode(meeting.id, resolvedMode, resolvedScenario);
+        } catch { /* non-critical */ }
+
+        // 1c. Initialize speaker store for the resolved mode
+        try {
+          const hasSpeakers = initMeetingSpeakers(resolvedMode);
+          // Inform user if local STT won't support speaker separation
+          if (resolvedMode !== "online" && !hasSpeakers) {
+            const { showToast } = await import("../stores/toastStore");
+            showToast(
+              "Local STT doesn't support speaker separation — all speech labeled as Room.",
+              "info"
+            );
           }
-        } else {
-          // Legacy fallback: use old mic + system device IDs
-          const micId = config.micDeviceId || "default";
-          const sysId = config.systemDeviceId || "default";
-          await startCapture(micId, sysId);
+        } catch { /* non-critical */ }
+
+        // 2. Sync recording toggle to backend before capture starts
+        const config = useConfigStore.getState();
+        try {
+          const { setRecordingEnabled } = await import("../lib/ipc");
+          await setRecordingEnabled(config.recordingEnabled);
+        } catch { /* non-critical */ }
+
+        // 3. Start audio capture — use per-party config if available, else legacy
+        try {
+          if (config.meetingAudioConfig) {
+            await startCapturePerParty(
+              config.meetingAudioConfig.you,
+              config.meetingAudioConfig.them,
+              { skipYouStt: skipYouStt(resolvedMode) }
+            );
+            // In-person mode: mute "you" source — room mic captures everyone,
+            // separate mic capture is redundant and creates duplicate "You" transcripts.
+            if (resolvedMode === "in_person") {
+              try {
+                const { setSourceMuted } = await import("../lib/ipc");
+                await setSourceMuted("you", true);
+                // Also set the UI mute state
+                (await import("./configStore")).useConfigStore.setState({ mutedYou: true });
+              } catch { /* non-critical */ }
+            }
+          } else {
+            // Legacy fallback: use old mic + system device IDs
+            const micId = config.micDeviceId || "default";
+            const sysId = config.systemDeviceId || "default";
+            await startCapture(micId, sysId);
+          }
+        } catch (err) {
+          console.warn("[meetingStore] Audio capture failed to start:", err);
+          // Every window shows it (the overlay is the one on screen).
+          const message = `Audio capture failed: ${err instanceof Error ? err.message : String(err)}`;
+          import("@tauri-apps/api/event").then(({ emit }) => emit("capture_warning", message)).catch(() => {});
+          // Continue anyway — meeting is created, user can still use AI features
         }
+
+        // 4. Set meeting state
+        const now = Date.now();
+        (await import("../lib/transcriptPersistence")).resetSavedSegments();
+        set({
+          activeMeeting: meeting,
+          isRecording: true,
+          meetingStartTime: now,
+          elapsedMs: 0,
+          lastPersistedIndex: 0,
+          // Reset lingering per-view state from the previous meeting
+          selectedMeetingId: null,
+          unfinishedMeeting: null,
+          settingsOpen: false,
+        });
+
+        // 5. Start timer
+        get().startTimer();
+
+        // 6. Switch to overlay view
+        set({ currentView: "overlay" });
+
+        // 7. Notify overlay Tauri window to initialize meeting UI
+        import("@tauri-apps/api/event").then(({ emit }) => {
+          emit("nexq:meeting_started", {
+            meeting,
+            audioMode: resolvedMode,
+            aiScenario: resolvedScenario,
+          }).catch(() => {});
+        });
       } catch (err) {
-        console.warn("[meetingStore] Audio capture failed to start:", err);
-        // Every window shows it (the overlay is the one on screen).
-        const message = `Audio capture failed: ${err instanceof Error ? err.message : String(err)}`;
-        import("@tauri-apps/api/event").then(({ emit }) => emit("capture_warning", message)).catch(() => {});
-        // Continue anyway — meeting is created, user can still use AI features
+        console.error("[meetingStore] Failed to start meeting:", err);
+        throw err;
       }
-
-      // 4. Set meeting state
-      const now = Date.now();
-      (await import("../lib/transcriptPersistence")).resetSavedSegments();
-      set({
-        activeMeeting: meeting,
-        isRecording: true,
-        meetingStartTime: now,
-        elapsedMs: 0,
-        lastPersistedIndex: 0,
-        // Reset lingering per-view state from the previous meeting
-        selectedMeetingId: null,
-        unfinishedMeeting: null,
-        settingsOpen: false,
-      });
-
-      // 5. Start timer
-      get().startTimer();
-
-      // 6. Switch to overlay view
-      set({ currentView: "overlay" });
-
-      // 7. Notify overlay Tauri window to initialize meeting UI
-      import("@tauri-apps/api/event").then(({ emit }) => {
-        emit("nexq:meeting_started", {
-          meeting,
-          audioMode: resolvedMode,
-          aiScenario: resolvedScenario,
-        }).catch(() => {});
-      });
-    } catch (err) {
-      console.error("[meetingStore] Failed to start meeting:", err);
-      throw err;
+    } finally {
+      startingFlows -= 1;
+      if (startingFlows === 0) set({ meetingStarting: false });
     }
   },
 
   endMeetingFlow: async () => {
+    // A demo's meeting is fake: never stop capture or save it. Ending it just leaves the demo.
+    try {
+      const { useDemoStore } = await import("../demo/demoStore");
+      if (useDemoStore.getState().isDemoActive) {
+        const { exitDemo } = await import("../demo/demoEngine");
+        exitDemo();
+        // Same notice a real end sends: the updater waits for it from each window.
+        try {
+          const [{ emit }, { getCurrentWebviewWindow }] = await Promise.all([
+            import("@tauri-apps/api/event"),
+            import("@tauri-apps/api/webviewWindow"),
+          ]);
+          const payload: WindowMeetingEndedEvent = { window: getCurrentWebviewWindow().label };
+          emit("nexq:meeting_ended", payload).catch(() => {});
+        } catch { /* not running in Tauri */ }
+        return;
+      }
+    } catch { /* non-critical */ }
     const state = get();
     const meeting = state.activeMeeting;
 

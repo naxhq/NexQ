@@ -19,6 +19,7 @@ import { useConfigStore } from "../stores/configStore";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useToastStore } from "../stores/toastStore";
 import { DEFAULT_IMAGE_QUESTION } from "./sendAsk";
+import { DEFAULT_HOTKEYS } from "../lib/hotkeys";
 
 const button = (name: RegExp) => screen.getByRole("button", { name }) as HTMLButtonElement;
 
@@ -284,5 +285,20 @@ describe("ModeButtons while an answer runs", () => {
     fireEvent.click(button(/^Recap/));
     expect(runUserAction).not.toHaveBeenCalled();
     expect(cancelGeneration).not.toHaveBeenCalled();
+  });
+});
+
+describe("ModeButtons hints follow the hotkey bindings", () => {
+  afterEach(() => {
+    useConfigStore.getState().setHotkeys(DEFAULT_HOTKEYS);
+  });
+
+  it("shows the default keys, and a rebinding changes the title", () => {
+    render(<ModeButtons />);
+    expect(button(/^Assist/).title).toContain("(Space)");
+    expect(button(/^Recap/).title).toContain("(4)");
+    act(() => useConfigStore.getState().setHotkeys({ ...useConfigStore.getState().hotkeys, mode_assist: "Q" }));
+    expect(button(/^Assist/).title).toContain("Assist (Q)");
+    expect(button(/^Assist/).title).not.toContain("Space");
   });
 });

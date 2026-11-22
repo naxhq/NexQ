@@ -37,6 +37,16 @@ import {
 import { LauncherStealthButton } from "./LauncherStealthButton";
 import { PersonalSourcesEditor } from "../sources/PersonalSourcesEditor";
 
+// Start-on-login begins a meeting once per app launch. This lives outside the
+// component: the launcher unmounts while a demo or Settings is on screen and
+// remounts after, which must not start a recording.
+let autoStartDone = false;
+
+/** Test hook: lets the next mount auto-start again. */
+export function resetLauncherAutoStart() {
+  autoStartDone = false;
+}
+
 // ── Favorites (localStorage) ──
 
 function useFavorites() {
@@ -105,15 +115,14 @@ export function LauncherView() {
   const autoRemoveFileIndex = useRagStore((s) => s.autoRemoveFileIndex);
 
   const { favorites, toggleFavorite } = useFavorites();
-  const autoStartTriggered = useRef(false);
 
   useEffect(() => {
     loadRecentMeetings();
     loadResources();
     refreshTokenBudget();
     refreshIndexStatus();
-    if (!autoStartTriggered.current) {
-      autoStartTriggered.current = true;
+    if (!autoStartDone) {
+      autoStartDone = true;
       const { startOnLogin } = useConfigStore.getState();
       const { activeMeeting: am } = useMeetingStore.getState();
       if (startOnLogin && !am) startMeetingFlow();

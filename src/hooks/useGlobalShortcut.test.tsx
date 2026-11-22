@@ -1,5 +1,5 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LLMProviderType, Meeting } from "../lib/types";
 
 const shortcuts = vi.hoisted(() => new Map<string, (event: { state: string }) => void>());
@@ -7,6 +7,8 @@ const captureFailure = vi.hoisted(() => ({ message: "" }));
 const registerFailure = vi.hoisted(() => ({ key: "" }));
 const emitted = vi.hoisted(() => [] as Array<[string, unknown]>);
 const invoked = vi.hoisted(() => [] as Array<[string, Record<string, unknown> | undefined]>);
+const eventHandlers = vi.hoisted(() => new Map<string, () => void>());
+const windowState = vi.hoisted(() => ({ overlayVisible: false }));
 vi.mock("@tauri-apps/plugin-global-shortcut", () => ({
   register: async (key: string, handler: (event: { state: string }) => void) => {
     if (key === registerFailure.key) throw new Error("already registered");
@@ -15,7 +17,10 @@ vi.mock("@tauri-apps/plugin-global-shortcut", () => ({
   unregister: async (key: string) => { shortcuts.delete(key); },
 }));
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: async () => () => {},
+  listen: async (event: string, handler: () => void) => {
+    eventHandlers.set(event, handler);
+    return () => { eventHandlers.delete(event); };
+  },
   emit: async (event: string, payload?: unknown) => { emitted.push([event, payload]); },
 }));
 vi.mock("@tauri-apps/plugin-store", () => ({
@@ -44,7 +49,12 @@ async function mountWindow(label: "launcher" | "overlay") {
   vi.resetModules();
   vi.doMock("@tauri-apps/api/webviewWindow", () => ({
     getCurrentWebviewWindow: () => ({ label }),
-    WebviewWindow: { getByLabel: async () => null },
+    WebviewWindow: {
+      getByLabel: async (name: string) =>
+        name === "overlay" && windowState.overlayVisible
+          ? { isVisible: async () => true, isMinimized: async () => false }
+          : null,
+    },
   }));
   const { useGlobalShortcut } = await import("./useGlobalShortcut");
   const { useMeetingStore } = await import("../stores/meetingStore");
@@ -52,13 +62,16 @@ async function mountWindow(label: "launcher" | "overlay") {
   useConfigStore.setState({ stealthShortcut: "", meetingAudioConfig: null });
   stores.push(useMeetingStore);
   renderHook(() => useGlobalShortcut());
-  await waitFor(() => expect(shortcuts.has("CmdOrCtrl+,")).toBe(true));
+  // The launcher holds Ctrl+, too; the overlay's last key is Ctrl+B.
+  await waitFor(() => expect(shortcuts.has(label === "launcher" ? "CmdOrCtrl+," : "CmdOrCtrl+B")).toBe(true));
   return useMeetingStore;
 }
 
 beforeEach(() => {
   invoked.length = 0;
   shortcuts.clear();
+  eventHandlers.clear();
+  windowState.overlayVisible = false;
   captureFailure.message = "";
   registerFailure.key = "";
 });
@@ -70,7 +83,6 @@ afterEach(() => {
 
 it("starts recording in the launcher that owns Web Speech when the overlay loads last", async () => {
   const launcher = await mountWindow("launcher");
-  shortcuts.delete("CmdOrCtrl+,");
   const overlay = await mountWindow("overlay");
 
   await act(async () => { shortcuts.get("CmdOrCtrl+M")!({ state: "Pressed" }); });
@@ -108,6 +120,43 @@ it("a number key stops a running automatic answer and runs what you asked for", 
   });
   await waitFor(() => expect(invoked.map(([command]) => command)).toContain("generate_assist"));
   expect(invoked.find(([command]) => command === "cancel_generation")?.[1]).toEqual({ requestId: "auto-1" });
+});
+
+it("the keys come from Settings > Hotkeys: a changed binding runs the action, the old key stops", async () => {
+  const useMeetingStore = await mountWindow("overlay");
+  const { useConfigStore } = await import("../stores/configStore");
+  useMeetingStore.setState({ activeMeeting: { id: "m" } as Meeting });
+  act(() => useConfigStore.getState().setHotkeys({ ...useConfigStore.getState().hotkeys, mode_say: "Q" }));
+
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { code: "Digit1" })); });
+  await new Promise((r) => setTimeout(r, 20));
+  expect(invoked.map(([command]) => command)).not.toContain("generate_assist");
+
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyQ" })); });
+  await waitFor(() => expect(invoked.map(([command]) => command)).toContain("generate_assist"));
+  expect(invoked.find(([command]) => command === "generate_assist")?.[1]).toMatchObject({ mode: "WhatToSay" });
+});
+
+it("a held action key runs the action once", async () => {
+  const useMeetingStore = await mountWindow("overlay");
+  useMeetingStore.setState({ activeMeeting: { id: "m" } as Meeting });
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "Digit2" }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "Digit2", repeat: true }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "Digit2", repeat: true }));
+  });
+  await waitFor(() => expect(invoked.some(([command]) => command === "generate_assist")).toBe(true));
+  expect(invoked.filter(([command]) => command === "generate_assist")).toHaveLength(1);
+});
+
+it("a modifier binding such as Ctrl+K runs its action", async () => {
+  const useMeetingStore = await mountWindow("overlay");
+  const { useConfigStore } = await import("../stores/configStore");
+  useMeetingStore.setState({ activeMeeting: { id: "m" } as Meeting });
+  act(() => useConfigStore.getState().setHotkeys({ ...useConfigStore.getState().hotkeys, mode_assist: "Ctrl+K" }));
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyK", ctrlKey: true })); });
+  await waitFor(() => expect(invoked.map(([command]) => command)).toContain("generate_assist"));
+  expect(invoked.find(([command]) => command === "generate_assist")?.[1]).toMatchObject({ mode: "Assist" });
 });
 
 it("holds the Assist shortcut in the overlay only while a meeting runs", async () => {
@@ -252,5 +301,89 @@ describe("capture screen shortcut", () => {
     act(() => overlay.setState({ activeMeeting: { id: "m2" } as Meeting }));
     await new Promise((r) => setTimeout(r, 50));
     expect(toasts()).toHaveLength(0);
+  });
+});
+
+describe("Settings shortcut (Ctrl+,)", () => {
+  const press = () => act(async () => { shortcuts.get("CmdOrCtrl+,")!({ state: "Pressed" }); });
+
+  it("opens the dashboard's Settings page from the launcher and closes it again", async () => {
+    const launcher = await mountWindow("launcher");
+    await press();
+    await waitFor(() => expect(launcher.getState().currentView).toBe("settings"));
+    await press();
+    await waitFor(() => expect(launcher.getState().currentView).toBe("launcher"));
+  });
+
+  it("is held by the launcher only, so the overlay window cannot take the key over", async () => {
+    await mountWindow("launcher");
+    const launcherHandler = shortcuts.get("CmdOrCtrl+,");
+    await mountWindow("overlay");
+    expect(shortcuts.get("CmdOrCtrl+,")).toBe(launcherHandler);
+  });
+
+  it("hands the press to the overlay window while the meeting overlay is on screen", async () => {
+    const launcher = await mountWindow("launcher");
+    const overlay = await mountWindow("overlay");
+    overlay.setState({ currentView: "overlay" });
+    windowState.overlayVisible = true;
+    emitted.length = 0;
+
+    await press();
+    await waitFor(() => expect(emitted).toEqual([["nexq:toggle_settings", undefined]]));
+    expect(launcher.getState().currentView).toBe("launcher");
+
+    // The overlay window toggles its own Settings panel when told.
+    await act(async () => { eventHandlers.get("nexq:toggle_settings")!(); });
+    expect(overlay.getState().settingsOpen).toBe(true);
+    await act(async () => { eventHandlers.get("nexq:toggle_settings")!(); });
+    expect(overlay.getState().settingsOpen).toBe(false);
+  });
+});
+
+describe("meeting shortcut (Ctrl+M) and demos", () => {
+  const press = () => act(async () => { shortcuts.get("CmdOrCtrl+M")!({ state: "Pressed" }); });
+  const commands = () => invoked.map(([command]) => command);
+
+  it("during a demo exits the demo and starts a real meeting, never ending the demo's", async () => {
+    const launcher = await mountWindow("launcher");
+    const { useDemoStore } = await import("../demo/demoStore");
+    act(() => {
+      useDemoStore.getState().activate("live-interview", "play");
+      launcher.setState({ activeMeeting: { id: "demo-meeting" } as Meeting, isRecording: true });
+    });
+
+    await press();
+    await waitFor(() => expect(launcher.getState().activeMeeting?.id).toBe("shortcut-meeting"));
+    expect(useDemoStore.getState().isDemoActive).toBe(false);
+    expect(commands()).toContain("start_meeting");
+    expect(commands()).not.toContain("stop_capture");
+    expect(commands()).not.toContain("append_transcript_segment");
+    expect(commands()).not.toContain("end_meeting");
+  });
+
+  it("with a real meeting still ends it", async () => {
+    const launcher = await mountWindow("launcher");
+    act(() => launcher.setState({ activeMeeting: { id: "real" } as Meeting, isRecording: true }));
+
+    await press();
+    await waitFor(() => expect(launcher.getState().activeMeeting).toBeNull());
+    expect(commands()).toContain("stop_capture");
+    expect(commands()).toContain("end_meeting");
+    expect(commands()).not.toContain("start_meeting");
+  });
+
+  it("ending a demo's meeting by any other path leaves the demo without stopping capture or saving", async () => {
+    const launcher = await mountWindow("launcher");
+    const { useDemoStore } = await import("../demo/demoStore");
+    act(() => {
+      useDemoStore.getState().activate("live-interview", "play");
+      launcher.setState({ activeMeeting: { id: "demo-meeting" } as Meeting });
+    });
+
+    await act(async () => { await launcher.getState().endMeetingFlow(); });
+    expect(useDemoStore.getState().isDemoActive).toBe(false);
+    expect(commands()).not.toContain("stop_capture");
+    expect(commands()).not.toContain("end_meeting");
   });
 });

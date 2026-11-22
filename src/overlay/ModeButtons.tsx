@@ -13,6 +13,7 @@ import { showToast } from "../stores/toastStore";
 import { ContextScopePicker } from "./ContextScopePicker";
 import { SourcePills } from "../sources/SourcePills";
 import type { IntelligenceMode } from "../lib/types";
+import { modeHotkey } from "../lib/hotkeys";
 import {
   Loader2,
   Sparkles,
@@ -36,16 +37,6 @@ const MODE_ICONS: Record<string, typeof Sparkles> = {
   AskQuestion: HelpCircle,
 };
 
-// Built-in shortcuts
-const MODE_SHORTCUTS: Record<string, string> = {
-  Assist: "Space",
-  WhatToSay: "1",
-  Shorten: "2",
-  FollowUp: "3",
-  Recap: "4",
-  AskQuestion: "5",
-};
-
 // Ordered built-in modes — AskQuestion now included
 const BUILT_IN_ORDER = ["Assist", "WhatToSay", "Shorten", "FollowUp", "Recap", "AskQuestion"];
 
@@ -60,10 +51,11 @@ export function ModeButtons() {
   const locked = isStreaming && !autoRunning;
   const contextScope = useConfigStore((s) => s.contextScope ?? DEFAULT_CONTEXT_SCOPE);
   const actions = useAIActionsStore((s) => s.configs.actions);
+  const hotkeys = useConfigStore((s) => s.hotkeys);
   const [askInputText, setAskInputText] = useState("");
   const [askInputVisible, setAskInputVisible] = useState(false);
 
-  // Listen for keyboard shortcut (Digit5) to toggle ask input
+  // The Ask hotkey (Settings > Hotkeys) fires this event to toggle the ask input
   useEffect(() => {
     const handler = () => setAskInputVisible((v) => !v);
     window.addEventListener("nexq:toggle-ask-input", handler);
@@ -81,7 +73,7 @@ export function ModeButtons() {
         result.push({
           mode: cfg.mode,
           label: cfg.name,
-          shortcut: MODE_SHORTCUTS[modeKey] || "",
+          shortcut: modeHotkey(modeKey as IntelligenceMode, hotkeys),
           icon: MODE_ICONS[modeKey] || Wand2,
           isCustom: false,
         });
@@ -102,7 +94,7 @@ export function ModeButtons() {
     }
 
     return result;
-  }, [actions]);
+  }, [actions, hotkeys]);
 
   const handleClick = useCallback(
     (mode: string) => {

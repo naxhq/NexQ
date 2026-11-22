@@ -117,32 +117,6 @@ export function getModeLabel(mode: IntelligenceMode): string {
   }
 }
 
-// Get mode keyboard shortcut
-export function getModeShortcut(mode: IntelligenceMode): string {
-  switch (mode) {
-    case "Assist":
-      return "Space";
-    case "WhatToSay":
-      return "Ctrl+1";
-    case "Shorten":
-      return "Ctrl+2";
-    case "FollowUp":
-      return "Ctrl+3";
-    case "Recap":
-      return "Ctrl+4";
-    case "AskQuestion":
-      return "Ctrl+5";
-    case "MeetingSummary":
-      return "";
-    case "ActionItemsExtraction":
-      return "";
-    case "BookmarkSuggestions":
-      return "";
-    case "MeetingAsk":
-      return "";
-  }
-}
-
 // Format file size
 export function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
