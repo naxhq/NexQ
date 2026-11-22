@@ -1,6 +1,7 @@
 ---
 import Icon from './Icon.astro';
 import { REPO, NAV, SECTION } from '../data/site';
+import { STARS_LABEL } from '../data/github';
 
 const base = import.meta.env.BASE_URL;
 ---
@@ -29,6 +30,7 @@ const base = import.meta.env.BASE_URL;
       >
         <Icon name="github" class="h-[18px] w-[18px]" />
         Star on GitHub
+        {STARS_LABEL && <span class="star-count">{STARS_LABEL}<span class="sr-only"> stars</span></span>}
       </a>
       <!-- Says "Download" at every width, so the wordmark always fits (the hero says "Get it for Windows or Mac"). -->
       <a href={`#${SECTION.download}`} class="btn-primary min-h-[40px] px-4 text-sm">Download</a>
@@ -61,6 +63,7 @@ const base = import.meta.env.BASE_URL;
           class="flex min-h-[48px] items-center gap-2 rounded-lg px-2 text-base text-muted-foreground hover:text-foreground"
         >
           <Icon name="github" class="h-4 w-4" /> Star on GitHub
+          {STARS_LABEL && <span class="star-count">{STARS_LABEL}<span class="sr-only"> stars</span></span>}
         </a>
       </li>
     </ul>

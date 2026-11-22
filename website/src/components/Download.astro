@@ -8,8 +8,6 @@ import Icon from './Icon.astro';
 import Wave from './Wave.astro';
 import { CURRENT_VERSION } from '../data/releases';
 import { RELEASES_LATEST, RELEASES_URL, CONTRIBUTING, SECTION } from '../data/site';
-
-const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
 ---
 
 <section id={SECTION.download} class="section dl-sec border-t border-border" aria-labelledby="download-title">
@@ -19,7 +17,7 @@ const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL :
 
     <div class="dl mt-10" data-dl>
       <div class="dl-grid">
-        <!-- src: README.md L121 (the x64-setup.exe installer), L119-123 (SmartScreen, not code-signed); docs/user-guide/getting-started.md L16-27 (per-user NSIS installer, no admin rights, More info then Run anyway) -->
+        <!-- src: README.md "Quick start" (the x64-setup.exe installer, SmartScreen, not code-signed); docs/user-guide/getting-started.md L16-27 (per-user NSIS installer, no admin rights, More info then Run anyway) -->
         <article class="dl-card dl-card--windows" aria-labelledby="dl-win">
           <div class="dl-head">
             <Icon name="windows" class="h-7 w-7" />
@@ -43,7 +41,7 @@ const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL :
           </a>
         </article>
 
-        <!-- src: README.md L125-132 (Apple Silicon beta, the .dmg on the releases page, not notarized so Gatekeeper blocks it, xattr -cr, mic access); site FAQ "Intel Macs and Linux are not supported yet" -->
+        <!-- src: README.md "Quick start" (Apple Silicon beta, the .dmg on the releases page, not notarized so Gatekeeper blocks it, xattr -cr, mic access); site FAQ "Intel Macs and Linux are not supported yet" -->
         <article class="dl-card dl-card--mac" aria-labelledby="dl-mac">
           <div class="dl-head">
             <Icon name="apple" class="h-7 w-7" />
@@ -81,26 +79,6 @@ const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL :
       </div>
     </div>
 
-    <!-- The demo video, here and nowhere else. Click to play: nothing loads until then. No audio track
-         (ffprobe: one video stream in the mp4 and the webm), so it is muted. -->
-    <figure class="dl-video" data-reveal>
-      <div class="dl-video__frame" data-demo-video data-webm={`${base}media/hero-demo.webm`} data-mp4={`${base}media/hero-demo.mp4`} data-poster={`${base}media/hero-demo-poster.webp`}>
-        <button type="button" class="dl-video__btn" aria-label="Play the demo video (no sound)">
-          <img src={`${base}media/hero-demo-poster.webp`} width="1600" height="1162" loading="lazy" decoding="async" alt="" />
-          <span class="dl-video__icon" aria-hidden="true">
-            <svg viewBox="0 0 12 12" width="22" height="22"><path d="M3 1.5v9l7.5-4.5z" fill="currentColor" /></svg>
-          </span>
-        </button>
-        <noscript>
-          <video controls muted preload="none" width="1600" height="1162" poster={`${base}media/hero-demo-poster.webp`}>
-            <source src={`${base}media/hero-demo.webm`} type="video/webm" />
-            <source src={`${base}media/hero-demo.mp4`} type="video/mp4" />
-          </video>
-        </noscript>
-      </div>
-      <figcaption>See it first: NexQ in demo mode, recorded on an earlier version.</figcaption>
-    </figure>
-
     <p class="dl-more">
       <a href={RELEASES_URL} class="link">Other builds and checksums</a>
       <a href={CONTRIBUTING} class="link">Build from source</a>
@@ -110,7 +88,6 @@ const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL :
 
 <script>
   import '../scripts/dl-detect.ts';
-  import '../scripts/demo-video.ts';
 </script>
 
 <style is:global>
@@ -122,85 +99,6 @@ const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL :
   @media (min-width: 640px) {
     .dl-sec {
       scroll-margin-top: calc(0.5rem - 7rem);
-    }
-  }
-
-  /* Video (below the downloads) */
-  .dl-video {
-    margin-top: 3rem;
-    max-width: 40rem;
-  }
-  /* From 1024px the video takes the wide column and its caption sits beside it (7fr / 4fr, like the After the call grid). */
-  @media (min-width: 1024px) {
-    .dl-video {
-      display: grid;
-      max-width: none;
-      grid-template-columns: minmax(0, 7fr) minmax(0, 4fr);
-      align-items: end;
-      gap: 3rem;
-    }
-    .dl-video figcaption {
-      margin-top: 0;
-      max-width: 28ch;
-      font-size: 1rem;
-      line-height: 1.5;
-    }
-  }
-  .dl-video__frame {
-    position: relative;
-    overflow: hidden;
-    aspect-ratio: 1600 / 1162;
-    border: 1px solid hsl(var(--border));
-    border-radius: 0.875rem;
-    background: hsl(var(--card));
-  }
-  .dl-video__frame video,
-  .dl-video__frame img {
-    display: block;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-  .dl-video__btn {
-    position: relative;
-    display: block;
-    width: 100%;
-    height: 100%;
-    border-radius: 0;
-  }
-  html:not(.js) .dl-video__btn {
-    display: none;
-  }
-  .dl-video__icon {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    display: grid;
-    width: 4.5rem;
-    height: 4.5rem;
-    place-items: center;
-    border-radius: 9999px;
-    background: hsl(var(--primary-btn));
-    color: #fff;
-    transform: translate(-50%, -50%);
-    transition: transform 0.3s var(--ease-spring);
-  }
-  .dl-video__btn:hover .dl-video__icon {
-    transform: translate(-50%, -50%) scale(1.06);
-  }
-  .dl-video figcaption {
-    margin-top: 0.75rem;
-    font-size: 0.875rem;
-    color: hsl(var(--muted-foreground));
-  }
-  @media (forced-colors: active) {
-    .dl-video__frame {
-      border-color: ButtonText;
-    }
-    .dl-video__icon {
-      border: 2px solid ButtonText;
-      background: ButtonFace;
-      color: ButtonText;
     }
   }
 
