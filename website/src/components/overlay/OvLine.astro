@@ -1,6 +1,7 @@
 ---
 // One transcript line, as TranscriptLine.tsx draws it: left border in the speaker colour at 40%,
-// m:ss time, speaker name in its colour, text, and the amber translation under it.
+// m:ss time, speaker name in its colour, text, and the amber translation under it (its row is
+// collapsed until the translation shows, so there is never an empty gap).
 import type { Line } from './content';
 interface Props {
   line: Line;
@@ -22,6 +23,6 @@ const label = line.who === 'you' ? 'You' : 'Them';
   <span class="ov-who">{label}</span>
   <div class="ov-lt">
     <span class="ov-tx">{line.text}</span><span class="ov-tail"></span>
-    {line.tr && <div class="ov-trl"><span class="sr-only">Translation: </span>{line.tr}</div>}
+    {line.tr && <div class="ov-trw"><div class="ov-trl"><div class="ov-trt"><span class="sr-only">Translation: </span>{line.tr}</div></div></div>}
   </div>
 </div>

@@ -9,7 +9,7 @@
  *     "Questions, responses, follow-ups"; Webinar "Presentation points, audience Q&A")
  *   custom scenarios ...................... CHANGELOG.md 2.32.0 "meetings can use custom scenarios";
  *     docs/user-guide/configuration.md L219 (Custom: your own system prompts)
- *   Oral Exam exists in the app but is left off the site on purpose (owner decision).
+ *   The scenario list matches the owner's decision (Interview, Team meeting, Lecture, Webinar, your own).
  *   call detection ........................ docs/user-guide/meeting-detection.md: Zoom, Teams, Meet, Webex
  *     (Slack huddles and Discord are options, off by default); every 3 s by default (1 to 10 s); "never
  *     listens to audio before you click Start"; Enter starts, Esc dismisses; "available on Windows".
@@ -42,8 +42,7 @@ const DETAIL: Record<string, { text: string; href: string }> = {
 
 <section id={SECTION.madeFor} class="section" aria-labelledby="made-for-title">
   <div class="wrap">
-    <p class="eyebrow">before 00:00</p>
-    <h2 id="made-for-title" class="h2 mt-3 max-w-[18ch]">Made for the calls you have</h2>
+    <h2 id="made-for-title" class="h2 max-w-[18ch]">Made for the calls you have</h2>
     <p class="lede">Pick a scenario before the call. It tunes what the AI listens for and how it answers.</p>
 
     <ul class="mf" data-mf data-reveal>
@@ -60,7 +59,7 @@ const DETAIL: Record<string, { text: string; href: string }> = {
 
     <div class="mf-detect" data-reveal>
       <div>
-        <p class="eyebrow">Call detection</p>
+        <p class="mf-label">Call detection</p>
         <h3 class="h3 mt-3 max-w-[20ch]">Zoom, Teams, Meet and Webex calls offer to start NexQ</h3>
       </div>
       <div class="mf-detect__body">
@@ -178,6 +177,11 @@ const DETAIL: Record<string, { text: string; href: string }> = {
       grid-template-columns: 1fr 1fr;
       gap: 4rem;
     }
+  }
+  .mf-label {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: hsl(var(--muted-foreground));
   }
   .mf-detect__body {
     display: grid;

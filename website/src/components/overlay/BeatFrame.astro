@@ -7,21 +7,12 @@
 import './overlay.css';
 import OvIcon from './OvIcon.astro';
 import OvLine from './OvLine.astro';
-import { A_LINES, B_QUESTION, D_ANSWER, tokens } from './content';
+import { A_LINES, B_QUESTION, D_ANSWER, MODES, tokens } from './content';
 
 interface Props {
   beat: 'a' | 'b' | 'c' | 'd';
 }
 const { beat } = Astro.props;
-
-const MODES = [
-  { label: 'Assist', icon: 'sparkles', key: 'Space' },
-  { label: 'Say', icon: 'message', key: '1' },
-  { label: 'Short', icon: 'scissors', key: '2' },
-  { label: 'F/U', icon: 'corner', key: '3' },
-  { label: 'Recap', icon: 'list', key: '4' },
-  { label: 'Ask', icon: 'help', key: '5' },
-];
 ---
 
 <div class="ov ov--frame ov--still nx-glass" data-view={beat} data-still={beat}>
@@ -31,12 +22,12 @@ const MODES = [
         <div class="ov-lines ov-lines--still">
           <div class="ov-g">{A_LINES.map((l) => <OvLine line={l} />)}</div>
         </div>
-        <div class="ov-foot" aria-label="Services">
+        <div class="ov-foot" role="group" aria-label="Services">
           <span class="ov-svc ov-svc--you"><i class="ov-sdot"></i><span class="ov-who2">YOU</span><span>Deepgram</span></span>
           <span class="ov-lang"><OvIcon name="languages" class="ov-i ov-i--s" /><span>EN</span></span>
           <span class="ov-fsep"></span>
           <span class="ov-svc ov-svc--them"><i class="ov-sdot"></i><span class="ov-who2">THEM</span><span>Deepgram</span></span>
-          <span class="ov-lang ov-lang--them"><OvIcon name="languages" class="ov-i ov-i--s" /><span class="l-es">ES</span></span>
+          <span class="ov-lang ov-lang--them"><OvIcon name="languages" class="ov-i ov-i--s" /><span class="ov-lg"><span class="l-en">EN</span><span class="l-es">ES</span></span></span>
         </div>
       </>
     )
@@ -57,7 +48,7 @@ const MODES = [
       <section class="ov-panel ov-ai ov-ai--still" aria-label="Actions and transcript scope">
         <div class="ov-modes" role="list">
           {MODES.map((m) => (
-            <span class="ov-mode" role="listitem"><OvIcon name={m.icon} class="ov-i ov-i--s" /><span>{m.label}</span><kbd class="ov-key">{m.key}</kbd></span>
+            <span class="ov-mode" role="listitem" data-mode-btn={m.mode}><OvIcon name={m.icon} class="ov-i ov-i--s" /><span>{m.label}</span><kbd class="ov-key">{m.key}</kbd></span>
           ))}
           <span class="ov-scope"><OvIcon name="clock" class="ov-i ov-i--s" /><span class="sc-b">Last 5 min</span></span>
         </div>
@@ -87,7 +78,7 @@ const MODES = [
               {D_ANSWER.activity.map((a) => <li>{a}</li>)}
             </ul>
             <p class="ov-ans ov-ans--static">{tokens(D_ANSWER.text).map((t) => <span class={t.b ? 'b' : ''}>{t.w} </span>)}</p>
-            <div class="ov-chips" aria-label="Sources used">
+            <div class="ov-chips" role="group" aria-label="Sources used">
               {D_ANSWER.chips.map((c) => (
                 <span class={c.kind === 'notes' ? 'ov-chip2 ov-chip2--notes' : 'ov-chip2 ov-chip2--tool'}>
                   <OvIcon name={c.kind === 'notes' ? 'book' : 'wrench'} class="ov-i ov-i--s" />{c.label}

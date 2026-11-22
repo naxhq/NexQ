@@ -1,6 +1,8 @@
 // After the call (AfterCall.astro): the sample recording. A playhead, a transcript that follows it,
-// tabs, and the click-to-play demo video. No audio: the playhead runs fast.
+// and tabs. No audio: the playhead runs fast.
 // Without JS the markup shows its resting state (playhead at 42%, every panel stacked).
+// No layout reads at startup: the transcript is first centred on the active line when the section
+// comes near the viewport (IntersectionObserver) or the visitor interacts, not on page load.
 const root = document.querySelector<HTMLElement>('[data-ac]');
 if (root) {
   const DUR = Number(root.dataset.dur);
@@ -23,10 +25,12 @@ if (root) {
   let active = lines.findIndex((l) => l.getAttribute('aria-current') === 'true');
   let raf = 0;
   let last = 0;
+  let armed = false; // layout reads (follow) wait until the section is near or the visitor acts
 
   const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
   const follow = (smooth: boolean) => {
+    if (!armed) return;
     const li = lines[active]?.parentElement;
     if (!li || !pane.offsetParent) return;
     pane.scrollTo({
@@ -35,8 +39,15 @@ if (root) {
     });
   };
 
+  const arm = () => {
+    if (armed) return;
+    armed = true;
+    if (active >= 0) follow(false);
+  };
+
+  // --progress lives on the player's waveform only, so moving it restyles a handful of nodes.
   const render = (smooth = false) => {
-    root.style.setProperty('--progress', String(t / DUR));
+    slider.style.setProperty('--progress', String(t / DUR));
     clock.textContent = fmt(t);
     slider.setAttribute('aria-valuenow', String(Math.floor(t)));
     slider.setAttribute('aria-valuetext', `${fmt(t)} of ${fmt(DUR)}`);
@@ -51,6 +62,7 @@ if (root) {
   };
 
   const seek = (s: number, smooth = true) => {
+    arm();
     t = Math.max(0, Math.min(DUR, s));
     manual = true;
     render(smooth);
@@ -83,6 +95,7 @@ if (root) {
     play.toggleAttribute('data-playing', v);
     play.setAttribute('aria-label', v ? 'Pause' : 'Play');
     if (v) {
+      arm();
       manual = true;
       if (t >= DUR - 1) t = 0;
     }
@@ -91,11 +104,15 @@ if (root) {
   play.addEventListener('click', () => setPlaying(!playing));
   document.addEventListener('visibilitychange', sync);
 
-  new IntersectionObserver((e) => {
-    onscreen = e[0].isIntersecting;
-    sync();
-    if (onscreen) onScroll();
-  }).observe(root);
+  new IntersectionObserver(
+    (e) => {
+      onscreen = e[0].isIntersecting;
+      if (onscreen) arm();
+      sync();
+      if (onscreen) onScroll();
+    },
+    { rootMargin: '300px 0px' },
+  ).observe(root);
 
   // Scrolling moves the playhead until the visitor takes over: 0 as the window enters, 1 as it leaves.
   let pending = 0;
@@ -166,25 +183,6 @@ if (root) {
   });
   feats.forEach((f) => f.addEventListener('click', () => showTab(tabs.findIndex((b) => b.dataset.tab === f.dataset.go))));
   showTab(0);
-  if (active >= 0) follow(false);
 }
-
-// The demo video: nothing is fetched until the visitor clicks.
-const frame = document.querySelector<HTMLElement>('[data-ac-video]');
-frame?.querySelector('button')?.addEventListener('click', () => {
-  const v = document.createElement('video');
-  v.controls = true;
-  v.autoplay = true;
-  v.poster = frame.dataset.poster!;
-  v.setAttribute('aria-label', 'NexQ demo, recorded in demo mode on an earlier version');
-  for (const [src, type] of [[frame.dataset.webm!, 'video/webm'], [frame.dataset.mp4!, 'video/mp4']]) {
-    const s = document.createElement('source');
-    s.src = src;
-    s.type = type;
-    v.append(s);
-  }
-  frame.replaceChildren(v);
-  v.focus();
-});
 
 export {};

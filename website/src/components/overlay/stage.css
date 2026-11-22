@@ -6,10 +6,14 @@
  *              last beat. It lets go when the story ends.
  *   <  900px   one column: hero, the overlay once, then the beats, each with a still of its moment.
  *   no JS      the overlay shows its final state and each beat shows its still.
+ *
+ * The overlay's size follows its box AND the viewport height (--ov-fs in overlay.css), so the whole
+ * overlay and its bar fit on a 1280x610 window. The bar under it holds the release wave (the
+ * call's audio) and the controls.
  */
 
 .nx-stage {
-  --pin-top: clamp(5rem, calc(50svh - 17rem), 9rem);
+  --pin-top: clamp(4.5rem, calc(50svh - 17rem), 9rem);
   display: grid;
   grid-template-columns: minmax(0, 1fr);
 }
@@ -27,7 +31,7 @@
   max-width: 100%;
   align-items: center;
   gap: 0.6rem;
-  padding: 0.25rem 0.85rem 0.25rem 0.3rem;
+  padding: 0.4rem 0.95rem;
   border: 1px solid hsl(var(--border));
   border-radius: 999px;
   font-size: 0.8125rem;
@@ -42,11 +46,14 @@
   border-color: hsl(var(--muted-foreground) / 0.5);
   color: hsl(var(--foreground));
 }
-.nx-pill .tag {
+.nx-pill__v {
   flex: none;
-  padding: 0.1rem 0.55rem;
-  background: hsl(var(--card));
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
   color: hsl(var(--foreground));
+}
+.nx-hero .eyebrow {
+  margin-bottom: 0.75rem;
 }
 .nx-hero .display {
   margin-top: 1.5rem;
@@ -96,32 +103,21 @@
   gap: 0.35rem;
 }
 .nx-proof b {
-  font-family: var(--font-mono);
-  font-size: 0.8125rem;
-  font-weight: 600;
+  font-size: 0.9375rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
   color: hsl(var(--foreground));
 }
-.nx-wavewrap {
-  --wave-played: hsl(var(--muted-foreground) / 0.75);
-  display: flex;
-  width: 100%;
-  max-width: 32rem;
-  align-items: center;
-  gap: 0.9rem;
-  margin-top: 1.75rem;
+/* One blue button: it names your system from 640px, and on phones jumps to Download. */
+.nx-dl--short {
+  display: none;
 }
-.nx-wavewrap .tag {
-  flex: none;
-  color: hsl(var(--foreground));
-}
-.nx-wavewrap .nx-wave {
-  flex: 1;
-  min-width: 0;
-  --wave-gap: 2px;
-}
-@media (max-width: 479px) {
-  .nx-wavewrap .nx-wave {
-    --wave-gap: 1px;
+@media (max-width: 639px) {
+  .nx-dl--os {
+    display: none;
+  }
+  .nx-dl--short {
+    display: inline-flex;
   }
 }
 
@@ -131,43 +127,109 @@
   margin-block: 0.5rem 2.5rem;
 }
 .nx-screen {
+  --pad: 0.55rem;
   position: relative;
-  padding: 0.55rem;
+  padding: var(--pad);
   overflow: hidden;
   border: 1px solid hsl(var(--border) / 0.8);
   border-radius: 1.1rem;
   background: hsl(var(--card));
 }
-.nx-skel {
+.nx-screen .nx-slide {
   position: absolute;
   inset: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.8rem;
-  padding: 1.5rem 1.4rem;
 }
-.nx-skel i {
-  display: block;
-  height: 0.65rem;
-  border-radius: 999px;
-  background: hsl(var(--foreground) / 0.07);
-}
-.nx-skel i:nth-child(1) { width: 36%; height: 1.05rem; background: hsl(var(--foreground) / 0.1); }
-.nx-skel i:nth-child(2) { width: 90%; }
-.nx-skel i:nth-child(3) { width: 74%; }
-.nx-skel i:nth-child(4) { width: 82%; }
 .nx-screen .ov-fit {
   position: relative;
   transition:
     opacity 0.5s var(--ease-spring),
     transform 0.7s var(--ease-spring);
 }
+
+/* The slide being shared: real text, the same in both panes of the stealth demo. */
+.nx-slide {
+  padding: 1.1rem 1.2rem;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  color: hsl(var(--foreground) / 0.9);
+}
+.nx-slide__t {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+  line-height: 1.2;
+  color: hsl(var(--foreground));
+}
+.nx-slide ul {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+.nx-slide li {
+  padding-left: 0.9rem;
+  position: relative;
+}
+.nx-slide li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 0.3rem;
+  height: 0.3rem;
+  border-radius: 999px;
+  background: hsl(var(--muted-foreground));
+}
+
+/* Call progress: a thin line under the overlay that follows the scroll through the beats. */
+.nx-callline {
+  position: absolute;
+  z-index: 3;
+  left: var(--pad);
+  right: var(--pad);
+  bottom: calc(var(--pad) / 2 - 1px);
+  display: none;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 1px;
+  background: hsl(var(--border) / 0.5);
+}
+.nx-callline i {
+  display: block;
+  height: 100%;
+  background: hsl(var(--primary));
+  transform: scaleX(var(--call-p, 0));
+  transform-origin: left center;
+}
+
 .nx-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+.nx-audio {
+  --wave-played: hsl(var(--muted-foreground) / 0.75);
+  --wave-h: 24px;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.nx-audio .tag {
+  flex: none;
+  color: hsl(var(--foreground));
+}
+.nx-audio .nx-wave {
+  flex: 1;
+  min-width: 0;
+}
+.nx-bar__row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  margin-top: 0.85rem;
 }
 .nx-cap {
   display: flex;
@@ -214,18 +276,16 @@
 .nx-pause[aria-pressed='true'] .i-play {
   display: block;
 }
+/* The demo's own Assist is the quiet one: a ghost button with a blue icon (the page's one blue button is Download). */
 .nx-assist {
   gap: 0.6rem;
+}
+.nx-assist svg {
+  color: hsl(var(--primary));
 }
 .nx-assist:disabled {
   opacity: 0.6;
   cursor: default;
-}
-.nx-assist .kbd {
-  border-color: transparent;
-  background: rgb(0 0 0 / 0.24);
-  box-shadow: none;
-  color: #fff;
 }
 .nx-stage:not([data-beat='h']) .nx-assist {
   visibility: hidden;
@@ -271,7 +331,7 @@ html:not(.js) .nx-hint {
 .nx-mscreen {
   position: relative;
   flex: 1;
-  min-height: 11rem;
+  min-height: 13.5rem;
   overflow: hidden;
   border: 1px solid hsl(var(--border));
   border-radius: 0.8rem;
@@ -281,7 +341,7 @@ html:not(.js) .nx-hint {
   position: absolute;
   right: 0.7rem;
   bottom: 0.7rem;
-  width: min(68%, 21rem);
+  width: min(64%, 21rem);
   transition:
     opacity 0.5s var(--ease-spring),
     transform 0.7s var(--ease-spring),
@@ -307,8 +367,8 @@ html:not(.js) .nx-hint {
   display: block;
 }
 .ov--mini {
-  font-size: 11px;
-  --ov-fs: 11px;
+  font-size: 12.5px;
+  --ov-fs: 12.5px;
 }
 .ov--mini .ov-head {
   padding: 0.4em 0.7em;
@@ -414,9 +474,15 @@ html:not(.js) .nx-hint {
   font-weight: 600;
   color: hsl(var(--foreground) / 0.9);
 }
-.nx-beat .tag {
+.nx-new {
   align-self: flex-start;
   margin-top: 1rem;
+  padding: 0.125rem 0.625rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: 9999px;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: hsl(var(--muted-foreground));
 }
 .nx-still {
   display: none;
@@ -470,6 +536,8 @@ html:not(.js) .nx-hint {
   transform: translateX(1.05rem);
 }
 .nx-status {
+  /* Two lines are reserved, so the column never jumps when the switch flips. */
+  min-height: 3em;
   margin-top: 0.8rem;
   font-size: 0.875rem;
   line-height: 1.5;
@@ -491,7 +559,11 @@ html:not(.js) .nx-nojs {
 
 /* ─── Phones and no-JS: stills in the beats ─── */
 @media (max-width: 519px) {
-  .nx-bar {
+  /* The slide on top and the small overlay under it, so the overlay never covers the slide's text. */
+  .nx-panes--beat .nx-mscreen {
+    min-height: 19.5rem;
+  }
+  .nx-bar__row {
     flex-direction: column;
     align-items: stretch;
   }
@@ -552,7 +624,10 @@ html:not(.js) .nx-panes--pin {
     margin: 0;
   }
   .nx-screen {
-    padding: 0.8rem;
+    --pad: 0.65rem;
+  }
+  .nx-callline {
+    display: block;
   }
   .nx-beat {
     min-height: min(80svh, 44rem);
@@ -574,6 +649,13 @@ html:not(.js) .nx-panes--pin {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .nx-mov,
+  .nx-panes--pin,
+  .nx-screen .ov-fit,
+  .nx-switch,
+  .nx-switch::after {
+    transition: none !important;
+  }
   .js .nx-beat {
     transition: none;
   }
@@ -586,4 +668,33 @@ html:not(.js) .nx-panes--pin {
 /* Paused: the loops stop, nothing else changes. */
 [data-paused] .rec-dot::after {
   animation-play-state: paused;
+}
+
+/* Call progress, tied to the scroll through the beats. Where the browser has scroll-driven animations
+   the line is drawn from the beats' own scroll timeline (0 when the first beat starts to cross the
+   middle of the screen, 1 when the last one has). Elsewhere callDemo.ts sets --call-p instead. */
+@supports (animation-timeline: view()) and (timeline-scope: --nx-beats) {
+  @media (min-width: 900px) and (prefers-reduced-motion: no-preference) {
+    .nx-stage {
+      timeline-scope: --nx-beats;
+    }
+    .nx-beats {
+      view-timeline-name: --nx-beats;
+      view-timeline-axis: block;
+      view-timeline-inset: 50%;
+    }
+    .nx-callline i {
+      animation: nx-callline linear both;
+      animation-timeline: --nx-beats;
+      animation-range: cover;
+    }
+  }
+}
+@keyframes nx-callline {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
 }

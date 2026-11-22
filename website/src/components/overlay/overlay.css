@@ -2,15 +2,20 @@
  * The overlay recreation. Mirrors src/overlay/*.tsx and src/index.css of the app: glass panel,
  * rounded-xl, border-border/20, panels at card/20, 10 / 12 / 13 px text, speaker colours.
  *
- * Everything is in em. The window's font size follows its container (cqw), so the whole thing scales
- * as one picture and line breaks stay the same at every size. Below 520px of container width it
- * switches to one column at a readable size (the app's own panels wrap the same way).
+ * Everything is in em. The window's font size follows its container (cqw) and the viewport height
+ * (so the whole overlay fits a short window), so it scales as one picture and line breaks stay the
+ * same at every size. No label is smaller than 11px: the small ones carry a max(11px, ...) floor.
+ * Below 460px of container width it switches to one column at a readable size.
  *
  * Text colours that the app draws very faint (45% to 60% alpha) are raised here to pass AA on this
  * background; the hue and the hierarchy are the app's.
  *
  * Which moment is on screen is `data-view` on .ov (h0 h1 a b c d e). Groups (.ov-g) say which views
- * they belong to in `data-for`. Only transform and opacity move.
+ * they belong to in `data-for`. Each beat's one visible change is an animation that plays ONCE: it is
+ * keyed to `data-play` (pinned overlay, set by callDemo.ts the first time the beat is shown) or to the
+ * still's own `data-still` (phones, played when it scrolls into view), and it ends on the beat's
+ * normal state, so scrolling back never replays it. Opacity and transform move, plus the translation
+ * row's height (grid-template-rows) so there is no empty gap before it shows.
  */
 
 .ov-fit {
@@ -19,7 +24,9 @@
 }
 
 .ov {
-  --ov-fs: clamp(12px, 2.35cqw, 15px);
+  /* The box's width, but never taller than the viewport allows: 37em of overlay plus the bar under it
+     (about 7.5rem) must fit under the pin offset. Never below 11px. */
+  --ov-fs: clamp(11px, min(2.35cqw, calc((100svh - var(--pin-top, 5rem) - 7.5rem) / 37)), 15px);
   --ov-mut: 215 14% 64%;
   /* Blue text on its own 10-20% tint: the app's blue, a little lighter so it passes AA. */
   --ov-blue: 217 92% 71%;
@@ -28,7 +35,7 @@
   display: flex;
   flex-direction: column;
   width: 100%;
-  height: 39em;
+  height: 37em;
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   font-size: var(--ov-fs);
   line-height: 1.4;
@@ -99,7 +106,7 @@
   color: hsl(var(--ov-mut) / 0.5);
 }
 .ov-title {
-  font-size: 0.92em;
+  font-size: max(11px, 0.92em);
   font-weight: 600;
   color: hsl(var(--foreground) / 0.9);
 }
@@ -111,7 +118,7 @@
   border-radius: 999px;
   background: hsl(var(--destructive) / 0.2);
   box-shadow: 0 0 0 1px hsl(var(--destructive) / 0.12);
-  font-size: 0.77em;
+  font-size: max(11px, 0.77em);
   font-weight: 600;
   letter-spacing: 0.03em;
   color: hsl(0 90% 70%);
@@ -137,14 +144,14 @@
   padding: 0.18em 0.5em;
   border-radius: 0.3em;
   background: rgb(74 108 247 / 0.15);
-  font-size: 0.7em;
+  font-size: max(11px, 0.7em);
   font-weight: 700;
   letter-spacing: 0.06em;
   color: #93a6ff;
 }
 .ov-time {
   font-family: var(--font-mono, 'Martian Mono', ui-monospace, monospace);
-  font-size: 0.73em;
+  font-size: max(11px, 0.73em);
   font-weight: 450;
   font-variant-numeric: tabular-nums;
   color: hsl(var(--ov-mut) / 0.9);
@@ -188,7 +195,7 @@
   margin-left: 0.2em;
   padding: 0.3em 0.55em;
   border-radius: 0.45em;
-  font-size: 0.92em;
+  font-size: max(11px, 0.92em);
   font-weight: 500;
   color: hsl(var(--ov-mut) / 0.85);
   transition:
@@ -200,6 +207,7 @@
   background: hsl(var(--primary) / 0.1);
   box-shadow: 0 0 0 1px hsl(var(--primary) / 0.22);
   color: hsl(var(--ov-blue));
+  transition-delay: 0.3s;
 }
 .ov-end {
   display: flex;
@@ -210,7 +218,7 @@
   border-radius: 0.55em;
   border: 1px solid hsl(var(--destructive) / 0.2);
   background: hsl(var(--destructive) / 0.1);
-  font-size: 0.92em;
+  font-size: max(11px, 0.92em);
   font-weight: 600;
   color: hsl(0 90% 72%);
 }
@@ -236,7 +244,7 @@
   flex: none;
   padding: 0.5em 0.9em;
   border-bottom: 1px solid hsl(var(--border) / 0.2);
-  font-size: 0.77em;
+  font-size: max(11px, 0.77em);
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -320,16 +328,16 @@
 }
 .ov-ts {
   margin-top: 0.22em;
-  font-size: 0.85em;
+  font-size: max(11px, 0.85em);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
-  color: hsl(var(--ov-mut) / 0.78);
+  color: hsl(var(--ov-mut) / 0.95);
 }
 .ov-who {
   margin-top: 0.22em;
   flex: none;
-  font-size: 0.85em;
+  font-size: max(11px, 0.85em);
   font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--sp);
@@ -351,8 +359,9 @@
   opacity: 0.6;
 }
 .ov-trl {
-  margin-top: 0.25em;
-  font-size: 0.92em;
+  min-height: 0;
+  overflow: hidden;
+  font-size: max(11px, 0.92em);
   line-height: 1.5;
   color: var(--translation, #fbbf24);
 }
@@ -421,14 +430,14 @@
 .ov-qt {
   flex: 1;
   min-width: 0;
-  font-size: 0.96em;
+  font-size: max(11px, 0.96em);
   font-weight: 500;
   line-height: 1.5;
   color: hsl(var(--foreground) / 0.92);
 }
 .ov-qt--idle {
   align-self: center;
-  font-size: 0.92em;
+  font-size: max(11px, 0.92em);
   font-weight: 400;
   color: hsl(var(--ov-mut) / 0.8);
 }
@@ -445,7 +454,7 @@
   border-radius: 0.55em;
   background: hsl(var(--info) / 0.1);
   font: inherit;
-  font-size: 0.92em;
+  font-size: max(11px, 0.92em);
   font-weight: 600;
   color: hsl(var(--info));
   transition:
@@ -504,7 +513,7 @@ button.ov-qa:hover {
   border-radius: 0.55em;
   background: none;
   font: inherit;
-  font-size: 0.77em;
+  font-size: max(11px, 0.77em);
   font-weight: 500;
   line-height: 1.3;
   color: hsl(var(--ov-mut) / 0.85);
@@ -542,30 +551,25 @@ button.ov-qa:hover {
   outline: 2px solid hsl(var(--primary));
   outline-offset: 1px;
 }
-/* Key hints are a site annotation, not app UI: they only exist in the "one key" moment. */
+/* Key hints are a site annotation, not app UI: in the "one key" moment each button shows its key. */
 .ov-key {
-  position: absolute;
-  top: -1.55em;
-  left: 50%;
-  z-index: 3;
+  display: none;
+  margin-left: 0.3em;
   padding: 0.05em 0.45em;
   border: 1px solid hsl(var(--border));
   border-radius: 0.35em;
   background: hsl(var(--card));
   box-shadow: 0 1px 0 hsl(var(--border));
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 0.9em;
+  font-size: max(11px, 0.9em);
   font-weight: 500;
   line-height: 1.5;
   white-space: nowrap;
   color: hsl(var(--foreground));
-  opacity: 0;
-  transform: translate3d(-50%, -0.3em, 0);
-  pointer-events: none;
 }
-.ov[data-view='c'] .ov-key {
-  animation: ov-key 0.62s var(--ov-spring) both;
-  animation-delay: calc(0.5s + var(--k, 0) * 0.62s);
+.ov[data-view='c'] .ov-key,
+.ov--still .ov-key {
+  display: inline-block;
 }
 .ov-mode:nth-of-type(1) { --k: 0; }
 .ov-mode:nth-of-type(2) { --k: 1; }
@@ -573,9 +577,14 @@ button.ov-qa:hover {
 .ov-mode:nth-of-type(4) { --k: 3; }
 .ov-mode:nth-of-type(5) { --k: 4; }
 .ov-mode:nth-of-type(6) { --k: 5; }
-.ov[data-view='c'] .ov-mode {
-  animation: ov-lit 0.62s var(--ov-spring) both;
-  animation-delay: calc(0.5s + var(--k, 0) * 0.62s);
+/* The answer shown in the "one key" moment came from Short, so that button stays lit. */
+.ov[data-view='c'] .ov-mode[data-mode-btn='Shorten'],
+.ov--still[data-still='c'] .ov-mode[data-mode-btn='Shorten'] {
+  background: hsl(var(--primary) / 0.2);
+  color: hsl(var(--ov-blue));
+  box-shadow:
+    0 0 0 1px hsl(var(--primary) / 0.3),
+    0 1px 3px hsl(var(--primary) / 0.12);
 }
 
 .ov-scope {
@@ -586,33 +595,12 @@ button.ov-qa:hover {
   margin-left: auto;
   padding: 0.34em 0.5em;
   border-radius: 0.55em;
-  font-size: 0.77em;
+  font-size: max(11px, 0.77em);
   font-weight: 500;
   color: hsl(var(--ov-mut) / 0.85);
-  transition:
-    background-color 0.5s var(--ov-spring),
-    color 0.5s var(--ov-spring);
 }
 .ov-scope .sc-b {
   display: none;
-}
-.ov[data-view='c'] .ov-scope {
-  animation: ov-scope 0.01s linear 4.3s both;
-}
-@keyframes ov-scope {
-  to {
-    background: hsl(var(--primary) / 0.1);
-    box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0.22);
-    color: hsl(var(--ov-blue));
-  }
-}
-.ov[data-view='c'] .ov-scope .sc-a {
-  animation: ov-off 0.01s linear 4.3s both;
-}
-.ov[data-view='c'] .ov-scope .sc-b {
-  display: inline;
-  opacity: 0;
-  animation: ov-on 0.01s linear 4.3s both;
 }
 .ov-pills {
   display: flex;
@@ -626,34 +614,34 @@ button.ov-qa:hover {
   min-height: 1.9em;
   padding: 0.34em 0.5em;
   border-radius: 0.55em;
-  font-size: 0.77em;
+  font-size: max(11px, 0.77em);
   font-weight: 500;
   color: hsl(var(--ov-mut) / 0.85);
   transition:
-    background-color 0.6s var(--ov-spring),
-    color 0.6s var(--ov-spring),
-    box-shadow 0.6s var(--ov-spring);
+    background-color 0.3s var(--ov-spring),
+    color 0.3s var(--ov-spring),
+    box-shadow 0.3s var(--ov-spring);
 }
 .ov[data-view='d'] .ov-pill--notes,
-.ov[data-view='e'] .ov-pill--notes {
+.ov[data-view='e'] .ov-pill--notes,
+.ov--still[data-still='d'] .ov-pill--notes {
   background: hsl(var(--highlight) / 0.2);
   color: hsl(var(--highlight));
   box-shadow:
     0 0 0 1px hsl(var(--highlight) / 0.3),
     0 1px 3px hsl(var(--highlight) / 0.1);
-  transition-delay: 0.5s;
 }
 .ov[data-view='d'] .ov-pill--tools,
-.ov[data-view='e'] .ov-pill--tools {
+.ov[data-view='e'] .ov-pill--tools,
+.ov--still[data-still='d'] .ov-pill--tools {
   background: hsl(var(--primary) / 0.2);
   color: hsl(var(--ov-blue));
   box-shadow:
     0 0 0 1px hsl(var(--primary) / 0.3),
     0 1px 3px hsl(var(--primary) / 0.1);
-  transition-delay: 0.95s;
 }
 
-/* Scope picker popover (open in the "one key" moment) */
+/* Scope picker popover: only the stills (BeatFrame.astro) show it, as a static open list. */
 .ov-pop {
   position: absolute;
   top: 4.9em;
@@ -674,15 +662,9 @@ button.ov-qa:hover {
     transform 0.5s var(--ov-spring),
     visibility 0s linear 0.35s;
 }
-.ov[data-view='c'] .ov-pop {
-  opacity: 1;
-  visibility: visible;
-  transform: none;
-  transition-delay: 4.1s, 4.1s, 0s;
-}
 .ov-pop-h {
   padding: 0.2em 0.55em 0.35em;
-  font-size: 0.75em;
+  font-size: max(11px, 0.75em);
   font-weight: 500;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -694,12 +676,12 @@ button.ov-qa:hover {
   gap: 0.6em;
   padding: 0.4em 0.55em;
   border-radius: 0.55em;
-  font-size: 0.92em;
+  font-size: max(11px, 0.92em);
   color: hsl(var(--foreground) / 0.85);
 }
 .ov-opt small {
   display: block;
-  font-size: 0.82em;
+  font-size: max(11px, 0.82em);
   color: hsl(var(--ov-mut) / 0.8);
 }
 .ov-opt i {
@@ -747,7 +729,7 @@ button.ov-qa:hover {
   border: 0;
   background: transparent;
   font: inherit;
-  font-size: 0.92em;
+  font-size: max(11px, 0.92em);
   color: hsl(var(--foreground) / 0.9);
   outline: none;
 }
@@ -776,7 +758,7 @@ button.ov-qa:hover {
   justify-content: center;
   gap: 0.6em;
   height: 100%;
-  font-size: 0.92em;
+  font-size: max(11px, 0.92em);
   color: hsl(var(--ov-mut) / 0.8);
   text-align: center;
 }
@@ -790,7 +772,7 @@ button.ov-qa:hover {
   border-radius: 0.3em;
   background: hsl(var(--secondary) / 0.4);
   font-family: 'Cascadia Code', 'Fira Code', Consolas, ui-monospace, monospace;
-  font-size: 0.8em;
+  font-size: max(11px, 0.8em);
   color: hsl(var(--foreground) / 0.8);
 }
 .ov-hero-ans > .ov-hs-idle,
@@ -839,14 +821,14 @@ button.ov-qa:hover {
   opacity: 0.8;
 }
 .ov-plab {
-  font-size: 0.77em;
+  font-size: max(11px, 0.77em);
   font-weight: 600;
   color: hsl(var(--ov-blue));
 }
 .ov-phase {
   min-width: 0;
   overflow: hidden;
-  font-size: 0.92em;
+  font-size: max(11px, 0.92em);
   text-overflow: ellipsis;
   white-space: nowrap;
   color: hsl(var(--foreground) / 0.72);
@@ -854,14 +836,14 @@ button.ov-qa:hover {
 .ov-elapsed {
   margin-left: auto;
   font-family: 'Cascadia Code', 'Fira Code', Consolas, ui-monospace, monospace;
-  font-size: 0.77em;
+  font-size: max(11px, 0.77em);
   font-variant-numeric: tabular-nums;
   color: hsl(var(--ov-mut) / 0.8);
 }
 .ov-pdet {
   padding-left: 0.95em;
   margin-top: 0.15em;
-  font-size: 0.77em;
+  font-size: max(11px, 0.77em);
   line-height: 1.35;
   color: hsl(var(--ov-mut) / 0.8);
 }
@@ -876,14 +858,14 @@ button.ov-qa:hover {
   padding: 0.18em 0.7em;
   border-radius: 999px;
   background: hsl(var(--primary) / 0.12);
-  font-size: 0.77em;
+  font-size: max(11px, 0.77em);
   font-weight: 500;
   color: hsl(var(--ov-blue));
 }
 .ov-timing {
   min-width: 0;
   overflow: hidden;
-  font-size: 0.77em;
+  font-size: max(11px, 0.77em);
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -895,7 +877,7 @@ button.ov-qa:hover {
 }
 .ov-ans {
   display: none;
-  font-size: 0.92em;
+  font-size: max(11px, 0.92em);
   line-height: 1.6;
   color: #d4d4d8;
 }
@@ -937,27 +919,9 @@ button.ov-qa:hover {
   list-style: none;
 }
 .ov-act li {
-  font-size: 0.77em;
+  font-size: max(11px, 0.77em);
   line-height: 1.5;
   color: hsl(var(--ov-mut) / 0.9);
-}
-.ov[data-view='d'] .ov-act li {
-  animation: ov-in 0.5s var(--ov-spring) both;
-  animation-delay: calc(0.5s + var(--i, 0) * 0.55s);
-}
-.ov[data-view='d'] .ov-ans--static,
-.ov[data-view='e'] .ov-ans--static {
-  animation: ov-in 0.6s var(--ov-spring) both;
-  animation-delay: 2.3s;
-}
-.ov[data-view='e'] .ov-act li,
-.ov[data-view='e'] .ov-ans--static,
-.ov[data-view='e'] .ov-chip2 {
-  animation: none;
-}
-.ov[data-view='d'] .ov-chip2 {
-  animation: ov-in 0.5s var(--ov-spring) both;
-  animation-delay: 2.7s;
 }
 .ov-chips {
   display: flex;
@@ -974,7 +938,7 @@ button.ov-qa:hover {
   gap: 0.3em;
   padding: 0.18em 0.65em;
   border-radius: 999px;
-  font-size: 0.77em;
+  font-size: max(11px, 0.77em);
   font-weight: 500;
 }
 .ov-chip2--notes {
@@ -1005,7 +969,7 @@ button.ov-qa:hover {
   border: 1px solid color-mix(in srgb, var(--c) 25%, transparent);
   border-radius: 999px;
   background: color-mix(in srgb, var(--c) 9%, transparent);
-  font-size: 0.92em;
+  font-size: max(11px, 0.92em);
   font-weight: 500;
   color: hsl(var(--foreground) / 0.9);
   white-space: nowrap;
@@ -1030,13 +994,13 @@ button.ov-qa:hover {
   min-width: 3.6em;
 }
 .ov-who2 {
-  font-size: 0.8em;
+  font-size: max(11px, 0.8em);
   font-weight: 600;
   letter-spacing: 0.03em;
   color: var(--c);
 }
 .ov-sub {
-  font-size: 0.8em;
+  font-size: max(11px, 0.8em);
   color: hsl(var(--foreground) / 0.65);
 }
 .ov-fsep {
@@ -1050,48 +1014,45 @@ button.ov-qa:hover {
   gap: 0.28em;
   padding: 0.2em 0.55em;
   border-radius: 999px;
-  font-size: 0.77em;
+  font-size: max(11px, 0.77em);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   color: hsl(var(--ov-mut) / 0.9);
 }
-.ov-lang .l-rs,
-.ov-lang .l-es {
-  display: none;
-}
-.ov[data-view='a'] .ov-lang--them {
+/* The side's language chip (SideLanguagePicker.tsx): EN and ES share one cell; beat a shows ES. */
+.ov-lg {
   display: inline-grid;
-  grid-template-columns: auto auto;
+}
+.ov-lg > span {
+  grid-area: 1 / 1;
+}
+.ov-lg .l-es {
+  opacity: 0;
+}
+.ov-lang--them {
+  transition: background-color 0.3s var(--ov-spring);
+}
+.ov[data-view='a'] .ov-lang--them,
+.ov--still[data-still='a'] .ov-lang--them {
   background: hsl(var(--muted) / 0.5);
   color: hsl(var(--foreground) / 0.9);
 }
-.ov[data-view='a'] .ov-lang--them .ov-i {
-  margin-right: 0.3em;
-}
-.ov[data-view='a'] .ov-lang--them > span {
-  grid-column: 2;
-  grid-row: 1;
-}
-.ov[data-view='a'] .ov-lang--them .l-rs,
-.ov[data-view='a'] .ov-lang--them .l-es {
-  display: inline;
+.ov[data-view='a'] .ov-lg .l-en,
+.ov--still[data-still='a'] .ov-lg .l-en {
   opacity: 0;
 }
-.ov[data-view='a'] .l-en {
-  animation: ov-off 0.01s linear 1s both;
+.ov[data-view='a'] .ov-lg .l-es,
+.ov--still[data-still='a'] .ov-lg .l-es {
+  opacity: 1;
 }
-.ov[data-view='a'] .l-rs {
-  animation: ov-rs 2.2s linear both;
+
+.ov-trt {
+  padding-top: 0.25em;
 }
-.ov[data-view='a'] .l-es {
-  animation: ov-on 0.01s linear 2.2s both;
-}
-.ov[data-view='a'] .ov-trl {
-  animation: ov-in 0.6s var(--ov-spring) both;
-  animation-delay: 2.5s;
-}
-.ov[data-view='a'] .ov-line:nth-child(3) .ov-trl {
-  animation-delay: 3s;
+/* Translation row: its own row that opens (0fr to 1fr), so nothing is reserved before it shows. */
+.ov-trw {
+  display: grid;
+  grid-template-rows: 1fr;
 }
 
 @keyframes ov-ping {
@@ -1113,43 +1074,102 @@ button.ov-qa:hover {
   from { opacity: 0; transform: translate3d(0, 0.35em, 0); }
   to { opacity: 1; transform: none; }
 }
-@keyframes ov-on {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-@keyframes ov-rs {
-  0%, 45% { opacity: 0; }
-  46%, 99% { opacity: 1; }
-  100% { opacity: 0; }
-}
-@keyframes ov-off {
+
+/* ─── The one visible change of each beat. Plays once, ends on the beat's normal state. ───
+   Pinned overlay: `data-play` lists the beats already shown (callDemo.ts adds one the first time).
+   Stills (phones): `.is-play` is added when the still scrolls into view; until then the animations
+   wait paused on their first frame, so there is no flash of the finished state.
+   Every change starts after the moment has faded in and lasts under 1.2 s. */
+@keyframes ov-hide {
   from { opacity: 1; }
   to { opacity: 0; }
 }
-@keyframes ov-key {
-  0% { opacity: 0; transform: translate3d(-50%, 0.3em, 0); }
-  22%, 72% { opacity: 1; transform: translate3d(-50%, 0, 0); }
-  100% { opacity: 0; transform: translate3d(-50%, 0, 0); }
+@keyframes ov-show {
+  from { opacity: 0; }
+}
+@keyframes ov-chip {
+  from { background-color: transparent; }
+}
+@keyframes ov-trw {
+  from { grid-template-rows: 0fr; opacity: 0; }
 }
 @keyframes ov-lit {
-  0% { background: transparent; box-shadow: none; }
-  30%, 60% {
+  0%, 100% { background: transparent; box-shadow: none; color: hsl(var(--ov-mut) / 0.85); }
+  35%, 60% {
     background: hsl(var(--primary) / 0.2);
-    color: hsl(var(--primary));
+    color: hsl(var(--ov-blue));
     box-shadow: 0 0 0 1px hsl(var(--primary) / 0.3);
   }
-  100% { background: transparent; box-shadow: none; }
+}
+@keyframes ov-lit-keep {
+  0% { background: transparent; box-shadow: none; color: hsl(var(--ov-mut) / 0.85); }
+}
+@keyframes ov-pill-off {
+  from { background: transparent; box-shadow: none; color: hsl(var(--ov-mut) / 0.85); }
+}
+.ov-line:nth-child(3) .ov-trw {
+  --n: 1;
+}
+@media (prefers-reduced-motion: no-preference) {
+  /* a: the other side's language switches from EN to ES, and the translations open under their lines */
+  :is(.ov[data-play~='a'], .js .ov--still[data-still='a']) .ov-lg .l-en {
+    animation: ov-hide 0.3s var(--ov-spring) 0.35s backwards;
+  }
+  :is(.ov[data-play~='a'], .js .ov--still[data-still='a']) .ov-lg .l-es {
+    animation: ov-show 0.3s var(--ov-spring) 0.35s backwards;
+  }
+  :is(.ov[data-play~='a'], .js .ov--still[data-still='a']) .ov-lang--them {
+    animation: ov-chip 0.3s var(--ov-spring) 0.35s backwards;
+  }
+  :is(.ov[data-play~='a'], .js .ov--still[data-still='a']) .ov-trw {
+    animation: ov-trw 0.5s var(--ov-spring) backwards;
+    animation-delay: calc(0.55s + var(--n, 0) * 0.12s);
+  }
+  /* b (stills): the question card arrives. On the pinned overlay the moment's own fade-in is the change. */
+  .js .ov--still[data-still='b'] .ov-qrow {
+    animation: ov-in 0.5s var(--ov-spring) 0.25s backwards;
+  }
+  /* c: the action keys light one after the other, 1 to 5, and the answer's own action stays lit */
+  :is(.ov[data-play~='c'], .js .ov--still[data-still='c']) .ov-mode {
+    animation: ov-lit 0.4s var(--ov-spring) backwards;
+    animation-delay: calc(0.35s + var(--k, 0) * 0.1s);
+  }
+  :is(.ov[data-play~='c'], .js .ov--still[data-still='c']) .ov-mode[data-mode-btn='Shorten'] {
+    animation-name: ov-lit-keep;
+  }
+  :is(.ov[data-play~='c'], .js .ov--still[data-still='c']) .ov-key {
+    animation: ov-show 0.3s var(--ov-spring) backwards;
+    animation-delay: calc(0.35s + var(--k, 0) * 0.1s);
+  }
+  /* d: Notes, then Tools, switch on */
+  :is(.ov[data-play~='d'], .js .ov--still[data-still='d']) .ov-pill {
+    animation: ov-pill-off 0.4s var(--ov-spring) 0.4s backwards;
+  }
+  :is(.ov[data-play~='d'], .js .ov--still[data-still='d']) .ov-pill--tools {
+    animation-delay: 0.65s;
+  }
+  .js .ov--still:not(.is-play),
+  .js .ov--still:not(.is-play) * {
+    animation-play-state: paused;
+  }
 }
 
-/* ─── One column below 560px of container width, at a readable size ─── */
-@container (max-width: 519px) {
+/* A narrow window has no room for the key caps next to the labels: the buttons still light in turn. */
+@container (max-width: 559px) {
+  .ov-key {
+    display: none !important;
+  }
+}
+
+/* ─── One column below 460px of container width, at a readable size ─── */
+@container (max-width: 459px) {
   .ov {
     --ov-fs: 12.5px;
-    height: 41em;
+    height: 52em;
   }
   .ov-body {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1.15fr) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 16.5em) minmax(0, 1fr);
   }
   .ov-head {
     padding: 0.5em 0.7em;
@@ -1159,9 +1179,6 @@ button.ov-qa:hover {
   .ov-wide,
   .ov-tbtn,
   .ov-sep {
-    display: none;
-  }
-  .ov-key {
     display: none;
   }
 }
@@ -1223,15 +1240,23 @@ button.ov-qa:hover {
   }
 }
 
-/* ─── Stills (BeatFrame.astro): the same pieces, cropped, nothing moving ─── */
+/* ─── Frames: the small stealth overlay never moves; the stills (BeatFrame.astro) play only their beat's one change ─── */
+.ov--mini *,
+.ov--mini *::before,
+.ov--mini *::after {
+  animation: none !important;
+}
 .ov--frame *,
 .ov--frame *::before,
 .ov--frame *::after {
-  animation: none !important;
   transition: none !important;
 }
 .ov--frame .ov-ping i {
   display: none;
+}
+.ov--still .ov-qdot,
+.ov--still .ov-caret {
+  animation: none;
 }
 .ov--still {
   display: block;
@@ -1261,13 +1286,6 @@ button.ov-qa:hover {
   visibility: visible;
   transform: none;
 }
-.ov--still .ov-key {
-  position: static;
-  display: inline-block;
-  margin-left: 0.2em;
-  opacity: 1;
-  transform: none;
-}
 .ov--still .ov-mode {
   padding-right: 0.45em;
 }
@@ -1280,13 +1298,8 @@ button.ov-qa:hover {
   box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0.22);
   color: hsl(var(--ov-blue));
 }
-.ov--still .ov-lang--them {
-  background: hsl(var(--muted) / 0.5);
-  color: hsl(var(--foreground) / 0.9);
-}
-.ov--still .ov-lang--them .l-es {
-  display: inline;
-  opacity: 1 !important;
+.ov--still[data-still='c'] .ov-scope .sc-a {
+  display: none;
 }
 .ov--still .ov-resp--still {
   padding: 0.8em;

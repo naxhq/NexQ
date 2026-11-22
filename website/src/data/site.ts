@@ -96,8 +96,12 @@ export const TRANSLATION_PROVIDERS: { name: string; where: 'cloud' | 'device' | 
   { name: 'OPUS-MT', where: 'device', note: 'Offline models you download once.' },
 ];
 
-/** The headline numbers. Keep in step with the lists above and README's compare table. */
-export const COUNTS = { stt: 11, llm: 9, translation: 5 } as const;
+/** The headline numbers, counted from the lists above so they cannot drift (README's compare table says 11 and 9). */
+export const COUNTS = {
+  stt: STT_PROVIDERS.length,
+  llm: LLM_PROVIDERS.length,
+  translation: TRANSLATION_PROVIDERS.length,
+};
 
 /** Speech engines that offer language auto-detect (src/lib/autoDetectCases.json). */
 export const AUTO_DETECT_ENGINES = [
@@ -191,7 +195,7 @@ export const FAQ: { q: string; a: string }[] = [
   },
   {
     q: 'Can other people see NexQ when I share my screen?',
-    a: 'With Hide from screen share on, the overlay stays on your screen and is kept out of screen shares, recordings and screenshots. On Windows 10 version 2004 or later this works with the usual tools. On macOS 14 and later, some recorders that use ScreenCaptureKit can still capture NexQ, so try a test share first. Please check that using NexQ is allowed in your call or exam.',
+    a: 'With Hide from screen share on, the overlay stays on your screen and is kept out of screen shares, recordings and screenshots. On Windows 10 version 2004 or later this works with the usual tools. On macOS 14 and later, some recorders that use ScreenCaptureKit can still capture NexQ, so try a test share first. Please check that using NexQ is allowed in your call.',
   },
   {
     q: 'Which platforms are supported?',

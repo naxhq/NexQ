@@ -1,6 +1,6 @@
 ---
 /**
- * #privacy: "Private by design". A typographic list of claims, each backed by the repo:
+ * #privacy: "Nothing leaves unless you choose it". A typographic list of claims, each backed by the repo:
  *   no bot, audio on your device ........ README.md L40 ("Audio is captured on your machine ... No bot joins your call"),
  *                                         docs FAQ in data/site.ts
  *   you decide where data goes .......... README.md L216 ("Nothing leaves your machine unless you choose a cloud provider")
@@ -24,7 +24,7 @@ const ROWS: { k: string; h: string; p: string; link?: { href: string; label: str
     p: 'NexQ captures audio on your own device, from your microphone and your system audio. Nobody is added to the meeting, so it works with any meeting app.',
   },
   {
-    k: 'routing',
+    k: 'choice',
     h: 'You decide where your words go.',
     p: 'Pair an on-device speech engine with Ollama or LM Studio and nothing leaves your computer. Pick a cloud provider and it receives only what you send it.',
     link: { href: '#ai', label: 'See the options' },
@@ -61,9 +61,8 @@ const ROWS: { k: string; h: string; p: string; link?: { href: string; label: str
 <section id={SECTION.privacy} class="section" aria-labelledby="privacy-title">
   <div class="wrap pv">
     <div class="pv-intro">
-      <p class="eyebrow">throughout</p>
-      <h2 id="privacy-title" class="h2 mt-3">Private by design</h2>
-      <p class="lede">Your calls are yours. NexQ is built so that you can check that, not just take our word for it.</p>
+      <h2 id="privacy-title" class="h2">Nothing leaves unless you choose it</h2>
+      <p class="lede">Your calls are yours, and the code is open, so you can check that instead of taking our word for it.</p>
       <p class="pv-note">
         Please tell the other people on the call that you are transcribing it. Many places require it.
       </p>
@@ -123,8 +122,8 @@ const ROWS: { k: string; h: string; p: string; link?: { href: string; label: str
   }
   .pv-k {
     padding-top: 0.5rem;
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
     color: hsl(var(--muted-foreground));
   }
   .pv-h {

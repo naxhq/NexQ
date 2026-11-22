@@ -12,19 +12,16 @@ import './overlay.css';
 import OvIcon from './OvIcon.astro';
 import OvLine from './OvLine.astro';
 import {
-  HERO_LINES, HERO_QUESTION, A_LINES, B_LINES, B_QUESTION, D_LINES, D_QUESTION,
-  ANSWERS, C_ANSWER, D_ANSWER, tokens, mmss, TIMES,
+  HERO_QUESTION, A_LINES, B_LINES, B_QUESTION, D_LINES, D_QUESTION,
+  ANSWERS, C_ANSWER, D_ANSWER, MODES, tokens, mmss, TIMES,
 } from './content';
+import type { Line } from './content';
 
-// Order, labels and keys: src/stores/aiActionsStore.ts L96-141, src/overlay/ModeButtons.tsx L29-48.
-const MODES = [
-  { mode: 'Assist', label: 'Assist', icon: 'sparkles', key: 'Space', aria: 'Assist (Space)' },
-  { mode: 'WhatToSay', label: 'Say', icon: 'message', key: '1', aria: 'Say (1)' },
-  { mode: 'Shorten', label: 'Short', icon: 'scissors', key: '2', aria: 'Short (2)' },
-  { mode: 'FollowUp', label: 'F/U', icon: 'corner', key: '3', aria: 'F/U (3)' },
-  { mode: 'Recap', label: 'Recap', icon: 'list', key: '4', aria: 'Recap (4)' },
-  { mode: 'AskQuestion', label: 'Ask', icon: 'help', key: '5', aria: 'Ask (5)' },
-];
+interface Props {
+  /** The hero transcript, laid onto the release wave's phrases (planHero in content.ts). */
+  heroLines: Line[];
+}
+const { heroLines } = Astro.props;
 ---
 
 <div class="ov-fit">
@@ -32,8 +29,7 @@ const MODES = [
     class="ov nx-glass"
     id="nx-overlay"
     role="group"
-    tabindex="0"
-    aria-label="Sample conversation: a rebuilt NexQ overlay. Press Space, or keys 1 to 5, while it has focus."
+    aria-label="Sample conversation, a rebuilt NexQ overlay"
     data-view="h1"
     data-ans="done"
     data-mode="Assist"
@@ -44,8 +40,8 @@ const MODES = [
       <div class="ov-hl">
         <svg class="ov-grip" viewBox="0 0 12 12" aria-hidden="true"><g fill="currentColor"><circle cx="2.5" cy="4" r="1" /><circle cx="6" cy="4" r="1" /><circle cx="9.5" cy="4" r="1" /><circle cx="2.5" cy="8" r="1" /><circle cx="6" cy="8" r="1" /><circle cx="9.5" cy="8" r="1" /></g></svg>
         <span class="ov-title">NexQ</span>
-        <span class="ov-rec" role="status" aria-label="Recording in progress"><span class="ov-ping" aria-hidden="true"><i></i><b></b></span>REC</span>
-        <span class="ov-badge" aria-label="Online meeting">ONLINE</span>
+        <span class="ov-rec"><span class="ov-ping" aria-hidden="true"><i></i><b></b></span>REC</span>
+        <span class="ov-badge">ONLINE</span>
         <span class="ov-time" data-timer>{mmss(TIMES.h)}</span>
       </div>
       <div class="ov-hr" aria-hidden="true">
@@ -63,7 +59,7 @@ const MODES = [
       <section class="ov-panel ov-trp" aria-label="Transcript">
         <div class="ov-ph" aria-hidden="true">Transcript</div>
         <div class="ov-lines">
-          <div class="ov-g" data-for="h0 h1">{HERO_LINES.map((l) => <OvLine line={l} live />)}</div>
+          <div class="ov-g" data-for="h0 h1">{heroLines.map((l) => <OvLine line={l} live />)}</div>
           <div class="ov-g" data-for="a">{A_LINES.map((l) => <OvLine line={l} />)}</div>
           <div class="ov-g" data-for="b c">{B_LINES.map((l) => <OvLine line={l} />)}</div>
           <div class="ov-g" data-for="d e">{D_LINES.map((l) => <OvLine line={l} />)}</div>
@@ -108,7 +104,7 @@ const MODES = [
         <section class="ov-panel ov-ai" aria-label="AI answer">
           <div class="ov-modes">
             {MODES.map((m) => (
-              <button type="button" class="ov-mode" data-mode-btn={m.mode} aria-label={m.aria} aria-pressed="false">
+              <button type="button" class="ov-mode" data-mode-btn={m.mode} aria-label={m.label === m.name ? `${m.name}, key ${m.key}` : `${m.label}, ${m.name}, key ${m.key}`} aria-pressed="false">
                 <OvIcon name={m.icon} class="ov-i ov-i--s" /><span>{m.label}</span><kbd class="ov-key" aria-hidden="true">{m.key}</kbd>
               </button>
             ))}
@@ -137,11 +133,11 @@ const MODES = [
                 </div>
                 <div class="ov-prog ov-hs-run" role="status" aria-live="off">
                   <div class="ov-progr"><i class="ov-pdot"></i><span class="ov-plab" data-prog-label>Assist</span><span class="ov-phase" data-phase>Sending…</span><span class="ov-elapsed" data-elapsed aria-hidden="true">0.0 s</span></div>
-                  <p class="ov-pdet">Sonnet · Claude · 3 new transcript lines sent</p>
+                  <p class="ov-pdet">Haiku · Claude · 3 new transcript lines sent</p>
                 </div>
                 <div class="ov-head2 ov-hs-done">
                   <span class="ov-badge2" data-done-label>Assist</span>
-                  <span class="ov-timing" data-done-timing>2.9 s · first words 0.8 s</span>
+                  <span class="ov-timing" data-done-timing>2.1 s · first words 0.7 s</span>
                   <span class="ov-copy" aria-hidden="true"><OvIcon name="copy" class="ov-i ov-i--s" /></span>
                 </div>
                 <div class="ov-anss">
@@ -170,7 +166,7 @@ const MODES = [
                   {D_ANSWER.activity.map((a, i) => <li style={`--i:${i}`}>{a}</li>)}
                 </ul>
                 <p class="ov-ans ov-ans--static">{tokens(D_ANSWER.text).map((t) => <span class={t.b ? 'b' : ''}>{t.w} </span>)}</p>
-                <div class="ov-chips" aria-label="Sources used">
+                <div class="ov-chips" role="group" aria-label="Sources used">
                   {D_ANSWER.chips.map((c) => (
                     <span class={c.kind === 'notes' ? 'ov-chip2 ov-chip2--notes' : 'ov-chip2 ov-chip2--tool'}>
                       <OvIcon name={c.kind === 'notes' ? 'book' : 'wrench'} class="ov-i ov-i--s" />{c.label}
@@ -180,28 +176,19 @@ const MODES = [
               </div>
             </div>
           </div>
-
-          <!-- Scope picker, open: ContextScopePicker.tsx L26-40 (labels), L214-232 -->
-          <div class="ov-pop" aria-hidden="true">
-            <p class="ov-pop-h">Focus the next answers on</p>
-            <div class="ov-opt"><i></i><span>Action default<small>Claude decides from the whole meeting</small></span></div>
-            <div class="ov-opt"><i></i><span>Since last answer<small>New talk since any answer</small></span></div>
-            <div class="ov-opt is-on"><i></i><span>Last 5 min</span></div>
-            <div class="ov-opt"><i></i><span>Whole meeting<small>Everything said so far</small></span></div>
-          </div>
         </section>
       </div>
     </div>
 
-    <!-- Footer status bar: src/components/ServiceStatusBar.tsx (compact), SideLanguagePicker.tsx -->
-    <div class="ov-foot" aria-label="Services">
-      <span class="ov-svc ov-svc--ai"><i class="ov-sdot"></i><OvIcon name="brain" class="ov-i ov-i--s" /><span>Claude</span><span class="ov-sub">Sonnet</span></span>
+    <!-- Footer status bar: src/components/ServiceStatusBar.tsx (compact), SideLanguagePicker.tsx (the chip shows the side's language) -->
+    <div class="ov-foot" role="group" aria-label="Services">
+      <span class="ov-svc ov-svc--ai"><i class="ov-sdot"></i><OvIcon name="brain" class="ov-i ov-i--s" /><span>Claude</span><span class="ov-sub">Haiku</span></span>
       <span class="ov-fsep"></span>
       <span class="ov-svc ov-svc--you"><i class="ov-sdot"></i><span class="ov-who2">YOU</span><span>Deepgram</span></span>
       <span class="ov-lang"><OvIcon name="languages" class="ov-i ov-i--s" /><span>EN</span></span>
       <span class="ov-fsep"></span>
       <span class="ov-svc ov-svc--them"><i class="ov-sdot"></i><span class="ov-who2">THEM</span><span>Deepgram</span></span>
-      <span class="ov-lang ov-lang--them"><OvIcon name="languages" class="ov-i ov-i--s" /><span class="l-en">EN</span><span class="l-rs">Restarting…</span><span class="l-es">ES</span></span>
+      <span class="ov-lang ov-lang--them"><OvIcon name="languages" class="ov-i ov-i--s" /><span class="ov-lg"><span class="l-en">EN</span><span class="l-es">ES</span></span></span>
     </div>
 
     <p class="sr-only" aria-live="polite" data-sr></p>

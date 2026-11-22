@@ -86,6 +86,22 @@ export const CURRENT_VERSION: string = JSON.parse(
   fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'),
 ).version;
 
+// Build-time checks: a stale or mistyped data file should fail the build, not ship a wrong page.
+const minor = (v: string) => v.split('.').slice(0, 2).join('.');
+if (RELEASES.length === 0) {
+  throw new Error('releases.ts: no releases parsed from CHANGELOG.md (is the format still "## [x.y.z]" with a "New" section?)');
+}
+for (const key of Object.keys(RELEASE_ONELINERS)) {
+  if (!RELEASES.some((r) => r.version === key)) {
+    throw new Error(`releases.ts: RELEASE_ONELINERS has "${key}" but CHANGELOG.md has no such release with new features. Fix or remove it in data/site.ts.`);
+  }
+}
+if (minor(RELEASES[0].version) !== minor(CURRENT_VERSION)) {
+  throw new Error(
+    `releases.ts: the newest release with features is v${RELEASES[0].version}, but package.json is v${CURRENT_VERSION}. The timeline would not show the current minor release.`,
+  );
+}
+
 /**
  * The release's waveform: bar heights 0..1, the same shape the app's update dialog and
  * installer show for that version. Seed with the full version string ("2.41.2").

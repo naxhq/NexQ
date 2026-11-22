@@ -3,21 +3,26 @@
  *
  *  - Hero: the opening plays once (transcript words follow the release wave's playhead), then it HOLDS
  *    on the detected question. Assist (button, Space or 1-5 while the demo has focus) streams an answer.
- *  - Beats: an IntersectionObserver on the beat text sets which moment of the overlay shows
- *    (`data-view` on .ov); CSS does all the transitions.
+ *  - Beats (900px and up): scrolling drives the call. One passive, rAF-throttled scroll handler reads
+ *    where the middle of the screen sits among the beats (rects are measured once, on the first scroll,
+ *    and again only after a resize), then picks the moment (`data-view` on .ov), sets the header timer
+ *    and, where CSS scroll-driven animations are missing, the call-progress line. A beat's one visible
+ *    change plays the first time it is shown (`data-play`) and never again.
+ *  - Phones: no pin. Each still in a beat plays its change once when it scrolls into view.
  *  - The loop only runs while the demo is on screen, the tab is visible and nothing is paused.
  *
  * All text lives in the HTML (content.ts renders it), so this file only moves attributes and
  * reveals words. Without JavaScript, and under reduced motion, the HTML is already the final state.
  */
+import { HERO_SECONDS, MODES, mmss } from '../components/overlay/content';
+import { detectOS } from './os';
 
-const HERO_MS = 11500;
-const HERO_SECONDS = 38;
-// Boundaries between sending, waiting, thinking and writing (ms).
-const PHASES_ASSIST = [450, 1050, 1800];
-const PHASES_QUICK = [300, 600, 900];
+const HERO_MS = 8000;
+// Boundaries between sending, waiting, thinking and writing (ms). The demo answers on the Fast tier
+// (Haiku): first words in under a second.
+const PHASES_ASSIST = [250, 450, 700];
+const PHASES_QUICK = [200, 350, 500];
 const WORD_MS = 70;
-const MODES = ['Assist', 'WhatToSay', 'Shorten', 'FollowUp', 'Recap', 'AskQuestion'];
 const PHASE_TEXT: Record<string, string> = {
   sending: 'Sending…',
   waiting: 'Waiting for the first words…',
@@ -26,13 +31,12 @@ const PHASE_TEXT: Record<string, string> = {
 };
 const HINT = {
   wait: 'Listening to the call',
-  hold: 'Question caught. Click Assist, or press Space in the overlay.',
+  hold: 'Question caught. Click Assist or press Space.',
   run: 'Answering',
-  done: 'Try Say, Short, F/U or Recap, or keys 1 to 4 in the overlay.',
+  done: 'Try another action, or keys 1 to 4 in the overlay.',
 };
 
 const clamp = (v: number, a = 0, b = 1) => Math.min(b, Math.max(a, v));
-const mmss = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 const secs = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
 
 interface HeroLine {
@@ -53,6 +57,12 @@ interface Run {
   shown: number;
   phase: string;
   lastElapsed: number;
+}
+interface Span {
+  id: string;
+  top: number;
+  bottom: number;
+  t: number;
 }
 
 function init(stage: HTMLElement) {
@@ -78,12 +88,14 @@ function init(stage: HTMLElement) {
   const pauseBtn = $<HTMLButtonElement>('[data-pause]');
   const toggle = $<HTMLButtonElement>('[data-stealth-toggle]');
   const statusEl = $('[data-stealth-status]');
+  const callLine = $('.nx-callline');
   const modeBtns = [...ov.querySelectorAll<HTMLButtonElement>('[data-mode-btn]')];
-  const timeOf = (el: Element | null, d = 0) => Number((el as HTMLElement | null)?.dataset.t ?? d);
+  // The keys and the card's Assist only belong to the hero moment (see setActive).
+  const heroOnly = [$('.ov-modes', ov), $('.ov-qa[data-assist]', ov)];
+  const beats = [...stage.querySelectorAll<HTMLElement>('[data-beat-id]')];
 
   // OS-aware download label (the link is the same for both: the latest release).
-  const ua = navigator.userAgent;
-  if (/Macintosh|Mac OS X/.test(ua) && !/iPhone|iPad|iPod/.test(ua) && navigator.maxTouchPoints < 2) {
+  if (detectOS() === 'mac') {
     stage.querySelectorAll<HTMLElement>('[data-os="win"]').forEach((n) => (n.hidden = true));
     stage.querySelectorAll<HTMLElement>('[data-os="mac"]').forEach((n) => (n.hidden = false));
   }
@@ -103,9 +115,11 @@ function init(stage: HTMLElement) {
   let run: Run | null = null;
   let raf = 0;
   let last = 0;
-  let timerCur = reduce ? HERO_SECONDS : 0;
+  let scrollT = HERO_SECONDS; // meeting time the scroll position stands for (seconds)
   let timerShown = '';
   let stealthTouched = false;
+  let interacted = false; // the visitor has used the demo: only then do we speak up in the live region
+  const played = new Set<string>();
 
   // ── Hero transcript ──
   const lines: HeroLine[] = [...ov.querySelectorAll<HTMLElement>('.ov-line[data-live]')].map((el) => {
@@ -126,6 +140,16 @@ function init(stage: HTMLElement) {
   const heroView = () => (p >= 1 ? 'h1' : 'h0');
   const viewNow = () => (active === 'h' ? heroView() : active);
 
+  // ── Header timer: the opening plays it, then the scroll position sets it ──
+  function renderTimer() {
+    const t = active === 'h' && p < 1 ? p * HERO_SECONDS : scrollT;
+    const s = mmss(t);
+    if (timerEl && s !== timerShown) {
+      timerShown = s;
+      timerEl.textContent = s;
+    }
+  }
+
   function applyHero() {
     for (const l of lines) {
       const f = clamp((p - l.from) / (l.to - l.from));
@@ -141,11 +165,12 @@ function init(stage: HTMLElement) {
       l.tail.textContent = (fin > 0 && shown > fin ? ' ' : '') + l.words.slice(fin, shown).join(' ');
     }
     wave?.style.setProperty('--progress', p.toFixed(3));
+    renderTimer();
     const v = viewNow();
     if (active === 'h' && ov.dataset.view !== v) {
       ov.dataset.view = v;
       if (v === 'h1') {
-        say(`Question detected: ${heroQuestion}`);
+        if (interacted) say(`Question detected: ${heroQuestion}`);
         hint(HINT.hold);
       }
     }
@@ -241,22 +266,9 @@ function init(stage: HTMLElement) {
     }
   }
 
-  // ── Timer in the overlay header ──
-  const timerTarget = () => (active === 'h' ? p * HERO_SECONDS : timeOf($(`[data-beat-id="${active}"]`)));
-  function stepTimer(dt: number) {
-    const target = timerTarget();
-    if (reduce || Math.abs(target - timerCur) < 0.4) timerCur = target;
-    else timerCur += (target - timerCur) * (1 - Math.exp(-dt / 260));
-    const s = mmss(timerCur);
-    if (timerEl && s !== timerShown) {
-      timerShown = s;
-      timerEl.textContent = s;
-    }
-  }
-
-  // ── The loop ──
+  // ── The loop: the hero opening and a streaming answer ──
   const running = () => !paused && onScreen && !document.hidden;
-  const busy = () => p < 1 || !!run || Math.abs(timerTarget() - timerCur) >= 0.4;
+  const busy = () => p < 1 || !!run;
   function frame(t: number) {
     raf = 0;
     const dt = Math.min(64, t - last);
@@ -267,7 +279,6 @@ function init(stage: HTMLElement) {
       applyHero();
     }
     stepRun(dt);
-    stepTimer(dt);
     if (busy()) raf = requestAnimationFrame(frame);
   }
   function kick() {
@@ -277,44 +288,105 @@ function init(stage: HTMLElement) {
   }
 
   // ── Which moment shows (beats) ──
+  let autoStealthTimer = 0;
   function setActive(next: string) {
     if (!wide.matches) next = 'h';
     if (next === active) return;
     active = next;
     stage.dataset.beat = next;
-    ov!.dataset.view = viewNow();
-    const h = next === 'h' ? (p >= 1 ? HINT.hold : HINT.wait) : $(`[data-beat-id="${next}"]`)?.dataset.hint;
+    ov.dataset.view = viewNow();
+    // A beat's one visible change plays the first time it is shown, and never again.
+    if (next !== 'h' && !reduce && !played.has(next)) {
+      played.add(next);
+      ov.dataset.play = [...played].join(' ');
+    }
+    const heroNow = next === 'h';
+    for (const el of heroOnly) el?.toggleAttribute('inert', !heroNow);
+    ov.tabIndex = heroNow ? 0 : -1;
+    for (const b of beats) b.classList.toggle('is-active', b.dataset.beatId === next);
+    const h = heroNow ? (p >= 1 ? HINT.hold : HINT.wait) : $(`[data-beat-id="${next}"]`)?.dataset.hint;
     if (h) hint(h);
+    // The stealth beat switches Hide from screen share on once, so the change is seen.
+    clearTimeout(autoStealthTimer);
+    if (next === 'e') autoStealthTimer = window.setTimeout(autoStealth, 1000);
+    renderTimer();
     kick();
   }
 
-  const beats = [...stage.querySelectorAll<HTMLElement>('[data-beat-id]')];
-  let current = 'h';
-  const inBand = new Set<string>();
-  const hero = $('#hero');
+  // Scroll position -> moment, meeting time and call progress. Rects are measured once (on the first
+  // scroll) and again only after a resize or a layout change; a scroll frame reads scrollY and nothing else.
+  let spans: Span[] = [];
+  let callTop = 0;
+  let dirty = true;
+  const cssLine = () => wide.matches && !reduce && CSS.supports('animation-timeline: view()') && CSS.supports('timeline-scope: --nx-beats');
+  function measure() {
+    const sy = window.scrollY;
+    callTop = ($('#call')?.getBoundingClientRect().top ?? 0) + sy;
+    spans = beats.map((b) => {
+      const r = b.getBoundingClientRect();
+      return { id: b.dataset.beatId!, top: r.top + sy, bottom: r.bottom + sy, t: Number(b.dataset.t) };
+    });
+    dirty = false;
+  }
+  function syncScroll() {
+    if (!wide.matches) {
+      setActive('h');
+      return;
+    }
+    if (dirty) measure();
+    if (!spans.length) return;
+    const mid = window.scrollY + window.innerHeight / 2; // the middle of the screen, in page coordinates
+    const here = spans.find((s) => mid >= s.top && mid < s.bottom) ?? (mid >= spans[spans.length - 1].bottom ? spans[spans.length - 1] : null);
+    // Meeting time: HERO_SECONDS above the call, then straight lines between each beat's centre and its stamp.
+    let t = HERO_SECONDS;
+    let prevY = callTop;
+    let prevT = HERO_SECONDS;
+    for (const s of spans) {
+      const y = (s.top + s.bottom) / 2;
+      if (mid <= y) {
+        t = mid <= prevY ? prevT : prevT + ((mid - prevY) / (y - prevY)) * (s.t - prevT);
+        break;
+      }
+      prevY = y;
+      prevT = s.t;
+      t = s.t;
+    }
+    scrollT = t;
+    if (callLine && !cssLine()) {
+      const span = spans[spans.length - 1].bottom - spans[0].top;
+      callLine.style.setProperty('--call-p', clamp((mid - spans[0].top) / span).toFixed(3));
+    }
+    setActive(here?.id ?? 'h');
+    renderTimer();
+  }
+  let ticking = false;
+  const onScroll = () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      ticking = false;
+      syncScroll();
+    });
+  };
+  window.addEventListener('scroll', onScroll, { passive: true });
+  window.addEventListener(
+    'resize',
+    () => {
+      dirty = true;
+      onScroll();
+    },
+    { passive: true },
+  );
+  wide.addEventListener('change', () => {
+    dirty = true;
+    if (wide.matches) onScroll();
+    else setActive('h');
+  });
+  // Headings and fonts can change the column's height without a scroll: measure again at the next one.
+  if ('ResizeObserver' in window) new ResizeObserver(() => (dirty = true)).observe($('#call') ?? stage);
+
+  // Run only while the demo is on screen.
   if ('IntersectionObserver' in window) {
-    const bandIO = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) {
-          const id = e.target === hero ? 'h' : (e.target as HTMLElement).dataset.beatId!;
-          if (e.isIntersecting) inBand.add(id);
-          else inBand.delete(id);
-          (e.target as HTMLElement).classList.toggle('is-active', e.isIntersecting);
-        }
-        const first = ['h', 'a', 'b', 'c', 'd', 'e'].find((k) => inBand.has(k));
-        if (first) current = first;
-        setActive(current);
-        // The stealth beat switches Hide from screen share on once, so the change is seen.
-        if (current === 'e' && !stealthTouched) {
-          stealthTouched = true;
-          setTimeout(() => setStealth(true), 1000);
-        }
-      },
-      { rootMargin: '-42% 0px -42% 0px' },
-    );
-    if (hero) bandIO.observe(hero);
-    beats.forEach((b) => bandIO.observe(b));
-    // Run only while the demo is on screen.
     new IntersectionObserver(
       (entries) => {
         onScreen = entries.some((e) => e.isIntersecting);
@@ -323,26 +395,66 @@ function init(stage: HTMLElement) {
       { threshold: 0 },
     ).observe(pin);
   }
-  wide.addEventListener('change', () => setActive(current));
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) kick();
   });
 
+  // ── Phones: each still plays its one change when it scrolls into view ──
+  if (!reduce) {
+    const frames = [...stage.querySelectorAll<HTMLElement>('.ov--still')];
+    if ('IntersectionObserver' in window) {
+      const io = new IntersectionObserver(
+        (entries) => {
+          for (const e of entries) {
+            if (!e.isIntersecting) continue;
+            e.target.classList.add('is-play');
+            io.unobserve(e.target);
+          }
+        },
+        { threshold: 0.4 },
+      );
+      frames.forEach((f) => io.observe(f));
+    } else {
+      frames.forEach((f) => f.classList.add('is-play'));
+    }
+  }
+
   // ── Stealth demo ──
   function setStealth(on: boolean) {
     stage.dataset.stealth = on ? 'on' : 'off';
-    ov!.dataset.stealth = on ? 'on' : 'off';
+    ov.dataset.stealth = on ? 'on' : 'off';
     if (toggle) toggle.setAttribute('aria-pressed', String(on));
     if (statusEl)
       statusEl.textContent = on
         ? 'On. The overlay stays on your screen and is left out of what they see.'
         : 'Off. The overlay is in the share, so they see it too.';
   }
+  let autoDone = false;
+  function autoStealth() {
+    if (autoDone || stealthTouched) return;
+    autoDone = true;
+    setStealth(true);
+  }
   toggle?.addEventListener('click', () => {
     stealthTouched = true;
+    clearTimeout(autoStealthTimer);
+    statusEl?.setAttribute('role', 'status'); // announce changes only once the visitor is the one changing it
     setStealth(toggle.getAttribute('aria-pressed') !== 'true');
   });
-  setStealth(false);
+  // Phones show the two screens inside the beat: switch it on when they scroll into view.
+  const beatPanes = $('.nx-panes--beat');
+  if (beatPanes && !reduce && 'IntersectionObserver' in window) {
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (!wide.matches && entries.some((e) => e.isIntersecting)) {
+          io.disconnect();
+          autoStealthTimer = window.setTimeout(autoStealth, 1000);
+        }
+      },
+      { threshold: 0.6 },
+    );
+    io.observe(beatPanes);
+  }
 
   // ── Controls ──
   pauseBtn?.addEventListener('click', () => {
@@ -352,6 +464,11 @@ function init(stage: HTMLElement) {
     stage.toggleAttribute('data-paused', paused);
     kick();
   });
+  const touch = () => {
+    interacted = true;
+  };
+  pin.addEventListener('pointerdown', touch, { capture: true, once: true });
+  pin.addEventListener('keydown', touch, { capture: true, once: true });
   assistMain?.addEventListener('click', () => start('Assist'));
   $('[data-assist]', ov)?.addEventListener('click', () => start('Assist'));
   modeBtns.forEach((b) => b.addEventListener('click', () => start(b.dataset.modeBtn!)));
@@ -364,7 +481,7 @@ function init(stage: HTMLElement) {
       return;
     }
     const n = /^Digit([1-5])$/.exec(e.code);
-    const mode = e.code === 'Space' ? 'Assist' : n ? MODES[Number(n[1])] : null;
+    const mode = e.code === 'Space' ? 'Assist' : n ? MODES[Number(n[1])].mode : null;
     if (!mode) return;
     if (target.tagName === 'BUTTON' && e.code === 'Space') return; // a focused button handles its own Space
     e.preventDefault();
@@ -372,13 +489,15 @@ function init(stage: HTMLElement) {
   });
 
   // ── Boot ──
-  setStealth(false);
+  ov.tabIndex = 0; // the keys only work with focus, so the sample is reachable by keyboard
   if (reduce) {
+    setStealth(true); // the final state: on
     pauseBtn?.setAttribute('hidden', '');
     hint(HINT.hold);
-    stepTimer(0);
+    renderTimer();
     return;
   }
+  setStealth(false); // switched on by the stealth beat
   // Rewind the hero to its first frame, then play it once the demo is on screen.
   for (const l of lines) {
     l.tx.textContent = '';
@@ -388,7 +507,7 @@ function init(stage: HTMLElement) {
   ov.dataset.ans = 'idle';
   ov.dataset.view = 'h0';
   wave?.style.setProperty('--progress', '0');
-  if (timerEl) timerEl.textContent = mmss(0);
+  renderTimer();
   stage.classList.add('is-ready');
   hint(HINT.wait);
   setTimeout(kick, 600);

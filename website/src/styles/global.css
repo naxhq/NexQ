@@ -392,49 +392,49 @@
 }
 
 /* ─── Release wave (markup in Wave.astro) ───
- * A row of bars from releaseWave(). Nothing here changes a bar's height: only the
- * colour moves, as a playhead. Section scripts set --progress (0 to 1) on the element:
+ * ONE inline SVG per wave: .nx-wave__rest draws every bar at rest, .nx-wave__on draws the same
+ * bars in their played colour (one path per colour) and is clipped at the playhead by --progress.
+ * Nothing here changes a bar's height: only the clip moves, like a playhead. Section scripts set
+ * --progress (0 to 1) on the .nx-wave element:
  *   el.style.setProperty('--progress', String(t))
- * Bars before the playhead take --wave-played (or their own --bar, e.g. you/them).
+ * Played bars take --wave-played, or green / orange for the bars of You / Them.
  * Without JS the wave renders at its default --progress (1, fully played).
  */
-/* One registration for every wave: lets --progress transition (a version sweep, a playhead).
-   Bar heights never animate. */
+/* Registered so --progress can transition (a version sweep, a playhead). It does not inherit:
+   only the wave element (and the layer that asks for it with `inherit`) restyles when it moves. */
 @property --progress {
   syntax: '<number>';
-  inherits: true;
+  inherits: false;
   initial-value: 1;
 }
 .nx-wave {
   --progress: 1;
-  display: flex;
-  align-items: center;
-  /* The gap shrinks with the box, so 72 bars always fit (a fixed gap overflowed narrow phones). */
-  gap: min(var(--wave-gap, 3px), 0.7%);
+  position: relative;
   height: var(--wave-h, 40px);
   width: 100%;
 }
-.nx-wave--sm { --wave-h: 20px; --wave-gap: 2px; }
-.nx-wave--md { --wave-h: 40px; --wave-gap: 3px; }
-.nx-wave--lg { --wave-h: 96px; --wave-gap: 4px; }
-.nx-wave__bar {
-  flex: 1 1 0;
-  min-width: 0;
-  height: calc(var(--h) * 100%);
-  min-height: 3px;
-  border-radius: 9999px;
-  /* 1 when this bar is behind the playhead, else 0 (steep clamp, no transition). */
-  --on: clamp(0, calc((var(--progress) - var(--p)) * 1000), 1);
-  background-color: color-mix(
-    in oklab,
-    var(--bar, var(--wave-played)) calc(var(--on) * 100%),
-    var(--wave-rest)
-  );
+.nx-wave--sm { --wave-h: 20px; }
+.nx-wave--md { --wave-h: 40px; }
+.nx-wave--lg { --wave-h: 96px; }
+.nx-wave svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.nx-wave__rest { fill: var(--wave-rest); }
+.nx-wave__on {
+  --progress: inherit;
+  fill: var(--wave-played);
+  /* Paint only: the played layer is revealed from the left up to the playhead. */
+  clip-path: inset(0 calc((1 - var(--progress)) * 100%) 0 0);
 }
 .nx-wave[data-tone='you'] { --wave-played: var(--you); }
 .nx-wave[data-tone='them'] { --wave-played: var(--them); }
-.nx-wave__bar[data-s='you'] { --bar: var(--you); }
-.nx-wave__bar[data-s='them'] { --bar: var(--them); }
+.nx-wave__on path[data-s='you'] { fill: var(--you); }
+.nx-wave__on path[data-s='them'] { fill: var(--them); }
 
 /* ─── Reveal on scroll (only when the `js` class is on <html>; Layout adds it) ─── */
 .js [data-reveal] {
@@ -510,9 +510,14 @@
     border-color: CanvasText;
     box-shadow: none;
   }
-  .nx-wave__bar {
-    background-color: CanvasText;
+  .nx-wave svg,
+  .nx-wave__on path,
+  .nx-wave__on path[data-s] {
+    fill: CanvasText;
     forced-color-adjust: none;
+  }
+  .nx-wave__rest {
+    opacity: 0.4;
   }
   .rec-dot {
     background: Highlight;

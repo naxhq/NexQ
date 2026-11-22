@@ -14,6 +14,8 @@ import { RELEASES, CURRENT_VERSION } from '../data/releases';
 import { CHANGELOG, SECTION } from '../data/site';
 
 const MAX_ITEMS = 4;
+/** On phones the list shows this many releases until the visitor asks for all of them. */
+const PHONE_VISIBLE = 5;
 
 interface Entry {
   /** Shown in the tab and the panel, e.g. "2.41.2". */
@@ -52,8 +54,7 @@ const entries: Entry[] = RELEASES.map((r, i) => {
   <div class="wrap">
     <div class="grid gap-8 lg:grid-cols-12 lg:items-end lg:gap-16">
       <div class="lg:col-span-7">
-        <p class="eyebrow">v2.22.0 to v{CURRENT_VERSION}</p>
-        <h2 id="releases-title" class="h2 mt-3">Every release has its own voice</h2>
+        <h2 id="releases-title" class="h2">Every release has its own voice</h2>
         <p class="lede">
           NexQ draws a waveform from each version number. The installer and the update dialog show the same one, so you
           can tell a release by its shape.
@@ -70,17 +71,18 @@ const entries: Entry[] = RELEASES.map((r, i) => {
       <div class="rel-bar">
         <p class="rel-count" id="rel-count">{entries.length} releases, newest first</p>
         <div class="rel-step" data-rel-step>
+          <!-- Left and right arrows on the horizontal strip, up and down on the phone list (global CSS rotates them). -->
           <button type="button" class="rel-step__btn" data-rel-prev aria-label="Newer release">
-            <Icon name="arrow-right" class="h-4 w-4 rotate-180" />
+            <Icon name="arrow-right" class="rel-step__i rel-step__i--prev h-4 w-4" />
           </button>
           <button type="button" class="rel-step__btn" data-rel-next aria-label="Older release">
-            <Icon name="arrow-right" class="h-4 w-4" />
+            <Icon name="arrow-right" class="rel-step__i rel-step__i--next h-4 w-4" />
           </button>
         </div>
       </div>
 
       <div class="rel-strip-wrap" data-end="false">
-        <div class="rel-strip" role="tablist" aria-label="NexQ releases" aria-orientation="horizontal" aria-describedby="rel-count">
+        <div class="rel-strip" id="rel-strip" role="tablist" aria-label="NexQ releases" aria-orientation="horizontal" aria-describedby="rel-count" data-collapsed="true">
           {entries.map((e, i) => (
             <button
               type="button"
@@ -90,6 +92,8 @@ const entries: Entry[] = RELEASES.map((r, i) => {
               aria-controls={`rel-panel-${i}`}
               aria-selected={i === 0 ? 'true' : 'false'}
               tabindex={i === 0 ? 0 : -1}
+              data-more={i >= PHONE_VISIBLE ? '' : undefined}
+              data-edge={i === PHONE_VISIBLE - 1 ? '' : undefined}
             >
               <span class="rel-tab__v">v{e.version}</span>
               <span class="rel-tab__d">{e.current ? 'Current' : e.shortDate}</span>
@@ -99,6 +103,11 @@ const entries: Entry[] = RELEASES.map((r, i) => {
             </button>
           ))}
         </div>
+        {entries.length > PHONE_VISIBLE && (
+          <button type="button" class="rel-all" data-rel-all aria-expanded="false" aria-controls="rel-strip">
+            <span data-rel-all-label>Show all {entries.length} releases</span>
+          </button>
+        )}
       </div>
 
       <div class="rel-panels">
@@ -152,8 +161,7 @@ const entries: Entry[] = RELEASES.map((r, i) => {
     margin-bottom: 0.75rem;
   }
   .rel-count {
-    font-family: var(--font-mono);
-    font-size: 0.8125rem;
+    font-size: 0.875rem;
     color: hsl(var(--muted-foreground));
   }
   /* The step buttons only mean something with JS. */
@@ -185,6 +193,18 @@ const entries: Entry[] = RELEASES.map((r, i) => {
     opacity: 0.35;
     cursor: default;
   }
+  /* The arrow icon points right. Wide strip: back is left, next is right. Phone list: up and down. */
+  .rel-step__i--prev {
+    transform: rotate(180deg);
+  }
+  @media (max-width: 767px) {
+    .rel-step__i--prev {
+      transform: rotate(-90deg);
+    }
+    .rel-step__i--next {
+      transform: rotate(90deg);
+    }
+  }
 
   /* ─── The strip: a vertical list on phones, a horizontal snap strip from 768px ─── */
   .rel-strip-wrap {
@@ -194,12 +214,6 @@ const entries: Entry[] = RELEASES.map((r, i) => {
     position: relative;
     display: flex;
     flex-direction: column;
-    max-height: 17.5rem; /* four and a half rows, so the cut-off row says "scroll" */
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    scroll-snap-type: y proximity;
-    scrollbar-width: thin;
-    scrollbar-color: hsl(var(--muted-foreground) / 0.4) transparent;
     border: 1px solid hsl(var(--border));
     border-radius: 0.875rem;
     background: hsl(var(--card));
@@ -214,13 +228,46 @@ const entries: Entry[] = RELEASES.map((r, i) => {
     min-height: 3.75rem;
     padding: 0.5rem 1rem;
     text-align: left;
-    scroll-snap-align: start;
     border-bottom: 1px solid hsl(var(--border));
     color: hsl(var(--muted-foreground));
     transition: background-color 0.25s var(--ease-spring);
   }
   .rel-tab:last-child {
     border-bottom: 0;
+  }
+  /* Phone list: only the newest few until "Show all". Without JS the strip is hidden anyway. */
+  @media (max-width: 767px) {
+    .rel-strip[data-collapsed='true'] .rel-tab[data-more] {
+      display: none;
+    }
+    .rel-strip[data-collapsed='true'] .rel-tab[data-edge] {
+      border-bottom: 0;
+    }
+  }
+  .rel-all {
+    display: none;
+  }
+  @media (max-width: 767px) {
+    .js .rel-all {
+      display: flex;
+      width: 100%;
+      min-height: 2.75rem;
+      align-items: center;
+      justify-content: center;
+      margin-top: 0.5rem;
+      border: 1px solid hsl(var(--border));
+      border-radius: 0.75rem;
+      font-size: 0.9375rem;
+      font-weight: 600;
+      color: hsl(var(--foreground));
+      transition:
+        background-color 0.2s var(--ease-spring),
+        border-color 0.2s var(--ease-spring);
+    }
+    .js .rel-all:hover {
+      border-color: hsl(var(--muted-foreground) / 0.5);
+      background-color: hsl(var(--card));
+    }
   }
   .rel-tab:hover {
     background-color: hsl(var(--secondary) / 0.5);
@@ -261,7 +308,6 @@ const entries: Entry[] = RELEASES.map((r, i) => {
     min-width: 0;
   }
   .rel-tab .nx-wave {
-    --wave-gap: 1px;
     --wave-h: 22px;
     transition: --progress 1.1s var(--ease-spring);
   }
@@ -283,6 +329,7 @@ const entries: Entry[] = RELEASES.map((r, i) => {
       gap: 0.25rem;
     }
     .rel-tab {
+      scroll-snap-align: start;
       flex: 0 0 11.5rem;
       grid-template-columns: 1fr;
       grid-template-areas: 'v' 'w' 'd';
@@ -314,26 +361,19 @@ const entries: Entry[] = RELEASES.map((r, i) => {
   }
 
   /* Edge fade says there is more to scroll. JS sets data-end="true" at the end of the strip. */
-  .rel-strip-wrap::after {
-    content: '';
-    pointer-events: none;
-    position: absolute;
-    inset: auto 1px 1px 1px;
-    height: 2.5rem;
-    border-radius: 0 0 0.8rem 0.8rem;
-    background: linear-gradient(to top, hsl(var(--card)), hsl(var(--card) / 0));
-    transition: opacity 0.25s var(--ease-spring);
-  }
-  .rel-strip-wrap[data-end='true']::after {
-    opacity: 0;
-  }
   @media (min-width: 768px) {
     .rel-strip-wrap::after {
+      content: '';
+      pointer-events: none;
+      position: absolute;
       inset: 1px 1px 1px auto;
       width: 3.5rem;
-      height: auto;
       border-radius: 0 0.8rem 0.8rem 0;
       background: linear-gradient(to left, hsl(var(--card)), hsl(var(--card) / 0));
+      transition: opacity 0.25s var(--ease-spring);
+    }
+    .rel-strip-wrap[data-end='true']::after {
+      opacity: 0;
     }
   }
 
@@ -397,11 +437,7 @@ const entries: Entry[] = RELEASES.map((r, i) => {
   }
   .rel-stage .nx-wave {
     --wave-h: 4rem;
-    --wave-gap: 3px;
     transition: --progress 1.4s var(--ease-spring);
-  }
-  .rel-stage .nx-wave__bar {
-    min-width: 2px;
   }
   @media (min-width: 768px) {
     .rel-stage {
@@ -409,7 +445,6 @@ const entries: Entry[] = RELEASES.map((r, i) => {
     }
     .rel-stage .nx-wave {
       --wave-h: 6rem;
-      --wave-gap: 4px;
     }
   }
 
@@ -469,6 +504,7 @@ const entries: Entry[] = RELEASES.map((r, i) => {
       outline-offset: -2px;
     }
     .rel-strip,
+    .rel-all,
     .rel-step__btn {
       border-color: ButtonText;
     }
