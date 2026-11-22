@@ -6,6 +6,7 @@ import {
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useMeetingStore } from "../stores/meetingStore";
+import { useDemoStore } from "../demo/demoStore";
 import { useAIActionsStore } from "../stores/aiActionsStore";
 import { isQuitPending } from "../lib/ipc";
 import { runYourAction } from "../lib/autoAnswer";
@@ -18,11 +19,16 @@ import { providerReadsImages } from "../lib/imageAttachments";
 import { modeForKeyEvent } from "../lib/hotkeys";
 import { captureScreenIntoAsk } from "../lib/screenCapture";
 
-/** Ctrl+M: end the running meeting (in every window that holds it) or start one. */
+/**
+ * Ctrl+M: end the running meeting (in every window that holds it) or start one.
+ * A demo's fake meeting is not a running meeting: the press starts a real one
+ * (startMeetingFlow leaves the demo first).
+ */
 async function toggleMeetingFromShortcut(): Promise<void> {
   const store = useMeetingStore.getState();
-  const quitPending = store.activeMeeting ? false : await isQuitPending().catch(() => false);
-  switch (meetingShortcutAction(!!store.activeMeeting, quitPending)) {
+  const hasMeeting = !!store.activeMeeting && !useDemoStore.getState().isDemoActive;
+  const quitPending = hasMeeting ? false : await isQuitPending().catch(() => false);
+  switch (meetingShortcutAction(hasMeeting, quitPending)) {
     case "end":
       if (!(await endMeetingFromThisWindow())) {
         showToast("Couldn't finish saving the meeting", "error");

@@ -283,6 +283,15 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   },
 
   endMeetingFlow: async () => {
+    // A demo's meeting is fake: never stop capture or save it. Ending it just leaves the demo.
+    try {
+      const { useDemoStore } = await import("../demo/demoStore");
+      if (useDemoStore.getState().isDemoActive) {
+        const { exitDemo } = await import("../demo/demoEngine");
+        exitDemo();
+        return;
+      }
+    } catch { /* non-critical */ }
     const state = get();
     const meeting = state.activeMeeting;
 

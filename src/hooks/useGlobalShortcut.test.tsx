@@ -340,3 +340,50 @@ describe("Settings shortcut (Ctrl+,)", () => {
     expect(overlay.getState().settingsOpen).toBe(false);
   });
 });
+
+describe("meeting shortcut (Ctrl+M) and demos", () => {
+  const press = () => act(async () => { shortcuts.get("CmdOrCtrl+M")!({ state: "Pressed" }); });
+  const commands = () => invoked.map(([command]) => command);
+
+  it("during a demo exits the demo and starts a real meeting, never ending the demo's", async () => {
+    const launcher = await mountWindow("launcher");
+    const { useDemoStore } = await import("../demo/demoStore");
+    act(() => {
+      useDemoStore.getState().activate("live-interview", "play");
+      launcher.setState({ activeMeeting: { id: "demo-meeting" } as Meeting, isRecording: true });
+    });
+
+    await press();
+    await waitFor(() => expect(launcher.getState().activeMeeting?.id).toBe("shortcut-meeting"));
+    expect(useDemoStore.getState().isDemoActive).toBe(false);
+    expect(commands()).toContain("start_meeting");
+    expect(commands()).not.toContain("stop_capture");
+    expect(commands()).not.toContain("append_transcript_segment");
+    expect(commands()).not.toContain("end_meeting");
+  });
+
+  it("with a real meeting still ends it", async () => {
+    const launcher = await mountWindow("launcher");
+    act(() => launcher.setState({ activeMeeting: { id: "real" } as Meeting, isRecording: true }));
+
+    await press();
+    await waitFor(() => expect(launcher.getState().activeMeeting).toBeNull());
+    expect(commands()).toContain("stop_capture");
+    expect(commands()).toContain("end_meeting");
+    expect(commands()).not.toContain("start_meeting");
+  });
+
+  it("ending a demo's meeting by any other path leaves the demo without stopping capture or saving", async () => {
+    const launcher = await mountWindow("launcher");
+    const { useDemoStore } = await import("../demo/demoStore");
+    act(() => {
+      useDemoStore.getState().activate("live-interview", "play");
+      launcher.setState({ activeMeeting: { id: "demo-meeting" } as Meeting });
+    });
+
+    await act(async () => { await launcher.getState().endMeetingFlow(); });
+    expect(useDemoStore.getState().isDemoActive).toBe(false);
+    expect(commands()).not.toContain("stop_capture");
+    expect(commands()).not.toContain("end_meeting");
+  });
+});
