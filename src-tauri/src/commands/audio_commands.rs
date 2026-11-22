@@ -293,6 +293,13 @@ pub async fn start_capture(
                     });
                     let _ = stt_app.emit(event_name, &payload);
 
+                    // A new line from Them replaces the old detected question.
+                    if let Some(ref intel) = intel_arc {
+                        if let Ok(mut engine) = intel.lock() {
+                            engine.note_them_line(&output.id, output.is_final);
+                        }
+                    }
+
                     // Push final segments to the intelligence engine's
                     // transcript buffer so the AI has access to what "Them" said.
                     if output.is_final {
@@ -1370,6 +1377,13 @@ pub async fn start_capture_per_party(
                     let seg = accumulator_segment_json(&seg_id, "Them", &output);
                     let payload = serde_json::json!({ "segment": seg });
                     let _ = stt_app.emit(event_name, &payload);
+
+                    // A new line from Them replaces the old detected question.
+                    if let Some(ref intel) = intel_arc {
+                        if let Ok(mut engine) = intel.lock() {
+                            engine.note_them_line(&output.id, output.is_final);
+                        }
+                    }
 
                     // Push final segments to the intelligence engine
                     if output.is_final {

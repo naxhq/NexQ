@@ -61,6 +61,13 @@ pub struct IntelligenceEngine {
     /// Request id + cancel token of the generation in flight (for the cancelled end event).
     in_flight: Arc<Mutex<InFlight>>,
     last_detected_question: Option<DetectedQuestion>,
+    /// A question that Assist stopped using because a newer line from Them
+    /// started: (text, timestamp). A final that re-sends the old line must not
+    /// bring it back.
+    dismissed_question: Option<(String, u64)>,
+    /// Id of the last final line from Them, to tell a line that continues from
+    /// one that starts.
+    them_final_line: Option<String>,
     action_configs: AllActionConfigs,
 }
 
@@ -73,6 +80,8 @@ impl IntelligenceEngine {
             is_generating: Arc::new(AtomicBool::new(false)),
             in_flight: Arc::new(Mutex::new(None)),
             last_detected_question: None,
+            dismissed_question: None,
+            them_final_line: None,
             action_configs: AllActionConfigs::default(),
         }
     }
@@ -98,16 +107,43 @@ impl IntelligenceEngine {
             .question_detector
             .detect_questions(&text, timestamp_ms, &speaker);
 
-        // Store the most recent high-confidence question
-        if let Some(q) = questions.iter().max_by(|a, b| {
-            a.confidence
-                .partial_cmp(&b.confidence)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }) {
-            self.last_detected_question = Some(q.clone());
+        // Store the most recent high-confidence question, unless it is one
+        // Assist already dropped (the final re-sends its old line)
+        let dismissed = self.dismissed_question.clone();
+        let best = questions
+            .iter()
+            .filter(|q| dismissed.as_ref() != Some(&(q.text.clone(), q.timestamp_ms)))
+            .max_by(|a, b| {
+                a.confidence
+                    .partial_cmp(&b.confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .cloned();
+        if let Some(q) = best {
+            self.last_detected_question = Some(q);
         }
 
         questions
+    }
+
+    /// Tell the engine about a line from Them (interim or final) with the
+    /// accumulator's line id. When an interim starts a new line, the question
+    /// detected from the earlier line of Them is stale: Assist stops using it
+    /// until a final detects a new one. Without a question Assist works from
+    /// the recent transcript.
+    pub fn note_them_line(&mut self, line_id: &str, is_final: bool) {
+        if is_final {
+            self.them_final_line = Some(line_id.to_string());
+            return;
+        }
+        if self.them_final_line.as_deref() == Some(line_id) {
+            return;
+        }
+        if self.last_detected_question.as_ref().is_some_and(|q| q.source == "Them") {
+            if let Some(q) = self.last_detected_question.take() {
+                self.dismissed_question = Some((q.text, q.timestamp_ms));
+            }
+        }
     }
 
     /// Main entry point: generate AI assistance in the given mode.
@@ -318,6 +354,8 @@ impl IntelligenceEngine {
     pub fn clear_session(&mut self) {
         self.transcript_buffer.clear();
         self.last_detected_question = None;
+        self.dismissed_question = None;
+        self.them_final_line = None;
         log::info!("[intelligence] session cleared for new meeting");
     }
 }
@@ -383,5 +421,52 @@ mod tests {
         drop(first);
         let second = engine.begin_generation("req-2").unwrap();
         assert!(!second.cancel_token().is_cancelled());
+    }
+
+    fn them_final(engine: &mut IntelligenceEngine, id: &str, text: &str, ts: u64) {
+        engine.note_them_line(id, true);
+        engine.push_transcript(text.to_string(), "Them".to_string(), ts, true);
+    }
+
+    #[test]
+    fn a_new_line_from_them_drops_the_old_detected_question() {
+        let mut engine = IntelligenceEngine::new();
+        them_final(&mut engine, "acc_1", "Why do you want this job?", 1_000);
+        assert!(engine.last_detected_question().is_some());
+        // An interim that extends the same line keeps it.
+        engine.note_them_line("acc_1", false);
+        assert!(engine.last_detected_question().is_some());
+        // A new line has started after a pause.
+        engine.note_them_line("acc_2", false);
+        assert!(engine.last_detected_question().is_none());
+        // The final that starts that line re-sends the old line first: it must
+        // not bring the question back.
+        them_final(&mut engine, "acc_1", "Why do you want this job?", 1_000);
+        them_final(&mut engine, "acc_2", "Take your time with that.", 62_000);
+        assert!(engine.last_detected_question().is_none());
+        // A question in the new line is detected as usual.
+        them_final(&mut engine, "acc_3", "And what about your salary expectations?", 70_000);
+        assert_eq!(
+            engine.last_detected_question().map(|q| q.text.as_str()),
+            Some("And what about your salary expectations?")
+        );
+    }
+
+    #[test]
+    fn a_question_from_you_is_kept_when_them_starts_a_line() {
+        let mut engine = IntelligenceEngine::new();
+        engine.push_transcript("Can I ask about the team?".to_string(), "You".to_string(), 1_000, true);
+        engine.note_them_line("acc_1", false);
+        assert!(engine.last_detected_question().is_some());
+    }
+
+    #[test]
+    fn clearing_the_session_forgets_the_dropped_question() {
+        let mut engine = IntelligenceEngine::new();
+        them_final(&mut engine, "acc_1", "Why do you want this job?", 1_000);
+        engine.note_them_line("acc_2", false);
+        engine.clear_session();
+        them_final(&mut engine, "acc_1", "Why do you want this job?", 1_000);
+        assert!(engine.last_detected_question().is_some());
     }
 }
