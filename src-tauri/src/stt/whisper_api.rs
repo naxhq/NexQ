@@ -638,4 +638,166 @@ mod tests {
         p.set_endpoint(Some("bogus"), None);
         assert!(p.start_stream(tx).await.is_err());
     }
+
+    // ---- Mock HTTP server (hand-written responses, no extra crates) ----
+
+    type Recorded = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+    /// Start a one-shot-per-connection HTTP server on 127.0.0.1:0.
+    /// `handler(method, path)` returns `(status line, body)`. Every raw request
+    /// (headers + body, lossy UTF-8) is recorded. Returns `(base_url, recorded)`.
+    async fn mock_server<F>(handler: F) -> (String, Recorded)
+    where
+        F: Fn(&str, &str) -> (&'static str, String) + Send + Sync + 'static,
+    {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let recorded: Recorded = Default::default();
+        let rec = recorded.clone();
+        let handler = std::sync::Arc::new(handler);
+
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(c) => c,
+                    Err(_) => return,
+                };
+                let rec = rec.clone();
+                let handler = handler.clone();
+                tokio::spawn(async move {
+                    let mut buf: Vec<u8> = Vec::new();
+                    let mut tmp = [0u8; 8192];
+                    let mut header_end = None;
+                    loop {
+                        if header_end.is_none() {
+                            header_end = buf.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4);
+                        }
+                        if let Some(h) = header_end {
+                            let head = String::from_utf8_lossy(&buf[..h]).to_ascii_lowercase();
+                            if head.contains("transfer-encoding: chunked") {
+                                if buf.ends_with(b"0\r\n\r\n") {
+                                    break;
+                                }
+                            } else {
+                                let len = head
+                                    .lines()
+                                    .find_map(|l| l.strip_prefix("content-length:"))
+                                    .and_then(|v| v.trim().parse::<usize>().ok())
+                                    .unwrap_or(0);
+                                if buf.len() >= h + len {
+                                    break;
+                                }
+                            }
+                        }
+                        match sock.read(&mut tmp).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                        }
+                    }
+                    let raw = String::from_utf8_lossy(&buf).to_string();
+                    let mut first = raw.lines().next().unwrap_or("").split_whitespace();
+                    let method = first.next().unwrap_or("").to_string();
+                    let path = first.next().unwrap_or("").to_string();
+                    let (status, body) = handler(&method, &path);
+                    rec.lock().unwrap().push(raw);
+                    let resp = format!(
+                        "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        status,
+                        body.len(),
+                        body
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+
+        (format!("http://{}/v1", addr), recorded)
+    }
+
+    fn custom_provider(base: &str, model: &str, key: &str) -> WhisperApiSTT {
+        let mut p = if key.is_empty() {
+            WhisperApiSTT::new()
+        } else {
+            WhisperApiSTT::with_api_key(key)
+        };
+        p.set_endpoint(Some(base), Some(model));
+        p
+    }
+
+    #[tokio::test]
+    async fn mock_models_200_is_success() {
+        let (base, rec) = mock_server(|_, _| ("200 OK", r#"{"data":[]}"#.to_string())).await;
+        let p = custom_provider(&base, "my-model", "");
+        assert!(p.test_connection().await.unwrap());
+        let reqs = rec.lock().unwrap();
+        assert_eq!(reqs.len(), 1);
+        assert!(reqs[0].starts_with("GET /v1/models "));
+    }
+
+    #[tokio::test]
+    async fn mock_models_404_falls_back_to_transcription_probe() {
+        let (base, rec) = mock_server(|method, _| {
+            if method == "GET" {
+                ("404 Not Found", "{}".to_string())
+            } else {
+                ("200 OK", r#"{"text":""}"#.to_string())
+            }
+        })
+        .await;
+        let p = custom_provider(&base, "faster-whisper-small", "");
+        assert!(p.test_connection().await.unwrap());
+
+        let reqs = rec.lock().unwrap();
+        assert_eq!(reqs.len(), 2);
+        assert!(reqs[0].starts_with("GET /v1/models "));
+        let post = &reqs[1];
+        assert!(post.starts_with("POST /v1/audio/transcriptions "));
+        assert!(post.contains("name=\"model\""));
+        assert!(post.contains("faster-whisper-small"));
+        // Empty key: no Authorization header on either request.
+        assert!(!reqs.iter().any(|r| r.to_ascii_lowercase().contains("authorization:")));
+    }
+
+    #[tokio::test]
+    async fn mock_key_is_sent_as_bearer_when_set() {
+        let (base, rec) = mock_server(|_, _| ("200 OK", "{}".to_string())).await;
+        let p = custom_provider(&base, "m", "secret-key");
+        assert!(p.test_connection().await.unwrap());
+        let reqs = rec.lock().unwrap();
+        assert!(reqs[0].to_ascii_lowercase().contains("authorization: bearer secret-key"));
+    }
+
+    #[tokio::test]
+    async fn mock_401_reports_refused_key() {
+        let (base, _rec) = mock_server(|_, _| ("401 Unauthorized", "{}".to_string())).await;
+        let p = custom_provider(&base, "m", "bad-key");
+        let err = p.test_connection().await.unwrap_err().to_string();
+        assert!(err.contains("The server refused the API key"), "{}", err);
+        assert!(!err.contains("bad-key"));
+    }
+
+    #[tokio::test]
+    async fn mock_send_segment_emits_transcript() {
+        let (base, rec) =
+            mock_server(|_, _| ("200 OK", r#"{"text":" hello "}"#.to_string())).await;
+        let (tx, mut rx) = mpsc::channel(4);
+        WhisperApiSTT::send_segment("", &base, "my-model", "en-US", vec![100i16; 1600], 42, tx).await;
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("timed out waiting for transcript")
+            .expect("channel closed without a result");
+        assert_eq!(result.text, "hello");
+        assert!(result.is_final);
+        assert_eq!(result.timestamp_ms, 42);
+
+        let reqs = rec.lock().unwrap();
+        assert_eq!(reqs.len(), 1);
+        assert!(reqs[0].starts_with("POST /v1/audio/transcriptions "));
+        assert!(reqs[0].contains("my-model"));
+        assert!(!reqs[0].to_ascii_lowercase().contains("authorization:"));
+    }
 }
