@@ -191,7 +191,7 @@ With any other provider your sources stay saved but are not used. Details: [Clau
 
 ## Keyboard shortcuts
 
-On macOS, use <kbd>Cmd</kbd> in place of <kbd>Ctrl</kbd>. The three <kbd>Ctrl</kbd>+<kbd>Shift</kbd> shortcuts can be changed in Settings → General. In a meeting, with a NexQ window focused, <kbd>Space</kbd> runs Assist and <kbd>1</kbd> to <kbd>5</kbd> run the other actions ([full list](docs/user-guide/keyboard-shortcuts.md)).
+On macOS, use <kbd>Cmd</kbd> in place of <kbd>Ctrl</kbd>. The three <kbd>Ctrl</kbd>+<kbd>Shift</kbd> shortcuts can be changed in Settings → General. In a meeting, with a NexQ window focused, <kbd>Space</kbd> runs Assist and <kbd>1</kbd> to <kbd>5</kbd> run the other actions ([full list](docs/user-guide/keyboard-shortcuts.md)). The in-meeting keys can be changed in Settings → Hotkeys.
 
 | Shortcut | Action |
 |---|---|

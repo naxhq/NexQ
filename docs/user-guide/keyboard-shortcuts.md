@@ -15,7 +15,7 @@ These shortcuts are registered system-wide and work regardless of which applicat
 | Shortcut | Action | Description |
 |----------|--------|-------------|
 | `Ctrl+M` | Start / End Meeting | Starts a new meeting if none is active; ends the current meeting if one is running |
-| `Ctrl+B` | Toggle Overlay | Switches between the launcher (dashboard) and the overlay (meeting) window. With no meeting running, it brings the dashboard back |
+| `Ctrl+B` | Switch between overlay and dashboard | Switches between the launcher (dashboard) and the overlay (meeting) window. With no meeting running, it brings the dashboard back |
 | `Ctrl+,` | Open / Close Settings | Toggles the settings panel |
 | `Ctrl+Shift+H` | Hide from screen share | Turns stealth mode on or off. Change it in Settings > General |
 | `Ctrl+Shift+Space` | Assist from any app | During a meeting, generates AI Assist without switching to NexQ. Stops an automatic answer that's running. Change it in Settings > General |
@@ -34,7 +34,7 @@ These shortcuts work when a meeting is active and the NexQ window (launcher or o
 | `4` | Recap | Provides a recap of the conversation so far |
 | `5` | Ask Question | Opens the free-form question input for custom AI queries |
 
-These overlay keys are fixed (they can't be rebound in Settings > Hotkeys) and need a running meeting. Only `Escape` also works while typing in an input.
+These overlay keys are fixed (they can't be rebound in Settings > Hotkeys) and need a running meeting. They work only as bare keys (no Ctrl, Alt, Meta or Shift held). Only `Escape` also works while typing in an input.
 
 | Shortcut | Action |
 |----------|--------|
@@ -46,7 +46,7 @@ These overlay keys are fixed (they can't be rebound in Settings > Hotkeys) and n
 
 > In the Ask box, `Ctrl+V` attaches a copied screenshot (Claude subscription only). `Ctrl+Shift+S` captures the screen for you; see [Asking about something on screen](claude-subscription.md#asking-about-something-on-screen). Screenshots can include other people's video or documents and go to Anthropic with your question; NexQ doesn't save them.
 
-> **Note:** The number keys (`1`--`5`) work with both the main keyboard and the numpad. They only trigger when no modifier keys (Ctrl, Alt, Meta) are held.
+> **Note:** The number keys (`1`--`5`) work with both the main keyboard and the numpad. They only trigger when no modifier keys (Ctrl, Alt, Meta, Shift) are held, and the same goes for the other action keys.
 
 ## System Tray
 
