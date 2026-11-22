@@ -33,6 +33,16 @@ pub const BASE_URL_CREDENTIAL_KEY: &str = "whisper_api_base_url";
 /// Credential-store key holding the optional custom model name (non-secret).
 pub const MODEL_CREDENTIAL_KEY: &str = "whisper_api_model";
 
+/// Credential-store key of the OpenAI API key. It is only ever sent to the
+/// default OpenAI URL, never to a custom endpoint.
+pub const OPENAI_KEY_CREDENTIAL_KEY: &str = "whisper_api";
+
+/// Credential-store key holding the optional API key for a custom endpoint.
+pub const CUSTOM_KEY_CREDENTIAL_KEY: &str = "whisper_api_custom_key";
+
+/// Timeout for one segment upload.
+const SEGMENT_TIMEOUT_SECS: u64 = 30;
+
 /// Normalize a user-entered OpenAI-style base URL.
 ///
 /// Trims whitespace, drops trailing slashes, strips a pasted trailing
@@ -96,6 +106,101 @@ fn with_auth(req: reqwest::RequestBuilder, api_key: &str) -> reqwest::RequestBui
     }
 }
 
+/// One shared HTTP client (connection reuse, bounded request time) for all segments.
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(SEGMENT_TIMEOUT_SECS))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
+
+/// Server body trimmed to at most 200 characters, for error messages.
+fn trim_body(body: &str) -> String {
+    let body = body.trim();
+    let mut out: String = body.chars().take(200).collect();
+    if body.chars().count() > 200 {
+        out.push_str("...");
+    }
+    out
+}
+
+/// "The server answered 500: <body>" for an unexpected non-2xx status.
+fn describe_http_failure(status: reqwest::StatusCode, body: &str) -> String {
+    let body = trim_body(body);
+    if body.is_empty() {
+        format!("The server answered {}.", status.as_u16())
+    } else {
+        format!("The server answered {}: {}", status.as_u16(), body)
+    }
+}
+
+fn unreachable_message(base_url: &str) -> String {
+    format!("Couldn't reach {}. Is the server running?", base_url)
+}
+
+fn needs_key_message() -> String {
+    "This server needs an API key.".to_string()
+}
+
+/// Reports mid-meeting failures to the UI once per run of failures
+/// (`stt_connection_status` "error"), and clears it on the next success.
+#[derive(Clone)]
+struct StatusReporter {
+    app_handle: Option<tauri::AppHandle>,
+    party: String,
+    failing: Arc<AtomicBool>,
+}
+
+impl StatusReporter {
+    fn new() -> Self {
+        Self {
+            app_handle: None,
+            party: "Them".to_string(),
+            failing: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn emit(&self, status: &str, message: Option<String>) {
+        if let Some(ref handle) = self.app_handle {
+            let event = serde_json::json!({
+                "provider": "whisper_api",
+                "party": self.party,
+                "status": status,
+                "message": message,
+            });
+            if let Err(e) = tauri::Emitter::emit(handle, "stt_connection_status", &event) {
+                log::warn!("WhisperApiSTT: Failed to emit status event: {}", e);
+            }
+        }
+    }
+
+    /// A segment failed: tell the UI only for the first failure of a run.
+    fn failure(&self, message: &str) {
+        if !self.failing.swap(true, Ordering::SeqCst) {
+            self.emit("error", Some(message.to_string()));
+        }
+    }
+
+    /// A segment succeeded: clear a previously reported failure.
+    fn success(&self) {
+        if self.failing.swap(false, Ordering::SeqCst) {
+            self.emit("connected", None);
+        }
+    }
+}
+
+/// Where and how one segment is sent.
+#[derive(Clone)]
+struct SegmentTarget {
+    api_key: String,
+    base_url: String,
+    model: String,
+    language: String,
+}
+
 fn refused_status(status: reqwest::StatusCode) -> bool {
     status.as_u16() == 401 || status.as_u16() == 403
 }
@@ -127,6 +232,7 @@ pub struct WhisperApiSTT {
     /// Set when the configured custom base URL is invalid; reported on start/test.
     endpoint_error: Option<String>,
     language: String,
+    reporter: StatusReporter,
     is_streaming: bool,
     result_tx: Option<mpsc::Sender<TranscriptResult>>,
     stop_flag: Arc<AtomicBool>,
@@ -145,6 +251,7 @@ impl WhisperApiSTT {
             model: DEFAULT_MODEL.to_string(),
             endpoint_error: None,
             language: "en".to_string(),
+            reporter: StatusReporter::new(),
             is_streaming: false,
             result_tx: None,
             stop_flag: Arc::new(AtomicBool::new(false)),
@@ -154,17 +261,62 @@ impl WhisperApiSTT {
         }
     }
 
-    /// Create with an API key.
-    pub fn with_api_key(api_key: &str) -> Self {
-        Self {
-            api_key: api_key.to_string(),
-            ..Self::new()
-        }
+    /// The single factory every build site uses. Picks the API key for the
+    /// resolved endpoint: the saved OpenAI key goes ONLY to the default OpenAI
+    /// URL, a custom endpoint gets only its own optional key.
+    pub fn from_settings(
+        openai_key: Option<&str>,
+        custom_key: Option<&str>,
+        base_url: Option<&str>,
+        model: Option<&str>,
+        language: &str,
+    ) -> Self {
+        let mut p = Self::new();
+        p.set_endpoint(base_url, model);
+        let key = if p.endpoint_error.is_some() {
+            None
+        } else if p.is_custom_endpoint() {
+            custom_key
+        } else {
+            openai_key
+        };
+        p.api_key = key.map(str::trim).unwrap_or("").to_string();
+        p.language = language.to_string();
+        p
     }
 
-    /// Set the API key.
-    pub fn set_api_key(&mut self, api_key: &str) {
-        self.api_key = api_key.to_string();
+    /// Like `from_settings`, reading the four credential-store slots through `lookup`.
+    pub fn from_store(lookup: impl Fn(&str) -> Option<String>, language: &str) -> Self {
+        let openai = lookup(OPENAI_KEY_CREDENTIAL_KEY);
+        let custom = lookup(CUSTOM_KEY_CREDENTIAL_KEY);
+        let base = lookup(BASE_URL_CREDENTIAL_KEY);
+        let model = lookup(MODEL_CREDENTIAL_KEY);
+        Self::from_settings(
+            openai.as_deref(),
+            custom.as_deref(),
+            base.as_deref(),
+            model.as_deref(),
+            language,
+        )
+    }
+
+    /// App handle used to report mid-meeting failures to the UI.
+    pub fn set_app_handle(&mut self, handle: tauri::AppHandle) {
+        self.reporter.app_handle = Some(handle);
+    }
+
+    /// Party label ("You" / "Them") for status events.
+    pub fn set_party(&mut self, party: &str) {
+        self.reporter.party = party.to_string();
+    }
+
+    fn target(&self) -> SegmentTarget {
+        SegmentTarget {
+            api_key: self.api_key.clone(),
+            base_url: self.base_url.clone(),
+            model: self.model.clone(),
+            language: self.language.clone(),
+        }
     }
 
     /// Set the optional custom endpoint and model. Empty/None keeps the OpenAI
@@ -243,29 +395,30 @@ impl WhisperApiSTT {
 
     /// Send accumulated audio to the Whisper API and emit the result.
     async fn send_segment(
-        api_key: &str,
-        base_url: &str,
-        model: &str,
-        language: &str,
+        target: &SegmentTarget,
+        reporter: &StatusReporter,
         samples: Vec<i16>,
         timestamp_ms: u64,
         result_tx: mpsc::Sender<TranscriptResult>,
     ) {
         let wav_data = Self::encode_wav(&samples);
+        let form = Self::build_form(&target.model, &target.language, wav_data);
 
-        let client = reqwest::Client::new();
-        let form = Self::build_form(model, language, wav_data);
-
-        let response = with_auth(client.post(transcriptions_url(base_url)), api_key)
-            .multipart(form)
-            .send()
-            .await;
+        let response = with_auth(
+            http_client().post(transcriptions_url(&target.base_url)),
+            &target.api_key,
+        )
+        .multipart(form)
+        .send()
+        .await;
 
         match response {
             Ok(resp) => {
-                if resp.status().is_success() {
+                let status = resp.status();
+                if status.is_success() {
                     match resp.json::<WhisperResponse>().await {
                         Ok(whisper_resp) => {
+                            reporter.success();
                             if let Some(text) = whisper_resp.text {
                                 let text = text.trim().to_string();
                                 if !text.is_empty() {
@@ -275,7 +428,9 @@ impl WhisperApiSTT {
                                         confidence: 0.95, // Whisper doesn't return confidence
                                         timestamp_ms,
                                         speaker: None,
-                                        language: crate::stt::provider::reported_language(language),
+                                        language: crate::stt::provider::reported_language(
+                                            &target.language,
+                                        ),
                                         segment_id: None,
                                         duration_ms: None,
                                         speaker_tag: None,
@@ -287,20 +442,22 @@ impl WhisperApiSTT {
                         }
                         Err(e) => {
                             log::error!("WhisperApiSTT: Failed to parse response: {}", e);
+                            reporter.failure("The server's reply wasn't a transcription (expected JSON with a text field).");
                         }
                     }
                 } else {
-                    let status = resp.status();
                     let body = resp.text().await.unwrap_or_default();
                     log::error!(
                         "WhisperApiSTT: API returned status {}: {}",
                         status,
-                        body
+                        trim_body(&body)
                     );
+                    reporter.failure(&describe_http_failure(status, &body));
                 }
             }
             Err(e) => {
                 log::error!("WhisperApiSTT: Request failed: {}", e);
+                reporter.failure(&unreachable_message(&target.base_url));
             }
         }
     }
@@ -338,6 +495,7 @@ impl STTProvider for WhisperApiSTT {
             self.is_custom_endpoint()
         );
 
+        self.reporter.failing.store(false, Ordering::SeqCst);
         self.result_tx = Some(result_tx);
         self.is_streaming = true;
         self.stop_flag.store(false, Ordering::SeqCst);
@@ -398,16 +556,11 @@ impl STTProvider for WhisperApiSTT {
                 let _ = tx.send(interim).await;
 
                 // Spawn the API call so it doesn't block audio feeding
-                let api_key = self.api_key.clone();
-                let base_url = self.base_url.clone();
-                let model = self.model.clone();
-                let language = self.language.clone();
+                let target = self.target();
+                let reporter = self.reporter.clone();
                 let result_tx = tx.clone();
                 tokio::spawn(async move {
-                    Self::send_segment(
-                        &api_key, &base_url, &model, &language, segment, timestamp_ms, result_tx,
-                    )
-                    .await;
+                    Self::send_segment(&target, &reporter, segment, timestamp_ms, result_tx).await;
                 });
             }
         }
@@ -433,16 +586,11 @@ impl STTProvider for WhisperApiSTT {
                 .unwrap_or(0);
 
             if let Some(ref tx) = self.result_tx {
-                let api_key = self.api_key.clone();
-                let base_url = self.base_url.clone();
-                let model = self.model.clone();
-                let language = self.language.clone();
+                let target = self.target();
+                let reporter = self.reporter.clone();
                 let result_tx = tx.clone();
                 tokio::spawn(async move {
-                    Self::send_segment(
-                        &api_key, &base_url, &model, &language, segment, timestamp_ms, result_tx,
-                    )
-                    .await;
+                    Self::send_segment(&target, &reporter, segment, timestamp_ms, result_tx).await;
                 });
             }
         }
@@ -474,54 +622,58 @@ impl STTProvider for WhisperApiSTT {
             .timeout(std::time::Duration::from_secs(20))
             .build()?;
 
-        // Lightweight authenticated endpoint: list models.
-        let response = with_auth(client.get(models_url(&self.base_url)), &self.api_key)
-            .send()
-            .await?;
-        let status = response.status();
-
         if !custom {
-            let success = status.is_success();
+            // OpenAI: list models, a lightweight authenticated endpoint.
+            let response = with_auth(client.get(models_url(&self.base_url)), &self.api_key)
+                .send()
+                .await?;
+            let success = response.status().is_success();
             if success {
                 log::info!("WhisperApiSTT: Connection test passed");
             } else {
-                log::warn!("WhisperApiSTT: Connection test failed with status {}", status);
+                log::warn!(
+                    "WhisperApiSTT: Connection test failed with status {}",
+                    response.status()
+                );
             }
             return Ok(success);
         }
 
+        // Custom endpoint: always probe the transcription route with ~0.5 s of
+        // silence. A /models 200 alone would also pass servers that cannot
+        // transcribe (Ollama, LM Studio), which then fail every segment.
+        let wav = Self::encode_wav(&vec![0i16; (SAMPLE_RATE / 2) as usize]);
+        let form = Self::build_form(&self.model, "", wav);
+        let probe = match with_auth(
+            client.post(transcriptions_url(&self.base_url)),
+            &self.api_key,
+        )
+        .multipart(form)
+        .send()
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                log::warn!("WhisperApiSTT: Probe request failed: {}", e);
+                return Err(unreachable_message(&self.base_url).into());
+            }
+        };
+        let status = probe.status();
         if status.is_success() {
-            log::info!("WhisperApiSTT: Connection test passed (/models)");
+            log::info!("WhisperApiSTT: Connection test passed (transcription probe)");
             return Ok(true);
         }
         if refused_status(status) {
-            return Err(refused_message(status).into());
+            let msg = if self.api_key.is_empty() {
+                needs_key_message()
+            } else {
+                refused_message(status)
+            };
+            return Err(msg.into());
         }
-        if status.as_u16() != 404 && status.as_u16() != 405 {
-            log::warn!("WhisperApiSTT: /models returned status {}", status);
-            return Ok(false);
-        }
-
-        // Many local servers have no /models route: probe the transcription
-        // endpoint with ~0.5 s of silence instead.
-        log::info!("WhisperApiSTT: /models not available ({}), probing transcriptions", status);
-        let wav = Self::encode_wav(&vec![0i16; (SAMPLE_RATE / 2) as usize]);
-        let form = Self::build_form(&self.model, "", wav);
-        let probe = with_auth(client.post(transcriptions_url(&self.base_url)), &self.api_key)
-            .multipart(form)
-            .send()
-            .await?;
-        let status = probe.status();
-        if refused_status(status) {
-            return Err(refused_message(status).into());
-        }
-        let success = status.is_success();
-        if success {
-            log::info!("WhisperApiSTT: Connection test passed (transcription probe)");
-        } else {
-            log::warn!("WhisperApiSTT: Transcription probe failed with status {}", status);
-        }
-        Ok(success)
+        let body = probe.text().await.unwrap_or_default();
+        log::warn!("WhisperApiSTT: Transcription probe failed with status {}", status);
+        Err(describe_http_failure(status, &body).into())
     }
 
     fn set_language(&mut self, language: &str) {
@@ -634,8 +786,7 @@ mod tests {
         assert!(p.start_stream(tx.clone()).await.is_ok());
 
         // Invalid endpoint is an error, never a silent OpenAI fallback.
-        let mut p = WhisperApiSTT::with_api_key("sk-test");
-        p.set_endpoint(Some("bogus"), None);
+        let mut p = WhisperApiSTT::from_settings(Some("sk-test"), None, Some("bogus"), None, "en");
         assert!(p.start_stream(tx).await.is_err());
     }
 
@@ -717,66 +868,174 @@ mod tests {
         (format!("http://{}/v1", addr), recorded)
     }
 
-    fn custom_provider(base: &str, model: &str, key: &str) -> WhisperApiSTT {
-        let mut p = if key.is_empty() {
-            WhisperApiSTT::new()
-        } else {
-            WhisperApiSTT::with_api_key(key)
+    /// Provider pointed at the mock, using the shared factory.
+    fn mock_provider(base: &str, openai: Option<&str>, custom: Option<&str>) -> WhisperApiSTT {
+        WhisperApiSTT::from_settings(openai, custom, Some(base), Some("faster-whisper-small"), "en")
+    }
+
+    fn lower(raw: &str) -> String {
+        raw.to_ascii_lowercase()
+    }
+
+    #[test]
+    fn factory_sends_openai_key_only_to_default_url() {
+        let p = WhisperApiSTT::from_settings(Some("sk-openai"), Some("custom"), None, None, "en");
+        assert_eq!(p.api_key, "sk-openai");
+        assert!(!p.is_custom_endpoint());
+
+        // Explicitly typing the OpenAI URL is still the default endpoint.
+        let p = WhisperApiSTT::from_settings(
+            Some("sk-openai"),
+            Some("custom"),
+            Some("https://api.openai.com/v1/"),
+            None,
+            "en",
+        );
+        assert_eq!(p.api_key, "sk-openai");
+
+        let p = WhisperApiSTT::from_settings(
+            Some("sk-openai"),
+            None,
+            Some("http://127.0.0.1:8000/v1"),
+            None,
+            "en",
+        );
+        assert_eq!(p.api_key, "", "OpenAI key must never reach a custom endpoint");
+
+        let p = WhisperApiSTT::from_settings(
+            Some("sk-openai"),
+            Some("custom"),
+            Some("http://127.0.0.1:8000/v1"),
+            None,
+            "en",
+        );
+        assert_eq!(p.api_key, "custom");
+
+        // Invalid endpoint: no key at all, and an error on start/test.
+        let p = WhisperApiSTT::from_settings(Some("sk-openai"), Some("c"), Some("bogus"), None, "en");
+        assert_eq!(p.api_key, "");
+        assert!(p.endpoint_error.is_some());
+    }
+
+    #[test]
+    fn from_store_reads_the_four_slots() {
+        let lookup = |k: &str| match k {
+            "whisper_api" => Some("sk-openai".to_string()),
+            "whisper_api_custom_key" => Some("custom".to_string()),
+            "whisper_api_base_url" => Some("http://127.0.0.1:8000/v1".to_string()),
+            "whisper_api_model" => Some("m".to_string()),
+            _ => None,
         };
-        p.set_endpoint(Some(base), Some(model));
-        p
+        let p = WhisperApiSTT::from_store(lookup, "fr");
+        assert_eq!(p.api_key, "custom");
+        assert_eq!(p.model, "m");
+        assert_eq!(p.language, "fr");
+        let p = WhisperApiSTT::from_store(|k| (k == "whisper_api").then(|| "sk".to_string()), "en");
+        assert_eq!(p.api_key, "sk");
+        assert_eq!(p.base_url, DEFAULT_BASE_URL);
+    }
+
+    #[test]
+    fn trim_body_caps_at_200_chars() {
+        assert_eq!(trim_body("  short  "), "short");
+        let long = "x".repeat(500);
+        let t = trim_body(&long);
+        assert!(t.starts_with(&"x".repeat(200)));
+        assert!(t.len() <= 203);
     }
 
     #[tokio::test]
-    async fn mock_models_200_is_success() {
-        let (base, rec) = mock_server(|_, _| ("200 OK", r#"{"data":[]}"#.to_string())).await;
-        let p = custom_provider(&base, "my-model", "");
-        assert!(p.test_connection().await.unwrap());
-        let reqs = rec.lock().unwrap();
-        assert_eq!(reqs.len(), 1);
-        assert!(reqs[0].starts_with("GET /v1/models "));
-    }
-
-    #[tokio::test]
-    async fn mock_models_404_falls_back_to_transcription_probe() {
+    async fn mock_custom_test_always_probes_transcriptions_even_if_models_is_200() {
+        // An Ollama/LM Studio style server: /models fine, no transcription route.
         let (base, rec) = mock_server(|method, _| {
             if method == "GET" {
-                ("404 Not Found", "{}".to_string())
+                ("200 OK", r#"{"data":[]}"#.to_string())
             } else {
-                ("200 OK", r#"{"text":""}"#.to_string())
+                ("404 Not Found", "page not found".to_string())
             }
         })
         .await;
-        let p = custom_provider(&base, "faster-whisper-small", "");
+        let p = mock_provider(&base, None, None);
+        let err = p.test_connection().await.unwrap_err().to_string();
+        assert!(err.contains("404"), "{}", err);
+        assert!(err.contains("page not found"), "{}", err);
+        let reqs = rec.lock().unwrap();
+        assert!(reqs.iter().all(|r| r.starts_with("POST /v1/audio/transcriptions ")));
+    }
+
+    #[tokio::test]
+    async fn mock_probe_200_sends_model_and_no_authorization_without_key() {
+        let (base, rec) = mock_server(|_, _| ("200 OK", r#"{"text":""}"#.to_string())).await;
+        let p = mock_provider(&base, None, None);
         assert!(p.test_connection().await.unwrap());
 
         let reqs = rec.lock().unwrap();
-        assert_eq!(reqs.len(), 2);
-        assert!(reqs[0].starts_with("GET /v1/models "));
-        let post = &reqs[1];
+        assert_eq!(reqs.len(), 1);
+        let post = &reqs[0];
         assert!(post.starts_with("POST /v1/audio/transcriptions "));
         assert!(post.contains("name=\"model\""));
         assert!(post.contains("faster-whisper-small"));
-        // Empty key: no Authorization header on either request.
-        assert!(!reqs.iter().any(|r| r.to_ascii_lowercase().contains("authorization:")));
+        assert!(!lower(post).contains("authorization:"));
     }
 
     #[tokio::test]
-    async fn mock_key_is_sent_as_bearer_when_set() {
+    async fn mock_openai_key_is_not_sent_to_custom_endpoint() {
         let (base, rec) = mock_server(|_, _| ("200 OK", "{}".to_string())).await;
-        let p = custom_provider(&base, "m", "secret-key");
+        let p = mock_provider(&base, Some("sk-openai-secret"), None);
         assert!(p.test_connection().await.unwrap());
         let reqs = rec.lock().unwrap();
-        assert!(reqs[0].to_ascii_lowercase().contains("authorization: bearer secret-key"));
+        assert!(!lower(&reqs[0]).contains("authorization:"));
+        assert!(!reqs[0].contains("sk-openai-secret"));
     }
 
     #[tokio::test]
-    async fn mock_401_reports_refused_key() {
+    async fn mock_custom_key_is_sent_as_bearer() {
+        let (base, rec) = mock_server(|_, _| ("200 OK", "{}".to_string())).await;
+        let p = mock_provider(&base, Some("sk-openai-secret"), Some("custom-secret"));
+        assert!(p.test_connection().await.unwrap());
+        let reqs = rec.lock().unwrap();
+        assert!(lower(&reqs[0]).contains("authorization: bearer custom-secret"));
+        assert!(!reqs[0].contains("sk-openai-secret"));
+    }
+
+    #[tokio::test]
+    async fn mock_probe_401_without_key_says_server_needs_a_key() {
         let (base, _rec) = mock_server(|_, _| ("401 Unauthorized", "{}".to_string())).await;
-        let p = custom_provider(&base, "m", "bad-key");
+        let p = mock_provider(&base, None, None);
+        let err = p.test_connection().await.unwrap_err().to_string();
+        assert_eq!(err, "This server needs an API key.");
+    }
+
+    #[tokio::test]
+    async fn mock_probe_403_with_key_reports_refused_key() {
+        let (base, _rec) = mock_server(|_, _| ("403 Forbidden", "{}".to_string())).await;
+        let p = mock_provider(&base, None, Some("bad-key"));
         let err = p.test_connection().await.unwrap_err().to_string();
         assert!(err.contains("The server refused the API key"), "{}", err);
         assert!(!err.contains("bad-key"));
+    }
+
+    #[tokio::test]
+    async fn mock_probe_405_and_500_report_status_and_trimmed_body() {
+        let (base, _rec) = mock_server(|_, _| ("405 Method Not Allowed", "{}".to_string())).await;
+        let err = mock_provider(&base, None, None).test_connection().await.unwrap_err().to_string();
+        assert!(err.contains("405"), "{}", err);
+
+        let long_body = "boom ".repeat(100);
+        let (base, _rec) = mock_server(move |_, _| ("500 Internal Server Error", long_body.clone())).await;
+        let err = mock_provider(&base, None, None).test_connection().await.unwrap_err().to_string();
+        assert!(err.starts_with("The server answered 500: boom"), "{}", err);
+        assert!(err.chars().count() < 260, "body must be trimmed: {}", err.len());
+    }
+
+    #[tokio::test]
+    async fn mock_unreachable_server_says_so() {
+        // Bind then drop to get a port nothing listens on.
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/v1", l.local_addr().unwrap());
+        drop(l);
+        let err = mock_provider(&base, None, None).test_connection().await.unwrap_err().to_string();
+        assert_eq!(err, format!("Couldn't reach {}. Is the server running?", base));
     }
 
     #[tokio::test]
@@ -784,7 +1043,8 @@ mod tests {
         let (base, rec) =
             mock_server(|_, _| ("200 OK", r#"{"text":" hello "}"#.to_string())).await;
         let (tx, mut rx) = mpsc::channel(4);
-        WhisperApiSTT::send_segment("", &base, "my-model", "en-US", vec![100i16; 1600], 42, tx).await;
+        let p = mock_provider(&base, None, None);
+        WhisperApiSTT::send_segment(&p.target(), &p.reporter, vec![100i16; 1600], 42, tx).await;
 
         let result = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
             .await
@@ -797,7 +1057,34 @@ mod tests {
         let reqs = rec.lock().unwrap();
         assert_eq!(reqs.len(), 1);
         assert!(reqs[0].starts_with("POST /v1/audio/transcriptions "));
-        assert!(reqs[0].contains("my-model"));
-        assert!(!reqs[0].to_ascii_lowercase().contains("authorization:"));
+        assert!(reqs[0].contains("faster-whisper-small"));
+        assert!(!lower(&reqs[0]).contains("authorization:"));
+    }
+
+    #[tokio::test]
+    async fn mock_segment_failures_are_reported_once_and_cleared_on_success() {
+        let fail = std::sync::Arc::new(AtomicBool::new(true));
+        let f = fail.clone();
+        let (base, _rec) = mock_server(move |_, _| {
+            if f.load(Ordering::SeqCst) {
+                ("500 Internal Server Error", "nope".to_string())
+            } else {
+                ("200 OK", r#"{"text":"ok"}"#.to_string())
+            }
+        })
+        .await;
+        let p = mock_provider(&base, None, None);
+        let (tx, mut rx) = mpsc::channel(4);
+
+        WhisperApiSTT::send_segment(&p.target(), &p.reporter, vec![1; 160], 0, tx.clone()).await;
+        assert!(p.reporter.failing.load(Ordering::SeqCst));
+        WhisperApiSTT::send_segment(&p.target(), &p.reporter, vec![1; 160], 0, tx.clone()).await;
+        assert!(p.reporter.failing.load(Ordering::SeqCst));
+        assert!(rx.try_recv().is_err(), "failed segments emit no transcript");
+
+        fail.store(false, Ordering::SeqCst);
+        WhisperApiSTT::send_segment(&p.target(), &p.reporter, vec![1; 160], 0, tx).await;
+        assert!(!p.reporter.failing.load(Ordering::SeqCst));
+        assert_eq!(rx.recv().await.unwrap().text, "ok");
     }
 }

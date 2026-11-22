@@ -257,7 +257,6 @@ pub async fn start_capture(
                 provider_type,
                 router.deepgram_api_key.clone(),
                 router.deepgram_config.clone(),
-                router.whisper_api_key.clone(),
                 router.azure_speech_key.clone(),
                 router.azure_speech_region.clone(),
                 router.groq_whisper_api_key.clone(),
@@ -267,7 +266,7 @@ pub async fn start_capture(
         });
 
         match stt_config {
-            Some((pt, dk, dg_cfg, wk, ak, ar, gk, ck, lang)) => {
+            Some((pt, dk, dg_cfg, ak, ar, gk, ck, lang)) => {
                 use crate::stt::provider::STTProviderType;
                 system_mai_selected = pt == STTProviderType::AzureMaiStreaming;
                 let p: Box<dyn STTProvider> = match pt {
@@ -281,22 +280,14 @@ pub async fn start_capture(
                         Box::new(p)
                     }
                     STTProviderType::WhisperApi => {
-                        let mut p = match wk.as_deref() {
-                            Some(k) => crate::stt::whisper_api::WhisperApiSTT::with_api_key(k),
-                            None => crate::stt::whisper_api::WhisperApiSTT::new(),
-                        };
-                        // Endpoint and model are read fresh (not from the router cache)
-                        // so a saved change applies without re-testing the provider.
-                        let base_url = get_credential_key(
-                            &state,
-                            crate::stt::whisper_api::BASE_URL_CREDENTIAL_KEY,
+                        // Read fresh from the store (not the router cache) so saved
+                        // changes apply without re-testing the provider.
+                        let mut p = crate::stt::whisper_api::WhisperApiSTT::from_store(
+                            |k| get_credential_key(&state, k),
+                            &lang,
                         );
-                        let model = get_credential_key(
-                            &state,
-                            crate::stt::whisper_api::MODEL_CREDENTIAL_KEY,
-                        );
-                        p.set_endpoint(base_url.as_deref(), model.as_deref());
-                        p.set_language(&lang);
+                        p.set_app_handle(app.clone());
+                        p.set_party("Them");
                         Box::new(p)
                     }
                     STTProviderType::AzureSpeech => {
@@ -2049,16 +2040,12 @@ async fn create_stt_provider_for_party(
         }
         STTProviderType::WhisperApi => {
             let lang = stt_language.clone();
-            let key = get_credential_key(state, "whisper_api");
-            log::info!("WhisperApi key for '{}': {}", party_role, if key.is_some() { "present" } else { "MISSING" });
-            let mut p = match key.as_deref() {
-                Some(k) => crate::stt::whisper_api::WhisperApiSTT::with_api_key(k),
-                None => crate::stt::whisper_api::WhisperApiSTT::new(),
-            };
-            let base_url = get_credential_key(state, crate::stt::whisper_api::BASE_URL_CREDENTIAL_KEY);
-            let model = get_credential_key(state, crate::stt::whisper_api::MODEL_CREDENTIAL_KEY);
-            p.set_endpoint(base_url.as_deref(), model.as_deref());
-            p.set_language(&lang);
+            let mut p = crate::stt::whisper_api::WhisperApiSTT::from_store(
+                |k| get_credential_key(state, k),
+                &lang,
+            );
+            p.set_app_handle(app.clone());
+            p.set_party(party_role);
             Ok(Some(Box::new(p)))
         }
         STTProviderType::AzureSpeech => {

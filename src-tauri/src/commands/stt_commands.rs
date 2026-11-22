@@ -165,25 +165,26 @@ pub async fn test_stt_connection(app: AppHandle, provider: String) -> Result<boo
     Ok(result)
 }
 
-/// Load the Whisper API key plus optional custom endpoint/model into the router.
-/// Missing values clear the cached ones so a removed endpoint or key does not linger.
+/// Load the Whisper API settings into the router: the OpenAI key, the optional
+/// key for a custom endpoint, and the optional custom endpoint and model.
+/// Missing values clear the cached ones so a removed value does not linger.
 fn load_whisper_api_credentials(
     router: &mut crate::stt::STTRouter,
     cred: &crate::credentials::CredentialManager,
 ) {
-    match cred.get_key("whisper_api") {
-        Ok(Some(key)) if !key.is_empty() => router.set_whisper_api_key(&key),
-        _ => router.whisper_api_key = None,
-    }
-    let base_url = cred
-        .get_key(crate::stt::whisper_api::BASE_URL_CREDENTIAL_KEY)
-        .ok()
-        .flatten();
-    let model = cred
-        .get_key(crate::stt::whisper_api::MODEL_CREDENTIAL_KEY)
-        .ok()
-        .flatten();
-    router.set_whisper_api_endpoint(base_url.as_deref(), model.as_deref());
+    use crate::stt::whisper_api as w;
+    let get = |key: &str| {
+        cred.get_key(key)
+            .ok()
+            .flatten()
+            .filter(|v| !v.trim().is_empty())
+    };
+    router.set_whisper_api_config(
+        get(w::OPENAI_KEY_CREDENTIAL_KEY).as_deref(),
+        get(w::CUSTOM_KEY_CREDENTIAL_KEY).as_deref(),
+        get(w::BASE_URL_CREDENTIAL_KEY).as_deref(),
+        get(w::MODEL_CREDENTIAL_KEY).as_deref(),
+    );
 }
 
 /// Read Azure MAI credentials directly from secure storage. There is
