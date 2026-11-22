@@ -1,3 +1,9 @@
+## [2.41.3](https://github.com/naxhq/NexQ/compare/v2.41.2...v2.41.3) (2026-11-22)
+
+
+### Bug Fixes
+
+* **stt:** speech after a pause shows on its own line right away, and Assist drops the old question ([#134](https://github.com/naxhq/NexQ/issues/134)) ([6607899](https://github.com/naxhq/NexQ/commit/66078996969300be972e1f4d8da78c28f5915b9e)), closes [#36](https://github.com/naxhq/NexQ/issues/36)
 ## [2.41.2](https://github.com/naxhq/NexQ/compare/v2.41.1...v2.41.2) (2026-11-21)
 
 
