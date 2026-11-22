@@ -47,6 +47,17 @@ These can't detect the language: Web Speech, Windows Speech, Azure Speech, Sherp
 
 **Which engines cover which languages:** Parakeet TDT 0.6B v3 covers 25 European languages (including Ukrainian and Russian, not Chinese, Japanese, Korean, Hindi, Arabic or Turkish). Deepgram Flux is English only; Flux Multilingual covers English, Spanish, French, German, Hindi, Russian, Portuguese, Japanese, Italian and Dutch. Azure MAI Streaming supports multilingual auto-detection and explicit supported locales; see [Microsoft's language list](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/mai-transcribe-2-streaming). Parakeet CTC 110M, ORT Streaming, the English Sherpa-ONNX zipformers and the `.en` and Distil Whisper.cpp models are English only. Of the other Sherpa-ONNX models, the Chinese/Multilingual zipformer covers Chinese only (not English) and SenseVoice Small covers Chinese, English, Japanese and Korean. For Chinese, use Deepgram Nova-3, a multilingual Whisper model, Azure Speech, Azure MAI Streaming, or Sherpa-ONNX SenseVoice Small.
 
+### Custom Whisper endpoint (local servers)
+
+The **Whisper API** provider can send audio to any server that speaks OpenAI's `/v1/audio/transcriptions` API instead of OpenAI, for example [faster-whisper-server / Speaches](https://github.com/speaches-ai/speaches) or a local wrapper around another speech model. The audio stays on the machine you point it at.
+
+1. Open Settings > STT Providers and choose **Whisper API**.
+2. Under **Endpoint**, enter the server's base URL, for example `http://127.0.0.1:8000/v1`. A pasted `.../audio/transcriptions` URL is trimmed for you. It must start with `http://` or `https://`.
+3. Under **Model**, enter the model name the server expects, for example `Systran/faster-whisper-small`.
+4. Leave **API Key** empty if the server needs none, then click **Save & Test**.
+
+Leave **Endpoint** and **Model** empty to keep using OpenAI (`https://api.openai.com/v1`, model `whisper-1`), which still needs an API key. Save & Test asks the server for `/models` and, if the server has no such route, sends half a second of silence to the transcription endpoint instead. Changing the endpoint or model applies to the next meeting.
+
 ### Azure MAI Streaming (public preview)
 
 **Azure MAI Streaming** is a separate provider (`azure_mai_streaming`) that uses Microsoft's `mai-transcribe-2-streaming` model. It is not the existing **Azure Speech** provider (`azure_speech`), which still sends short audio batches to the Azure Speech REST API. The new provider uses the [official Azure Speech SDK for JavaScript](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/mai-transcribe-2-streaming-speech-sdk), bundled with NexQ; you do not need to install Node.js, the SDK, or another runtime.

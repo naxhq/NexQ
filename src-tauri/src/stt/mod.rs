@@ -110,6 +110,10 @@ pub struct STTRouter {
     pub(crate) deepgram_config: deepgram::DeepgramConfig,
     /// OpenAI API key for Whisper API (cached from credential store)
     pub(crate) whisper_api_key: Option<String>,
+    /// Optional custom OpenAI-compatible base URL for Whisper API (non-secret)
+    pub(crate) whisper_api_base_url: Option<String>,
+    /// Optional custom model name for Whisper API (non-secret)
+    pub(crate) whisper_api_model: Option<String>,
     /// Azure Speech subscription key (cached from credential store)
     pub(crate) azure_speech_key: Option<String>,
     /// Azure Speech region (e.g., "eastus", "westeurope")
@@ -137,6 +141,8 @@ impl STTRouter {
             deepgram_api_key: None,
             deepgram_config: deepgram::DeepgramConfig::default(),
             whisper_api_key: None,
+            whisper_api_base_url: None,
+            whisper_api_model: None,
             azure_speech_key: None,
             azure_speech_region: None,
             groq_whisper_api_key: None,
@@ -206,12 +212,7 @@ impl STTRouter {
                 Box::new(p)
             }
             STTProviderType::WhisperApi => {
-                let mut p = whisper_api::WhisperApiSTT::new();
-                if let Some(ref key) = self.whisper_api_key {
-                    p.set_api_key(key);
-                }
-                p.set_language(&self.language);
-                Box::new(p)
+                Box::new(self.build_whisper_api())
             }
             STTProviderType::AzureSpeech => {
                 let mut p = azure_speech::AzureSpeechSTT::new();
@@ -437,14 +438,36 @@ impl STTRouter {
         }
     }
 
+    /// Build a Whisper API provider from the cached key, endpoint and model.
+    fn build_whisper_api(&self) -> whisper_api::WhisperApiSTT {
+        let mut p = whisper_api::WhisperApiSTT::new();
+        if let Some(ref key) = self.whisper_api_key {
+            p.set_api_key(key);
+        }
+        p.set_endpoint(
+            self.whisper_api_base_url.as_deref(),
+            self.whisper_api_model.as_deref(),
+        );
+        p.set_language(&self.language);
+        p
+    }
+
     /// Set the OpenAI Whisper API key.
     pub fn set_whisper_api_key(&mut self, key: &str) {
         self.whisper_api_key = Some(key.to_string());
 
         if self.active_type == Some(STTProviderType::WhisperApi) {
-            let mut p = whisper_api::WhisperApiSTT::with_api_key(key);
-            p.set_language(&self.language);
-            self.active_provider = Some(Box::new(p));
+            self.active_provider = Some(Box::new(self.build_whisper_api()));
+        }
+    }
+
+    /// Set (or clear, with `None`) the optional custom Whisper API endpoint and model.
+    pub fn set_whisper_api_endpoint(&mut self, base_url: Option<&str>, model: Option<&str>) {
+        self.whisper_api_base_url = base_url.map(str::to_string);
+        self.whisper_api_model = model.map(str::to_string);
+
+        if self.active_type == Some(STTProviderType::WhisperApi) {
+            self.active_provider = Some(Box::new(self.build_whisper_api()));
         }
     }
 
@@ -534,11 +557,8 @@ impl STTRouter {
                     .map_err(|e| format!("Connection test failed: {}", e))
             }
             STTProviderType::WhisperApi => {
-                let key = self
-                    .whisper_api_key
-                    .as_deref()
-                    .ok_or("No OpenAI API key configured")?;
-                let provider = whisper_api::WhisperApiSTT::with_api_key(key);
+                // The provider itself requires a key unless a custom endpoint is set.
+                let provider = self.build_whisper_api();
                 provider
                     .test_connection()
                     .await

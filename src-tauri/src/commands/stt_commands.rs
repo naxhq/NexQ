@@ -38,9 +38,7 @@ pub async fn set_stt_provider(app: AppHandle, provider: String) -> Result<(), St
                     }
                 }
                 STTProviderType::WhisperApi => {
-                    if let Ok(Some(key)) = cred.get_key("whisper_api") {
-                        router.set_whisper_api_key(&key);
-                    }
+                    load_whisper_api_credentials(&mut router, &cred);
                 }
                 STTProviderType::AzureSpeech => {
                     if let Ok(Some(key)) = cred.get_key("azure_speech") {
@@ -127,9 +125,7 @@ pub async fn test_stt_connection(app: AppHandle, provider: String) -> Result<boo
                     }
                 }
                 STTProviderType::WhisperApi => {
-                    if let Ok(Some(key)) = cred.get_key("whisper_api") {
-                        router.set_whisper_api_key(&key);
-                    }
+                    load_whisper_api_credentials(&mut router, &cred);
                 }
                 STTProviderType::AzureSpeech => {
                     if let Ok(Some(key)) = cred.get_key("azure_speech") {
@@ -167,6 +163,27 @@ pub async fn test_stt_connection(app: AppHandle, provider: String) -> Result<boo
     })?;
 
     Ok(result)
+}
+
+/// Load the Whisper API key plus optional custom endpoint/model into the router.
+/// Missing values clear the cached ones so a removed endpoint or key does not linger.
+fn load_whisper_api_credentials(
+    router: &mut crate::stt::STTRouter,
+    cred: &crate::credentials::CredentialManager,
+) {
+    match cred.get_key("whisper_api") {
+        Ok(Some(key)) if !key.is_empty() => router.set_whisper_api_key(&key),
+        _ => router.whisper_api_key = None,
+    }
+    let base_url = cred
+        .get_key(crate::stt::whisper_api::BASE_URL_CREDENTIAL_KEY)
+        .ok()
+        .flatten();
+    let model = cred
+        .get_key(crate::stt::whisper_api::MODEL_CREDENTIAL_KEY)
+        .ok()
+        .flatten();
+    router.set_whisper_api_endpoint(base_url.as_deref(), model.as_deref());
 }
 
 /// Read Azure MAI credentials directly from secure storage. There is

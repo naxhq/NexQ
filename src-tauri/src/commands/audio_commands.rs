@@ -285,6 +285,17 @@ pub async fn start_capture(
                             Some(k) => crate::stt::whisper_api::WhisperApiSTT::with_api_key(k),
                             None => crate::stt::whisper_api::WhisperApiSTT::new(),
                         };
+                        // Endpoint and model are read fresh (not from the router cache)
+                        // so a saved change applies without re-testing the provider.
+                        let base_url = get_credential_key(
+                            &state,
+                            crate::stt::whisper_api::BASE_URL_CREDENTIAL_KEY,
+                        );
+                        let model = get_credential_key(
+                            &state,
+                            crate::stt::whisper_api::MODEL_CREDENTIAL_KEY,
+                        );
+                        p.set_endpoint(base_url.as_deref(), model.as_deref());
                         p.set_language(&lang);
                         Box::new(p)
                     }
@@ -2044,6 +2055,9 @@ async fn create_stt_provider_for_party(
                 Some(k) => crate::stt::whisper_api::WhisperApiSTT::with_api_key(k),
                 None => crate::stt::whisper_api::WhisperApiSTT::new(),
             };
+            let base_url = get_credential_key(state, crate::stt::whisper_api::BASE_URL_CREDENTIAL_KEY);
+            let model = get_credential_key(state, crate::stt::whisper_api::MODEL_CREDENTIAL_KEY);
+            p.set_endpoint(base_url.as_deref(), model.as_deref());
             p.set_language(&lang);
             Ok(Some(Box::new(p)))
         }

@@ -9,6 +9,7 @@ const azureMai = vi.hoisted(() => ({
   has: vi.fn(),
   get: vi.fn(),
   probe: vi.fn(),
+  sttTest: vi.fn(),
   store: vi.fn(),
   delete: vi.fn(),
 }));
@@ -27,6 +28,7 @@ vi.mock("../lib/ipc", async (importOriginal) => ({
   storeApiKey: (provider: string, key: string) => azureMai.store(provider, key),
   deleteApiKey: (provider: string) => azureMai.delete(provider),
   testAzureMaiConnection: (key: string, region: string) => azureMai.probe(key, region),
+  testSTTConnection: (provider: string) => azureMai.sttTest(provider),
   listLocalSTTEngines: async () => [],
 }));
 
@@ -47,6 +49,7 @@ beforeEach(() => {
   azureMai.has.mockReset().mockImplementation(async (provider: string) => azureMai.credentials.has(provider));
   azureMai.get.mockReset().mockImplementation(async (provider: string) => azureMai.credentials.get(provider) ?? null);
   azureMai.probe.mockReset().mockResolvedValue(true);
+  azureMai.sttTest.mockReset().mockResolvedValue(true);
   azureMai.store.mockReset().mockImplementation(async (provider: string, key: string) => {
     azureMai.credentials.set(provider, key);
   });
@@ -426,4 +429,83 @@ it("still reads back stored keys for non-MAI cloud providers", async () => {
   render(<STTSettings />);
   await waitFor(() => expect(screen.getByLabelText("API Key")).toHaveValue("deepgram-key"));
   expect(azureMai.get).toHaveBeenCalledWith("deepgram");
+});
+
+function useWhisperApiProvider() {
+  useConfigStore.setState({
+    meetingAudioConfig: {
+      ...config,
+      you: { ...config.you, stt_provider: "whisper_api" },
+    },
+  });
+}
+
+it("loads the saved Whisper API endpoint and model and explains them", async () => {
+  azureMai.credentials.set("whisper_api_base_url", "http://127.0.0.1:8000/v1");
+  azureMai.credentials.set("whisper_api_model", "Systran/faster-whisper-small");
+  useWhisperApiProvider();
+
+  render(<STTSettings />);
+  const endpoint = await screen.findByLabelText("Endpoint");
+  await waitFor(() => expect(endpoint).toHaveValue("http://127.0.0.1:8000/v1"));
+  expect(screen.getByLabelText("Model")).toHaveValue("Systran/faster-whisper-small");
+  expect(endpoint).toHaveAttribute("placeholder", "https://api.openai.com/v1");
+  expect(screen.getByLabelText("Model")).toHaveAttribute("placeholder", "whisper-1");
+  expect(screen.getByText(
+    "Any OpenAI-compatible transcription server, for example a local faster-whisper server. Leave empty for OpenAI.",
+  )).toBeInTheDocument();
+});
+
+it("saves the Whisper API endpoint and model on blur and deletes them when emptied", async () => {
+  useWhisperApiProvider();
+  const user = userEvent.setup();
+  render(<STTSettings />);
+
+  const endpoint = await screen.findByLabelText("Endpoint");
+  await waitFor(() => expect(endpoint).not.toBeDisabled());
+  await user.type(endpoint, "http://127.0.0.1:8000/v1");
+  await user.type(screen.getByLabelText("Model"), "my-model");
+  await user.tab();
+  await waitFor(() => expect(azureMai.credentials.get("whisper_api_base_url")).toBe("http://127.0.0.1:8000/v1"));
+  expect(azureMai.credentials.get("whisper_api_model")).toBe("my-model");
+
+  await user.clear(endpoint);
+  await user.clear(screen.getByLabelText("Model"));
+  await user.tab();
+  await waitFor(() => expect(azureMai.credentials.has("whisper_api_base_url")).toBe(false));
+  expect(azureMai.credentials.has("whisper_api_model")).toBe(false);
+});
+
+it("lets Whisper API Save & Test run without an API key when an endpoint is set", async () => {
+  useWhisperApiProvider();
+  const user = userEvent.setup();
+  render(<STTSettings />);
+
+  const endpoint = await screen.findByLabelText("Endpoint");
+  await waitFor(() => expect(endpoint).not.toBeDisabled());
+  expect(screen.queryByRole("button", { name: "Save & Test" })).not.toBeInTheDocument();
+
+  await user.type(endpoint, "http://127.0.0.1:8000/v1");
+  await user.click(screen.getByRole("button", { name: "Save & Test" }));
+
+  await waitFor(() => expect(azureMai.sttTest).toHaveBeenCalledWith("whisper_api"));
+  expect(azureMai.credentials.get("whisper_api_base_url")).toBe("http://127.0.0.1:8000/v1");
+  expect(azureMai.credentials.has("whisper_api")).toBe(false);
+  await waitFor(() => expect(useConfigStore.getState().verifiedCloudProviders).toContain("whisper_api"));
+});
+
+it("keeps Whisper API key-required by default and rejects a non-http endpoint", async () => {
+  useWhisperApiProvider();
+  const user = userEvent.setup();
+  render(<STTSettings />);
+
+  const endpoint = await screen.findByLabelText("Endpoint");
+  await waitFor(() => expect(endpoint).not.toBeDisabled());
+  await user.type(screen.getByLabelText(/^API Key/), "sk-test");
+  await user.type(endpoint, "127.0.0.1:8000");
+  await user.click(screen.getByRole("button", { name: "Save & Test" }));
+
+  expect(await screen.findByText("Endpoint must start with http:// or https://")).toBeInTheDocument();
+  expect(azureMai.sttTest).not.toHaveBeenCalled();
+  expect(azureMai.credentials.has("whisper_api_base_url")).toBe(false);
 });
