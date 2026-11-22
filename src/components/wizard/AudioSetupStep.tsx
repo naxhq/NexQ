@@ -56,7 +56,7 @@ export function AudioSetupStep() {
       role: "Them",
       device_id: systemDeviceId ?? "default",
       is_input_device: false,
-      stt_provider: "whisper_cpp",
+      stt_provider: "deepgram",
     },
     recording_enabled: false,
     preset_name: null,

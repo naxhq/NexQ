@@ -6,14 +6,13 @@ import { hasApiKey } from "../../lib/ipc";
 import type { STTProviderType, MeetingAudioConfig } from "../../lib/types";
 import {
   Globe,
-  Server,
   Cloud,
   Zap,
   CheckCircle,
   AlertCircle,
 } from "lucide-react";
 
-interface ProviderChoice {
+export interface ProviderChoice {
   value: STTProviderType;
   label: string;
   icon: React.ReactNode;
@@ -22,20 +21,14 @@ interface ProviderChoice {
   free: boolean;
 }
 
-const PROVIDERS: ProviderChoice[] = [
+// Only engines that survive the load-time migration in configStore.loadConfig:
+// whisper_cpp is batch-only (not live STT) and is switched away at the next launch.
+export const WIZARD_STT_PROVIDERS: ProviderChoice[] = [
   {
     value: "web_speech",
     label: "Web Speech API",
     icon: <Globe className="h-4 w-4" />,
     description: "Browser-native, works with microphone input",
-    requiresKey: false,
-    free: true,
-  },
-  {
-    value: "whisper_cpp",
-    label: "Whisper.cpp (Local)",
-    icon: <Server className="h-4 w-4" />,
-    description: "OpenAI Whisper running locally — offline, free",
     requiresKey: false,
     free: true,
   },
@@ -81,7 +74,7 @@ export function STTSetupStep() {
     meetingAudioConfig?.you.stt_provider ?? "web_speech"
   );
   const [themSTT, setThemSTT] = useState<STTProviderType>(
-    meetingAudioConfig?.them.stt_provider ?? "whisper_cpp"
+    meetingAudioConfig?.them.stt_provider ?? "deepgram"
   );
   const [keyStatus, setKeyStatus] = useState<Record<string, boolean>>({});
 
@@ -132,8 +125,9 @@ export function STTSetupStep() {
         {/* Recommended free setup banner */}
         <div className="rounded-xl border border-success/20 bg-success/5 px-4 py-3">
           <p className="text-xs text-success leading-relaxed">
-            <strong>Recommended (Free):</strong> Web Speech for You + Windows
-            Native for Them. No API keys needed!
+            <strong>Recommended:</strong> Web Speech for You (free, no key) +
+            Deepgram for Them. Offline local models can be added later in
+            Settings.
           </p>
         </div>
 
@@ -146,7 +140,7 @@ export function STTSetupStep() {
             STT Provider
           </label>
           <div className="grid grid-cols-1 gap-2">
-            {PROVIDERS.map((p) => (
+            {WIZARD_STT_PROVIDERS.map((p) => (
               <ProviderButton
                 key={p.value}
                 provider={p}
@@ -167,7 +161,7 @@ export function STTSetupStep() {
             STT Provider
           </label>
           <div className="grid grid-cols-1 gap-2">
-            {PROVIDERS.filter((p) => p.value !== "web_speech").map((p) => (
+            {WIZARD_STT_PROVIDERS.filter((p) => p.value !== "web_speech").map((p) => (
               <ProviderButton
                 key={p.value}
                 provider={p}
