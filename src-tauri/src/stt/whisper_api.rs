@@ -212,6 +212,10 @@ fn refused_message(status: reqwest::StatusCode) -> String {
     )
 }
 
+fn openai_refused_message(status: reqwest::StatusCode) -> String {
+    format!("OpenAI refused the key (HTTP {}).", status.as_u16())
+}
+
 /// OpenAI Whisper transcription API response.
 #[derive(Debug, Deserialize)]
 struct WhisperResponse {
@@ -338,7 +342,7 @@ impl WhisperApiSTT {
 
     /// True when a non-OpenAI base URL is configured (API key becomes optional).
     pub fn is_custom_endpoint(&self) -> bool {
-        self.base_url != DEFAULT_BASE_URL
+        !self.base_url.eq_ignore_ascii_case(DEFAULT_BASE_URL)
     }
 
     /// Multipart form for one transcription request.
@@ -624,9 +628,19 @@ impl STTProvider for WhisperApiSTT {
 
         if !custom {
             // OpenAI: list models, a lightweight authenticated endpoint.
-            let response = with_auth(client.get(models_url(&self.base_url)), &self.api_key)
+            let response = match with_auth(client.get(models_url(&self.base_url)), &self.api_key)
                 .send()
-                .await?;
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    log::warn!("WhisperApiSTT: Connection test request failed: {}", e);
+                    return Err(unreachable_message(&self.base_url).into());
+                }
+            };
+            if refused_status(response.status()) {
+                return Err(openai_refused_message(response.status()).into());
+            }
             let success = response.status().is_success();
             if success {
                 log::info!("WhisperApiSTT: Connection test passed");
@@ -933,6 +947,31 @@ mod tests {
         let p = WhisperApiSTT::from_store(|k| (k == "whisper_api").then(|| "sk".to_string()), "en");
         assert_eq!(p.api_key, "sk");
         assert_eq!(p.base_url, DEFAULT_BASE_URL);
+    }
+
+    #[test]
+    fn openai_messages_are_plain() {
+        assert_eq!(
+            openai_refused_message(reqwest::StatusCode::UNAUTHORIZED),
+            "OpenAI refused the key (HTTP 401)."
+        );
+        assert_eq!(
+            unreachable_message(DEFAULT_BASE_URL),
+            "Couldn't reach https://api.openai.com/v1. Is the server running?"
+        );
+    }
+
+    #[test]
+    fn openai_url_is_default_regardless_of_case() {
+        let p = WhisperApiSTT::from_settings(
+            Some("sk-openai"),
+            Some("custom"),
+            Some("HTTPS://API.OPENAI.COM/v1/"),
+            None,
+            "en",
+        );
+        assert!(!p.is_custom_endpoint());
+        assert_eq!(p.api_key, "sk-openai");
     }
 
     #[test]

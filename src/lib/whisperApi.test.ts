@@ -3,7 +3,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 const ipc = vi.hoisted(() => ({ has: vi.fn() }));
 vi.mock("./ipc", () => ({ hasApiKey: (p: string) => ipc.has(p) }));
 
-import { hasSttCredential, isInsecureRemoteHttp, isValidWhisperBaseUrl, isWhisperApiConfigured } from "./whisperApi";
+import { hasSttCredential, isCustomWhisperEndpoint, isInsecureRemoteHttp, isValidWhisperBaseUrl, isWhisperApiConfigured } from "./whisperApi";
 
 beforeEach(() => ipc.has.mockReset());
 
@@ -50,4 +50,16 @@ it("flags http endpoints on other machines only", () => {
   expect(isInsecureRemoteHttp("http://[::1]:8000/v1")).toBe(false);
   expect(isInsecureRemoteHttp("https://speech.example.com/v1")).toBe(false);
   expect(isInsecureRemoteHttp("")).toBe(false);
+});
+
+it("recognizes a custom endpoint like the backend does", () => {
+  expect(isCustomWhisperEndpoint("")).toBe(false);
+  expect(isCustomWhisperEndpoint("   ")).toBe(false);
+  expect(isCustomWhisperEndpoint("https://api.openai.com/v1")).toBe(false);
+  expect(isCustomWhisperEndpoint(" HTTPS://API.OpenAI.com/v1/ ")).toBe(false);
+  expect(isCustomWhisperEndpoint("https://api.openai.com/v1/audio/transcriptions")).toBe(false);
+  expect(isCustomWhisperEndpoint("https://api.openai.com/v1/audio/transcriptions/")).toBe(false);
+  expect(isCustomWhisperEndpoint("http://127.0.0.1:8000/v1")).toBe(true);
+  expect(isCustomWhisperEndpoint("http://127.0.0.1:8000/v1/audio/transcriptions")).toBe(true);
+  expect(isCustomWhisperEndpoint("https://api.openai.com/v2")).toBe(true);
 });

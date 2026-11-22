@@ -13,6 +13,7 @@ NexQ supports 12 STT providers. Each channel ("You" and "Them") can use a differ
 | Web Speech API | Browser | Free | Good | Real-time | Quick setup, long sessions, English |
 | Deepgram | Cloud | Pay per use | Excellent | Real-time | Production use, high accuracy; Flux knows when a speaker finishes |
 | Groq Whisper | Cloud | Free tier | Very Good | Very Fast | High accuracy at no cost |
+| [Whisper API](#custom-whisper-endpoint-local-servers) | Cloud or self-hosted | OpenAI pricing / free self-hosted | Very Good | Batched (~5 s) | OpenAI or your own compatible server |
 | Cartesia | Cloud | Pay per second | Very Good | Real-time | Lines that end when the speaker finishes (English, French, Hindi, Japanese, Spanish) |
 | Whisper (local) | Local | Free | Excellent | Slow | Privacy, offline use |
 | ONNX Runtime | Local | Free | Good | Medium | Balanced local option |

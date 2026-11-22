@@ -618,3 +618,71 @@ it("warns that a key is sent unencrypted to a non-local http endpoint, but not t
   await user.type(endpoint, "http://192.168.1.20:8000/v1");
   expect(await screen.findByText(/the key is sent unencrypted/)).toBeInTheDocument();
 });
+
+it("treats the OpenAI URL as the default: OpenAI key field and slot stay, nothing is stored", async () => {
+  azureMai.credentials.set("whisper_api", "sk-openai");
+  useWhisperApiProvider();
+  const { user, endpoint } = await renderWhisper();
+  expect(screen.getByLabelText("API Key")).toHaveValue("sk-openai");
+
+  await user.type(endpoint, "HTTPS://api.openai.com/v1/audio/transcriptions/");
+  await user.tab();
+  expect(screen.getByLabelText("API Key")).toHaveValue("sk-openai");
+  expect(screen.queryByLabelText("API key for this server (optional)")).not.toBeInTheDocument();
+  expect(azureMai.credentials.has("whisper_api_base_url")).toBe(false);
+});
+
+it("carries a typed, unsaved key over when the key slot swaps, but never a saved one", async () => {
+  azureMai.credentials.set("whisper_api", "sk-openai");
+  useWhisperApiProvider();
+  const first = await renderWhisper();
+
+  // A saved key stays with its slot.
+  expect(screen.getByLabelText("API Key")).toHaveValue("sk-openai");
+  await first.user.type(first.endpoint, "http://127.0.0.1:8000/v1");
+  const customKey = await screen.findByLabelText("API key for this server (optional)");
+  await waitFor(() => expect(customKey).toHaveValue(""));
+  cleanup();
+
+  // A key typed but not saved moves with the user to the other slot.
+  azureMai.credentials.clear();
+  useWhisperApiProvider();
+  const second = await renderWhisper();
+  await second.user.type(screen.getByLabelText("API Key"), "typed-key");
+  await second.user.type(second.endpoint, "http://127.0.0.1:8000/v1");
+  const swapped = await screen.findByLabelText("API key for this server (optional)");
+  await waitFor(() => expect(swapped).toHaveValue("typed-key"));
+});
+
+it("leaves the endpoint saved and the previous key intact when a test fails", async () => {
+  azureMai.credentials.set("whisper_api_custom_key", "old-key");
+  azureMai.credentials.set("whisper_api_base_url", "http://127.0.0.1:8000/v1");
+  azureMai.sttTest.mockRejectedValue("The server answered 404: not found");
+  useWhisperApiProvider();
+  const { user, endpoint } = await renderWhisper();
+
+  const key = screen.getByLabelText("API key for this server (optional)");
+  await waitFor(() => expect(key).toHaveValue("old-key"));
+  await user.clear(endpoint);
+  await user.type(endpoint, "http://127.0.0.1:9000/v1");
+  await user.clear(key);
+  await user.type(key, "new-key");
+  await user.click(screen.getByRole("button", { name: "Save & Test" }));
+
+  expect(await screen.findByText("The server answered 404: not found")).toBeInTheDocument();
+  expect(azureMai.credentials.get("whisper_api_base_url")).toBe("http://127.0.0.1:9000/v1");
+  expect(azureMai.credentials.get("whisper_api_custom_key")).toBe("old-key");
+});
+
+it("says the Whisper API key is stored, not verified, until a test passes", async () => {
+  azureMai.credentials.set("whisper_api", "sk-openai");
+  useWhisperApiProvider();
+  await renderWhisper();
+  expect(await screen.findByText("API key stored securely")).toBeInTheDocument();
+  expect(screen.queryByText("API key verified and stored securely")).not.toBeInTheDocument();
+
+  cleanup();
+  useWhisperApiProvider(true);
+  await renderWhisper();
+  expect(await screen.findByText("API key verified and stored securely")).toBeInTheDocument();
+});

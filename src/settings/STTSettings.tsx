@@ -30,6 +30,7 @@ import {
   WHISPER_API_BASE_URL_KEY,
   WHISPER_API_MODEL_KEY,
   WHISPER_ENDPOINT_ERROR,
+  isCustomWhisperEndpoint,
   isInsecureRemoteHttp,
   isValidWhisperBaseUrl,
 } from "../lib/whisperApi";
@@ -366,6 +367,8 @@ export function STTSettings() {
   const [whisperStoredKey, setWhisperStoredKey] = useState(false);
   // Last values written to the credential store, to skip no-op blur saves.
   const savedWhisperRef = useRef({ baseUrl: "", model: "" });
+  // The blur save in flight (Save & Test waits for it before reading the saved state).
+  const whisperSaveRef = useRef<Promise<void>>(Promise.resolve());
 
   const [localEngines, setLocalEngines] = useState<LocalSTTEngineInfo[]>([]);
   const activeParakeetModel = useConfigStore((s) =>
@@ -425,7 +428,7 @@ export function STTSettings() {
   const credentialStateReady = credentialStateProvider === selectedProvider;
   const isWhisperApi = selectedProvider === "whisper_api";
   // A custom endpoint makes the API key optional (local servers usually need none).
-  const whisperEndpointSet = isWhisperApi && whisperBaseUrl.trim() !== "";
+  const whisperEndpointSet = isWhisperApi && isCustomWhisperEndpoint(whisperBaseUrl);
   // The OpenAI key and a custom server's key live in separate slots; the OpenAI
   // key is never used for a custom endpoint.
   const activeCredentialKey = whisperEndpointSet
@@ -668,18 +671,22 @@ export function STTSettings() {
     setVerifiedCloudProviders(updated);
   }, [setVerifiedCloudProviders]);
 
-  /** Write (or, when empty, delete) the Whisper API endpoint and model. */
+  /**
+   * Write (or, when empty, delete) the Whisper API endpoint and model.
+   * The OpenAI URL is the default, so it is stored as empty.
+   */
   const persistWhisperEndpoint = useCallback(async (baseUrl: string, model: string) => {
+    const base = isCustomWhisperEndpoint(baseUrl) ? baseUrl.trim() : "";
     const entries: [string, string][] = [
-      [WHISPER_API_BASE_URL_KEY, baseUrl.trim()],
+      [WHISPER_API_BASE_URL_KEY, base],
       [WHISPER_API_MODEL_KEY, model.trim()],
     ];
     for (const [credKey, value] of entries) {
       if (value) await storeApiKey(credKey, value);
       else await deleteApiKey(credKey).catch(() => {});
     }
-    savedWhisperRef.current = { baseUrl: baseUrl.trim(), model: model.trim() };
-    setWhisperSavedBaseUrl(baseUrl.trim());
+    savedWhisperRef.current = { baseUrl: base, model: model.trim() };
+    setWhisperSavedBaseUrl(base);
   }, []);
 
   /** Save the endpoint/model on blur; a changed endpoint or model must be tested again. */
@@ -690,19 +697,25 @@ export function STTSettings() {
     }
     setWhisperEndpointError("");
     const saved = savedWhisperRef.current;
-    if (saved.baseUrl === whisperBaseUrl.trim() && saved.model === whisperModel.trim()) return;
-    try {
-      await persistWhisperEndpoint(whisperBaseUrl, whisperModel);
-      updateVerifiedProvider("whisper_api", false);
-    } catch (e) {
-      console.warn("Failed to save Whisper endpoint:", e);
-    }
+    const base = isCustomWhisperEndpoint(whisperBaseUrl) ? whisperBaseUrl.trim() : "";
+    if (saved.baseUrl === base && saved.model === whisperModel.trim()) return;
+    const run = (async () => {
+      try {
+        await persistWhisperEndpoint(whisperBaseUrl, whisperModel);
+        updateVerifiedProvider("whisper_api", false);
+      } catch (e) {
+        console.warn("Failed to save Whisper endpoint:", e);
+      }
+    })();
+    whisperSaveRef.current = run;
+    await run;
   }, [whisperBaseUrl, whisperModel, persistWhisperEndpoint, updateVerifiedProvider]);
 
   /**
    * Whisper API Save & Test. The key is written only when the user typed or
    * cleared it, into the slot for the current endpoint (OpenAI key or the custom
-   * server's key). On a failed test everything is put back as it was.
+   * server's key). A failed test restores the key slot and the verified flag.
+   * The endpoint and model stay saved: the blur save already wrote them.
    */
   const handleWhisperSaveAndTest = useCallback(async () => {
     const provider: STTProviderType = "whisper_api";
@@ -720,7 +733,7 @@ export function STTSettings() {
     }
     setWhisperEndpointError("");
 
-    const custom = whisperBaseUrl.trim() !== "";
+    const custom = isCustomWhisperEndpoint(whisperBaseUrl);
     const slot = custom ? WHISPER_API_CUSTOM_KEY : WHISPER_API_KEY;
     const typed = apiKey.trim();
     if (!custom && !typed) {
@@ -731,7 +744,8 @@ export function STTSettings() {
     setConnectionStatus("testing");
     setStatusMessage("Testing connection...");
 
-    const previousEndpoint = { ...savedWhisperRef.current };
+    // A blur save may still be writing the endpoint/model: let it finish first.
+    await whisperSaveRef.current;
     const wasVerified = useConfigStore.getState().verifiedCloudProviders.includes(provider);
     let previousKey: string | null = null;
     let keyWritten = false;
@@ -758,12 +772,11 @@ export function STTSettings() {
         setStatusMessage("Connection successful. Provider is ready.");
       }
     } catch (e) {
-      // Put everything back: the key slot, endpoint, model and verified state.
+      // Put back the key slot and the verified flag; the endpoint stays saved.
       if (keyWritten) {
         if (previousKey) await storeApiKey(slot, previousKey).catch(() => {});
         else await deleteApiKey(slot).catch(() => {});
       }
-      await persistWhisperEndpoint(previousEndpoint.baseUrl, previousEndpoint.model).catch(() => {});
       updateVerifiedProvider(provider, wasVerified);
       if (isStillSelected() && keyWritten) setHasStoredKey(previousKey !== null);
       fail(e instanceof Error ? e.message : String(e));
@@ -1185,6 +1198,8 @@ export function STTSettings() {
               <p className="text-xs text-success/70">
                 {selectedProvider === "azure_mai_streaming"
                   ? "API key configured and stored securely"
+                  : isWhisperApi && !verifiedCloudProviders.includes("whisper_api")
+                  ? "API key stored securely"
                   : "API key verified and stored securely"}
               </p>
             )}

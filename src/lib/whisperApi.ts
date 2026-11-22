@@ -7,6 +7,9 @@ export const WHISPER_API_CUSTOM_KEY = "whisper_api_custom_key";
 export const WHISPER_API_BASE_URL_KEY = "whisper_api_base_url";
 export const WHISPER_API_MODEL_KEY = "whisper_api_model";
 
+/** OpenAI's base URL, the default when no custom endpoint is set. */
+export const WHISPER_OPENAI_BASE_URL = "https://api.openai.com/v1";
+
 /** Shown when the endpoint field is not an http(s) URL. */
 export const WHISPER_ENDPOINT_ERROR = "Endpoint must start with http:// or https:// (for example http://127.0.0.1:8000/v1)";
 
@@ -44,4 +47,16 @@ export function isInsecureRemoteHttp(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * True when the typed endpoint is a server other than OpenAI. Mirrors the Rust
+ * normalization: trim, drop trailing slashes, strip a pasted `/audio/transcriptions`,
+ * then compare to the OpenAI URL case-insensitively. Empty is not custom.
+ */
+export function isCustomWhisperEndpoint(raw: string): boolean {
+  let v = raw.trim().replace(/\/+$/, "");
+  v = v.replace(/\/audio\/transcriptions$/i, "").replace(/\/+$/, "");
+  if (v === "") return false;
+  return v.toLowerCase() !== WHISPER_OPENAI_BASE_URL;
 }
