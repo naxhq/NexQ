@@ -22,6 +22,8 @@ import { liveInterviewScenario } from "./demo/scenarios/liveInterview";
 import { DemoPicker } from "./demo/DemoPicker";
 import { useDemoStore } from "./demo/demoStore";
 import { useMeetingStore } from "./stores/meetingStore";
+import { useConfigStore } from "./stores/configStore";
+import { resetLauncherAutoStart } from "./launcher/LauncherView";
 
 beforeAll(() => {
   mockWindows("launcher");
@@ -51,6 +53,8 @@ afterEach(() => {
   showMeetingOverlay.mockClear();
   useMeetingStore.getState().stopTimer();
   useMeetingStore.setState({ activeMeeting: null, currentView: "launcher", isRecording: false });
+  useConfigStore.setState({ startOnLogin: false });
+  resetLauncherAutoStart();
 });
 
 describe("demo mode in the launcher window", () => {
@@ -134,5 +138,34 @@ describe("demo picker while a real meeting runs", () => {
     expect(useDemoStore.getState().isDemoActive).toBe(false);
     expect(useMeetingStore.getState().activeMeeting?.id).toBe("real-1");
     useDemoStore.getState().closePicker();
+  });
+});
+
+describe("start on login and demos", () => {
+  it("does not start a recording again when the launcher comes back after a demo", async () => {
+    const original = useMeetingStore.getState().startMeetingFlow;
+    const startMeetingFlow = vi.fn(() => Promise.resolve());
+    useMeetingStore.setState({ startMeetingFlow });
+    useConfigStore.setState({ startOnLogin: true });
+    try {
+      render(<App />);
+      await vi.waitFor(() => expect(startMeetingFlow).toHaveBeenCalledTimes(1));
+
+      // The demo draws the overlay inline, so the launcher unmounts and remounts on exit
+      await act(async () => {
+        launchDemo(liveInterviewScenario, "screenshot");
+      });
+      expect(await screen.findByLabelText("End meeting")).toBeTruthy();
+      await act(async () => {
+        exitDemo();
+      });
+      await vi.waitFor(() => expect(screen.queryByLabelText("End meeting")).toBeNull());
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 50));
+      });
+      expect(startMeetingFlow).toHaveBeenCalledTimes(1);
+    } finally {
+      useMeetingStore.setState({ startMeetingFlow: original });
+    }
   });
 });
