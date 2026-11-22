@@ -19,52 +19,62 @@
  *   action items and topic sections", "Searchable meeting history, summaries and 'Ask a past
  *   meeting'", "AI Call Log: inspect every prompt, latency and token count").
  *
- * The meeting is made up for this page. The existing screenshots in public/ predate the Ask tab and
- * show demo-mode data, so they are not used here.
+ * The meeting is the hero demo's interview (Dana, design hiring; components/overlay/content.ts), told
+ * from the other side: what is left after "47:12". It is made up for this page. The existing
+ * screenshots in public/ predate the Ask tab and show demo-mode data, so they are not used here.
  */
 import { SECTION } from '../data/site';
 
 const DUR = 2832; // 47:12, in seconds
-const START = 0.42; // where the playhead rests without JS and with reduced motion
+const START = 0.18; // where the playhead rests without JS and with reduced motion (the CTO ask, ~8:30)
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
-// [seconds, who, text, bookmarked]
-const LINES: [number, 'you' | 'them', string, boolean?][] = [
-  [42, 'them', 'Thanks for joining. First item is the launch date for the new onboarding.'],
-  [190, 'you', 'QA found two blockers last week. Both are fixed, but the retest is not done.'],
-  [505, 'them', 'Can we still ship on the 12th?'],
-  [845, 'you', 'If the retest passes by Friday, yes. I would rather not promise it before that.', true],
-  [1188, 'them', 'Fine. What about the pricing page copy?'],
-  [1470, 'you', 'Legal needs one more day. I will send them the draft this afternoon.'],
-  [1755, 'them', 'Who owns the support docs?', true],
-  [2020, 'you', 'I can take them. I will have a first version by Wednesday.'],
-  [2282, 'them', 'Great. Last thing: the rollout. Ten percent first?'],
-  [2540, 'you', 'Ten percent for two days, then everyone if the error rate stays flat.', true],
-  [2755, 'them', 'Agreed. Let’s write that down and wrap up.'],
+// The same interview as the hero demo and the beats above (components/overlay/content.ts: Dana leads
+// hiring for the design team; the toughest trade-off; the slow dashboard; the second round with the
+// CTO). Times are the ones the beats use (1:49 and 4:34 and 8:00); the rest are filled in.
+// [seconds, who, text, bookmarked, language]
+const LINES: [number, 'you' | 'them', string, boolean?, string?][] = [
+  [3, 'them', 'Thanks for joining. I’m Dana, I lead hiring for the design team.'],
+  [11, 'you', 'Great to meet you, Dana. Happy to be here.'],
+  [22, 'them', 'What was the toughest trade-off on your last project?', true],
+  [49, 'you', 'We shipped the design system before the redesign. It cost two weeks up front, and every screen after that took days.'],
+  [109, 'them', 'Perfecto. Cuéntame cómo trabajas con ingeniería.', false, 'es'],
+  [117, 'you', 'I pair with them from day one.'],
+  [274, 'them', 'How would you make a slow dashboard with fifty charts feel fast?', true],
+  [301, 'you', 'Show something useful first. Load the summary at once, then stream the charts as they arrive.'],
+  [480, 'them', 'Can you do a second round with our CTO next week?', true],
+  [493, 'you', 'Yes. Tuesday after 2 pm or Thursday morning both work.'],
+  [2410, 'them', 'That’s all from me. Any questions before we wrap up?'],
+  [2531, 'you', 'Yes, about the team roadmap. Can we cover it in the second round?'],
+  [2700, 'them', 'Of course. I’ll send the invite for the CTO round tomorrow.'],
 ];
 const TOPICS: [number, string][] = [
-  [0, 'Launch date'],
-  [1188, 'Pricing copy'],
-  [1755, 'Support docs'],
-  [2282, 'Rollout'],
+  [0, 'Intro and trade-offs'],
+  [109, 'Working with engineering'],
+  [274, 'Dashboard speed'],
+  [480, 'Second round'],
 ];
 const BOOKMARKS: [number, string][] = [
-  [845, 'Do not promise the date before the retest'],
-  [1755, 'Support docs need an owner'],
-  [2540, 'Rollout: 10% for two days, then everyone'],
+  [22, 'Toughest trade-off: the design system first'],
+  [274, 'A slow dashboard with fifty charts'],
+  [480, 'Second round with the CTO next week'],
 ];
 const ACTIONS: { text: string; who: 'you' | 'them'; name: string; t: number; done?: boolean }[] = [
-  { text: 'Finish the onboarding retest by Friday', who: 'you', name: 'You', t: 845 },
-  { text: 'Send the pricing page draft to legal', who: 'you', name: 'You', t: 1470 },
-  { text: 'Write the first version of the support docs', who: 'you', name: 'You', t: 2020 },
-  { text: 'Fix the two onboarding blockers', who: 'you', name: 'You', t: 190, done: true },
+  { text: 'Offer Dana Tuesday after 2 pm or Thursday morning', who: 'you', name: 'You', t: 493, done: true },
+  { text: 'Ask about the team roadmap in the second round', who: 'you', name: 'You', t: 2531 },
+  { text: 'Send the invite for the CTO round', who: 'them', name: 'Dana', t: 2700 },
 ];
+// Every request NexQ sent to the AI, with its answer. `ms` for the live answers is the timing the demo shows
+// (content.ts C_ANSWER 0.9 s, D_ANSWER 4.1 s); the others are made up like the meeting.
 const LOG: { label: string; title: string; ms: string; meta: string }[] = [
-  { label: 'Say', title: 'Can we still ship on the 12th?', ms: '1240ms', meta: 'ollama/llama3.2' },
-  { label: 'F/U', title: 'Who owns the support docs?', ms: '980ms', meta: 'ollama/llama3.2' },
-  { label: 'Recap', title: 'Rollout: ten percent first?', ms: '2110ms', meta: 'ollama/llama3.2' },
+  { label: 'Assist', title: 'What was the toughest trade-off on your last project?', ms: '1380ms', meta: 'claude_cli/haiku' },
+  { label: 'Short', title: 'How would you make a slow dashboard with fifty charts feel fast?', ms: '900ms', meta: 'claude_cli/haiku' },
+  { label: 'Assist', title: 'Can you do a second round with our CTO next week?', ms: '4100ms', meta: 'claude_cli/haiku' },
+  { label: 'Summary', title: 'Meeting summary', ms: '6240ms', meta: 'claude_cli/sonnet' },
+  { label: 'Actions', title: 'Action items', ms: '3180ms', meta: 'claude_cli/sonnet' },
 ];
+const LOG_ASK = { label: 'Ask', title: 'What did Dana say about the second round?', meta: 'claude_cli/sonnet' };
 
 // A speech-shaped waveform, seeded so the build is stable. Not the release wave: that one means a version.
 const N = 120;
@@ -100,7 +110,10 @@ const FEATURES: { tab: string; title: string; text: string }[] = [
   { tab: 'actions', title: 'Action items', text: 'Pulled out of the conversation with who they belong to. Tick them off.' },
   { tab: 'bookmarks', title: 'Bookmarks and topic sections', text: 'Mark a moment yourself or let the AI suggest them. The green lines on the waveform are where the subject changed.' },
   { tab: 'ask', title: 'Ask a past meeting', text: 'Chat with the meeting. Questions and answers are saved with it.' },
-  { tab: 'ai', title: 'AI Call Log', text: 'Every prompt, latency and token count behind an answer you asked for.' },
+  // src: README.md L73 ("inspect every prompt, latency and token count"), docs/DEVELOPMENT.md L74 (every LLM request with
+  // provider, model, prompt, timing, usage and errors), src/launcher/meeting-details/AIInteractionLog.tsx (mode label,
+  // question, latency, provider/model, the response), src/lib/utils.ts getModeLabel (Summary and Actions are logged too).
+  { tab: 'ai', title: 'AI Call Log', text: 'Every prompt and the answer it got, with timing, tokens and the model behind it. Summaries and action items are logged too, not only the answers you asked for.' },
 ];
 const TABS = [
   { id: 'transcript', label: 'Transcript', count: LINES.length },
@@ -117,8 +130,8 @@ const TABS = [
     <p class="eyebrow">after 47:12</p>
     <h2 id="after-title" class="h2 mt-3 max-w-[20ch]">Everything is still there afterwards</h2>
     <p class="lede">
-      The call ends and the work is not over. NexQ keeps the recording, with a transcript that follows it, and
-      the notes you would otherwise write by hand.
+      The interview with Dana ends at 47:12, and the work is not over. NexQ keeps the recording, with a
+      transcript that follows it, and the notes you would otherwise write by hand.
     </p>
 
     <div class="ac-grid">
@@ -127,17 +140,19 @@ const TABS = [
           class="ac"
           data-ac
           data-dur={DUR}
+          data-rest={START}
           role="group"
-          aria-label="Sample past meeting, Weekly product sync, 47 minutes 12 seconds. A made-up example."
+          aria-label="Sample past meeting, Design interview with Dana, 47 minutes 12 seconds. The same made-up interview as the demo above."
         >
           <header class="ac-head">
             <svg class="ac-back" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M13 8H3m4-4L3 8l4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
             <div>
-              <p class="ac-title">Weekly product sync</p>
+              <p class="ac-title">Design interview with Dana</p>
               <p class="ac-meta">2h ago · 47:12 · {LINES.length} segments</p>
             </div>
           </header>
 
+          <div class="ac-tabs-wrap" data-ac-tabs-wrap>
           <div class="ac-tabs" role="tablist" aria-label="Meeting views" data-ac-tabs>
             {TABS.map((t, i) => (
               <button type="button" role="tab" id={`ac-tab-${t.id}`} aria-controls={`ac-panel-${t.id}`} aria-selected={i === 0 ? 'true' : 'false'} tabindex={i === 0 ? 0 : -1} data-tab={t.id}>
@@ -145,15 +160,16 @@ const TABS = [
               </button>
             ))}
           </div>
+          </div>
 
           <div class="ac-body">
             <!-- Transcript -->
             <div class="ac-panel" role="tabpanel" id="ac-panel-transcript" aria-labelledby="ac-tab-transcript" data-on data-ac-lines tabindex="-1">
               <h4 class="ac-nojs-h">Transcript</h4>
-              <ol class="ac-lines">
-                {LINES.map(([t, who, text, bm], i) => (
+              <ol class="ac-lines" aria-label="Transcript lines. Up and down arrows move between them.">
+                {LINES.map(([t, who, text, bm, lang], i) => (
                   <li>
-                    <button type="button" class="ac-line" data-t={t} aria-current={i === activeIdx ? 'true' : undefined} aria-label={`${fmt(t)} ${who === 'you' ? 'You' : 'Dana'}: ${text}`}>
+                    <button type="button" class="ac-line" data-t={t} tabindex={i === activeIdx ? 0 : -1} lang={lang} aria-current={i === activeIdx ? 'true' : undefined} aria-label={`${fmt(t)} ${who === 'you' ? 'You' : 'Dana'}: ${text}`}>
                       <span class="ac-ts">{fmt(t)}</span>
                       {bm ? <svg class="ac-bm" viewBox="0 0 10 12" width="10" height="12" aria-hidden="true"><path d="M1.5 1h7v10L5 8.5 1.5 11z" fill="currentColor" /></svg> : <span class="ac-bm" aria-hidden="true"></span>}
                       <span class="ac-who" data-w={who} aria-hidden="true">{who === 'you' ? 'You' : 'Dana'}</span>
@@ -168,13 +184,14 @@ const TABS = [
             <div class="ac-panel" role="tabpanel" id="ac-panel-summary" aria-labelledby="ac-tab-summary" tabindex="-1">
               <h4 class="ac-nojs-h">Summary</h4>
               <div class="ac-prose">
-                <p>The team agreed to ship the new onboarding on the 12th, as long as the retest of two fixed blockers passes by Friday. Pricing page copy needs one more day of legal review, and support docs have an owner.</p>
+                <p>Design interview with Dana, who leads hiring for the design team. You talked through the toughest trade-off on your last project, how you work with engineering and how to make a slow dashboard feel fast. Dana asked for a second round with the CTO next week.</p>
                 <p class="ac-prose__h">Key points</p>
                 <ul>
-                  <li>Launch date holds if the retest passes by Friday.</li>
-                  <li>Pricing copy goes to legal today.</li>
-                  <li>First version of the support docs is due Wednesday.</li>
-                  <li>Rollout starts at 10% for two days, then goes to everyone if the error rate stays flat.</li>
+                  <li>Toughest trade-off: the design system came before the redesign. Two weeks slower, then days per screen.</li>
+                  <li>You pair with engineers from day one.</li>
+                  <li>A slow dashboard: show something useful first, then stream the charts.</li>
+                  <li>Second round with the CTO next week: Tuesday after 2 pm or Thursday morning.</li>
+                  <li>Your roadmap questions wait for that round.</li>
                 </ul>
               </div>
             </div>
@@ -183,13 +200,13 @@ const TABS = [
             <div class="ac-panel" role="tabpanel" id="ac-panel-ask" aria-labelledby="ac-tab-ask" tabindex="-1">
               <h4 class="ac-nojs-h">Ask</h4>
               <div class="ac-chat">
-                <p class="ac-q">What was decided?</p>
+                <p class="ac-q">What did Dana say about the second round?</p>
                 <div class="ac-prose">
-                  <p>Three things:</p>
+                  <p>She asked whether you can do a second round with the CTO next week.</p>
                   <ul>
-                    <li>Ship on the 12th if the retest passes by Friday.</li>
-                    <li>Send the pricing page draft to legal this afternoon.</li>
-                    <li>Roll out to 10% for two days, then to everyone if the error rate stays flat.</li>
+                    <li>You offered Tuesday after 2 pm or Thursday morning.</li>
+                    <li>She will send the invite for the CTO round tomorrow.</li>
+                    <li>You asked to cover the team roadmap in that round.</li>
                   </ul>
                 </div>
                 <p class="ac-ask" aria-hidden="true">Ask about this meeting…</p>
@@ -211,9 +228,9 @@ const TABS = [
               <p class="ac-log__g">Ask this meeting</p>
               <ul class="ac-log">
                 <li>
-                  <span class="ac-pill">Ask</span>
-                  <span class="ac-log__t">What was decided?</span>
-                  <span class="ac-log__m">ollama/llama3.2</span>
+                  <span class="ac-pill">{LOG_ASK.label}</span>
+                  <span class="ac-log__t">{LOG_ASK.title}</span>
+                  <span class="ac-log__m">{LOG_ASK.meta}</span>
                 </li>
               </ul>
             </div>
@@ -279,7 +296,7 @@ const TABS = [
           </div>
         </div>
         <p class="ac-cap">
-          A made-up meeting. There is no sound here: the playhead runs fast so you can watch the transcript follow it.
+          The same made-up interview as the demo above. There is no sound here: the playhead runs fast so you can watch the transcript follow it.
           Green lines mark topic changes, amber dots mark bookmarks.
         </p>
       </div>
@@ -347,13 +364,30 @@ const TABS = [
     color: hsl(var(--muted-foreground));
   }
 
+  /* Tabs scroll sideways when they do not fit. The edge that still has tabs beyond it fades out (set by after-player.ts). */
+  .ac-tabs-wrap {
+    border-top: 1px solid hsl(var(--border) / 0.6);
+    border-bottom: 1px solid hsl(var(--border) / 0.6);
+  }
+  .ac-tabs-wrap[data-more-l] .ac-tabs,
+  .ac-tabs-wrap[data-more-r] .ac-tabs {
+    --fl: 0rem;
+    --fr: 0rem;
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--fl), #000 calc(100% - var(--fr)), transparent 100%);
+    mask-image: linear-gradient(to right, transparent 0, #000 var(--fl), #000 calc(100% - var(--fr)), transparent 100%);
+  }
+  .ac-tabs-wrap[data-more-l] .ac-tabs {
+    --fl: 2.25rem;
+  }
+  .ac-tabs-wrap[data-more-r] .ac-tabs {
+    --fr: 2.25rem;
+  }
   .ac-tabs {
+    position: relative; /* offsetParent for revealing a picked tab */
     display: flex;
     gap: 0.25rem;
     padding: 0.375rem 0.75rem;
     overflow-x: auto;
-    border-top: 1px solid hsl(var(--border) / 0.6);
-    border-bottom: 1px solid hsl(var(--border) / 0.6);
     scrollbar-width: none;
   }
   .ac-tabs::-webkit-scrollbar {
@@ -389,7 +423,7 @@ const TABS = [
     line-height: 1.4;
     color: hsl(var(--muted-foreground));
   }
-  :global(html:not(.js)) .ac-tabs {
+  :global(html:not(.js)) .ac-tabs-wrap {
     display: none;
   }
 
@@ -859,6 +893,34 @@ const TABS = [
     }
     .ac-line[aria-current='true'] {
       border-left-color: Highlight;
+    }
+    /* Backgrounds are dropped in forced colors, so anything that used a fill to say something gets an edge or a system colour. */
+    .ac-tabs button[aria-selected='true'] {
+      outline: 2px solid Highlight;
+      outline-offset: -2px;
+    }
+    .ac-feats button[aria-current='true'] .ac-feats__t {
+      color: Highlight;
+      text-decoration: underline;
+    }
+    .ac-dot {
+      background: Highlight;
+      forced-color-adjust: none;
+    }
+    .ac-topic {
+      background: CanvasText;
+      forced-color-adjust: none;
+    }
+    li[data-done] > .ac-check {
+      background: Highlight;
+      color: HighlightText;
+      border-color: Highlight;
+      forced-color-adjust: none;
+    }
+    .ac-q,
+    .ac-pill,
+    .ac-count {
+      border: 1px solid CanvasText;
     }
   }
 </style>

@@ -12,32 +12,12 @@ import { RELEASES_LATEST, RELEASES_URL, CONTRIBUTING, SECTION } from '../data/si
 const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
 ---
 
-<section id={SECTION.download} class="section border-t border-border" aria-labelledby="download-title">
+<section id={SECTION.download} class="section dl-sec border-t border-border" aria-labelledby="download-title">
   <div class="wrap">
     <h2 id="download-title" class="h2">Download NexQ</h2>
     <p class="lede">Free and open source. Pick your system, run the installer, and start your next call with it open.</p>
 
-    <!-- The demo video, here and nowhere else. Click to play: nothing loads until then. No audio track
-         (ffprobe: one video stream in the mp4 and the webm), so it is muted. -->
-    <figure class="dl-video" data-reveal>
-      <div class="dl-video__frame" data-demo-video data-webm={`${base}media/hero-demo.webm`} data-mp4={`${base}media/hero-demo.mp4`} data-poster={`${base}media/hero-demo-poster.webp`}>
-        <button type="button" class="dl-video__btn" aria-label="Play the demo video (no sound)">
-          <img src={`${base}media/hero-demo-poster.webp`} width="1600" height="1162" loading="lazy" decoding="async" alt="" />
-          <span class="dl-video__icon" aria-hidden="true">
-            <svg viewBox="0 0 12 12" width="22" height="22"><path d="M3 1.5v9l7.5-4.5z" fill="currentColor" /></svg>
-          </span>
-        </button>
-        <noscript>
-          <video controls muted preload="none" width="1600" height="1162" poster={`${base}media/hero-demo-poster.webp`}>
-            <source src={`${base}media/hero-demo.webm`} type="video/webm" />
-            <source src={`${base}media/hero-demo.mp4`} type="video/mp4" />
-          </video>
-        </noscript>
-      </div>
-      <figcaption>Demo mode, recorded on an earlier version.</figcaption>
-    </figure>
-
-    <div class="dl mt-12" data-dl>
+    <div class="dl mt-10" data-dl>
       <div class="dl-grid">
         <!-- src: README.md L119-123 (x64-setup.exe, SmartScreen, not code-signed); docs/user-guide/getting-started.md L16-27 (per-user NSIS installer, no admin rights, More info then Run anyway) -->
         <article class="dl-card dl-card--windows" aria-labelledby="dl-win">
@@ -97,6 +77,26 @@ const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL :
       </div>
     </div>
 
+    <!-- The demo video, here and nowhere else. Click to play: nothing loads until then. No audio track
+         (ffprobe: one video stream in the mp4 and the webm), so it is muted. -->
+    <figure class="dl-video" data-reveal>
+      <div class="dl-video__frame" data-demo-video data-webm={`${base}media/hero-demo.webm`} data-mp4={`${base}media/hero-demo.mp4`} data-poster={`${base}media/hero-demo-poster.webp`}>
+        <button type="button" class="dl-video__btn" aria-label="Play the demo video (no sound)">
+          <img src={`${base}media/hero-demo-poster.webp`} width="1600" height="1162" loading="lazy" decoding="async" alt="" />
+          <span class="dl-video__icon" aria-hidden="true">
+            <svg viewBox="0 0 12 12" width="22" height="22"><path d="M3 1.5v9l7.5-4.5z" fill="currentColor" /></svg>
+          </span>
+        </button>
+        <noscript>
+          <video controls muted preload="none" width="1600" height="1162" poster={`${base}media/hero-demo-poster.webp`}>
+            <source src={`${base}media/hero-demo.webm`} type="video/webm" />
+            <source src={`${base}media/hero-demo.mp4`} type="video/mp4" />
+          </video>
+        </noscript>
+      </div>
+      <figcaption>See it first: NexQ in demo mode, recorded on an earlier version.</figcaption>
+    </figure>
+
     <p class="dl-more">
       <a href={RELEASES_URL} target="_blank" rel="noopener" class="link">Other builds and checksums</a>
       <a href={CONTRIBUTING} target="_blank" rel="noopener" class="link">Build from source</a>
@@ -110,9 +110,20 @@ const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL :
 </script>
 
 <style is:global>
-  /* Video */
+  /* Jumping here (nav, hero, CTA) lands the heading just under the solid nav, so the download buttons are on the
+     first screen. html's scroll-padding-top is nav + 1rem; this cancels the section's own top padding (5rem, 7rem from sm). */
+  .dl-sec {
+    scroll-margin-top: calc(0.5rem - 5rem);
+  }
+  @media (min-width: 640px) {
+    .dl-sec {
+      scroll-margin-top: calc(0.5rem - 7rem);
+    }
+  }
+
+  /* Video (below the downloads) */
   .dl-video {
-    margin-top: 2.5rem;
+    margin-top: 3rem;
     max-width: 40rem;
   }
   .dl-video__frame {
@@ -165,6 +176,11 @@ const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL :
   @media (forced-colors: active) {
     .dl-video__frame {
       border-color: ButtonText;
+    }
+    .dl-video__icon {
+      border: 2px solid ButtonText;
+      background: ButtonFace;
+      color: ButtonText;
     }
   }
 

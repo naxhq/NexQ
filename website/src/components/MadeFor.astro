@@ -167,6 +167,13 @@ const DETAIL: Record<string, { text: string; href: string }> = {
     }
   }
 
+  @media (forced-colors: active) {
+    .mf-name[aria-pressed='true'] {
+      text-decoration: underline;
+      text-decoration-thickness: 0.06em;
+      text-underline-offset: 0.12em;
+    }
+  }
   .mf-detect {
     display: grid;
     gap: 2rem;

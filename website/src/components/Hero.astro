@@ -1,15 +1,21 @@
 ---
 /**
- * Hero + "Scroll the call" as ONE stage. The overlay is a single element, pinned beside the hero and
- * then beside every beat, so it is the same object from the first word to the stealth demo. That needs
- * one grid parent, which is why this file renders both sections (CallStory.astro renders nothing).
+ * Hero and "Scroll the call" as ONE stage, so the overlay is one pinned object from the first word to the last beat.
+ * One grid parent is what makes that possible, which is why this file renders both sections.
  *
- *   #hero  headline, version pill, download, proof, the release wave
- *   #call  five beats, each with a timestamp, one headline, one sentence, at most three facts
- *   pinned the overlay (overlay/Overlay.astro) and its controls; callDemo.ts plays it
+ *   .nx-stage        the grid (stage.css). Two columns from 900px: text on the left, the overlay pinned on the right.
+ *   #hero            headline, version pill, download, proof. Its overlay plays the opening once, then holds on the
+ *                    question card until the visitor presses Assist.
+ *   .nx-pin          the pinned column: the overlay (overlay/Overlay.astro), the stealth screens that replace it in
+ *                    beat e (overlay/StealthPanes.astro), the call-progress line, then the bar with the release wave
+ *                    (the call's audio) and the Pause and Assist controls.
+ *   #call            five beats (a to e). Each has a timestamp, one headline, one sentence, at most three facts and,
+ *                    on phones and without JavaScript, a still of its moment (overlay/BeatFrame.astro).
+ *   callDemo.ts      the one state machine: plays the hero, turns the scroll position into the moment on show
+ *                    (`data-view` on the overlay, `data-beat` on the stage) and the header timer, handles the keys.
  *
- * Styles: overlay/stage.css (layout) and overlay/overlay.css (the overlay). Script: scripts/callDemo.ts.
- * The release wave sits under the overlay as the call's audio; its phrases carry the hero transcript.
+ * All on-screen words of the overlay live in overlay/content.ts. Styles: overlay/stage.css (layout) and
+ * overlay/overlay.css (the overlay). The hero conversation is laid onto the phrases of this release's wave (planHero).
  */
 import Wave from './Wave.astro';
 import Icon from './Icon.astro';
@@ -18,7 +24,7 @@ import BeatFrame from './overlay/BeatFrame.astro';
 import StealthPanes from './overlay/StealthPanes.astro';
 import Slide from './overlay/Slide.astro';
 import OvIcon from './overlay/OvIcon.astro';
-import { planHero, mmss, TIMES, HERO_SECONDS } from './overlay/content';
+import { planHero, mmss, TIMES, T0, HERO_SECONDS } from './overlay/content';
 import './overlay/stage.css';
 import { SECTION, REPO, RELEASES_LATEST, COUNTS } from '../data/site';
 import { CURRENT_VERSION, RELEASES, waveFor } from '../data/releases';
@@ -43,7 +49,7 @@ const latestText = (latest.oneLiner ?? latest.items[0] ?? '').replace(/\.$/, '')
     )}
     <h1 id="hero-title" class="display">The answer stays on your side of the screen.</h1>
     <p class="nx-sub">
-      An open-source interview and meeting copilot. It hears both sides of your call and answers in one keypress, in an overlay that screen share leaves out. Use local models, any API or your Claude subscription.
+      An open-source interview and meeting copilot. It hears both sides of your call and answers in one keypress, in a private overlay you can hide from screen share. Use local models, any API or your Claude subscription.
     </p>
     <div class="nx-cta">
       <!-- One blue button. 640px and up it names your system; on phones, which cannot run either build, it jumps to Download. -->
@@ -109,7 +115,7 @@ const latestText = (latest.oneLiner ?? latest.items[0] ?? '').replace(/\.$/, '')
 
     <div class="nx-beats" data-beats>
     <!-- Beat a: src/overlay/SideLanguagePicker.tsx, docs/user-guide/ai-providers.md (a different language for each side), audio-setup.md (Echo or Feedback) -->
-    <article class="nx-beat" data-beat-id="a" data-t={TIMES.a} data-hint="Each side has its own language" aria-labelledby="beat-a">
+    <article class="nx-beat" data-beat-id="a" data-t={TIMES.a} data-t0={T0.a} data-hint="Each side has its own language" aria-labelledby="beat-a">
       <p class="eyebrow">{mmss(TIMES.a)}</p>
       <h3 id="beat-a" class="h3">Each side in its own language.</h3>
       <p class="nx-beat__lede">
@@ -124,7 +130,7 @@ const latestText = (latest.oneLiner ?? latest.items[0] ?? '').replace(/\.$/, '')
     </article>
 
     <!-- Beat b: docs/user-guide/configuration.md (AI Actions), interview-copilot.md (question cards) -->
-    <article class="nx-beat" data-beat-id="b" data-t={TIMES.b} data-hint="A question becomes a card" aria-labelledby="beat-b">
+    <article class="nx-beat" data-beat-id="b" data-t={TIMES.b} data-t0={T0.b} data-hint="A question becomes a card" aria-labelledby="beat-b">
       <p class="eyebrow">{mmss(TIMES.b)}</p>
       <h3 id="beat-b" class="h3">The question, caught.</h3>
       <p class="nx-beat__lede">
@@ -138,7 +144,7 @@ const latestText = (latest.oneLiner ?? latest.items[0] ?? '').replace(/\.$/, '')
     </article>
 
     <!-- Beat c: docs/user-guide/keyboard-shortcuts.md, claude-subscription.md (screenshots, pasting images), src/overlay/ContextScopePicker.tsx -->
-    <article class="nx-beat" data-beat-id="c" data-t={TIMES.c} data-hint="One key for each action" aria-labelledby="beat-c">
+    <article class="nx-beat" data-beat-id="c" data-t={TIMES.c} data-t0={T0.c} data-hint="One key for each action" aria-labelledby="beat-c">
       <p class="eyebrow">{mmss(TIMES.c)}</p>
       <h3 id="beat-c" class="h3">One key.</h3>
       <p class="nx-beat__lede">
@@ -153,7 +159,7 @@ const latestText = (latest.oneLiner ?? latest.items[0] ?? '').replace(/\.$/, '')
     </article>
 
     <!-- Beat d: docs/user-guide/claude-subscription.md (Personal sources), rag-context.md, README.md (Gemini Context Cache) -->
-    <article class="nx-beat" id="knows" data-beat-id="d" data-t={TIMES.d} data-hint="Notes and Tools, in the answer" aria-labelledby="beat-d">
+    <article class="nx-beat" id="knows" data-beat-id="d" data-t={TIMES.d} data-t0={T0.d} data-hint="Notes and Tools, in the answer" aria-labelledby="beat-d">
       <p class="eyebrow">{mmss(TIMES.d)}</p>
       <h3 id="beat-d" class="h3">What it knows.</h3>
       <p class="nx-beat__lede">
@@ -169,7 +175,7 @@ const latestText = (latest.oneLiner ?? latest.items[0] ?? '').replace(/\.$/, '')
     </article>
 
     <!-- Beat e: README.md (Stealth Mode), docs/user-guide/keyboard-shortcuts.md, interview-copilot.md -->
-    <article class="nx-beat" id="stealth" data-beat-id="e" data-t={TIMES.e} data-hint="Only you see the overlay, when it is on" aria-labelledby="beat-e">
+    <article class="nx-beat" id="stealth" data-beat-id="e" data-t={TIMES.e} data-t0={T0.e} data-hint="Only you see the overlay, when it is on" aria-labelledby="beat-e">
       <p class="eyebrow">{mmss(TIMES.e)}</p>
       <h3 id="beat-e" class="h3">Gone from the share.</h3>
       <p class="nx-beat__lede">

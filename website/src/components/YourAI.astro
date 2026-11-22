@@ -8,13 +8,13 @@
  * Without JS the three positions are stacked and the dial is hidden.
  *
  * Claude subscription spotlight facts: docs/user-guide/claude-subscription.md
- *   Fast/Deep defaults ......... L16-L19 and src-tauri/src/llm/cli_agent/manager.rs:133-143
- *   first words < 1 s .......... L23 ("with thinking off ... usually arrive in under a second")
- *   warm sessions .............. L52-L58 ("sends only what is new")
- *   tokens, cost, time ......... L72-L74 (Usage indicator, an estimate)
- *   tools off, empty folder .... L100 (Privacy)
- *   fallback provider .......... L66-L68
- *   thinking per provider ...... CHANGELOG.md 2.40.0, src/settings/ThinkingSettings.tsx,
+ *   Fast/Deep defaults ......... L21-L22 and src-tauri/src/llm/cli_agent/manager.rs:133-143
+ *   first words < 1 s .......... L26 ("with thinking off ... usually arrive in under a second")
+ *   warm sessions .............. L52-L54 ("sends only what is new")
+ *   tokens, cost, time ......... L69 (Usage indicator, an estimate)
+ *   tools off, empty folder .... L97 (Privacy)
+ *   fallback provider .......... L65
+ *   thinking per provider ...... CHANGELOG.md 2.40.0 (L29), src/settings/ThinkingSettings.tsx,
  *                                src/lib/llmRequestOptions.ts:4-9 (Auto, Off, Low, High; Claude has its own)
  */
 import { SECTION, STT_PROVIDERS, LLM_PROVIDERS, TRANSLATION_PROVIDERS, COUNTS, doc } from '../data/site';
@@ -182,7 +182,7 @@ const TIERS = {
           <span class="ai-beta">Beta</span>
         </p>
         <p class="ai-stat">
-          <span class="ai-stat__v">&lt; 1 s</span>
+          <span class="ai-stat__v"><span aria-hidden="true">&lt;1&thinsp;s</span><span class="sr-only">Less than 1 second</span></span>
           <span class="ai-stat__l">usually, to the first words, with thinking off (the Fast default)</span>
         </p>
         <p class="mt-6 text-sm">
@@ -327,15 +327,20 @@ const TIERS = {
     }
   }
 
-  /* ─── Panels: stacked in one grid cell so switching never moves the page ─── */
+  /* ─── Panels: all three sit in the same place. The visible one is in the flow, so the stage is exactly as
+     tall as what it shows (no reserved blank under the shorter panels); the others lie over it, hidden. The
+     page below moves only when the visitor picks a position, never on its own. ─── */
   .ai-stage {
     margin-top: 2rem;
   }
   :global(.js) .ai-stage {
-    display: grid;
+    position: relative;
   }
   :global(.js) .ai-panel {
-    grid-area: 1 / 1;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
     opacity: 0;
     visibility: hidden;
     transform: translate3d(0, 8px, 0);
@@ -345,6 +350,7 @@ const TIERS = {
       visibility 0s 0.3s;
   }
   :global(.js) .ai-panel[data-on] {
+    position: relative;
     opacity: 1;
     visibility: visible;
     transform: none;
@@ -624,11 +630,10 @@ const TIERS = {
   }
   .ai-stat__v {
     display: block;
-    font-family: var(--font-mono);
-    font-size: clamp(2.25rem, 4vw, 3.25rem);
-    font-weight: 500;
+    font-size: clamp(2.5rem, 4.5vw, 3.75rem);
+    font-weight: 800;
     line-height: 1;
-    letter-spacing: -0.04em;
+    letter-spacing: -0.035em;
   }
   .ai-stat__l {
     display: block;

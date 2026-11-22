@@ -158,26 +158,26 @@ export const SCENARIOS = [
  * and true to that release's CHANGELOG entry.
  */
 export const RELEASE_ONELINERS: Record<string, string> = {
-  '2.41.0': 'Your notes and tools, in the answer.',
+  '2.41.0': 'Notes and tools for your Claude answers.',
   '2.40.0': 'Choose how much each AI provider thinks.',
-  '2.39.0': 'Switch each side’s language from the overlay.',
-  '2.38.0': 'Screenshots in Ask, auto-detect language, echo cancellation that holds up.',
+  '2.39.0': 'Switch each side’s transcription language from the overlay.',
+  '2.38.0': 'Each side in its own language, auto-detect, and screenshots in Ask.',
   '2.37.0': 'Click the tray icon to bring NexQ back.',
   '2.36.0': 'Echo cancellation, and stealth also leaves the taskbar.',
   '2.35.0': 'NexQ’s own installer, and a what’s new before you update.',
-  '2.34.0': 'Auto-Answer replies the moment the speaker finishes.',
-  '2.33.0': 'Auto-Answer is off by default, and Cartesia stops billing while muted.',
-  '2.32.0': 'Question detection and Auto-Answer become separate switches.',
-  '2.31.0': 'Cartesia ink-2 joins the speech engines, with Chinese and Japanese questions.',
+  '2.34.0': 'Auto-Answer replies as soon as Cartesia or Deepgram Flux hear the speaker finish.',
+  '2.33.0': 'Auto-Answer is off by default, and Cartesia isn’t billed while a side is muted.',
+  '2.32.0': 'Question detection and Auto-Answer are now separate.',
+  '2.31.0': 'Cartesia ink-2 joins the speech engines. Chinese and Japanese questions are detected too.',
   '2.30.0': 'Vietnamese transcription.',
   '2.29.0': 'Assist from any app with one shortcut.',
   '2.28.0': 'A warning when audio comes in but the engine returns nothing.',
   '2.27.0': 'A rotating log file, and Diagnostics in Settings, About.',
-  '2.26.0': 'NexQ notices Zoom, Teams, Meet and Webex calls.',
-  '2.25.0': 'macOS arrives, and the overlay can hide from screen share.',
-  '2.24.0': 'Thinking control, real usage numbers, a scope picker.',
+  '2.26.0': 'On Windows, NexQ notices Zoom, Teams, Meet and Webex calls and offers to start.',
+  '2.25.0': 'macOS arrives, and NexQ can hide from screen sharing.',
+  '2.24.0': 'A thinking setting for Claude, accurate usage, a transcript scope picker.',
   '2.23.0': 'Claude models read from the CLI, with effort set per model.',
-  '2.22.0': 'Your Claude subscription, and updates that never interrupt.',
+  '2.22.0': 'Your Claude subscription as a provider, and quiet background updates.',
 };
 
 export const FAQ: { q: string; a: string }[] = [

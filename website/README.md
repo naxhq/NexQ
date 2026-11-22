@@ -17,16 +17,34 @@ npm run preview
 
 ```
 src/
-  pages/index.astro        page order: Navbar, Hero, CallStory, YourAI, AfterCall, MadeFor,
-                           Privacy, Releases, Download, Compare, FAQ, FinalCTA, Footer
+  pages/index.astro        page order: Navbar, Hero (hero + "The call" as one stage), YourAI, AfterCall,
+                           MadeFor, Privacy, Releases, Download, Compare, FAQ, FinalCTA, Footer
   layouts/Layout.astro     head, OG/Twitter, JSON-LD, font preload, reveal-on-scroll helper
   components/              one file per section, plus Navbar, Footer, Icon, Wave
+  components/overlay/      the overlay recreation: Overlay, BeatFrame, content.ts, overlay.css, stage.css
+  scripts/                 small vanilla TS modules, one per interactive part (callDemo.ts is the demo)
   data/site.ts             facts and copy lists (see below)
   data/releases.ts         build-time release data
   styles/global.css        tokens, fonts, shared classes (read the comments at the top)
 ```
 
 Each section is a `<section id=... aria-labelledby=...>`. The ids are in `SECTION` in `site.ts`.
+
+## The call stage
+
+`Hero.astro` renders the hero and the "Scroll the call" beats (`#call`) as one stage (`overlay/stage.css`):
+one grid with a single overlay that stays pinned beside the text (CSS `position: sticky`, no
+scroll-jacking) from the first word to the last beat. Under 900px it is one column.
+
+- `components/overlay/content.ts` holds the whole sample conversation (Dana, a design hiring call):
+  hero lines, the beat lines a to e, the answers and the times each moment shows. `AfterCall.astro`
+  tells the same interview from the other side, so keep the two in step.
+- `scripts/callDemo.ts` is the state machine: the hero plays its opening once and holds on the question
+  card, a click on Assist streams the answer, and each beat (a both sides, b question caught, c one
+  key, d what it knows, e hide from screen share) changes one thing in the overlay. One rAF loop, paused
+  offscreen and in a hidden tab. Without JS, or with reduced motion, every beat shows its final state.
+- Phones (and no JS) get a still of each beat (`BeatFrame.astro`) next to its text. The hero CTA names
+  your system from 640px up, and on phones reads "Get it for Windows or Mac" and jumps to Download.
 
 ## Where facts live
 

@@ -287,8 +287,18 @@
   opacity: 0.6;
   cursor: default;
 }
+/* Beats have no Assist of their own to press: the pause button is alone and stays on the right. */
 .nx-stage:not([data-beat='h']) .nx-assist {
-  visibility: hidden;
+  display: none;
+}
+.nx-bar__ctl {
+  margin-left: auto;
+}
+/* A touch screen has no Space key to name. */
+@media (hover: none) {
+  .nx-assist .kbd {
+    display: none;
+  }
 }
 html:not(.js) .nx-bar__ctl,
 html:not(.js) .nx-hint {
@@ -648,6 +658,27 @@ html:not(.js) .nx-panes--pin {
   }
 }
 
+/* Between 900 and 1100px the text column is only 320 to 450px wide: a smaller gutter and slightly smaller type give
+   it room for about 40 characters a line, without making the overlay (which needs 460px of width) any smaller. */
+@media (min-width: 900px) and (max-width: 1099px) {
+  .nx-stage {
+    column-gap: 1.5rem;
+  }
+  .nx-hero .display {
+    font-size: 2.15rem;
+  }
+  .nx-beat__lede {
+    font-size: 1rem;
+    line-height: 1.55;
+  }
+  .nx-facts li {
+    font-size: 0.9rem;
+  }
+  .nx-beat .h3 {
+    font-size: 1.55rem;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .nx-mov,
   .nx-panes--pin,
@@ -665,9 +696,40 @@ html:not(.js) .nx-panes--pin {
   }
 }
 
-/* Paused: the loops stop, nothing else changes. */
-[data-paused] .rec-dot::after {
-  animation-play-state: paused;
+/* Forced colors (Windows high contrast): the screen, the two stealth screens and the overlay in them are pictures of
+   a desktop, so they keep their own colours on one fixed dark ground with a system-coloured border (see
+   overlay.css). Everything else on the page follows the system palette. */
+@media (forced-colors: active) {
+  .nx-screen,
+  .nx-mscreen,
+  .nx-panes--pin {
+    forced-color-adjust: none;
+    background: #080c16;
+    border-color: CanvasText;
+  }
+  .nx-panes--pin {
+    border-color: transparent;
+  }
+  .nx-pane figcaption {
+    color: CanvasText;
+  }
+  /* The switch is drawn with background colours, which the system replaces: give it a border and a knob that show. */
+  .nx-switch {
+    border: 1px solid ButtonText;
+    box-shadow: none;
+  }
+  .nx-switch::after {
+    background: ButtonText;
+  }
+  .nx-toggle[aria-pressed='true'] .nx-switch {
+    background: Highlight;
+  }
+  .nx-toggle[aria-pressed='true'] .nx-switch::after {
+    background: HighlightText;
+  }
+  .nx-panes--pin .nx-pane figcaption {
+    color: #e4e4e7;
+  }
 }
 
 /* Call progress, tied to the scroll through the beats. Where the browser has scroll-driven animations

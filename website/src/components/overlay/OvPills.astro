@@ -1,0 +1,13 @@
+---
+// The Notes and Tools pills next to the action buttons (src/overlay/SourcePills.tsx).
+import OvIcon from './OvIcon.astro';
+interface Props {
+  label: string;
+}
+const { label } = Astro.props;
+---
+
+<span class="ov-pills" role="group" aria-label={label}>
+  <span class="ov-pill ov-pill--notes" data-pill="notes"><OvIcon name="book" class="ov-i ov-i--s" />Notes</span>
+  <span class="ov-pill ov-pill--tools" data-pill="tools"><OvIcon name="wrench" class="ov-i ov-i--s" />Tools</span>
+</span>

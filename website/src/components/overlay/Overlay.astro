@@ -11,9 +11,14 @@
 import './overlay.css';
 import OvIcon from './OvIcon.astro';
 import OvLine from './OvLine.astro';
+import OvFoot from './OvFoot.astro';
+import OvEmpty from './OvEmpty.astro';
+import OvQRow from './OvQRow.astro';
+import OvPills from './OvPills.astro';
+import OvSourcesAnswer from './OvSourcesAnswer.astro';
 import {
-  HERO_QUESTION, A_LINES, B_LINES, B_QUESTION, D_LINES, D_QUESTION,
-  ANSWERS, C_ANSWER, D_ANSWER, MODES, tokens, mmss, TIMES,
+  OV, HERO_QUESTION, A_LINES, B_LINES, B_QUESTION, D_LINES, D_QUESTION,
+  ANSWERS, C_ANSWER, MODES, tokens, mmss, TIMES,
 } from './content';
 import type { Line } from './content';
 
@@ -39,9 +44,10 @@ const { heroLines } = Astro.props;
     <div class="ov-head">
       <div class="ov-hl">
         <svg class="ov-grip" viewBox="0 0 12 12" aria-hidden="true"><g fill="currentColor"><circle cx="2.5" cy="4" r="1" /><circle cx="6" cy="4" r="1" /><circle cx="9.5" cy="4" r="1" /><circle cx="2.5" cy="8" r="1" /><circle cx="6" cy="8" r="1" /><circle cx="9.5" cy="8" r="1" /></g></svg>
-        <span class="ov-title">NexQ</span>
+        <span class="ov-title">{OV.title}</span>
         <span class="ov-rec"><span class="ov-ping" aria-hidden="true"><i></i><b></b></span>REC</span>
-        <span class="ov-badge">ONLINE</span>
+        <span class="ov-badge">{OV.badge}</span>
+        <span class="ov-scn">{OV.scenario}</span>
         <span class="ov-time" data-timer>{mmss(TIMES.h)}</span>
       </div>
       <div class="ov-hr" aria-hidden="true">
@@ -72,7 +78,7 @@ const { heroLines } = Astro.props;
           <div class="ov-stack">
             <div class="ov-g ov-qrow" data-for="h0 a">
               <span class="ov-qi ov-qi--idle"><OvIcon name="help" class="ov-i ov-i--l" /></span>
-              <p class="ov-qt ov-qt--idle">Listening for questions from the other party</p>
+              <p class="ov-qt ov-qt--idle">{OV.idleQuestion}</p>
             </div>
             <div class="ov-g ov-qrow ov-qrow--has" data-for="h1">
               <span class="ov-qi"><OvIcon name="help" class="ov-i ov-i--l" /><i class="ov-qdot"></i></span>
@@ -82,21 +88,9 @@ const { heroLines } = Astro.props;
                 <span class="qa-b"><OvIcon name="check" class="ov-i ov-i--s" />Answered</span>
               </button>
             </div>
-            <div class="ov-g ov-qrow ov-qrow--has" data-for="b">
-              <span class="ov-qi"><OvIcon name="help" class="ov-i ov-i--l" /><i class="ov-qdot"></i></span>
-              <p class="ov-qt">&ldquo;{B_QUESTION}&rdquo;</p>
-              <span class="ov-qa" aria-hidden="true"><span class="qa-a" style="display:inline-flex"><OvIcon name="sparkles" class="ov-i ov-i--s" />Assist</span></span>
-            </div>
-            <div class="ov-g ov-qrow ov-qrow--has" data-for="c">
-              <span class="ov-qi"><OvIcon name="help" class="ov-i ov-i--l" /><i class="ov-qok"><OvIcon name="check" class="ov-i" /></i></span>
-              <p class="ov-qt">&ldquo;{B_QUESTION}&rdquo;</p>
-              <span class="ov-qa ov-qa--done" aria-hidden="true"><span style="display:inline-flex"><OvIcon name="check" class="ov-i ov-i--s" />Answered</span></span>
-            </div>
-            <div class="ov-g ov-qrow ov-qrow--has" data-for="d e">
-              <span class="ov-qi"><OvIcon name="help" class="ov-i ov-i--l" /><i class="ov-qok"><OvIcon name="check" class="ov-i" /></i></span>
-              <p class="ov-qt">&ldquo;{D_QUESTION}&rdquo;</p>
-              <span class="ov-qa ov-qa--done" aria-hidden="true"><span style="display:inline-flex"><OvIcon name="check" class="ov-i ov-i--s" />Answered</span></span>
-            </div>
+            <OvQRow text={B_QUESTION} state="caught" for="b" />
+            <OvQRow text={B_QUESTION} state="answered" for="c" />
+            <OvQRow text={D_QUESTION} state="answered" for="d e" />
           </div>
         </div>
 
@@ -110,16 +104,13 @@ const { heroLines } = Astro.props;
             ))}
             <span class="ov-scope" aria-hidden="true">
               <OvIcon name="clock" class="ov-i ov-i--s" />
-              <span class="sc-a">Action default</span><span class="sc-b">Last 5 min</span>
+              <span class="sc-a">{OV.scopeDefault}</span><span class="sc-b">{OV.scopeChosen}</span>
             </span>
-            <span class="ov-pills" role="group" aria-label="Personal sources for your next answer">
-              <span class="ov-pill ov-pill--notes" data-pill="notes"><OvIcon name="book" class="ov-i ov-i--s" />Notes</span>
-              <span class="ov-pill ov-pill--tools" data-pill="tools"><OvIcon name="wrench" class="ov-i ov-i--s" />Tools</span>
-            </span>
+            <OvPills label="Personal sources for your next answer" />
           </div>
 
           <div class="ov-ask" data-ask-box>
-            <input type="text" class="ov-askin" placeholder="Ask about the meeting..." aria-label="Ask a question (sample, does not send)" maxlength="200" />
+            <input type="text" class="ov-askin" placeholder={OV.askPlaceholder} aria-label={OV.askLabel} maxlength="200" />
             <span class="ov-askb" aria-hidden="true"><OvIcon name="send" class="ov-i ov-i--s" /></span>
           </div>
 
@@ -127,13 +118,10 @@ const { heroLines } = Astro.props;
             <div class="ov-stack">
               <!-- Hero: idle, progress, streamed text, done. data-ans on .ov picks the part. -->
               <div class="ov-g ov-hero-ans" data-for="h0 h1">
-                <div class="ov-empty ov-hs-idle">
-                  <OvIcon name="sparkles" class="ov-i ov-i--xl" />
-                  <p>Press <kbd class="ov-kbd">Space</kbd> for AI assistance</p>
-                </div>
+                <OvEmpty class="ov-hs-idle" />
                 <div class="ov-prog ov-hs-run" role="status" aria-live="off">
                   <div class="ov-progr"><i class="ov-pdot"></i><span class="ov-plab" data-prog-label>Assist</span><span class="ov-phase" data-phase>Sending…</span><span class="ov-elapsed" data-elapsed aria-hidden="true">0.0 s</span></div>
-                  <p class="ov-pdet">Haiku · Claude · 3 new transcript lines sent</p>
+                  <p class="ov-pdet" data-sent-fast={`${OV.sent.fast} · ${OV.sent.lines}`} data-sent-deep={`${OV.sent.deep} · ${OV.sent.lines}`} data-det>{OV.sent.fast} · {OV.sent.lines}</p>
                 </div>
                 <div class="ov-head2 ov-hs-done">
                   <span class="ov-badge2" data-done-label>Assist</span>
@@ -150,30 +138,14 @@ const { heroLines } = Astro.props;
                 </div>
               </div>
 
-              <div class="ov-g ov-empty" data-for="a b">
-                <OvIcon name="sparkles" class="ov-i ov-i--xl" />
-                <p>Press <kbd class="ov-kbd">Space</kbd> for AI assistance</p>
-              </div>
+              <OvEmpty class="ov-g" data-for="a b" />
 
               <div class="ov-g ov-done" data-for="c">
                 <div class="ov-head2"><span class="ov-badge2">{C_ANSWER.label}</span><span class="ov-timing">{C_ANSWER.timing}</span><span class="ov-copy" aria-hidden="true"><OvIcon name="copy" class="ov-i ov-i--s" /></span></div>
                 <p class="ov-ans ov-ans--static">{tokens(C_ANSWER.text).map((t) => <span class={t.b ? 'b' : ''}>{t.w} </span>)}</p>
               </div>
 
-              <div class="ov-g ov-done" data-for="d e">
-                <div class="ov-head2"><span class="ov-badge2">{D_ANSWER.label}</span><span class="ov-timing">{D_ANSWER.timing}</span><span class="ov-copy" aria-hidden="true"><OvIcon name="copy" class="ov-i ov-i--s" /></span></div>
-                <ul class="ov-act" aria-label="What the answer did with your sources">
-                  {D_ANSWER.activity.map((a, i) => <li style={`--i:${i}`}>{a}</li>)}
-                </ul>
-                <p class="ov-ans ov-ans--static">{tokens(D_ANSWER.text).map((t) => <span class={t.b ? 'b' : ''}>{t.w} </span>)}</p>
-                <div class="ov-chips" role="group" aria-label="Sources used">
-                  {D_ANSWER.chips.map((c) => (
-                    <span class={c.kind === 'notes' ? 'ov-chip2 ov-chip2--notes' : 'ov-chip2 ov-chip2--tool'}>
-                      <OvIcon name={c.kind === 'notes' ? 'book' : 'wrench'} class="ov-i ov-i--s" />{c.label}
-                    </span>
-                  ))}
-                </div>
-              </div>
+              <OvSourcesAnswer />
             </div>
           </div>
         </section>
@@ -181,15 +153,7 @@ const { heroLines } = Astro.props;
     </div>
 
     <!-- Footer status bar: src/components/ServiceStatusBar.tsx (compact), SideLanguagePicker.tsx (the chip shows the side's language) -->
-    <div class="ov-foot" role="group" aria-label="Services">
-      <span class="ov-svc ov-svc--ai"><i class="ov-sdot"></i><OvIcon name="brain" class="ov-i ov-i--s" /><span>Claude</span><span class="ov-sub">Haiku</span></span>
-      <span class="ov-fsep"></span>
-      <span class="ov-svc ov-svc--you"><i class="ov-sdot"></i><span class="ov-who2">YOU</span><span>Deepgram</span></span>
-      <span class="ov-lang"><OvIcon name="languages" class="ov-i ov-i--s" /><span>EN</span></span>
-      <span class="ov-fsep"></span>
-      <span class="ov-svc ov-svc--them"><i class="ov-sdot"></i><span class="ov-who2">THEM</span><span>Deepgram</span></span>
-      <span class="ov-lang ov-lang--them"><OvIcon name="languages" class="ov-i ov-i--s" /><span class="ov-lg"><span class="l-en">EN</span><span class="l-es">ES</span></span></span>
-    </div>
+    <OvFoot />
 
     <p class="sr-only" aria-live="polite" data-sr></p>
   </div>

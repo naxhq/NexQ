@@ -1,0 +1,21 @@
+---
+// An answer that used notes and a tool: badge and timing, the activity lines, the text and the source chips.
+// src: src-tauri/src/sources/activity.rs L85-111 (the lines), src/overlay/SourcePills.tsx, AIResponsePanel.tsx.
+import OvIcon from './OvIcon.astro';
+import { D_ANSWER, tokens } from './content';
+---
+
+<div class="ov-g ov-done" data-for="d e">
+  <div class="ov-head2"><span class="ov-badge2">{D_ANSWER.label}</span><span class="ov-timing">{D_ANSWER.timing}</span><span class="ov-copy" aria-hidden="true"><OvIcon name="copy" class="ov-i ov-i--s" /></span></div>
+  <ul class="ov-act" aria-label="What the answer did with your sources">
+    {D_ANSWER.activity.map((a, i) => <li style={`--i:${i}`}>{a}</li>)}
+  </ul>
+  <p class="ov-ans ov-ans--static">{tokens(D_ANSWER.text).map((t) => <span class={t.b ? 'b' : ''}>{t.w} </span>)}</p>
+  <div class="ov-chips" role="group" aria-label="Sources used">
+    {D_ANSWER.chips.map((c) => (
+      <span class={c.kind === 'notes' ? 'ov-chip2 ov-chip2--notes' : 'ov-chip2 ov-chip2--tool'}>
+        <OvIcon name={c.kind === 'notes' ? 'book' : 'wrench'} class="ov-i ov-i--s" />{c.label}
+      </span>
+    ))}
+  </div>
+</div>

@@ -87,11 +87,67 @@ export const D_ANSWER = {
   ],
 };
 
+/**
+ * Every other word on the overlay, so Overlay.astro and BeatFrame.astro draw the same text.
+ * src: src/overlay/OverlayView.tsx L212-224 (title, mode badge, scenario chip), QuestionDetector.tsx (idle text),
+ * AskImages.tsx L24 (placeholder with Claude), ContextScopePicker.tsx (scope picker), SideLanguagePicker.tsx L146-147 (chip).
+ */
+export const OV = {
+  title: 'NexQ',
+  badge: 'ONLINE',
+  /** Scenario chip (OverlayView.tsx L222-224): the active scenario's name, src/lib/scenarios.ts L57. */
+  scenario: 'Interview',
+  idleQuestion: 'Listening for questions from the other party',
+  /** askPlaceholder(true): the Claude subscription can take a pasted screenshot (AskImages.tsx L24). */
+  askPlaceholder: 'Ask or paste a screenshot',
+  askLabel: 'Ask a question (sample, does not send)',
+  /** The empty answer panel; on a touch screen the key hint becomes a tap hint. */
+  emptyPre: 'Press',
+  emptyKey: 'Space',
+  emptyPost: 'for AI assistance',
+  emptyTap: 'Tap Assist for AI assistance',
+  scopeDefault: 'Action default',
+  scopeChosen: 'Last 5 min',
+  /** The side's language chip while it restarts the speech engine (SideLanguagePicker.tsx L146-147). */
+  restarting: 'Restarting…',
+  langs: { en: 'EN', es: 'ES' },
+  services: { ai: 'Claude', model: 'Haiku', stt: 'Deepgram', you: 'YOU', them: 'THEM' },
+  /** The "what was sent" line under the progress row: model and provider, then the transcript lines sent. */
+  sent: { fast: 'Haiku · Claude', deep: 'Sonnet · Claude', lines: '3 new transcript lines sent' },
+  scopeHeading: 'Focus the next answers on',
+  scopeOptions: [
+    { label: 'Action default', note: 'Claude decides from the whole meeting', on: false },
+    { label: 'Since last answer', note: 'New talk since any answer', on: false },
+    { label: 'Last 5 min', note: '', on: true },
+    { label: 'Whole meeting', note: 'Everything said so far', on: false },
+  ],
+} as const;
+
 /** Meeting time of the overlay header in each moment (seconds). Beat eyebrows read the same times. */
 export const TIMES = { h: HERO_SECONDS, a: 130, b: 280, c: 335, d: 490, e: 545 } as const;
 export const mmss = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 /** Transcript stamp, the way TranscriptLine.tsx shows it: m:ss. */
 export const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+/** "4:34" to 274 seconds. */
+const stampSeconds = (ts: string) => {
+  const [m, sec] = ts.split(':').map(Number);
+  return m * 60 + sec;
+};
+/**
+ * The earliest the header timer may read in each beat: one second after the last line on screen, so the
+ * clock never runs behind the transcript. callDemo.ts takes the larger of this and the scrolled time.
+ */
+export const T0 = {
+  a: stampSeconds(A_LINES[A_LINES.length - 1].ts) + 1,
+  b: stampSeconds(B_LINES[B_LINES.length - 1].ts) + 1,
+  c: stampSeconds(B_LINES[B_LINES.length - 1].ts) + 1,
+  d: stampSeconds(D_LINES[D_LINES.length - 1].ts) + 1,
+  e: stampSeconds(D_LINES[D_LINES.length - 1].ts) + 1,
+} as const;
+for (const k of Object.keys(T0) as (keyof typeof T0)[]) {
+  if (T0[k] > TIMES[k]) throw new Error(`Beat ${k}: its lines run past the beat's time (${T0[k]} s > ${TIMES[k]} s)`);
+}
 
 // Actions, in the order of the app's buttons (src/stores/aiActionsStore.ts L96-141, src/overlay/ModeButtons.tsx L29-48).
 // `name` is the full action name for prose and screen readers; `label` is what the button shows.
@@ -174,13 +230,27 @@ export function planHero(bars: number[]): HeroPlan {
     }
   };
   search(0, 0, [], 0);
+  // Build-time check: every line needs phrases of its own, in order, inside the wave. A wave that
+  // cannot carry the conversation fails the build instead of shipping a transcript with no words in it.
+  if (ends.length !== lines.length || ends.some((e, i) => e === undefined || (i > 0 && e <= ends[i - 1]))) {
+    throw new Error(`planHero: no split of ${phrases.length} phrases gives each of the ${lines.length} lines a phrase`);
+  }
 
   const speakers: (Speaker | null)[] = Array(n).fill(null);
   const out: Line[] = lines.map((l, i) => {
-    const a = phrases[(ends[i - 1] ?? -1) + 1][0];
-    const b = phrases[ends[i]][1];
+    const first = phrases[(ends[i - 1] ?? -1) + 1];
+    const last = phrases[ends[i]];
+    if (!first || !last) throw new Error(`planHero: line ${i + 1} ("${l.text}") has no phrase`);
+    const a = first[0];
+    const b = last[1];
     for (let k = a; k < b; k++) speakers[k] = l.who;
     return { who: l.who, text: l.text, from: a / n, to: b / n, ts: clock((a / n) * HERO_SECONDS) };
+  });
+  out.forEach((l, i) => {
+    const { from, to } = l;
+    if (from === undefined || to === undefined || !(from >= 0 && to <= 1 && from < to) || (i > 0 && from < (out[i - 1].to as number))) {
+      throw new Error(`planHero: line ${i + 1} has a bad playhead range (${from} to ${to}); ranges must be ordered, inside [0, 1]`);
+    }
   });
   return { lines: out, speakers };
 }

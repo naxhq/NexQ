@@ -18,10 +18,14 @@ import { HERO_SECONDS, MODES, mmss } from '../components/overlay/content';
 import { detectOS } from './os';
 
 const HERO_MS = 8000;
-// Boundaries between sending, waiting, thinking and writing (ms). The demo answers on the Fast tier
-// (Haiku): first words in under a second.
-const PHASES_ASSIST = [250, 450, 700];
-const PHASES_QUICK = [200, 350, 500];
+// Boundaries between sending, waiting, thinking and writing (ms), as ResponseProgress.tsx walks them.
+// Assist, What to say, Shorten, Follow-up and Ask run on the Fast tier (Haiku, thinking off): sending, waiting, then
+// writing, with no "Thinking…" (docs/user-guide/claude-subscription.md L22-26). Recap runs on the Deep tier (Sonnet,
+// thinking on), so it does think. A phase with no time (b equals c) is skipped.
+const PHASES_FAST_ASSIST = [250, 700, 700];
+const PHASES_FAST_QUICK = [200, 500, 500];
+const PHASES_DEEP = [250, 450, 1400];
+const DEEP_MODES = new Set(['Recap']);
 const WORD_MS = 70;
 const PHASE_TEXT: Record<string, string> = {
   sending: 'Sending…',
@@ -29,11 +33,13 @@ const PHASE_TEXT: Record<string, string> = {
   thinking: 'Thinking…',
   writing: 'Writing…',
 };
+// A touch screen has no hover and no Space key: it taps.
+const TOUCH = matchMedia('(hover: none)').matches;
 const HINT = {
   wait: 'Listening to the call',
-  hold: 'Question caught. Click Assist or press Space.',
+  hold: TOUCH ? 'Question caught. Tap Assist.' : 'Question caught. Click Assist or press Space.',
   run: 'Answering',
-  done: 'Try another action, or keys 1 to 4 in the overlay.',
+  done: TOUCH ? 'Try another action in the overlay.' : 'Try another action, or keys 1 to 5 in the overlay.',
 };
 
 const clamp = (v: number, a = 0, b = 1) => Math.min(b, Math.max(a, v));
@@ -62,7 +68,9 @@ interface Span {
   id: string;
   top: number;
   bottom: number;
+  /** Meeting time of the beat (seconds), and the earliest the timer may read in it: just after its last line. */
   t: number;
+  t0: number;
 }
 
 function init(stage: HTMLElement) {
@@ -80,6 +88,9 @@ function init(stage: HTMLElement) {
   const phaseEl = $('[data-phase]', ov);
   const elapsedEl = $('[data-elapsed]', ov);
   const progLabel = $('[data-prog-label]', ov);
+  const detEl = $('[data-det]', ov);
+  const langEn = $('.ov-lg .l-en', ov);
+  const langEs = $('.ov-lg .l-es', ov);
   const doneLabel = $('[data-done-label]', ov);
   const doneTiming = $('[data-done-timing]', ov);
   const caret = $('.ov-caret', ov);
@@ -222,7 +233,9 @@ function init(stage: HTMLElement) {
     }
     for (const w of ov.querySelectorAll('.ov-ans .w')) w.classList.add('off');
     ov.dataset.mode = mode;
-    const phases = mode === 'Assist' ? PHASES_ASSIST : PHASES_QUICK;
+    const deep = DEEP_MODES.has(mode);
+    const phases = deep ? PHASES_DEEP : mode === 'Assist' ? PHASES_FAST_ASSIST : PHASES_FAST_QUICK;
+    if (detEl) detEl.textContent = (deep ? detEl.dataset.sentDeep : detEl.dataset.sentFast) ?? '';
     if (reduce) {
       const total = phases[2] + wordsOf(mode).length * WORD_MS;
       return showAnswer(mode, total, phases[2]);
@@ -292,9 +305,16 @@ function init(stage: HTMLElement) {
   function setActive(next: string) {
     if (!wide.matches) next = 'h';
     if (next === active) return;
+    // Leaving the hero before its opening has played out: finish it, so no half-played wave or half-written
+    // transcript is left behind under the later beats.
+    if (active === 'h' && p < 1) {
+      p = 1;
+      applyHero();
+    }
     active = next;
     stage.dataset.beat = next;
     ov.dataset.view = viewNow();
+    syncLang();
     // A beat's one visible change plays the first time it is shown, and never again.
     if (next !== 'h' && !reduce && !played.has(next)) {
       played.add(next);
@@ -313,6 +333,13 @@ function init(stage: HTMLElement) {
     kick();
   }
 
+  // The other side's chip holds both language codes and swaps them with CSS: only the one on show is read aloud.
+  function syncLang() {
+    const es = ov.dataset.view === 'a';
+    langEn?.setAttribute('aria-hidden', String(es));
+    langEs?.setAttribute('aria-hidden', String(!es));
+  }
+
   // Scroll position -> moment, meeting time and call progress. Rects are measured once (on the first
   // scroll) and again only after a resize or a layout change; a scroll frame reads scrollY and nothing else.
   let spans: Span[] = [];
@@ -324,7 +351,8 @@ function init(stage: HTMLElement) {
     callTop = ($('#call')?.getBoundingClientRect().top ?? 0) + sy;
     spans = beats.map((b) => {
       const r = b.getBoundingClientRect();
-      return { id: b.dataset.beatId!, top: r.top + sy, bottom: r.bottom + sy, t: Number(b.dataset.t) };
+      const t = Number(b.dataset.t);
+      return { id: b.dataset.beatId!, top: r.top + sy, bottom: r.bottom + sy, t, t0: Number(b.dataset.t0 ?? t) };
     });
     dirty = false;
   }
@@ -351,6 +379,8 @@ function init(stage: HTMLElement) {
       prevT = s.t;
       t = s.t;
     }
+    // Never read earlier than the last line on show: the clock may not run behind the transcript.
+    if (here) t = Math.max(t, here.t0);
     scrollT = t;
     if (callLine && !cssLine()) {
       const span = spans[spans.length - 1].bottom - spans[0].top;
@@ -489,12 +519,21 @@ function init(stage: HTMLElement) {
   });
 
   // ── Boot ──
+  // A visitor who arrives part-way down (a link to #knows or #stealth, a reload, or a restored scroll position)
+  // sees the beat that is on screen, not the hero. The scroll position can settle after this script runs
+  // (fonts, scroll restoration), so it is read once now and once more when the page has loaded.
+  const syncOnArrival = () => {
+    if (location.hash || window.scrollY > 0) syncScroll();
+  };
+  window.addEventListener('load', syncOnArrival, { once: true });
   ov.tabIndex = 0; // the keys only work with focus, so the sample is reachable by keyboard
   if (reduce) {
     setStealth(true); // the final state: on
     pauseBtn?.setAttribute('hidden', '');
     hint(HINT.hold);
     renderTimer();
+    syncLang();
+    syncOnArrival();
     return;
   }
   setStealth(false); // switched on by the stealth beat
@@ -510,6 +549,8 @@ function init(stage: HTMLElement) {
   renderTimer();
   stage.classList.add('is-ready');
   hint(HINT.wait);
+  syncLang();
+  syncOnArrival();
   setTimeout(kick, 600);
 }
 

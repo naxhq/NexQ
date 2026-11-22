@@ -92,9 +92,6 @@
   --translation: #fbbf24;
   --rec: #ef4444;
 
-  /* Overlay mock: interim (not yet final) transcript text. Raise if it fails AA. */
-  --interim-alpha: 0.45;
-
   /* Spring, critically damped: quick start, no overshoot, never bounce. */
   --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
   --nav-h: 4rem;
@@ -109,7 +106,6 @@
   :root {
     --muted-foreground: 215 20% 82%;
     --border: 220 20% 40%;
-    --interim-alpha: 0.7;
     --wave-rest: hsl(var(--muted-foreground) / 0.6);
   }
 }
@@ -369,28 +365,6 @@
   }
 }
 
-/* ─── Recording dot (red). The ping is the only looping motion in the overlay chrome. ─── */
-.rec-dot {
-  position: relative;
-  display: inline-block;
-  width: 0.5rem;
-  height: 0.5rem;
-  border-radius: 9999px;
-  background: var(--rec);
-}
-.rec-dot::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: inherit;
-  animation: rec-ping 2.4s var(--ease-spring) infinite;
-}
-@keyframes rec-ping {
-  0% { transform: scale(1); opacity: 0.6; }
-  70%, 100% { transform: scale(2.6); opacity: 0; }
-}
-
 /* ─── Release wave (markup in Wave.astro) ───
  * ONE inline SVG per wave: .nx-wave__rest draws every bar at rest, .nx-wave__on draws the same
  * bars in their played colour (one path per colour) and is clipped at the playhead by --progress.
@@ -479,9 +453,6 @@
     opacity: 1;
     transform: none;
   }
-  .rec-dot::after {
-    display: none;
-  }
 }
 
 /* ─── Forced colors (Windows High Contrast): use system colours, drop effects ─── */
@@ -518,9 +489,5 @@
   }
   .nx-wave__rest {
     opacity: 0.4;
-  }
-  .rec-dot {
-    background: Highlight;
-    forced-color-adjust: none;
   }
 }

@@ -4,13 +4,13 @@
 import './overlay.css';
 import OvIcon from './OvIcon.astro';
 import OvLine from './OvLine.astro';
-import { D_LINES, mmss, TIMES } from './content';
+import { OV, D_LINES, mmss, TIMES } from './content';
 ---
 
 <div class="ov ov--frame ov--mini nx-glass" data-view="frame">
   <div class="ov-head">
     <div class="ov-hl">
-      <span class="ov-title">NexQ</span>
+      <span class="ov-title">{OV.title}</span>
       <span class="ov-rec"><span class="ov-ping" aria-hidden="true"><i></i><b></b></span>REC</span>
       <span class="ov-time">{mmss(TIMES.e)}</span>
     </div>

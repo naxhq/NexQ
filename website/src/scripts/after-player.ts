@@ -1,12 +1,12 @@
 // After the call (AfterCall.astro): the sample recording. A playhead, a transcript that follows it,
 // and tabs. No audio: the playhead runs fast.
-// Without JS the markup shows its resting state (playhead at 42%, every panel stacked).
+// Without JS the markup shows its resting state (playhead at data-rest, every panel stacked).
 // No layout reads at startup: the transcript is first centred on the active line when the section
 // comes near the viewport (IntersectionObserver) or the visitor interacts, not on page load.
 const root = document.querySelector<HTMLElement>('[data-ac]');
 if (root) {
   const DUR = Number(root.dataset.dur);
-  const REST = 0.42;
+  const REST = Number(root.dataset.rest);
   const RATE = DUR / 30; // sample seconds per real second
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const $ = <T extends HTMLElement>(s: string) => root.querySelector<T>(s)!;
@@ -58,6 +58,7 @@ if (root) {
       active = a;
       lines[a]?.setAttribute('aria-current', 'true');
       follow(smooth);
+      if (a >= 0 && !pane.contains(document.activeElement)) setStop(a);
     }
   };
 
@@ -129,8 +130,25 @@ if (root) {
   }
   addEventListener('scroll', onScroll, { passive: true });
 
-  // Rows and bookmarks seek.
+  // Rows and bookmarks seek. The transcript is one tab stop (roving tabindex): Tab lands on the current
+  // line, Up and Down move between lines, Home and End jump to the first and last, Enter or Space seeks.
+  let stop = Math.max(0, active);
+  const setStop = (i: number) => {
+    lines[stop].tabIndex = -1;
+    stop = i;
+    lines[stop].tabIndex = 0;
+  };
   lines.forEach((l, i) => l.addEventListener('click', () => seek(times[i])));
+  lines.forEach((l, i) => l.addEventListener('focus', () => setStop(i)));
+  lines.forEach((l) =>
+    l.addEventListener('keydown', (e) => {
+      const i = lines.indexOf(l);
+      const n = e.key === 'ArrowDown' ? i + 1 : e.key === 'ArrowUp' ? i - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? lines.length - 1 : -1;
+      if (n < 0 || n >= lines.length) return;
+      e.preventDefault();
+      lines[n].focus();
+    }),
+  );
   root.querySelectorAll<HTMLElement>('[data-seek]').forEach((b) =>
     b.addEventListener('click', () => {
       showTab(0);
@@ -162,6 +180,19 @@ if (root) {
   // Tabs.
   const tabs = Array.from(root.querySelectorAll<HTMLElement>('[role="tab"]'));
   const feats = Array.from(document.querySelectorAll<HTMLElement>('[data-go]'));
+  // Tabs that do not fit scroll sideways. The wrapper says which edge still has tabs beyond it (a fade, see CSS),
+  // and a tab the visitor picks is scrolled into the middle so it is never left half hidden.
+  const bar = $('[data-ac-tabs]');
+  const barWrap = $('[data-ac-tabs-wrap]');
+  const edges = () => {
+    barWrap.toggleAttribute('data-more-l', bar.scrollLeft > 4);
+    barWrap.toggleAttribute('data-more-r', bar.scrollLeft + bar.clientWidth < bar.scrollWidth - 4);
+  };
+  bar.addEventListener('scroll', edges, { passive: true });
+  new ResizeObserver(edges).observe(bar);
+  const reveal = (b: HTMLElement) =>
+    bar.scrollTo({ left: b.offsetLeft - (bar.clientWidth - b.offsetWidth) / 2, behavior: reduce ? 'auto' : 'smooth' });
+
   function showTab(i: number, focus = false) {
     tabs.forEach((b, j) => {
       b.setAttribute('aria-selected', String(j === i));
@@ -172,7 +203,12 @@ if (root) {
     if (focus) tabs[i].focus();
     if (i === 0) follow(false);
   }
-  tabs.forEach((b, i) => b.addEventListener('click', () => showTab(i)));
+  tabs.forEach((b, i) =>
+    b.addEventListener('click', () => {
+      showTab(i);
+      reveal(b);
+    }),
+  );
   $('[data-ac-tabs]').addEventListener('keydown', (e) => {
     const i = tabs.indexOf(document.activeElement as HTMLElement);
     if (i < 0) return;
@@ -181,7 +217,13 @@ if (root) {
     e.preventDefault();
     showTab(n, true);
   });
-  feats.forEach((f) => f.addEventListener('click', () => showTab(tabs.findIndex((b) => b.dataset.tab === f.dataset.go))));
+  feats.forEach((f) =>
+    f.addEventListener('click', () => {
+      const i = tabs.findIndex((b) => b.dataset.tab === f.dataset.go);
+      showTab(i);
+      reveal(tabs[i]);
+    }),
+  );
   showTab(0);
 }
 

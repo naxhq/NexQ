@@ -30,6 +30,9 @@
   --ov-mut: 215 14% 64%;
   /* Blue text on its own 10-20% tint: the app's blue, a little lighter so it passes AA. */
   --ov-blue: 217 92% 71%;
+  /* Words still being recognised (TranscriptLine.tsx draws them italic at 45%). Raised to .6 for contrast, .75 when the
+     visitor asks for more contrast. Local on purpose: global.css keeps the app's .45 for everything else. */
+  --ov-interim-alpha: 0.6;
   --ov-spring: var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
   position: relative;
   display: flex;
@@ -149,10 +152,20 @@
   letter-spacing: 0.06em;
   color: #93a6ff;
 }
+/* The app's clock is the overlay's own sans with tabular numbers (OverlayView.tsx L225). */
+/* Scenario chip (OverlayView.tsx L222-224: 10px, muted, white at 5%, rounded). */
+.ov-scn {
+  flex: none;
+  padding: 0.18em 0.5em;
+  border-radius: 0.3em;
+  background: hsl(0 0% 100% / 0.05);
+  font-size: max(11px, 0.7em);
+  color: hsl(var(--ov-mut));
+}
 .ov-time {
-  font-family: var(--font-mono, 'Martian Mono', ui-monospace, monospace);
+  font-family: inherit;
   font-size: max(11px, 0.73em);
-  font-weight: 450;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
   color: hsl(var(--ov-mut) / 0.9);
 }
@@ -351,12 +364,17 @@
   line-height: 1.55;
   color: #e4e4e7;
 }
-/* Words still being recognised: the app draws them italic at 45%; raised to 60% for contrast. */
+/* Words still being recognised: italic, at --ov-interim-alpha (see .ov). */
 .ov-tail {
   font-style: italic;
   line-height: 1.55;
   color: #e4e4e7;
-  opacity: 0.6;
+  opacity: var(--ov-interim-alpha, 0.6);
+}
+@media (prefers-contrast: more) {
+  .ov {
+    --ov-interim-alpha: 0.75;
+  }
 }
 .ov-trl {
   min-height: 0;
@@ -765,6 +783,18 @@ button.ov-qa:hover {
 .ov-empty .ov-i--xl {
   color: hsl(var(--primary) / 0.55);
 }
+/* The key hint of the empty answer panel is a tap hint on a touch screen. */
+.ov-hint-tap {
+  display: none;
+}
+@media (hover: none) {
+  .ov-hint-key {
+    display: none;
+  }
+  .ov-hint-tap {
+    display: block;
+  }
+}
 .ov-kbd {
   margin: 0 0.2em;
   padding: 0.1em 0.5em;
@@ -1030,7 +1060,21 @@ button.ov-qa:hover {
   opacity: 0;
 }
 .ov-lang--them {
+  position: relative;
   transition: background-color 0.3s var(--ov-spring);
+}
+/* "Restarting…" (SideLanguagePicker.tsx L146-147): beat a shows it for a moment between EN and ES. It sits where the
+   code sits and runs on to the right, over the free space of the bar, so the chip never changes width. */
+.ov-rs {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(0.55em + 0.92em + 0.28em);
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
 }
 .ov[data-view='a'] .ov-lang--them,
 .ov--still[data-still='a'] .ov-lang--them {
@@ -1090,6 +1134,14 @@ button.ov-qa:hover {
 @keyframes ov-chip {
   from { background-color: transparent; }
 }
+/* "Restarting…" fades in, pulses (the app's animate-pulse on the label) and fades out. Ends back at its resting opacity 0. */
+@keyframes ov-restart {
+  0% { opacity: 0; }
+  12%, 30% { opacity: 1; }
+  50% { opacity: 0.45; }
+  70%, 88% { opacity: 1; }
+  100% { opacity: 0; }
+}
 @keyframes ov-trw {
   from { grid-template-rows: 0fr; opacity: 0; }
 }
@@ -1111,21 +1163,28 @@ button.ov-qa:hover {
   --n: 1;
 }
 @media (prefers-reduced-motion: no-preference) {
-  /* a: the other side's language switches from EN to ES, and the translations open under their lines */
+  /* a: the other side's language chip goes EN, "Restarting…" (about 0.6 s), ES, all inside 1.2 s, and the
+     translations open under their lines */
   :is(.ov[data-play~='a'], .js .ov--still[data-still='a']) .ov-lg .l-en {
-    animation: ov-hide 0.3s var(--ov-spring) 0.35s backwards;
+    animation: ov-hide 0.15s var(--ov-spring) 0.3s backwards;
+  }
+  :is(.ov[data-play~='a'], .js .ov--still[data-still='a']) .ov-rs {
+    animation: ov-restart 0.6s linear 0.35s backwards;
   }
   :is(.ov[data-play~='a'], .js .ov--still[data-still='a']) .ov-lg .l-es {
-    animation: ov-show 0.3s var(--ov-spring) 0.35s backwards;
+    animation: ov-show 0.25s var(--ov-spring) 0.95s backwards;
   }
   :is(.ov[data-play~='a'], .js .ov--still[data-still='a']) .ov-lang--them {
-    animation: ov-chip 0.3s var(--ov-spring) 0.35s backwards;
+    animation: ov-chip 0.25s var(--ov-spring) 0.95s backwards;
   }
   :is(.ov[data-play~='a'], .js .ov--still[data-still='a']) .ov-trw {
     animation: ov-trw 0.5s var(--ov-spring) backwards;
     animation-delay: calc(0.55s + var(--n, 0) * 0.12s);
   }
-  /* b (stills): the question card arrives. On the pinned overlay the moment's own fade-in is the change. */
+  /* b: the question card arrives after the transcript has settled, so "question caught" lands as its own beat */
+  .ov[data-play~='b'] .ov-qrow[data-for='b'] {
+    animation: ov-in 0.5s var(--ov-spring) 0.45s backwards;
+  }
   .js .ov--still[data-still='b'] .ov-qrow {
     animation: ov-in 0.5s var(--ov-spring) 0.25s backwards;
   }
@@ -1148,9 +1207,22 @@ button.ov-qa:hover {
   :is(.ov[data-play~='d'], .js .ov--still[data-still='d']) .ov-pill--tools {
     animation-delay: 0.65s;
   }
+  /* A still's translation rows are always open, so the page never changes height when it plays: they fade in. */
+  .js .ov--still[data-still='a'] .ov-trw {
+    animation: ov-show 0.5s var(--ov-spring) backwards;
+    animation-delay: calc(0.55s + var(--n, 0) * 0.12s);
+  }
+  /* !important: the `animation` shorthands above reset play-state, and an unseen still must wait on its first frame. */
   .js .ov--still:not(.is-play),
   .js .ov--still:not(.is-play) * {
-    animation-play-state: paused;
+    animation-play-state: paused !important;
+  }
+}
+
+/* The header has no room for the scenario chip in a narrow window (the clock would run into the buttons). */
+@container (max-width: 499px) {
+  .ov-scn {
+    display: none;
   }
 }
 
@@ -1231,12 +1303,20 @@ button.ov-qa:hover {
   }
 }
 
+/* Forced colors (Windows high contrast). The overlay is a picture of the app, drawn in light text on a dark
+   window, so it keeps its own colours on ONE fixed dark ground (it is never a light window with light text)
+   and gets a system-coloured border so its edge shows on any theme. Everything around it follows the system.
+   stage.css gives the screen and the stealth panes the same treatment. */
 @media (forced-colors: active) {
-  .ov {
+  .ov,
+  .ov.nx-glass {
     forced-color-adjust: none;
-    background: Canvas;
+    background: #080c16;
     border: 1px solid CanvasText;
-    color: CanvasText;
+    color: #e4e4e7;
+  }
+  .ov:focus-visible {
+    outline-color: Highlight;
   }
 }
 

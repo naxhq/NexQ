@@ -7,7 +7,11 @@
 import './overlay.css';
 import OvIcon from './OvIcon.astro';
 import OvLine from './OvLine.astro';
-import { A_LINES, B_QUESTION, D_ANSWER, MODES, tokens } from './content';
+import OvFoot from './OvFoot.astro';
+import OvQRow from './OvQRow.astro';
+import OvPills from './OvPills.astro';
+import OvSourcesAnswer from './OvSourcesAnswer.astro';
+import { OV, A_LINES, B_QUESTION, MODES } from './content';
 
 interface Props {
   beat: 'a' | 'b' | 'c' | 'd';
@@ -22,24 +26,14 @@ const { beat } = Astro.props;
         <div class="ov-lines ov-lines--still">
           <div class="ov-g">{A_LINES.map((l) => <OvLine line={l} />)}</div>
         </div>
-        <div class="ov-foot" role="group" aria-label="Services">
-          <span class="ov-svc ov-svc--you"><i class="ov-sdot"></i><span class="ov-who2">YOU</span><span>Deepgram</span></span>
-          <span class="ov-lang"><OvIcon name="languages" class="ov-i ov-i--s" /><span>EN</span></span>
-          <span class="ov-fsep"></span>
-          <span class="ov-svc ov-svc--them"><i class="ov-sdot"></i><span class="ov-who2">THEM</span><span>Deepgram</span></span>
-          <span class="ov-lang ov-lang--them"><OvIcon name="languages" class="ov-i ov-i--s" /><span class="ov-lg"><span class="l-en">EN</span><span class="l-es">ES</span></span></span>
-        </div>
+        <OvFoot ai={false} shows="es" />
       </>
     )
   }
   {
     beat === 'b' && (
       <div class="ov-q ov-q--still" role="region" aria-label="A detected question">
-        <div class="ov-g ov-qrow ov-qrow--has">
-          <span class="ov-qi"><OvIcon name="help" class="ov-i ov-i--l" /><i class="ov-qdot"></i></span>
-          <p class="ov-qt">&ldquo;{B_QUESTION}&rdquo;</p>
-          <span class="ov-qa" aria-hidden="true"><span class="qa-a"><OvIcon name="sparkles" class="ov-i ov-i--s" />Assist</span></span>
-        </div>
+        <OvQRow text={B_QUESTION} state="caught" />
       </div>
     )
   }
@@ -50,14 +44,13 @@ const { beat } = Astro.props;
           {MODES.map((m) => (
             <span class="ov-mode" role="listitem" data-mode-btn={m.mode}><OvIcon name={m.icon} class="ov-i ov-i--s" /><span>{m.label}</span><kbd class="ov-key">{m.key}</kbd></span>
           ))}
-          <span class="ov-scope"><OvIcon name="clock" class="ov-i ov-i--s" /><span class="sc-b">Last 5 min</span></span>
+          <span class="ov-scope"><OvIcon name="clock" class="ov-i ov-i--s" /><span class="sc-b">{OV.scopeChosen}</span></span>
         </div>
         <div class="ov-pop">
-          <p class="ov-pop-h">Focus the next answers on</p>
-          <div class="ov-opt"><i></i><span>Action default<small>Claude decides from the whole meeting</small></span></div>
-          <div class="ov-opt"><i></i><span>Since last answer<small>New talk since any answer</small></span></div>
-          <div class="ov-opt is-on"><i></i><span>Last 5 min</span></div>
-          <div class="ov-opt"><i></i><span>Whole meeting<small>Everything said so far</small></span></div>
+          <p class="ov-pop-h">{OV.scopeHeading}</p>
+          {OV.scopeOptions.map((o) => (
+            <div class:list={['ov-opt', o.on && 'is-on']}><i></i><span>{o.label}{o.note && <small>{o.note}</small>}</span></div>
+          ))}
         </div>
       </section>
     )
@@ -66,26 +59,10 @@ const { beat } = Astro.props;
     beat === 'd' && (
       <section class="ov-panel ov-ai ov-ai--still" aria-label="An answer that used notes and a tool">
         <div class="ov-modes">
-          <span class="ov-pills" role="group" aria-label="Personal sources for this answer">
-            <span class="ov-pill ov-pill--notes"><OvIcon name="book" class="ov-i ov-i--s" />Notes</span>
-            <span class="ov-pill ov-pill--tools"><OvIcon name="wrench" class="ov-i ov-i--s" />Tools</span>
-          </span>
+          <OvPills label="Personal sources for this answer" />
         </div>
         <div class="ov-resp ov-resp--still">
-          <div class="ov-g ov-done">
-            <div class="ov-head2"><span class="ov-badge2">{D_ANSWER.label}</span><span class="ov-timing">{D_ANSWER.timing}</span></div>
-            <ul class="ov-act" aria-label="What the answer did with your sources">
-              {D_ANSWER.activity.map((a) => <li>{a}</li>)}
-            </ul>
-            <p class="ov-ans ov-ans--static">{tokens(D_ANSWER.text).map((t) => <span class={t.b ? 'b' : ''}>{t.w} </span>)}</p>
-            <div class="ov-chips" role="group" aria-label="Sources used">
-              {D_ANSWER.chips.map((c) => (
-                <span class={c.kind === 'notes' ? 'ov-chip2 ov-chip2--notes' : 'ov-chip2 ov-chip2--tool'}>
-                  <OvIcon name={c.kind === 'notes' ? 'book' : 'wrench'} class="ov-i ov-i--s" />{c.label}
-                </span>
-              ))}
-            </div>
-          </div>
+          <OvSourcesAnswer />
         </div>
       </section>
     )
