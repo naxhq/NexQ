@@ -14,6 +14,7 @@ import { showToast } from "../stores/toastStore";
 import { useConfigStore } from "../stores/configStore";
 import { formatShortcut, normalizeAccelerator, reservedShortcutAction, screenCaptureSupported } from "../lib/shortcutLabel";
 import { providerReadsImages } from "../lib/imageAttachments";
+import { modeForKeyEvent } from "../lib/hotkeys";
 import { captureScreenIntoAsk } from "../lib/screenCapture";
 
 /** Ctrl+M: end the running meeting (in every window that holds it) or start one. */
@@ -240,49 +241,15 @@ export function useGlobalShortcut() {
       const actions = useAIActionsStore.getState().configs.actions;
       const isVisible = (mode: string) => actions[mode]?.visible !== false;
 
-      switch (e.code) {
-        case "Space":
-          if (isVisible("Assist")) {
-            e.preventDefault();
-            runYourAction("Assist").catch(() => {});
-          }
-          break;
-        case "Numpad1":
-        case "Digit1":
-          if (!e.ctrlKey && !e.metaKey && !e.altKey && isVisible("WhatToSay")) {
-            e.preventDefault();
-            runYourAction("WhatToSay").catch(() => {});
-          }
-          break;
-        case "Numpad2":
-        case "Digit2":
-          if (!e.ctrlKey && !e.metaKey && !e.altKey && isVisible("Shorten")) {
-            e.preventDefault();
-            runYourAction("Shorten").catch(() => {});
-          }
-          break;
-        case "Numpad3":
-        case "Digit3":
-          if (!e.ctrlKey && !e.metaKey && !e.altKey && isVisible("FollowUp")) {
-            e.preventDefault();
-            runYourAction("FollowUp").catch(() => {});
-          }
-          break;
-        case "Numpad4":
-        case "Digit4":
-          if (!e.ctrlKey && !e.metaKey && !e.altKey && isVisible("Recap")) {
-            e.preventDefault();
-            runYourAction("Recap").catch(() => {});
-          }
-          break;
-        case "Numpad5":
-        case "Digit5":
-          if (!e.ctrlKey && !e.metaKey && !e.altKey && isVisible("AskQuestion")) {
-            e.preventDefault();
-            // Open/focus the Ask input instead of triggering generation directly
-            window.dispatchEvent(new Event("nexq:toggle-ask-input"));
-          }
-          break;
+      // The keys come from Settings > Hotkeys (read now, so a change applies at once).
+      const mode = modeForKeyEvent(e, useConfigStore.getState().hotkeys);
+      if (!mode || !isVisible(mode)) return;
+      e.preventDefault();
+      if (mode === "AskQuestion") {
+        // Open/focus the Ask input instead of triggering generation directly
+        window.dispatchEvent(new Event("nexq:toggle-ask-input"));
+      } else {
+        runYourAction(mode).catch(() => {});
       }
     }
 

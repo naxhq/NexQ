@@ -57,11 +57,6 @@ function populate(): void {
       keyterms: [],
     },
     hotkeys: {
-      toggle_assist: 'Space',
-      start_end_meeting: 'Ctrl+M',
-      show_hide: 'Ctrl+B',
-      open_settings: 'Ctrl+,',
-      escape: 'Escape',
       mode_assist: 'Space',
       mode_say: '1',
       mode_shorten: '2',

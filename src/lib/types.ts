@@ -662,12 +662,8 @@ export interface AppConfig {
   hotkeys: HotkeyConfig;
 }
 
+/** In-meeting action keys (the global shortcuts are separate settings). */
 export interface HotkeyConfig {
-  toggle_assist: string;
-  start_end_meeting: string;
-  show_hide: string;
-  open_settings: string;
-  escape: string;
   mode_assist: string;
   mode_say: string;
   mode_shorten: string;

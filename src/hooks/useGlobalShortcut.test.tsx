@@ -110,6 +110,20 @@ it("a number key stops a running automatic answer and runs what you asked for", 
   expect(invoked.find(([command]) => command === "cancel_generation")?.[1]).toEqual({ requestId: "auto-1" });
 });
 
+it("the keys come from Settings > Hotkeys: a changed binding runs the action, the old key stops", async () => {
+  const useMeetingStore = await mountWindow("overlay");
+  const { useConfigStore } = await import("../stores/configStore");
+  useMeetingStore.setState({ activeMeeting: { id: "m" } as Meeting });
+  act(() => useConfigStore.getState().setHotkeys({ ...useConfigStore.getState().hotkeys, mode_say: "Q" }));
+
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { code: "Digit1" })); });
+  await new Promise((r) => setTimeout(r, 20));
+  expect(invoked.map(([command]) => command)).not.toContain("generate_assist");
+
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyQ" })); });
+  await waitFor(() => expect(invoked.map(([command]) => command)).toContain("generate_assist"));
+});
+
 it("holds the Assist shortcut in the overlay only while a meeting runs", async () => {
   const overlay = await mountWindow("overlay");
   const { DEFAULT_ASSIST_SHORTCUT } = await import("../stores/configStore");

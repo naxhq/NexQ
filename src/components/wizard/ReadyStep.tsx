@@ -9,6 +9,7 @@ import {
   Globe,
 } from "lucide-react";
 import { useConfigStore } from "../../stores/configStore";
+import { formatShortcut } from "../../lib/shortcutLabel";
 
 interface ReadyStepProps {
   onStartMeeting: () => void;
@@ -18,17 +19,18 @@ interface ReadyStepProps {
 
 function useShortcuts() {
   const hotkeys = useConfigStore((s) => s.hotkeys);
+  const assistShortcut = useConfigStore((s) => s.assistShortcut);
   return [
-    { keys: hotkeys.toggle_assist, action: "Trigger AI Assist", context: "During meeting" },
-    { keys: hotkeys.start_end_meeting, action: "Start / End meeting", context: "Global" },
-    { keys: hotkeys.show_hide, action: "Show / Hide overlay", context: "Global" },
+    { keys: hotkeys.mode_assist, action: "Trigger AI Assist", context: "During meeting" },
+    { keys: formatShortcut(assistShortcut), action: "Assist from any app", context: "During meeting" },
+    { keys: "Ctrl+M", action: "Start / End meeting", context: "Global" },
+    { keys: "Ctrl+B", action: "Show / Hide overlay", context: "Global" },
     { keys: hotkeys.mode_say, action: "What to Say mode", context: "During meeting" },
     { keys: hotkeys.mode_shorten, action: "Shorten mode", context: "During meeting" },
     { keys: hotkeys.mode_followup, action: "Follow-up mode", context: "During meeting" },
     { keys: hotkeys.mode_recap, action: "Recap mode", context: "During meeting" },
     { keys: hotkeys.mode_ask, action: "Ask Question mode", context: "During meeting" },
-    { keys: hotkeys.open_settings, action: "Open Settings", context: "Global" },
-    { keys: hotkeys.escape, action: "Close overlay / settings", context: "Global" },
+    { keys: "Ctrl+,", action: "Open Settings", context: "Global" },
   ];
 }
 
@@ -96,7 +98,7 @@ export function ReadyStep({
               <tbody>
                 {SHORTCUTS.map((s) => (
                   <tr
-                    key={s.keys}
+                    key={s.action}
                     className="group border-b border-border/20 last:border-0"
                   >
                     <td className="px-3 py-1.5">

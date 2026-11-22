@@ -207,3 +207,57 @@ describe("configStore: capture shortcut", () => {
     await vi.waitFor(() => expect(saved.get("captureShortcut")).toBe("CmdOrCtrl+Alt+X"));
   });
 });
+
+describe("configStore: hotkeys", () => {
+  beforeEach(() => {
+    saved.clear();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("starts with the keys the app really uses", async () => {
+    const store = await freshStore();
+    expect(store.getState().hotkeys).toEqual({
+      mode_assist: "Space",
+      mode_say: "1",
+      mode_shorten: "2",
+      mode_followup: "3",
+      mode_recap: "4",
+      mode_ask: "5",
+    });
+  });
+
+  it("an old config with no hotkeys loads the defaults", async () => {
+    saved.set("theme", "dark");
+    const store = await freshStore();
+    await store.getState().loadConfig();
+    expect(store.getState().hotkeys.mode_say).toBe("1");
+    expect(store.getState().hotkeys.mode_ask).toBe("5");
+  });
+
+  it("an old config with the unused Ctrl+1..5 values loads the defaults and is cleaned up", async () => {
+    saved.set("hotkeys", {
+      toggle_assist: "Space", start_end_meeting: "Ctrl+M", show_hide: "Ctrl+B", open_settings: "Ctrl+,", escape: "Escape",
+      mode_assist: "Space", mode_say: "Ctrl+1", mode_shorten: "Ctrl+2", mode_followup: "Ctrl+3", mode_recap: "Ctrl+4", mode_ask: "Ctrl+5",
+    });
+    const store = await freshStore();
+    await store.getState().loadConfig();
+    expect(store.getState().hotkeys).toMatchObject({ mode_say: "1", mode_shorten: "2", mode_followup: "3", mode_recap: "4", mode_ask: "5" });
+    expect(Object.keys(store.getState().hotkeys)).toHaveLength(6);
+    await vi.waitFor(() => expect(saved.get("hotkeys")).toEqual(store.getState().hotkeys));
+  });
+
+  it("restores a saved choice and persists a change", async () => {
+    saved.set("hotkeys", { mode_say: "Q" });
+    const store = await freshStore();
+    await store.getState().loadConfig();
+    expect(store.getState().hotkeys.mode_say).toBe("Q");
+    expect(store.getState().hotkeys.mode_shorten).toBe("2");
+
+    store.getState().setHotkeys({ ...store.getState().hotkeys, mode_recap: "R" });
+    await vi.waitFor(() => expect(saved.get("hotkeys")).toMatchObject({ mode_say: "Q", mode_recap: "R" }));
+  });
+});

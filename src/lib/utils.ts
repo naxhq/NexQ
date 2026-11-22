@@ -1,6 +1,7 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
-import type { Speaker, IntelligenceMode } from "./types";
+import type { Speaker, IntelligenceMode, HotkeyConfig } from "./types";
+import { DEFAULT_HOTKEYS, modeHotkey } from "./hotkeys";
 
 // shadcn/ui utility
 export function cn(...inputs: ClassValue[]) {
@@ -117,30 +118,9 @@ export function getModeLabel(mode: IntelligenceMode): string {
   }
 }
 
-// Get mode keyboard shortcut
-export function getModeShortcut(mode: IntelligenceMode): string {
-  switch (mode) {
-    case "Assist":
-      return "Space";
-    case "WhatToSay":
-      return "Ctrl+1";
-    case "Shorten":
-      return "Ctrl+2";
-    case "FollowUp":
-      return "Ctrl+3";
-    case "Recap":
-      return "Ctrl+4";
-    case "AskQuestion":
-      return "Ctrl+5";
-    case "MeetingSummary":
-      return "";
-    case "ActionItemsExtraction":
-      return "";
-    case "BookmarkSuggestions":
-      return "";
-    case "MeetingAsk":
-      return "";
-  }
+// Get mode keyboard shortcut (the key that runs it during a meeting)
+export function getModeShortcut(mode: IntelligenceMode, hotkeys: HotkeyConfig = DEFAULT_HOTKEYS): string {
+  return modeHotkey(mode, hotkeys);
 }
 
 // Format file size

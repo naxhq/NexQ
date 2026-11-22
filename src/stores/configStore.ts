@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { load, Store } from "@tauri-apps/plugin-store";
+import { DEFAULT_HOTKEYS, sanitizeHotkeys } from "../lib/hotkeys";
 import type {
   ThemeMode,
   LLMProviderType,
@@ -87,20 +88,6 @@ function pushClaudeCliConfig(config: ClaudeCliConfig): void {
     })
   );
 }
-
-const DEFAULT_HOTKEYS: HotkeyConfig = {
-  toggle_assist: "Space",
-  start_end_meeting: "Ctrl+M",
-  show_hide: "Ctrl+B",
-  open_settings: "Ctrl+,",
-  escape: "Escape",
-  mode_assist: "Space",
-  mode_say: "1",
-  mode_shorten: "2",
-  mode_followup: "3",
-  mode_recap: "4",
-  mode_ask: "5",
-};
 
 // Singleton store instance, lazily initialized
 let storeInstance: Store | null = null;
@@ -858,8 +845,9 @@ export const useConfigStore = create<ConfigState>((set) => ({
     persistValue("firstRunCompleted", completed);
   },
   setHotkeys: (hotkeys) => {
-    set({ hotkeys });
-    persistValue("hotkeys", hotkeys);
+    const clean = sanitizeHotkeys(hotkeys);
+    set({ hotkeys: clean });
+    persistValue("hotkeys", clean);
   },
   setVerifiedCloudProviders: (providers) => {
     set({ verifiedCloudProviders: providers });
@@ -1048,7 +1036,12 @@ export const useConfigStore = create<ConfigState>((set) => ({
       const startOnLogin = await store.get<boolean>("startOnLogin");
       const dataDirectory = await store.get<string>("dataDirectory");
       const firstRunCompleted = await store.get<boolean>("firstRunCompleted");
-      const hotkeys = await store.get<HotkeyConfig>("hotkeys");
+      const savedHotkeys = await store.get<unknown>("hotkeys");
+      // Older versions saved bindings nothing read (Ctrl+1..5 after a Reset): fix them here.
+      const hotkeys = sanitizeHotkeys(savedHotkeys);
+      if (savedHotkeys != null && JSON.stringify(savedHotkeys) !== JSON.stringify(hotkeys)) {
+        persistValue("hotkeys", hotkeys);
+      }
       const activeWhisperModel = await store.get<string | null>("activeWhisperModel");
       const whisperDualPass = await store.get<WhisperDualPassConfig>("whisperDualPass");
       const contextStrategy = await store.get<ContextStrategy>("contextStrategy");
@@ -1234,7 +1227,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
         ...(startOnLogin != null && { startOnLogin }),
         ...(dataDirectory != null && { dataDirectory }),
         ...(firstRunCompleted != null && { firstRunCompleted }),
-        ...(hotkeys != null && { hotkeys }),
+        hotkeys,
         ...(activeWhisperModel !== undefined && { activeWhisperModel }),
         ...(activeModelPerEngine != null && { activeModelPerEngine }),
         ...(whisperDualPass != null && { whisperDualPass }),
@@ -1367,6 +1360,9 @@ export const useConfigStore = create<ConfigState>((set) => ({
       });
       store.onKeyChange<CustomLlmAuthType>("customLlmAuthType", (val) => {
         if (val != null) set({ customLlmAuthType: val });
+      });
+      store.onKeyChange<unknown>("hotkeys", (val) => {
+        if (val != null) set({ hotkeys: sanitizeHotkeys(val) });
       });
       store.onKeyChange<boolean>("stealthMode", (val) => {
         if (val != null) set({ stealthMode: val });

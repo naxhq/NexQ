@@ -6,7 +6,7 @@ NexQ has two levels of keyboard shortcuts: **global shortcuts** that work even w
 
 ![Hotkey settings panel](../../website/public/screenshots/Setting/Setting-Hotkey.png)
 
-You can customize all keyboard shortcuts in Settings > Hotkeys. The panel above shows the hotkey configuration interface where you can remap global and meeting shortcuts to your preferred key combinations.
+Settings > Hotkeys lets you change the meeting keys below (Assist and the five actions). Click a binding and press the new key; Reset to Defaults brings back `Space` and `1` to `5`. The three Ctrl+Shift shortcuts in the Global table are changed in Settings > General, and Ctrl+M, Ctrl+B and Ctrl+, are fixed.
 
 ## Global Shortcuts
 
