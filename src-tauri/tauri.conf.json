@@ -24,8 +24,7 @@
         "resizable": true,
         "center": true,
         "decorations": true,
-        "visible": true,
-        "backgroundThrottling": "disabled"
+        "visible": true
       },
       {
         "label": "overlay",
