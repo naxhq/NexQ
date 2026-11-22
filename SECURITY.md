@@ -67,3 +67,22 @@ Out of scope:
 - Updates are downloaded from GitHub Releases and verified against the Ed25519 public key embedded in the app before installation.
 - NexQ has no telemetry. Network traffic goes only to providers you configure and to GitHub Releases for update checks.
 - The webview runs without a Content Security Policy by design (local-only app), so any path that renders untrusted content as HTML is security-relevant.
+
+## Verify a download
+
+Releases are signed with minisign: on the [releases page](https://github.com/naxhq/NexQ/releases), the Windows installer (`NexQ_<version>_x64-setup.exe`) and the macOS update archive (`NexQ_<version>_aarch64.app.tar.gz`) each have a matching `.sig` file, and the app checks that signature before it installs an update. The macOS `.dmg` has no `.sig`; to check the Mac app, verify the `.app.tar.gz` with its own `.sig`. To check a download yourself, the public key is:
+
+```
+untrusted comment: minisign public key: 333EFC94A407E29A
+RWSa4geklPw+Mw1zySvTddemXH0UFe2fq9ds6KpXfEylBTf9GbrrivlR
+```
+
+Key ID `333EFC94A407E29A`. This is the same key as `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`, which holds these two lines base64-encoded.
+
+1. Download the installer and its `.sig` file.
+2. The `.sig` is a base64 encoding of a minisign signature, so decode it first. On Windows: `certutil -decode NexQ_<version>_x64-setup.exe.sig NexQ_<version>_x64-setup.exe.minisig`. On macOS or Linux: `base64 -d < NexQ_<version>_x64-setup.exe.sig > NexQ_<version>_x64-setup.exe.minisig`.
+3. Verify it with [minisign](https://jedisct1.github.io/minisign/): `minisign -Vm NexQ_<version>_x64-setup.exe -x NexQ_<version>_x64-setup.exe.minisig -P RWSa4geklPw+Mw1zySvTddemXH0UFe2fq9ds6KpXfEylBTf9GbrrivlR`
+
+Use the real file names from the release. A good check prints "Signature and comment signature verified".
+
+The Windows installer is not Authenticode signed, so PowerShell's `Get-AuthenticodeSignature` reports `NotSigned` and SmartScreen may warn on first run. That is expected; the minisign check is how you confirm the file is ours.

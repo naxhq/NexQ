@@ -102,3 +102,27 @@ it("Reset to Defaults restores the real keys", async () => {
   });
   await vi.waitFor(() => expect(saved.get("hotkeys")).toMatchObject({ mode_say: "1", mode_ask: "5" }));
 });
+
+const MAC_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)";
+
+it("lists the capture shortcut and treats its key as taken where capturing is supported", async () => {
+  const store = await mount();
+  expect(screen.getByText("Capture screen into Ask (change in General)")).toBeTruthy();
+  fireEvent.click(row("What to Say"));
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyS", ctrlKey: true, shiftKey: true }));
+  });
+  expect(store.getState().hotkeys.mode_say).toBe("1");
+  expect(screen.getByText("Press a key...")).toBeTruthy();
+});
+
+it("on macOS neither lists the capture shortcut nor treats its key as taken", async () => {
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue(MAC_UA);
+  const store = await mount();
+  expect(screen.queryByText("Capture screen into Ask (change in General)")).toBeNull();
+  fireEvent.click(row("What to Say"));
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyS", ctrlKey: true, shiftKey: true }));
+  });
+  expect(store.getState().hotkeys.mode_say).toBe("Ctrl+Shift+S");
+});

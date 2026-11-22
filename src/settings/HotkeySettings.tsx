@@ -9,7 +9,7 @@ import {
   hotkeyConflict,
   hotkeyFromEvent,
 } from "../lib/hotkeys";
-import { RESERVED_SHORTCUTS, formatShortcut } from "../lib/shortcutLabel";
+import { RESERVED_SHORTCUTS, formatShortcut, screenCaptureSupported } from "../lib/shortcutLabel";
 import { RotateCcw, Keyboard } from "lucide-react";
 
 const MODIFIER_CODES = /^(Control|Shift|Alt|Meta|OS)(Left|Right)?$/;
@@ -28,6 +28,8 @@ export function HotkeySettings() {
   const assistShortcut = useConfigStore((s) => s.assistShortcut);
   const captureShortcut = useConfigStore((s) => s.captureShortcut);
   const stealthShortcut = useConfigStore((s) => s.stealthShortcut);
+  // No capture shortcut where capturing isn't supported: don't list it or treat its key as taken.
+  const captureSupported = screenCaptureSupported();
 
   const [editingKey, setEditingKey] = useState<keyof HotkeyConfig | null>(null);
 
@@ -58,7 +60,7 @@ export function HotkeySettings() {
       }
       const taken = hotkeyConflict(combo, editingKey, hotkeys, {
         [assistShortcut]: "Assist from any app",
-        [captureShortcut]: "Capture screen into Ask",
+        ...(captureSupported ? { [captureShortcut]: "Capture screen into Ask" } : {}),
         [stealthShortcut]: "Hide from screen share",
       });
       if (taken) {
@@ -73,7 +75,7 @@ export function HotkeySettings() {
 
     window.addEventListener("keydown", handler, { capture: true });
     return () => window.removeEventListener("keydown", handler, { capture: true });
-  }, [editingKey, hotkeys, setHotkeys, assistShortcut, captureShortcut, stealthShortcut]);
+  }, [editingKey, hotkeys, setHotkeys, assistShortcut, captureShortcut, captureSupported, stealthShortcut]);
 
   const handleRowClick = useCallback((action: keyof HotkeyConfig) => {
     setEditingKey(action);
@@ -91,7 +93,9 @@ export function HotkeySettings() {
 
   const others = [
     { keys: formatShortcut(assistShortcut), action: "Assist from any app (change in General)" },
-    { keys: formatShortcut(captureShortcut), action: "Capture screen into Ask (change in General)" },
+    ...(captureSupported
+      ? [{ keys: formatShortcut(captureShortcut), action: "Capture screen into Ask (change in General)" }]
+      : []),
     { keys: formatShortcut(stealthShortcut), action: "Hide from screen share (change in General)" },
     ...FIXED_SHORTCUTS,
   ];

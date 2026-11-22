@@ -329,6 +329,19 @@ impl CustomClient {
     }
 }
 
+/// A 401 or 403: the server answered but won't take the request as sent.
+fn auth_refused(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 401 | 403)
+}
+
+/// What Test Connection says when the server refused it.
+fn refusal_message(status: reqwest::StatusCode) -> String {
+    format!(
+        "the server refused the request (HTTP {}). Cloud APIs usually need Auth Type Bearer Token.",
+        status.as_u16()
+    )
+}
+
 #[async_trait::async_trait]
 impl LLMProvider for CustomClient {
     fn provider_name(&self) -> &str {
@@ -403,29 +416,28 @@ impl LLMProvider for CustomClient {
     }
 
     async fn test_connection(&self) -> Result<bool, LLMError> {
-        // Try /models first (OpenAI-compat)
-        let url = format!("{}/models", self.config.base_url);
-        let request = self.apply_auth(self.client.get(&url));
-        if let Ok(resp) = request.send().await {
-            if resp.status().is_success() {
-                return Ok(true);
+        // The first 401/403 any probe gets: reported if nothing succeeds.
+        let mut refused: Option<reqwest::StatusCode> = None;
+
+        // Try /models first (OpenAI-compat), then /api/tags (Ollama-compat),
+        // then a plain GET to the base URL.
+        for path in ["/models", "/api/tags", ""] {
+            let url = format!("{}{}", self.config.base_url, path);
+            if let Ok(resp) = self.apply_auth(self.client.get(&url)).send().await {
+                // The plain base URL is often a public page: its 200 doesn't
+                // count once an API path refused the key.
+                if resp.status().is_success() && (!path.is_empty() || refused.is_none()) {
+                    return Ok(true);
+                }
+                if refused.is_none() && auth_refused(resp.status()) {
+                    refused = Some(resp.status());
+                }
             }
         }
 
-        // Try /api/tags (Ollama-compat)
-        let url = format!("{}/api/tags", self.config.base_url);
-        let request = self.apply_auth(self.client.get(&url));
-        if let Ok(resp) = request.send().await {
-            if resp.status().is_success() {
-                return Ok(true);
-            }
-        }
-
-        // Try a simple GET to the base URL
-        let request = self.apply_auth(self.client.get(&self.config.base_url));
-        match request.send().await {
-            Ok(resp) => Ok(resp.status().is_success()),
-            Err(_) => Ok(false),
+        match refused {
+            Some(status) => Err(LLMError::AuthError(refusal_message(status))),
+            None => Ok(false),
         }
     }
 
@@ -651,6 +663,57 @@ mod tests {
         assert_eq!(response.status(), 200);
         let paths: Vec<String> = seen.lock().unwrap().iter().map(|(p, _)| p.clone()).collect();
         assert_eq!(paths, ["/v1/chat/completions", "/v1/api/chat"]);
+    }
+
+    #[test]
+    fn only_401_and_403_count_as_a_refusal() {
+        use reqwest::StatusCode;
+        assert!(auth_refused(StatusCode::UNAUTHORIZED));
+        assert!(auth_refused(StatusCode::FORBIDDEN));
+        assert!(!auth_refused(StatusCode::NOT_FOUND));
+        assert!(!auth_refused(StatusCode::INTERNAL_SERVER_ERROR));
+        let message = refusal_message(StatusCode::UNAUTHORIZED);
+        assert!(message.contains("refused the request (HTTP 401)"), "{message}");
+        assert!(message.contains("Bearer Token"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn test_connection_says_the_server_refused_it_on_401() {
+        let (base, _) = server(vec![("/v1/models", 401, r#"{"error":"unauthorized"}"#)]).await;
+        match client(&base, CustomAuthType::None, None).test_connection().await {
+            Err(LLMError::AuthError(message)) => {
+                assert!(message.contains("refused the request (HTTP 401)"), "{message}");
+                assert!(message.contains("Bearer Token"), "{message}");
+            }
+            other => panic!("expected an auth error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_connection_with_a_working_models_endpoint_is_ok() {
+        let (base, _) = server(vec![("/v1/models", 200, r#"{"data":[]}"#)]).await;
+        assert!(client(&base, CustomAuthType::Bearer, Some("k")).test_connection().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_public_base_url_does_not_hide_a_refused_key() {
+        let (base, _) = server(vec![("/v1/models", 401, "{}"), ("/v1", 200, "<html></html>")]).await;
+        assert!(matches!(
+            client(&base, CustomAuthType::None, None).test_connection().await,
+            Err(LLMError::AuthError(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_working_ollama_path_still_passes_after_a_refusal() {
+        let (base, _) = server(vec![("/v1/models", 401, "{}"), ("/v1/api/tags", 200, r#"{"models":[]}"#)]).await;
+        assert!(client(&base, CustomAuthType::None, None).test_connection().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_connection_without_a_refusal_stays_a_plain_false() {
+        let (base, _) = server(vec![]).await;
+        assert!(!client(&base, CustomAuthType::None, None).test_connection().await.unwrap());
     }
 
     /// Reported: a key pasted with spaces around it was refused (401).

@@ -174,6 +174,18 @@ All cloud providers require an API key. Here is where to get them:
 - To remove a key: Settings > Provider > Remove API Key
 - You can also manage keys through Windows Settings > Credential Manager
 
+## Any OpenAI-compatible API (DeepSeek example)
+
+The Custom provider talks to any service that follows the OpenAI API, not only local servers. DeepSeek is one example:
+
+1. Open Settings > LLM Providers and choose **Custom**.
+2. Set **Base URL** to `https://api.deepseek.com`. NexQ adds `/chat/completions` and `/models` itself, so don't include them.
+3. Set **Auth Type** to **Bearer Token** and paste your API key into the **Token** field. Cloud APIs refuse requests without it (a 401 or 403 from **Test Connection** usually means this is wrong).
+4. Click **Test Connection**, then **Load Models** and pick a model from the list.
+5. Click **Use Custom for AI responses**.
+
+The same steps work for other OpenAI-compatible services: use the base URL from the service's documentation. If you would rather use one key for many models, choose the **OpenRouter** provider instead of Custom.
+
 ## Tips
 
 - **Mix and match providers.** You can use different STT providers for "You" and "Them" channels, and a different LLM provider for AI assistance. For example: Web Speech API for mic, Deepgram for system audio, and Ollama for LLM.
