@@ -36,7 +36,7 @@ The chevron next to **Start NexQ** picks the meeting type (Team Meeting, Intervi
 - **Check for calls.** How often NexQ checks: every 1, 2, 3 (default), 5 or 10 seconds.
 - **Hide the prompt after.** 30 seconds, 1 minute, 2 minutes, or until the call ends. The timer pauses while your mouse is over the prompt.
 
-Keyboard: **Enter** starts the meeting and **Esc** dismisses the prompt. When [stealth mode](../../README.md#whats-new) is on, the prompt is hidden from screen sharing too.
+Keyboard: **Enter** starts the meeting and **Esc** dismisses the prompt. When [Hide from screen share](../../README.md#privacy) is on, the prompt is hidden from screen sharing too.
 
 > Meeting detection is available on Windows. macOS support is planned.
 
