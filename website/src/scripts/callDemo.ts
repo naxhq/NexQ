@@ -522,10 +522,15 @@ function init(stage: HTMLElement) {
   // A visitor who arrives part-way down (a link to #knows or #stealth, a reload, or a restored scroll position)
   // sees the beat that is on screen, not the hero. The scroll position can settle after this script runs
   // (fonts, scroll restoration), so it is read once now and once more when the page has loaded.
+  // Reading scrollY or a rect while the page has not been laid out yet forces the whole page's layout inside this
+  // script's task (a ~230 ms long task on a throttled phone). So only a link with a hash syncs at once (it needs
+  // the layout anyway); a restored scroll position is read after the first frame, when the layout is clean.
   const syncOnArrival = () => {
     if (location.hash || window.scrollY > 0) syncScroll();
   };
-  window.addEventListener('load', syncOnArrival, { once: true });
+  const syncAfterPaint = () => requestAnimationFrame(() => setTimeout(syncOnArrival, 0));
+  const syncAtBoot = () => (location.hash ? syncOnArrival() : syncAfterPaint());
+  window.addEventListener('load', syncAfterPaint, { once: true });
   ov.tabIndex = 0; // the keys only work with focus, so the sample is reachable by keyboard
   if (reduce) {
     setStealth(true); // the final state: on
@@ -533,7 +538,7 @@ function init(stage: HTMLElement) {
     hint(HINT.hold);
     renderTimer();
     syncLang();
-    syncOnArrival();
+    syncAtBoot();
     return;
   }
   setStealth(false); // switched on by the stealth beat
@@ -550,7 +555,7 @@ function init(stage: HTMLElement) {
   stage.classList.add('is-ready');
   hint(HINT.wait);
   syncLang();
-  syncOnArrival();
+  syncAtBoot();
   setTimeout(kick, 600);
 }
 
