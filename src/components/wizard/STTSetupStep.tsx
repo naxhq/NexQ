@@ -1,6 +1,6 @@
 // Wizard Step 3: STT Configuration — per-party STT provider selection.
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, type KeyboardEvent } from "react";
 import { useConfigStore } from "../../stores/configStore";
 import { hasApiKey } from "../../lib/ipc";
 import type { STTProviderType, MeetingAudioConfig } from "../../lib/types";
@@ -65,6 +65,41 @@ export const WIZARD_STT_PROVIDERS: ProviderChoice[] = [
     free: false,
   },
 ];
+
+const themProviders = WIZARD_STT_PROVIDERS.filter((p) => p.value !== "web_speech");
+
+/**
+ * Arrow-key navigation for a radiogroup (roving tabindex): Up/Left and Down/Right
+ * move to the previous/next radio and select it, Home/End jump to the first/last.
+ */
+function radioArrowKeys(e: KeyboardEvent<HTMLDivElement>) {
+  if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  const radios = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]'));
+  const current = radios.indexOf(document.activeElement as HTMLElement);
+  if (current < 0) return;
+  let next: number;
+  switch (e.key) {
+    case "ArrowDown":
+    case "ArrowRight":
+      next = (current + 1) % radios.length;
+      break;
+    case "ArrowUp":
+    case "ArrowLeft":
+      next = (current - 1 + radios.length) % radios.length;
+      break;
+    case "Home":
+      next = 0;
+      break;
+    case "End":
+      next = radios.length - 1;
+      break;
+    default:
+      return;
+  }
+  e.preventDefault();
+  radios[next].focus();
+  radios[next].click();
+}
 
 export function STTSetupStep() {
   const meetingAudioConfig = useConfigStore((s) => s.meetingAudioConfig);
@@ -141,12 +176,13 @@ export function STTSetupStep() {
             </span>
             STT Provider
           </label>
-          <div role="radiogroup" aria-labelledby="stt-you-label" className="grid grid-cols-1 gap-2">
-            {WIZARD_STT_PROVIDERS.map((p) => (
+          <div role="radiogroup" aria-labelledby="stt-you-label" onKeyDown={radioArrowKeys} className="grid grid-cols-1 gap-2">
+            {WIZARD_STT_PROVIDERS.map((p, i) => (
               <ProviderButton
                 key={p.value}
                 provider={p}
                 selected={youSTT === p.value}
+                tabStop={youSTT === p.value || (i === 0 && !WIZARD_STT_PROVIDERS.some((q) => q.value === youSTT))}
                 hasKey={p.requiresKey ? keyStatus[p.value] ?? false : true}
                 onSelect={() => setYouSTT(p.value)}
               />
@@ -163,12 +199,13 @@ export function STTSetupStep() {
             </span>
             STT Provider
           </label>
-          <div role="radiogroup" aria-labelledby="stt-them-label" className="grid grid-cols-1 gap-2">
-            {WIZARD_STT_PROVIDERS.filter((p) => p.value !== "web_speech").map((p) => (
+          <div role="radiogroup" aria-labelledby="stt-them-label" onKeyDown={radioArrowKeys} className="grid grid-cols-1 gap-2">
+            {themProviders.map((p, i) => (
               <ProviderButton
                 key={p.value}
                 provider={p}
                 selected={themSTT === p.value}
+                tabStop={themSTT === p.value || (i === 0 && !themProviders.some((q) => q.value === themSTT))}
                 hasKey={p.requiresKey ? keyStatus[p.value] ?? false : true}
                 onSelect={() => setThemSTT(p.value)}
               />
@@ -197,7 +234,7 @@ function MissingKeyNote({
   const choice = WIZARD_STT_PROVIDERS.find((p) => p.value === provider);
   if (!checked || !choice?.requiresKey || keyStatus[provider]) return null;
   return (
-    <p role="status" className="mt-2 text-xs text-yellow-500 leading-relaxed">
+    <p role="status" className="mt-2 text-xs text-amber-700 dark:text-warning leading-relaxed">
       {choice.label} needs an API key. Add it in Settings &gt; STT Providers. Free and
       offline instead: Settings &gt; Audio &amp; Devices &gt; Presets &gt; Free (one-time
       465 MB download).
@@ -208,11 +245,13 @@ function MissingKeyNote({
 function ProviderButton({
   provider,
   selected,
+  tabStop,
   hasKey,
   onSelect,
 }: {
   provider: ProviderChoice;
   selected: boolean;
+  tabStop: boolean;
   hasKey: boolean;
   onSelect: () => void;
 }) {
@@ -221,6 +260,7 @@ function ProviderButton({
       type="button"
       role="radio"
       aria-checked={selected}
+      tabIndex={tabStop ? 0 : -1}
       onClick={onSelect}
       className={`flex items-center gap-3.5 rounded-xl border px-4 py-3.5 text-left transition-all duration-150 ${
         selected
@@ -245,7 +285,7 @@ function ProviderButton({
             <CheckCircle role="img" aria-label="API key saved" className="h-3 w-3 text-success" />
           )}
           {provider.requiresKey && !hasKey && (
-            <AlertCircle role="img" aria-label="API key missing" className="h-3 w-3 text-yellow-500" />
+            <AlertCircle role="img" aria-label="API key missing" className="h-3 w-3 text-amber-700 dark:text-warning" />
           )}
         </div>
         <p className="text-xs text-muted-foreground truncate">
