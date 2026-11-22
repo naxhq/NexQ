@@ -3,7 +3,7 @@
 // Ctrl+, and the three in Settings > General) are separate and not stored here.
 
 import type { HotkeyConfig, IntelligenceMode } from "./types";
-import { normalizeAccelerator, reservedShortcutAction } from "./shortcutLabel";
+import { RESERVED_SHORTCUTS, isMacPlatform, normalizeAccelerator } from "./shortcutLabel";
 
 export interface HotkeyAction {
   id: keyof HotkeyConfig;
@@ -182,6 +182,27 @@ export function modeForKeyEvent(
 }
 
 /**
+ * A hotkey's "Ctrl" is Ctrl or Cmd (a key press with either matches it), so
+ * for conflicts it equals CmdOrCtrl on every platform, and on a Mac also the
+ * literal Control. Both sides are reduced to one spelling for that.
+ */
+function comparableAccelerator(accelerator: string, mac: boolean): string {
+  const parts = normalizeAccelerator(accelerator, mac).split("+");
+  // Cmd+Control together is not a plain Ctrl key.
+  if (parts.includes("CmdOrCtrl") && parts.includes("Ctrl")) return parts.join("+");
+  return parts.map((p) => (p === "CmdOrCtrl" ? "Ctrl" : p)).join("+");
+}
+
+/** The built-in shortcut that `canon` (a canonical hotkey) would shadow, if any. */
+function reservedHotkeyAction(canon: string, mac: boolean): string | null {
+  const wanted = comparableAccelerator(canon, mac);
+  for (const [accel, action] of Object.entries(RESERVED_SHORTCUTS)) {
+    if (comparableAccelerator(accel, mac) === wanted) return action;
+  }
+  return null;
+}
+
+/**
  * Why `spec` can't be the binding for `action`, or null when it can: another
  * action key, a built-in shortcut, an overlay single key, or one of the
  * global shortcuts from Settings > General (`globals`, accelerator -> name).
@@ -191,19 +212,20 @@ export function hotkeyConflict(
   action: keyof HotkeyConfig,
   hotkeys: HotkeyConfig,
   globals: Record<string, string> = {},
+  mac = isMacPlatform(),
 ): string | null {
   const canon = canonicalHotkey(spec);
   if (!canon) return "That key can't be used";
   const other = HOTKEY_ACTIONS.find((a) => a.id !== action && canonicalHotkey(hotkeys[a.id]) === canon);
   if (other) return other.label;
-  const reserved = reservedShortcutAction(canon);
+  const reserved = reservedHotkeyAction(canon, mac);
   if (reserved) return reserved;
   if (EDITING_SHORTCUTS[canon]) return EDITING_SHORTCUTS[canon];
   const single = overlaySingleKey(canon);
   if (single) return single.label;
-  const wanted = normalizeAccelerator(canon);
+  const wanted = comparableAccelerator(canon, mac);
   for (const [accel, name] of Object.entries(globals)) {
-    if (accel && normalizeAccelerator(accel) === wanted) return name;
+    if (accel && comparableAccelerator(accel, mac) === wanted) return name;
   }
   return null;
 }
@@ -213,7 +235,7 @@ export function hotkeyConflict(
  * set. Anything missing, unreadable, a leftover Ctrl+1..5 default, or clashing
  * with another binding falls back to that action's default.
  */
-export function sanitizeHotkeys(saved: unknown): HotkeyConfig {
+export function sanitizeHotkeys(saved: unknown, mac = isMacPlatform()): HotkeyConfig {
   const source = saved && typeof saved === "object" ? (saved as Record<string, unknown>) : {};
   const result: HotkeyConfig = { ...DEFAULT_HOTKEYS };
   const taken = new Set<string>();
@@ -224,7 +246,7 @@ export function sanitizeHotkeys(saved: unknown): HotkeyConfig {
       canon &&
       canon !== canonicalHotkey(legacy) &&
       !taken.has(canon) &&
-      !reservedShortcutAction(canon) &&
+      !reservedHotkeyAction(canon, mac) &&
       !EDITING_SHORTCUTS[canon] &&
       !overlaySingleKey(canon);
     result[id] = usable ? canon : DEFAULT_HOTKEYS[id];
@@ -236,10 +258,14 @@ export function sanitizeHotkeys(saved: unknown): HotkeyConfig {
 }
 
 /** The in-meeting action keys as "taken" entries (key -> name) for the global shortcut pickers. */
-export function hotkeysAsTaken(hotkeys: HotkeyConfig): Record<string, string> {
+export function hotkeysAsTaken(hotkeys: HotkeyConfig, mac = isMacPlatform()): Record<string, string> {
   const taken: Record<string, string> = {};
   for (const { id, label } of HOTKEY_ACTIONS) {
-    if (hotkeys[id]) taken[hotkeys[id]] = `${label} key`;
+    if (!hotkeys[id]) continue;
+    taken[hotkeys[id]] = `${label} key`;
+    // A hotkey's Ctrl is also Cmd: on a Mac the pickers record Cmd as CmdOrCtrl.
+    const canon = canonicalHotkey(hotkeys[id]);
+    if (mac && canon?.startsWith("Ctrl+")) taken[`CmdOrCtrl+${canon.slice(5)}`] = `${label} key`;
   }
   return taken;
 }

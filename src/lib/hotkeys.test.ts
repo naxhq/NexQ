@@ -154,3 +154,37 @@ describe("hotkeys: the action keys as taken entries", () => {
     });
   });
 });
+
+describe("hotkeys: conflicts on a Mac", () => {
+  // Recording Command+M gives "Ctrl+M" (the hotkey's Ctrl is Ctrl or Cmd), while
+  // the built-in and General shortcuts are CmdOrCtrl accelerators.
+  it("Ctrl/Cmd+M clashes with the CmdOrCtrl built-ins", () => {
+    expect(hotkeyConflict("Ctrl+M", "mode_say", DEFAULT_HOTKEYS, {}, true)).toBe("Start / end meeting");
+    expect(hotkeyConflict("Ctrl+Shift+D", "mode_say", DEFAULT_HOTKEYS, {}, true)).toBe("Demo mode");
+  });
+
+  it("clashes with a General shortcut stored as CmdOrCtrl, as Cmd, or as Control", () => {
+    for (const accel of ["CmdOrCtrl+Shift+H", "Cmd+Shift+H", "Super+Shift+H", "Ctrl+Shift+H"]) {
+      expect(hotkeyConflict("Ctrl+Shift+H", "mode_say", DEFAULT_HOTKEYS, { [accel]: "Hide" }, true)).toBe("Hide");
+    }
+    // Cmd and Control held together is a different shortcut
+    expect(hotkeyConflict("Ctrl+Shift+H", "mode_say", DEFAULT_HOTKEYS, { "CmdOrCtrl+Ctrl+Shift+H": "Hide" }, true)).toBeNull();
+  });
+
+  it("on Windows the Win key is still not Ctrl", () => {
+    expect(hotkeyConflict("Ctrl+Shift+H", "mode_say", DEFAULT_HOTKEYS, { "Super+Shift+H": "Hide" }, false)).toBeNull();
+    expect(hotkeyConflict("Ctrl+Shift+H", "mode_say", DEFAULT_HOTKEYS, { "CmdOrCtrl+Shift+H": "Hide" }, false)).toBe("Hide");
+  });
+
+  it("a saved Ctrl+M is replaced by the default on a Mac too", () => {
+    expect(sanitizeHotkeys({ mode_say: "Ctrl+M" }, true).mode_say).toBe("1");
+    expect(sanitizeHotkeys({ mode_say: "Ctrl+B" }, true).mode_say).toBe("1");
+    expect(sanitizeHotkeys({ mode_say: "Ctrl+K" }, true).mode_say).toBe("Ctrl+K");
+  });
+
+  it("the taken entries also carry the CmdOrCtrl spelling the shortcut pickers record", () => {
+    const hk = { ...DEFAULT_HOTKEYS, mode_assist: "Ctrl+K" };
+    expect(hotkeysAsTaken(hk, true)).toMatchObject({ "Ctrl+K": "Assist key", "CmdOrCtrl+K": "Assist key" });
+    expect(hotkeysAsTaken(hk, false)).not.toHaveProperty("CmdOrCtrl+K");
+  });
+});
