@@ -7,6 +7,7 @@ pub mod whisper_cpp;
 pub mod windows_native;
 pub mod word_diff;
 // Sub-PRD 9: Additional providers
+pub mod azure_mai_streaming;
 pub mod azure_speech;
 pub mod cartesia;
 pub mod groq_whisper;
@@ -222,6 +223,15 @@ impl STTRouter {
                 }
                 p.set_language(&self.language);
                 Box::new(p)
+            }
+            STTProviderType::AzureMaiStreaming => {
+                // MAI credentials are deliberately not cached in this legacy
+                // router. Audio commands create the provider from the current
+                // credential store for each party/session.
+                self.active_provider = None;
+                self.active_type = Some(provider_type);
+                log::info!("STTRouter: Azure MAI Streaming selected (provider created per-party)");
+                return Ok(());
             }
             STTProviderType::GroqWhisper => {
                 let mut p = groq_whisper::GroqWhisperSTT::new();
@@ -549,6 +559,9 @@ impl STTRouter {
                     .await
                     .map_err(|e| format!("Connection test failed: {}", e))
             }
+            STTProviderType::AzureMaiStreaming => Err(
+                "Azure MAI Streaming connection tests require app-scoped credentials".to_string(),
+            ),
             STTProviderType::GroqWhisper => {
                 let key = self
                     .groq_whisper_api_key
@@ -622,5 +635,21 @@ mod tests {
     fn router_lines_carry_the_turn_signal_only_when_there_is_one() {
         assert_eq!(payload(Some(provider::TurnSignal::End))["turn"], "end");
         assert!(payload(None).get("turn").is_none());
+    }
+
+    #[tokio::test]
+    async fn mai_is_selected_without_caching_its_credentials_in_the_legacy_router() {
+        let mut router = STTRouter::new();
+        router.set_provider(STTProviderType::AzureMaiStreaming).await.unwrap();
+
+        assert_eq!(
+            router.active_provider_type(),
+            Some(&STTProviderType::AzureMaiStreaming)
+        );
+        assert!(router.active_provider.is_none());
+        assert!(router
+            .test_provider_connection(&STTProviderType::AzureMaiStreaming)
+            .await
+            .is_err());
     }
 }

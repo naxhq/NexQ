@@ -14,6 +14,7 @@
 //! from the new one's, and moves stream-relative timestamps onto the meeting's
 //! time base.
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -74,6 +75,9 @@ pub type SideTx = mpsc::Sender<Tagged>;
 pub struct SwapSignal {
     generation: AtomicU32,
     flush: Notify,
+    /// Outgoing generations whose hypotheses must be withdrawn, not promoted,
+    /// when their boundary reaches the transcript task.
+    preserve_only: Mutex<HashSet<u32>>,
     /// The start of the meeting's capture: stream-relative timestamps of a
     /// replacement provider are offset by the time since it.
     origin: Instant,
@@ -86,6 +90,7 @@ impl Default for SwapSignal {
         SwapSignal {
             generation: AtomicU32::new(0),
             flush: Notify::new(),
+            preserve_only: Mutex::new(HashSet::new()),
             origin: Instant::now(),
             adapter: Mutex::new(None),
         }
@@ -107,14 +112,41 @@ pub fn meeting_timestamp(timestamp_ms: u64, stream_offset_ms: u64) -> u64 {
 impl SwapSignal {
     /// How many times the side's provider has been swapped.
     pub fn generation(&self) -> u32 {
-        self.generation.load(Ordering::Relaxed)
+        self.generation.load(Ordering::Acquire)
     }
 
     /// The old provider has stopped and sent what it had: the transcript task
     /// ends the line it has open, and results of older generations stop counting.
     pub fn swapped(&self) {
-        self.generation.fetch_add(1, Ordering::Relaxed);
+        let _boundaries = self
+            .preserve_only
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.generation.fetch_add(1, Ordering::Release);
+        drop(_boundaries);
         self.flush.notify_one();
+    }
+
+    /// Record an outgoing generation whose interim must not become final at
+    /// the swap boundary. The watermark is the generation being replaced.
+    pub fn swapped_without_interim(&self) {
+        let mut preserve_only = self.preserve_only
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let outgoing_generation = self.generation.load(Ordering::Acquire);
+        preserve_only.insert(outgoing_generation);
+        // Publish the marker before the increment that makes this boundary
+        // visible to generation() readers.
+        self.generation.store(outgoing_generation.wrapping_add(1), Ordering::Release);
+        drop(preserve_only);
+        self.flush.notify_one();
+    }
+
+    fn take_preserve_only(&self, outgoing_generation: u32) -> bool {
+        self.preserve_only
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&outgoing_generation)
     }
 
     /// A sender for the side's newest provider (the one of the current
@@ -149,6 +181,31 @@ impl SwapSignal {
     }
 }
 
+/// Apply every provider boundary up to `target_generation`. A MAI outgoing
+/// generation first withdraws any remaining hypothesis, then finalizes only
+/// the accumulator's confirmed text. Other providers keep close_line semantics.
+fn advance_accumulated_boundary(
+    accumulator: &mut SegmentAccumulator,
+    signal: &SwapSignal,
+    current: &mut u32,
+    target_generation: u32,
+    on_output: &mut impl FnMut(AccumulatorOutput),
+) {
+    while *current < target_generation {
+        if signal.take_preserve_only(*current) {
+            if let Some(output) = accumulator.discard_interim() {
+                on_output(output);
+            }
+            if let Some(output) = accumulator.flush() {
+                on_output(output);
+            }
+        } else if let Some(output) = accumulator.close_line() {
+            on_output(output);
+        }
+        *current += 1;
+    }
+}
+
 /// Run a side's transcript task until its result channel closes: feed every
 /// result to the accumulator, and end the open line when the side's provider
 /// is swapped, interim words included, so the new provider starts a line of its
@@ -173,11 +230,15 @@ pub async fn pump_accumulated(
                     continue;
                 }
                 if generation > current {
-                    // The new provider is already talking: its first line is its own.
-                    if let Some(output) = accumulator.close_line() {
-                        on_output(output);
-                    }
-                    current = generation;
+                    // The new provider is already talking: apply every skipped
+                    // boundary before accepting its first result.
+                    advance_accumulated_boundary(
+                        accumulator,
+                        signal,
+                        &mut current,
+                        generation,
+                        &mut on_output,
+                    );
                 }
                 on_result(&result);
                 // Live-update the threshold from settings changes.
@@ -189,10 +250,13 @@ pub async fn pump_accumulated(
             _ = signal.flush.notified() => {
                 let swapped_to = signal.generation();
                 if current < swapped_to {
-                    if let Some(output) = accumulator.close_line() {
-                        on_output(output);
-                    }
-                    current = swapped_to;
+                    advance_accumulated_boundary(
+                        accumulator,
+                        signal,
+                        &mut current,
+                        swapped_to,
+                        &mut on_output,
+                    );
                 }
             }
         }
@@ -357,13 +421,19 @@ async fn swap_side_provider_within(
             _ => return SwapOutcome::NotRunning,
         };
 
+    let preserve_only = old.provider_type()
+        == crate::stt::provider::STTProviderType::AzureMaiStreaming;
     if let Err(e) = old.stop_stream().await {
         log::warn!("{:?} STT stop before a language swap: {}", side, e);
     }
     drop(old);
     // What the old provider still had in flight goes into the channel before the boundary.
     signal.drained(drain_timeout).await;
-    signal.swapped();
+    if preserve_only {
+        signal.swapped_without_interim();
+    } else {
+        signal.swapped();
+    }
 
     let muted = muted_flag.load(Ordering::Relaxed);
     new_provider.set_muted(muted);
@@ -417,7 +487,11 @@ mod tests {
             self.name
         }
         fn provider_type(&self) -> crate::stt::provider::STTProviderType {
-            crate::stt::provider::STTProviderType::Deepgram
+            if self.name == "mai_old" {
+                crate::stt::provider::STTProviderType::AzureMaiStreaming
+            } else {
+                crate::stt::provider::STTProviderType::Deepgram
+            }
         }
         async fn start_stream(
             &mut self,
@@ -568,6 +642,74 @@ mod tests {
         assert_eq!(fake.providers[Side::You.index()].as_ref().unwrap().provider_name(), "you_old");
         assert_eq!(fake.signals[Side::Them.index()].generation(), 1);
         assert_eq!(fake.signals[Side::You.index()].generation(), 0);
+    }
+
+    #[tokio::test]
+    async fn an_outgoing_mai_generation_marks_a_preserve_only_boundary() {
+        let log: Log = Default::default();
+        let mut fake = FakeLoop::new(Some(Mock::boxed("mai_old", &log)), None);
+
+        let outcome = swap(
+            &mut fake,
+            Side::You,
+            Mock::boxed("you_new", &log),
+            &AtomicBool::new(false),
+        )
+        .await;
+
+        assert_eq!(outcome, SwapOutcome::Swapped);
+        assert!(fake.signals[Side::You.index()].take_preserve_only(0));
+        assert!(!fake.signals[Side::You.index()].take_preserve_only(1));
+    }
+
+    #[tokio::test]
+    async fn a_lost_mai_clear_on_swap_withdraws_but_does_not_finalize_the_hypothesis() {
+        const T0: u64 = 1_700_000_000_000;
+        let (tx, mut rx) = mpsc::channel(8);
+        let signal = SwapSignal::default();
+        let partial = result("unconfirmed hypothesis", false, T0 + 600);
+        tx.send(Tagged { generation: 0, result: result("Confirmed.", true, T0) })
+            .await
+            .unwrap();
+        tx.send(Tagged { generation: 0, result: partial.clone() })
+            .await
+            .unwrap();
+
+        // Simulate an explicit interim clear lost while the MAI adapter drained.
+        signal.swapped_without_interim();
+        tx.send(Tagged { generation: 1, result: result("Next.", true, T0 + 1_000) })
+            .await
+            .unwrap();
+        drop(tx);
+
+        let mut accumulator = SegmentAccumulator::new(3_000);
+        let threshold = AtomicU64::new(3_000);
+        let mut outputs = Vec::new();
+        pump_accumulated(
+            &mut rx,
+            &signal,
+            &mut accumulator,
+            &threshold,
+            |_| {},
+            |output| outputs.push(output),
+        )
+        .await;
+
+        assert!(!outputs
+            .iter()
+            .any(|output| output.is_final && output.text.contains(&partial.text)));
+        let clear_index = outputs
+            .iter()
+            .position(|output| !output.is_final && output.text.is_empty())
+            .expect("the boundary withdraws the stale interim");
+        let clear_id = outputs[clear_index].id.clone();
+        let confirmed = outputs
+            .get(clear_index + 1)
+            .expect("confirmed text is flushed after the withdrawal");
+        assert!(confirmed.is_final);
+        assert_eq!(confirmed.text, "Confirmed.");
+        assert_eq!(confirmed.id, clear_id);
+        assert!(outputs.iter().any(|output| output.is_final && output.text == "Next."));
     }
 
     #[tokio::test]

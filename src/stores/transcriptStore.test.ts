@@ -49,6 +49,18 @@ describe("transcriptStore upsert", () => {
       ["Sure", true, undefined],
     ]);
   });
+
+  it("withdraws only the unconfirmed content and allows a later real final", () => {
+    const { updateInterimSegment, clearInterimSegment } = useTranscriptStore.getState();
+    updateInterimSegment(seg("Confirmed.", true));
+    updateInterimSegment(seg("Confirmed. Maybe", false));
+    updateInterimSegment(seg("Unconfirmed", false, "you_1_acc_1"));
+    clearInterimSegment("them_1_acc_1");
+    clearInterimSegment("you_1_acc_1");
+    expect(useTranscriptStore.getState().segments).toEqual([seg("Confirmed.", true)]);
+    updateInterimSegment(seg("Confirmed. Yes.", true));
+    expect(useTranscriptStore.getState().segments).toEqual([seg("Confirmed. Yes.", true)]);
+  });
 });
 
 describe("interim lifetime", () => {

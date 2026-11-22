@@ -25,6 +25,11 @@ pub async fn get_api_key(
     provider: String,
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
+    // The MAI settings and runtime only need presence and a short-lived
+    // Speech token respectively. Never return this saved key over IPC.
+    if provider == crate::stt::azure_mai_streaming::ID {
+        return Ok(None);
+    }
     let cred_mgr = state
         .credentials
         .as_ref()

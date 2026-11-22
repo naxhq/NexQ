@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./index.css";
 import { installFrontendLogging } from "./lib/logger";
+import { registerAzureMaiSdk } from "./lib/azureMaiBridge";
 
 // Check if this window was opened as a detached DevLog view
 const params = new URLSearchParams(window.location.search);
@@ -39,6 +40,8 @@ if (view === "meeting-prompt") {
     });
   });
 } else {
+  // Allow Rust to reach the launcher SDK before the user can start a meeting.
+  void registerAzureMaiSdk().catch(() => console.warn("Azure MAI Streaming SDK registration failed"));
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
       <App />

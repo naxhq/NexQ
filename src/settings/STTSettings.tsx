@@ -2,7 +2,7 @@
 // Badges: always-ready=green, no model/key=red, downloaded-not-active=amber,
 //         cloud-key-stored=amber, cloud-tested=green.
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useConfigStore } from "../stores/configStore";
 import { useMeetingStore } from "../stores/meetingStore";
@@ -19,6 +19,7 @@ import {
 import {
   setSTTProvider,
   testSTTConnection,
+  testAzureMaiConnection,
   listLocalSTTEngines,
   deleteApiKey,
 } from "../lib/ipc";
@@ -42,8 +43,10 @@ import {
   ChevronUp,
   Settings2,
   Cpu,
+  ExternalLink,
 } from "lucide-react";
 import { LocalModelManager } from "./LocalModelManager";
+import { open } from "@tauri-apps/plugin-shell";
 
 // ── Provider definitions ──
 
@@ -55,6 +58,9 @@ interface ProviderOption {
   isLocal: boolean;
   credentialKey: string;
   needsRegion?: boolean;
+  regionCredentialKey?: string;
+  defaultRegion?: string;
+  regionOptions?: readonly { value: string; label: string }[];
   /** Engine ID whose models must be downloaded + activated for readiness */
   requiresModels?: string;
   /** Always ready (no download / key needed) */
@@ -62,6 +68,16 @@ interface ProviderOption {
   /** Batch-only: cannot be used for live streaming; shown with badge */
   batchOnly?: boolean;
 }
+
+const AZURE_MAI_REGIONS = [
+  { value: "swedencentral", label: "Sweden Central" },
+  { value: "centralus", label: "Central US" },
+  { value: "eastus2", label: "East US 2" },
+  { value: "southeastasia", label: "Southeast Asia" },
+] as const;
+
+const AZURE_MAI_GUIDE_URL =
+  "https://learn.microsoft.com/en-us/azure/ai-services/speech-service/mai-transcribe-2-streaming-speech-sdk";
 
 const PROVIDER_OPTIONS: ProviderOption[] = [
   {
@@ -143,6 +159,19 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
     isLocal: false,
     credentialKey: "azure_speech",
     needsRegion: true,
+    regionCredentialKey: "azure_speech_region",
+  },
+  {
+    value: "azure_mai_streaming",
+    label: "Azure MAI Streaming",
+    description: "MAI-Transcribe-2-Streaming · Public Preview",
+    requiresApiKey: true,
+    isLocal: false,
+    credentialKey: "azure_mai_streaming",
+    needsRegion: true,
+    regionCredentialKey: "azure_mai_streaming_region",
+    defaultRegion: "swedencentral",
+    regionOptions: AZURE_MAI_REGIONS,
   },
   {
     value: "groq_whisper",
@@ -292,12 +321,19 @@ export function STTSettings() {
   const youProvider = meetingAudioConfig?.you.stt_provider;
   const [selectedProvider, setSelectedProvider] =
     useState<STTProviderType>(youProvider ?? sttProvider);
+  const selectedProviderRef = useRef(selectedProvider);
   useEffect(() => {
-    if (youProvider) setSelectedProvider(youProvider);
+    if (youProvider && youProvider !== selectedProviderRef.current) {
+      selectedProviderRef.current = youProvider;
+      setSelectedProvider(youProvider);
+    }
   }, [youProvider]);
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
   const [hasStoredKey, setHasStoredKey] = useState(false);
+  const [credentialStateProvider, setCredentialStateProvider] =
+    useState<STTProviderType | null>(null);
+  const [credentialStateLoading, setCredentialStateLoading] = useState(false);
   // keyDirty: user has typed a new key that differs from stored — show Save & Test
   const [keyDirty, setKeyDirty] = useState(false);
   const [connectionStatus, setConnectionStatus] =
@@ -305,7 +341,7 @@ export function STTSettings() {
   const [statusMessage, setStatusMessage] = useState("");
 
   const [azureRegion, setAzureRegion] = useState("eastus");
-  const [hasStoredRegion, setHasStoredRegion] = useState(false);
+  const [azureMaiRegion, setAzureMaiRegion] = useState("swedencentral");
 
   const [localEngines, setLocalEngines] = useState<LocalSTTEngineInfo[]>([]);
   const activeParakeetModel = useConfigStore((s) =>
@@ -362,6 +398,19 @@ export function STTSettings() {
   const currentProviderOption = PROVIDER_OPTIONS.find(
     (p) => p.value === selectedProvider
   );
+  const credentialStateReady = credentialStateProvider === selectedProvider;
+  const shownApiKey = credentialStateReady ? apiKey : "";
+  const shownHasStoredKey = credentialStateReady && hasStoredKey;
+  const shownKeyDirty = credentialStateReady && keyDirty;
+  const shownConnectionStatus = credentialStateReady ? connectionStatus : "idle";
+  const credentialsAreLoading =
+    currentProviderOption?.requiresApiKey === true &&
+    (!credentialStateReady || credentialStateLoading);
+  const showMaiKeyReentryHint =
+    selectedProvider === "azure_mai_streaming" &&
+    shownHasStoredKey &&
+    shownKeyDirty &&
+    !shownApiKey.trim();
 
   // ── Load readiness state ──
 
@@ -430,7 +479,10 @@ export function STTSettings() {
   // ── Key loading (load stored key display when switching providers) ──
 
   useEffect(() => {
+    let cancelled = false;
     const loadKeyForProvider = async () => {
+      setCredentialStateProvider(selectedProvider);
+      setCredentialStateLoading(currentProviderOption?.requiresApiKey === true);
       setApiKey("");
       setShowApiKey(false);
       setHasStoredKey(false);
@@ -438,43 +490,83 @@ export function STTSettings() {
       setConnectionStatus("idle");
       setStatusMessage("");
 
-      if (!currentProviderOption?.requiresApiKey) return;
+      if (!currentProviderOption?.requiresApiKey) {
+        setCredentialStateLoading(false);
+        return;
+      }
 
       const credKey = currentProviderOption.credentialKey;
-      if (!credKey) return;
+      if (!credKey) {
+        setCredentialStateLoading(false);
+        return;
+      }
+
+      if (selectedProvider === "azure_mai_streaming") {
+        setAzureMaiRegion(currentProviderOption.defaultRegion ?? "swedencentral");
+      }
 
       try {
         const keyExists = await hasApiKey(credKey);
+        if (cancelled) return;
         setHasStoredKey(keyExists);
-        if (keyExists) {
+        // MAI keys are write-only in the UI: discover presence, but never
+        // read the long-lived secret back into JavaScript or the input field.
+        if (keyExists && selectedProvider !== "azure_mai_streaming") {
           const stored = await getApiKey(credKey);
+          if (cancelled) return;
           if (stored) setApiKey(stored);
         }
       } catch (e) {
-        console.warn("Failed to load STT API key:", e);
+        if (!cancelled) console.warn("Failed to load STT API key:", e);
       }
 
-      if (currentProviderOption.needsRegion) {
+      if (cancelled) return;
+      if (currentProviderOption.needsRegion && currentProviderOption.regionCredentialKey) {
         try {
-          const regionExists = await hasApiKey("azure_speech_region");
-          setHasStoredRegion(regionExists);
+          const regionExists = await hasApiKey(currentProviderOption.regionCredentialKey);
+          if (cancelled) return;
           if (regionExists) {
-            const stored = await getApiKey("azure_speech_region");
-            if (stored) setAzureRegion(stored);
+            const stored = await getApiKey(currentProviderOption.regionCredentialKey);
+            if (cancelled) return;
+            if (stored) {
+              if (selectedProvider === "azure_mai_streaming") setAzureMaiRegion(stored);
+              else setAzureRegion(stored);
+            }
           }
         } catch (e) {
-          console.warn("Failed to load Azure region:", e);
+          if (!cancelled) console.warn("Failed to load speech region:", e);
         }
       }
+      if (!cancelled) setCredentialStateLoading(false);
     };
-    loadKeyForProvider();
-  }, [selectedProvider, currentProviderOption?.credentialKey, currentProviderOption?.requiresApiKey, currentProviderOption?.needsRegion]);
+    void loadKeyForProvider();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    selectedProvider,
+    currentProviderOption?.credentialKey,
+    currentProviderOption?.requiresApiKey,
+    currentProviderOption?.needsRegion,
+    currentProviderOption?.regionCredentialKey,
+    currentProviderOption?.defaultRegion,
+  ]);
 
   // ── Handlers ──
 
   const handleProviderChange = useCallback(
     async (provider: STTProviderType) => {
+      if (provider === selectedProviderRef.current) return;
+      selectedProviderRef.current = provider;
       setSelectedProvider(provider);
+      setCredentialStateProvider(provider);
+      setCredentialStateLoading(
+        PROVIDER_OPTIONS.find((option) => option.value === provider)?.requiresApiKey === true,
+      );
+      setApiKey("");
+      setShowApiKey(false);
+      setHasStoredKey(false);
+      setKeyDirty(false);
       setConnectionStatus("idle");
       setStatusMessage("");
       try {
@@ -497,66 +589,137 @@ export function STTSettings() {
     [setConfigSTTProvider, meetingAudioConfig, setMeetingAudioConfig]
   );
 
+  const updateVerifiedProvider = useCallback((provider: STTProviderType, verified: boolean) => {
+    const current = useConfigStore.getState().verifiedCloudProviders;
+    const updated = verified
+      ? Array.from(new Set([...current, provider]))
+      : current.filter((value) => value !== provider);
+    setVerifiedCloudProviders(updated);
+  }, [setVerifiedCloudProviders]);
+
   /** Save & Test: test key first, only persist on success. */
   const handleSaveAndTest = useCallback(async () => {
     if (!apiKey.trim() || !currentProviderOption?.credentialKey) return;
 
+    const provider = selectedProvider;
+    const option = currentProviderOption;
+    const isStillSelected = () => selectedProviderRef.current === provider;
     setConnectionStatus("testing");
     setStatusMessage("Testing connection...");
 
-    try {
-      // Temporarily store so the backend can read it during test
-      await storeApiKey(currentProviderOption.credentialKey, apiKey.trim());
-      if (currentProviderOption.needsRegion && azureRegion.trim()) {
-        await storeApiKey("azure_speech_region", azureRegion.trim());
-        setHasStoredRegion(true);
+    // Unlike the legacy Azure Speech path below, MAI credentials are passed
+    // directly to its probe and only persisted after a successful response.
+    if (provider === "azure_mai_streaming") {
+      const key = apiKey.trim();
+      const region = azureMaiRegion.trim();
+      if (!region || !option.regionCredentialKey) {
+        setConnectionStatus("error");
+        setStatusMessage("Choose a Speech Resource region before testing.");
+        return;
       }
+      try {
+        const success = await testAzureMaiConnection(key, region);
+        if (!success) {
+          if (isStillSelected()) {
+            setConnectionStatus("error");
+            setStatusMessage(
+              hasStoredKey
+                ? "Connection failed — existing credentials were kept"
+                : "Connection failed — credentials not saved",
+            );
+          }
+          return;
+        }
 
-      const success = await testSTTConnection(selectedProvider);
-      if (success) {
+        await storeApiKey(option.credentialKey, key);
+        await storeApiKey(option.regionCredentialKey, region);
+        updateVerifiedProvider(provider, true);
+        if (!isStillSelected()) return;
         setHasStoredKey(true);
         setKeyDirty(false);
         setConnectionStatus("success");
         setStatusMessage("Connection successful — provider is ready");
-        // Persist the verified state
-        const updated = Array.from(new Set([...verifiedCloudProviders, selectedProvider]));
-        setVerifiedCloudProviders(updated);
+      } catch (e) {
+        if (isStillSelected()) {
+          setConnectionStatus("error");
+          setStatusMessage(`Test failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      return;
+    }
+
+    // Legacy cloud-provider flow remains unchanged.
+    try {
+      // Temporarily store so the backend can read it during test
+      await storeApiKey(option.credentialKey, apiKey.trim());
+      if (option.needsRegion && azureRegion.trim()) {
+        await storeApiKey("azure_speech_region", azureRegion.trim());
+      }
+
+      const success = await testSTTConnection(provider);
+      if (success) {
+        updateVerifiedProvider(provider, true);
+        if (isStillSelected()) {
+          setHasStoredKey(true);
+          setKeyDirty(false);
+          setConnectionStatus("success");
+          setStatusMessage("Connection successful — provider is ready");
+        }
       } else {
         // Remove the key we temporarily stored — test failed
-        await deleteApiKey(currentProviderOption.credentialKey).catch(() => {});
-        setHasStoredKey(false);
-        setConnectionStatus("error");
-        setStatusMessage("Connection failed — key not saved");
-        const updated = verifiedCloudProviders.filter((p) => p !== selectedProvider);
-        setVerifiedCloudProviders(updated);
+        await deleteApiKey(option.credentialKey).catch(() => {});
+        updateVerifiedProvider(provider, false);
+        if (isStillSelected()) {
+          setHasStoredKey(false);
+          setConnectionStatus("error");
+          setStatusMessage("Connection failed — key not saved");
+        }
       }
     } catch (e) {
-      await deleteApiKey(currentProviderOption.credentialKey!).catch(() => {});
-      setHasStoredKey(false);
-      setConnectionStatus("error");
-      setStatusMessage(`Test failed: ${e}`);
-      const updated = verifiedCloudProviders.filter((p) => p !== selectedProvider);
-      setVerifiedCloudProviders(updated);
+      await deleteApiKey(option.credentialKey).catch(() => {});
+      updateVerifiedProvider(provider, false);
+      if (isStillSelected()) {
+        setHasStoredKey(false);
+        setConnectionStatus("error");
+        setStatusMessage(`Test failed: ${e}`);
+      }
     }
-  }, [apiKey, azureRegion, selectedProvider, currentProviderOption, verifiedCloudProviders, setVerifiedCloudProviders]);
+  }, [
+    apiKey,
+    azureRegion,
+    azureMaiRegion,
+    selectedProvider,
+    currentProviderOption,
+    hasStoredKey,
+    updateVerifiedProvider,
+  ]);
 
   const handleClearApiKey = useCallback(async () => {
-    if (!currentProviderOption?.credentialKey) return;
-    try { await deleteApiKey(currentProviderOption.credentialKey); } catch { /* ok */ }
-    setApiKey("");
-    setHasStoredKey(false);
-    setKeyDirty(false);
-    setConnectionStatus("idle");
-    setStatusMessage("");
-    const updated = verifiedCloudProviders.filter((p) => p !== selectedProvider);
-    setVerifiedCloudProviders(updated);
-  }, [currentProviderOption?.credentialKey, selectedProvider, verifiedCloudProviders, setVerifiedCloudProviders]);
+    const provider = selectedProvider;
+    const option = currentProviderOption;
+    if (!option?.credentialKey) return;
+    try { await deleteApiKey(option.credentialKey); } catch { /* ok */ }
+    if (provider === "azure_mai_streaming" && option.regionCredentialKey) {
+      try { await deleteApiKey(option.regionCredentialKey); } catch { /* ok */ }
+    }
+    updateVerifiedProvider(provider, false);
+    if (selectedProviderRef.current === provider) {
+      setApiKey("");
+      setHasStoredKey(false);
+      setKeyDirty(false);
+      setConnectionStatus("idle");
+      setStatusMessage("");
+    }
+  }, [
+    currentProviderOption,
+    selectedProvider,
+    updateVerifiedProvider,
+  ]);
 
   const handleSaveRegion = useCallback(async () => {
     if (!azureRegion.trim()) return;
     try {
       await storeApiKey("azure_speech_region", azureRegion.trim());
-      setHasStoredRegion(true);
     } catch (e) {
       console.warn("Failed to save Azure region:", e);
     }
@@ -635,7 +798,7 @@ export function STTSettings() {
             <span className="text-xs font-semibold text-foreground">Cloud</span>
             <span className="ml-auto text-meta text-muted-foreground/60 font-medium uppercase tracking-wider">Requires API Key</span>
           </div>
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
             {cloudProviders.map((p) => (
               <ProviderCard
                 key={p.value}
@@ -680,13 +843,17 @@ export function STTSettings() {
       {/* API Key — cloud providers only. Save & Test flow: test first, persist only on success. */}
       {currentProviderOption?.requiresApiKey && (
         <div className="rounded-xl border border-border/30 bg-card/50 p-5">
-          <h3 className="mb-3 text-sm font-semibold text-primary/80">API Key</h3>
+          <label htmlFor="stt-provider-api-key" className="mb-3 block text-sm font-semibold text-primary/80">
+            API Key
+          </label>
 
           <div className="flex gap-2">
             <div className="relative flex-1">
               <input
+                id="stt-provider-api-key"
                 type={showApiKey ? "text" : "password"}
-                value={apiKey}
+                disabled={credentialsAreLoading || (selectedProvider === "azure_mai_streaming" && shownConnectionStatus === "testing")}
+                value={shownApiKey}
                 onChange={(e) => {
                   setApiKey(e.target.value);
                   setKeyDirty(true);
@@ -694,10 +861,15 @@ export function STTSettings() {
                   setStatusMessage("");
                 }}
                 placeholder={
-                  hasStoredKey && !keyDirty
+                  credentialsAreLoading
+                    ? "Checking saved credentials…"
+                    : shownHasStoredKey && showMaiKeyReentryHint
+                    ? "Re-enter API key to test the updated region"
+                    : shownHasStoredKey && !shownKeyDirty
                     ? "Key stored — type to replace"
                     : `Enter ${currentProviderOption.label} API key`
                 }
+                aria-describedby={showMaiKeyReentryHint ? "stt-mai-key-reentry-hint" : undefined}
                 className="w-full rounded-lg border border-border/50 bg-background px-3.5 py-2.5 pr-10 text-sm text-foreground placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
               />
               <button
@@ -712,13 +884,13 @@ export function STTSettings() {
             </div>
 
             {/* Save & Test — shown whenever user has typed a key */}
-            {(keyDirty || (!hasStoredKey && apiKey.trim())) && (
+            {(shownKeyDirty || (!shownHasStoredKey && shownApiKey.trim())) && (
               <button
                 onClick={handleSaveAndTest}
-                disabled={!apiKey.trim() || connectionStatus === "testing"}
+                disabled={!shownApiKey.trim() || shownConnectionStatus === "testing" || credentialsAreLoading}
                 className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {connectionStatus === "testing" ? (
+                {shownConnectionStatus === "testing" ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : (
                   <Wifi className="h-3.5 w-3.5" />
@@ -728,7 +900,8 @@ export function STTSettings() {
             )}
 
             {/* Clear — only if key is stored and verified, and user hasn't started typing a new one */}
-            {hasStoredKey && !keyDirty && (
+            {shownHasStoredKey &&
+              (selectedProvider === "azure_mai_streaming" ? !shownApiKey.trim() : !shownKeyDirty) && (
               <button
                 onClick={handleClearApiKey}
                 className="flex items-center gap-1.5 rounded-lg border border-destructive/30 px-3 py-2 text-xs text-destructive transition-colors hover:bg-destructive/10"
@@ -740,25 +913,38 @@ export function STTSettings() {
           </div>
 
           {/* Status feedback */}
-          <div className="mt-2 min-h-[18px]">
-            {connectionStatus === "success" && (
+          <div className="mt-2 min-h-[18px]" role="status" aria-live="polite">
+            {credentialsAreLoading && (
+              <p className="text-xs text-muted-foreground">Checking saved credentials...</p>
+            )}
+            {!credentialsAreLoading && shownConnectionStatus === "success" && (
               <div className="flex items-center gap-1.5 text-xs text-success">
                 <CheckCircle className="h-3 w-3" />
                 {statusMessage}
               </div>
             )}
-            {connectionStatus === "error" && (
+            {!credentialsAreLoading && shownConnectionStatus === "testing" && (
+              <p className="text-xs text-muted-foreground">Testing connection...</p>
+            )}
+            {!credentialsAreLoading && shownConnectionStatus === "error" && (
               <div className="flex items-center gap-1.5 text-xs text-destructive">
                 <XCircle className="h-3 w-3" />
                 {statusMessage}
               </div>
             )}
-            {connectionStatus === "idle" && hasStoredKey && !keyDirty && (
+            {!credentialsAreLoading && shownConnectionStatus === "idle" && shownHasStoredKey && !shownKeyDirty && (
               <p className="text-xs text-success/70">
-                API key verified and stored securely
+                {selectedProvider === "azure_mai_streaming"
+                  ? "API key configured and stored securely"
+                  : "API key verified and stored securely"}
               </p>
             )}
-            {connectionStatus === "idle" && !hasStoredKey && (
+            {!credentialsAreLoading && shownConnectionStatus === "idle" && shownHasStoredKey && showMaiKeyReentryHint && (
+              <p id="stt-mai-key-reentry-hint" className="text-xs text-muted-foreground">
+                Re-enter the saved API key to test the updated region. Existing credentials remain in use until the test succeeds.
+              </p>
+            )}
+            {!credentialsAreLoading && shownConnectionStatus === "idle" && !shownHasStoredKey && (
               <p className="text-xs text-muted-foreground">
                 Enter your key and click Save & Test
               </p>
@@ -770,20 +956,78 @@ export function STTSettings() {
       {/* Azure Region Input */}
       {currentProviderOption?.needsRegion && (
         <div className="rounded-xl border border-border/30 bg-card/50 p-5">
-          <h3 className="mb-3 text-sm font-semibold text-primary/80">
-            Azure Region
-          </h3>
-          <input
-            type="text"
-            value={azureRegion}
-            onChange={(e) => setAzureRegion(e.target.value)}
-            onBlur={handleSaveRegion}
-            placeholder="eastus"
-            className="w-full rounded-lg border border-border/50 bg-background px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
-          />
-          <p className="mt-1.5 text-xs text-muted-foreground">
-            Azure region for your Speech Services resource (e.g., eastus, westeurope, southeastasia)
+          <label htmlFor="stt-provider-region" className="mb-3 block text-sm font-semibold text-primary/80">
+            {selectedProvider === "azure_mai_streaming" ? "Speech Resource region" : "Azure Region"}
+          </label>
+          {currentProviderOption.regionOptions ? (
+            <select
+              id="stt-provider-region"
+              value={azureMaiRegion}
+              disabled={shownConnectionStatus === "testing"}
+              onChange={(e) => {
+                setAzureMaiRegion(e.target.value);
+                if (selectedProvider === "azure_mai_streaming") setKeyDirty(true);
+                setConnectionStatus("idle");
+                setStatusMessage("");
+              }}
+              aria-describedby={`stt-provider-region-description${showMaiKeyReentryHint ? " stt-mai-key-reentry-hint" : ""}`}
+              className="w-full rounded-lg border border-border/50 bg-background px-3.5 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
+            >
+              {currentProviderOption.regionOptions.map((region) => (
+                <option key={region.value} value={region.value}>
+                  {region.label} ({region.value})
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              id="stt-provider-region"
+              type="text"
+              value={azureRegion}
+              onChange={(e) => setAzureRegion(e.target.value)}
+              onBlur={handleSaveRegion}
+              aria-describedby="stt-provider-region-description"
+              placeholder="eastus"
+              className="w-full rounded-lg border border-border/50 bg-background px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
+            />
+          )}
+          <p id="stt-provider-region-description" className="mt-1.5 text-xs text-muted-foreground">
+            {selectedProvider === "azure_mai_streaming"
+              ? "Choose the region where your Speech Resource was created. The API key and region are saved only after the connection test succeeds."
+              : "Azure region for your Speech Services resource (e.g., eastus, westeurope, southeastasia)"}
           </p>
+        </div>
+      )}
+
+      {selectedProvider === "azure_mai_streaming" && (
+        <div className="rounded-xl border border-border/30 bg-card/50 p-5">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-semibold text-primary/80">Azure MAI Streaming</h3>
+            <span className="rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-meta font-semibold text-warning">
+              Public Preview
+            </span>
+          </div>
+          <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+            <div>
+              <dt className="text-muted-foreground">Model</dt>
+              <dd className="font-medium text-foreground">MAI-Transcribe-2-Streaming</dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">Required resource</dt>
+              <dd className="font-medium text-foreground">Speech Resource</dd>
+            </div>
+          </dl>
+          <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+            Auto-detect uses Microsoft&apos;s default multilingual mode. Choose a specific language below to send it explicitly. Speaker diarization is not supported.
+          </p>
+          <button
+            type="button"
+            onClick={() => void open(AZURE_MAI_GUIDE_URL).catch((error) => console.warn("Failed to open Azure MAI guide:", error))}
+            className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+          >
+            Official Microsoft guide
+            <ExternalLink aria-hidden="true" className="h-3 w-3" />
+          </button>
         </div>
       )}
 
@@ -822,7 +1066,9 @@ export function STTSettings() {
             {showAutoDetectionWarning
               ? autoProblems.map((problem) => <p key={problem}>{problem}</p>)
               : <p>
-                  {selectedProvider === "deepgram" && isDeepgramNova3(deepgramModel)
+                  {selectedProvider === "azure_mai_streaming"
+                    ? "MAI-Transcribe-2-Streaming uses multilingual mode with automatic language detection by default."
+                    : selectedProvider === "deepgram" && isDeepgramNova3(deepgramModel)
                     ? "Nova-3 can transcribe multiple languages within the same sentence."
                     : "For speech that switches languages mid-sentence, use Deepgram Nova-3."}
                 </p>}
@@ -960,6 +1206,7 @@ function ProviderIcon({ value, isSelected }: { value: STTProviderType; isSelecte
     case "deepgram":
     case "whisper_api":
     case "azure_speech":
+    case "azure_mai_streaming":
     case "cartesia":
       return <Cloud className={cls} />;
     case "groq_whisper":

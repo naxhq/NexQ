@@ -325,6 +325,11 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     try {
       await stopCapture();
     } catch (err) {
+      if (/Azure MAI Streaming.*drain/i.test(String(err))) {
+        // Do not snapshot the transcript while a final may still reach the
+        // launcher. Keep the meeting open so End can retry the drain.
+        throw new Error("Azure MAI Streaming could not finish draining the transcript. The meeting is still open — press End again.");
+      }
       console.warn("[meetingStore] Audio capture failed to stop:", err);
     }
 

@@ -25,11 +25,13 @@ const boardReview = {
 };
 
 const calls = new Map<string, Record<string, unknown>>();
+let stopError: string | undefined;
 
 beforeAll(() => {
   mockWindows("launcher");
   mockIPC((cmd, args) => {
     calls.set(cmd, args as Record<string, unknown>);
+    if (cmd === "stop_capture" && stopError) throw stopError;
     return cmd === "start_meeting" ? JSON.stringify({ id: "meeting-1", title: "Standup" }) : [];
   });
 });
@@ -37,6 +39,16 @@ beforeAll(() => {
 beforeEach(() => {
   calls.clear();
   saved.config = {};
+  stopError = undefined;
+});
+
+it("keeps the meeting open if the MAI transcript is still draining", async () => {
+  const meetings = useMeetingStore.getState();
+  await meetings.startMeetingFlow("Standup", "online", "team_meeting");
+  stopError = "Timed out waiting for Azure MAI Streaming transcripts to drain";
+  await expect(meetings.endMeetingFlow()).rejects.toThrow("press End again");
+  expect(useMeetingStore.getState().activeMeeting?.id).toBe("meeting-1");
+  expect(calls.has("end_meeting")).toBe(false);
 });
 
 afterEach(() => {

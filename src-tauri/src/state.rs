@@ -113,6 +113,9 @@ pub struct AppState {
     /// Where a language change for one side reaches the running audio loop
     /// (audio::side_swap). Replaced at every capture start; None before the first.
     pub side_swap: Mutex<Option<crate::audio::side_swap::SideSwapSender>>,
+    /// Completion signal for an active MAI capture's provider and transcript drain.
+    /// Stop/restart waits for this before emitting stopped or persisting the recording.
+    pub mai_capture_drain: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
     /// In-memory cache for OpenRouter model catalog (TTL: 4 hours).
     pub openrouter_cache: Arc<Mutex<Option<OpenRouterModelCache>>>,
     /// Tray icon manager — initialized after the tray handle is available.
@@ -201,6 +204,7 @@ impl AppState {
             pending_recording: Arc::new(Mutex::new(None)),
             auto_refusals: Mutex::new([None, None]),
             side_swap: Mutex::new(None),
+            mai_capture_drain: tokio::sync::Mutex::new(None),
             openrouter_cache: Arc::new(Mutex::new(None)),
             tray_manager: Arc::new(Mutex::new(None)),
             gemini_cache: Arc::new(Mutex::new(None)),

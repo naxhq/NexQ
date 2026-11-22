@@ -58,6 +58,82 @@ impl Drop for TranscriptTally {
     }
 }
 
+const MAI_CAPTURE_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
+const MAI_TRANSCRIPT_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// Wait only for captures that installed the MAI drain receiver. On timeout or
+/// a worker failure, preserve the receiver and fail the stop/restart instead
+/// of allowing post-stop transcript events to race persistence.
+async fn wait_for_mai_capture_drain(state: &AppState) -> Result<(), String> {
+    // Keep the async mutex for the entire wait so concurrent stop/restart
+    // commands cannot observe an empty slot and pass the barrier.
+    let mut slot = state.mai_capture_drain.lock().await;
+    let Some(mut receiver) = slot.take() else {
+        return Ok(());
+    };
+
+    match tokio::time::timeout(MAI_CAPTURE_DRAIN_TIMEOUT, &mut receiver).await {
+        Ok(Ok(())) => Ok(()),
+        // The worker closed the channel without confirming a successful drain.
+        // Do not leave a closed receiver in AppState; surface the failure once.
+        Ok(Err(_)) => Err(
+            "Azure MAI Streaming stopped before transcript draining completed".to_string(),
+        ),
+        Err(_) => {
+            // Keep a still-live receiver so a retry can observe eventual
+            // completion; it is not a consumed/closed oneshot.
+            *slot = Some(receiver);
+            Err("Timed out waiting for Azure MAI Streaming transcripts to drain".to_string())
+        }
+    }
+}
+
+async fn store_mai_capture_drain(
+    state: &AppState,
+    receiver: tokio::sync::oneshot::Receiver<()>,
+) -> Result<(), String> {
+    let mut slot = state.mai_capture_drain.lock().await;
+    if slot.is_some() {
+        return Err("A previous Azure MAI Streaming capture is still draining".to_string());
+    }
+    *slot = Some(receiver);
+    Ok(())
+}
+
+async fn drain_transcript_tasks(
+    mut tasks: Vec<tokio::task::JoinHandle<()>>,
+) -> bool {
+    let mut completed = vec![false; tasks.len()];
+    let drained = tokio::time::timeout(MAI_TRANSCRIPT_DRAIN_TIMEOUT, async {
+        for (index, task) in tasks.iter_mut().enumerate() {
+            if (&mut *task).await.is_err() {
+                completed[index] = true;
+                return false;
+            }
+            completed[index] = true;
+        }
+        true
+    })
+    .await
+    .unwrap_or(false);
+
+    if !drained {
+        for (index, task) in tasks.iter().enumerate() {
+            if !completed[index] {
+                task.abort();
+            }
+        }
+        // Do not close the drain oneshot until aborted transcript tasks can no
+        // longer emit a late result.
+        for (index, task) in tasks.iter_mut().enumerate() {
+            if !completed[index] {
+                let _ = (&mut *task).await;
+            }
+        }
+    }
+    drained
+}
+
 fn accumulator_segment_json(id: &str, speaker: &str, output: &AccumulatorOutput) -> serde_json::Value {
     let mut seg = serde_json::json!({
         "id": id,
@@ -140,6 +216,10 @@ pub async fn start_capture(
             }
         }
     }
+    // A prior stop may have ended the device streams while its MAI worker was
+    // still draining the final SDK results. Do not start a replacement capture
+    // until that capture's transcript pipeline has completed.
+    wait_for_mai_capture_drain(&state).await?;
 
     // Create the audio chunk channel
     let (tx, mut rx) = mpsc::channel::<crate::audio::AudioChunk>(256);
@@ -162,6 +242,7 @@ pub async fn start_capture(
     // System audio (WASAPI loopback = other party in Zoom/Meet) needs a
     // cloud STT provider (Deepgram/Whisper/Azure/Groq) configured in Settings.
     // If no cloud provider is configured, system audio won't be transcribed.
+    let mut system_mai_selected = false;
     let system_stt: Option<Box<dyn STTProvider>> = {
         let stt_config = state.stt.as_ref().and_then(|stt_arc| {
             let router = stt_arc.lock().ok()?;
@@ -186,6 +267,7 @@ pub async fn start_capture(
         match stt_config {
             Some((pt, dk, dg_cfg, wk, ak, ar, gk, ck, lang)) => {
                 use crate::stt::provider::STTProviderType;
+                system_mai_selected = pt == STTProviderType::AzureMaiStreaming;
                 let p: Box<dyn STTProvider> = match pt {
                     STTProviderType::Deepgram => {
                         let mut p = match dk.as_deref() {
@@ -209,6 +291,23 @@ pub async fn start_capture(
                             (Some(k), Some(r)) => crate::stt::azure_speech::AzureSpeechSTT::with_config(k, r),
                             _ => crate::stt::azure_speech::AzureSpeechSTT::new(),
                         };
+                        p.set_language(&lang);
+                        Box::new(p)
+                    }
+                    STTProviderType::AzureMaiStreaming => {
+                        let key = get_credential_key(&state, crate::stt::azure_mai_streaming::ID)
+                            .unwrap_or_default();
+                        let region = get_credential_key(
+                            &state,
+                            crate::stt::azure_mai_streaming::REGION_KEY,
+                        )
+                        .unwrap_or_default();
+                        let mut p = crate::stt::azure_mai_streaming::AzureMaiSTT::new(
+                            app.clone(),
+                            key,
+                            region,
+                            "Them",
+                        );
                         p.set_language(&lang);
                         Box::new(p)
                     }
@@ -263,14 +362,21 @@ pub async fn start_capture(
         false
     };
 
+    let (mai_drain_tx, mai_drain_rx) = if has_system_stt && system_mai_selected {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        (Some(sender), Some(receiver))
+    } else {
+        (None, None)
+    };
+
     // Emit transcript events from system audio STT (speaker = "Them")
     // Uses the SegmentAccumulator to merge consecutive segments within a
     // configurable pause threshold, producing longer, more readable lines.
-    if has_system_stt {
+    let system_transcript_task = if has_system_stt {
         let stt_app = app.clone();
         let intel_arc = app.state::<AppState>().intelligence.clone();
         let pause_threshold = app.state::<AppState>().pause_threshold_ms.clone();
-        tokio::spawn(async move {
+        Some(tokio::spawn(async move {
             use std::sync::atomic::Ordering;
             let threshold = pause_threshold.load(Ordering::Relaxed);
             let mut accumulator =
@@ -294,15 +400,18 @@ pub async fn start_capture(
                     let _ = stt_app.emit(event_name, &payload);
 
                     // A new line from Them replaces the old detected question.
-                    if let Some(ref intel) = intel_arc {
-                        if let Ok(mut engine) = intel.lock() {
-                            engine.note_them_line(&output.id, &output.text, output.is_final);
+                    let is_interim_clear = !output.is_final && output.text.is_empty();
+                    if !is_interim_clear {
+                        if let Some(ref intel) = intel_arc {
+                            if let Ok(mut engine) = intel.lock() {
+                                engine.note_them_line(&output.id, &output.text, output.is_final);
+                            }
                         }
                     }
 
                     // Push final segments to the intelligence engine's
                     // transcript buffer so the AI has access to what "Them" said.
-                    if output.is_final {
+                    if output.is_final && !is_interim_clear {
                         if let Some(ref intel) = intel_arc {
                             if let Ok(mut engine) = intel.lock() {
                                 engine.push_transcript(
@@ -316,8 +425,10 @@ pub async fn start_capture(
                     }
                 }
             }
-        });
-    }
+        }))
+    } else {
+        None
+    };
 
     // Grab the recorder handle for WAV recording (with mic/system mixing)
     let recorder = {
@@ -419,8 +530,23 @@ pub async fn start_capture(
         if let Some(ref mut provider) = system_stt_provider {
             let _ = provider.stop_stream().await;
         }
+        if let Some(drain_tx) = mai_drain_tx {
+            let drained = match system_transcript_task {
+                Some(task) => drain_transcript_tasks(vec![task]).await,
+                None => true,
+            };
+            if drained {
+                let _ = drain_tx.send(());
+            } else {
+                log::error!("Azure MAI system transcript task did not drain before timeout");
+            }
+        }
         log::info!("Audio processing task exiting");
     });
+
+    if let Some(receiver) = mai_drain_rx {
+        store_mai_capture_drain(&state, receiver).await?;
+    }
 
     log::info!("Audio capture started via command");
     Ok(())
@@ -458,12 +584,8 @@ pub async fn stop_capture(app: AppHandle, keep_recording: Option<bool>) -> Resul
         }
     };
 
-    // Every side's thread has stopped: the windows drop what they showed about reconnecting.
-    let _ = app.emit("audio_capture_stopped", ());
-
-    // Store recording info for end_meeting to pick up.
-    // The frontend calls stopCapture() then endMeeting() in sequence, so
-    // we park the info here and end_meeting consumes it.
+    // Park the recorder result even if the bounded MAI drain times out. A retry
+    // can then finish the drain without losing the WAV that end_meeting needs.
     if let Some((wav_path, start_time_ms)) = recording_info {
         let mut pending = state
             .pending_recording
@@ -475,6 +597,14 @@ pub async fn stop_capture(app: AppHandle, keep_recording: Option<bool>) -> Resul
         });
         log::info!("Recording info stored for post-meeting pipeline");
     }
+
+    // MAI closes the SDK stream asynchronously and may emit its last transcript
+    // only after the capture device has stopped. Keep the UI and meeting
+    // persistence behind that bounded drain barrier.
+    wait_for_mai_capture_drain(&state).await?;
+
+    // Every side's thread has stopped: the windows drop what they showed about reconnecting.
+    let _ = app.emit("audio_capture_stopped", ());
 
     Ok(())
 }
@@ -990,6 +1120,11 @@ pub async fn start_capture_per_party(
         .lock()
         .map(|guard| guard.as_ref().is_some_and(|mgr| mgr.is_capturing()))
         .unwrap_or(false);
+    if !was_capturing {
+        // A previous stop can have closed the devices while its MAI transcript
+        // task is still finishing. Do not replace that capture's resources.
+        wait_for_mai_capture_drain(&state).await?;
+    }
     let you_result = if skip_you_stt {
         crate::stt::emit_stt_debug(&app, "info", "stt", "'You' STT skipped (in-person meeting)");
         Ok(None)
@@ -1039,6 +1174,9 @@ pub async fn start_capture_per_party(
                 mgr.stop_capture(true);
             }
         }
+    }
+    if stopped_existing_capture {
+        wait_for_mai_capture_drain(&state).await?;
     }
     if stopped_existing_capture {
         // The old sides have stopped; the new capture starts with a clean slate.
@@ -1245,6 +1383,17 @@ pub async fn start_capture_per_party(
         }
     }
 
+    let mai_you_active =
+        you_stt_provider.is_some() && you.stt_provider == crate::stt::azure_mai_streaming::ID;
+    let mai_them_active =
+        them_stt_provider.is_some() && them.stt_provider == crate::stt::azure_mai_streaming::ID;
+    let (mai_drain_tx, mai_drain_rx) = if mai_you_active || mai_them_active {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        (Some(sender), Some(receiver))
+    } else {
+        (None, None)
+    };
+
     // Unique session prefix to avoid segment ID collisions across mid-meeting restarts.
     // Each restart of start_capture_per_party gets a distinct prefix, so segment IDs
     // like "you_a3_1" won't collide with "you_b7_1" from a previous session.
@@ -1257,6 +1406,7 @@ pub async fn start_capture_per_party(
     // Uses SegmentAccumulator for cloud providers (Deepgram, Groq, etc.)
     // Skips accumulator for web_speech (browser handles segmentation)
     // and whisper_cpp (dual-pass engine manages its own line breaking).
+    let mut mai_transcript_tasks = Vec::new();
     if you_stt_provider.is_some() {
         let stt_app = app.clone();
         let prefix = session_prefix.clone();
@@ -1269,7 +1419,7 @@ pub async fn start_capture_per_party(
         } else {
             None
         };
-        tokio::spawn(async move {
+        let transcript_task = tokio::spawn(async move {
             if let Some(pause_threshold) = pause_threshold {
                 // Accumulator path: merge same-speaker segments
                 use std::sync::atomic::Ordering;
@@ -1282,7 +1432,11 @@ pub async fn start_capture_per_party(
                     &you_signal_for_task,
                     &mut accumulator,
                     &pause_threshold,
-                    |result| tally.record(result.is_final),
+                    |result| {
+                        if !result.is_interim_clear() {
+                            tally.record(result.is_final);
+                        }
+                    },
                     |output| {
                         let event_name = if output.is_final {
                             "transcript_final"
@@ -1342,6 +1496,9 @@ pub async fn start_capture_per_party(
                 .await;
             }
         });
+        if mai_you_active {
+            mai_transcript_tasks.push(transcript_task);
+        }
     }
 
     // Emit transcript events from "Them" STT (speaker = "Them")
@@ -1354,7 +1511,7 @@ pub async fn start_capture_per_party(
         let pause_threshold = app.state::<AppState>().pause_threshold_ms.clone();
         let mut tally = TranscriptTally::new("Them", &them.stt_provider);
         let them_signal_for_task = them_signal.clone();
-        tokio::spawn(async move {
+        let transcript_task = tokio::spawn(async move {
             use std::sync::atomic::Ordering;
             let threshold = pause_threshold.load(Ordering::Relaxed);
             let mut accumulator =
@@ -1365,7 +1522,11 @@ pub async fn start_capture_per_party(
                 &them_signal_for_task,
                 &mut accumulator,
                 &pause_threshold,
-                |result| tally.record(result.is_final),
+                |result| {
+                    if !result.is_interim_clear() {
+                        tally.record(result.is_final);
+                    }
+                },
                 |output| {
                     let event_name = if output.is_final {
                         "transcript_final"
@@ -1379,14 +1540,17 @@ pub async fn start_capture_per_party(
                     let _ = stt_app.emit(event_name, &payload);
 
                     // A new line from Them replaces the old detected question.
-                    if let Some(ref intel) = intel_arc {
-                        if let Ok(mut engine) = intel.lock() {
-                            engine.note_them_line(&seg_id, &output.text, output.is_final);
+                    let is_interim_clear = !output.is_final && output.text.is_empty();
+                    if !is_interim_clear {
+                        if let Some(ref intel) = intel_arc {
+                            if let Ok(mut engine) = intel.lock() {
+                                engine.note_them_line(&seg_id, &output.text, output.is_final);
+                            }
                         }
                     }
 
                     // Push final segments to the intelligence engine
-                    if output.is_final {
+                    if output.is_final && !is_interim_clear {
                         if let Some(ref intel) = intel_arc {
                             if let Ok(mut engine) = intel.lock() {
                                 engine.push_transcript(
@@ -1421,6 +1585,9 @@ pub async fn start_capture_per_party(
                 }
             }
         });
+        if mai_them_active {
+            mai_transcript_tasks.push(transcript_task);
+        }
     }
 
     // Grab the recorder handle for WAV recording (with mic/system mixing), and
@@ -1725,6 +1892,13 @@ pub async fn start_capture_per_party(
         // The transcript tasks end (and flush) once no result channel is left open.
         drop(you_stt_tx);
         drop(them_stt_tx);
+        if let Some(drain_tx) = mai_drain_tx {
+            if drain_transcript_tasks(mai_transcript_tasks).await {
+                let _ = drain_tx.send(());
+            } else {
+                log::error!("Azure MAI transcript task did not drain before timeout");
+            }
+        }
 
         // Restore IPolicyConfig override if active (crash recovery for async task exit)
         {
@@ -1739,6 +1913,10 @@ pub async fn start_capture_per_party(
 
         log::info!("Per-party audio processing task exiting");
     });
+
+    if let Some(receiver) = mai_drain_rx {
+        store_mai_capture_drain(&state, receiver).await?;
+    }
 
     log::info!("Per-party audio capture started");
     // Remember what each side now runs under, so the next swap can tell news from old.
@@ -1873,6 +2051,26 @@ async fn create_stt_provider_for_party(
                 _ => crate::stt::azure_speech::AzureSpeechSTT::new(),
             };
             p.set_language(&lang);
+            Ok(Some(Box::new(p)))
+        }
+        STTProviderType::AzureMaiStreaming => {
+            let key = get_credential_key(state, crate::stt::azure_mai_streaming::ID)
+                .unwrap_or_default();
+            let region = get_credential_key(state, crate::stt::azure_mai_streaming::REGION_KEY)
+                .unwrap_or_default();
+            log::info!(
+                "Azure MAI key for '{}': {}, region: {}",
+                party_role,
+                if key.is_empty() { "MISSING" } else { "present" },
+                if region.is_empty() { "MISSING" } else { "present" }
+            );
+            let mut p = crate::stt::azure_mai_streaming::AzureMaiSTT::new(
+                app.clone(),
+                key,
+                region,
+                party_role,
+            );
+            p.set_language(&stt_language);
             Ok(Some(Box::new(p)))
         }
         STTProviderType::GroqWhisper => {
@@ -2165,7 +2363,10 @@ fn supports_auto_language(provider: &crate::stt::provider::STTProviderType, mode
             matches!(model, "nova-3" | "nova-3-general" | "flux-general-multi")
         }
         STTProviderType::WhisperCpp => is_multilingual_whisper_model(model),
-        STTProviderType::GroqWhisper | STTProviderType::WhisperApi | STTProviderType::Cartesia => true,
+        STTProviderType::GroqWhisper
+        | STTProviderType::WhisperApi
+        | STTProviderType::Cartesia
+        | STTProviderType::AzureMaiStreaming => true,
         STTProviderType::ParakeetTdt => model.starts_with("parakeet-tdt-0.6b-v3"),
         _ => false,
     }
@@ -2740,6 +2941,37 @@ mod tests {
             resolve_parakeet_model_id("parakeet-tdt-ctc-110m-int8"),
             "parakeet-tdt-ctc-110m-int8"
         );
+    }
+
+    #[test]
+    fn azure_mai_streaming_is_selectable_and_supports_auto_detect() {
+        use crate::stt::provider::{list_available_providers, STTProviderType};
+
+        let provider = STTProviderType::from_str(crate::stt::azure_mai_streaming::ID).unwrap();
+        assert_eq!(provider, STTProviderType::AzureMaiStreaming);
+        assert_eq!(provider.as_str(), crate::stt::azure_mai_streaming::ID);
+        assert!(supports_auto_language(&provider, ""));
+        assert!(check_auto_language("auto", &provider, None, None, "Them").is_ok());
+
+        let selector_entry = list_available_providers()
+            .into_iter()
+            .find(|entry| entry.provider_type == crate::stt::azure_mai_streaming::ID)
+            .expect("MAI provider is advertised to the provider selector");
+        assert_eq!(selector_entry.name, "Azure MAI Streaming");
+        assert!(selector_entry.requires_api_key);
+        assert!(!selector_entry.is_local);
+        assert!(selector_entry.supported_languages.iter().any(|language| language == "auto"));
+    }
+
+    #[test]
+    fn accumulator_clear_is_an_empty_interim_update_payload() {
+        let mut clear = output(None);
+        clear.text.clear();
+        clear.is_final = false;
+
+        let segment = accumulator_segment_json("them_x_acc_1", "Them", &clear);
+        assert_eq!(segment["text"], "");
+        assert_eq!(segment["is_final"], false);
     }
 
     #[test]

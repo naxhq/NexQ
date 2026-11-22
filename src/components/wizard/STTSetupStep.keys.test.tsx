@@ -19,6 +19,16 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("first-run STT step: missing API key", () => {
+  it("shows Azure MAI Streaming's model and Public Preview label in the setup choices", async () => {
+    render(<STTSetupStep />);
+    const choices = await screen.findAllByRole("radio", { name: /Azure MAI Streaming/ });
+    expect(choices).toHaveLength(2);
+    for (const choice of choices) {
+      expect(choice).toHaveTextContent("MAI-Transcribe-2-Streaming");
+      expect(choice).toHaveTextContent("Public Preview");
+    }
+  });
+
   it("tells the user in one plain line when the selected engine has no saved key", async () => {
     render(<STTSetupStep />);
     // Them defaults to Deepgram, which has no key here

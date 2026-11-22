@@ -132,6 +132,14 @@ const STT_OPTIONS: {
     isCloud: true,
   },
   {
+    value: "azure_mai_streaming",
+    label: "Azure MAI Streaming",
+    shortLabel: "Azure MAI Streaming",
+    icon: <Cloud className="h-3.5 w-3.5" />,
+    requiresKey: true,
+    isCloud: true,
+  },
+  {
     value: "groq_whisper",
     label: "Groq Whisper",
     shortLabel: "Groq",
@@ -155,7 +163,7 @@ const STT_OPTIONS: {
 const EXCLUSIVE_PROVIDERS: STTProviderType[] = ["web_speech", "windows_native"];
 
 const EXCLUSIVE_FALLBACK_ORDER: STTProviderType[] = [
-  "deepgram", "groq_whisper", "whisper_api", "azure_speech", "cartesia",
+  "deepgram", "groq_whisper", "whisper_api", "azure_speech", "azure_mai_streaming", "cartesia",
   "sherpa_onnx", "ort_streaming", "parakeet_tdt",
 ];
 
@@ -319,11 +327,14 @@ export function MeetingAudioSettings() {
   }
 
   async function checkApiKeys() {
-    const providers = ["deepgram", "whisper_api", "azure_speech", "groq_whisper", "cartesia"];
+    const providers = ["deepgram", "whisper_api", "azure_speech", "azure_mai_streaming", "groq_whisper", "cartesia"];
     const status: Record<string, boolean> = {};
     for (const p of providers) {
       try {
         status[p] = await hasApiKey(p);
+        if (p === "azure_mai_streaming" && status[p]) {
+          status[p] = await hasApiKey("azure_mai_streaming_region");
+        }
       } catch {
         status[p] = false;
       }
@@ -424,7 +435,12 @@ export function MeetingAudioSettings() {
         <p id="audio-stt-auto-description" className={`mb-3 text-xs ${unsupportedAutoChannels.length ? "text-warning" : "text-muted-foreground"}`}>
           {unsupportedAutoChannels.length
             ? `Auto-detect won't work for ${unsupportedAutoChannels.join(" and ")}. See ${unsupportedAutoChannels.length > 1 ? "their cards" : "its card"} below, or pick a language.`
-            : "For speech that switches languages mid-sentence, use Deepgram Nova-3."}
+            : (
+                (!inPerson && youLanguage === AUTO_STT_LANGUAGE && config.you.stt_provider === "azure_mai_streaming") ||
+                (themLanguage === AUTO_STT_LANGUAGE && config.them.stt_provider === "azure_mai_streaming")
+              )
+              ? "Azure MAI Streaming uses multilingual mode with automatic language detection by default."
+              : "For speech that switches languages mid-sentence, use Deepgram Nova-3."}
         </p>
       )}
 
@@ -881,6 +897,7 @@ function PartyPanel({
             Speech to Text
           </label>
           <ProviderSelect
+            ariaLabel={`${sideName} speech-to-text provider`}
             value={party.stt_provider}
             isInput={party.is_input_device}
             apiKeyStatus={apiKeyStatus}
@@ -959,6 +976,7 @@ function PartyPanel({
 // ── Custom STT Provider Dropdown ──
 
 function ProviderSelect({
+  ariaLabel,
   value,
   isInput,
   apiKeyStatus,
@@ -967,6 +985,7 @@ function ProviderSelect({
   otherPartyLabel,
   onChange,
 }: {
+  ariaLabel: string;
   value: STTProviderType;
   isInput: boolean;
   apiKeyStatus: Record<string, boolean>;
@@ -1108,6 +1127,7 @@ function ProviderSelect({
     <div className="relative" ref={ref}>
       <button
         type="button"
+        aria-label={ariaLabel}
         onClick={() => setOpen(!open)}
         className={`flex w-full cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-colors ${
           open

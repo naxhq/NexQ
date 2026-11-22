@@ -39,6 +39,18 @@ describe("language picker in the status bar", () => {
     expect(screen.queryByRole("button", { name: /^You language/ })).toBeNull();
   });
 
+  it("shows the registered MAI provider and exact model in the status chip", () => {
+    useMeetingStore.setState({ audioMode: "online" });
+    useConfigStore.setState({
+      meetingAudioConfig: {
+        ...config,
+        you: { ...config.you, stt_provider: "azure_mai_streaming" },
+      },
+    });
+    render(<ServiceStatusBar />);
+    expect(screen.getByTitle("Your STT: Azure MAI Streaming / MAI-Transcribe-2-Streaming")).toBeInTheDocument();
+  });
+
   it("is absent outside a meeting and in the launcher footer", () => {
     useMeetingStore.setState({ isRecording: false, audioMode: "online" });
     const { rerender } = render(<ServiceStatusBar compact />);

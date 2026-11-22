@@ -50,6 +50,10 @@ pub async fn set_stt_provider(app: AppHandle, provider: String) -> Result<(), St
                         router.set_azure_speech_region(&region);
                     }
                 }
+                STTProviderType::AzureMaiStreaming => {
+                    // Per-party routing reads these credentials directly when
+                    // it creates each provider; do not cache the MAI key here.
+                }
                 STTProviderType::GroqWhisper => {
                     if let Ok(Some(key)) = cred.get_key("groq_whisper") {
                         router.set_groq_whisper_api_key(&key);
@@ -92,6 +96,14 @@ pub async fn test_stt_connection(app: AppHandle, provider: String) -> Result<boo
 
     let state = app.state::<AppState>();
 
+    // MAI's test opens a short-lived SDK bridge session. Read its credentials
+    // fresh from secure storage and avoid holding the blocking STTRouter mutex
+    // across the asynchronous SDK probe.
+    if provider_type == STTProviderType::AzureMaiStreaming {
+        let (key, region) = get_azure_mai_credentials(&state)?;
+        return crate::stt::azure_mai_streaming::test_azure_mai_connection(app, key, region).await;
+    }
+
     // Initialize STTRouter if needed
     ensure_stt_initialized(&app, &state)?;
 
@@ -127,6 +139,9 @@ pub async fn test_stt_connection(app: AppHandle, provider: String) -> Result<boo
                         router.set_azure_speech_region(&region);
                     }
                 }
+                STTProviderType::AzureMaiStreaming => {
+                    // Handled above without holding the router lock.
+                }
                 STTProviderType::GroqWhisper => {
                     if let Ok(Some(key)) = cred.get_key("groq_whisper") {
                         router.set_groq_whisper_api_key(&key);
@@ -152,6 +167,27 @@ pub async fn test_stt_connection(app: AppHandle, provider: String) -> Result<boo
     })?;
 
     Ok(result)
+}
+
+/// Read Azure MAI credentials directly from secure storage. There is
+/// intentionally no environment-variable or STTRouter cache fallback.
+fn get_azure_mai_credentials(state: &AppState) -> Result<(String, String), String> {
+    let credentials = state
+        .credentials
+        .as_ref()
+        .ok_or("No credential store available for Azure MAI Streaming")?;
+    let credentials = credentials
+        .lock()
+        .map_err(|_| "Credential store lock poisoned".to_string())?;
+    let key = credentials
+        .get_key(crate::stt::azure_mai_streaming::ID)
+        .map_err(|e| format!("Failed to read Azure MAI Streaming key: {}", e))?
+        .ok_or("No Azure MAI Streaming key configured")?;
+    let region = credentials
+        .get_key(crate::stt::azure_mai_streaming::REGION_KEY)
+        .map_err(|e| format!("Failed to read Azure MAI Streaming region: {}", e))?
+        .ok_or("No Azure MAI Streaming region configured")?;
+    Ok((key, region))
 }
 
 /// Update whisper.cpp dual-pass configuration. Takes effect immediately,

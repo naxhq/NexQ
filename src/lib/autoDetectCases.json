@@ -30,6 +30,7 @@
     { "provider": "web_speech", "model": "", "supported": false, "name": "Web Speech" },
     { "provider": "windows_native", "model": "", "supported": false, "name": "Windows Speech" },
     { "provider": "azure_speech", "model": "", "supported": false, "name": "Azure Speech" },
+    { "provider": "azure_mai_streaming", "model": "", "supported": true },
     { "provider": "sherpa_onnx", "model": "", "supported": false, "name": "Sherpa-ONNX" },
     { "provider": "ort_streaming", "model": "", "supported": false, "name": "ORT Streaming" }
   ]

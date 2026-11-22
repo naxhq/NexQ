@@ -35,6 +35,28 @@ pub struct TranscriptResult {
     pub turn: Option<TurnSignal>,
 }
 
+impl TranscriptResult {
+    /// Withdraw an unconfirmed hypothesis (without promoting it on a swap).
+    pub fn clear_interim() -> Self {
+        Self {
+            text: String::new(),
+            is_final: false,
+            confidence: 0.0,
+            timestamp_ms: 0,
+            speaker: None,
+            language: None,
+            segment_id: Some("clear_interim".into()),
+            duration_ms: None,
+            speaker_tag: None,
+            turn: None,
+        }
+    }
+
+    pub fn is_interim_clear(&self) -> bool {
+        !self.is_final && self.segment_id.as_deref() == Some("clear_interim")
+    }
+}
+
 /// A provider's own end-of-turn detection, carried on a transcript result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -132,6 +154,8 @@ pub enum STTProviderType {
     WhisperApi,
     /// Sub-PRD 9: Azure Cognitive Services
     AzureSpeech,
+    /// Microsoft's MAI-Transcribe-2-Streaming via the Speech SDK.
+    AzureMaiStreaming,
     /// Sub-PRD 9: Groq Whisper
     GroqWhisper,
     /// Frontend-only Web Speech API — never instantiated in Rust.
@@ -157,6 +181,7 @@ impl STTProviderType {
             STTProviderType::Deepgram => "deepgram",
             STTProviderType::WhisperApi => "whisper_api",
             STTProviderType::AzureSpeech => "azure_speech",
+            STTProviderType::AzureMaiStreaming => super::azure_mai_streaming::ID,
             STTProviderType::GroqWhisper => "groq_whisper",
             STTProviderType::WebSpeech => "web_speech",
             STTProviderType::WhisperCpp => "whisper_cpp",
@@ -174,6 +199,7 @@ impl STTProviderType {
             "deepgram" => Some(STTProviderType::Deepgram),
             "whisper_api" => Some(STTProviderType::WhisperApi),
             "azure_speech" => Some(STTProviderType::AzureSpeech),
+            super::azure_mai_streaming::ID => Some(STTProviderType::AzureMaiStreaming),
             "groq_whisper" => Some(STTProviderType::GroqWhisper),
             "web_speech" => Some(STTProviderType::WebSpeech),
             "sherpa_onnx" => Some(STTProviderType::SherpaOnnx),
@@ -377,6 +403,14 @@ pub fn list_available_providers() -> Vec<STTProviderInfo> {
                 "sv-SE".to_string(),
                 "vi-VN".to_string(),
             ],
+        },
+        STTProviderInfo {
+            provider_type: super::azure_mai_streaming::ID.to_string(),
+            name: "Azure MAI Streaming".to_string(),
+            requires_api_key: true,
+            is_local: false,
+            supported_languages: "auto af ar as az bg bn bs ca cs da de el en es et fa fi fil fr gl gu he hi hu hy id is it ja kk kn ko lt lv mk ml mr ms nb ne nl or pa pl pt ro ru sk sl sv sw ta te th tr uk ur vi yue zh"
+                .split_whitespace().map(str::to_string).collect(),
         },
         STTProviderInfo {
             provider_type: "groq_whisper".to_string(),
