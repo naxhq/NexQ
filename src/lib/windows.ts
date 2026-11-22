@@ -108,6 +108,13 @@ export async function waitForOverlayMeeting(
   });
 }
 
+/**
+ * Launcher -> overlay window: the Settings shortcut (Ctrl+,) was pressed while
+ * the meeting overlay is the window on screen. Only one window holds that
+ * global key (the launcher), so it passes the press on.
+ */
+export const TOGGLE_SETTINGS_EVENT = "nexq:toggle_settings";
+
 /** Whether the overlay window is on screen. */
 export async function isOverlayVisible(): Promise<boolean> {
   const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");

@@ -3,12 +3,13 @@ import {
   register,
   unregister,
 } from "@tauri-apps/plugin-global-shortcut";
+import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useAIActionsStore } from "../stores/aiActionsStore";
 import { isQuitPending } from "../lib/ipc";
 import { runYourAction } from "../lib/autoAnswer";
-import { isOverlayVisible, meetingShortcutAction, showLauncherWindow, showMeetingOverlay, switchShortcutTarget } from "../lib/windows";
+import { TOGGLE_SETTINGS_EVENT, isOverlayVisible, isWindowShown, meetingShortcutAction, showLauncherWindow, showMeetingOverlay, switchShortcutTarget } from "../lib/windows";
 import { endMeetingFromThisWindow } from "./useUpdater";
 import { showToast } from "../stores/toastStore";
 import { useConfigStore } from "../stores/configStore";
@@ -33,6 +34,35 @@ async function toggleMeetingFromShortcut(): Promise<void> {
     case "ignore":
       break;
   }
+}
+
+/**
+ * Opens Settings in this window, or closes them: the dashboard's Settings page,
+ * or the meeting overlay's Settings panel (the demo draws the overlay in the
+ * launcher, so both can happen there).
+ */
+export function toggleSettingsHere(): void {
+  const store = useMeetingStore.getState();
+  if (store.currentView === "settings") store.setCurrentView(store.previousView || "launcher");
+  else if (store.settingsOpen) store.setSettingsOpen(false);
+  else store.openSettings();
+}
+
+/**
+ * Ctrl+, wherever the user is. The launcher holds the global key (two windows
+ * registering the same key leave it to whichever registered last); it opens
+ * the dashboard's Settings, or hands the press to the overlay window while
+ * the meeting overlay is the window on screen.
+ */
+async function toggleSettingsFromShortcut(): Promise<void> {
+  if (await isOverlayVisible()) {
+    await emit(TOGGLE_SETTINGS_EVENT);
+    return;
+  }
+  toggleSettingsHere();
+  // NexQ may be hidden (it has no taskbar button under stealth mode).
+  const settingsShowing = useMeetingStore.getState().currentView === "settings";
+  if (settingsShowing && !(await isWindowShown("launcher"))) await showLauncherWindow();
 }
 
 /** Stealth shortcut: hide NexQ from screen sharing, or show it again. */
@@ -199,15 +229,15 @@ export function useGlobalShortcut() {
           key: "CmdOrCtrl+,",
           handler: (event) => {
             if (event.state === "Pressed") {
-              const store = useMeetingStore.getState();
-              store.setSettingsOpen(!store.settingsOpen);
+              toggleSettingsFromShortcut().catch(() => {});
             }
           },
         },
       ];
 
       for (const { key, handler } of defs) {
-        if (key === "CmdOrCtrl+M" && !isLauncher) continue;
+        // The launcher holds these two keys; the overlay gets Settings by event.
+        if ((key === "CmdOrCtrl+M" || key === "CmdOrCtrl+,") && !isLauncher) continue;
         try {
           await unregister(key).catch(() => {}); // Clean up stale registration
           await register(key, handler);
@@ -224,6 +254,20 @@ export function useGlobalShortcut() {
       shortcuts.forEach((s) => {
         unregister(s).catch(() => {});
       });
+    };
+  }, []);
+
+  // Overlay window: the launcher passes on Ctrl+, while the overlay is showing.
+  useEffect(() => {
+    if (getCurrentWebviewWindow().label !== "overlay") return;
+    let cancelled = false;
+    let stop: (() => void) | undefined;
+    listen(TOGGLE_SETTINGS_EVENT, toggleSettingsHere)
+      .then((fn) => { if (cancelled) fn(); else stop = fn; })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      stop?.();
     };
   }, []);
 
