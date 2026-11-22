@@ -133,6 +133,19 @@ For a practical check, start a test meeting, speak on each configured side, veri
 - **"Cartesia refused the API key or account"**: NexQ stops retrying. Check the key in Settings > STT and your credit balance at [play.cartesia.ai](https://play.cartesia.ai/usage)
 - **Credits**: Cartesia bills every second of audio it receives while a channel is unmuted, including silence. One unmuted channel uses about 10,800 credits per hour; Cartesia on both "You" and "Them" uses about 21,600. Muting a channel closes its Cartesia stream, so muted time costs nothing; unmuting reconnects in a fraction of a second and keeps your first words. In in-person meetings the room mic is transcribed as "Them", so NexQ doesn't start a "You" provider at all, and "You" uses no credits
 
+### Custom Whisper Endpoint
+
+**Problem**: Whisper API with your own server fails the test, or transcription stops during a meeting.
+
+**Solution**: Save & Test shows the server's own message. Common ones:
+
+- **"Couldn't reach ... Is the server running?"**: the server isn't running, or the address or port is wrong. Open the same address in a browser (for example `http://127.0.0.1:8000/docs`) to check
+- **"The server answered 404"**: usually the URL is missing `/v1`, or the server has no `/v1/audio/transcriptions` route. Use the base URL that ends in `/v1`, not the full transcription path
+- **"The server answered 400" or "model not found"**: the **Model** name doesn't match a model the server has. Use the exact name it lists
+- **"This server needs an API key"**: enter the key your server expects in "API key for this server". Your OpenAI key is never sent to a custom server
+- **Ollama and LM Studio** don't do speech-to-text, so they can't be used here. Use a server built for transcription, such as faster-whisper-server (Speaches)
+- **Fails mid-meeting**: NexQ shows the error once and clears it when the next segment succeeds. Whisper API sends audio in batches of about 5 seconds, so a slow server delays text; a request that takes more than 30 seconds is dropped
+
 ### Local Whisper Model Slow or Inaccurate
 
 **Problem**: Local Whisper transcription has high latency or poor accuracy.

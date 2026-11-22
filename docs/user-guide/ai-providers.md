@@ -13,6 +13,7 @@ NexQ supports 12 STT providers. Each channel ("You" and "Them") can use a differ
 | Web Speech API | Browser | Free | Good | Real-time | Quick setup, long sessions, English |
 | Deepgram | Cloud | Pay per use | Excellent | Real-time | Production use, high accuracy; Flux knows when a speaker finishes |
 | Groq Whisper | Cloud | Free tier | Very Good | Very Fast | High accuracy at no cost |
+| [Whisper API](#custom-whisper-endpoint-local-servers) | Cloud or self-hosted | OpenAI pricing / free self-hosted | Very Good | Batched (~5 s) | OpenAI or your own compatible server |
 | Cartesia | Cloud | Pay per second | Very Good | Real-time | Lines that end when the speaker finishes (English, French, Hindi, Japanese, Spanish) |
 | Whisper (local) | Local | Free | Excellent | Slow | Privacy, offline use |
 | ONNX Runtime | Local | Free | Good | Medium | Balanced local option |
@@ -46,6 +47,23 @@ These can't detect the language: Web Speech, Windows Speech, Azure Speech, Sherp
 **For speech that switches languages mid-sentence**, such as Ukrainian with English technical terms, use **Deepgram Nova-3** with **Auto-detect**. This combination enables [Nova-3 multilingual transcription](https://developers.deepgram.com/docs/nova-3-language-prompting), which Deepgram bills at a higher rate than single-language Nova-3 (see [Deepgram's pricing](https://deepgram.com/pricing)).
 
 **Which engines cover which languages:** Parakeet TDT 0.6B v3 covers 25 European languages (including Ukrainian and Russian, not Chinese, Japanese, Korean, Hindi, Arabic or Turkish). Deepgram Flux is English only; Flux Multilingual covers English, Spanish, French, German, Hindi, Russian, Portuguese, Japanese, Italian and Dutch. Azure MAI Streaming supports multilingual auto-detection and explicit supported locales; see [Microsoft's language list](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/mai-transcribe-2-streaming). Parakeet CTC 110M, ORT Streaming, the English Sherpa-ONNX zipformers and the `.en` and Distil Whisper.cpp models are English only. Of the other Sherpa-ONNX models, the Chinese/Multilingual zipformer covers Chinese only (not English) and SenseVoice Small covers Chinese, English, Japanese and Korean. For Chinese, use Deepgram Nova-3, a multilingual Whisper model, Azure Speech, Azure MAI Streaming, or Sherpa-ONNX SenseVoice Small.
+
+### Custom Whisper endpoint (local servers)
+
+The **Whisper API** provider can send audio to any server that speaks OpenAI's `/v1/audio/transcriptions` API instead of OpenAI, for example [faster-whisper-server / Speaches](https://github.com/speaches-ai/speaches) or a wrapper around another speech model. Only the audio goes to the server you choose, so a server on your own machine keeps it off the internet.
+
+1. Open Settings > STT Providers and choose **Whisper API**.
+2. Under **Endpoint**, enter the server's base URL, for example `http://127.0.0.1:8000/v1`. A pasted `.../audio/transcriptions` URL is trimmed for you. It must start with `http://` or `https://`.
+3. Under **Model**, enter the model name the server expects, for example `Systran/faster-whisper-small`.
+4. Leave the key field empty if the server needs none, then click **Save & Test**.
+
+What to know:
+
+- **Your OpenAI key stays separate.** With an endpoint set, the key field is "API key for this server (optional)" and is saved on its own. The OpenAI key is never sent to a custom server. Clear the Endpoint field to go back to OpenAI and your saved OpenAI key.
+- **Empty means OpenAI.** With Endpoint and Model empty, NexQ uses `https://api.openai.com/v1` and `whisper-1`, which needs an OpenAI key. You can also set only **Model** (for example `gpt-4o-transcribe`) to stay on OpenAI with another model.
+- **Not live streaming.** Whisper API sends the audio in batches of about 5 seconds, so text appears a few seconds after it is spoken. For word-by-word text, use Deepgram, Cartesia or a local streaming engine.
+- **Save & Test** sends half a second of silence to the server's transcription endpoint, so a server that can't transcribe fails the test instead of passing it.
+- **`http://` to another machine** sends the key unencrypted. NexQ warns about it when a key is set. Use `https://` or keep the server on this computer.
 
 ### Azure MAI Streaming (public preview)
 

@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { MeetingAudioConfig } from "../lib/types";
@@ -9,6 +9,7 @@ const azureMai = vi.hoisted(() => ({
   has: vi.fn(),
   get: vi.fn(),
   probe: vi.fn(),
+  sttTest: vi.fn(),
   store: vi.fn(),
   delete: vi.fn(),
 }));
@@ -27,6 +28,7 @@ vi.mock("../lib/ipc", async (importOriginal) => ({
   storeApiKey: (provider: string, key: string) => azureMai.store(provider, key),
   deleteApiKey: (provider: string) => azureMai.delete(provider),
   testAzureMaiConnection: (key: string, region: string) => azureMai.probe(key, region),
+  testSTTConnection: (provider: string) => azureMai.sttTest(provider),
   listLocalSTTEngines: async () => [],
 }));
 
@@ -47,6 +49,7 @@ beforeEach(() => {
   azureMai.has.mockReset().mockImplementation(async (provider: string) => azureMai.credentials.has(provider));
   azureMai.get.mockReset().mockImplementation(async (provider: string) => azureMai.credentials.get(provider) ?? null);
   azureMai.probe.mockReset().mockResolvedValue(true);
+  azureMai.sttTest.mockReset().mockResolvedValue(true);
   azureMai.store.mockReset().mockImplementation(async (provider: string, key: string) => {
     azureMai.credentials.set(provider, key);
   });
@@ -426,4 +429,319 @@ it("still reads back stored keys for non-MAI cloud providers", async () => {
   render(<STTSettings />);
   await waitFor(() => expect(screen.getByLabelText("API Key")).toHaveValue("deepgram-key"));
   expect(azureMai.get).toHaveBeenCalledWith("deepgram");
+});
+
+function useWhisperApiProvider(verified: boolean = false) {
+  useConfigStore.setState({
+    meetingAudioConfig: {
+      ...config,
+      you: { ...config.you, stt_provider: "whisper_api" },
+    },
+    verifiedCloudProviders: verified ? ["whisper_api"] : [],
+  });
+}
+
+async function renderWhisper() {
+  const user = userEvent.setup();
+  render(<STTSettings />);
+  const endpoint = await screen.findByLabelText("Endpoint");
+  await waitFor(() => expect(endpoint).not.toBeDisabled());
+  // The key field finishes loading its slot after the endpoint decides which slot applies.
+  await waitFor(() => expect(screen.getByLabelText(/^API [Kk]ey/)).not.toBeDisabled());
+  return { user, endpoint, model: screen.getByLabelText("Model") };
+}
+
+function whisperBadge() {
+  return within(screen.getByRole("button", { name: /^Whisper API/ }));
+}
+
+it("loads the saved Whisper API endpoint and model, above the key field", async () => {
+  azureMai.credentials.set("whisper_api_base_url", "http://127.0.0.1:8000/v1");
+  azureMai.credentials.set("whisper_api_model", "Systran/faster-whisper-small");
+  useWhisperApiProvider();
+
+  render(<STTSettings />);
+  const endpoint = await screen.findByLabelText("Endpoint");
+  await waitFor(() => expect(endpoint).toHaveValue("http://127.0.0.1:8000/v1"));
+  expect(screen.getByLabelText("Model")).toHaveValue("Systran/faster-whisper-small");
+  expect(endpoint).toHaveAttribute("placeholder", "https://api.openai.com/v1");
+  expect(screen.getByLabelText("Model")).toHaveAttribute("placeholder", "whisper-1");
+  expect(screen.getByText(
+    "Any OpenAI-compatible transcription server, for example a local faster-whisper server. Leave empty for OpenAI.",
+  )).toBeInTheDocument();
+
+  const key = await screen.findByLabelText("API key for this server (optional)");
+  expect(endpoint.compareDocumentPosition(key) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+it("describes Whisper API as OpenAI or your own server", async () => {
+  useWhisperApiProvider();
+  render(<STTSettings />);
+  expect(await screen.findByText("OpenAI or your own compatible server")).toBeInTheDocument();
+});
+
+it("saves the Whisper API endpoint and model on blur and deletes them when emptied", async () => {
+  useWhisperApiProvider();
+  const { user, endpoint, model } = await renderWhisper();
+
+  await user.type(endpoint, "http://127.0.0.1:8000/v1");
+  await user.type(model, "my-model");
+  await user.tab();
+  await waitFor(() => expect(azureMai.credentials.get("whisper_api_base_url")).toBe("http://127.0.0.1:8000/v1"));
+  expect(azureMai.credentials.get("whisper_api_model")).toBe("my-model");
+
+  await user.clear(endpoint);
+  await user.clear(model);
+  await user.tab();
+  await waitFor(() => expect(azureMai.credentials.has("whisper_api_base_url")).toBe(false));
+  expect(azureMai.credentials.has("whisper_api_model")).toBe(false);
+});
+
+it("rejects an invalid endpoint on blur with aria-invalid and a message, and does not save it", async () => {
+  useWhisperApiProvider();
+  const { user, endpoint } = await renderWhisper();
+
+  await user.type(endpoint, "127.0.0.1:8000");
+  await user.tab();
+  expect(await screen.findByRole("alert")).toHaveTextContent(/must start with http:\/\/ or https:\/\//);
+  expect(endpoint).toHaveAttribute("aria-invalid", "true");
+  expect(azureMai.credentials.has("whisper_api_base_url")).toBe(false);
+
+  await user.clear(endpoint);
+  await user.type(endpoint, "http://127.0.0.1:8000/v1");
+  expect(endpoint).not.toHaveAttribute("aria-invalid");
+});
+
+it("lets Whisper API Save & Test run without any key when an endpoint is set", async () => {
+  useWhisperApiProvider();
+  const { user, endpoint } = await renderWhisper();
+  expect(screen.queryByRole("button", { name: "Save & Test" })).not.toBeInTheDocument();
+
+  await user.type(endpoint, "http://127.0.0.1:8000/v1");
+  await user.click(screen.getByRole("button", { name: "Save & Test" }));
+
+  await waitFor(() => expect(azureMai.sttTest).toHaveBeenCalledWith("whisper_api"));
+  expect(azureMai.credentials.get("whisper_api_base_url")).toBe("http://127.0.0.1:8000/v1");
+  expect(azureMai.credentials.has("whisper_api")).toBe(false);
+  expect(azureMai.credentials.has("whisper_api_custom_key")).toBe(false);
+  await waitFor(() => expect(useConfigStore.getState().verifiedCloudProviders).toContain("whisper_api"));
+});
+
+it("keeps the saved OpenAI key out of a custom endpoint: not shown, not stored over, not deleted", async () => {
+  azureMai.credentials.set("whisper_api", "sk-openai");
+  azureMai.credentials.set("whisper_api_base_url", "http://127.0.0.1:8000/v1");
+  useWhisperApiProvider();
+  const { user } = await renderWhisper();
+
+  const key = screen.getByLabelText("API key for this server (optional)");
+  expect(key).toHaveValue("");
+  await user.click(screen.getByRole("button", { name: "Save & Test" }));
+  await waitFor(() => expect(azureMai.sttTest).toHaveBeenCalledWith("whisper_api"));
+
+  expect(azureMai.store.mock.calls.some(([p]) => p === "whisper_api")).toBe(false);
+  expect(azureMai.delete.mock.calls.some(([p]) => p === "whisper_api")).toBe(false);
+  expect(azureMai.credentials.get("whisper_api")).toBe("sk-openai");
+});
+
+it("stores a typed key for a custom endpoint in its own slot, never the OpenAI one", async () => {
+  azureMai.credentials.set("whisper_api", "sk-openai");
+  azureMai.credentials.set("whisper_api_base_url", "http://127.0.0.1:8000/v1");
+  useWhisperApiProvider();
+  const { user } = await renderWhisper();
+
+  await user.type(screen.getByLabelText("API key for this server (optional)"), "server-key");
+  await user.click(screen.getByRole("button", { name: "Save & Test" }));
+  await waitFor(() => expect(azureMai.credentials.get("whisper_api_custom_key")).toBe("server-key"));
+  expect(azureMai.credentials.get("whisper_api")).toBe("sk-openai");
+});
+
+it("restores the previous custom key and shows the server's message when the test fails", async () => {
+  azureMai.credentials.set("whisper_api_custom_key", "old-key");
+  azureMai.credentials.set("whisper_api_base_url", "http://127.0.0.1:8000/v1");
+  azureMai.sttTest.mockRejectedValue("Couldn't reach http://127.0.0.1:8000/v1. Is the server running?");
+  useWhisperApiProvider();
+  const { user } = await renderWhisper();
+
+  const key = screen.getByLabelText("API key for this server (optional)");
+  await waitFor(() => expect(key).toHaveValue("old-key"));
+  await user.clear(key);
+  await user.type(key, "new-key");
+  await user.click(screen.getByRole("button", { name: "Save & Test" }));
+
+  expect(await screen.findByText("Couldn't reach http://127.0.0.1:8000/v1. Is the server running?")).toBeInTheDocument();
+  expect(azureMai.credentials.get("whisper_api_custom_key")).toBe("old-key");
+});
+
+it("keeps a stored OpenAI key through a model-only change, even when the test fails", async () => {
+  azureMai.credentials.set("whisper_api", "sk-openai");
+  azureMai.sttTest.mockRejectedValue("The server answered 400: bad model");
+  useWhisperApiProvider(true);
+  const { user, model } = await renderWhisper();
+  expect(screen.queryByRole("button", { name: "Save & Test" })).not.toBeInTheDocument();
+
+  await user.type(model, "gpt-4o-transcribe");
+  expect(screen.getByRole("button", { name: "Save & Test" })).toBeEnabled();
+  await user.tab();
+  // Saved on blur; the badge asks for a new test instead of turning into "No Key".
+  await waitFor(() => expect(azureMai.credentials.get("whisper_api_model")).toBe("gpt-4o-transcribe"));
+  expect(whisperBadge().getByText("Not tested")).toBeInTheDocument();
+  expect(whisperBadge().queryByText("No Key")).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "Save & Test" }));
+  expect(await screen.findByText("The server answered 400: bad model")).toBeInTheDocument();
+  expect(azureMai.credentials.get("whisper_api")).toBe("sk-openai");
+  expect(azureMai.delete.mock.calls.some(([p]) => p === "whisper_api")).toBe(false);
+});
+
+it("keeps Whisper API key-required by default and rejects a non-http endpoint on Save & Test", async () => {
+  useWhisperApiProvider();
+  const { user, endpoint } = await renderWhisper();
+
+  await user.type(screen.getByLabelText(/^API [Kk]ey/), "sk-test");
+  await user.type(endpoint, "127.0.0.1:8000");
+  await user.click(screen.getByRole("button", { name: "Save & Test" }));
+
+  expect(await screen.findAllByText(/must start with http:\/\/ or https:\/\//)).not.toHaveLength(0);
+  expect(azureMai.sttTest).not.toHaveBeenCalled();
+  expect(azureMai.credentials.has("whisper_api_base_url")).toBe(false);
+});
+
+it("warns that a key is sent unencrypted to a non-local http endpoint, but not to localhost", async () => {
+  useWhisperApiProvider();
+  const { user, endpoint } = await renderWhisper();
+
+  await user.type(endpoint, "http://127.0.0.1:8000/v1");
+  await user.type(screen.getByLabelText("API key for this server (optional)"), "k");
+  expect(screen.queryByText(/sent unencrypted/)).not.toBeInTheDocument();
+
+  await user.clear(endpoint);
+  await user.type(endpoint, "http://192.168.1.20:8000/v1");
+  expect(await screen.findByText(/the key is sent unencrypted/)).toBeInTheDocument();
+});
+
+it("treats the OpenAI URL as the default: OpenAI key field and slot stay, nothing is stored", async () => {
+  azureMai.credentials.set("whisper_api", "sk-openai");
+  useWhisperApiProvider();
+  const { user, endpoint } = await renderWhisper();
+  expect(screen.getByLabelText("API Key")).toHaveValue("sk-openai");
+
+  await user.type(endpoint, "HTTPS://api.openai.com/v1/audio/transcriptions/");
+  await user.tab();
+  expect(screen.getByLabelText("API Key")).toHaveValue("sk-openai");
+  expect(screen.queryByLabelText("API key for this server (optional)")).not.toBeInTheDocument();
+  expect(azureMai.credentials.has("whisper_api_base_url")).toBe(false);
+});
+
+it("carries a typed, unsaved key over when the key slot swaps, but never a saved one", async () => {
+  azureMai.credentials.set("whisper_api", "sk-openai");
+  useWhisperApiProvider();
+  const first = await renderWhisper();
+
+  // A saved key stays with its slot.
+  expect(screen.getByLabelText("API Key")).toHaveValue("sk-openai");
+  await first.user.type(first.endpoint, "http://127.0.0.1:8000/v1");
+  const customKey = await screen.findByLabelText("API key for this server (optional)");
+  await waitFor(() => expect(customKey).toHaveValue(""));
+  cleanup();
+
+  // A key typed but not saved moves with the user to the other slot.
+  azureMai.credentials.clear();
+  useWhisperApiProvider();
+  const second = await renderWhisper();
+  await second.user.type(screen.getByLabelText("API Key"), "typed-key");
+  await second.user.type(second.endpoint, "http://127.0.0.1:8000/v1");
+  const swapped = await screen.findByLabelText("API key for this server (optional)");
+  await waitFor(() => expect(swapped).toHaveValue("typed-key"));
+});
+
+it("leaves the endpoint saved and the previous key intact when a test fails", async () => {
+  azureMai.credentials.set("whisper_api_custom_key", "old-key");
+  azureMai.credentials.set("whisper_api_base_url", "http://127.0.0.1:8000/v1");
+  azureMai.sttTest.mockRejectedValue("The server answered 404: not found");
+  useWhisperApiProvider();
+  const { user, endpoint } = await renderWhisper();
+
+  const key = screen.getByLabelText("API key for this server (optional)");
+  await waitFor(() => expect(key).toHaveValue("old-key"));
+  await user.clear(endpoint);
+  await user.type(endpoint, "http://127.0.0.1:9000/v1");
+  await user.clear(key);
+  await user.type(key, "new-key");
+  await user.click(screen.getByRole("button", { name: "Save & Test" }));
+
+  expect(await screen.findByText("The server answered 404: not found")).toBeInTheDocument();
+  expect(azureMai.credentials.get("whisper_api_base_url")).toBe("http://127.0.0.1:9000/v1");
+  expect(azureMai.credentials.get("whisper_api_custom_key")).toBe("old-key");
+});
+
+it("says the Whisper API key is stored, not verified, until a test passes", async () => {
+  azureMai.credentials.set("whisper_api", "sk-openai");
+  useWhisperApiProvider();
+  await renderWhisper();
+  expect(await screen.findByText("API key stored securely")).toBeInTheDocument();
+  expect(screen.queryByText("API key verified and stored securely")).not.toBeInTheDocument();
+
+  cleanup();
+  useWhisperApiProvider(true);
+  await renderWhisper();
+  expect(await screen.findByText("API key verified and stored securely")).toBeInTheDocument();
+});
+
+it("chains overlapping endpoint saves so the last edit is what stays stored", async () => {
+  // The first save is slow; without chaining it would finish after the second one.
+  azureMai.store.mockImplementation(async (provider: string, key: string) => {
+    if (provider === "whisper_api_base_url" && key.includes("first")) {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    }
+    azureMai.credentials.set(provider, key);
+  });
+  useWhisperApiProvider();
+  const { user, endpoint } = await renderWhisper();
+
+  await user.type(endpoint, "http://first:1/v1");
+  await user.tab();
+  await user.clear(endpoint);
+  await user.type(endpoint, "http://second:2/v1");
+  await user.tab();
+
+  await waitFor(() => expect(azureMai.credentials.get("whisper_api_base_url")).toBe("http://second:2/v1"));
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  expect(azureMai.credentials.get("whisper_api_base_url")).toBe("http://second:2/v1");
+  const writes = azureMai.store.mock.calls.filter(([p]) => p === "whisper_api_base_url").map(([, v]) => v);
+  expect(writes).toEqual(["http://first:1/v1", "http://second:2/v1"]);
+});
+
+it("locks the Whisper inputs while a test runs", async () => {
+  let finish: (ok: boolean) => void = () => {};
+  azureMai.sttTest.mockReturnValue(new Promise<boolean>((resolve) => { finish = resolve; }));
+  useWhisperApiProvider();
+  const { user, endpoint, model } = await renderWhisper();
+
+  await user.type(endpoint, "http://127.0.0.1:8000/v1");
+  await user.click(screen.getByRole("button", { name: "Save & Test" }));
+  await waitFor(() => expect(azureMai.sttTest).toHaveBeenCalled());
+  expect(endpoint).toBeDisabled();
+  expect(model).toBeDisabled();
+  expect(screen.getByLabelText("API key for this server (optional)")).toBeDisabled();
+
+  finish(true);
+  await waitFor(() => expect(endpoint).not.toBeDisabled());
+  await waitFor(() => expect(useConfigStore.getState().verifiedCloudProviders).toContain("whisper_api"));
+});
+
+it("does not mark Whisper API verified when the config changed under a running test", async () => {
+  let finish: (ok: boolean) => void = () => {};
+  azureMai.sttTest.mockReturnValue(new Promise<boolean>((resolve) => { finish = resolve; }));
+  useWhisperApiProvider();
+  const { user, endpoint } = await renderWhisper();
+
+  await user.type(endpoint, "http://127.0.0.1:8000/v1");
+  await user.click(screen.getByRole("button", { name: "Save & Test" }));
+  await waitFor(() => expect(azureMai.sttTest).toHaveBeenCalled());
+
+  // Switching provider mid-test changes the config context: the late result is stale.
+  await user.click(screen.getByRole("button", { name: /Deepgram/ }));
+  finish(true);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(useConfigStore.getState().verifiedCloudProviders).not.toContain("whisper_api");
 });

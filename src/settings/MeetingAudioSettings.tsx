@@ -24,6 +24,7 @@ import {
   stopDeviceMonitor,
   type DevicePeakLevel,
 } from "../lib/ipc";
+import { hasSttCredential } from "../lib/whisperApi";
 import { showToast } from "../stores/toastStore";
 import type {
   AudioDevice,
@@ -331,7 +332,7 @@ export function MeetingAudioSettings() {
     const status: Record<string, boolean> = {};
     for (const p of providers) {
       try {
-        status[p] = await hasApiKey(p);
+        status[p] = await hasSttCredential(p);
         if (p === "azure_mai_streaming" && status[p]) {
           status[p] = await hasApiKey("azure_mai_streaming_region");
         }

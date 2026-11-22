@@ -24,6 +24,16 @@ import {
   deleteApiKey,
 } from "../lib/ipc";
 import { storeApiKey, getApiKey, hasApiKey } from "../lib/ipc";
+import {
+  WHISPER_API_KEY,
+  WHISPER_API_CUSTOM_KEY,
+  WHISPER_API_BASE_URL_KEY,
+  WHISPER_API_MODEL_KEY,
+  WHISPER_ENDPOINT_ERROR,
+  isCustomWhisperEndpoint,
+  isInsecureRemoteHttp,
+  isValidWhisperBaseUrl,
+} from "../lib/whisperApi";
 import type { STTProviderType, LocalSTTEngineInfo, DeepgramConfig, GroqConfig } from "../lib/types";
 import {
   CheckCircle,
@@ -146,7 +156,7 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
   {
     value: "whisper_api",
     label: "Whisper API",
-    description: "OpenAI Whisper model",
+    description: "OpenAI or your own compatible server",
     requiresApiKey: true,
     isLocal: false,
     credentialKey: "whisper_api",
@@ -336,12 +346,31 @@ export function STTSettings() {
   const [credentialStateLoading, setCredentialStateLoading] = useState(false);
   // keyDirty: user has typed a new key that differs from stored — show Save & Test
   const [keyDirty, setKeyDirty] = useState(false);
+  const keyDirtyRef = useRef(false);
+  keyDirtyRef.current = keyDirty;
+  const prevProviderRef = useRef<STTProviderType | null>(null);
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("idle");
   const [statusMessage, setStatusMessage] = useState("");
 
   const [azureRegion, setAzureRegion] = useState("eastus");
   const [azureMaiRegion, setAzureMaiRegion] = useState("swedencentral");
+
+  // Whisper API: optional custom OpenAI-compatible endpoint + model (non-secret).
+  const [whisperBaseUrl, setWhisperBaseUrl] = useState("");
+  const [whisperModel, setWhisperModel] = useState("");
+  const [whisperDirty, setWhisperDirty] = useState(false);
+  const [whisperLoaded, setWhisperLoaded] = useState(false);
+  const [whisperEndpointError, setWhisperEndpointError] = useState("");
+  // Stored endpoint / OpenAI key presence, for the provider badge (any selected provider).
+  const [whisperSavedBaseUrl, setWhisperSavedBaseUrl] = useState("");
+  const [whisperStoredKey, setWhisperStoredKey] = useState(false);
+  // Last values written to the credential store, to skip no-op blur saves.
+  const savedWhisperRef = useRef({ baseUrl: "", model: "" });
+  // The blur save in flight (Save & Test waits for it before reading the saved state).
+  const whisperSaveRef = useRef<Promise<void>>(Promise.resolve());
+  // Bumped on every config edit; a Save & Test that finishes under an older value is ignored.
+  const whisperRevisionRef = useRef(0);
 
   const [localEngines, setLocalEngines] = useState<LocalSTTEngineInfo[]>([]);
   const activeParakeetModel = useConfigStore((s) =>
@@ -399,6 +428,16 @@ export function STTSettings() {
     (p) => p.value === selectedProvider
   );
   const credentialStateReady = credentialStateProvider === selectedProvider;
+  const isWhisperApi = selectedProvider === "whisper_api";
+  // A custom endpoint makes the API key optional (local servers usually need none).
+  const whisperEndpointSet = isWhisperApi && isCustomWhisperEndpoint(whisperBaseUrl);
+  // While a Whisper test runs its inputs are locked, so the result matches what is saved.
+  const whisperTesting = isWhisperApi && connectionStatus === "testing";
+  // The OpenAI key and a custom server's key live in separate slots; the OpenAI
+  // key is never used for a custom endpoint.
+  const activeCredentialKey = whisperEndpointSet
+    ? WHISPER_API_CUSTOM_KEY
+    : currentProviderOption?.credentialKey;
   const shownApiKey = credentialStateReady ? apiKey : "";
   const shownHasStoredKey = credentialStateReady && hasStoredKey;
   const shownKeyDirty = credentialStateReady && keyDirty;
@@ -460,6 +499,9 @@ export function STTSettings() {
     if (p.requiresApiKey) {
       // Verified = key was saved+tested successfully (persisted across page navigations)
       if (verifiedCloudProviders.includes(p.value)) return { text: "Ready", variant: "ready" };
+      if (p.value === "whisper_api" && (whisperSavedBaseUrl !== "" || whisperStoredKey)) {
+        return { text: "Not tested", variant: "warning" };
+      }
       return { text: "No Key", variant: "error" };
     }
 
@@ -481,12 +523,19 @@ export function STTSettings() {
   useEffect(() => {
     let cancelled = false;
     const loadKeyForProvider = async () => {
+      whisperRevisionRef.current += 1;
+      // Switching a Whisper endpoint on or off swaps the key slot but keeps a key being typed.
+      const providerChanged = prevProviderRef.current !== selectedProvider;
+      prevProviderRef.current = selectedProvider;
+      const keepTyped = !providerChanged && keyDirtyRef.current;
       setCredentialStateProvider(selectedProvider);
       setCredentialStateLoading(currentProviderOption?.requiresApiKey === true);
-      setApiKey("");
+      if (!keepTyped) {
+        setApiKey("");
+        setKeyDirty(false);
+      }
       setShowApiKey(false);
       setHasStoredKey(false);
-      setKeyDirty(false);
       setConnectionStatus("idle");
       setStatusMessage("");
 
@@ -495,7 +544,7 @@ export function STTSettings() {
         return;
       }
 
-      const credKey = currentProviderOption.credentialKey;
+      const credKey = activeCredentialKey;
       if (!credKey) {
         setCredentialStateLoading(false);
         return;
@@ -511,7 +560,7 @@ export function STTSettings() {
         setHasStoredKey(keyExists);
         // MAI keys are write-only in the UI: discover presence, but never
         // read the long-lived secret back into JavaScript or the input field.
-        if (keyExists && selectedProvider !== "azure_mai_streaming") {
+        if (keyExists && selectedProvider !== "azure_mai_streaming" && !keepTyped) {
           const stored = await getApiKey(credKey);
           if (cancelled) return;
           if (stored) setApiKey(stored);
@@ -545,12 +594,42 @@ export function STTSettings() {
     };
   }, [
     selectedProvider,
-    currentProviderOption?.credentialKey,
+    activeCredentialKey,
     currentProviderOption?.requiresApiKey,
     currentProviderOption?.needsRegion,
     currentProviderOption?.regionCredentialKey,
     currentProviderOption?.defaultRegion,
   ]);
+
+  // ── Whisper API endpoint + model (loaded once; the Whisper card shows them whichever provider is selected) ──
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const load = async (credKey: string) =>
+          (await hasApiKey(credKey)) ? (await getApiKey(credKey)) ?? "" : "";
+        const [baseUrl, model, hasOpenAiKey] = await Promise.all([
+          load(WHISPER_API_BASE_URL_KEY),
+          load(WHISPER_API_MODEL_KEY),
+          hasApiKey(WHISPER_API_KEY),
+        ]);
+        if (cancelled) return;
+        setWhisperBaseUrl(baseUrl);
+        setWhisperModel(model);
+        setWhisperSavedBaseUrl(baseUrl);
+        setWhisperStoredKey(hasOpenAiKey);
+        savedWhisperRef.current = { baseUrl, model };
+      } catch (e) {
+        if (!cancelled) console.warn("Failed to load Whisper endpoint:", e);
+      } finally {
+        if (!cancelled) setWhisperLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // ── Handlers ──
 
@@ -596,6 +675,137 @@ export function STTSettings() {
       : current.filter((value) => value !== provider);
     setVerifiedCloudProviders(updated);
   }, [setVerifiedCloudProviders]);
+
+  /**
+   * Write (or, when empty, delete) the Whisper API endpoint and model.
+   * The OpenAI URL is the default, so it is stored as empty.
+   */
+  const persistWhisperEndpoint = useCallback(async (baseUrl: string, model: string) => {
+    const base = isCustomWhisperEndpoint(baseUrl) ? baseUrl.trim() : "";
+    const entries: [string, string][] = [
+      [WHISPER_API_BASE_URL_KEY, base],
+      [WHISPER_API_MODEL_KEY, model.trim()],
+    ];
+    for (const [credKey, value] of entries) {
+      if (value) await storeApiKey(credKey, value);
+      else await deleteApiKey(credKey).catch(() => {});
+    }
+    savedWhisperRef.current = { baseUrl: base, model: model.trim() };
+    setWhisperSavedBaseUrl(base);
+  }, []);
+
+  /**
+   * Save the endpoint/model on blur; a changed endpoint or model must be tested again.
+   * Saves are chained so overlapping blurs write in order, and a write that would
+   * not change what is stored is skipped. Save & Test awaits the chain's tail.
+   */
+  const handleSaveWhisperEndpoint = useCallback(() => {
+    if (!isValidWhisperBaseUrl(whisperBaseUrl)) {
+      setWhisperEndpointError(WHISPER_ENDPOINT_ERROR);
+      return Promise.resolve();
+    }
+    setWhisperEndpointError("");
+    const baseUrl = whisperBaseUrl;
+    const model = whisperModel;
+    const base = isCustomWhisperEndpoint(baseUrl) ? baseUrl.trim() : "";
+    const run = whisperSaveRef.current.then(async () => {
+      const saved = savedWhisperRef.current;
+      if (saved.baseUrl === base && saved.model === model.trim()) return;
+      try {
+        await persistWhisperEndpoint(baseUrl, model);
+        updateVerifiedProvider("whisper_api", false);
+      } catch (e) {
+        console.warn("Failed to save Whisper endpoint:", e);
+      }
+    });
+    whisperSaveRef.current = run;
+    return run;
+  }, [whisperBaseUrl, whisperModel, persistWhisperEndpoint, updateVerifiedProvider]);
+
+  /**
+   * Whisper API Save & Test. The key is written only when the user typed or
+   * cleared it, into the slot for the current endpoint (OpenAI key or the custom
+   * server's key). A failed test restores the key slot and the verified flag.
+   * The endpoint and model stay saved: the blur save already wrote them.
+   */
+  const handleWhisperSaveAndTest = useCallback(async () => {
+    const provider: STTProviderType = "whisper_api";
+    const isStillSelected = () => selectedProviderRef.current === provider;
+    const fail = (message: string) => {
+      if (!isStillSelected()) return;
+      setConnectionStatus("error");
+      setStatusMessage(message);
+    };
+
+    if (!isValidWhisperBaseUrl(whisperBaseUrl)) {
+      setWhisperEndpointError(WHISPER_ENDPOINT_ERROR);
+      fail(WHISPER_ENDPOINT_ERROR);
+      return;
+    }
+    setWhisperEndpointError("");
+
+    const custom = isCustomWhisperEndpoint(whisperBaseUrl);
+    const slot = custom ? WHISPER_API_CUSTOM_KEY : WHISPER_API_KEY;
+    const typed = apiKey.trim();
+    if (!custom && !typed) {
+      fail("Enter your OpenAI API key, or set an endpoint for your own server.");
+      return;
+    }
+
+    setConnectionStatus("testing");
+    setStatusMessage("Testing connection...");
+    const revision = whisperRevisionRef.current;
+    const isStale = () => whisperRevisionRef.current !== revision;
+
+    // Blur saves may still be writing the endpoint/model: let all of them finish first.
+    await whisperSaveRef.current;
+    const wasVerified = useConfigStore.getState().verifiedCloudProviders.includes(provider);
+    let previousKey: string | null = null;
+    let keyWritten = false;
+    try {
+      if (keyDirty) {
+        if (hasStoredKey) previousKey = await getApiKey(slot).catch(() => null);
+        keyWritten = true;
+        if (typed) await storeApiKey(slot, typed);
+        else await deleteApiKey(slot).catch(() => {});
+      }
+      await persistWhisperEndpoint(whisperBaseUrl, whisperModel);
+
+      const success = await testSTTConnection(provider);
+      if (!success) throw new Error("Connection failed");
+
+      // The config changed while testing: this result is not about what is saved now.
+      if (isStale()) return;
+      updateVerifiedProvider(provider, true);
+      const keyPresent = keyDirty ? typed !== "" : hasStoredKey;
+      if (slot === WHISPER_API_KEY) setWhisperStoredKey(keyPresent);
+      if (isStillSelected()) {
+        setHasStoredKey(keyPresent);
+        setKeyDirty(false);
+        setWhisperDirty(false);
+        setConnectionStatus("success");
+        setStatusMessage("Connection successful. Provider is ready.");
+      }
+    } catch (e) {
+      // Put back the key slot and the verified flag; the endpoint stays saved.
+      if (keyWritten) {
+        if (previousKey) await storeApiKey(slot, previousKey).catch(() => {});
+        else await deleteApiKey(slot).catch(() => {});
+      }
+      if (isStale()) return;
+      updateVerifiedProvider(provider, wasVerified);
+      if (isStillSelected() && keyWritten) setHasStoredKey(previousKey !== null);
+      fail(e instanceof Error ? e.message : String(e));
+    }
+  }, [
+    apiKey,
+    keyDirty,
+    hasStoredKey,
+    whisperBaseUrl,
+    whisperModel,
+    persistWhisperEndpoint,
+    updateVerifiedProvider,
+  ]);
 
   /** Save & Test: test key first, only persist on success. */
   const handleSaveAndTest = useCallback(async () => {
@@ -698,7 +908,10 @@ export function STTSettings() {
     const provider = selectedProvider;
     const option = currentProviderOption;
     if (!option?.credentialKey) return;
-    try { await deleteApiKey(option.credentialKey); } catch { /* ok */ }
+    const slot = activeCredentialKey ?? option.credentialKey;
+    whisperRevisionRef.current += 1;
+    try { await deleteApiKey(slot); } catch { /* ok */ }
+    if (slot === WHISPER_API_KEY) setWhisperStoredKey(false);
     if (provider === "azure_mai_streaming" && option.regionCredentialKey) {
       try { await deleteApiKey(option.regionCredentialKey); } catch { /* ok */ }
     }
@@ -712,6 +925,7 @@ export function STTSettings() {
     }
   }, [
     currentProviderOption,
+    activeCredentialKey,
     selectedProvider,
     updateVerifiedProvider,
   ]);
@@ -840,11 +1054,72 @@ export function STTSettings() {
         </div>
       )}
 
+      {/* Whisper API: optional custom OpenAI-compatible endpoint + model (above the key card) */}
+      {isWhisperApi && (
+        <div className="rounded-xl border border-border/30 bg-card/50 p-5">
+          <label htmlFor="stt-whisper-endpoint" className="mb-3 block text-sm font-semibold text-primary/80">
+            Endpoint
+          </label>
+          <input
+            id="stt-whisper-endpoint"
+            type="text"
+            value={whisperBaseUrl}
+            disabled={!whisperLoaded || whisperTesting}
+            onChange={(e) => {
+              whisperRevisionRef.current += 1;
+              setWhisperBaseUrl(e.target.value);
+              setWhisperDirty(true);
+              setWhisperEndpointError("");
+              setConnectionStatus("idle");
+              setStatusMessage("");
+            }}
+            onBlur={handleSaveWhisperEndpoint}
+            placeholder="https://api.openai.com/v1"
+            aria-invalid={whisperEndpointError ? true : undefined}
+            aria-describedby={
+              whisperEndpointError
+                ? "stt-whisper-endpoint-error stt-whisper-endpoint-hint"
+                : "stt-whisper-endpoint-hint"
+            }
+            className="w-full rounded-lg border border-border/50 bg-background px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20 aria-[invalid=true]:border-destructive"
+          />
+          {whisperEndpointError && (
+            <p id="stt-whisper-endpoint-error" role="alert" className="mt-1.5 flex items-center gap-1.5 text-xs text-destructive">
+              <XCircle className="h-3 w-3" />
+              {whisperEndpointError}
+            </p>
+          )}
+          <label htmlFor="stt-whisper-model" className="mb-3 mt-4 block text-sm font-semibold text-primary/80">
+            Model
+          </label>
+          <input
+            id="stt-whisper-model"
+            type="text"
+            value={whisperModel}
+            disabled={!whisperLoaded || whisperTesting}
+            onChange={(e) => {
+              whisperRevisionRef.current += 1;
+              setWhisperModel(e.target.value);
+              setWhisperDirty(true);
+              setConnectionStatus("idle");
+              setStatusMessage("");
+            }}
+            onBlur={handleSaveWhisperEndpoint}
+            placeholder="whisper-1"
+            aria-describedby="stt-whisper-endpoint-hint"
+            className="w-full rounded-lg border border-border/50 bg-background px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
+          />
+          <p id="stt-whisper-endpoint-hint" className="mt-1.5 text-xs text-muted-foreground">
+            Any OpenAI-compatible transcription server, for example a local faster-whisper server. Leave empty for OpenAI.
+          </p>
+        </div>
+      )}
+
       {/* API Key — cloud providers only. Save & Test flow: test first, persist only on success. */}
       {currentProviderOption?.requiresApiKey && (
         <div className="rounded-xl border border-border/30 bg-card/50 p-5">
           <label htmlFor="stt-provider-api-key" className="mb-3 block text-sm font-semibold text-primary/80">
-            API Key
+            {whisperEndpointSet ? "API key for this server (optional)" : "API Key"}
           </label>
 
           <div className="flex gap-2">
@@ -852,9 +1127,10 @@ export function STTSettings() {
               <input
                 id="stt-provider-api-key"
                 type={showApiKey ? "text" : "password"}
-                disabled={credentialsAreLoading || (selectedProvider === "azure_mai_streaming" && shownConnectionStatus === "testing")}
+                disabled={credentialsAreLoading || whisperTesting || (selectedProvider === "azure_mai_streaming" && shownConnectionStatus === "testing")}
                 value={shownApiKey}
                 onChange={(e) => {
+                  whisperRevisionRef.current += 1;
                   setApiKey(e.target.value);
                   setKeyDirty(true);
                   setConnectionStatus("idle");
@@ -867,6 +1143,8 @@ export function STTSettings() {
                     ? "Re-enter API key to test the updated region"
                     : shownHasStoredKey && !shownKeyDirty
                     ? "Key stored — type to replace"
+                    : whisperEndpointSet
+                    ? "Optional for local servers"
                     : `Enter ${currentProviderOption.label} API key`
                 }
                 aria-describedby={showMaiKeyReentryHint ? "stt-mai-key-reentry-hint" : undefined}
@@ -884,10 +1162,14 @@ export function STTSettings() {
             </div>
 
             {/* Save & Test — shown whenever user has typed a key */}
-            {(shownKeyDirty || (!shownHasStoredKey && shownApiKey.trim())) && (
+            {(shownKeyDirty ||
+              (!shownHasStoredKey && shownApiKey.trim()) ||
+              (credentialStateReady && isWhisperApi &&
+                (whisperDirty ||
+                  (whisperEndpointSet && !verifiedCloudProviders.includes("whisper_api"))))) && (
               <button
-                onClick={handleSaveAndTest}
-                disabled={!shownApiKey.trim() || shownConnectionStatus === "testing" || credentialsAreLoading}
+                onClick={isWhisperApi ? handleWhisperSaveAndTest : handleSaveAndTest}
+                disabled={(!shownApiKey.trim() && !whisperEndpointSet) || shownConnectionStatus === "testing" || credentialsAreLoading}
                 className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {shownConnectionStatus === "testing" ? (
@@ -904,6 +1186,7 @@ export function STTSettings() {
               (selectedProvider === "azure_mai_streaming" ? !shownApiKey.trim() : !shownKeyDirty) && (
               <button
                 onClick={handleClearApiKey}
+                disabled={whisperTesting}
                 className="flex items-center gap-1.5 rounded-lg border border-destructive/30 px-3 py-2 text-xs text-destructive transition-colors hover:bg-destructive/10"
               >
                 <Trash2 className="h-3.5 w-3.5" />
@@ -936,6 +1219,8 @@ export function STTSettings() {
               <p className="text-xs text-success/70">
                 {selectedProvider === "azure_mai_streaming"
                   ? "API key configured and stored securely"
+                  : isWhisperApi && !verifiedCloudProviders.includes("whisper_api")
+                  ? "API key stored securely"
                   : "API key verified and stored securely"}
               </p>
             )}
@@ -946,9 +1231,19 @@ export function STTSettings() {
             )}
             {!credentialsAreLoading && shownConnectionStatus === "idle" && !shownHasStoredKey && (
               <p className="text-xs text-muted-foreground">
-                Enter your key and click Save & Test
+                {whisperEndpointSet
+                  ? "Click Save & Test to check the endpoint"
+                  : "Enter your key and click Save & Test"}
               </p>
             )}
+            {!credentialsAreLoading &&
+              whisperEndpointSet &&
+              isInsecureRemoteHttp(whisperBaseUrl) &&
+              (shownApiKey.trim() || shownHasStoredKey) && (
+                <p className="text-xs text-warning">
+                  This endpoint uses http:// on another machine, so the key is sent unencrypted.
+                </p>
+              )}
           </div>
         </div>
       )}

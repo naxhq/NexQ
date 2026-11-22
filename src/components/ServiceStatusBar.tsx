@@ -13,6 +13,7 @@ import { useMeetingStore } from "../stores/meetingStore";
 import { useSpeakerStore } from "../stores/speakerStore";
 import { useAudioLevel } from "../hooks/useAudioLevel";
 import { hasApiKey, listLocalSTTEngines, getApiKey } from "../lib/ipc";
+import { hasSttCredential } from "../lib/whisperApi";
 import type { STTProviderType, LLMProviderType, LocalSTTEngineInfo } from "../lib/types";
 import { showToast } from "../stores/toastStore";
 import { useUpdaterStore } from "../stores/updaterStore";
@@ -661,7 +662,7 @@ function STTPickerDropdown({
           listLocalSTTEngines(),
           ...cloudProviders.map(async (p) => {
             try {
-              const keyExists = await hasApiKey(p);
+              const keyExists = await hasSttCredential(p);
               const regionExists = p !== "azure_mai_streaming" || !keyExists
                 ? true
                 : await hasApiKey("azure_mai_streaming_region");
