@@ -1,3 +1,14 @@
+# [2.42.0](https://github.com/naxhq/NexQ/compare/v2.41.4...v2.42.0) (2026-11-22)
+
+
+### Bug Fixes
+
+* macOS Hotkeys capture row, clearer Custom LLM auth error, download verification docs ([#136](https://github.com/naxhq/NexQ/issues/136)) ([35d4297](https://github.com/naxhq/NexQ/commit/35d4297908d96016f3e46a09cbd2c63e5a2b43bf))
+
+
+### Features
+
+* **stt:** add Azure MAI Streaming provider ([#139](https://github.com/naxhq/NexQ/issues/139)) ([45c73eb](https://github.com/naxhq/NexQ/commit/45c73ebc0841f4b6ab8112e172b843630ef7bc59))
 ## [2.41.4](https://github.com/naxhq/NexQ/compare/v2.41.3...v2.41.4) (2026-11-22)
 
 
