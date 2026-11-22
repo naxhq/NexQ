@@ -65,14 +65,15 @@ NexQ uses a two-party audio model: **"You"** (microphone) and **"Them"** (system
 - **Languages**: English, French, Hindi, Japanese, Spanish. Settings warns when the selected language isn't one of them
 - **Cost**: Billed per second of audio while a channel is unmuted, silence included (about 3 credits per second for each channel that uses Cartesia). Muted time isn't billed: muting closes the stream
 
-### Whisper (Local)
+### Local engines (Sherpa-ONNX, ORT Streaming, Parakeet TDT)
 
-- **Setup**: Download a Whisper model from Settings > STT > Local Models
+- **Setup**: Download a model from Settings > STT Providers (each local engine has its own model list)
 - **Requires API Key**: No
 - **Runs Locally**: Yes
 - **Best For**: Offline use, privacy-sensitive environments
-- **Engines**: whisper.cpp, Sherpa-ONNX, ORT Streaming, Parakeet TDT
-- **Note**: Local models require significant CPU/RAM. Smaller models (tiny, base) are faster but less accurate. Larger models (large-v3) are more accurate but slower.
+- **Live engines**: Sherpa-ONNX, ORT Streaming and Parakeet TDT. These are the local choices for "You" and "Them" in Settings > Audio & Devices
+- **Whisper.cpp**: Not a live engine. It only transcribes recorded meetings in batch, so Settings > Audio & Devices doesn't offer it for a live meeting. A saved setup that still names it is switched to another engine at the next launch
+- **Note**: Local models require significant CPU/RAM. Smaller models are faster but less accurate; larger ones are more accurate but slower.
 
 ### Windows Native Speech
 
@@ -236,13 +237,13 @@ Higher confidence thresholds filter out uncertain transcriptions, giving you a c
 
 ![Hotkey settings panel](../../website/public/screenshots/Setting/Setting-Hotkey.png)
 
-The Hotkey settings let you customize keyboard shortcuts for NexQ's core actions. Configure:
+Settings > Hotkeys lists the in-meeting keys and the other shortcuts NexQ uses.
 
-- **Global shortcuts** -- system-wide shortcuts that work even when NexQ is not focused (e.g., start/stop meeting, toggle overlay)
-- **Meeting shortcuts** -- shortcuts active during meetings for AI actions
-- **Custom key bindings** -- remap any action to your preferred key combination
+- **Rebindable here** -- Assist (`Space`) and the five action keys: What to Say (`1`), Shorten (`2`), Follow-Up (`3`), Recap (`4`) and Ask Question (`5`). Click a binding and press the new key. Reset to Defaults brings the originals back
+- **Fixed** -- `Ctrl+M` (start or end a meeting), `Ctrl+B` (overlay or dashboard), `Ctrl+,` (Settings), and in the overlay `Escape`, `B`, `S`, `K` and `M`. These are listed in the editor but can't be changed
+- **Changed in General** -- Assist from any app, Capture screen into Ask and Hide from screen share. Their keys are set in Settings > General and shown in Hotkeys for reference
 
-See [Keyboard Shortcuts](keyboard-shortcuts.md) for a full reference of all available shortcuts and their default bindings.
+See [Keyboard Shortcuts](keyboard-shortcuts.md) for the full reference and what each key does.
 
 ## Noise Preset
 

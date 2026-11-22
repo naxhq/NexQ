@@ -34,6 +34,16 @@ These shortcuts work when a meeting is active and the NexQ window (launcher or o
 | `4` | Recap | Provides a recap of the conversation so far |
 | `5` | Ask Question | Opens the free-form question input for custom AI queries |
 
+These overlay keys are fixed (they can't be rebound in Settings > Hotkeys) and need a running meeting. Only `Escape` also works while typing in an input.
+
+| Shortcut | Action |
+|----------|--------|
+| `B` | Add a bookmark at the current point in the meeting |
+| `S` | Open or close the speaker stats panel |
+| `K` | Open or close the bookmarks panel |
+| `M` | Mute or unmute your microphone ("You") |
+| `Escape` | Close the open panels (speaker stats, bookmarks, developer log) |
+
 > In the Ask box, `Ctrl+V` attaches a copied screenshot (Claude subscription only). `Ctrl+Shift+S` captures the screen for you; see [Asking about something on screen](claude-subscription.md#asking-about-something-on-screen). Screenshots can include other people's video or documents and go to Anthropic with your question; NexQ doesn't save them.
 
 > **Note:** The number keys (`1`--`5`) work with both the main keyboard and the numpad. They only trigger when no modifier keys (Ctrl, Alt, Meta) are held.
