@@ -33,7 +33,7 @@ import { CURRENT_VERSION, RELEASES, waveFor } from '../data/releases';
 // The hero conversation is laid onto the phrases of this release's wave (see planHero).
 const plan = planHero(waveFor(CURRENT_VERSION));
 
-// The pill announces the newest release that has something new in it: "v2.41 · Your notes and tools, in the answer".
+// The pill announces the newest release, by its one-liner (or its first item): "v2.41 · Your notes and tools, in the answer".
 const latest = RELEASES[0];
 const latestTag = `v${latest.version.split('.').slice(0, 2).join('.')}`;
 const latestText = (latest.oneLiner ?? latest.items[0] ?? '').replace(/\.$/, '');
@@ -69,7 +69,7 @@ const numberedNames = new Intl.ListFormat('en', { style: 'long', type: 'disjunct
         <span data-os="mac" hidden><Icon name="apple" class="h-[18px] w-[18px]" />Download for Mac</span>
       </a>
       <a href={`#${SECTION.download}`} class="btn-primary nx-dl nx-dl--short">Get it for Windows or Mac</a>
-      <a href={REPO} class="btn-ghost" target="_blank" rel="noopener"><span><Icon name="star" class="h-[18px] w-[18px]" />Star on GitHub</span></a>
+      <a href={REPO} class="btn-ghost"><span><Icon name="star" class="h-[18px] w-[18px]" />Star on GitHub</span></a>
     </div>
     <p class="nx-small">Windows 10 and 11, macOS on Apple Silicon (beta). <a class="link" href={`#${SECTION.download}`}>Other options</a></p>
 
@@ -186,7 +186,7 @@ const numberedNames = new Intl.ListFormat('en', { style: 'long', type: 'disjunct
     </article>
 
     <!-- Beat e: README.md (Stealth Mode), docs/user-guide/keyboard-shortcuts.md, interview-copilot.md -->
-    <article class="nx-beat" id="stealth" data-beat-id="e" data-t={TIMES.e} data-t0={T0.e} data-hint="Only you see the overlay, when it is on" aria-labelledby="beat-e">
+    <article class="nx-beat" id="stealth" data-beat-id="e" data-t={TIMES.e} data-t0={T0.e} data-hint="Hidden from the share, still on your screen." aria-labelledby="beat-e">
       <p class="eyebrow">{mmss(TIMES.e)}</p>
       <h3 id="beat-e" class="h3">Gone from the share.</h3>
       <p class="nx-beat__lede">

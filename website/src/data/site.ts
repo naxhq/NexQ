@@ -1,3 +1,5 @@
+import autoDetectCases from '../../../src/lib/autoDetectCases.json';
+
 // Single source of truth for links and facts shown on the site.
 // Facts here are taken from CHANGELOG.md, README.md, docs/user-guide/ and the app source.
 // Do not add numbers, quotes or claims that are not in those sources.
@@ -103,16 +105,29 @@ export const COUNTS = {
   translation: TRANSLATION_PROVIDERS.length,
 };
 
-/** Speech engines that offer language auto-detect (src/lib/autoDetectCases.json). */
-export const AUTO_DETECT_ENGINES = [
-  'Deepgram Nova-3',
-  'Deepgram Flux Multilingual',
-  'Parakeet v3',
-  'multilingual Whisper models',
-  'Whisper API',
-  'Groq',
-  'Cartesia',
+/**
+ * Speech engines that offer language auto-detect. The display names are ours; each one is tied to the provider
+ * (and model, where only one model qualifies) in src/lib/autoDetectCases.json, the table the app and its tests
+ * read. The checks below run when the site builds, so a name that stops being supported, or a supported provider
+ * missing from this list, fails the build instead of shipping a wrong claim.
+ */
+const AUTO_DETECT: { name: string; provider: string; model?: string }[] = [
+  { name: 'Deepgram Nova-3', provider: 'deepgram', model: 'nova-3' },
+  { name: 'Deepgram Flux Multilingual', provider: 'deepgram', model: 'flux-general-multi' },
+  { name: 'Parakeet v3', provider: 'parakeet_tdt', model: 'parakeet-tdt-0.6b-v3-int8' },
+  { name: 'multilingual Whisper models', provider: 'whisper_cpp' },
+  { name: 'Whisper API', provider: 'whisper_api' },
+  { name: 'Groq', provider: 'groq_whisper' },
+  { name: 'Cartesia', provider: 'cartesia' },
 ];
+for (const e of AUTO_DETECT) {
+  const ok = autoDetectCases.cases.some((c) => c.supported && c.provider === e.provider && (e.model === undefined || c.model === e.model));
+  if (!ok) throw new Error(`site.ts: "${e.name}" is not a supported auto-detect case in src/lib/autoDetectCases.json`);
+}
+for (const p of new Set(autoDetectCases.cases.filter((c) => c.supported).map((c) => c.provider))) {
+  if (!AUTO_DETECT.some((e) => e.provider === p)) throw new Error(`site.ts: auto-detect provider "${p}" (src/lib/autoDetectCases.json) has no entry in AUTO_DETECT`);
+}
+export const AUTO_DETECT_ENGINES: string[] = AUTO_DETECT.map((e) => e.name);
 
 export interface Hotkey {
   /** Keys in order, for one <kbd> each. "Mod" means Ctrl on Windows and Cmd on Mac. */

@@ -19,7 +19,7 @@ const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL :
 
     <div class="dl mt-10" data-dl>
       <div class="dl-grid">
-        <!-- src: README.md L119-123 (x64-setup.exe, SmartScreen, not code-signed); docs/user-guide/getting-started.md L16-27 (per-user NSIS installer, no admin rights, More info then Run anyway) -->
+        <!-- src: README.md L121 (the x64-setup.exe installer), L119-123 (SmartScreen, not code-signed); docs/user-guide/getting-started.md L16-27 (per-user NSIS installer, no admin rights, More info then Run anyway) -->
         <article class="dl-card dl-card--windows" aria-labelledby="dl-win">
           <div class="dl-head">
             <Icon name="windows" class="h-7 w-7" />
@@ -28,7 +28,10 @@ const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL :
           </div>
           <p class="dl-spec">Windows 10 and 11, x64</p>
           <ul class="dl-list">
-            <li>A per-user installer. No admin rights needed.</li>
+            <li>
+              On the release page, pick the file that ends in <code class="dl-file">x64-setup.exe</code>. It is a per-user
+              installer, so no admin rights are needed.
+            </li>
             <li>
               Windows may show a SmartScreen warning, because the installer is not code-signed yet. Choose
               <strong>More info</strong>, then <strong>Run anyway</strong>.
@@ -40,7 +43,7 @@ const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL :
           </a>
         </article>
 
-        <!-- src: README.md L125-132 (Apple Silicon beta, .dmg, not notarized so Gatekeeper blocks it, xattr -cr, mic access); site FAQ "Intel Macs and Linux are not supported yet" -->
+        <!-- src: README.md L125-132 (Apple Silicon beta, the .dmg on the releases page, not notarized so Gatekeeper blocks it, xattr -cr, mic access); site FAQ "Intel Macs and Linux are not supported yet" -->
         <article class="dl-card dl-card--mac" aria-labelledby="dl-mac">
           <div class="dl-head">
             <Icon name="apple" class="h-7 w-7" />
@@ -50,6 +53,7 @@ const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL :
           </div>
           <p class="dl-spec">Apple Silicon. Intel Macs are not supported yet.</p>
           <ul class="dl-list">
+            <li>On the release page, pick the file that ends in <code class="dl-file">.dmg</code>.</li>
             <li>
               The beta is not notarized, so Gatekeeper blocks the first launch. After you drag NexQ into Applications,
               clear the quarantine flag once:
@@ -98,8 +102,8 @@ const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL :
     </figure>
 
     <p class="dl-more">
-      <a href={RELEASES_URL} target="_blank" rel="noopener" class="link">Other builds and checksums</a>
-      <a href={CONTRIBUTING} target="_blank" rel="noopener" class="link">Build from source</a>
+      <a href={RELEASES_URL} class="link">Other builds and checksums</a>
+      <a href={CONTRIBUTING} class="link">Build from source</a>
     </p>
   </div>
 </section>
@@ -210,7 +214,7 @@ const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL :
     display: grid;
   }
   .dl-card {
-    min-width: 0;
+      min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 1rem;
@@ -266,6 +270,15 @@ const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL :
   .dl-list strong {
     font-weight: 600;
     color: hsl(var(--foreground));
+  }
+  .dl-file {
+    border-radius: 0.25rem;
+    background: hsl(var(--secondary));
+    padding: 0.0625rem 0.3125rem;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.8125em;
+    color: hsl(var(--foreground));
+    white-space: nowrap;
   }
   .dl-code {
     display: block;
@@ -338,7 +351,7 @@ const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL :
       grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     }
     .dl-card {
-    min-width: 0;
+      min-width: 0;
       padding: 2rem;
     }
     .dl-card + .dl-card {

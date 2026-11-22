@@ -14,19 +14,14 @@
  * All text lives in the HTML (content.ts renders it), so this file only moves attributes and
  * reveals words. Without JavaScript, and under reduced motion, the HTML is already the final state.
  */
-import { HERO_SECONDS, MODES, mmss } from '../components/overlay/content';
+import { HERO_SECONDS, MODES, mmss, formatDuration } from '../components/overlay/content';
 import { detectOS } from './os';
 
 const HERO_MS = 8000;
-// Boundaries between sending, waiting, thinking and writing (ms), as ResponseProgress.tsx walks them.
-// Assist, What to say, Shorten, Follow-up and Ask run on the Fast tier (Haiku, thinking off): sending, waiting, then
-// writing, with no "Thinking…" (docs/user-guide/claude-subscription.md L22-26). Recap runs on the Deep tier (Sonnet,
-// thinking on), so it does think. A phase with no time (b equals c) is skipped.
-const PHASES_FAST_ASSIST = [250, 700, 700];
-const PHASES_FAST_QUICK = [200, 500, 500];
-const PHASES_DEEP = [250, 450, 1400];
-const DEEP_MODES = new Set(['Recap']);
-const WORD_MS = 70;
+// The pace of an answer comes from the numbers content.ts writes on it (data-send, data-first, data-think, data-total, in ms),
+// as ResponseProgress.tsx walks them: sending until `send`, waiting until `first` (or until the thinking starts), then,
+// on the Deep tier only (Recap), thinking until `first`; writing runs from `first` and the stream ends at `total`.
+// Fast tier answers (Haiku, thinking off) never think (docs/user-guide/claude-subscription.md L22-26).
 const PHASE_TEXT: Record<string, string> = {
   sending: 'Sending…',
   waiting: 'Waiting for the first words…',
@@ -43,7 +38,6 @@ const HINT = {
 };
 
 const clamp = (v: number, a = 0, b = 1) => Math.min(b, Math.max(a, v));
-const secs = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
 
 interface HeroLine {
   tx: HTMLElement;
@@ -59,7 +53,10 @@ interface Run {
   mode: string;
   t: number;
   words: HTMLElement[];
-  phases: number[];
+  send: number;
+  first: number;
+  think: number;
+  total: number;
   shown: number;
   phase: string;
   lastElapsed: number;
@@ -236,11 +233,14 @@ function init(stage: HTMLElement) {
     }
     for (const w of ov.querySelectorAll('.ov-ans .w')) w.classList.add('off');
     ov.dataset.mode = mode;
-    const deep = DEEP_MODES.has(mode);
-    const phases = deep ? PHASES_DEEP : mode === 'Assist' ? PHASES_FAST_ASSIST : PHASES_FAST_QUICK;
-    if (detEl) detEl.textContent = (deep ? detEl.dataset.sentDeep : detEl.dataset.sentFast) ?? '';
+    const own = ov.querySelector<HTMLElement>(`.ov-ans[data-answer="${mode}"]`)?.dataset;
+    const think = Number(own?.think ?? 0);
+    if (detEl) detEl.textContent = (think ? detEl.dataset.sentDeep : detEl.dataset.sentFast) ?? '';
     if (reduce) return showAnswer(mode);
-    run = { mode, t: 0, words: wordsOf(mode), phases, shown: 0, phase: '', lastElapsed: -1 };
+    const total = Number(own?.total);
+    const first = Number(own?.first);
+    if (!(total > first && first > 0)) return showAnswer(mode); // no timing on the answer: show it whole
+    run = { mode, t: 0, words: wordsOf(mode), send: Number(own?.send ?? 0), first, think, total, shown: 0, phase: '', lastElapsed: -1 };
     if (progLabel) progLabel.textContent = labelOf(mode);
     ov.dataset.ans = 'sending';
     setModeButtons(mode, true);
@@ -250,27 +250,30 @@ function init(stage: HTMLElement) {
 
   function stepRun(dt: number) {
     if (!run) return;
-    run.t += dt;
-    const [a, b, c] = run.phases;
-    const phase = run.t < a ? 'sending' : run.t < b ? 'waiting' : run.t < c ? 'thinking' : 'writing';
+    run.t = Math.min(run.total, run.t + dt);
+    const { t, send, first, think, total } = run;
+    const phase = t < send ? 'sending' : think && t >= first - think && t < first ? 'thinking' : t < first ? 'waiting' : 'writing';
     if (phase !== run.phase) {
       run.phase = phase;
       ov.dataset.ans = phase;
       if (phaseEl) phaseEl.textContent = PHASE_TEXT[phase];
     }
-    const tenth = Math.floor(run.t / 100);
+    // The live counter and the label the answer ends on are the same two numbers: the counter stops at `total`.
+    const tenth = Math.floor(t / 100);
     if (elapsedEl && tenth !== run.lastElapsed) {
       run.lastElapsed = tenth;
-      elapsedEl.textContent = secs(run.t);
+      elapsedEl.textContent = formatDuration(t);
     }
     if (phase === 'writing') {
-      const n = Math.min(run.words.length, Math.floor((run.t - c) / WORD_MS) + 1);
+      // The first word lands at `first`, the last at `total`.
+      const n = Math.min(run.words.length, Math.ceil(((t - first) / (total - first)) * run.words.length));
       if (n !== run.shown) {
         for (let i = run.shown; i < n; i++) run.words[i].classList.remove('off');
         run.shown = n;
         if (caret && run.words[n - 1]) run.words[n - 1].after(caret);
       }
-      if (n >= run.words.length && run.t - c > run.words.length * WORD_MS + 250) {
+      if (t >= total) {
+        if (elapsedEl) elapsedEl.textContent = formatDuration(total);
         const mode = run.mode;
         run = null;
         showAnswer(mode);
@@ -300,6 +303,13 @@ function init(stage: HTMLElement) {
   }
 
   // ── Which moment shows (beats) ──
+  // The overlay's keyboard line is only true in the hero moment: in the beats the keys are inert, so it is not read.
+  const keysDesc = $('#nx-ov-keys', ov);
+  const describeKeys = (on: boolean) => {
+    if (!keysDesc) return;
+    if (on) ov.setAttribute('aria-describedby', keysDesc.id);
+    else ov.removeAttribute('aria-describedby');
+  };
   let autoStealthTimer = 0;
   function setActive(next: string) {
     if (!wide.matches) next = 'h';
@@ -322,6 +332,7 @@ function init(stage: HTMLElement) {
     const heroNow = next === 'h';
     for (const el of heroOnly) el?.toggleAttribute('inert', !heroNow);
     ov.tabIndex = heroNow ? 0 : -1;
+    describeKeys(heroNow);
     for (const b of beats) b.classList.toggle('is-active', b.dataset.beatId === next);
     const h = heroNow ? (p >= 1 ? HINT.hold : HINT.wait) : $(`[data-beat-id="${next}"]`)?.dataset.hint;
     if (h) hint(h);
@@ -534,6 +545,7 @@ function init(stage: HTMLElement) {
   const syncAtBoot = () => (location.hash ? syncOnArrival() : syncAfterPaint());
   window.addEventListener('load', syncAfterPaint, { once: true });
   ov.tabIndex = 0; // the keys only work with focus, so the sample is reachable by keyboard
+  describeKeys(true);
   if (reduce) {
     setStealth(true); // the final state: on
     pauseBtn?.setAttribute('hidden', '');

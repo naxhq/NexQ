@@ -10,6 +10,8 @@ export interface Line {
   /** Meeting time, shown the way TranscriptLine does (m:ss). */
   ts: string;
   text: string;
+  /** Language of `text` when it is not English (sets `lang` on the text element). */
+  lang?: string;
   /** Amber translation under the line (TranscriptLine.tsx L48, #fbbf24). */
   tr?: string;
   /** Hero only: playhead range (0..1) in which the words arrive. */
@@ -29,9 +31,9 @@ export const HERO_QUESTION = HERO_TEXT[HERO_TEXT.length - 1].text;
 
 // Beat a, 02:10. The other side speaks Spanish, you speak English.
 export const A_LINES: Line[] = [
-  { who: 'them', ts: '1:49', text: 'Perfecto. ¿Sigo en español? Me siento más cómoda.', tr: 'Perfect. Shall I go on in Spanish? I feel more comfortable.' },
+  { who: 'them', ts: '1:49', lang: 'es', text: 'Perfecto. ¿Sigo en español? Me siento más cómoda.', tr: 'Perfect. Shall I go on in Spanish? I feel more comfortable.' },
   { who: 'you', ts: '1:57', text: 'Of course. I’ll keep my side in English.' },
-  { who: 'them', ts: '2:04', text: 'Cuéntame cómo trabajas con ingeniería.', tr: 'Tell me how you work with engineering.' },
+  { who: 'them', ts: '2:04', lang: 'es', text: 'Cuéntame cómo trabajas con ingeniería.', tr: 'Tell me how you work with engineering.' },
 ];
 
 // Beat b and c, 04:40 and 05:35.
@@ -41,6 +43,8 @@ export const B_LINES: Line[] = [
   { who: 'them', ts: '4:34', text: 'How would you make a slow dashboard with fifty charts feel fast?' },
 ];
 export const B_QUESTION = B_LINES[2].text;
+/** Your reply at 5:01, after the beat b answer: on screen in beat c and in After the call. */
+export const C_REPLY: Line = { who: 'you', ts: '5:01', text: 'Show something useful first. Load the summary at once, then stream the charts as they arrive.' };
 
 // Beat d and e, 08:10 and 09:05.
 export const D_LINES: Line[] = [
@@ -49,59 +53,85 @@ export const D_LINES: Line[] = [
   { who: 'them', ts: '8:00', text: 'Can you do a second round with our CTO next week?' },
 ];
 export const D_QUESTION = D_LINES[2].text;
+/** Your reply at 8:13, after the beat d answer: on screen in beat e and in After the call. */
+export const E_REPLY: Line = { who: 'you', ts: '8:13', text: 'Yes. Tuesday after 2 pm or Thursday morning both work.' };
+
+/** "0.7 s", "1:05": the app's formatDuration (src/overlay/responseFormat.ts L4-9). */
+export function formatDuration(ms: number): string {
+  const safe = Math.max(0, ms);
+  if (safe < 60_000) return `${(safe / 1000).toFixed(1)} s`;
+  const secs = Math.floor(safe / 1000);
+  return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+}
+
+/**
+ * The one timing of an answer, in milliseconds. Every place that shows it (the live counter, the answer's header, the
+ * no-JS markup, After the call) reads these numbers, and callDemo.ts paces the run from them:
+ *   sending until `sendMs`, waiting until `firstMs` (or until the thinking starts), thinking for `thinkMs` and ending at
+ *   `firstMs` (Deep tier only), then writing from `firstMs` until `totalMs`, where the stream ends.
+ */
+export interface Timing {
+  totalMs: number;
+  firstMs: number;
+  /** Deep tier only (Recap): how long "Thinking…" lasts before the first words. */
+  thinkMs?: number;
+}
+/** Sending ends here for every answer (ms). */
+export const SEND_MS = 200;
+/** "1.4 s · first words 0.7 s", the way AIResponsePanel.tsx L382-385 builds its timing line. */
+export const timingLabel = (t: Timing) => `${formatDuration(t.totalMs)} · first words ${formatDuration(t.firstMs)}`;
+function timed<T extends object>(t: Timing, rest: T): T & Timing & { timing: string } {
+  if (!(t.firstMs > SEND_MS && t.totalMs > t.firstMs && (t.thinkMs === undefined || (t.thinkMs > 0 && t.firstMs - t.thinkMs >= SEND_MS)))) {
+    throw new Error(`content.ts: bad timing ${JSON.stringify(t)}`);
+  }
+  return { ...rest, ...t, timing: timingLabel(t) };
+}
 
 /**
  * Answers, one per action. `**bold**` becomes a bold word. Hero answers stream word by word.
- * `timing` is the one timing every place prints for that answer (the overlay, the no-JS markup, After the call):
- * total time, then the time to the first words. Fast tier (Haiku, thinking off) answers are quick; Recap runs on the
- * Deep tier (Sonnet, thinking on), so it takes longer (docs/user-guide/claude-subscription.md L22-26).
+ * The timing is the one every place prints for that answer. Fast tier (Haiku, thinking off) answers are quick; Recap runs
+ * on the Deep tier (Sonnet, thinking on), so it thinks first and takes longer (docs/user-guide/claude-subscription.md L22-26).
+ * `timing` is the label built from the numbers.
  */
-export const ANSWERS: Record<string, { label: string; text: string; timing: string }> = {
-  Assist: {
+export const ANSWERS: Record<string, { label: string; text: string; timing: string } & Timing> = {
+  Assist: timed({ totalMs: 1400, firstMs: 700 }, {
     label: 'Assist',
     text: 'Pick one decision and say why. **We shipped the design system before the redesign.** It cost two weeks, then every screen took days, not weeks. Close with what you would change.',
-    timing: '1.4 s · first words 0.7 s',
-  },
-  WhatToSay: {
+  }),
+  WhatToSay: timed({ totalMs: 1000, firstMs: 500 }, {
     label: 'Say',
     text: 'Say it in two sentences. **“We shipped the design system first. It slowed us by two weeks and saved us months.”**',
-    timing: '1.0 s · first words 0.5 s',
-  },
-  Shorten: {
+  }),
+  Shorten: timed({ totalMs: 900, firstMs: 500 }, {
     label: 'Short',
     text: '**Two weeks slower, months faster.** We built the system first.',
-    timing: '0.9 s · first words 0.5 s',
-  },
-  FollowUp: {
+  }),
+  FollowUp: timed({ totalMs: 1000, firstMs: 500 }, {
     label: 'F/U',
     text: 'Ask Dana: **“How does the team weigh speed against consistency today?”**',
-    timing: '1.0 s · first words 0.5 s',
-  },
-  Recap: {
+  }),
+  Recap: timed({ totalMs: 3200, firstMs: 2100, thinkMs: 1400 }, {
     label: 'Recap',
     text: '**So far:** Dana leads hiring for design. You introduced yourself. She asked for your toughest trade-off.',
-    timing: '3.2 s · first words 2.1 s',
-  },
+  }),
 };
 
 // Beat c: a finished answer, mode Short.
-export const C_ANSWER = {
+export const C_ANSWER = timed({ totalMs: ANSWERS.Shorten.totalMs, firstMs: ANSWERS.Shorten.firstMs }, {
   label: 'Short',
   text: '**Show something useful first.** Load the summary at once, then stream the charts as they arrive.',
-  timing: ANSWERS.Shorten.timing,
-};
+});
 
 // Beat d: an answer that used notes and a tool (src-tauri/src/sources/activity.rs L85-111 for the lines).
-export const D_ANSWER = {
+export const D_ANSWER = timed({ totalMs: 4100, firstMs: 2300 }, {
   label: 'Assist',
   text: '**Yes.** Tuesday after 2 pm or Thursday morning both work. Dana’s notes say you wanted to ask about the team roadmap, so save that for round two.',
-  timing: '4.1 s · first words 2.3 s',
   activity: ["Searching notes for 'Dana'", 'Reading Dana.md', 'Calendar: free_slots'],
   chips: [
     { kind: 'notes', label: 'Dana.md' },
     { kind: 'tool', label: 'Calendar: free_slots' },
   ],
-};
+});
 
 /**
  * Every other word on the overlay, so Overlay.astro and BeatFrame.astro draw the same text.
@@ -157,10 +187,13 @@ const stampSeconds = (ts: string) => {
 export const T0 = {
   a: stampSeconds(A_LINES[A_LINES.length - 1].ts) + 1,
   b: stampSeconds(B_LINES[B_LINES.length - 1].ts) + 1,
-  c: stampSeconds(B_LINES[B_LINES.length - 1].ts) + 1,
+  c: stampSeconds(C_REPLY.ts) + 1,
   d: stampSeconds(D_LINES[D_LINES.length - 1].ts) + 1,
-  e: stampSeconds(D_LINES[D_LINES.length - 1].ts) + 1,
+  e: stampSeconds(E_REPLY.ts) + 1,
 } as const;
+// Your replies come after the lines they answer.
+if (stampSeconds(C_REPLY.ts) <= stampSeconds(B_LINES[B_LINES.length - 1].ts)) throw new Error('C_REPLY must come after the last line of B_LINES');
+if (stampSeconds(E_REPLY.ts) <= stampSeconds(D_LINES[D_LINES.length - 1].ts)) throw new Error('E_REPLY must come after the last line of D_LINES');
 for (const k of Object.keys(T0) as (keyof typeof T0)[]) {
   if (T0[k] > TIMES[k]) throw new Error(`Beat ${k}: its lines run past the beat's time (${T0[k]} s > ${TIMES[k]} s)`);
 }

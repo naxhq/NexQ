@@ -43,8 +43,8 @@ const POSITIONS = [
   {
     id: 'local',
     label: 'All on this computer',
-    tag: 'Nothing leaves',
-    verdict: 'Nothing leaves this computer.',
+    tag: 'Stays here',
+    verdict: 'Your audio and words stay on this computer.',
     detail: 'Download the models once, and it all works offline.',
     nodes: [
       { title: 'Speech engine', sub: 'on this computer', where: 'here' },
@@ -113,10 +113,11 @@ const TIERS = {
 
     <!-- The dial. JS only; without it the three panels below are simply stacked. -->
     <div class="ai-dial-wrap" data-reveal>
-      <div class="ai-dial" role="group" aria-label="Where your words go" data-ai-dial style="--i:0">
+      <p class="ai-dial-label" id="ai-dial-label">Where your words go</p>
+      <div class="ai-dial" role="radiogroup" aria-labelledby="ai-dial-label" data-ai-dial style="--i:0">
         <span class="ai-dial__thumb" aria-hidden="true"></span>
         {POSITIONS.map((p, i) => (
-          <button type="button" class="ai-dial__btn" data-pos={i} aria-pressed={i === 0 ? 'true' : 'false'} tabindex={i === 0 ? 0 : -1}>
+          <button type="button" role="radio" class="ai-dial__btn" data-pos={i} aria-checked={i === 0 ? 'true' : 'false'} aria-controls={`ai-pos-${p.id}`} tabindex={i === 0 ? 0 : -1}>
             <span class="ai-dial__label">{p.label}</span>
             <span class="ai-dial__tag">{p.tag}</span>
           </button>
@@ -261,6 +262,12 @@ const TIERS = {
   :global(html:not(.js)) .ai-dial-wrap {
     display: none;
   }
+  .ai-dial-label {
+    margin-bottom: 0.5rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: hsl(var(--muted-foreground));
+  }
   .ai-dial {
     --pad: 4px;
     position: relative;
@@ -299,7 +306,7 @@ const TIERS = {
   .ai-dial__btn:hover {
     color: hsl(var(--foreground));
   }
-  .ai-dial__btn[aria-pressed='true'] {
+  .ai-dial__btn[aria-checked='true'] {
     color: hsl(var(--foreground));
   }
   .ai-dial__label {

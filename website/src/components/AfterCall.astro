@@ -26,7 +26,7 @@
 import { SECTION } from '../data/site';
 import { CURRENT_VERSION, waveFor } from '../data/releases';
 import {
-  planHero, A_LINES, B_LINES, B_QUESTION, D_LINES, D_QUESTION, HERO_QUESTION, ANSWERS, C_ANSWER, D_ANSWER,
+  planHero, A_LINES, B_LINES, B_QUESTION, D_LINES, D_QUESTION, HERO_QUESTION, ANSWERS, C_ANSWER, D_ANSWER, C_REPLY, E_REPLY,
 } from './overlay/content';
 
 const DUR = 2832; // 47:12, in seconds
@@ -40,8 +40,8 @@ const secs = (ts: string) => {
 };
 /** Straight apostrophes in the shared sample text become typographic ones on this page. */
 const curly = (t: string) => t.replace(/(\w)'(\w)/g, '$1’$2');
-/** "4.1 s · first words 2.3 s" to "4100ms", the way the AI Log shows latency. */
-const logMs = (timing: string) => `${Math.round(parseFloat(timing) * 1000)}ms`;
+/** Latency the way the AI Log shows it (AIInteractionLog.tsx: `${latency_ms}ms`), from content.ts's one number. */
+const logMs = (a: { totalMs: number }) => `${a.totalMs}ms`;
 
 // The same interview as the hero demo and the beats above. Every line the overlay shows (hero opening,
 // beats a, b and d) is read from components/overlay/content.ts, with the same stamps, so the recording
@@ -57,9 +57,9 @@ const LINES: [number, 'you' | 'them', string, boolean?, string?][] = [
   [49, 'you', 'We shipped the design system before the redesign. It cost two weeks up front, and every screen after that took days.'],
   ...fromContent(A_LINES, 'es', () => false),
   ...fromContent(B_LINES, undefined, (t) => t === B_QUESTION),
-  [301, 'you', 'Show something useful first. Load the summary at once, then stream the charts as they arrive.'],
+  ...fromContent([C_REPLY]),
   ...fromContent(D_LINES, undefined, (t) => t === D_QUESTION),
-  [493, 'you', 'Yes. Tuesday after 2 pm or Thursday morning both work.'],
+  ...fromContent([E_REPLY]),
   [2410, 'them', 'That’s all from me. Any questions before we wrap up?'],
   [2531, 'you', 'Yes, about the team roadmap. Can we cover it in the second round?'],
   [2700, 'them', 'Of course. I’ll send the invite for the CTO round tomorrow.'],
@@ -80,20 +80,22 @@ const BOOKMARKS: [number, string][] = [
   [480, 'Second round with the CTO next week'],
 ];
 const ACTIONS: { text: string; who: 'you' | 'them'; name: string; t: number; done?: boolean }[] = [
-  { text: 'Offer Dana Tuesday after 2 pm or Thursday morning', who: 'you', name: 'You', t: 493, done: true },
+  { text: 'Offer Dana Tuesday after 2 pm or Thursday morning', who: 'you', name: 'You', t: secs(E_REPLY.ts), done: true },
   { text: 'Ask about the team roadmap in the second round', who: 'you', name: 'You', t: 2531 },
   { text: 'Send the invite for the CTO round', who: 'them', name: 'Dana', t: 2700 },
 ];
 // Every request NexQ sent to the AI, with its answer. Titles, labels and timings of the three live answers come
-// from content.ts (the first Assist's from ANSWERS.Assist.timing); Summary and Actions are made up like the meeting.
+// from content.ts (the first Assist's from ANSWERS.Assist.totalMs); Summary and Actions are made up like the meeting.
 const LOG: { label: string; title: string; ms: string; meta: string }[] = [
-  { label: ANSWERS.Assist.label, title: HERO_QUESTION, ms: logMs(ANSWERS.Assist.timing), meta: 'claude_cli/haiku' },
-  { label: C_ANSWER.label, title: B_QUESTION, ms: logMs(C_ANSWER.timing), meta: 'claude_cli/haiku' },
-  { label: D_ANSWER.label, title: D_QUESTION, ms: logMs(D_ANSWER.timing), meta: 'claude_cli/haiku' },
+  { label: ANSWERS.Assist.label, title: HERO_QUESTION, ms: logMs(ANSWERS.Assist), meta: 'claude_cli/haiku' },
+  { label: C_ANSWER.label, title: B_QUESTION, ms: logMs(C_ANSWER), meta: 'claude_cli/haiku' },
+  { label: D_ANSWER.label, title: D_QUESTION, ms: logMs(D_ANSWER), meta: 'claude_cli/haiku' },
   { label: 'Summary', title: 'Meeting summary', ms: '6240ms', meta: 'claude_cli/sonnet' },
   { label: 'Actions', title: 'Action items', ms: '3180ms', meta: 'claude_cli/sonnet' },
 ];
-const LOG_ASK = { label: 'Ask', title: 'What did Dana say about the second round?', meta: 'claude_cli/sonnet' };
+// Ask this meeting rows: label getModeLabel('MeetingAsk') = "Ask meeting" (src/lib/utils.ts:115-116), meta is the model alone
+// (AIInteractionLog.tsx:49-51 passes answer.model, no provider, no latency).
+const LOG_ASK = { label: 'Ask meeting', title: 'What did Dana say about the second round?', meta: 'sonnet' };
 
 // A speech-shaped waveform, seeded so the build is stable. Not the release wave: that one means a version.
 const N = 120;

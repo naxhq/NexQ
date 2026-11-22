@@ -1271,8 +1271,8 @@ button.ov-qa:hover {
   }
 }
 
-/* Below 460px the header has no room for the scenario chip (the title and the clock come first). */
-@container (max-width: 459px) {
+/* Below 520px the header has no room for the scenario chip (the title and the clock come first). */
+@container (max-width: 519px) {
   .ov-scn {
     display: none;
   }
@@ -1287,6 +1287,13 @@ button.ov-qa:hover {
   .ov-svc {
     gap: 0.3em;
     padding-inline: 0.55em;
+  }
+}
+
+/* Below 720px (a tablet, 768px wide, shows the overlay about 700px wide) the mode badge goes first, so the meeting title reads in full. */
+@container (max-width: 719px) {
+  .ov-badge {
+    display: none;
   }
 }
 

@@ -17,8 +17,8 @@ import OvQRow from './OvQRow.astro';
 import OvPills from './OvPills.astro';
 import OvSourcesAnswer from './OvSourcesAnswer.astro';
 import {
-  OV, HERO_QUESTION, A_LINES, B_LINES, B_QUESTION, D_LINES, D_QUESTION,
-  ANSWERS, C_ANSWER, MODES, tokens, mmss, TIMES,
+  OV, HERO_QUESTION, A_LINES, B_LINES, C_REPLY, B_QUESTION, D_LINES, E_REPLY, D_QUESTION,
+  ANSWERS, C_ANSWER, MODES, SEND_MS, tokens, mmss, TIMES,
 } from './content';
 import type { Line } from './content';
 
@@ -67,8 +67,10 @@ const { heroLines } = Astro.props;
         <div class="ov-lines">
           <div class="ov-g" data-for="h0 h1">{heroLines.map((l) => <OvLine line={l} live />)}</div>
           <div class="ov-g" data-for="a">{A_LINES.map((l) => <OvLine line={l} />)}</div>
-          <div class="ov-g" data-for="b c">{B_LINES.map((l) => <OvLine line={l} />)}</div>
-          <div class="ov-g" data-for="d e">{D_LINES.map((l) => <OvLine line={l} />)}</div>
+          <div class="ov-g" data-for="b">{B_LINES.map((l) => <OvLine line={l} />)}</div>
+          <div class="ov-g" data-for="c">{[...B_LINES, C_REPLY].map((l) => <OvLine line={l} />)}</div>
+          <div class="ov-g" data-for="d">{D_LINES.map((l) => <OvLine line={l} />)}</div>
+          <div class="ov-g" data-for="e">{[...D_LINES, E_REPLY].map((l) => <OvLine line={l} />)}</div>
         </div>
       </section>
 
@@ -130,7 +132,7 @@ const { heroLines } = Astro.props;
                 </div>
                 <div class="ov-anss">
                   {Object.entries(ANSWERS).map(([mode, a]) => (
-                    <p class="ov-ans" data-answer={mode} data-timing={a.timing}>
+                    <p class="ov-ans" data-answer={mode} data-timing={a.timing} data-send={SEND_MS} data-first={a.firstMs} data-total={a.totalMs} data-think={a.thinkMs}>
                       {tokens(a.text).map((t) => <span class={t.b ? 'w b' : 'w'}>{t.w} </span>)}
                     </p>
                   ))}
@@ -156,5 +158,7 @@ const { heroLines } = Astro.props;
     <OvFoot />
 
     <p class="sr-only" aria-live="polite" data-sr></p>
+    <!-- Read as the overlay's description while the hero moment is on (callDemo.ts adds and removes aria-describedby): the keys do nothing in the beats, and without JavaScript. -->
+    <p id="nx-ov-keys" hidden>Space answers, keys 1 to 5 pick the other actions.</p>
   </div>
 </div>

@@ -11,7 +11,7 @@
  *                                         source secrets too); src-tauri/src/credentials/
  *   signed updates ...................... README.md L123 (installs on quit, never mid-meeting) and L219 (Ed25519)
  *   open source MIT ..................... README.md L41, LICENSE
- *   no telemetry ........................ README.md L219 (only contacts GitHub Releases for updates, besides your providers and the model downloads: src-tauri/src/stt/local_engines/model_registry.rs, translation/opus_mt_registry.rs fetch from huggingface.co and github.com)
+ *   no telemetry ........................ README.md L219 (only contacts GitHub, for update checks and their release notes (src/lib/changelog.ts:31-38 fetches CHANGELOG.md from raw.githubusercontent.com), besides your providers and the model downloads: src-tauri/src/stt/local_engines/model_registry.rs, translation/opus_mt_registry.rs fetch from huggingface.co and github.com)
  *   consent line ........................ docs/user-guide/meeting-detection.md (last line)
  * No analytics on this site: owner decision.
  */
@@ -53,7 +53,7 @@ const ROWS: { k: string; h: string; p: string; link?: { href: string; label: str
   {
     k: 'tracking',
     h: 'No tracking.',
-    p: 'NexQ has no telemetry or analytics. Besides the providers you set up and the models you choose to download, it only contacts GitHub Releases to check for updates. This website has no analytics either.',
+    p: 'NexQ has no telemetry or analytics. Besides the providers you set up and the models you choose to download, it only contacts GitHub, to check for updates and show their release notes. This website has no analytics either.',
   },
 ];
 ---

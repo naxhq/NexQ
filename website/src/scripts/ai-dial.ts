@@ -1,4 +1,4 @@
-// The "Where your words go" dial (YourAI.astro). Buttons with aria-pressed, arrow keys,
+// The "Where your words go" dial (YourAI.astro). A radiogroup: role=radio buttons with aria-checked, roving tabindex, arrow keys, Home and End,
 // no state beyond the selected index. Panels show with [data-on]; without JS all stay visible.
 const dial = document.querySelector<HTMLElement>('[data-ai-dial]');
 if (dial) {
@@ -7,7 +7,7 @@ if (dial) {
 
   const select = (i: number, focus = false) => {
     buttons.forEach((b, j) => {
-      b.setAttribute('aria-pressed', String(j === i));
+      b.setAttribute('aria-checked', String(j === i));
       b.tabIndex = j === i ? 0 : -1;
     });
     panels.forEach((p, j) => p.toggleAttribute('data-on', j === i));

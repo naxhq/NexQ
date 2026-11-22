@@ -33,7 +33,7 @@ const rows: { label: string; values: Cell[] }[] = [
       </p>
     </div>
 
-    <div class="cmp mt-12" role="region" aria-label="Comparison of NexQ with Otter.ai, Granola and Krisp" tabindex="0">
+    <div class="cmp mt-12" role="region" aria-label="Comparison of NexQ with Otter.ai, Granola and Krisp" data-cmp>
       <table class="cmp-table">
         <caption class="cmp-caption">Checked Nov 2026</caption>
         <thead>
@@ -70,6 +70,22 @@ const rows: { label: string; values: Cell[] }[] = [
     </p>
   </div>
 </section>
+
+<!-- The scroll region joins the tab order only while it really scrolls sideways, so keyboard users can pan it. -->
+<script>
+  const cmp = document.querySelector<HTMLElement>('[data-cmp]');
+  if (cmp) {
+    const sync = () => {
+      if (cmp.scrollWidth > cmp.clientWidth) cmp.tabIndex = 0;
+      else cmp.removeAttribute('tabindex');
+    };
+    sync();
+    window.addEventListener('resize', sync);
+    // The table can grow after the web fonts arrive, without any window resize.
+    const table = cmp.querySelector('table');
+    if (table && typeof ResizeObserver !== 'undefined') new ResizeObserver(sync).observe(table);
+  }
+</script>
 
 <style is:global>
   .cmp {

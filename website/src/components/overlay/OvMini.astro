@@ -1,10 +1,10 @@
 ---
-// A small overlay in a small window: header, two lines. Used by the "Hide from screen share" panes.
+// A small overlay in a small window: header, the last two lines of the call at that moment. Used by the "Hide from screen share" panes.
 // Same classes as the full overlay (overlay.css), so it is the same thing, just smaller.
 import './overlay.css';
 import OvIcon from './OvIcon.astro';
 import OvLine from './OvLine.astro';
-import { OV, D_LINES, mmss, TIMES } from './content';
+import { OV, D_LINES, E_REPLY, mmss, TIMES } from './content';
 ---
 
 <div class="ov ov--frame ov--mini nx-glass" data-view="frame">
@@ -19,7 +19,7 @@ import { OV, D_LINES, mmss, TIMES } from './content';
     </div>
   </div>
   <div class="ov-minib">
-    <OvLine line={D_LINES[1]} />
     <OvLine line={D_LINES[2]} />
+    <OvLine line={E_REPLY} />
   </div>
 </div>

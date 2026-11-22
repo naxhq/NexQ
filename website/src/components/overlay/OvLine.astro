@@ -22,7 +22,7 @@ const label = line.who === 'you' ? 'You' : 'Them';
   <span class="ov-ts">{line.ts}</span>
   <span class="ov-who">{label}</span>
   <div class="ov-lt">
-    <span class="ov-tx">{line.text}</span><span class="ov-tail"></span>
-    {line.tr && <div class="ov-trw"><div class="ov-trl"><div class="ov-trt"><span class="sr-only">Translation: </span>{line.tr}</div></div></div>}
+    <span class="ov-tx" lang={line.lang}>{line.text}</span><span class="ov-tail"></span>
+    {line.tr && <div class="ov-trw"><div class="ov-trl"><div class="ov-trt" lang={line.lang ? 'en' : undefined}><span class="sr-only">Translation: </span>{line.tr}</div></div></div>}
   </div>
 </div>
