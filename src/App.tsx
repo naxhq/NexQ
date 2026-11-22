@@ -32,6 +32,7 @@ import type { AppView, Meeting, AudioMode, AIScenario } from "./lib/types";
 import { useDemoShortcut } from "./demo/useDemoShortcut";
 import { DemoPicker } from "./demo/DemoPicker";
 import { DemoBadge } from "./demo/DemoBadge";
+import { useDemoStore } from "./demo/demoStore";
 import { SCREENSHOT_EVENT, leaveSettingsForAsk } from "./lib/screenCapture";
 import { SHOW_MEETING_OVERLAY_EVENT, showLauncherWindow, showMeetingOverlay, showOverlayWindow } from "./lib/windows";
 import { logToFile } from "./lib/logger";
@@ -40,6 +41,7 @@ import { createCaptureStatusHandler } from "./lib/captureStatus";
 
 function App() {
   const currentView = useMeetingStore((s) => s.currentView);
+  const isDemoActive = useDemoStore((s) => s.isDemoActive);
   const settingsOpen = useMeetingStore((s) => s.settingsOpen);
   const setSettingsOpen = useMeetingStore((s) => s.setSettingsOpen);
   const setCurrentView = useMeetingStore((s) => s.setCurrentView);
@@ -139,13 +141,15 @@ function App() {
   // starts (or anything asks this window for the meeting view), bring the
   // overlay up and keep the dashboard here, so showing the launcher again
   // never shows a second, unpinned copy of the meeting.
+  // Demo mode is the exception: it is a local simulation (its stores live only
+  // in this window), so the overlay view is drawn right here and must stay.
   useEffect(() => {
     if (windowLabel !== "launcher") return;
-    if (currentView === "overlay") {
+    if (currentView === "overlay" && !isDemoActive) {
       useMeetingStore.getState().setCurrentView("launcher");
       showMeetingOverlay().catch(() => {});
     }
-  }, [currentView, windowLabel]);
+  }, [currentView, windowLabel, isDemoActive]);
 
   // OVERLAY window: show the meeting overlay on request (launcher RETURN,
   // Ctrl+B, tray "Show Overlay"). It renders only its own view, so switch to
@@ -443,7 +447,17 @@ function App() {
   return (
     <div className={`h-screen w-screen overflow-hidden text-foreground ${resolvedView === "overlay" ? "bg-transparent" : "bg-background"}`}>
       <ErrorBoundary fallbackMessage="NexQ encountered an error">
-        {(resolvedView === "launcher" || resolvedView === "overlay") && (
+        {resolvedView === "overlay" && isDemoActive && (
+          <ErrorBoundary fallbackMessage="Failed to load overlay">
+            <div key={activeMeetingId || "no-meeting"} className="flex h-full">
+              <div className="flex-1 min-w-0 overflow-hidden">
+                <OverlayView />
+              </div>
+              <CallLogPanel />
+            </div>
+          </ErrorBoundary>
+        )}
+        {(resolvedView === "launcher" || (resolvedView === "overlay" && !isDemoActive)) && (
           <ErrorBoundary fallbackMessage="Failed to load launcher">
             <LauncherView />
           </ErrorBoundary>
