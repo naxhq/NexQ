@@ -1165,6 +1165,8 @@ export const useConfigStore = create<ConfigState>((set) => ({
           console.log("[configStore] Migrated dual-exclusive STT: kept You, fell back Them to deepgram");
         }
         if (migrated) {
+          // The engines no longer match the saved preset, so its chip must not light.
+          resolvedMeetingConfig = { ...resolvedMeetingConfig, preset_name: null };
           await store.set("meetingAudioConfig", resolvedMeetingConfig);
           console.log("[configStore] Migrated meetingAudioConfig providers");
         }

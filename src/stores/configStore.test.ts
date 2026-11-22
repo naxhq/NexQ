@@ -261,3 +261,40 @@ describe("configStore: hotkeys", () => {
     await vi.waitFor(() => expect(saved.get("hotkeys")).toMatchObject({ mode_say: "Q", mode_recap: "R" }));
   });
 });
+
+describe("configStore: STT migration and the preset chip", () => {
+  beforeEach(() => {
+    saved.clear();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const inPerson = (themProvider: string, preset: string | null) => ({
+    you: { role: "You", device_id: "default", is_input_device: true, stt_provider: "web_speech" },
+    them: { role: "Them", device_id: "mic_2", is_input_device: true, stt_provider: themProvider },
+    recording_enabled: false,
+    preset_name: preset,
+  });
+
+  it("clears the preset name when the migration swaps an engine (old In-Person config using whisper_cpp)", async () => {
+    saved.set("meetingAudioConfig", inPerson("whisper_cpp", "In-Person"));
+    const store = await freshStore();
+    await store.getState().loadConfig();
+
+    const config = store.getState().meetingAudioConfig;
+    expect(config?.them.stt_provider).toBe("deepgram");
+    expect(config?.preset_name).toBeNull();
+    expect((saved.get("meetingAudioConfig") as { preset_name: unknown }).preset_name).toBeNull();
+  });
+
+  it("keeps the preset name when nothing was migrated", async () => {
+    saved.set("meetingAudioConfig", inPerson("parakeet_tdt", "In-Person"));
+    const store = await freshStore();
+    await store.getState().loadConfig();
+
+    expect(store.getState().meetingAudioConfig?.preset_name).toBe("In-Person");
+  });
+});
