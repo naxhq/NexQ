@@ -236,8 +236,8 @@ function MissingKeyNote({
   return (
     <p role="status" className="mt-2 text-xs text-amber-700 dark:text-warning leading-relaxed">
       {choice.label} needs an API key. Add it in Settings &gt; STT Providers. Free and
-      offline instead: Settings &gt; Audio &amp; Devices &gt; Presets &gt; Free (one-time
-      465 MB download).
+      offline instead: in Settings &gt; STT Providers, download and activate Parakeet TDT
+      (one-time 465 MB), then pick Settings &gt; Audio &amp; Devices &gt; Presets &gt; Free.
     </p>
   );
 }

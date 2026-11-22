@@ -24,6 +24,7 @@ describe("first-run STT step: missing API key", () => {
     // Them defaults to Deepgram, which has no key here
     const note = await screen.findByText(/Deepgram needs an API key/);
     expect(note.textContent).toContain("Settings > STT Providers");
+    expect(note.textContent).toContain("download and activate Parakeet TDT");
     expect(note.textContent).toContain("Presets > Free");
     expect(note.textContent).toContain("465 MB");
   });

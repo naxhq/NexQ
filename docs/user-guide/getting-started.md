@@ -46,8 +46,11 @@ NexQ needs an STT provider to transcribe audio. The fastest way to get started:
 **Option A: Web Speech for you, a free local model for them**
 
 1. Open Settings (click the gear icon or press `Ctrl+,`)
-2. Go to **Audio & Devices > Presets** and choose **Free**
-3. Web Speech transcribes "You" (mic) with no key. It can't hear system audio, so "Them" uses the Parakeet TDT local model, which downloads once (465 MB) and then works offline
+2. Go to **STT Providers**, select **Parakeet TDT**, download the model (one-time, 465 MB) and click **Activate**
+3. Go to **Audio & Devices > Presets** and choose **Free**
+4. Web Speech transcribes "You" (mic) with no key. It can't hear system audio, so "Them" uses the Parakeet TDT local model, which works offline once downloaded
+
+The Free preset only saves the settings; it doesn't download the model for you.
 
 Web Speech can only be used by one party, and only with a microphone. For "Them" (system audio) pick a local model or a cloud provider such as Deepgram.
 
