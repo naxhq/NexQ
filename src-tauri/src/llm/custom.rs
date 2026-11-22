@@ -424,7 +424,9 @@ impl LLMProvider for CustomClient {
         for path in ["/models", "/api/tags", ""] {
             let url = format!("{}{}", self.config.base_url, path);
             if let Ok(resp) = self.apply_auth(self.client.get(&url)).send().await {
-                if resp.status().is_success() {
+                // The plain base URL is often a public page: its 200 doesn't
+                // count once an API path refused the key.
+                if resp.status().is_success() && (!path.is_empty() || refused.is_none()) {
                     return Ok(true);
                 }
                 if refused.is_none() && auth_refused(resp.status()) {
@@ -691,6 +693,21 @@ mod tests {
     async fn test_connection_with_a_working_models_endpoint_is_ok() {
         let (base, _) = server(vec![("/v1/models", 200, r#"{"data":[]}"#)]).await;
         assert!(client(&base, CustomAuthType::Bearer, Some("k")).test_connection().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_public_base_url_does_not_hide_a_refused_key() {
+        let (base, _) = server(vec![("/v1/models", 401, "{}"), ("/v1", 200, "<html></html>")]).await;
+        assert!(matches!(
+            client(&base, CustomAuthType::None, None).test_connection().await,
+            Err(LLMError::AuthError(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_working_ollama_path_still_passes_after_a_refusal() {
+        let (base, _) = server(vec![("/v1/models", 401, "{}"), ("/v1/api/tags", 200, r#"{"models":[]}"#)]).await;
+        assert!(client(&base, CustomAuthType::None, None).test_connection().await.unwrap());
     }
 
     #[tokio::test]

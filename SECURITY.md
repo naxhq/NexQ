@@ -70,7 +70,7 @@ Out of scope:
 
 ## Verify a download
 
-Releases are signed with minisign. Each installer on the [releases page](https://github.com/naxhq/NexQ/releases) has a matching `.sig` file, and the app checks that signature before it installs an update. To check a download yourself, the public key is:
+Releases are signed with minisign: on the [releases page](https://github.com/naxhq/NexQ/releases), the Windows installer (`NexQ_<version>_x64-setup.exe`) and the macOS update archive (`NexQ_<version>_aarch64.app.tar.gz`) each have a matching `.sig` file, and the app checks that signature before it installs an update. The macOS `.dmg` has no `.sig`; to check the Mac app, verify the `.app.tar.gz` with its own `.sig`. To check a download yourself, the public key is:
 
 ```
 untrusted comment: minisign public key: 333EFC94A407E29A
@@ -80,7 +80,7 @@ RWSa4geklPw+Mw1zySvTddemXH0UFe2fq9ds6KpXfEylBTf9GbrrivlR
 Key ID `333EFC94A407E29A`. This is the same key as `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`, which holds these two lines base64-encoded.
 
 1. Download the installer and its `.sig` file.
-2. The `.sig` is a base64 encoding of a minisign signature, so decode it first. On Windows: `certutil -decode NexQ_<version>_x64-setup.exe.sig NexQ_<version>_x64-setup.exe.minisig`. On macOS or Linux: `base64 -d NexQ_<version>_x64-setup.exe.sig > NexQ_<version>_x64-setup.exe.minisig`.
+2. The `.sig` is a base64 encoding of a minisign signature, so decode it first. On Windows: `certutil -decode NexQ_<version>_x64-setup.exe.sig NexQ_<version>_x64-setup.exe.minisig`. On macOS or Linux: `base64 -d < NexQ_<version>_x64-setup.exe.sig > NexQ_<version>_x64-setup.exe.minisig`.
 3. Verify it with [minisign](https://jedisct1.github.io/minisign/): `minisign -Vm NexQ_<version>_x64-setup.exe -x NexQ_<version>_x64-setup.exe.minisig -P RWSa4geklPw+Mw1zySvTddemXH0UFe2fq9ds6KpXfEylBTf9GbrrivlR`
 
 Use the real file names from the release. A good check prints "Signature and comment signature verified".
