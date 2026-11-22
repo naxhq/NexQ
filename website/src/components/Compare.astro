@@ -1,50 +1,59 @@
 ---
-// Same comparison as the project README ("Why NexQ vs. Others?").
-type Cell = string | boolean;
+/**
+ * #compare: a short, honest table. Rows are the README's "How NexQ compares" table
+ * (README.md L190-200), with the counts fixed to 11 speech engines and 9 AI providers
+ * (site.ts COUNTS). The table sits in its own scroll container, so the page never scrolls sideways.
+ */
+import Icon from './Icon.astro';
+import { COUNTS, SECTION } from '../data/site';
+
 const cols = ['NexQ', 'Otter.ai', 'Granola', 'Krisp'];
+type Cell = string | boolean;
+// src: README.md L190-200. Competitor cells are what the README lists; "Paid tiers" and "Fixed" are its words.
 const rows: { label: string; values: Cell[] }[] = [
-  { label: 'Price', values: ['Free', '$8+/mo', '$18/mo', '$16/mo'] },
+  { label: 'Price', values: ['Free', 'Paid tiers', 'Paid tiers', 'Paid tiers'] },
   { label: 'Open source', values: [true, false, false, false] },
-  { label: 'No bot joins the call', values: [true, false, true, true] },
-  { label: 'Can run fully local', values: [true, false, 'Partial', 'Partial'] },
-  { label: 'Speech-to-text providers', values: ['10', '1', '1', '1'] },
-  { label: 'AI providers', values: ['9', '1', '1', '1'] },
-  { label: 'Local AI models', values: [true, false, false, false] },
-  { label: 'Your documents as context', values: [true, false, false, false] },
+  { label: 'Works without a meeting bot', values: [true, false, true, true] },
+  { label: 'Fully local option', values: [true, false, false, 'Partial'] },
+  { label: 'Speech engines / AI providers', values: [`${COUNTS.stt} / ${COUNTS.llm}`, 'Fixed', 'Fixed', 'Fixed'] },
+  { label: 'Local LLM', values: [true, false, false, false] },
+  { label: 'Your own documents as context', values: [true, false, false, false] },
 ];
 ---
 
-<section id="compare" class="section border-t border-line" aria-labelledby="compare-title">
+<section id={SECTION.compare} class="section border-t border-border" aria-labelledby="compare-title">
   <div class="wrap">
-    <div class="max-w-3xl" data-reveal>
-      <p class="eyebrow">Compare</p>
-      <h2 id="compare-title" class="h2 mt-4">Your conversations shouldn't be a subscription.</h2>
+    <div class="grid gap-6 lg:grid-cols-12 lg:items-end lg:gap-16">
+      <div class="lg:col-span-7">
+        <h2 id="compare-title" class="h2">Your calls shouldn’t be a subscription.</h2>
+      </div>
+      <p class="text-[0.9375rem] leading-relaxed text-muted-foreground lg:col-span-5 lg:pb-1">
+        Otter.ai, Granola and Krisp each come with their own engine. NexQ lets you pick your speech and AI providers, and
+        run all of it on your own computer.
+      </p>
     </div>
 
-    <div class="relative mt-12 overflow-x-auto rounded-2xl border border-line-strong" data-reveal tabindex="0" role="region" aria-labelledby="compare-title">
-      <table class="w-full min-w-[36rem] border-collapse text-left text-[0.9375rem]">
-        <caption class="sr-only">NexQ compared with Otter.ai, Granola and Krisp</caption>
+    <div class="cmp mt-12" role="region" aria-label="Comparison of NexQ with Otter.ai, Granola and Krisp" data-cmp>
+      <table class="cmp-table">
+        <caption class="cmp-caption">Checked Nov 2026</caption>
         <thead>
-          <tr class="border-b border-line">
-            <th scope="col" class="px-5 py-4 font-normal text-ink-3"><span class="sr-only">Feature</span></th>
+          <tr>
+            <th scope="col"><span class="sr-only">Feature</span></th>
             {cols.map((c, i) => (
-              <th scope="col" class:list={['px-4 py-4 text-center font-medium', i === 0 ? 'bg-brand/[0.08] text-ink' : 'text-ink-2']}>{c}</th>
+              <th scope="col" class:list={[i === 0 && 'cmp-us']}>{c}</th>
             ))}
           </tr>
         </thead>
         <tbody>
           {rows.map((r) => (
-            <tr class="border-b border-line last:border-0">
-              <th scope="row" class="px-5 py-3.5 font-normal text-ink-2">{r.label}</th>
+            <tr>
+              <th scope="row">{r.label}</th>
               {r.values.map((v, i) => (
-                <td class:list={['px-4 py-3.5 text-center', i === 0 ? 'bg-brand/[0.08] font-medium text-ink' : 'text-ink-3']}>
+                <td class:list={[i === 0 && 'cmp-us', v === false && 'cmp-no']}>
                   {v === true ? (
-                    <span class:list={[i === 0 ? 'text-live' : 'text-ink-2']}>
-                      <svg class="mx-auto h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>
-                      <span class="sr-only">Yes</span>
-                    </span>
+                    <span class="cmp-yes"><Icon name="check" class="h-4 w-4" />Yes</span>
                   ) : v === false ? (
-                    <span><span aria-hidden="true">–</span><span class="sr-only">No</span></span>
+                    'No'
                   ) : (
                     v
                   )}
@@ -55,9 +64,130 @@ const rows: { label: string; values: Cell[] }[] = [
         </tbody>
       </table>
     </div>
-    <p class="mt-4 text-xs text-ink-3">
-      Competitor pricing and features as listed in the NexQ README; check each vendor for current details. "Can run fully
-      local" for NexQ means with local speech and AI providers selected.
+    <p class="cmp-note">
+      Competitor details are taken from the NexQ README and change over time, so check each vendor’s own page.
+      “Fully local option” for NexQ means choosing an on-device speech engine and a local model.
     </p>
   </div>
 </section>
+
+<!-- The scroll region joins the tab order only while it really scrolls sideways, so keyboard users can pan it. -->
+<script>
+  const cmp = document.querySelector<HTMLElement>('[data-cmp]');
+  if (cmp) {
+    const sync = () => {
+      if (cmp.scrollWidth > cmp.clientWidth) cmp.tabIndex = 0;
+      else cmp.removeAttribute('tabindex');
+    };
+    sync();
+    window.addEventListener('resize', sync);
+    // The table can grow after the web fonts arrive, without any window resize.
+    const table = cmp.querySelector('table');
+    if (table && typeof ResizeObserver !== 'undefined') new ResizeObserver(sync).observe(table);
+  }
+</script>
+
+<style is:global>
+  .cmp {
+    overflow-x: auto;
+    border: 1px solid hsl(var(--border));
+    border-radius: 1rem;
+  }
+  .cmp-table {
+    width: 100%;
+    min-width: 19rem;
+    border-collapse: collapse;
+    text-align: left;
+    font-size: 0.8125rem;
+    line-height: 1.35;
+  }
+  /* A visible caption: it dates the table. */
+  .cmp-caption {
+    caption-side: bottom;
+    border-top: 1px solid hsl(var(--border));
+    padding: 0.75rem 0.75rem;
+    text-align: left;
+    font-size: 0.8125rem;
+    color: hsl(var(--muted-foreground));
+  }
+  .cmp-table th,
+  .cmp-table td {
+    padding: 0.75rem 0.375rem;
+    vertical-align: middle;
+  }
+  .cmp-table thead th {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    text-align: center;
+    color: hsl(var(--muted-foreground));
+    border-bottom: 1px solid hsl(var(--border));
+  }
+  .cmp-table tbody tr + tr > * {
+    border-top: 1px solid hsl(var(--border));
+  }
+  .cmp-table tbody th {
+    padding-left: 0.75rem;
+    font-weight: 500;
+    color: hsl(var(--foreground));
+  }
+  .cmp-table td {
+    text-align: center;
+    color: hsl(var(--muted-foreground));
+  }
+  .cmp-table .cmp-no {
+    color: hsl(var(--muted-foreground));
+  }
+  /* Our column: a lifted surface, not a colour. */
+  .cmp-table .cmp-us {
+    background-color: hsl(var(--secondary));
+    color: hsl(var(--foreground));
+    font-weight: 600;
+  }
+  .cmp-yes {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+  .cmp-yes svg {
+    display: none;
+  }
+  .cmp-note {
+    margin-top: 1rem;
+    max-width: 44rem;
+    font-size: 0.8125rem;
+    line-height: 1.55;
+    color: hsl(var(--muted-foreground));
+  }
+
+  @media (min-width: 480px) {
+    .cmp-table {
+      font-size: 0.9375rem;
+    }
+    .cmp-table th,
+    .cmp-table td {
+      padding: 0.875rem 0.75rem;
+    }
+    .cmp-table tbody th {
+      padding-left: 1.25rem;
+    }
+    .cmp-yes svg {
+      display: block;
+    }
+  }
+  @media (min-width: 768px) {
+    .cmp-table {
+      min-width: 36rem;
+    }
+    .cmp-table tbody th {
+      width: 34%;
+    }
+  }
+  @media (forced-colors: active) {
+    .cmp,
+    .cmp-caption,
+    .cmp-table thead th,
+    .cmp-table tbody tr + tr > * {
+      border-color: ButtonText;
+    }
+  }
+</style>

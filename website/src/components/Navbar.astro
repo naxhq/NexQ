@@ -1,36 +1,21 @@
 ---
 import Icon from './Icon.astro';
-import { REPO, DOCS } from '../data/site';
+import { REPO, NAV, SECTION } from '../data/site';
 
 const base = import.meta.env.BASE_URL;
-const links = [
-  { label: 'Features', href: '#features' },
-  { label: 'Stealth', href: '#stealth' },
-  { label: 'What’s new', href: '#whats-new' },
-  { label: 'Download', href: '#download' },
-  { label: 'FAQ', href: '#faq' },
-  { label: 'Docs', href: DOCS, external: true },
-];
 ---
 
-<header
-  id="navbar"
-  class="fixed inset-x-0 top-0 z-50 h-16 border-b border-transparent transition-[background-color,border-color] duration-300"
->
-  <nav class="wrap flex h-full items-center justify-between gap-4" aria-label="Main">
-    <a href={base} class="flex items-center gap-2.5 rounded-lg text-ink" aria-label="NexQ home">
-      <img src={`${base}img/logo-96.png`} alt="" width="28" height="28" class="rounded-[7px]" />
-      <span class="text-[1.05rem] font-semibold tracking-tight">NexQ</span>
+<header id="navbar" class="fixed inset-x-0 top-0 z-50 h-16 border-b border-border bg-background">
+  <nav class="wrap flex h-full items-center justify-between gap-3" aria-label="Main">
+    <a href={base} class="flex items-center gap-2.5 rounded-lg text-foreground" aria-label="NexQ home">
+      <img src={`${base}img/logo-56.png`} alt="" width="28" height="28" class="rounded-[7px]" />
+      <span class="text-[1.05rem] font-bold tracking-tight">NexQ</span>
     </a>
 
     <ul class="hidden items-center gap-1 lg:flex">
-      {links.map((l) => (
+      {NAV.map((l) => (
         <li>
-          <a
-            href={l.href}
-            class="rounded-lg px-3 py-2 text-sm text-ink-2 transition-colors hover:text-ink"
-            {...(l.external ? { target: '_blank', rel: 'noopener' } : {})}
-          >
+          <a href={l.href} class="rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground">
             {l.label}
           </a>
         </li>
@@ -40,56 +25,42 @@ const links = [
     <div class="flex items-center gap-2">
       <a
         href={REPO}
-        target="_blank"
-        rel="noopener"
-        class="hidden min-h-[40px] items-center gap-2 rounded-lg px-2.5 text-ink-2 transition-colors hover:text-ink sm:flex"
+        class="hidden min-h-[40px] items-center gap-2 rounded-lg px-2.5 text-sm text-muted-foreground transition-colors hover:text-foreground md:flex"
       >
         <Icon name="github" class="h-[18px] w-[18px]" />
-        <span class="sr-only">NexQ on GitHub, star count:</span>
-        <img
-          src="https://img.shields.io/github/stars/naxhq/NexQ?style=flat&label=&color=161a24&labelColor=161a24&logo=&cacheSeconds=3600"
-          alt="GitHub stars"
-          height="20"
-          width="40"
-          class="h-5 w-auto rounded-sm"
-          loading="lazy"
-          decoding="async"
-        />
+        Star on GitHub
       </a>
-      <a href="#download" class="btn-primary min-h-[40px]! rounded-lg! px-4! text-sm!">
-        Download
-      </a>
+      <!-- Says "Download" at every width, so the wordmark always fits (the hero says "Get it for Windows or Mac"). -->
+      <a href={`#${SECTION.download}`} class="btn-primary min-h-[40px] px-4 text-sm">Download</a>
       <button
         id="nav-toggle"
         type="button"
-        class="inline-flex h-10 w-10 items-center justify-center rounded-lg text-ink-2 hover:text-ink lg:hidden"
+        class="inline-flex h-10 w-10 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground lg:hidden"
         aria-expanded="false"
         aria-controls="nav-menu"
+        aria-label="Menu"
       >
-        <span class="sr-only">Menu</span>
-        <Icon name="menu" class="h-5 w-5 nav-open-icon" />
-        <Icon name="close" class="hidden h-5 w-5 nav-close-icon" />
+        <Icon name="menu" class="nav-open-icon h-5 w-5" />
+        <Icon name="close" class="nav-close-icon hidden h-5 w-5" />
       </button>
     </div>
   </nav>
 
-  <div id="nav-menu" class="hidden border-b border-line bg-bg/95 backdrop-blur-xl lg:hidden">
+  <div id="nav-menu" class="hidden border-b border-border bg-background lg:hidden">
     <ul class="wrap flex flex-col py-3">
-      {links.map((l) => (
+      {NAV.map((l) => (
         <li>
-          <a
-            href={l.href}
-            class="flex min-h-[48px] items-center justify-between rounded-lg px-2 text-base text-ink-2 hover:text-ink"
-            {...(l.external ? { target: '_blank', rel: 'noopener' } : {})}
-          >
+          <a href={l.href} class="flex min-h-[48px] items-center rounded-lg px-2 text-base text-muted-foreground hover:text-foreground">
             {l.label}
-            {l.external && <Icon name="arrow-up-right" class="h-4 w-4 text-ink-3" />}
           </a>
         </li>
       ))}
       <li>
-        <a href={REPO} target="_blank" rel="noopener" class="flex min-h-[48px] items-center gap-2 rounded-lg px-2 text-base text-ink-2 hover:text-ink">
-          <Icon name="github" class="h-4 w-4" /> GitHub
+        <a
+          href={REPO}
+          class="flex min-h-[48px] items-center gap-2 rounded-lg px-2 text-base text-muted-foreground hover:text-foreground"
+        >
+          <Icon name="github" class="h-4 w-4" /> Star on GitHub
         </a>
       </li>
     </ul>
@@ -97,24 +68,9 @@ const links = [
 </header>
 
 <script>
-  const nav = document.getElementById('navbar');
+  // Mobile menu: a button with aria-expanded. Escape closes it and returns focus to the button.
   const toggle = document.getElementById('nav-toggle');
   const menu = document.getElementById('nav-menu');
-
-  if (nav) {
-    let scrolled: boolean | null = null;
-    const onScroll = () => {
-      const next = window.scrollY > 8;
-      if (next === scrolled) return;
-      scrolled = next;
-      nav.classList.toggle('bg-bg/80', next);
-      nav.classList.toggle('backdrop-blur-xl', next);
-      nav.classList.toggle('border-line', next);
-      nav.classList.toggle('border-transparent', !next);
-    };
-    window.addEventListener('scroll', onScroll, { passive: true });
-    onScroll();
-  }
 
   if (toggle && menu) {
     const setOpen = (open: boolean) => {

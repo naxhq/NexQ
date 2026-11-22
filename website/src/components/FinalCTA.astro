@@ -1,31 +1,31 @@
 ---
+/**
+ * The close. Plain and confident: one blue action, one quiet link, the logo, no decoration.
+ * On phones the button says what the hero says ("Get it for Windows or Mac"); the nav says "Download".
+ */
 import Icon from './Icon.astro';
-import { RELEASES_LATEST, REPO } from '../data/site';
+import { CURRENT_VERSION } from '../data/releases';
+import { REPO, SECTION } from '../data/site';
 
-const base = import.meta.env.BASE_URL;
+const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
 ---
 
-<section class="relative overflow-hidden border-t border-line py-28 sm:py-36" aria-labelledby="cta-title">
-  <div
-    class="pointer-events-none absolute inset-x-0 bottom-0 h-full"
-    style="background: radial-gradient(50% 60% at 50% 100%, rgba(59,130,246,0.10) 0%, transparent 70%);"
-    aria-hidden="true"
-  ></div>
-  <div class="wrap relative flex flex-col items-center text-center" data-reveal>
-    <img src={`${base}img/logo-96.png`} alt="" width="56" height="56" class="rounded-2xl shadow-[0_12px_40px_-12px_rgba(59,130,246,0.6)]" loading="lazy" />
-    <h2 id="cta-title" class="mt-8 max-w-3xl text-[2.25rem] font-semibold leading-[1.05] tracking-[-0.04em] text-ink sm:text-6xl sm:leading-none">
-      Walk into your next call <span class="font-serif font-normal italic tracking-[-0.02em]">prepared.</span>
-    </h2>
-    <p class="mt-5 max-w-xl text-lg text-ink-2">Free, open source, and running on your own machine in minutes.</p>
-    <div class="mt-9 flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
-      <a href={RELEASES_LATEST} class="btn-primary sm:px-6!">
-        <Icon name="download" />
-        <span data-download-label>Download for Windows</span>
+<section id="final-cta" class="section border-t border-border" aria-labelledby="final-cta-title">
+  <div class="wrap">
+    <img src={`${base}img/logo-96.png`} alt="" width="56" height="56" loading="lazy" decoding="async" class="rounded-[14px]" />
+    <h2 id="final-cta-title" class="display mt-8 max-w-[14ch] text-balance">Walk into your next call prepared.</h2>
+    <p class="lede">Free, open source, and no bot joins your call. Windows and Mac.</p>
+    <div class="mt-9 flex flex-col gap-3 sm:flex-row sm:items-center">
+      <a href={`#${SECTION.download}`} class="btn-primary min-h-[52px] px-6 text-base">
+        <Icon name="download" class="h-5 w-5" />
+        <span class="sm:hidden">Get it for Windows or Mac</span>
+        <span class="hidden sm:inline">Download NexQ</span>
       </a>
-      <a href={REPO} target="_blank" rel="noopener" class="btn-ghost">
-        <Icon name="github" />
-        View source
+      <a href={REPO} class="btn-ghost min-h-[52px] px-6 text-base">
+        <Icon name="github" class="h-5 w-5" />
+        Star on GitHub
       </a>
     </div>
+    <p class="mt-6 text-sm text-muted-foreground"><span class="font-mono">v{CURRENT_VERSION}</span> · MIT license</p>
   </div>
 </section>

@@ -1,0 +1,28 @@
+---
+// One transcript line, as TranscriptLine.tsx draws it: left border in the speaker colour at 40%,
+// m:ss time, speaker name in its colour, text, and the amber translation under it (its row is
+// collapsed until the translation shows, so there is never an empty gap).
+import type { Line } from './content';
+interface Props {
+  line: Line;
+  /** Hero lines are revealed word by word by callDemo.ts (from/to are playhead positions). */
+  live?: boolean;
+}
+const { line, live = false } = Astro.props;
+const label = line.who === 'you' ? 'You' : 'Them';
+---
+
+<div
+  class:list={['ov-line', live && 'is-on']}
+  data-who={line.who}
+  data-live={live ? '' : undefined}
+  data-from={live ? line.from : undefined}
+  data-to={live ? line.to : undefined}
+>
+  <span class="ov-ts">{line.ts}</span>
+  <span class="ov-who">{label}</span>
+  <div class="ov-lt">
+    <span class="ov-tx" lang={line.lang}>{line.text}</span><span class="ov-tail"></span>
+    {line.tr && <div class="ov-trw"><div class="ov-trl"><div class="ov-trt" lang={line.lang ? 'en' : undefined}><span class="sr-only">Translation: </span>{line.tr}</div></div></div>}
+  </div>
+</div>

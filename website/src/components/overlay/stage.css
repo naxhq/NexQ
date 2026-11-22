@@ -1,0 +1,763 @@
+/*
+ * The stage: the hero and the call story share one grid, so the overlay is ONE pinned object.
+ *
+ *   >= 900px   two columns. Text (hero, then the beats) on the left, the overlay pinned on the right
+ *              for the whole length of the grid, so it is the same element from the first word to the
+ *              last beat. It lets go when the story ends.
+ *   <  900px   one column: hero, the overlay once, then the beats, each with a still of its moment.
+ *   no JS      the overlay shows its final state and each beat shows its still.
+ *
+ * The overlay's size follows its box AND the viewport height (--ov-fs in overlay.css), so the whole
+ * overlay and its bar fit on a 1280x610 window. The bar under it holds the release wave (the
+ * call's audio) and the controls.
+ */
+
+.nx-stage {
+  --pin-top: clamp(4.5rem, calc(50svh - 17rem), 9rem);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* ─── Hero ─── */
+.nx-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding-top: calc(var(--nav-h) + 1.75rem);
+  padding-bottom: 2.5rem;
+}
+.nx-pill {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4rem 0.95rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  line-height: 1.3;
+  color: hsl(var(--muted-foreground));
+  text-decoration: none;
+  transition:
+    border-color 0.25s var(--ease-spring),
+    color 0.25s var(--ease-spring);
+}
+.nx-pill:hover {
+  border-color: hsl(var(--muted-foreground) / 0.5);
+  color: hsl(var(--foreground));
+}
+.nx-pill__v {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: hsl(var(--foreground));
+}
+.nx-hero .eyebrow {
+  margin-bottom: 0.75rem;
+}
+.nx-hero .display {
+  margin-top: 1.5rem;
+  font-size: clamp(2.4rem, 2.6vw + 1.1rem, 3.2rem);
+}
+.nx-sub {
+  margin-top: 1.4rem;
+  max-width: 30rem;
+  font-size: clamp(1.0625rem, 0.3vw + 1rem, 1.1875rem);
+  line-height: 1.55;
+  color: hsl(var(--muted-foreground));
+}
+.nx-cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.75rem;
+}
+.nx-cta [hidden] {
+  display: none;
+}
+.nx-cta .btn-primary span,
+.nx-cta .btn-ghost span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.nx-small {
+  margin-top: 0.9rem;
+  font-size: 0.875rem;
+  color: hsl(var(--muted-foreground));
+}
+.nx-proof {
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
+  justify-content: start;
+  gap: 0.35rem 2.25rem;
+  margin: 2.25rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.875rem;
+  color: hsl(var(--muted-foreground));
+}
+.nx-proof li {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+}
+.nx-proof b {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: hsl(var(--foreground));
+}
+/* One blue button: it names your system from 640px, and on phones jumps to Download. */
+.nx-dl--short {
+  display: none;
+}
+@media (max-width: 639px) {
+  .nx-dl--os {
+    display: none;
+  }
+  .nx-dl--short {
+    display: inline-flex;
+  }
+}
+
+/* ─── The pinned overlay ─── */
+.nx-pin {
+  position: relative;
+  margin-block: 0.5rem 2.5rem;
+}
+.nx-screen {
+  --pad: 0.55rem;
+  position: relative;
+  padding: var(--pad);
+  overflow: hidden;
+  border: 1px solid hsl(var(--border) / 0.8);
+  border-radius: 1.1rem;
+  background: hsl(var(--card));
+}
+.nx-screen .nx-slide {
+  position: absolute;
+  inset: 0;
+}
+.nx-screen .ov-fit {
+  position: relative;
+  transition:
+    opacity 0.5s var(--ease-spring),
+    transform 0.7s var(--ease-spring);
+}
+
+/* The slide being shared: real text, the same in both panes of the stealth demo. */
+.nx-slide {
+  padding: 1.1rem 1.2rem;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  color: hsl(var(--foreground) / 0.9);
+}
+.nx-slide__t {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+  line-height: 1.2;
+  color: hsl(var(--foreground));
+}
+.nx-slide ul {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+.nx-slide li {
+  padding-left: 0.9rem;
+  position: relative;
+}
+.nx-slide li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 0.3rem;
+  height: 0.3rem;
+  border-radius: 999px;
+  background: hsl(var(--muted-foreground));
+}
+
+/* Call progress: a thin line under the overlay that follows the scroll through the beats. */
+.nx-callline {
+  position: absolute;
+  z-index: 3;
+  left: var(--pad);
+  right: var(--pad);
+  bottom: calc(var(--pad) / 2 - 1px);
+  display: none;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 1px;
+  background: hsl(var(--border) / 0.5);
+}
+.nx-callline i {
+  display: block;
+  height: 100%;
+  background: hsl(var(--primary));
+  transform: scaleX(var(--call-p, 0));
+  transform-origin: left center;
+}
+
+.nx-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+.nx-audio {
+  --wave-played: hsl(var(--muted-foreground) / 0.75);
+  --wave-h: 24px;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.nx-audio .tag {
+  flex: none;
+  color: hsl(var(--foreground));
+}
+.nx-audio .nx-wave {
+  flex: 1;
+  min-width: 0;
+}
+.nx-bar__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.nx-cap {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  color: hsl(var(--muted-foreground));
+}
+.nx-cap strong {
+  font-weight: 600;
+  color: hsl(var(--foreground));
+}
+.nx-bar__ctl {
+  display: flex;
+  flex: none;
+  gap: 0.5rem;
+}
+.nx-pause {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.75rem;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  transition:
+    border-color 0.2s var(--ease-spring),
+    color 0.2s var(--ease-spring);
+}
+.nx-pause:hover {
+  border-color: hsl(var(--muted-foreground) / 0.5);
+  color: hsl(var(--foreground));
+}
+.nx-pause svg {
+  width: 1rem;
+  height: 1rem;
+}
+.nx-pause .i-play,
+.nx-pause[aria-pressed='true'] .i-pause {
+  display: none;
+}
+.nx-pause[aria-pressed='true'] .i-play {
+  display: block;
+}
+/* The demo's own Assist is the quiet one: a ghost button with a blue icon (the page's one blue button is Download). */
+.nx-assist {
+  gap: 0.6rem;
+}
+.nx-assist svg {
+  color: hsl(var(--primary));
+}
+.nx-assist:disabled,
+.nx-assist[aria-disabled='true'] {
+  opacity: 0.6;
+  cursor: default;
+}
+/* Beats have no Assist of their own to press: the pause button is alone and stays on the right. */
+.nx-stage:not([data-beat='h']) .nx-assist {
+  display: none;
+}
+.nx-bar__ctl {
+  margin-left: auto;
+}
+/* A touch screen has no Space key to name. */
+@media (hover: none) {
+  .nx-assist .kbd {
+    display: none;
+  }
+}
+html:not(.js) .nx-bar__ctl,
+html:not(.js) .nx-hint {
+  display: none;
+}
+.nx-hint {
+  color: hsl(var(--muted-foreground));
+}
+
+/* Before the script has rewound the hero, hide the final state so it never flashes. */
+@media (prefers-reduced-motion: no-preference) {
+  .js .nx-stage:not(.is-ready) .ov .ov-line[data-live],
+  .js .nx-stage:not(.is-ready) .ov .ov-hero-ans,
+  .js .nx-stage:not(.is-ready) .ov .ov-qrow--has {
+    animation: nx-unhide 0.01s linear 3s forwards;
+    opacity: 0 !important;
+  }
+}
+@keyframes nx-unhide {
+  to { opacity: 1; }
+}
+
+/* ─── "Hide from screen share" panes ─── */
+.nx-panes {
+  display: grid;
+  gap: 0.75rem;
+}
+.nx-pane {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+}
+.nx-pane figcaption {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+}
+.nx-mscreen {
+  position: relative;
+  flex: 1;
+  min-height: 13.5rem;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.8rem;
+  background: hsl(var(--card));
+}
+.nx-mov {
+  position: absolute;
+  right: 0.7rem;
+  bottom: 0.7rem;
+  width: min(64%, 21rem);
+  transition:
+    opacity 0.5s var(--ease-spring),
+    transform 0.7s var(--ease-spring),
+    visibility 0s linear 0s;
+}
+.nx-stage[data-stealth='on'] .nx-mov--share {
+  opacity: 0;
+  visibility: hidden;
+  transform: translate3d(0, 0.7rem, 0) scale(0.98);
+  transition:
+    opacity 0.5s var(--ease-spring),
+    transform 0.7s var(--ease-spring),
+    visibility 0s linear 0.5s;
+}
+.nx-stage[data-stealth='on'] .ov--mini .ov-hb--stealth {
+  background: hsl(var(--primary) / 0.12);
+  color: hsl(var(--primary));
+}
+.nx-stage[data-stealth='on'] .ov--mini .ov-hb .s-off {
+  display: none;
+}
+.nx-stage[data-stealth='on'] .ov--mini .ov-hb .s-on {
+  display: block;
+}
+.ov--mini {
+  font-size: 12.5px;
+  --ov-fs: 12.5px;
+}
+.ov--mini .ov-head {
+  padding: 0.4em 0.7em;
+}
+.ov-minib {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1em;
+  padding: 0.4em 0.5em 0.5em;
+}
+.ov--mini .ov-line {
+  padding: 0.35em 0.5em;
+}
+
+/* Pinned copy: replaces the big overlay while the stealth beat is active (wide screens, JS on). */
+.nx-panes--pin {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  grid-template-rows: 1fr 1fr;
+  padding: 0.7rem;
+  border-radius: inherit;
+  background: hsl(var(--card));
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.5s var(--ease-spring),
+    visibility 0s linear 0.5s;
+}
+.nx-panes--pin .nx-mscreen {
+  min-height: 0;
+}
+.nx-stage[data-beat='e'] .nx-panes--pin {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 0.1s, 0s;
+}
+.nx-stage[data-beat='e'] .nx-screen .ov-fit {
+  opacity: 0;
+}
+
+/* Beat copy of the panes: phones and no-JS only. */
+.nx-panes--beat {
+  display: none;
+  margin-top: 1.25rem;
+}
+
+/* ─── The call story ─── */
+.nx-call {
+  padding-bottom: 3rem;
+}
+.nx-callhead {
+  padding-top: 3rem;
+  padding-bottom: 1rem;
+}
+.nx-callhead .lede {
+  margin-top: 1rem;
+}
+.nx-beat {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  max-width: 30rem;
+  padding-block: 2.5rem;
+  border-top: 1px solid hsl(var(--border) / 0.6);
+}
+.nx-beat .eyebrow {
+  transition: color 0.4s var(--ease-spring);
+}
+.nx-beat .h3 {
+  margin-top: 0.6rem;
+}
+.nx-beat__lede {
+  margin-top: 0.9rem;
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  color: hsl(var(--muted-foreground));
+}
+.nx-facts {
+  display: grid;
+  gap: 0.7rem;
+  margin: 1.25rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.nx-facts li {
+  padding-left: 1rem;
+  border-left: 1px solid hsl(var(--border));
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  color: hsl(var(--foreground) / 0.88);
+}
+.nx-facts .kbd {
+  vertical-align: 0.04em;
+}
+.nx-also {
+  margin-top: 1rem;
+  font-size: 0.875rem;
+  line-height: 1.55;
+  color: hsl(var(--muted-foreground));
+}
+.nx-also b {
+  font-weight: 600;
+  color: hsl(var(--foreground) / 0.9);
+}
+.nx-new {
+  align-self: flex-start;
+  margin-top: 1rem;
+  padding: 0.125rem 0.625rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: 9999px;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: hsl(var(--muted-foreground));
+}
+.nx-still {
+  display: none;
+  margin-top: 1.5rem;
+}
+.nx-toggle {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  align-self: flex-start;
+  gap: 0.75rem;
+  margin-top: 1.4rem;
+  padding: 0 1.1rem 0 0.55rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
+  background: hsl(var(--card));
+  font: inherit;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+  transition: border-color 0.2s var(--ease-spring);
+}
+.nx-toggle:hover {
+  border-color: hsl(var(--muted-foreground) / 0.5);
+}
+.nx-switch {
+  position: relative;
+  width: 2.5rem;
+  height: 1.45rem;
+  flex: none;
+  border-radius: 999px;
+  background: hsl(var(--muted));
+  box-shadow: inset 0 0 0 1px hsl(var(--border));
+  transition: background-color 0.3s var(--ease-spring);
+}
+.nx-switch::after {
+  content: '';
+  position: absolute;
+  top: 0.2rem;
+  left: 0.2rem;
+  width: 1.05rem;
+  height: 1.05rem;
+  border-radius: 999px;
+  background: hsl(var(--foreground));
+  transition: transform 0.35s var(--ease-spring);
+}
+.nx-toggle[aria-pressed='true'] .nx-switch {
+  background: hsl(var(--primary-btn));
+}
+.nx-toggle[aria-pressed='true'] .nx-switch::after {
+  transform: translateX(1.05rem);
+}
+.nx-status {
+  /* Two lines are reserved, so the column never jumps when the switch flips. */
+  min-height: 3em;
+  margin-top: 0.8rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: hsl(var(--foreground) / 0.9);
+}
+html:not(.js) .nx-toggle,
+html:not(.js) .nx-status {
+  display: none;
+}
+.nx-nojs {
+  display: none;
+  margin-top: 1rem;
+  font-size: 0.875rem;
+  color: hsl(var(--muted-foreground));
+}
+html:not(.js) .nx-nojs {
+  display: block;
+}
+
+/* ─── Phones and no-JS: stills in the beats ─── */
+@media (max-width: 519px) {
+  /* The slide on top and the small overlay under it, so the overlay never covers the slide's text. */
+  .nx-panes--beat .nx-mscreen {
+    min-height: 19.5rem;
+  }
+  .nx-bar__row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .nx-bar__ctl .nx-assist {
+    flex: 1;
+  }
+}
+@media (max-width: 899px) {
+  .nx-still {
+    display: block;
+  }
+  .nx-panes--beat {
+    display: grid;
+  }
+  .nx-panes--pin {
+    display: none;
+  }
+  .nx-hero .display {
+    max-width: none;
+  }
+  .nx-beat {
+    max-width: none;
+  }
+}
+html:not(.js) .nx-still {
+  display: block;
+}
+html:not(.js) .nx-panes--beat {
+  display: grid;
+}
+html:not(.js) .nx-panes--pin {
+  display: none;
+}
+
+/* ─── Wide: two columns, the overlay pinned ─── */
+@media (min-width: 900px) {
+  .nx-stage {
+    grid-template-columns: minmax(0, 1fr) clamp(21rem, calc(60vw - 3rem), 38rem);
+    column-gap: clamp(1.5rem, 4vw, 4rem);
+  }
+  .nx-hero {
+    grid-column: 1;
+    grid-row: 1;
+    min-height: min(100svh, 52rem);
+    padding-top: var(--pin-top);
+  }
+  .nx-call {
+    grid-column: 1;
+    grid-row: 2;
+    padding-bottom: 12svh;
+  }
+  .nx-pin {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    align-self: start;
+    position: sticky;
+    top: var(--pin-top);
+    margin: 0;
+  }
+  .nx-screen {
+    --pad: 0.65rem;
+  }
+  .nx-callline {
+    display: block;
+  }
+  .nx-beat {
+    min-height: min(80svh, 44rem);
+  }
+  .js .nx-beat {
+    opacity: 0.86;
+    transition: opacity 0.6s var(--ease-spring);
+  }
+  .js .nx-beat.is-active {
+    opacity: 1;
+  }
+  .nx-beat.is-active .eyebrow {
+    color: hsl(var(--foreground));
+  }
+  .js .nx-still,
+  .js .nx-panes--beat {
+    display: none;
+  }
+}
+
+/* Between 900 and 1100px the text column is only 320 to 450px wide: a smaller gutter and slightly smaller type give
+   it room for about 40 characters a line, without making the overlay (which needs 460px of width) any smaller. */
+@media (min-width: 900px) and (max-width: 1099px) {
+  .nx-stage {
+    column-gap: 1.5rem;
+  }
+  .nx-hero .display {
+    font-size: 2.15rem;
+  }
+  .nx-beat__lede {
+    font-size: 1rem;
+    line-height: 1.55;
+  }
+  .nx-facts li {
+    font-size: 0.9rem;
+  }
+  .nx-beat .h3 {
+    font-size: 1.55rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-mov,
+  .nx-panes--pin,
+  .nx-screen .ov-fit,
+  .nx-switch,
+  .nx-switch::after {
+    transition: none !important;
+  }
+  .js .nx-beat {
+    transition: none;
+  }
+  .js .nx-beat.is-active,
+  .js .nx-beat {
+    opacity: 1;
+  }
+}
+
+/* Forced colors (Windows high contrast): the screen, the two stealth screens and the overlay in them are pictures of
+   a desktop, so they keep their own colours on one fixed dark ground with a system-coloured border (see
+   overlay.css). Everything else on the page follows the system palette. */
+@media (forced-colors: active) {
+  .nx-screen,
+  .nx-mscreen,
+  .nx-panes--pin {
+    forced-color-adjust: none;
+    background: #080c16;
+    border-color: CanvasText;
+  }
+  .nx-panes--pin {
+    border-color: transparent;
+  }
+  .nx-pane figcaption {
+    color: CanvasText;
+  }
+  /* The switch is drawn with background colours, which the system replaces: give it a border and a knob that show. */
+  .nx-switch {
+    border: 1px solid ButtonText;
+    box-shadow: none;
+  }
+  .nx-switch::after {
+    background: ButtonText;
+  }
+  .nx-toggle[aria-pressed='true'] .nx-switch {
+    background: Highlight;
+  }
+  .nx-toggle[aria-pressed='true'] .nx-switch::after {
+    background: HighlightText;
+  }
+  .nx-panes--pin .nx-pane figcaption {
+    color: #e4e4e7;
+  }
+}
+
+/* Call progress, tied to the scroll through the beats. Where the browser has scroll-driven animations
+   the line is drawn from the beats' own scroll timeline (0 when the first beat starts to cross the
+   middle of the screen, 1 when the last one has). Elsewhere callDemo.ts sets --call-p instead. */
+@supports (animation-timeline: view()) and (timeline-scope: --nx-beats) {
+  @media (min-width: 900px) and (prefers-reduced-motion: no-preference) {
+    .nx-stage {
+      timeline-scope: --nx-beats;
+    }
+    .nx-beats {
+      view-timeline-name: --nx-beats;
+      view-timeline-axis: block;
+      view-timeline-inset: 50%;
+    }
+    .nx-callline i {
+      animation: nx-callline linear both;
+      animation-timeline: --nx-beats;
+      animation-range: cover;
+    }
+  }
+}
+@keyframes nx-callline {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}

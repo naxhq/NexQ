@@ -1,0 +1,27 @@
+---
+// A detected question in the card (src/overlay/QuestionDetector.tsx L138 info 5%, border info 10%, L267-298).
+// `caught` is the card waiting for an answer, `answered` the same card with its check mark.
+import OvIcon from './OvIcon.astro';
+interface Props {
+  text: string;
+  state: 'caught' | 'answered';
+  /** The moments of the pinned overlay that show this row (a still leaves it out). */
+  for?: string;
+}
+const { text, state, for: dataFor } = Astro.props;
+---
+
+<div class="ov-g ov-qrow ov-qrow--has" data-for={dataFor} data-state={state}>
+  <span class="ov-qi">
+    <OvIcon name="help" class="ov-i ov-i--l" />
+    {state === 'caught' ? <i class="ov-qdot"></i> : <i class="ov-qok"><OvIcon name="check" class="ov-i" /></i>}
+  </span>
+  <p class="ov-qt">&ldquo;{text}&rdquo;</p>
+  {
+    state === 'caught' ? (
+      <span class="ov-qa" aria-hidden="true"><span class="qa-a" style="display:inline-flex"><OvIcon name="sparkles" class="ov-i ov-i--s" />Assist</span></span>
+    ) : (
+      <span class="ov-qa ov-qa--done" aria-hidden="true"><span style="display:inline-flex"><OvIcon name="check" class="ov-i ov-i--s" />Answered</span></span>
+    )
+  }
+</div>

@@ -1,143 +1,215 @@
 ---
+/**
+ * Hero and "Scroll the call" as ONE stage, so the overlay is one pinned object from the first word to the last beat.
+ * One grid parent is what makes that possible, which is why this file renders both sections.
+ *
+ *   .nx-stage        the grid (stage.css). Two columns from 900px: text on the left, the overlay pinned on the right.
+ *   #hero            headline, version pill, download, proof. Its overlay plays the opening once, then holds on the
+ *                    question card until the visitor presses Assist.
+ *   .nx-pin          the pinned column: the overlay (overlay/Overlay.astro), the stealth screens that replace it in
+ *                    beat e (overlay/StealthPanes.astro), the call-progress line, then the bar with the release wave
+ *                    (the call's audio) and the Pause and Assist controls.
+ *   #call            five beats (a to e). Each has a timestamp, one headline, one sentence, at most three facts and,
+ *                    on phones and without JavaScript, a still of its moment (overlay/BeatFrame.astro).
+ *   callDemo.ts      the one state machine: plays the hero, turns the scroll position into the moment on show
+ *                    (`data-view` on the overlay, `data-beat` on the stage) and the header timer, handles the keys.
+ *
+ * All on-screen words of the overlay live in overlay/content.ts. Styles: overlay/stage.css (layout) and
+ * overlay/overlay.css (the overlay). The hero conversation is laid onto the phrases of this release's wave (planHero).
+ */
+import Wave from './Wave.astro';
 import Icon from './Icon.astro';
-import { RELEASES_LATEST, REPO } from '../data/site';
+import Overlay from './overlay/Overlay.astro';
+import BeatFrame from './overlay/BeatFrame.astro';
+import StealthPanes from './overlay/StealthPanes.astro';
+import Slide from './overlay/Slide.astro';
+import OvIcon from './overlay/OvIcon.astro';
+import Keys from './overlay/Keys.astro';
+import { planHero, mmss, TIMES, T0, HERO_SECONDS } from './overlay/content';
+import './overlay/stage.css';
+import { SECTION, REPO, RELEASES_LATEST, RELEASES_URL, COUNTS, HOTKEYS, AUTO_DETECT_ENGINES } from '../data/site';
+import { CURRENT_VERSION, RELEASES, waveFor } from '../data/releases';
 
-const base = import.meta.env.BASE_URL;
-const proof = [
-  { value: '11', label: 'speech-to-text engines' },
-  { value: '9', label: 'AI providers, local or cloud' },
-  { value: '0', label: 'bots in your meeting' },
-  { value: 'MIT', label: 'open source, free forever' },
-];
+// The hero conversation is laid onto the phrases of this release's wave (see planHero).
+const plan = planHero(waveFor(CURRENT_VERSION));
+
+// The pill announces the newest release, by its one-liner (or its first item): "v2.41 · Your notes and tools, in the answer".
+const latest = RELEASES[0];
+const latestTag = `v${latest.version.split('.').slice(0, 2).join('.')}`;
+const latestText = (latest.oneLiner ?? latest.items[0] ?? '').replace(/\.$/, '');
+
+// Beat facts that data/site.ts owns, so a change there reaches the page.
+// Beat a: a few of the engines that detect the language (all of them are in the Your AI section and the docs).
+const detectNames = ['Deepgram Nova-3', 'Cartesia', 'Parakeet v3', 'Groq'];
+for (const n of detectNames) if (!AUTO_DETECT_ENGINES.includes(n)) throw new Error(`Hero: "${n}" is not in AUTO_DETECT_ENGINES (data/site.ts)`);
+const detectList = new Intl.ListFormat('en', { style: 'long', type: 'conjunction' }).format(detectNames);
+// Beat c: the in-overlay keys. Space is Assist and 1 to 5 are the other actions, in the order of the overlay buttons.
+const appKeys = HOTKEYS.filter((h) => h.scope === 'app');
+const numbered = appKeys.filter((h) => /^[0-9]$/.test(h.keys[0]));
+const numberedNames = new Intl.ListFormat('en', { style: 'long', type: 'disjunction' }).format(numbered.map((h) => h.action));
 ---
 
-<section class="relative overflow-hidden pt-28 sm:pt-36" aria-labelledby="hero-title">
-  <!-- Quiet top light: neutral, not decorative color -->
-  <div
-    class="pointer-events-none absolute inset-x-0 top-0 h-[38rem]"
-    style="background: radial-gradient(60% 50% at 50% 0%, rgba(238,241,247,0.06) 0%, transparent 70%);"
-    aria-hidden="true"
-  ></div>
-
-  <div class="wrap relative">
-    <a
-      href="#whats-new"
-      class="hero-in group inline-flex max-w-full items-center gap-2.5 rounded-full border border-line-strong bg-bg-raised/70 py-1.5 pl-2 pr-3.5 text-[0.8125rem] text-ink-2 transition-colors hover:border-[rgba(160,175,215,0.32)] hover:text-ink"
-      style="--d: 0ms"
-    >
-      <span class="rounded-full bg-brand/15 px-2 py-0.5 font-mono text-[0.6875rem] font-medium text-brand-ink">v2.25</span>
-      <span class="truncate">macOS beta and Hide from screen share</span>
-      <Icon name="arrow-right" class="h-3.5 w-3.5 shrink-0 transition-transform duration-300 ease-spring group-hover:translate-x-0.5" />
-    </a>
-
-    <h1
-      id="hero-title"
-      class="hero-in mt-7 max-w-4xl text-[2.6rem] font-semibold leading-[1.02] tracking-[-0.045em] text-ink sm:text-6xl sm:leading-none lg:text-[5.25rem]"
-      style="--d: 80ms"
-    >
-      The meeting copilot that stays on <span class="font-serif font-normal italic tracking-[-0.02em] text-ink">your side</span> of the screen.
-    </h1>
-
-    <p class="hero-in mt-6 max-w-2xl text-lg leading-relaxed text-ink-2 sm:text-xl sm:leading-7" style="--d: 160ms">
-      NexQ transcribes both sides of the call in real time and helps you answer in seconds, from a private overlay
-      you can hide from screen share. No bot joins. Bring local models, any API, or your Claude subscription. Free and open source.
+<div class="wrap nx-stage" data-stage data-beat="h" data-stealth="on">
+  <section id={SECTION.hero} class="nx-hero" aria-labelledby="hero-title">
+    <p class="eyebrow">{mmss(0)}</p>
+    {latestText && (
+      <a href="#knows" class="nx-pill">
+        <span class="nx-pill__v">{latestTag}</span><span aria-hidden="true">·</span>
+        <span>{latestText}</span>
+      </a>
+    )}
+    <h1 id="hero-title" class="display">The answer stays on your side of the screen.</h1>
+    <p class="nx-sub">
+      An open-source interview and meeting copilot. It hears both sides of your call and answers in one keypress, in a private overlay you can hide from screen share. Use local models, any API or your Claude subscription.
     </p>
-
-    <div class="hero-in mt-9 flex flex-col gap-3 sm:flex-row sm:items-center" style="--d: 240ms">
-      <a href={RELEASES_LATEST} class="btn-primary sm:px-6!" data-download-cta>
-        <Icon name="download" />
-        <span data-download-label>Download for Windows</span>
+    <div class="nx-cta">
+      <!-- One blue button. 640px and up it names your system; on phones, which cannot run either build, it jumps to Download. -->
+      <a href={RELEASES_LATEST} class="btn-primary nx-dl nx-dl--os">
+        <span data-os="win"><Icon name="windows" class="h-[18px] w-[18px]" />Download for Windows</span>
+        <span data-os="mac" hidden><Icon name="apple" class="h-[18px] w-[18px]" />Download for Mac</span>
       </a>
-      <a href={REPO} target="_blank" rel="noopener" class="btn-ghost">
-        <Icon name="github" />
-        Star on GitHub
-      </a>
+      <a href={`#${SECTION.download}`} class="btn-primary nx-dl nx-dl--short">Get it for Windows or Mac</a>
+      <a href={REPO} class="btn-ghost"><span><Icon name="star" class="h-[18px] w-[18px]" />Star on GitHub</span></a>
     </div>
-    <p class="hero-in mt-4 text-sm text-ink-3" style="--d: 300ms">
-      Windows 10/11 <span aria-hidden="true">·</span> macOS on Apple Silicon (beta) <span aria-hidden="true">·</span>
-      <a href="#download" class="underline decoration-line-strong underline-offset-4 hover:text-ink-2">other options</a>
-    </p>
+    <p class="nx-small">Windows 10 and 11, macOS on Apple Silicon (beta). <a class="link" href={RELEASES_URL}>Other builds</a></p>
 
-    <figure class="hero-in relative mt-16 sm:mt-20" style="--d: 380ms">
-      <div class="frame relative">
-        <video
-          id="hero-video"
-          class="block aspect-[1600/1162] w-full"
-          width="1600"
-          height="1162"
-          muted
-          loop
-          playsinline
-          preload="metadata"
-          poster={`${base}media/hero-demo-poster.webp`}
-          aria-describedby="hero-video-caption"
-        >
-          <source src={`${base}media/hero-demo.webm`} type="video/webm" />
-          <source src={`${base}media/hero-demo.mp4`} type="video/mp4" />
-        </video>
-        <button
-          id="hero-video-toggle"
-          type="button"
-          class="absolute bottom-3 right-3 hidden h-9 items-center gap-2 rounded-full border border-line-strong bg-bg/80 px-3 text-xs font-medium text-ink-2 backdrop-blur-sm hover:text-ink"
-          aria-pressed="false"
-        >
-          <span data-state-label>Pause</span>
-          <span class="sr-only">demo video</span>
-        </button>
+    <ul class="nx-proof" aria-label="At a glance">
+      <li><b>{COUNTS.stt}</b> speech engines</li>
+      <li><b>{COUNTS.llm}</b> AI providers</li>
+      <li><b>0</b> bots in your call</li>
+      <li><b>MIT</b> licensed</li>
+    </ul>
+  </section>
+
+  <div class="nx-pin" data-pin>
+    <div class="nx-screen">
+      <Slide />
+      <Overlay heroLines={plan.lines} />
+      <StealthPanes class="nx-panes--pin" />
+      <div class="nx-callline" aria-hidden="true"><i></i></div>
+    </div>
+    <div class="nx-bar">
+      <!-- The release wave is the call's audio: its phrases carry the hero transcript, You green and Them orange. -->
+      <div class="nx-audio">
+        <span class="tag">v{CURRENT_VERSION}</span>
+        <Wave
+          version={CURRENT_VERSION}
+          size="sm"
+          speakers={plan.speakers}
+          label={`Audio of the sample call, the release waveform for v${CURRENT_VERSION}. Orange is them and green is you.`}
+        />
       </div>
-      <figcaption id="hero-video-caption" class="mt-4 flex items-center gap-2.5 text-sm text-ink-3">
-        <span class="live-dot" aria-hidden="true"></span>
-        A live technical interview in NexQ's demo mode: both sides transcribed and translated, the question detected, an answer one keypress away.
-      </figcaption>
-    </figure>
-
-    <dl class="mt-16 grid grid-cols-2 gap-x-6 gap-y-8 border-t border-line pt-10 sm:mt-20 lg:grid-cols-4">
-      {proof.map((p, i) => (
-        <div data-reveal style={`--reveal-delay: ${i * 70}ms`}>
-          <dt class="sr-only">{p.label}</dt>
-          <dd class="text-4xl font-semibold tracking-[-0.04em] text-ink sm:text-5xl">{p.value}</dd>
-          <dd class="mt-2 text-sm text-ink-3">{p.label}</dd>
+      <div class="nx-bar__row">
+        <p class="nx-cap">
+          <strong>Sample conversation</strong>
+          <span class="nx-hint" data-hint>Question caught. Click Assist or press Space.</span>
+        </p>
+        <div class="nx-bar__ctl">
+          <button type="button" class="nx-pause" data-pause aria-pressed="false" aria-label="Pause the sample">
+            <svg class="i-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" /></svg>
+            <svg class="i-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4v16l13-8z" /></svg>
+          </button>
+          <button type="button" class="btn-ghost nx-assist" data-assist-main>
+            <OvIcon name="sparkles" class="h-[18px] w-[18px]" />Assist <kbd class="kbd">Space</kbd>
+          </button>
         </div>
-      ))}
-    </dl>
+      </div>
+    </div>
   </div>
-</section>
+
+  <section id={SECTION.call} class="nx-call" aria-labelledby="call-title">
+    <header class="nx-callhead">
+      <p class="eyebrow">{mmss(HERO_SECONDS)}</p>
+      <h2 id="call-title" class="h2 mt-3">Scroll through one call.</h2>
+      <p class="lede">Follow one sample call and see what NexQ does at each moment of it.</p>
+    </header>
+
+    <div class="nx-beats" data-beats>
+    <!-- Beat a: src/overlay/SideLanguagePicker.tsx, docs/user-guide/ai-providers.md (a different language for each side), audio-setup.md (Echo or Feedback) -->
+    <article class="nx-beat" data-beat-id="a" data-t={TIMES.a} data-t0={T0.a} data-hint="Each side has its own language" aria-labelledby="beat-a">
+      <p class="eyebrow">{mmss(TIMES.a)}</p>
+      <h3 id="beat-a" class="h3">Each side in its own language.</h3>
+      <p class="nx-beat__lede">
+        Each side is transcribed on its own, so you can speak English while they speak Spanish and switch either language from the overlay.
+      </p>
+      <ul class="nx-facts">
+        <li>Live translation shows under each line, from DeepL, Google, Microsoft, your own AI or offline OPUS-MT.</li>
+        <li>Some speech engines detect the language for you, such as {detectList}.</li>
+      </ul>
+      <p class="nx-also"><b>Also:</b> echo cancellation keeps the other side out of your microphone, and you can rename speakers.</p>
+      <div class="nx-still"><BeatFrame beat="a" /></div>
+    </article>
+
+    <!-- Beat b: docs/user-guide/configuration.md (AI Actions), interview-copilot.md (question cards) -->
+    <article class="nx-beat" data-beat-id="b" data-t={TIMES.b} data-t0={T0.b} data-hint="A question becomes a card" aria-labelledby="beat-b">
+      <p class="eyebrow">{mmss(TIMES.b)}</p>
+      <h3 id="beat-b" class="h3">The question, caught.</h3>
+      <p class="nx-beat__lede">
+        A question from the other side becomes a card, and one click on it gets you an answer.
+      </p>
+      <ul class="nx-facts">
+        <li>Auto-Answer is off by default and needs Question Detection.</li>
+        <li>With it on, NexQ answers after 1.5 seconds of quiet, or as soon as Cartesia or Deepgram Flux hear the speaker finish.</li>
+      </ul>
+      <div class="nx-still"><BeatFrame beat="b" /></div>
+    </article>
+
+    <!-- Beat c: docs/user-guide/keyboard-shortcuts.md, claude-subscription.md (screenshots, pasting images), src/overlay/ContextScopePicker.tsx -->
+    <article class="nx-beat" data-beat-id="c" data-t={TIMES.c} data-t0={T0.c} data-hint="One key for each action" aria-labelledby="beat-c">
+      <p class="eyebrow">{mmss(TIMES.c)}</p>
+      <h3 id="beat-c" class="h3">One key.</h3>
+      <p class="nx-beat__lede">
+        <kbd class="kbd">{appKeys[0].keys[0]}</kbd> answers, and keys <kbd class="kbd">{numbered[0].keys[0]}</kbd> to <kbd class="kbd">{numbered[numbered.length - 1].keys[0]}</kbd> pick {numberedNames} while the overlay has focus.
+      </p>
+      <ul class="nx-facts">
+        <li><Keys action="Assist from any app" /> asks from any app, without switching windows.</li>
+        <li>The scope picker sets what the answer looks at: the last few minutes, since your last answer, or the whole call.</li>
+        <li><Keys action="Capture the screen into Ask" win /> puts a screenshot into Ask on Windows, and you can paste images into Ask too. Both need your Claude subscription.</li>
+      </ul>
+      <div class="nx-still"><BeatFrame beat="c" /></div>
+    </article>
+
+    <!-- Beat d: docs/user-guide/claude-subscription.md (Personal sources), rag-context.md, README.md (Gemini Context Cache) -->
+    <article class="nx-beat" id="knows" data-beat-id="d" data-t={TIMES.d} data-t0={T0.d} data-hint="Notes and Tools, in the answer" aria-labelledby="beat-d">
+      <p class="eyebrow">{mmss(TIMES.d)}</p>
+      <h3 id="beat-d" class="h3">What it knows.</h3>
+      <p class="nx-beat__lede">
+        NexQ searches the documents you load on your PC, and on your Claude subscription an answer can also read your notes and call your tools.
+      </p>
+      <span class="nx-new">New in 2.41 · Claude subscription</span>
+      <ul class="nx-facts">
+        <li>Documents you load are indexed locally with vector and keyword search, and work with any AI. Gemini can also cache them.</li>
+        <li>A notes folder, such as an Obsidian vault, is read only. Tools are connectors to your apps (MCP servers), like a calendar, and tools that look like they change something (add, send, edit, delete) start off.</li>
+        <li>Switch Notes and Tools on for an answer you ask for. A lookup can add a few seconds, and automatic answers never use them.</li>
+      </ul>
+      <div class="nx-still"><BeatFrame beat="d" /></div>
+    </article>
+
+    <!-- Beat e: README.md (Stealth Mode), docs/user-guide/keyboard-shortcuts.md, interview-copilot.md -->
+    <article class="nx-beat" id="stealth" data-beat-id="e" data-t={TIMES.e} data-t0={T0.e} data-hint="Hidden from the share, still on your screen" aria-labelledby="beat-e">
+      <p class="eyebrow">{mmss(TIMES.e)}</p>
+      <h3 id="beat-e" class="h3">Gone from the share.</h3>
+      <p class="nx-beat__lede">
+        Turn on Hide from screen share and the overlay stays on your screen but is left out of what you share, record or screenshot.
+      </p>
+      <button type="button" class="nx-toggle" data-stealth-toggle aria-pressed="true">
+        <span class="nx-switch" aria-hidden="true"></span>Hide from screen share
+      </button>
+      <p class="nx-status" data-stealth-status>On. The overlay stays on your screen and is left out of what they see.</p>
+      <p class="nx-nojs">With Hide from screen share on, the overlay is in the first screen and not in the second.</p>
+      <StealthPanes class="nx-panes--beat" />
+      <ul class="nx-facts">
+        <li>
+          <Keys action="Hide from screen share" /> switches it. NexQ also leaves the taskbar on Windows (Alt+Tab still finds it) and the Dock and Cmd+Tab on macOS.
+        </li>
+        <li>On Windows 10 version 2004 or later it works with the usual screen-share tools. On macOS 14 and later, some recorders built on ScreenCaptureKit can still capture it, so run a test share first.</li>
+        <li>It keeps your screen private, so check that using NexQ is allowed in your call.</li>
+      </ul>
+    </article>
+    </div>
+  </section>
+</div>
 
 <script>
-  const video = document.getElementById('hero-video') as HTMLVideoElement | null;
-  const toggle = document.getElementById('hero-video-toggle');
-  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)');
-
-  if (video && toggle) {
-    const label = toggle.querySelector('[data-state-label]');
-    const sync = () => {
-      const paused = video.paused;
-      toggle.setAttribute('aria-pressed', String(paused));
-      if (label) label.textContent = paused ? 'Play' : 'Pause';
-    };
-    toggle.classList.remove('hidden');
-    toggle.classList.add('inline-flex');
-    toggle.addEventListener('click', () => {
-      if (video.paused) video.play().catch(() => {});
-      else video.pause();
-    });
-    video.addEventListener('play', sync);
-    video.addEventListener('pause', sync);
-
-    if (!reduce.matches) {
-      // Start only when visible, pause when scrolled away to save battery.
-      const io = new IntersectionObserver(
-        ([entry]) => {
-          if (entry.isIntersecting && !video.dataset.userPaused) video.play().catch(() => {});
-          else if (!entry.isIntersecting) video.pause();
-        },
-        { threshold: 0.25 },
-      );
-      io.observe(video);
-      toggle.addEventListener('click', () => {
-        video.dataset.userPaused = video.paused ? '1' : '';
-      });
-    }
-    sync();
-  }
+  import '../scripts/callDemo.ts';
 </script>

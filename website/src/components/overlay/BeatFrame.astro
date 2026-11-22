@@ -1,0 +1,70 @@
+---
+/**
+ * A still of one moment of the overlay, for phones and for visitors without JavaScript (on a wide
+ * screen with JavaScript the pinned overlay shows these moments instead). Same markup and classes as
+ * Overlay.astro, so it is the same UI, cropped to the part the beat is about.
+ */
+import './overlay.css';
+import OvIcon from './OvIcon.astro';
+import OvLine from './OvLine.astro';
+import OvFoot from './OvFoot.astro';
+import OvQRow from './OvQRow.astro';
+import OvPills from './OvPills.astro';
+import OvSourcesAnswer from './OvSourcesAnswer.astro';
+import { OV, A_LINES, B_QUESTION, MODES } from './content';
+
+interface Props {
+  beat: 'a' | 'b' | 'c' | 'd';
+}
+const { beat } = Astro.props;
+---
+
+<div class="ov ov--frame ov--still nx-glass" data-view={beat} data-still={beat}>
+  {
+    beat === 'a' && (
+      <>
+        <div class="ov-lines ov-lines--still">
+          <div class="ov-g">{A_LINES.map((l) => <OvLine line={l} />)}</div>
+        </div>
+        <OvFoot ai={false} shows="es" />
+      </>
+    )
+  }
+  {
+    beat === 'b' && (
+      <div class="ov-q ov-q--still" role="region" aria-label="A detected question">
+        <OvQRow text={B_QUESTION} state="caught" />
+      </div>
+    )
+  }
+  {
+    beat === 'c' && (
+      <section class="ov-panel ov-ai ov-ai--still" aria-label="Actions and transcript scope">
+        <div class="ov-modes" role="list">
+          {MODES.map((m) => (
+            <span class="ov-mode" role="listitem" data-mode-btn={m.mode}><OvIcon name={m.icon} class="ov-i ov-i--s" /><span>{m.label}</span><kbd class="ov-key">{m.key}</kbd></span>
+          ))}
+          <span class="ov-scope"><OvIcon name="clock" class="ov-i ov-i--s" /><span class="sc-b">{OV.scopeChosen}</span></span>
+        </div>
+        <div class="ov-pop">
+          <p class="ov-pop-h">{OV.scopeHeading}</p>
+          {OV.scopeOptions.map((o) => (
+            <div class:list={['ov-opt', o.on && 'is-on']}><i></i><span>{o.label}{o.note && <small>{o.note}</small>}</span></div>
+          ))}
+        </div>
+      </section>
+    )
+  }
+  {
+    beat === 'd' && (
+      <section class="ov-panel ov-ai ov-ai--still" aria-label="An answer that used notes and a tool">
+        <div class="ov-modes">
+          <OvPills label="Personal sources for this answer" />
+        </div>
+        <div class="ov-resp ov-resp--still">
+          <OvSourcesAnswer />
+        </div>
+      </section>
+    )
+  }
+</div>

@@ -194,7 +194,7 @@ DeepL, Google, Microsoft, any configured LLM, and OPUS-MT (offline, local models
 | Open source | Yes | No | No | No |
 | Fully local option | Yes | No | No | Partial |
 | No bot joins the call | Yes | No | Yes | Yes |
-| Choice of STT / LLM | 10 / 9 | Fixed | Fixed | Fixed |
+| Choice of STT / LLM | 11 / 9 | Fixed | Fixed | Fixed |
 | Local LLM | Yes | No | No | No |
 | Your own documents as context | Yes | No | No | No |
 
@@ -216,7 +216,7 @@ Let the AI look things up in your own notes and tools while it answers you in a 
 - **Nothing leaves your machine unless you choose a cloud provider.** With a local STT engine and a local LLM, NexQ works offline.
 - **Your data stays on disk you control:** meetings, transcripts, recordings, models and the RAG index live in the app data folder (`%APPDATA%\com.nexq.app` on Windows, `~/Library/Application Support/com.nexq.app` on macOS).
 - **Secrets go to the OS credential store:** Windows Credential Manager or the macOS Keychain.
-- **No telemetry or analytics.** Apart from the providers you configure, NexQ only contacts GitHub Releases to check for updates, and every update is verified with an Ed25519 signature.
+- **No telemetry or analytics.** Apart from the providers you configure and the models you choose to download, NexQ only contacts GitHub, to check for updates and show their release notes, and every update is verified with an Ed25519 signature.
 - Found a security issue? Please follow [SECURITY.md](SECURITY.md).
 
 ## Development

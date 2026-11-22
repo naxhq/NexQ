@@ -1,0 +1,735 @@
+---
+/**
+ * #ai: "Your AI, your call".
+ *
+ * A three-position dial ("Where your words go") re-draws the data path and the provider lists.
+ * Lists come from STT_PROVIDERS / LLM_PROVIDERS / TRANSLATION_PROVIDERS (site.ts), grouped by
+ * their `where` field, so the counts cannot drift from the real provider list.
+ * Without JS the three positions are stacked and the dial is hidden.
+ *
+ * Claude subscription spotlight facts: docs/user-guide/claude-subscription.md
+ *   Fast/Deep defaults ......... L21-L22 and src-tauri/src/llm/cli_agent/manager.rs:133-143
+ *   first words < 1 s .......... L26 ("with thinking off ... usually arrive in under a second")
+ *   warm sessions .............. L52-L54 ("sends only what is new")
+ *   tokens, cost, time ......... L69 (Usage indicator, an estimate)
+ *   tools off, empty folder .... L97 (Privacy)
+ *   fallback provider .......... L65
+ *   thinking per provider ...... CHANGELOG.md 2.40.0 (L29), src/settings/ThinkingSettings.tsx,
+ *                                src/lib/llmRequestOptions.ts:4-9 (Auto, Off, Low, High; Claude has its own)
+ */
+import { SECTION, STT_PROVIDERS, LLM_PROVIDERS, TRANSLATION_PROVIDERS, COUNTS, doc } from '../data/site';
+
+type Row = { name: string; note?: string };
+const stt = (w: string[]): Row[] => STT_PROVIDERS.filter((p) => w.includes(p.where)).map(({ name, note }) => ({ name, note }));
+const llm = (w: string): Row[] => LLM_PROVIDERS.filter((p) => p.where === w).map(({ name, note }) => ({ name, note }));
+const tr = (w: string[]): Row[] => TRANSLATION_PROVIDERS.filter((p) => w.includes(p.where)).map(({ name, note }) => ({ name, note }));
+
+// Short notes shown next to a name (the long ones in site.ts are for tooltips and the FAQ).
+const SHORT: Record<string, string> = {
+  'Whisper.cpp': 'recordings only',
+  'Windows Speech': 'Windows, your mic only',
+  'Web Speech': 'no key, but cloud, your mic only',
+  'Custom endpoint': 'any OpenAI-compatible server',
+  'OPUS-MT': 'offline models, downloaded once',
+  'Your AI provider': 'whichever you set up',
+  'Claude subscription': 'Pro or Max, no API key',
+};
+const short = (rows: Row[]) => rows.map((r) => ({ name: r.name, note: SHORT[r.name] }));
+
+type Where = 'here' | 'out' | 'mix';
+interface Node { title: string; sub: string; where: Where }
+
+const POSITIONS = [
+  {
+    id: 'local',
+    label: 'All on this computer',
+    tag: 'Stays here',
+    verdict: 'Your audio and words stay on this computer.',
+    detail: 'Download the models once, and it all works offline.',
+    nodes: [
+      { title: 'Speech engine', sub: 'on this computer', where: 'here' },
+      { title: 'AI model', sub: 'on this computer', where: 'here' },
+    ] as Node[],
+    rows: [
+      { label: 'Speech', items: short(stt(['device'])), total: COUNTS.stt },
+      { label: 'AI', items: short(llm('local')), total: COUNTS.llm },
+      { label: 'Translation', items: short(tr(['device'])), total: COUNTS.translation },
+    ],
+  },
+  {
+    id: 'keys',
+    label: 'Your cloud keys',
+    tag: 'You bring the keys',
+    verdict: 'Each provider gets only what you send it, and bills you directly.',
+    detail:
+      'Audio goes to your speech provider, transcript text to your AI provider. Mix freely: an on-device speech engine with a cloud AI keeps your audio at home. Keys sit in the system vault.',
+    nodes: [
+      { title: 'Speech engine', sub: 'leaves: your speech provider', where: 'out' },
+      { title: 'AI provider', sub: 'leaves: your AI provider', where: 'out' },
+    ] as Node[],
+    rows: [
+      { label: 'Speech', items: short(stt(['cloud', 'cloud-nokey'])), total: COUNTS.stt },
+      { label: 'AI', items: short(llm('cloud')), total: COUNTS.llm },
+      { label: 'Translation', items: short(tr(['cloud', 'your-ai'])), total: COUNTS.translation },
+    ],
+  },
+  {
+    id: 'plan',
+    label: 'Your Claude plan',
+    tag: 'No API key',
+    verdict: 'Text goes to Anthropic through Claude’s own tool, under your account.',
+    detail:
+      'You still pick any speech engine, so keep it on-device if the audio should stay home. NexQ never sees your Claude sign-in.',
+    nodes: [
+      { title: 'Speech engine', sub: 'your pick, here or cloud', where: 'mix' },
+      { title: 'Claude', sub: 'leaves: Anthropic, via the Claude Code CLI', where: 'out' },
+    ] as Node[],
+    rows: [
+      { label: 'Speech', items: [{ name: 'Any speech engine', note: 'on this computer or in the cloud' }], total: COUNTS.stt },
+      { label: 'AI', items: short(llm('plan')), total: COUNTS.llm },
+      { label: 'Translation', items: short(tr(['your-ai', 'device'])), total: COUNTS.translation },
+    ],
+  },
+];
+
+// The Fast / Deep readout. Defaults from manager.rs:133-143 and claude-subscription.md L16-L19.
+const TIERS = {
+  Fast: { for: 'Live answers: Assist, What to say, Shorten, Follow-up, Ask', model: 'Haiku', effort: 'Low', thinking: 'Off' },
+  Deep: { for: 'Recaps, summaries, action items, Ask this meeting', model: 'Sonnet', effort: 'Medium', thinking: 'On' },
+};
+---
+
+<section id={SECTION.ai} class="section ai" aria-labelledby="ai-title">
+  <div class="wrap">
+    <p class="eyebrow">12:05</p>
+    <h2 id="ai-title" class="h2 mt-3 max-w-[18ch]">Your AI, your call.</h2>
+    <p class="lede">
+      NexQ does not pick a speech engine or a model for you, and it never sits between you and your provider.
+      You decide where your words go.
+    </p>
+    <p class="ai-counts" data-reveal>
+      <span>{COUNTS.stt} speech engines</span><span>{COUNTS.llm} AI providers</span><span>{COUNTS.translation} translation providers</span>
+    </p>
+
+    <!-- The dial. JS only; without it the three panels below are simply stacked. -->
+    <div class="ai-dial-wrap" data-reveal>
+      <p class="ai-dial-label" id="ai-dial-label">Where your words go</p>
+      <div class="ai-dial" role="radiogroup" aria-labelledby="ai-dial-label" data-ai-dial style="--i:0">
+        <span class="ai-dial__thumb" aria-hidden="true"></span>
+        {POSITIONS.map((p, i) => (
+          <button type="button" role="radio" class="ai-dial__btn" data-pos={i} aria-checked={i === 0 ? 'true' : 'false'} aria-controls={`ai-pos-${p.id}`} tabindex={i === 0 ? 0 : -1}>
+            <span class="ai-dial__label">{p.label}</span>
+            <span class="ai-dial__tag">{p.tag}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+
+    <div class="ai-stage" data-reveal>
+      {POSITIONS.map((p, i) => (
+        <div class="ai-panel" data-ai-panel data-on={i === 0 ? '' : undefined} id={`ai-pos-${p.id}`}>
+          <h3 class="ai-panel__title">Where your words go: {p.label.toLowerCase()}</h3>
+
+          <!-- The data path. Solid outline: stays on this computer. Dashed: leaves it. -->
+          <figure class="ai-flow" aria-label={`Data path, ${p.label.toLowerCase()}: ${p.verdict}`}>
+            <div class="ai-flow__in">
+              <p class="ai-io"><span class="ai-io__dot" style="background:var(--you)" aria-hidden="true"></span>Your microphone</p>
+              <p class="ai-io"><span class="ai-io__dot" style="background:var(--them)" aria-hidden="true"></span>Their audio</p>
+            </div>
+            <span class="ai-edge" data-cross={p.nodes[0].where === 'here' ? 'no' : p.nodes[0].where === 'out' ? 'yes' : 'maybe'}><span class="ai-edge__l">audio</span></span>
+            <div class="ai-node" data-where={p.nodes[0].where}>
+              <p class="ai-node__t">{p.nodes[0].title}</p>
+              <p class="ai-node__s">{p.nodes[0].where === 'out' && <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true"><path d="M3 9l6-6M4 3h5v5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>}{p.nodes[0].sub}</p>
+            </div>
+            <span class="ai-edge" data-cross={p.nodes[1].where === 'here' && p.nodes[0].where === 'here' ? 'no' : p.nodes[1].where === 'out' || p.nodes[0].where === 'out' ? 'yes' : 'maybe'}><span class="ai-edge__l">text</span></span>
+            <div class="ai-node" data-where={p.nodes[1].where}>
+              <p class="ai-node__t">{p.nodes[1].title}</p>
+              <p class="ai-node__s">{p.nodes[1].where === 'out' && <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true"><path d="M3 9l6-6M4 3h5v5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>}{p.nodes[1].sub}</p>
+            </div>
+            <span class="ai-edge" data-cross={p.nodes[1].where === 'here' ? 'no' : 'yes'}><span class="ai-edge__l">answer</span></span>
+            <div class="ai-node ai-node--you" data-where="here">
+              <p class="ai-node__t">You</p>
+              <p class="ai-node__s">the overlay, on this computer</p>
+            </div>
+          </figure>
+
+          <p class="ai-verdict"><strong>{p.verdict}</strong> {p.detail}</p>
+
+          <dl class="ai-rows">
+            {p.rows.map((r) => (
+              <div class="ai-row">
+                <dt>{r.label}<span class="ai-row__n">{p.id === 'plan' && r.label === 'Speech' ? '' : `${r.items.length} of ${r.total}`}</span></dt>
+                <dd>
+                  <ul>
+                    {r.items.map((it) => (
+                      <li>{it.name}{it.note && <span class="ai-note">{it.note}</span>}</li>
+                    ))}
+                  </ul>
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      ))}
+    </div>
+
+    <!-- Claude subscription spotlight: a spec readout, not cards. -->
+    <div class="ai-claude" data-reveal>
+      <div class="ai-claude__intro">
+        <p class="ai-label">Your Claude plan, up close</p>
+        <h3 class="h3 mt-3">Already pay for Claude? Use that.</h3>
+        <p class="mt-4 max-w-[34ch] text-muted-foreground">
+          Pro or Max, through the official Claude Code command-line tool on your PC. No API key.
+          <span class="ai-beta">Beta</span>
+        </p>
+        <p class="ai-stat">
+          <span class="ai-stat__v"><span aria-hidden="true">&lt;1&thinsp;s</span><span class="sr-only">Less than 1 second</span></span>
+          <span class="ai-stat__l">usually, to the first words, with thinking off (the Fast default)</span>
+        </p>
+        <p class="mt-6 text-sm">
+          <a class="link" href={doc('claude-subscription')}>Claude subscription guide</a>
+          <span class="mx-2 text-muted-foreground" aria-hidden="true">/</span>
+          <a class="link" href={doc('ai-providers')}>Choosing providers</a>
+        </p>
+      </div>
+
+      <div class="ai-claude__spec">
+        <table class="ai-tier">
+          <caption class="sr-only">Fast and Deep tier defaults for the Claude subscription</caption>
+          <thead>
+            <tr><td></td><th scope="col">Fast</th><th scope="col">Deep</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Used for</th><td class="ai-tier__for">{TIERS.Fast.for}</td><td class="ai-tier__for">{TIERS.Deep.for}</td></tr>
+            <tr><th scope="row">Model</th><td>{TIERS.Fast.model}</td><td>{TIERS.Deep.model}</td></tr>
+            <tr><th scope="row">Effort</th><td>{TIERS.Fast.effort}</td><td>{TIERS.Deep.effort}</td></tr>
+            <tr><th scope="row">Thinking</th><td>{TIERS.Fast.thinking}</td><td>{TIERS.Deep.thinking}</td></tr>
+          </tbody>
+        </table>
+        <p class="ai-tier__note">Defaults. Each tier takes any model (Haiku, Sonnet, Opus, Fable) and a higher effort, at the cost of slower answers.</p>
+
+        <dl class="ai-spec">
+          <div><dt>Sign-in</dt><dd>In Claude’s own tool. NexQ never sees your credentials.</dd></div>
+          <div><dt>Sessions</dt><dd>Warm for each meeting. After the first request, NexQ sends only the transcript that is new.</dd></div>
+          <div><dt>Thinking</dt><dd>A switch per tier here. Every other provider gets its own Auto, Off, Low or High.</dd></div>
+          <div><dt>Numbers</dt><dd>Real tokens, cost and time for each request, as Claude reports them. An estimate, since your plan covers the cost.</dd></div>
+          <div><dt>Reach</dt><dd>Tools off, in an empty private folder. The exceptions are the notes folders and tools you add.</dd></div>
+          <div><dt>Fallback</dt><dd>If Claude is unavailable, NexQ answers with the provider you chose, and switches back when Claude recovers.</dd></div>
+        </dl>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .ai-label {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: hsl(var(--muted-foreground));
+  }
+  .ai-counts {
+    display: flex;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: hsl(var(--muted-foreground));
+    flex-wrap: wrap;
+    gap: 0.25rem 0;
+    margin-top: 1.25rem;
+  }
+  .ai-counts span + span::before {
+    content: '';
+    display: inline-block;
+    width: 3px;
+    height: 3px;
+    margin: 0 0.75rem;
+    vertical-align: middle;
+    border-radius: 9999px;
+    background: hsl(var(--muted-foreground));
+  }
+  @media (max-width: 639px) {
+    .ai-counts {
+      flex-direction: column;
+    }
+    .ai-counts span + span::before {
+      display: none;
+    }
+  }
+
+  /* ─── The dial ─── */
+  .ai-dial-wrap {
+    margin-top: 2.5rem;
+  }
+  :global(html:not(.js)) .ai-dial-wrap {
+    display: none;
+  }
+  .ai-dial-label {
+    margin-bottom: 0.5rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: hsl(var(--muted-foreground));
+  }
+  .ai-dial {
+    --pad: 4px;
+    position: relative;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    padding: var(--pad);
+    border: 1px solid hsl(var(--border));
+    border-radius: 1rem;
+    background: hsl(var(--card));
+  }
+  .ai-dial__thumb {
+    position: absolute;
+    top: var(--pad);
+    bottom: var(--pad);
+    left: var(--pad);
+    width: calc((100% - 2 * var(--pad)) / 3);
+    border: 1px solid hsl(var(--muted-foreground) / 0.35);
+    border-radius: 0.75rem;
+    background: hsl(var(--secondary));
+    transform: translate3d(calc(var(--i) * 100%), 0, 0);
+    transition: transform 0.5s var(--ease-spring);
+  }
+  .ai-dial__btn {
+    position: relative;
+    display: flex;
+    min-height: 4.5rem;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.125rem;
+    padding: 0.75rem 1.25rem;
+    border-radius: 0.75rem;
+    text-align: left;
+    color: hsl(var(--muted-foreground));
+    transition: color 0.25s var(--ease-spring);
+  }
+  .ai-dial__btn:hover {
+    color: hsl(var(--foreground));
+  }
+  .ai-dial__btn[aria-checked='true'] {
+    color: hsl(var(--foreground));
+  }
+  .ai-dial__label {
+    font-size: clamp(1rem, 0.6vw + 0.9rem, 1.25rem);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+  }
+  .ai-dial__tag {
+    font-size: 0.8125rem;
+    line-height: 1.3;
+  }
+  @media (max-width: 719px) {
+    .ai-dial {
+      grid-template-columns: 1fr;
+    }
+    .ai-dial__thumb {
+      right: var(--pad);
+      width: auto;
+      height: calc((100% - 2 * var(--pad)) / 3);
+      transform: translate3d(0, calc(var(--i) * 100%), 0);
+    }
+    .ai-dial__btn {
+      min-height: 3.75rem;
+    }
+  }
+
+  /* ─── Panels: all three sit in the same place. The visible one is in the flow, so the stage is exactly as
+     tall as what it shows (no reserved blank under the shorter panels); the others lie over it, hidden. The
+     page below moves only when the visitor picks a position, never on its own. ─── */
+  .ai-stage {
+    margin-top: 2rem;
+  }
+  :global(.js) .ai-stage {
+    position: relative;
+  }
+  :global(.js) .ai-panel {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    opacity: 0;
+    visibility: hidden;
+    transform: translate3d(0, 8px, 0);
+    transition:
+      opacity 0.3s var(--ease-spring),
+      transform 0.5s var(--ease-spring),
+      visibility 0s 0.3s;
+  }
+  :global(.js) .ai-panel[data-on] {
+    position: relative;
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    transition-delay: 0s;
+  }
+  .ai-panel + .ai-panel {
+    margin-top: 4rem;
+  }
+  :global(.js) .ai-panel + .ai-panel {
+    margin-top: 0;
+  }
+  .ai-panel__title {
+    margin-bottom: 1.5rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: hsl(var(--muted-foreground));
+  }
+  :global(.js) .ai-panel__title {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* ─── Data path ─── */
+  .ai-flow {
+    display: flex;
+    align-items: center;
+  }
+  .ai-flow__in {
+    display: grid;
+    gap: 0.5rem;
+    flex: 0 0 auto;
+  }
+  .ai-io {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid hsl(var(--foreground) / 0.3);
+    border-radius: 0.625rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+  .ai-io__dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    flex: none;
+    border-radius: 9999px;
+  }
+  .ai-node {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 0.875rem 1rem;
+    border: 1px solid hsl(var(--foreground) / 0.3);
+    border-radius: 0.75rem;
+  }
+  .ai-node[data-where='out'] {
+    border: 1px dashed hsl(var(--muted-foreground) / 0.75);
+  }
+  .ai-node[data-where='mix'] {
+    border-style: solid dashed solid dashed;
+  }
+  .ai-node--you {
+    flex: 0 1 11rem;
+  }
+  .ai-node__t {
+    font-size: 1.0625rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+  }
+  .ai-node__s {
+    display: flex;
+    align-items: baseline;
+    gap: 0.375rem;
+    margin-top: 0.25rem;
+    font-size: 0.8125rem;
+    line-height: 1.4;
+    color: hsl(var(--muted-foreground));
+  }
+  .ai-node__s svg {
+    flex: none;
+    transform: translateY(1px);
+  }
+  .ai-node[data-where='out'] .ai-node__s {
+    color: hsl(var(--foreground) / 0.85);
+  }
+
+  .ai-edge {
+    position: relative;
+    flex: 1 1 3rem;
+    min-width: 2.75rem;
+    max-width: 6rem;
+    height: 2rem;
+  }
+  .ai-edge::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 4px;
+    top: 50%;
+    border-top: 1px solid hsl(var(--foreground) / 0.45);
+  }
+  .ai-edge::after {
+    content: '';
+    position: absolute;
+    right: 0;
+    top: 50%;
+    width: 6px;
+    height: 6px;
+    border-top: 1px solid hsl(var(--foreground) / 0.45);
+    border-right: 1px solid hsl(var(--foreground) / 0.45);
+    transform: translateY(-50%) rotate(45deg);
+    transform-origin: center;
+    margin-right: 1px;
+  }
+  .ai-edge[data-cross='yes']::before {
+    border-top-style: dashed;
+    border-top-color: hsl(var(--muted-foreground));
+  }
+  .ai-edge[data-cross='maybe']::before {
+    border-top-style: dotted;
+  }
+  .ai-edge__l {
+    position: absolute;
+    left: 50%;
+    bottom: calc(50% + 4px);
+    transform: translateX(-50%);
+    font-size: 0.75rem;
+    color: hsl(var(--muted-foreground));
+  }
+  @media (max-width: 899px) {
+    .ai-flow {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .ai-flow__in {
+      grid-template-columns: 1fr 1fr;
+    }
+    .ai-node,
+    .ai-node--you {
+      flex: none;
+    }
+    .ai-edge {
+      flex: none;
+      width: 2rem;
+      height: 2.75rem;
+      min-width: 0;
+      max-width: none;
+      align-self: flex-start;
+      margin-left: 1.25rem;
+    }
+    .ai-edge::before {
+      left: 50%;
+      right: auto;
+      top: 0;
+      bottom: 4px;
+      border-top: 0;
+      border-left: 1px solid hsl(var(--foreground) / 0.45);
+    }
+    .ai-edge[data-cross='yes']::before {
+      border-left-style: dashed;
+      border-left-color: hsl(var(--muted-foreground));
+    }
+    .ai-edge[data-cross='maybe']::before {
+      border-left-style: dotted;
+    }
+    .ai-edge::after {
+      right: auto;
+      left: 50%;
+      top: auto;
+      bottom: 1px;
+      margin: 0;
+      transform: translateX(-50%) rotate(135deg);
+    }
+    .ai-edge__l {
+      left: calc(50% + 10px);
+      bottom: 50%;
+      transform: translateY(50%);
+    }
+  }
+  @media (max-width: 479px) {
+    .ai-flow__in {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .ai-verdict {
+    margin-top: 1.5rem;
+    max-width: 52rem;
+    font-size: 1.0625rem;
+    line-height: 1.55;
+    color: hsl(var(--muted-foreground));
+  }
+  .ai-verdict strong {
+    color: hsl(var(--foreground));
+    font-weight: 650;
+  }
+
+  /* ─── Provider rows ─── */
+  .ai-rows {
+    margin-top: 1.5rem;
+    border-top: 1px solid hsl(var(--border));
+  }
+  .ai-row {
+    display: grid;
+    gap: 0.5rem 2rem;
+    padding: 1rem 0;
+    border-bottom: 1px solid hsl(var(--border));
+  }
+  @media (min-width: 720px) {
+    .ai-row {
+      grid-template-columns: 9.5rem 1fr;
+    }
+  }
+  .ai-row dt {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    font-size: 0.9375rem;
+    font-weight: 650;
+  }
+  .ai-row__n {
+    font-size: 0.75rem;
+    font-weight: 450;
+    color: hsl(var(--muted-foreground));
+  }
+  .ai-row ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem 1.5rem;
+  }
+  .ai-row li {
+    font-size: 1rem;
+    font-weight: 500;
+  }
+  .ai-note {
+    margin-left: 0.5rem;
+    font-size: 0.8125rem;
+    font-weight: 400;
+    color: hsl(var(--muted-foreground));
+  }
+
+  /* ─── Claude spotlight ─── */
+  .ai-claude {
+    display: grid;
+    gap: 2.5rem;
+    margin-top: 5rem;
+    padding-top: 3rem;
+    border-top: 1px solid hsl(var(--border));
+  }
+  @media (min-width: 1024px) {
+    .ai-claude {
+      grid-template-columns: 5fr 7fr;
+      gap: 4rem;
+    }
+  }
+  .ai-beta {
+    display: inline-block;
+    margin-left: 0.5rem;
+    padding: 0 0.5rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    line-height: 1.5;
+    vertical-align: 0.1em;
+  }
+  .ai-stat {
+    margin-top: 2.5rem;
+    padding-left: 1rem;
+    border-left: 2px solid hsl(var(--primary));
+  }
+  .ai-stat__v {
+    display: block;
+    font-size: clamp(2.5rem, 4.5vw, 3.75rem);
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.035em;
+  }
+  .ai-stat__l {
+    display: block;
+    margin-top: 0.625rem;
+    max-width: 26ch;
+    font-size: 0.875rem;
+    line-height: 1.45;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .ai-tier {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9375rem;
+  }
+  .ai-tier th,
+  .ai-tier td {
+    padding: 0.625rem 0;
+    text-align: left;
+    vertical-align: top;
+    border-bottom: 1px solid hsl(var(--border));
+  }
+  .ai-tier th[scope='row'] {
+    width: 6rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: hsl(var(--muted-foreground));
+    padding-top: 0.8125rem;
+  }
+  .ai-tier thead th {
+    padding-bottom: 0.75rem;
+    font-size: 1.125rem;
+    font-weight: 750;
+    letter-spacing: -0.02em;
+  }
+  .ai-tier tbody td {
+    padding-right: 1rem;
+    font-size: 1.0625rem;
+    font-weight: 600;
+  }
+  .ai-tier tbody td.ai-tier__for {
+    font-size: 0.875rem;
+    font-weight: 400;
+    line-height: 1.45;
+    color: hsl(var(--muted-foreground));
+  }
+  .ai-tier__note {
+    margin-top: 0.75rem;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    color: hsl(var(--muted-foreground));
+  }
+  .ai-spec {
+    margin-top: 2rem;
+    border-top: 1px solid hsl(var(--border));
+  }
+  .ai-spec > div {
+    display: grid;
+    gap: 0.25rem 1.5rem;
+    padding: 0.875rem 0;
+    border-bottom: 1px solid hsl(var(--border));
+  }
+  @media (min-width: 640px) {
+    .ai-spec > div {
+      grid-template-columns: 6rem 1fr;
+    }
+  }
+  .ai-spec dt {
+    padding-top: 0.15rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: hsl(var(--muted-foreground));
+  }
+  .ai-spec dd {
+    font-size: 0.9375rem;
+    line-height: 1.55;
+  }
+
+  @media (forced-colors: active) {
+    .ai-dial__thumb {
+      border-color: Highlight;
+    }
+    .ai-node,
+    .ai-io {
+      border-color: CanvasText;
+    }
+  }
+</style>
+
+<script>
+  import '../scripts/ai-dial.ts';
+</script>

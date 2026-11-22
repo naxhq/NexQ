@@ -1,0 +1,25 @@
+---
+// A small overlay in a small window: header, the last two lines of the call at that moment. Used by the "Hide from screen share" panes.
+// Same classes as the full overlay (overlay.css), so it is the same thing, just smaller.
+import './overlay.css';
+import OvIcon from './OvIcon.astro';
+import OvLine from './OvLine.astro';
+import { OV, D_LINES, E_REPLY, mmss, TIMES } from './content';
+---
+
+<div class="ov ov--frame ov--mini nx-glass" data-view="frame">
+  <div class="ov-head">
+    <div class="ov-hl">
+      <span class="ov-title">{OV.title}</span>
+      <span class="ov-rec"><span class="ov-ping" aria-hidden="true"><i></i><b></b></span>REC</span>
+      <span class="ov-time">{mmss(TIMES.e)}</span>
+    </div>
+    <div class="ov-hr" aria-hidden="true">
+      <span class="ov-hb ov-hb--stealth"><OvIcon name="screen-share" class="ov-i s-off" /><OvIcon name="screen-share-off" class="ov-i s-on" /></span>
+    </div>
+  </div>
+  <div class="ov-minib">
+    <OvLine line={D_LINES[2]} />
+    <OvLine line={E_REPLY} />
+  </div>
+</div>

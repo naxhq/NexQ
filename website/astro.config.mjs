@@ -16,5 +16,8 @@ export default defineConfig({
     // Tailwind runs as a Vite plugin. An inline (empty) PostCSS config stops Vite from
     // picking up the desktop app's postcss.config.js (Tailwind 3) in the repo root.
     css: { postcss: {} },
+    // The site imports the app's own release helpers (../src/lib/*.mjs) and reads the
+    // root CHANGELOG.md and package.json, so the dev server may serve files above website/.
+    server: { fs: { allow: ['..'] } },
   },
 });

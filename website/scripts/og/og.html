@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>NexQ social card (1200 x 630)</title>
+<style>
+  /* Fonts: the site's own self-hosted files (run `npm ci` in website/ first). */
+  @font-face {
+    font-family: 'Schibsted Grotesk';
+    font-weight: 400 900;
+    src: url('../../node_modules/@fontsource-variable/schibsted-grotesk/files/schibsted-grotesk-latin-wght-normal.woff2') format('woff2-variations');
+  }
+  @font-face {
+    font-family: 'Martian Mono';
+    font-weight: 100 800;
+    src: url('../../node_modules/@fontsource-variable/martian-mono/files/martian-mono-latin-wght-normal.woff2') format('woff2-variations');
+  }
+  /* The site's tokens (website/src/styles/global.css), only the ones this card uses. */
+  :root {
+    --background: 222 47% 6%;
+    --foreground: 210 20% 96%;
+    --card: 222 40% 8%;
+    --border: 220 20% 18%;
+    --muted-foreground: 215 14% 64%;
+    --info: 199 89% 53%;
+    --you: #22c55e;
+    --them: #f97316;
+    --rec: #ef4444;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { width: 1200px; height: 630px; overflow: hidden; }
+  body {
+    position: relative;
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: 'Schibsted Grotesk', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .brand { position: absolute; left: 72px; top: 60px; display: flex; align-items: center; gap: 16px; }
+  .brand img { width: 52px; height: 52px; border-radius: 13px; }
+  .brand span { font-size: 36px; font-weight: 750; letter-spacing: -0.02em; }
+
+  h1 {
+    position: absolute;
+    left: 72px;
+    top: 168px;
+    width: 560px;
+    font-size: 82px;
+    font-weight: 850;
+    line-height: 0.98;
+    letter-spacing: -0.045em;
+    text-wrap: balance;
+  }
+
+  .foot {
+    position: absolute;
+    left: 72px;
+    bottom: 56px;
+    font-size: 26px;
+    font-weight: 500;
+    color: hsl(var(--muted-foreground));
+  }
+
+  /* A crisp stand-in for the overlay (website/src/components/overlay): same colours, alphas, radii. */
+  .ov {
+    position: absolute;
+    right: 64px;
+    top: 116px;
+    width: 440px;
+    padding: 18px 20px 20px;
+    border: 1px solid hsl(var(--border) / 0.6);
+    border-radius: 18px;
+    background: hsl(var(--card));
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    font-size: 16px;
+    line-height: 1.4;
+  }
+  .ov-top { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; font-size: 14px; color: hsl(var(--muted-foreground)); }
+  .rec { width: 10px; height: 10px; border-radius: 99px; background: var(--rec); }
+  .ov-top b { font-family: 'Martian Mono', ui-monospace, monospace; font-size: 13px; font-weight: 500; color: hsl(var(--foreground)); }
+  .ln { display: grid; grid-template-columns: 34px 1fr; column-gap: 10px; padding: 3px 0 3px 12px; border-left: 2px solid; margin-bottom: 8px; }
+  .ln[data-w='them'] { border-color: rgb(249 115 22 / 0.4); }
+  .ln[data-w='you'] { border-color: rgb(34 197 94 / 0.4); }
+  .ln .ts { font-size: 12px; color: hsl(var(--muted-foreground)); padding-top: 2px; }
+  .ln .tx { font-size: 15px; color: hsl(var(--foreground) / 0.92); }
+  .ln .who { font-weight: 700; margin-right: 6px; }
+  .ln[data-w='them'] .who { color: var(--them); }
+  .ln[data-w='you'] .who { color: var(--you); }
+
+  .q {
+    display: flex; gap: 12px; align-items: flex-start;
+    margin-top: 14px; padding: 12px 14px;
+    border: 1px solid hsl(var(--info) / 0.1); border-radius: 12px; background: hsl(var(--info) / 0.05);
+  }
+  .q svg { flex: none; margin-top: 2px; color: hsl(var(--info)); }
+  .q p { flex: 1; font-size: 15.5px; font-weight: 500; color: hsl(var(--foreground) / 0.92); }
+  .q .go {
+    flex: none; padding: 5px 11px; border: 1px solid hsl(var(--info) / 0.3); border-radius: 9px;
+    background: hsl(var(--info) / 0.12); font-size: 13.5px; font-weight: 600; color: hsl(199 89% 72%);
+  }
+
+  .ans {
+    margin-top: 12px; padding: 14px 16px;
+    border: 1px solid hsl(var(--info) / 0.2); border-radius: 12px; background: hsl(var(--info) / 0.05);
+    font-size: 15.5px; line-height: 1.5; color: hsl(var(--foreground) / 0.92);
+  }
+  .ans .lab { display: block; margin-bottom: 4px; font-size: 12.5px; font-weight: 700; color: hsl(var(--info)); }
+  .ans strong { font-weight: 700; color: hsl(var(--foreground)); }
+</style>
+</head>
+<body>
+  <div class="brand"><img src="../../public/img/logo-96.png" alt="" /><span>NexQ</span></div>
+
+  <h1>The answer stays on your side of the screen.</h1>
+
+  <p class="foot">Free and open source. Windows and Mac.</p>
+
+  <div class="ov">
+    <div class="ov-top"><span class="rec"></span><b>0:16</b><span>Sample conversation</span></div>
+    <div class="ln" data-w="you"><span class="ts">0:11</span><span class="tx"><span class="who">You</span>Great to meet you, Dana.</span></div>
+    <div class="ln" data-w="them"><span class="ts">0:16</span><span class="tx"><span class="who">Them</span>What was the toughest trade-off on your last project?</span></div>
+    <div class="q">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7"/><path d="M12 17h.01"/></svg>
+      <p>Question caught</p>
+      <span class="go">Assist</span>
+    </div>
+    <div class="ans"><span class="lab">Assist</span>Pick one decision and say why. <strong>We shipped the design system before the redesign.</strong> It cost two weeks up front, and every screen after took days.</div>
+  </div>
+</body>
+</html>

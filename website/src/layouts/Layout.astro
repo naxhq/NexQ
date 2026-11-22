@@ -1,8 +1,8 @@
 ---
 import '../styles/global.css';
-import fs from 'node:fs';
-import path from 'node:path';
+import schibstedWoff2 from '../../node_modules/@fontsource-variable/schibsted-grotesk/files/schibsted-grotesk-latin-wght-normal.woff2?url';
 import { SITE_TITLE, SITE_DESCRIPTION, REPO, RELEASES_LATEST, LICENSE, FAQ } from '../data/site';
+import { CURRENT_VERSION } from '../data/releases';
 
 interface Props {
   title?: string;
@@ -10,19 +10,15 @@ interface Props {
 }
 
 const { title = SITE_TITLE, description = SITE_DESCRIPTION } = Astro.props;
+if (description.length > 160) {
+  throw new Error(`Meta description is ${description.length} characters; keep it at 160 or fewer.`);
+}
 
 const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
 const canonical = new URL(Astro.url.pathname, Astro.site).href;
 const ogImage = new URL(`${base}og.jpg`, Astro.site).href;
-
-// The app's version lives in the repo root package.json (bumped by `npm run release`).
-let appVersion: string | undefined;
-try {
-  const pkg = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), '..', 'package.json'), 'utf8'));
-  appVersion = typeof pkg.version === 'string' ? pkg.version : undefined;
-} catch {
-  appVersion = undefined;
-}
+const ogAlt =
+  'NexQ social card: the headline "The answer stays on your side of the screen." next to the overlay catching a question and answering it.';
 
 const softwareLd = {
   '@context': 'https://schema.org',
@@ -34,7 +30,7 @@ const softwareLd = {
   applicationCategory: 'BusinessApplication',
   applicationSubCategory: 'AI meeting assistant',
   operatingSystem: 'Windows 10, Windows 11, macOS (Apple Silicon, beta)',
-  ...(appVersion ? { softwareVersion: appVersion } : {}),
+  softwareVersion: CURRENT_VERSION,
   downloadUrl: RELEASES_LATEST,
   license: LICENSE,
   isAccessibleForFree: true,
@@ -42,6 +38,7 @@ const softwareLd = {
   sameAs: [REPO],
 };
 
+// Same array as the visible FAQ section, so the structured data always matches the page.
 const faqLd = {
   '@context': 'https://schema.org',
   '@type': 'FAQPage',
@@ -61,7 +58,7 @@ const faqLd = {
     <title>{title}</title>
     <meta name="description" content={description} />
     <link rel="canonical" href={canonical} />
-    <meta name="theme-color" content="#0b0d13" />
+    <meta name="theme-color" content="#080c16" />
     <meta name="color-scheme" content="dark" />
     <meta name="generator" content={Astro.generator} />
 
@@ -74,7 +71,7 @@ const faqLd = {
     <meta property="og:image" content={ogImage} />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="NexQ: AI Meeting Assistant and Real-Time Interview Copilot" />
+    <meta property="og:image:alt" content={ogAlt} />
     <meta property="og:locale" content="en_US" />
 
     <!-- Twitter -->
@@ -82,22 +79,15 @@ const faqLd = {
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content={ogImage} />
-    <meta name="twitter:image:alt" content="NexQ: AI Meeting Assistant and Real-Time Interview Copilot" />
+    <meta name="twitter:image:alt" content={ogAlt} />
 
     <!-- Icons -->
     <link rel="icon" type="image/png" sizes="64x64" href={`${base}favicon.png`} />
     <link rel="apple-touch-icon" href={`${base}apple-touch-icon.png`} />
     <link rel="sitemap" href={`${base}sitemap-index.xml`} />
 
-    <!-- Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@1&display=swap"
-    />
-
-    <link rel="preload" as="image" href={`${base}media/hero-demo-poster.webp`} type="image/webp" fetchpriority="high" />
+    <!-- Fonts are self-hosted (see styles/global.css). Preload the one the headline uses. -->
+    <link rel="preload" as="font" type="font/woff2" href={schibstedWoff2} crossorigin />
 
     <script is:inline>document.documentElement.classList.add('js');</script>
 
@@ -107,30 +97,35 @@ const faqLd = {
   <body class="min-h-screen">
     <a
       href="#main"
-      class="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-lg focus:bg-brand-btn focus:px-4 focus:py-2 focus:text-white"
+      class="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-lg focus:bg-primary-btn focus:px-4 focus:py-2 focus:text-white"
     >
       Skip to content
     </a>
     <slot />
 
     <script>
-      // Reveal-on-scroll. CSS keeps everything visible without JS or with reduced motion.
+      // Reveal on scroll for [data-reveal]. Hidden state only exists when JS runs (the `js`
+      // class) and never under reduced motion (global.css), so no-JS and reduced-motion
+      // visitors see everything.
       const items = document.querySelectorAll<HTMLElement>('[data-reveal]');
-      if ('IntersectionObserver' in window) {
-        const io = new IntersectionObserver(
-          (entries) => {
-            for (const entry of entries) {
-              if (entry.isIntersecting) {
-                entry.target.classList.add('is-in');
-                io.unobserve(entry.target);
+      const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (!reduce && items.length > 0) {
+        if ('IntersectionObserver' in window) {
+          const io = new IntersectionObserver(
+            (entries) => {
+              for (const entry of entries) {
+                if (entry.isIntersecting) {
+                  entry.target.classList.add('is-in');
+                  io.unobserve(entry.target);
+                }
               }
-            }
-          },
-          { rootMargin: '0px 0px -8% 0px', threshold: 0.08 },
-        );
-        items.forEach((el) => io.observe(el));
-      } else {
-        items.forEach((el) => el.classList.add('is-in'));
+            },
+            { rootMargin: '0px 0px -8% 0px', threshold: 0.08 },
+          );
+          items.forEach((el) => io.observe(el));
+        } else {
+          items.forEach((el) => el.classList.add('is-in'));
+        }
       }
     </script>
   </body>

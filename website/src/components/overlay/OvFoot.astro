@@ -1,0 +1,40 @@
+---
+// Footer status bar, shared by the live overlay and the beat-a still.
+// src: src/components/ServiceStatusBar.tsx (compact), src/overlay/SideLanguagePicker.tsx L130-150 (the chip shows
+// the side's language, and "Restarting…" while the speech engine restarts after a change).
+// EN and ES sit in one cell and swap with CSS (overlay.css), so only the one on show is exposed to a screen reader:
+// callDemo.ts keeps `aria-hidden` in step with the moment, and `shows` is the state the markup starts in.
+import OvIcon from './OvIcon.astro';
+import { OV } from './content';
+interface Props {
+  /** The AI service chip. The still of beat a leaves it out. */
+  ai?: boolean;
+  /** Which language the other side's chip starts on. */
+  shows?: 'en' | 'es';
+}
+const { ai = true, shows = 'en' } = Astro.props;
+---
+
+<div class="ov-foot" role="group" aria-label="Services">
+  {ai && (
+    <span class="ov-side">
+      <span class="ov-svc ov-svc--ai"><i class="ov-sdot"></i><OvIcon name="brain" class="ov-i ov-i--s" /><span>{OV.services.ai}</span><span class="ov-sub">{OV.services.model}</span></span>
+    </span>
+  )}
+  <!-- Each side and its language chip are one unit that never splits across two lines. -->
+  <span class="ov-side">
+    <span class="ov-svc ov-svc--you"><i class="ov-sdot"></i><span class="ov-who2">{OV.services.you}</span><span>{OV.services.stt}</span></span>
+    <span class="ov-lang"><OvIcon name="languages" class="ov-i ov-i--s" /><span>{OV.langs.en}</span></span>
+  </span>
+  <span class="ov-side">
+    <span class="ov-svc ov-svc--them"><i class="ov-sdot"></i><span class="ov-who2">{OV.services.them}</span><span>{OV.services.stt}</span></span>
+    <span class="ov-lang ov-lang--them">
+      <OvIcon name="languages" class="ov-i ov-i--s" />
+      <span class="ov-lg">
+        <span class="l-en" aria-hidden={shows === 'es' ? 'true' : undefined}>{OV.langs.en}</span>
+        <span class="l-es" aria-hidden={shows === 'en' ? 'true' : undefined}>{OV.langs.es}</span>
+      </span>
+      <span class="ov-rs" aria-hidden="true">{OV.restarting}</span>
+    </span>
+  </span>
+</div>

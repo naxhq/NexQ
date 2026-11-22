@@ -1,149 +1,383 @@
 ---
+/**
+ * #download: two builds, one wave. Both buttons go to the latest release page (no direct asset
+ * URLs, which change with every version). The visitor's platform is highlighted by
+ * scripts/dl-detect.ts; without JS Windows keeps the blue button.
+ */
 import Icon from './Icon.astro';
-import { RELEASES_LATEST, REPO, doc } from '../data/site';
+import Wave from './Wave.astro';
+import { CURRENT_VERSION } from '../data/releases';
+import { RELEASES_LATEST, RELEASES_URL, CONTRIBUTING, SECTION } from '../data/site';
 
-const platforms = [
-  {
-    os: 'windows',
-    icon: 'windows',
-    name: 'Windows',
-    req: 'Windows 10 or 11, x64',
-    cta: 'Download for Windows',
-    notes: [
-      'Per-user installer, no admin rights needed',
-      'Updates itself quietly and installs when you quit',
-      'Not code-signed yet: on the SmartScreen prompt choose “More info”, then “Run anyway”',
-    ],
-    badge: '',
-  },
-  {
-    os: 'mac',
-    icon: 'apple',
-    name: 'macOS',
-    req: 'Apple Silicon (M-series) Macs',
-    cta: 'Download for macOS',
-    notes: [
-      'Beta, from v2.25, contributed by the community',
-      'Intel Macs are not supported yet',
-      'Please report anything odd on GitHub Issues',
-    ],
-    badge: 'Beta',
-  },
-] as const;
+const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
 ---
 
-<section id="download" class="section border-t border-line" aria-labelledby="download-title">
+<section id={SECTION.download} class="section dl-sec border-t border-border" aria-labelledby="download-title">
   <div class="wrap">
-    <div class="max-w-3xl" data-reveal>
-      <p class="eyebrow">Download</p>
-      <h2 id="download-title" class="h2 mt-4">Free. No account. Ready in a minute.</h2>
-      <p class="lede">
-        Install, pick a speech engine and an AI provider (or use the free local ones), and start any meeting. NexQ picks
-        up your system audio automatically.
-      </p>
-      <p class="mt-4 text-sm text-ink-3" id="os-detected" aria-live="polite"></p>
-    </div>
+    <h2 id="download-title" class="h2">Download NexQ</h2>
+    <p class="lede">Free and open source. Pick your system, run the installer, and start your next call with it open.</p>
 
-    <div class="mt-12 grid gap-5 md:grid-cols-2">
-      {platforms.map((p, i) => (
-        <article
-          class="platform group relative flex flex-col rounded-3xl border border-line-strong bg-bg-raised p-6 transition-[border-color,box-shadow] duration-300 sm:p-8"
-          data-os={p.os}
-          data-reveal
-          style={`--reveal-delay: ${i * 80}ms`}
-          aria-labelledby={`dl-${p.os}`}
-        >
-          <div class="flex items-start justify-between gap-4">
-            <div class="flex items-center gap-4">
-              <span class="flex h-12 w-12 items-center justify-center rounded-2xl border border-line-strong bg-bg-panel text-ink">
-                <Icon name={p.icon} class="h-6 w-6" />
-              </span>
-              <div>
-                <h3 id={`dl-${p.os}`} class="flex items-center gap-2 text-xl font-semibold tracking-[-0.02em] text-ink">
-                  {p.name}
-                  {p.badge && <span class="rounded-full bg-them/10 px-2 py-0.5 text-xs font-medium text-them">{p.badge}</span>}
-                </h3>
-                <p class="mt-0.5 text-sm text-ink-3">{p.req}</p>
-              </div>
-            </div>
-            <span class="detected-tag hidden rounded-full bg-live/10 px-2.5 py-1 text-xs font-medium text-live">Your system</span>
+    <div class="dl mt-10" data-dl>
+      <div class="dl-grid">
+        <!-- src: README.md L121 (the x64-setup.exe installer), L119-123 (SmartScreen, not code-signed); docs/user-guide/getting-started.md L16-27 (per-user NSIS installer, no admin rights, More info then Run anyway) -->
+        <article class="dl-card dl-card--windows" aria-labelledby="dl-win">
+          <div class="dl-head">
+            <Icon name="windows" class="h-7 w-7" />
+            <h3 id="dl-win" class="dl-title">Windows</h3>
+            <span class="dl-here">Your system</span>
           </div>
-
-          <ul class="mt-7 space-y-2.5 text-[0.9375rem] text-ink-2">
-            {p.notes.map((n) => (
-              <li class="flex gap-2.5">
-                <Icon name="check" class="mt-1 h-4 w-4 shrink-0 text-ink-3" />
-                <span>{n}</span>
-              </li>
-            ))}
+          <p class="dl-spec">Windows 10 and 11, x64</p>
+          <ul class="dl-list">
+            <li>
+              On the release page, pick the file that ends in <code class="dl-file">x64-setup.exe</code>. It is a per-user
+              installer, so no admin rights are needed.
+            </li>
+            <li>
+              Windows may show a SmartScreen warning, because the installer is not code-signed yet. Choose
+              <strong>More info</strong>, then <strong>Run anyway</strong>.
+            </li>
           </ul>
-
-          <div class="mt-8 flex-1"></div>
-          <a href={RELEASES_LATEST} class="dl-btn btn-ghost w-full">
-            <Icon name="download" />
-            {p.cta}
+          <a href={RELEASES_LATEST} class="btn-primary dl-btn" data-dl-btn="windows">
+            <Icon name="download" class="h-[18px] w-[18px]" />
+            Download for Windows
           </a>
         </article>
-      ))}
+
+        <!-- src: README.md L125-132 (Apple Silicon beta, the .dmg on the releases page, not notarized so Gatekeeper blocks it, xattr -cr, mic access); site FAQ "Intel Macs and Linux are not supported yet" -->
+        <article class="dl-card dl-card--mac" aria-labelledby="dl-mac">
+          <div class="dl-head">
+            <Icon name="apple" class="h-7 w-7" />
+            <h3 id="dl-mac" class="dl-title">macOS</h3>
+            <span class="tag">Beta</span>
+            <span class="dl-here">Your system</span>
+          </div>
+          <p class="dl-spec">Apple Silicon. Intel Macs are not supported yet.</p>
+          <ul class="dl-list">
+            <li>On the release page, pick the file that ends in <code class="dl-file">.dmg</code>.</li>
+            <li>
+              The beta is not notarized, so Gatekeeper blocks the first launch. After you drag NexQ into Applications,
+              clear the quarantine flag once:
+              <code class="dl-code">xattr -cr /Applications/NexQ.app</code>
+            </li>
+            <li>Allow microphone access when macOS asks.</li>
+          </ul>
+          <a href={RELEASES_LATEST} class="btn-ghost dl-btn" data-dl-btn="mac">
+            <Icon name="download" class="h-[18px] w-[18px]" />
+            Download for Mac
+          </a>
+        </article>
+      </div>
+
+      <!-- src: src/components/UpdateDialog.tsx L16-33 (the release wave doubles as the progress bar), scripts/nsis-release-info.mjs L60 (the installer draws releaseWave(version, 72)) -->
+      <div class="dl-wave-row">
+        <div class="dl-wave-text">
+          <p class="dl-ver">v{CURRENT_VERSION}</p>
+          <p class="dl-wave-line">Your installer shows this wave.</p>
+          <p class="dl-wave-note">It fills as NexQ installs, and the update dialog draws the same one.</p>
+        </div>
+        <div class="dl-wave" data-dl-wave>
+          <Wave version={CURRENT_VERSION} size="lg" />
+        </div>
+      </div>
     </div>
 
-    <div class="mt-8 flex flex-col gap-3 text-sm text-ink-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-8">
-      <a href={doc('getting-started')} target="_blank" rel="noopener" class="inline-flex items-center gap-1 hover:text-ink-2">
-        Getting started guide <Icon name="arrow-up-right" class="h-3.5 w-3.5" />
-      </a>
-      <a href={`${REPO}#development`} target="_blank" rel="noopener" class="inline-flex items-center gap-1 hover:text-ink-2">
-        Build from source <Icon name="arrow-up-right" class="h-3.5 w-3.5" />
-      </a>
-      <span>Recommended: 8 GB RAM, 16 GB for local speech and AI models.</span>
-    </div>
+    <!-- The demo video, here and nowhere else. Click to play: nothing loads until then. No audio track
+         (ffprobe: one video stream in the mp4 and the webm), so it is muted. -->
+    <figure class="dl-video" data-reveal>
+      <div class="dl-video__frame" data-demo-video data-webm={`${base}media/hero-demo.webm`} data-mp4={`${base}media/hero-demo.mp4`} data-poster={`${base}media/hero-demo-poster.webp`}>
+        <button type="button" class="dl-video__btn" aria-label="Play the demo video (no sound)">
+          <img src={`${base}media/hero-demo-poster.webp`} width="1600" height="1162" loading="lazy" decoding="async" alt="" />
+          <span class="dl-video__icon" aria-hidden="true">
+            <svg viewBox="0 0 12 12" width="22" height="22"><path d="M3 1.5v9l7.5-4.5z" fill="currentColor" /></svg>
+          </span>
+        </button>
+        <noscript>
+          <video controls muted preload="none" width="1600" height="1162" poster={`${base}media/hero-demo-poster.webp`}>
+            <source src={`${base}media/hero-demo.webm`} type="video/webm" />
+            <source src={`${base}media/hero-demo.mp4`} type="video/mp4" />
+          </video>
+        </noscript>
+      </div>
+      <figcaption>See it first: NexQ in demo mode, recorded on an earlier version.</figcaption>
+    </figure>
+
+    <p class="dl-more">
+      <a href={RELEASES_URL} class="link">Other builds and checksums</a>
+      <a href={CONTRIBUTING} class="link">Build from source</a>
+    </p>
   </div>
 </section>
 
-<style>
-  .platform.is-detected {
-    border-color: rgba(59, 130, 246, 0.45);
-    box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.08);
+<script>
+  import '../scripts/dl-detect.ts';
+  import '../scripts/demo-video.ts';
+</script>
+
+<style is:global>
+  /* Jumping here (nav, hero, CTA) lands the heading just under the solid nav, so the download buttons are on the
+     first screen. html's scroll-padding-top is nav + 1rem; this cancels the section's own top padding (5rem, 7rem from sm). */
+  .dl-sec {
+    scroll-margin-top: calc(0.5rem - 5rem);
+  }
+  @media (min-width: 640px) {
+    .dl-sec {
+      scroll-margin-top: calc(0.5rem - 7rem);
+    }
+  }
+
+  /* Video (below the downloads) */
+  .dl-video {
+    margin-top: 3rem;
+    max-width: 40rem;
+  }
+  /* From 1024px the video takes the wide column and its caption sits beside it (7fr / 4fr, like the After the call grid). */
+  @media (min-width: 1024px) {
+    .dl-video {
+      display: grid;
+      max-width: none;
+      grid-template-columns: minmax(0, 7fr) minmax(0, 4fr);
+      align-items: end;
+      gap: 3rem;
+    }
+    .dl-video figcaption {
+      margin-top: 0;
+      max-width: 28ch;
+      font-size: 1rem;
+      line-height: 1.5;
+    }
+  }
+  .dl-video__frame {
+    position: relative;
+    overflow: hidden;
+    aspect-ratio: 1600 / 1162;
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.875rem;
+    background: hsl(var(--card));
+  }
+  .dl-video__frame video,
+  .dl-video__frame img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .dl-video__btn {
+    position: relative;
+    display: block;
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+  }
+  html:not(.js) .dl-video__btn {
+    display: none;
+  }
+  .dl-video__icon {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    display: grid;
+    width: 4.5rem;
+    height: 4.5rem;
+    place-items: center;
+    border-radius: 9999px;
+    background: hsl(var(--primary-btn));
+    color: #fff;
+    transform: translate(-50%, -50%);
+    transition: transform 0.3s var(--ease-spring);
+  }
+  .dl-video__btn:hover .dl-video__icon {
+    transform: translate(-50%, -50%) scale(1.06);
+  }
+  .dl-video figcaption {
+    margin-top: 0.75rem;
+    font-size: 0.875rem;
+    color: hsl(var(--muted-foreground));
+  }
+  @media (forced-colors: active) {
+    .dl-video__frame {
+      border-color: ButtonText;
+    }
+    .dl-video__icon {
+      border: 2px solid ButtonText;
+      background: ButtonFace;
+      color: ButtonText;
+    }
+  }
+
+  .dl {
+    overflow: hidden;
+    border: 1px solid hsl(var(--border));
+    border-radius: 1.25rem;
+  }
+  .dl-grid {
+    grid-template-columns: minmax(0, 1fr);
+    display: grid;
+  }
+  .dl-card {
+      min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1.5rem;
+    transition: background-color 0.3s var(--ease-spring);
+  }
+  .dl-card + .dl-card {
+    border-top: 1px solid hsl(var(--border));
+  }
+  .dl-head {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .dl-title {
+    font-size: 1.5rem;
+    font-weight: 750;
+    letter-spacing: -0.03em;
+    line-height: 1.1;
+  }
+  /* The slot is always laid out; only its visibility changes, so detection moves nothing. */
+  .dl-here {
+    visibility: hidden;
+    margin-left: auto;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: hsl(var(--foreground));
+  }
+  .dl[data-os='windows'] .dl-card--windows .dl-here,
+  .dl[data-os='mac'] .dl-card--mac .dl-here {
+    visibility: visible;
+  }
+  .dl[data-os='windows'] .dl-card--windows,
+  .dl[data-os='mac'] .dl-card--mac {
+    background-color: hsl(var(--card));
+  }
+  .dl-spec {
+    font-size: 0.9375rem;
+    color: hsl(var(--muted-foreground));
+  }
+  .dl-list {
+    grid-template-columns: minmax(0, 1fr);
+    display: grid;
+    flex: 1 1 auto;
+    gap: 0.875rem;
+    align-content: start;
+    padding: 0;
+    list-style: none;
+    font-size: 0.9375rem;
+    line-height: 1.55;
+    color: hsl(var(--muted-foreground));
+  }
+  .dl-list strong {
+    font-weight: 600;
+    color: hsl(var(--foreground));
+  }
+  .dl-file {
+    border-radius: 0.25rem;
+    background: hsl(var(--secondary));
+    padding: 0.0625rem 0.3125rem;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.8125em;
+    color: hsl(var(--foreground));
+    white-space: nowrap;
+  }
+  .dl-code {
+    display: block;
+    margin-top: 0.625rem;
+    overflow-x: auto;
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.5rem;
+    background: hsl(var(--background));
+    padding: 0.625rem 0.75rem;
+    font-size: 0.8125rem;
+    line-height: 1.4;
+    color: hsl(var(--foreground));
+    user-select: all;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .dl-btn {
+    align-self: flex-start;
+    width: 100%;
+  }
+  .dl-wave-row {
+    grid-template-columns: minmax(0, 1fr);
+    display: grid;
+    gap: 1.25rem;
+    border-top: 1px solid hsl(var(--border));
+    padding: 1.5rem;
+  }
+  .dl-wave-line {
+    margin-top: 0.375rem;
+    font-size: 1.25rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+  }
+  .dl-wave-note {
+    margin-top: 0.375rem;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    color: hsl(var(--muted-foreground));
+  }
+  .dl-ver {
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    font-weight: 450;
+    color: hsl(var(--muted-foreground));
+  }
+  .dl-wave .nx-wave {
+    --wave-h: 4rem;
+    transition: --progress 2.4s var(--ease-spring);
+  }
+  /* The wave is "unplayed" until it scrolls into view, then fills once. Without JS it shows full. */
+  .js .dl-wave:not(.is-in) .nx-wave {
+    --progress: 0 !important;
+  }
+  .dl-more {
+    margin-top: 1.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.75rem;
+    font-size: 0.9375rem;
+  }
+  .dl-more a {
+    display: inline-flex;
+    min-height: 2.75rem;
+    align-items: center;
+  }
+
+  @media (min-width: 768px) {
+    .dl-grid {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+    .dl-card {
+      min-width: 0;
+      padding: 2rem;
+    }
+    .dl-card + .dl-card {
+      border-top: 0;
+      border-left: 1px solid hsl(var(--border));
+    }
+    .dl-btn {
+      width: auto;
+    }
+    .dl-wave-row {
+      grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
+      align-items: center;
+      gap: 2.5rem;
+      padding: 2rem;
+    }
+    .dl-wave .nx-wave {
+      --wave-h: 5rem;
+    }
+  }
+
+  @media (forced-colors: active) {
+    .dl,
+    .dl-card + .dl-card,
+    .dl-wave-row,
+    .dl-code {
+      border-color: ButtonText;
+    }
   }
 </style>
-
-<script>
-  type OS = 'windows' | 'mac' | 'mobile' | 'other';
-
-  function detectOS(): OS {
-    const nav = navigator as Navigator & { userAgentData?: { platform?: string; mobile?: boolean } };
-    const ua = navigator.userAgent;
-    const platform = (nav.userAgentData?.platform || navigator.platform || '').toLowerCase();
-    if (nav.userAgentData?.mobile || /android|iphone|ipad|ipod/i.test(ua)) return 'mobile';
-    // iPadOS reports as Mac with touch support
-    if (platform.includes('mac') && navigator.maxTouchPoints > 1) return 'mobile';
-    if (platform.includes('win') || /windows/i.test(ua)) return 'windows';
-    if (platform.includes('mac') || /mac os x/i.test(ua)) return 'mac';
-    return 'other';
-  }
-
-  const os = detectOS();
-  const status = document.getElementById('os-detected');
-  const messages: Record<OS, string> = {
-    windows: 'Detected Windows. The Windows installer is highlighted below.',
-    mac: 'Detected macOS. The Apple Silicon beta is highlighted below. It does not run on Intel Macs.',
-    mobile: 'NexQ is a desktop app for Windows and macOS. Open this page on your computer to download it.',
-    other: 'NexQ currently ships for Windows and for macOS on Apple Silicon. On other systems you can build it from source.',
-  };
-  if (status) status.textContent = messages[os];
-
-  if (os === 'windows' || os === 'mac') {
-    const card = document.querySelector<HTMLElement>(`.platform[data-os="${os}"]`);
-    if (card) {
-      card.classList.add('is-detected');
-      card.querySelector('.detected-tag')?.classList.remove('hidden');
-      const btn = card.querySelector('.dl-btn');
-      btn?.classList.remove('btn-ghost');
-      btn?.classList.add('btn-primary');
-    }
-    // Keep the hero and final CTA consistent with the detected platform.
-    const label = os === 'mac' ? 'Download for macOS (beta)' : 'Download for Windows';
-    document.querySelectorAll('[data-download-label]').forEach((el) => (el.textContent = label));
-  } else {
-    document.querySelectorAll('[data-download-label]').forEach((el) => (el.textContent = 'Download NexQ'));
-  }
-</script>

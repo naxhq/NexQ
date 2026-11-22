@@ -1,0 +1,78 @@
+---
+/**
+ * A release's waveform as static, accessible markup. Bars come from the app's own
+ * releaseWave() (see data/releases.ts). Heights never change; only the colour moves,
+ * like a playhead.
+ *
+ * Drawn as ONE inline SVG per wave (a path per colour, not a span per bar), so a page with
+ * many waves stays a handful of DOM nodes. Two layers: every bar at rest, and the same bars
+ * in their played colour, clipped at the playhead by --progress.
+ *
+ * Props
+ *   version   full version string, e.g. "2.41.2" (also the seed of the shape)
+ *   size      'sm' (20px) | 'md' (40px, default) | 'lg' (96px). Or set --wave-h on a parent.
+ *   progress  initial playhead 0..1 (default 1: fully played, which is what no-JS shows)
+ *   tone      'primary' (default, blue) | 'you' (green) | 'them' (orange): colour of played bars
+ *   speakers  optional per-bar speaker: ('you' | 'them' | null)[]; played bars of that speaker
+ *             take the speaker colour (green / orange)
+ *   count     number of bars (default 72)
+ *   label     override the aria-label (default "Release waveform for v2.41.2")
+ *   class     extra classes
+ *
+ * Animating (section authors): the root has `data-wave` and a `--progress` custom property.
+ *   const wave = document.querySelector<HTMLElement>('[data-wave]');
+ *   wave.style.setProperty('--progress', String(t)); // t in 0..1, from your rAF loop
+ * Colours: override --wave-played / --wave-rest on the element. Styles are in global.css.
+ * `--wave-gap` no longer does anything (the gap is a fixed share of each bar's slot).
+ * Do not animate heights, and do not use it as a decorative divider.
+ */
+import { waveFor } from '../data/releases';
+
+interface Props {
+  version: string;
+  size?: 'sm' | 'md' | 'lg';
+  progress?: number;
+  tone?: 'primary' | 'you' | 'them';
+  speakers?: Array<'you' | 'them' | null | undefined>;
+  count?: number;
+  label?: string;
+  class?: string;
+}
+
+const { version, size = 'md', progress = 1, tone = 'primary', speakers, count = 72, label, class: className = '' } = Astro.props;
+const bars = waveFor(version, count);
+
+// Geometry in viewBox units: each bar has a 10-wide slot, a 6-wide pill, and the box is 100 tall.
+// preserveAspectRatio="none" stretches that to whatever size CSS gives the wave.
+const SLOT = 10;
+const W = 6;
+const H = 100;
+const pill = (i: number, v: number) => {
+  const h = 2 * Math.max(4, Math.round(v * (H / 2))); // even, at least 8, so the ends stay round
+  return `M${i * SLOT + (SLOT - W) / 2} ${H / 2 - h / 2 + W / 2}a${W / 2} ${W / 2} 0 0 1 ${W} 0v${h - W}a${W / 2} ${W / 2} 0 0 1-${W} 0z`;
+};
+const group: Record<'all' | 'def' | 'you' | 'them', string> = { all: '', def: '', you: '', them: '' };
+bars.forEach((v, i) => {
+  const d = pill(i, v);
+  group.all += d;
+  const s = speakers?.[i];
+  group[s === 'you' ? 'you' : s === 'them' ? 'them' : 'def'] += d;
+});
+const viewBox = `0 0 ${bars.length * SLOT} ${H}`;
+---
+
+<div
+  class:list={['nx-wave', `nx-wave--${size}`, className]}
+  role="img"
+  aria-label={label ?? `Release waveform for v${version}`}
+  data-wave={version}
+  data-tone={tone === 'primary' ? undefined : tone}
+  style={`--progress:${progress}`}
+>
+  <svg class="nx-wave__rest" viewBox={viewBox} preserveAspectRatio="none" aria-hidden="true" focusable="false"><path d={group.all}></path></svg>
+  <svg class="nx-wave__on" viewBox={viewBox} preserveAspectRatio="none" aria-hidden="true" focusable="false">
+    {group.def && <path d={group.def}></path>}
+    {group.you && <path data-s="you" d={group.you}></path>}
+    {group.them && <path data-s="them" d={group.them}></path>}
+  </svg>
+</div>

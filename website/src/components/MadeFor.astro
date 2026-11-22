@@ -1,0 +1,235 @@
+---
+/**
+ * #made-for: scenarios as a typographic list. Hovering or focusing a name swaps the one-line
+ * "what NexQ does here" and its guide link. Without JS every line is shown under its name.
+ *
+ * Facts:
+ *   scenario names and one-line purpose ... src/lib/scenarios.ts:5-83 (Team Meeting "Tracks decisions,
+ *     action items, speaker attribution"; Lecture "Key concepts, definitions, Q&A extraction"; Interview
+ *     "Questions, responses, follow-ups"; Webinar "Presentation points, audience Q&A")
+ *   custom scenarios ...................... CHANGELOG.md 2.32.0 "meetings can use custom scenarios";
+ *     docs/user-guide/configuration.md L219 (Custom: your own system prompts)
+ *   The scenario list matches the owner's decision (Interview, Team meeting, Lecture, Webinar, your own).
+ *   call detection ........................ docs/user-guide/meeting-detection.md: Zoom, Teams, Meet, Webex
+ *     (Slack huddles and Discord are options, off by default); every 3 s by default (1 to 10 s); "never
+ *     listens to audio before you click Start"; Enter starts, Esc dismisses; "available on Windows".
+ */
+import { SECTION, SCENARIOS, doc } from '../data/site';
+
+const DETAIL: Record<string, { text: string; href: string }> = {
+  interview: {
+    text: 'Catches each question as it is asked, then helps you answer and follow up, using the resume and notes you loaded.',
+    href: doc('interview-copilot'),
+  },
+  meeting: {
+    text: 'Tracks decisions and action items, and who said what, so you can leave with the list.',
+    href: `${doc('configuration')}#ai-scenarios`,
+  },
+  lecture: {
+    text: 'Pulls out key concepts, definitions and the questions asked, so you can follow now and review later.',
+    href: doc('lecture-assistant'),
+  },
+  webinar: {
+    text: 'Keeps the presentation’s main points and the audience Q&A while you watch.',
+    href: `${doc('configuration')}#ai-scenarios`,
+  },
+  custom: {
+    text: 'Write a scenario with your own instructions for the AI, then pick it for any meeting. New in 2.32.',
+    href: `${doc('configuration')}#ai-scenarios`,
+  },
+};
+---
+
+<section id={SECTION.madeFor} class="section" aria-labelledby="made-for-title">
+  <div class="wrap">
+    <h2 id="made-for-title" class="h2 max-w-[18ch]">Made for the calls you have.</h2>
+    <p class="lede">Pick a scenario before the call. It tunes what the AI listens for and how it answers.</p>
+
+    <ul class="mf" data-mf data-reveal>
+      {SCENARIOS.map((s, i) => (
+        <li class="mf-item" data-on={i === 0 ? '' : undefined}>
+          <button type="button" class="mf-name" aria-pressed={i === 0 ? 'true' : 'false'}>{s.name}</button>
+          <div class="mf-detail">
+            <p>{DETAIL[s.id].text}</p>
+            <a class="link" href={DETAIL[s.id].href}>Read the guide<span class="sr-only"> for {s.name}</span></a>
+          </div>
+        </li>
+      ))}
+    </ul>
+
+    <div class="mf-detect" data-reveal>
+      <div>
+        <p class="mf-label">Call detection</p>
+        <h3 class="h3 mt-3 max-w-[20ch]">Zoom, Teams, Meet and Webex calls offer to start NexQ</h3>
+      </div>
+      <div class="mf-detect__body">
+        <p>
+          When a call app starts using your microphone, a small prompt asks if you want to begin.
+          <kbd class="kbd">Enter</kbd> starts, <kbd class="kbd">Esc</kbd> dismisses.
+        </p>
+        <p>
+          NexQ checks every 3 seconds by default, and never listens to audio before you click Start: it only reads which
+          app has the microphone open, and the titles of that app’s windows. Slack huddles and Discord can be switched on too. Windows only for now.
+        </p>
+        <p><a class="link" href={doc('meeting-detection')}>How call detection works</a></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .mf {
+    position: relative;
+    margin-top: 3.5rem;
+    border-top: 1px solid hsl(var(--border));
+  }
+  .mf-item {
+    border-bottom: 1px solid hsl(var(--border));
+  }
+  .mf-name {
+    display: block;
+    width: 100%;
+    min-height: 44px;
+    padding: 0.75rem 0;
+    text-align: left;
+    font-size: clamp(2.25rem, 5vw + 0.75rem, 4.5rem);
+    font-weight: 800;
+    letter-spacing: -0.045em;
+    line-height: 1;
+    color: hsl(var(--muted-foreground) / 0.8);
+    cursor: default;
+    transition: color 0.3s var(--ease-spring);
+  }
+  :global(.js) .mf-name {
+    cursor: pointer;
+  }
+  .mf-name:hover,
+  .mf-name[aria-pressed='true'] {
+    color: hsl(var(--foreground));
+  }
+  .mf-detail {
+    max-width: 30rem;
+    padding: 0 0 1.25rem;
+  }
+  .mf-detail p {
+    font-size: 1.125rem;
+    line-height: 1.5;
+  }
+  .mf-detail a {
+    display: inline-block;
+    margin-top: 0.5rem;
+    font-size: 0.9375rem;
+  }
+
+  /* With JS, only the selected line is shown. Small screens: under its name. Wide screens: on the right. */
+  :global(.js) .mf-item:not([data-on]) .mf-detail {
+    display: none;
+  }
+  :global(.js) .mf-item[data-on] .mf-detail {
+    animation: mf-in 0.45s var(--ease-spring);
+  }
+  @keyframes mf-in {
+    from {
+      opacity: 0;
+      transform: translate3d(0, 6px, 0);
+    }
+  }
+  @media (min-width: 900px) {
+    :global(.js) .mf {
+      padding-right: 50%;
+      min-height: 22rem;
+    }
+    :global(.js) .mf-detail {
+      position: absolute;
+      top: 0;
+      left: calc(50% + 2rem);
+      right: 0;
+      padding: 1rem 0 0;
+    }
+    :global(.js) .mf-detail p {
+      font-size: 1.375rem;
+    }
+    :global(.js) .mf-item:not([data-on]) .mf-detail {
+      display: block;
+      opacity: 0;
+      visibility: hidden;
+    }
+    :global(.js) .mf-item[data-on] .mf-detail {
+      animation: none;
+      opacity: 1;
+      visibility: visible;
+      transition: opacity 0.4s var(--ease-spring) 0.05s;
+    }
+    :global(.js) .mf-item:not([data-on]) .mf-detail {
+      transition:
+        opacity 0.2s var(--ease-spring),
+        visibility 0s 0.2s;
+    }
+  }
+
+  @media (forced-colors: active) {
+    .mf-name[aria-pressed='true'] {
+      text-decoration: underline;
+      text-decoration-thickness: 0.06em;
+      text-underline-offset: 0.12em;
+    }
+  }
+  .mf-detect {
+    display: grid;
+    gap: 2rem;
+    margin-top: 5rem;
+  }
+  @media (min-width: 900px) {
+    .mf-detect {
+      grid-template-columns: 1fr 1fr;
+      gap: 4rem;
+    }
+  }
+  .mf-label {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: hsl(var(--muted-foreground));
+  }
+  .mf-detect__body {
+    display: grid;
+    gap: 0.875rem;
+    max-width: 34rem;
+    font-size: 1rem;
+    line-height: 1.6;
+    color: hsl(var(--muted-foreground));
+  }
+  .mf-detect__body p:first-child {
+    color: hsl(var(--foreground));
+    font-size: 1.125rem;
+  }
+</style>
+
+<script>
+  // Select a scenario on click or focus at once. On hover the change waits ~150 ms for the pointer to
+  // settle, so moving diagonally across the list to "Read the guide" does not swap the selection.
+  const mf = document.querySelector<HTMLElement>('[data-mf]');
+  if (mf) {
+    const items = Array.from(mf.querySelectorAll<HTMLElement>('.mf-item'));
+    let timer = 0;
+    const pick = (i: number) => {
+      clearTimeout(timer);
+      items.forEach((it, j) => {
+        it.toggleAttribute('data-on', j === i);
+        it.querySelector('button')!.setAttribute('aria-pressed', String(j === i));
+      });
+    };
+    const hover = matchMedia('(hover: hover)').matches;
+    items.forEach((it, i) => {
+      const b = it.querySelector('button')!;
+      b.addEventListener('click', () => pick(i));
+      b.addEventListener('focus', () => pick(i));
+      if (hover) {
+        b.addEventListener('pointerenter', () => {
+          clearTimeout(timer);
+          timer = window.setTimeout(() => pick(i), 150);
+        });
+        b.addEventListener('pointerleave', () => clearTimeout(timer));
+      }
+    });
+  }
+</script>

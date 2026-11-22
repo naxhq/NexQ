@@ -1,31 +1,107 @@
 ---
 import Icon from './Icon.astro';
-import { FAQ, DOCS } from '../data/site';
+import { FAQ, DOCS, SECTION } from '../data/site';
+// Renders the same FAQ array that Layout.astro turns into FAQPage JSON-LD.
+// Native <details>/<summary>: works without JS, keyboard and screen reader friendly.
 ---
 
-<section id="faq" class="section border-t border-line" aria-labelledby="faq-title">
+<section id={SECTION.faq} class="section border-t border-border" aria-labelledby="faq-title">
   <div class="wrap">
     <div class="grid gap-12 lg:grid-cols-12 lg:gap-16">
-      <div class="lg:col-span-4" data-reveal>
-        <p class="eyebrow">FAQ</p>
-        <h2 id="faq-title" class="h2 mt-4">Questions, answered.</h2>
-        <p class="lede">
-          Anything else? The <a href={DOCS} target="_blank" rel="noopener" class="link">user guide</a> goes deeper.
-        </p>
+      <div class="lg:col-span-4">
+        <div class="lg:sticky lg:top-[calc(var(--nav-h)+2rem)]">
+          <h2 id="faq-title" class="h2">Questions people ask first.</h2>
+          <p class="lede">
+            Anything else? The <a href={DOCS} class="link">user guide</a> goes deeper.
+          </p>
+        </div>
       </div>
-      <div class="faq lg:col-span-8">
+      <div class="faq faq-list lg:col-span-8">
         {FAQ.map((f) => (
-          <details class="group border-t border-line last:border-b">
-            <summary class="flex min-h-[64px] cursor-pointer items-center justify-between gap-6 py-5 text-left text-[1.0625rem] font-medium text-ink transition-colors hover:text-white">
-              <h3 class="font-medium">{f.q}</h3>
-              <span class="faq-icon flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-line-strong text-ink-2">
+          <details class="faq-item">
+            <summary class="faq-q">
+              <h3>{f.q}</h3>
+              <span class="faq-icon" aria-hidden="true">
                 <Icon name="plus" class="h-4 w-4" />
               </span>
             </summary>
-            <p class="max-w-2xl pb-6 pr-12 text-[0.9375rem] leading-relaxed text-ink-2">{f.a}</p>
+            <p class="faq-a">{f.a}</p>
           </details>
         ))}
       </div>
     </div>
   </div>
 </section>
+
+<style is:global>
+  .faq-item {
+    border-top: 1px solid hsl(var(--border));
+  }
+  .faq-item:last-child {
+    border-bottom: 1px solid hsl(var(--border));
+  }
+  .faq-q {
+    display: flex;
+    min-height: 4rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.5rem;
+    padding: 1.125rem 0.25rem;
+    text-align: left;
+    color: hsl(var(--foreground));
+    transition: color 0.2s var(--ease-spring);
+  }
+  .faq-q h3 {
+    font-size: 1.0625rem;
+    font-weight: 650;
+    line-height: 1.35;
+    letter-spacing: -0.01em;
+    text-wrap: pretty;
+  }
+  .faq-q:focus-visible {
+    outline-offset: 2px;
+    border-radius: 0.5rem;
+  }
+  .faq-icon {
+    display: flex;
+    height: 2.25rem;
+    width: 2.25rem;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid hsl(var(--border));
+    border-radius: 9999px;
+    color: hsl(var(--muted-foreground));
+    transition:
+      transform 0.35s var(--ease-spring),
+      background-color 0.2s var(--ease-spring),
+      color 0.2s var(--ease-spring);
+  }
+  .faq-q:hover .faq-icon {
+    background-color: hsl(var(--card));
+    color: hsl(var(--foreground));
+  }
+  .faq-item[open] > .faq-q .faq-icon {
+    background-color: hsl(var(--secondary));
+    color: hsl(var(--foreground));
+  }
+  .faq-a {
+    max-width: 40rem;
+    padding: 0 3.5rem 1.5rem 0.25rem;
+    font-size: 0.9375rem;
+    line-height: 1.65;
+    color: hsl(var(--muted-foreground));
+  }
+  @media (max-width: 480px) {
+    .faq-a {
+      padding-right: 0.25rem;
+    }
+  }
+  @media (forced-colors: active) {
+    .faq-item,
+    .faq-item:last-child,
+    .faq-icon {
+      border-color: ButtonText;
+    }
+  }
+</style>

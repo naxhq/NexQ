@@ -1,0 +1,29 @@
+---
+// "Your screen" and "What they see": the same slide twice. The overlay is in the first one always,
+// and in the second one only while Hide from screen share is off. The state is `data-stealth` on
+// the closest .nx-stage (set by callDemo.ts); without JS it reads "on".
+import OvMini from './OvMini.astro';
+import Slide from './Slide.astro';
+interface Props {
+  /** The beat text and the pinned column each get a copy; only one is visible at a time. */
+  class?: string;
+}
+const { class: cls = '' } = Astro.props;
+---
+
+<div class:list={['nx-panes', cls]} aria-hidden="true">
+  <figure class="nx-pane">
+    <figcaption>Your screen</figcaption>
+    <div class="nx-mscreen">
+      <Slide />
+      <div class="nx-mov"><OvMini /></div>
+    </div>
+  </figure>
+  <figure class="nx-pane nx-pane--share">
+    <figcaption>What they see</figcaption>
+    <div class="nx-mscreen">
+      <Slide />
+      <div class="nx-mov nx-mov--share"><OvMini /></div>
+    </div>
+  </figure>
+</div>

@@ -1,0 +1,17 @@
+---
+// The answer panel before any answer: src/overlay/AIResponsePanel.tsx empty state. On a touch screen
+// (hover: none, see overlay.css) the key hint reads as a tap hint instead.
+import OvIcon from './OvIcon.astro';
+import { OV } from './content';
+interface Props {
+  class?: string;
+  'data-for'?: string;
+}
+const { class: cls = '', 'data-for': dataFor } = Astro.props;
+---
+
+<div class:list={['ov-empty', cls]} data-for={dataFor}>
+  <OvIcon name="sparkles" class="ov-i ov-i--xl" />
+  <p class="ov-hint-key">{OV.emptyPre} <kbd class="ov-kbd">{OV.emptyKey}</kbd> {OV.emptyPost}</p>
+  <p class="ov-hint-tap">{OV.emptyTap}</p>
+</div>
