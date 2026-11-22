@@ -52,7 +52,7 @@ afterEach(() => {
   cleanup();
   showMeetingOverlay.mockClear();
   useMeetingStore.getState().stopTimer();
-  useMeetingStore.setState({ activeMeeting: null, currentView: "launcher", isRecording: false });
+  useMeetingStore.setState({ activeMeeting: null, currentView: "launcher", isRecording: false, meetingStarting: false });
   useConfigStore.setState({ startOnLogin: false });
   resetLauncherAutoStart();
 });
@@ -167,5 +167,56 @@ describe("start on login and demos", () => {
     } finally {
       useMeetingStore.setState({ startMeetingFlow: original });
     }
+  });
+});
+
+describe("demo while a real meeting is starting", () => {
+  it("is refused until the start settles, and the real meeting is not overwritten", async () => {
+    const flow = useMeetingStore.getState().startMeetingFlow("Real call", "online");
+    // activeMeeting is not set yet, but the start is under way
+    expect(useMeetingStore.getState().meetingStarting).toBe(true);
+    expect(useMeetingStore.getState().activeMeeting).toBeNull();
+
+    launchDemo(liveInterviewScenario, "screenshot");
+    expect(useDemoStore.getState().isDemoActive).toBe(false);
+
+    await act(async () => {
+      await flow;
+    });
+    expect(useMeetingStore.getState().meetingStarting).toBe(false);
+    expect(useMeetingStore.getState().activeMeeting?.id).toBe("real-1");
+    expect(useDemoStore.getState().isDemoActive).toBe(false);
+  });
+
+  it("clears the starting flag when the start fails", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "start_meeting") throw new Error("boom");
+      return [];
+    }, { shouldMockEvents: true });
+    try {
+      await expect(useMeetingStore.getState().startMeetingFlow("x", "online")).rejects.toBeTruthy();
+      expect(useMeetingStore.getState().meetingStarting).toBe(false);
+    } finally {
+      mockIPC((cmd, args) => {
+        if (cmd === "plugin:store|load") return 1;
+        if (cmd === "plugin:store|get") {
+          const { key } = args as { key: string };
+          return key === "firstRunCompleted" ? [true, true] : [null, false];
+        }
+        if (cmd === "list_meetings") return "[]";
+        if (cmd === "start_meeting") return JSON.stringify({ id: "real-1", title: "Real call" });
+        if (cmd === "get_rag_status" || cmd === "get_token_budget") return "null";
+        return [];
+      }, { shouldMockEvents: true });
+    }
+  });
+
+  it("disables Start Demo in the picker", async () => {
+    useMeetingStore.setState({ meetingStarting: true });
+    useDemoStore.getState().openPicker();
+    render(<DemoPicker />);
+    const start = (await screen.findByRole("button", { name: "Start Demo" })) as HTMLButtonElement;
+    expect(start.disabled).toBe(true);
+    useDemoStore.getState().closePicker();
   });
 });

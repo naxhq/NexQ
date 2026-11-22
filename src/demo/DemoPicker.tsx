@@ -10,7 +10,7 @@ export function DemoPicker() {
   const pickerOpen = useDemoStore((s) => s.pickerOpen);
   const closePicker = useDemoStore((s) => s.closePicker);
   // Demo data would overwrite a live meeting's stores, so demos wait until it ends.
-  const meetingRunning = useMeetingStore((s) => s.activeMeeting !== null);
+  const meetingRunning = useMeetingStore((s) => s.activeMeeting !== null || s.meetingStarting);
 
   const [selectedScenarioId, setSelectedScenarioId] = useState<string>(demoScenarios[0]?.id ?? '');
   const [selectedMode, setSelectedMode] = useState<'screenshot' | 'play'>('screenshot');

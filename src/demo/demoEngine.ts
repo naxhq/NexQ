@@ -59,6 +59,9 @@ function snapshotStores() {
 }
 
 function restoreStores() {
+  // A real meeting may be starting right now (it exits the demo first); the
+  // snapshot predates it and must not clear that flag.
+  const meetingStarting = useMeetingStore.getState().meetingStarting;
   // The demo's detected questions (and what the question panel remembers about
   // each transcript line) must not outlive it. clear() also empties the
   // panel's module-level line memory, which setState cannot reach.
@@ -71,6 +74,7 @@ function restoreStores() {
     }
   }
   storeSnapshots = {};
+  useMeetingStore.setState({ meetingStarting });
 }
 
 // ---------------------------------------------------------------------------
@@ -88,6 +92,11 @@ function restoreStores() {
  * data to disk via Tauri plugin-store.
  */
 export function launchDemo(scenario: DemoScenario, mode: 'play' | 'screenshot') {
+  // Demo data would overwrite a real meeting that is running or still starting
+  // (activeMeeting is only set after async setup). A demo's own meeting doesn't count.
+  const { meetingStarting, activeMeeting } = useMeetingStore.getState();
+  if (meetingStarting) return;
+  if (activeMeeting && !useDemoStore.getState().isDemoActive) return;
   // 1. Snapshot current store state so we can restore later
   snapshotStores();
   // A demo starts without the questions of whatever ran before it.
