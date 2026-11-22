@@ -77,6 +77,7 @@ export function STTSetupStep() {
     meetingAudioConfig?.them.stt_provider ?? "deepgram"
   );
   const [keyStatus, setKeyStatus] = useState<Record<string, boolean>>({});
+  const [keysChecked, setKeysChecked] = useState(false);
 
   // Check which API keys are stored
   useEffect(() => {
@@ -91,6 +92,7 @@ export function STTSetupStep() {
         }
       }
       setKeyStatus(status);
+      setKeysChecked(true);
     }
     check();
   }, []);
@@ -133,13 +135,13 @@ export function STTSetupStep() {
 
         {/* YOU STT Selection */}
         <div>
-          <label className="mb-3 flex items-center gap-2.5 text-sm font-medium text-foreground">
+          <label id="stt-you-label" className="mb-3 flex items-center gap-2.5 text-sm font-medium text-foreground">
             <span className="rounded-lg bg-primary/10 px-2 py-1 text-meta font-semibold uppercase tracking-wide text-primary">
               You
             </span>
             STT Provider
           </label>
-          <div className="grid grid-cols-1 gap-2">
+          <div role="radiogroup" aria-labelledby="stt-you-label" className="grid grid-cols-1 gap-2">
             {WIZARD_STT_PROVIDERS.map((p) => (
               <ProviderButton
                 key={p.value}
@@ -150,17 +152,18 @@ export function STTSetupStep() {
               />
             ))}
           </div>
+          <MissingKeyNote provider={youSTT} keyStatus={keyStatus} checked={keysChecked} />
         </div>
 
         {/* THEM STT Selection */}
         <div>
-          <label className="mb-3 flex items-center gap-2.5 text-sm font-medium text-foreground">
+          <label id="stt-them-label" className="mb-3 flex items-center gap-2.5 text-sm font-medium text-foreground">
             <span className="rounded-lg bg-muted px-2 py-1 text-meta font-semibold uppercase tracking-wide text-muted-foreground">
               Them
             </span>
             STT Provider
           </label>
-          <div className="grid grid-cols-1 gap-2">
+          <div role="radiogroup" aria-labelledby="stt-them-label" className="grid grid-cols-1 gap-2">
             {WIZARD_STT_PROVIDERS.filter((p) => p.value !== "web_speech").map((p) => (
               <ProviderButton
                 key={p.value}
@@ -171,12 +174,34 @@ export function STTSetupStep() {
               />
             ))}
           </div>
+          <MissingKeyNote provider={themSTT} keyStatus={keyStatus} checked={keysChecked} />
           <p className="mt-1 text-meta text-muted-foreground">
             Web Speech API is not available for "Them" — it only works with the browser's microphone.
           </p>
         </div>
       </div>
     </div>
+  );
+}
+
+/** One plain line when the chosen engine needs an API key that is not saved yet. */
+function MissingKeyNote({
+  provider,
+  keyStatus,
+  checked,
+}: {
+  provider: STTProviderType;
+  keyStatus: Record<string, boolean>;
+  checked: boolean;
+}) {
+  const choice = WIZARD_STT_PROVIDERS.find((p) => p.value === provider);
+  if (!checked || !choice?.requiresKey || keyStatus[provider]) return null;
+  return (
+    <p role="status" className="mt-2 text-xs text-yellow-500 leading-relaxed">
+      {choice.label} needs an API key. Add it in Settings &gt; STT Providers. Free and
+      offline instead: Settings &gt; Audio &amp; Devices &gt; Presets &gt; Free (one-time
+      465 MB download).
+    </p>
   );
 }
 
@@ -193,6 +218,9 @@ function ProviderButton({
 }) {
   return (
     <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
       onClick={onSelect}
       className={`flex items-center gap-3.5 rounded-xl border px-4 py-3.5 text-left transition-all duration-150 ${
         selected
@@ -214,10 +242,10 @@ function ProviderButton({
             </span>
           )}
           {provider.requiresKey && hasKey && (
-            <CheckCircle className="h-3 w-3 text-success" />
+            <CheckCircle role="img" aria-label="API key saved" className="h-3 w-3 text-success" />
           )}
           {provider.requiresKey && !hasKey && (
-            <AlertCircle className="h-3 w-3 text-yellow-500" />
+            <AlertCircle role="img" aria-label="API key missing" className="h-3 w-3 text-yellow-500" />
           )}
         </div>
         <p className="text-xs text-muted-foreground truncate">
