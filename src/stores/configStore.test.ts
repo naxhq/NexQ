@@ -250,6 +250,19 @@ describe("configStore: hotkeys", () => {
     await vi.waitFor(() => expect(saved.get("hotkeys")).toEqual(store.getState().hotkeys));
   });
 
+  it("a deliberate Ctrl+1 survives setHotkeys and the next load", async () => {
+    const store = await freshStore();
+    await store.getState().loadConfig();
+    store.getState().setHotkeys({ ...store.getState().hotkeys, mode_say: "Ctrl+1" });
+    expect(store.getState().hotkeys.mode_say).toBe("Ctrl+1");
+    await vi.waitFor(() => expect(saved.get("hotkeys")).toMatchObject({ mode_say: "Ctrl+1" }));
+
+    const reloaded = await freshStore();
+    await reloaded.getState().loadConfig();
+    expect(reloaded.getState().hotkeys.mode_say).toBe("Ctrl+1");
+    expect(saved.get("hotkeys")).toMatchObject({ mode_say: "Ctrl+1" });
+  });
+
   it("restores a saved choice and persists a change", async () => {
     saved.set("hotkeys", { mode_say: "Q" });
     const store = await freshStore();

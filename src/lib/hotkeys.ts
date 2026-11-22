@@ -33,7 +33,9 @@ export const DEFAULT_HOTKEYS: HotkeyConfig = {
 /**
  * Settings > Hotkeys once offered (and, after "Reset", saved) Ctrl+1..5 for
  * the five mode keys. Nothing ever read them, and the app really uses 1..5,
- * so a saved Ctrl+N is never a choice the user made.
+ * so those saved values are not choices the user made. A config is only
+ * treated as that old one when it is recognisably old (see isLegacyHotkeyConfig):
+ * a Ctrl+1 someone picked on purpose today must survive.
  */
 const LEGACY_DEFAULTS: Partial<Record<keyof HotkeyConfig, string>> = {
   mode_say: "Ctrl+1",
@@ -42,6 +44,9 @@ const LEGACY_DEFAULTS: Partial<Record<keyof HotkeyConfig, string>> = {
   mode_recap: "Ctrl+4",
   mode_ask: "Ctrl+5",
 };
+
+/** Fields the old Settings > Hotkeys page saved next to the mode keys. */
+const LEGACY_FIELDS = ["toggle_assist", "start_end_meeting", "show_hide", "open_settings", "escape"];
 
 export type OverlayKeyId = "bookmark" | "stats" | "bookmarks" | "mute" | "closePanels";
 
@@ -231,9 +236,25 @@ export function hotkeyConflict(
 }
 
 /**
- * Bindings from whatever was saved (any version) to a usable, conflict-free
- * set. Anything missing, unreadable, a leftover Ctrl+1..5 default, or clashing
- * with another binding falls back to that action's default.
+ * Is `saved` the config the old Settings > Hotkeys page wrote? It carried
+ * fields nothing used (toggle_assist ...), and "Reset" saved all five mode
+ * keys as exactly Ctrl+1..Ctrl+5.
+ */
+export function isLegacyHotkeyConfig(saved: unknown): boolean {
+  if (!saved || typeof saved !== "object") return false;
+  const source = saved as Record<string, unknown>;
+  if (LEGACY_FIELDS.some((f) => f in source)) return true;
+  return HOTKEY_ACTIONS.every(({ id }) => {
+    const legacy = LEGACY_DEFAULTS[id];
+    return legacy === undefined || canonicalHotkey(source[id]) === canonicalHotkey(legacy);
+  });
+}
+
+/**
+ * Bindings from whatever was saved to a usable, conflict-free set. Anything
+ * missing, unreadable, reserved or clashing with another binding falls back
+ * to that action's default. Ctrl+1..5 is a normal choice here: only
+ * migrateSavedHotkeys, for an old config, discards it.
  */
 export function sanitizeHotkeys(saved: unknown, mac = isMacPlatform()): HotkeyConfig {
   const source = saved && typeof saved === "object" ? (saved as Record<string, unknown>) : {};
@@ -241,10 +262,8 @@ export function sanitizeHotkeys(saved: unknown, mac = isMacPlatform()): HotkeyCo
   const taken = new Set<string>();
   for (const { id } of HOTKEY_ACTIONS) {
     const canon = canonicalHotkey(source[id]);
-    const legacy = LEGACY_DEFAULTS[id];
     const usable =
       canon &&
-      canon !== canonicalHotkey(legacy) &&
       !taken.has(canon) &&
       !reservedHotkeyAction(canon, mac) &&
       !EDITING_SHORTCUTS[canon] &&
@@ -255,6 +274,22 @@ export function sanitizeHotkeys(saved: unknown, mac = isMacPlatform()): HotkeyCo
   // A fallback default can still land on a binding the user chose: start over.
   if (taken.size !== HOTKEY_ACTIONS.length) return { ...DEFAULT_HOTKEYS };
   return result;
+}
+
+/**
+ * For the config read from disk at startup: like sanitizeHotkeys, but an old
+ * config (isLegacyHotkeyConfig) first loses its never-used Ctrl+1..5 values.
+ * Runs on load only, so a Ctrl+1 chosen later is kept by setHotkeys, window
+ * sync and the next load.
+ */
+export function migrateSavedHotkeys(saved: unknown, mac = isMacPlatform()): HotkeyConfig {
+  if (!isLegacyHotkeyConfig(saved)) return sanitizeHotkeys(saved, mac);
+  const source = { ...(saved as Record<string, unknown>) };
+  for (const { id } of HOTKEY_ACTIONS) {
+    const legacy = LEGACY_DEFAULTS[id];
+    if (legacy && canonicalHotkey(source[id]) === canonicalHotkey(legacy)) delete source[id];
+  }
+  return sanitizeHotkeys(source, mac);
 }
 
 /** The in-meeting action keys as "taken" entries (key -> name) for the global shortcut pickers. */

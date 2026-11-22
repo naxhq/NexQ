@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_HOTKEYS,
+  HOTKEY_ACTIONS,
   OVERLAY_SINGLE_KEYS,
   canonicalHotkey,
   hotkeyConflict,
   hotkeyFromEvent,
   hotkeysAsTaken,
+  isLegacyHotkeyConfig,
   matchesHotkey,
+  migrateSavedHotkeys,
   modeForKeyEvent,
   modeHotkey,
   sanitizeHotkeys,
@@ -104,7 +107,7 @@ describe("hotkeys: loading an old saved config", () => {
       mode_recap: "Ctrl+4",
       mode_ask: "Ctrl+5",
     };
-    const clean = sanitizeHotkeys(old);
+    const clean = migrateSavedHotkeys(old);
     expect(clean).toEqual(DEFAULT_HOTKEYS);
     expect(Object.keys(clean).sort()).toEqual(Object.keys(DEFAULT_HOTKEYS).sort());
   });
@@ -112,7 +115,7 @@ describe("hotkeys: loading an old saved config", () => {
   it("keeps a real choice, even next to a bogus value", () => {
     const clean = sanitizeHotkeys({ ...DEFAULT_HOTKEYS, mode_say: "ctrl+shift+k", mode_recap: "Ctrl+4" });
     expect(clean.mode_say).toBe("Ctrl+Shift+K");
-    expect(clean.mode_recap).toBe("4");
+    expect(clean.mode_recap).toBe("Ctrl+4");
   });
 
   it("unreadable, reserved or clashing values fall back to the defaults", () => {
@@ -186,5 +189,40 @@ describe("hotkeys: conflicts on a Mac", () => {
     const hk = { ...DEFAULT_HOTKEYS, mode_assist: "Ctrl+K" };
     expect(hotkeysAsTaken(hk, true)).toMatchObject({ "Ctrl+K": "Assist key", "CmdOrCtrl+K": "Assist key" });
     expect(hotkeysAsTaken(hk, false)).not.toHaveProperty("CmdOrCtrl+K");
+  });
+});
+
+describe("hotkeys: a deliberate Ctrl+1..5", () => {
+  it("is a free choice, not a conflict", () => {
+    expect(hotkeyConflict("Ctrl+1", "mode_say", DEFAULT_HOTKEYS, {}, false)).toBeNull();
+    for (const n of [1, 2, 3, 4, 5]) {
+      const id = HOTKEY_ACTIONS[n].id;
+      expect(sanitizeHotkeys({ ...DEFAULT_HOTKEYS, [id]: `Ctrl+${n}` })[id]).toBe(`Ctrl+${n}`);
+    }
+  });
+
+  it("survives sanitizing again (setHotkeys, window sync, reload)", () => {
+    const chosen = { ...DEFAULT_HOTKEYS, mode_say: "Ctrl+1" };
+    const once = sanitizeHotkeys(chosen);
+    expect(once.mode_say).toBe("Ctrl+1");
+    expect(sanitizeHotkeys(once)).toEqual(once);
+    expect(migrateSavedHotkeys(once)).toEqual(once);
+  });
+
+  it("only an identifiable old config is migrated", () => {
+    const five = { mode_assist: "Space", mode_say: "Ctrl+1", mode_shorten: "Ctrl+2", mode_followup: "Ctrl+3", mode_recap: "Ctrl+4", mode_ask: "Ctrl+5" };
+    // all five exactly Ctrl+1..5: the old Reset
+    expect(isLegacyHotkeyConfig(five)).toBe(true);
+    expect(migrateSavedHotkeys(five)).toEqual(DEFAULT_HOTKEYS);
+    // the old shape (unused fields), even with one key changed
+    const oldShape = { toggle_assist: "Space", start_end_meeting: "Ctrl+M", mode_say: "Ctrl+1", mode_recap: "Q" };
+    expect(isLegacyHotkeyConfig(oldShape)).toBe(true);
+    expect(migrateSavedHotkeys(oldShape)).toEqual({ ...DEFAULT_HOTKEYS, mode_recap: "Q" });
+    // a single deliberate Ctrl+1, or four of five, is not
+    expect(isLegacyHotkeyConfig({ ...DEFAULT_HOTKEYS, mode_say: "Ctrl+1" })).toBe(false);
+    expect(isLegacyHotkeyConfig({ ...five, mode_ask: "5" })).toBe(false);
+    expect(migrateSavedHotkeys({ ...five, mode_ask: "5" }).mode_say).toBe("Ctrl+1");
+    expect(migrateSavedHotkeys({ ...DEFAULT_HOTKEYS, mode_say: "Ctrl+1" }).mode_say).toBe("Ctrl+1");
+    expect(isLegacyHotkeyConfig(null)).toBe(false);
   });
 });

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { load, Store } from "@tauri-apps/plugin-store";
-import { DEFAULT_HOTKEYS, sanitizeHotkeys } from "../lib/hotkeys";
+import { DEFAULT_HOTKEYS, migrateSavedHotkeys, sanitizeHotkeys } from "../lib/hotkeys";
 import type {
   ThemeMode,
   LLMProviderType,
@@ -1038,7 +1038,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
       const firstRunCompleted = await store.get<boolean>("firstRunCompleted");
       const savedHotkeys = await store.get<unknown>("hotkeys");
       // Older versions saved bindings nothing read (Ctrl+1..5 after a Reset): fix them here.
-      const hotkeys = sanitizeHotkeys(savedHotkeys);
+      const hotkeys = migrateSavedHotkeys(savedHotkeys);
       if (savedHotkeys != null && JSON.stringify(savedHotkeys) !== JSON.stringify(hotkeys)) {
         persistValue("hotkeys", hotkeys);
       }
