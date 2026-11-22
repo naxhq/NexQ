@@ -170,8 +170,17 @@ pub fn looks_like_new_question(text: &str) -> bool {
             .iter()
             .skip_while(|word| TAG_LEAD_INS.contains(word))
             .next()
-            .is_some_and(|first| INTERROGATIVE_STARTERS.contains(first))
+            .is_some_and(|first| INTERROGATIVE_STARTERS.contains(&question_word_stem(first)))
     })
+}
+
+/// A word without its contraction ("what's" and "what\u{2019}s" are "what").
+/// Negations ("can't") are left whole: they are not question starters.
+fn question_word_stem(word: &str) -> &str {
+    if word.ends_with("n't") || word.ends_with("n\u{2019}t") {
+        return word;
+    }
+    word.split(['\'', '\u{2019}']).next().unwrap_or(word)
 }
 
 /// Whether a sentence is only a tag, with or without words leading into it.
@@ -320,5 +329,14 @@ mod tests {
         ] {
             assert!(QuestionDetector::new().detect_questions(text, 0, "Them").is_empty(), "{text}");
         }
+    }
+
+    #[test]
+    fn a_new_question_may_start_with_a_lead_in_or_a_contraction() {
+        assert!(looks_like_new_question("So what's your current role"));
+        assert!(looks_like_new_question("So what\u{2019}s your current role"));
+        assert!(looks_like_new_question("And how'd you do that"));
+        assert!(!looks_like_new_question("That's fine"));
+        assert!(!looks_like_new_question("Can't say I mind"));
     }
 }

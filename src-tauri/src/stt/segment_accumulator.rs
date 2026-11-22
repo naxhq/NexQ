@@ -168,6 +168,9 @@ impl SegmentAccumulator {
             return vec![out];
         }
         self.last_interim = None;
+        // An interim already showed this utterance on a new line: its final
+        // starts that paragraph too, even if the threshold changed since.
+        let interim_split = self.interim_new_line == Some(true);
         self.interim_new_line = None;
 
         let end_ms = match result.duration_ms {
@@ -181,7 +184,7 @@ impl SegmentAccumulator {
         };
 
         let mut outputs = Vec::new();
-        if self.has_active && !self.starts_new_paragraph(&result, &speaker, true) {
+        if self.has_active && !interim_split && !self.starts_new_paragraph(&result, &speaker, true) {
             if !self.current_text.is_empty() {
                 self.current_text.push(' ');
             }
@@ -607,5 +610,19 @@ mod tests {
         a.flush();
         let outs = a.feed_result(interim("again", T0 + 800));
         assert_eq!((outs[0].id.as_str(), outs[0].text.as_str()), ("acc_2", "again"));
+    }
+
+    #[test]
+    fn the_final_follows_its_interim_when_the_threshold_changes_in_between() {
+        let mut a = acc();
+        a.feed_result(fin("Is that okay?", T0, Some(1_000), None));
+        // 4 s of silence with a 3 s threshold: the interim gets its own line.
+        let outs = a.feed_result(interim("so", T0 + 5_000));
+        assert_eq!(outs[0].id, "acc_2");
+        a.set_pause_threshold(10_000);
+        let outs = a.feed_result(fin("So about it.", T0 + 5_000, Some(1_000), None));
+        assert_eq!(outs.len(), 2);
+        assert_eq!((outs[0].id.as_str(), outs[0].text.as_str()), ("acc_1", "Is that okay?"));
+        assert_eq!((outs[1].id.as_str(), outs[1].text.as_str()), ("acc_2", "So about it."));
     }
 }

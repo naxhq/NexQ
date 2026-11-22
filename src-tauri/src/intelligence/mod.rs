@@ -131,13 +131,17 @@ impl IntelligenceEngine {
     /// reads as a question, the question detected from the earlier line of
     /// Them is stale: Assist stops using it until a final detects a new one.
     /// Other talk ("Mm-hmm", an answer) keeps it. Interims grow, so each one
-    /// is checked. Without a question Assist works from the recent transcript.
+    /// is checked; a final that starts a line is checked too. Call this before
+    /// `push_transcript` so a question in that final becomes the new one. Without a question Assist works from the recent transcript.
     pub fn note_them_line(&mut self, line_id: &str, text: &str, is_final: bool) {
+        // A line that continues the last final one (also the old paragraph a
+        // new final re-sends) changes nothing. Providers that only send
+        // placeholder interims reach a new line through its final.
+        let continues = self.them_final_line.as_deref() == Some(line_id);
         if is_final {
             self.them_final_line = Some(line_id.to_string());
-            return;
         }
-        if self.them_final_line.as_deref() == Some(line_id) {
+        if continues {
             return;
         }
         if !question_detector::looks_like_new_question(text) {
@@ -497,6 +501,38 @@ mod tests {
         // The final re-sends the old paragraph: neither of its questions returns.
         them_final(&mut engine, "acc_1", old, 1_000);
         assert!(engine.last_detected_question().is_none());
+    }
+
+    #[test]
+    fn a_final_only_line_drops_the_question_only_when_it_is_a_question() {
+        // Providers with placeholder interims reach a new line only through its final.
+        let mut engine = IntelligenceEngine::new();
+        them_final(&mut engine, "acc_1", "Why do you want this job?", 1_000);
+        them_final(&mut engine, "acc_1", "Why do you want this job?", 1_000);
+        assert!(engine.last_detected_question().is_some(), "a re-send changes nothing");
+        engine.note_them_line("acc_2", "So why did you choose Rust.", true);
+        assert!(engine.last_detected_question().is_none());
+        engine.push_transcript("So why did you choose Rust.".to_string(), "Them".to_string(), 62_000, true);
+        assert!(engine.last_detected_question().is_none(), "no detected question in a plain sentence");
+        // The old paragraph re-sent by the next final stays dropped.
+        them_final(&mut engine, "acc_2", "So why did you choose Rust.", 62_000);
+        assert!(engine.last_detected_question().is_none());
+
+        let mut engine = IntelligenceEngine::new();
+        them_final(&mut engine, "acc_1", "Why do you want this job?", 1_000);
+        them_final(&mut engine, "acc_2", "Take your time with that.", 62_000);
+        assert!(engine.last_detected_question().is_some());
+    }
+
+    #[test]
+    fn a_final_that_starts_a_line_with_a_question_becomes_the_new_question() {
+        let mut engine = IntelligenceEngine::new();
+        them_final(&mut engine, "acc_1", "Why do you want this job?", 1_000);
+        them_final(&mut engine, "acc_2", "What is your salary expectation?", 62_000);
+        assert_eq!(
+            engine.last_detected_question().map(|q| q.text.as_str()),
+            Some("What is your salary expectation?")
+        );
     }
 
     #[test]

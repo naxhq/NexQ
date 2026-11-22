@@ -1381,7 +1381,7 @@ pub async fn start_capture_per_party(
                     // A new line from Them replaces the old detected question.
                     if let Some(ref intel) = intel_arc {
                         if let Ok(mut engine) = intel.lock() {
-                            engine.note_them_line(&output.id, &output.text, output.is_final);
+                            engine.note_them_line(&seg_id, &output.text, output.is_final);
                         }
                     }
 
