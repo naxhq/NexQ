@@ -92,11 +92,25 @@ If a side stays silent after you reconnected the device, pick the device again i
 2. **Don't use Windows Speech for "Them"**: Windows Speech only listens to your default microphone. It can't transcribe audio playing on your computer (Zoom, Teams, YouTube). Use Parakeet TDT, Deepgram or Groq for the other side.
 3. **Check provider config**: Open Settings > STT and verify your provider is correctly configured
 4. **Test connection**: Click **Test Connection** to verify the STT provider is reachable
-5. **Check API key**: For cloud providers (Deepgram, Groq, Cartesia), ensure your API key is valid and has not expired
+5. **Check API key**: For cloud providers (Deepgram, Groq, Cartesia, Azure Speech, and Azure MAI Streaming), ensure your API key is valid and belongs to the configured resource
 6. **Check internet connection**: Cloud STT providers require a stable internet connection. If your connection is intermittent, transcription may fail silently
 7. **Try Web Speech API**: Switch to Web Speech API temporarily to verify audio is reaching the STT pipeline. If Web Speech works but your chosen provider does not, the issue is with the provider configuration
 8. **Check the Dev Log**: press `Ctrl+Shift+L` in the meeting window for STT errors, or send your log (see [Collecting logs](#collecting-logs-for-a-bug-report))
 9. See the [AI Providers Guide](ai-providers.md) for provider-specific setup instructions
+
+### Azure MAI Streaming
+
+**Problem**: **Save & Test** fails, Azure reports an authentication or model-availability error, or live text does not appear.
+
+**Solution**:
+
+- **Authentication failure / 401 / 403**: Re-enter a key from the Speech resource's **Keys and Endpoint** page. Make sure the configured region identifier exactly matches that resource; keys and regions must match.
+- **Model unavailable**: Create the Speech resource in a supported Azure MAI Streaming region: `swedencentral`, `centralus`, `eastus2`, or `southeastasia`. Other Azure Speech regions do not imply this preview model is available there.
+- **No transcript, but audio meters move**: In **Settings > Audio & Devices**, confirm Azure MAI Streaming is selected on the side you're testing. Check that the side's language is **Auto-detect** or a locale supported by the model. Test "You" and "Them" separately to isolate the capture path.
+- **Network / connection failure**: NexQ retries temporary failures automatically while the channel is active. Speech during an outage is not replayed to Azure after reconnecting. Check internet access and whether a VPN, proxy, TLS inspection, or firewall blocks the Speech SDK's secure connection (including WebSockets over outbound port 443). On a managed network, ask IT to allow the Azure Speech service endpoints; Microsoft's [Speech SDK troubleshooting guide](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/troubleshooting) has current diagnostics.
+- **Interim text appears, but a final result does not**: Interims are provisional updates, not confirmed transcript segments. Check the Dev Log for SDK/service errors and verify that the test speech is in a supported language. The feature is in public preview, so availability and behavior can change.
+
+For a practical check, start a test meeting, speak on each configured side, verify that interim words update while speaking, then check that Azure final results settle into the transcript. This provider does not diarize speakers; multiple people on one side will not receive Azure speaker labels. See [Azure MAI Streaming setup](ai-providers.md#azure-mai-streaming-public-preview).
 
 ### Web Speech API Stops Working
 

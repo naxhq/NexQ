@@ -65,6 +65,19 @@ NexQ uses a two-party audio model: **"You"** (microphone) and **"Them"** (system
 - **Languages**: English, French, Hindi, Japanese, Spanish. Settings warns when the selected language isn't one of them
 - **Cost**: Billed per second of audio while a channel is unmuted, silence included (about 3 credits per second for each channel that uses Cartesia). Muted time isn't billed: muting closes the stream
 
+### Azure MAI Streaming (public preview)
+
+- **Provider ID**: `azure_mai_streaming` (a separate provider from `azure_speech`)
+- **Model**: `mai-transcribe-2-streaming`
+- **SDK**: Official Microsoft Azure Speech SDK for JavaScript, bundled with NexQ; no separate runtime or SDK installation is needed
+- **Setup**: Use a Speech resource key and its matching region. The model is available in `swedencentral`, `centralus`, `eastus2`, and `southeastasia`
+- **Live results**: Interim transcript updates while speaking, followed by Azure final results
+- **Languages**: Multilingual auto-detection by default, or choose a supported explicit locale per side
+- **Diarization**: Not supported. NexQ keeps "You" and "Them" on separate audio channels, but Azure does not label multiple speakers within one channel
+- **Existing Azure Speech**: Remains a separate REST-based provider that submits short audio batches; it is not this streaming model
+
+See [Choosing AI Providers](ai-providers.md#azure-mai-streaming-public-preview) for portal setup, the exact setup steps, and a live verification checklist.
+
 ### Local engines (Sherpa-ONNX, ORT Streaming, Parakeet TDT)
 
 - **Setup**: Download a model from Settings > STT Providers (each local engine has its own model list)

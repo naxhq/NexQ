@@ -38,7 +38,7 @@ It hears both sides of a call, answers on a private overlay, and can hide from y
 - **Answers in the moment.** Questions are caught as they are asked. Press one key, or turn on Auto-Answer, and the answer streams in, grounded in your resume, notes or slides.
 - **Yours to run.** Free, MIT licensed, no account and no usage caps. No bot joins your call. Use fully offline engines or the cloud providers you pick.
 - **Hidden from the share.** Turn on Hide from screen share and the overlay stays visible to you but is left out of screen shares and recordings, and off the taskbar or Dock.
-- **Bring your own models.** 11 speech-to-text engines and 9 LLM providers, including your existing Claude subscription.
+- **Bring your own models.** 12 speech-to-text engines and 9 LLM providers, including your existing Claude subscription.
 
 ## Quick start
 
@@ -142,7 +142,7 @@ Audio is captured on your machine. What leaves it depends on the engines you pic
 
 | | Runs on your device | Cloud |
 |---|---|---|
-| **Speech-to-text (11)** | Parakeet TDT, Sherpa-ONNX, ORT Streaming, Windows Speech (Windows, mic only), Whisper.cpp (recordings only, not live calls) | Deepgram, Groq Whisper, Whisper API, Azure Speech, Cartesia, Web Speech (no key, mic only) |
+| **Speech-to-text (12)** | Parakeet TDT, Sherpa-ONNX, ORT Streaming, Windows Speech (Windows, mic only), Whisper.cpp (recordings only, not live calls) | Deepgram, Groq Whisper, Whisper API, Azure Speech, Azure MAI Streaming (public preview), Cartesia, Web Speech (no key, mic only) |
 | **LLM (9)** | Ollama, LM Studio | OpenAI, Anthropic, Google Gemini, Groq, OpenRouter, any custom endpoint, and Claude through your Pro or Max subscription (official Claude Code CLI, beta, no API key) |
 | **Translation (5)** | OPUS-MT (offline) | DeepL, Google, Microsoft, or any LLM you configured |
 
