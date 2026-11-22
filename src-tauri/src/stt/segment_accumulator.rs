@@ -2,7 +2,11 @@
 // into one paragraph until a pause, a speaker change or the paragraph cap.
 //
 // Sits between the STT provider output and IPC event emission.
-// Interim results pass through immediately (same segment ID for in-place replacement).
+// Interim results pass through immediately. One that continues the current
+// paragraph reuses its ID and extends its text (in-place replacement); one that
+// would start a new paragraph (pause, speaker or tag change, paragraph cap)
+// shows on its own line under the ID the next final will take, so speech after
+// a pause never appears at the end of the previous line.
 // Final results are merged into the current paragraph (re-emitted under the
 // same ID with the longer text) until one of these starts a new paragraph:
 // - the silence between the END of the previous final and the START of the
@@ -123,7 +127,8 @@ impl SegmentAccumulator {
 
         // Interim results: pass through with accumulated prefix for display
         if !result.is_final {
-            let out = if self.has_active {
+            let continues_line = self.has_active && !self.starts_new_paragraph(&result, &speaker);
+            let out = if continues_line {
                 // Shown as the end of the current line (same id, speaker and
                 // tag), so the interim replaces it in place instead of
                 // adding a duplicate line in the UI.
@@ -185,7 +190,8 @@ impl SegmentAccumulator {
         outputs
     }
 
-    /// Whether the final `result` (from `speaker`) ends the current paragraph.
+    /// Whether `result` (from `speaker`) ends the current paragraph. Used for
+    /// finals and for interims, so an interim shows where its final will land.
     fn starts_new_paragraph(&self, result: &TranscriptResult, speaker: &str) -> bool {
         let speaker_changed = speaker != self.current_speaker;
         // A final without a tag (diarization off, or no word data) keeps the current one.
@@ -214,8 +220,9 @@ impl SegmentAccumulator {
         let Some(mut shown) = self.last_interim.take() else {
             return self.flush();
         };
-        if !self.has_active {
-            // Interim words with no final yet: they own the next id.
+        if shown.id == format!("acc_{}", self.segment_counter + 1) {
+            // Interim words on a line of their own (no final yet, or speech
+            // after a pause): they own the next id.
             self.segment_counter += 1;
         }
         shown.is_final = true;
@@ -460,5 +467,68 @@ mod tests {
         let closed = a.close_line().unwrap();
         assert_eq!((closed.id.as_str(), closed.text.as_str()), ("acc_1", "Hello there."));
         assert!(a.close_line().is_none());
+    }
+
+    #[test]
+    fn interim_after_a_pause_gets_its_own_line_and_the_final_takes_its_place() {
+        let mut a = acc();
+        a.feed_result(fin("Is that okay?", T0, Some(2_000), None));
+        // 60 s of silence, then the speaker resumes.
+        let resumed = T0 + 62_000;
+        let outs = a.feed_result(interim("so about the", resumed));
+        assert_eq!(outs.len(), 1);
+        assert_eq!((outs[0].id.as_str(), outs[0].text.as_str(), outs[0].is_final), ("acc_2", "so about the", false));
+        assert_eq!(outs[0].timestamp_ms, resumed);
+        // A longer interim keeps the same new id and its own text only.
+        let outs = a.feed_result(interim("so about the budget", resumed));
+        assert_eq!((outs[0].id.as_str(), outs[0].text.as_str()), ("acc_2", "so about the budget"));
+        // The final lands on that id; the old paragraph is not re-emitted or changed.
+        let outs = a.feed_result(fin("So about the budget.", resumed, Some(2_500), None));
+        assert_eq!(outs.len(), 2);
+        assert_eq!((outs[0].id.as_str(), outs[0].text.as_str()), ("acc_1", "Is that okay?"));
+        assert_eq!((outs[1].id.as_str(), outs[1].text.as_str(), outs[1].is_final), ("acc_2", "So about the budget.", true));
+        assert_eq!(outs[1].timestamp_ms, resumed);
+    }
+
+    #[test]
+    fn interim_within_the_threshold_still_extends_the_current_line() {
+        let mut a = acc();
+        a.feed_result(fin("Hello there.", T0, Some(2_000), None));
+        // 1 s after the final ended: below the 3 s threshold.
+        let outs = a.feed_result(interim("how are", T0 + 3_000));
+        assert_eq!((outs[0].id.as_str(), outs[0].text.as_str()), ("acc_1", "Hello there. how are"));
+        assert_eq!(outs[0].timestamp_ms, T0);
+    }
+
+    #[test]
+    fn interim_from_another_speaker_gets_its_own_line() {
+        let mut a = acc();
+        a.feed_result(fin("Hello there.", T0, Some(2_000), None));
+        let you = TranscriptResult { speaker: Some("You".into()), ..interim("hi", T0 + 2_100) };
+        let outs = a.feed_result(you);
+        assert_eq!((outs[0].id.as_str(), outs[0].text.as_str(), outs[0].speaker.as_str()), ("acc_2", "hi", "You"));
+        let tagged = TranscriptResult { speaker_tag: Some("S2".into()), ..interim("yes", T0 + 2_100) };
+        let a_tag = a.feed_result(fin("Fine.", T0 + 2_100, Some(500), Some("S1")));
+        assert_eq!(a_tag.len(), 2);
+        let outs = a.feed_result(tagged);
+        assert_eq!((outs[0].id.as_str(), outs[0].text.as_str()), ("acc_3", "yes"));
+        assert_eq!(outs[0].speaker_tag.as_deref(), Some("S2"));
+    }
+
+    #[test]
+    fn closing_a_line_after_a_new_line_interim_keeps_the_old_paragraph_untouched() {
+        let mut a = acc();
+        a.feed_result(fin("Is that okay?", T0, Some(2_000), None));
+        a.feed_result(interim("so about the", T0 + 62_000));
+
+        let closed = a.close_line().unwrap();
+        assert_eq!((closed.id.as_str(), closed.text.as_str(), closed.is_final), ("acc_2", "so about the", true));
+        assert_eq!(closed.timestamp_ms, T0 + 62_000);
+        assert!(a.close_line().is_none(), "closed once");
+
+        // The next result is a fresh line, neither the old one nor the closed one.
+        let next = a.feed_result(fin("Hola.", T0 + 63_000, Some(300), None));
+        assert_eq!(next.len(), 1);
+        assert_eq!((next[0].id.as_str(), next[0].text.as_str()), ("acc_3", "Hola."));
     }
 }
