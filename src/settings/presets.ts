@@ -58,18 +58,18 @@ export const BUILT_IN_PRESETS: MeetingPreset[] = [
     requiresKey: "deepgram",
   },
   {
-    name: "Local Only (Whisper)",
-    description: "Whisper.cpp for both parties — offline, free",
-    you: { hint: "default_mic", stt: "whisper_cpp" },
-    them: { hint: "default_output", stt: "whisper_cpp" },
-    requiresDownload: "whisper_cpp",
+    name: "Local Only (Parakeet)",
+    description: "Parakeet TDT for both parties, offline and free (one-time model download)",
+    you: { hint: "default_mic", stt: "parakeet_tdt" },
+    them: { hint: "default_output", stt: "parakeet_tdt" },
+    requiresDownload: "parakeet_tdt",
   },
   {
     name: "In-Person",
-    description: "Both parties use mic input — Web Speech + Whisper.cpp",
+    description: "Both parties use mic input: Web Speech for you, Parakeet TDT for the second mic (one-time model download)",
     you: { hint: "default_mic", stt: "web_speech" },
-    them: { hint: "mic_2", stt: "whisper_cpp" },
-    requiresDownload: "whisper_cpp",
+    them: { hint: "mic_2", stt: "parakeet_tdt" },
+    requiresDownload: "parakeet_tdt",
   },
 ];
 
