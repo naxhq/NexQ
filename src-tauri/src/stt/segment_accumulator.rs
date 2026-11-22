@@ -4,9 +4,11 @@
 // Sits between the STT provider output and IPC event emission.
 // Interim results pass through immediately. One that continues the current
 // paragraph reuses its ID and extends its text (in-place replacement); one that
-// would start a new paragraph (pause, speaker or tag change, paragraph cap)
-// shows on its own line under the ID the next final will take, so speech after
-// a pause never appears at the end of the previous line.
+// would start a new paragraph (pause, speaker change, paragraph cap) shows on
+// its own line under the ID the next final will take, so speech after a pause
+// never appears at the end of the previous line. That is decided once per
+// utterance, on its first interim, because some providers stamp interims with
+// a moving time; the tag is only checked on finals (interim tags are unsettled).
 // Final results are merged into the current paragraph (re-emitted under the
 // same ID with the longer text) until one of these starts a new paragraph:
 // - the silence between the END of the previous final and the START of the
@@ -76,6 +78,9 @@ pub struct SegmentAccumulator {
     /// The interim line last shown, until a final replaces it: words the
     /// provider hasn't confirmed, which `close_line` still turns into a line.
     last_interim: Option<AccumulatorOutput>,
+    /// Whether the interims since the last final show on a new line, decided
+    /// by the first of them. None until an interim arrives after a final.
+    interim_new_line: Option<bool>,
     clock: Clock,
 }
 
@@ -96,6 +101,7 @@ impl SegmentAccumulator {
             segment_counter: 0,
             has_active: false,
             last_interim: None,
+            interim_new_line: None,
             clock,
         }
     }
@@ -127,7 +133,17 @@ impl SegmentAccumulator {
 
         // Interim results: pass through with accumulated prefix for display
         if !result.is_final {
-            let continues_line = self.has_active && !self.starts_new_paragraph(&result, &speaker);
+            let continues_line = self.has_active && {
+                let new_line = match self.interim_new_line {
+                    Some(decided) => decided,
+                    None => {
+                        let decided = self.starts_new_paragraph(&result, &speaker, false);
+                        self.interim_new_line = Some(decided);
+                        decided
+                    }
+                };
+                !new_line
+            };
             let out = if continues_line {
                 // Shown as the end of the current line (same id, speaker and
                 // tag), so the interim replaces it in place instead of
@@ -152,6 +168,7 @@ impl SegmentAccumulator {
             return vec![out];
         }
         self.last_interim = None;
+        self.interim_new_line = None;
 
         let end_ms = match result.duration_ms {
             Some(duration) => result.timestamp_ms + duration,
@@ -164,7 +181,7 @@ impl SegmentAccumulator {
         };
 
         let mut outputs = Vec::new();
-        if self.has_active && !self.starts_new_paragraph(&result, &speaker) {
+        if self.has_active && !self.starts_new_paragraph(&result, &speaker, true) {
             if !self.current_text.is_empty() {
                 self.current_text.push(' ');
             }
@@ -190,12 +207,12 @@ impl SegmentAccumulator {
         outputs
     }
 
-    /// Whether `result` (from `speaker`) ends the current paragraph. Used for
-    /// finals and for interims, so an interim shows where its final will land.
-    fn starts_new_paragraph(&self, result: &TranscriptResult, speaker: &str) -> bool {
+    /// Whether `result` (from `speaker`) ends the current paragraph. Finals
+    /// also check the diarization tag; interims do not (theirs is unsettled).
+    fn starts_new_paragraph(&self, result: &TranscriptResult, speaker: &str, check_tag: bool) -> bool {
         let speaker_changed = speaker != self.current_speaker;
         // A final without a tag (diarization off, or no word data) keeps the current one.
-        let tag_changed = result.speaker_tag.is_some() && result.speaker_tag != self.current_tag;
+        let tag_changed = check_tag && result.speaker_tag.is_some() && result.speaker_tag != self.current_tag;
         let pause = result.timestamp_ms.saturating_sub(self.last_end_ms) >= self.pause_threshold_ms;
         let long = self.last_end_ms.saturating_sub(self.current_start_ms) >= MAX_PARAGRAPH_MS;
         speaker_changed || tag_changed || pause || long
@@ -207,6 +224,7 @@ impl SegmentAccumulator {
             let output = self.output(true, 1.0);
             self.current_text.clear();
             self.has_active = false;
+            self.interim_new_line = None;
             Some(output)
         } else {
             None
@@ -227,6 +245,7 @@ impl SegmentAccumulator {
         }
         shown.is_final = true;
         shown.turn = None;
+        self.interim_new_line = None;
         self.current_text.clear();
         self.has_active = false;
         Some(shown)
@@ -507,12 +526,48 @@ mod tests {
         let you = TranscriptResult { speaker: Some("You".into()), ..interim("hi", T0 + 2_100) };
         let outs = a.feed_result(you);
         assert_eq!((outs[0].id.as_str(), outs[0].text.as_str(), outs[0].speaker.as_str()), ("acc_2", "hi", "You"));
+    }
+
+    #[test]
+    fn a_tag_change_on_an_interim_continues_the_line_but_splits_on_the_final() {
+        let mut a = acc();
+        a.feed_result(fin("Hello there.", T0, Some(2_000), Some("S1")));
         let tagged = TranscriptResult { speaker_tag: Some("S2".into()), ..interim("yes", T0 + 2_100) };
-        let a_tag = a.feed_result(fin("Fine.", T0 + 2_100, Some(500), Some("S1")));
-        assert_eq!(a_tag.len(), 2);
         let outs = a.feed_result(tagged);
-        assert_eq!((outs[0].id.as_str(), outs[0].text.as_str()), ("acc_3", "yes"));
-        assert_eq!(outs[0].speaker_tag.as_deref(), Some("S2"));
+        assert_eq!((outs[0].id.as_str(), outs[0].text.as_str()), ("acc_1", "Hello there. yes"));
+        let outs = a.feed_result(fin("Yes.", T0 + 2_100, Some(500), Some("S2")));
+        assert_eq!(outs.len(), 2);
+        assert_eq!((outs[1].id.as_str(), outs[1].text.as_str()), ("acc_2", "Yes."));
+    }
+
+    #[test]
+    fn interims_that_cross_the_threshold_mid_utterance_keep_one_line() {
+        // Moving interim stamps: the first is inside the threshold, later ones pass it.
+        let mut a = acc();
+        a.feed_result(fin("Is that okay?", T0, Some(2_000), None));
+        let mut ids = Vec::new();
+        for (text, at) in [("so", T0 + 2_500), ("so about", T0 + 4_000), ("so about the budget", T0 + 9_000)] {
+            let outs = a.feed_result(interim(text, at));
+            assert_eq!(outs.len(), 1);
+            ids.push((outs[0].id.clone(), outs[0].text.clone()));
+        }
+        assert_eq!(ids[2], ("acc_1".to_string(), "Is that okay? so about the budget".to_string()));
+        assert!(ids.iter().all(|(id, _)| id == "acc_1"), "{ids:?}");
+    }
+
+    #[test]
+    fn interims_after_a_pause_stay_on_the_new_line_even_if_a_stamp_moves_back() {
+        let mut a = acc();
+        a.feed_result(fin("Is that okay?", T0, Some(2_000), None));
+        let first = a.feed_result(interim("so", T0 + 62_000));
+        assert_eq!(first[0].id, "acc_2");
+        // A later interim stamped inside the threshold of the old line still stays on acc_2.
+        let later = a.feed_result(interim("so about", T0 + 2_500));
+        assert_eq!((later[0].id.as_str(), later[0].text.as_str()), ("acc_2", "so about"));
+        // After the final, the next utterance is decided afresh.
+        a.feed_result(fin("So about it.", T0 + 62_000, Some(1_000), None));
+        let next = a.feed_result(interim("and", T0 + 63_500));
+        assert_eq!((next[0].id.as_str(), next[0].text.as_str()), ("acc_2", "So about it. and"));
     }
 
     #[test]
