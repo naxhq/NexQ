@@ -6,7 +6,8 @@
  * Files: public/media/hero-demo.{webm,mp4} and hero-demo-poster.webp. VIDEO_W/H must match the files (ffprobe).
  */
 import { SECTION } from '../data/site';
-import { CURRENT_VERSION } from '../data/releases';
+// The app version the video was recorded on. Change it only when the video is replaced.
+const RECORDED_ON = '2.41.2';
 
 const VIDEO_W = 1600;
 const VIDEO_H = 1066;
@@ -20,7 +21,7 @@ const poster = `${base}media/hero-demo-poster.webp`;
   <div class="wrap">
     <h2 id="demo-title" class="h2 max-w-[20ch]">See the real app in a call.</h2>
     <p class="lede">
-      This is NexQ's built-in demo mode on v{CURRENT_VERSION}, playing a scripted interview. The answer is slowed down so you can read it, and the recording has no sound.
+      This is NexQ's built-in demo mode on v{RECORDED_ON}, playing a scripted interview. The answer is slowed down so you can read it, and the recording has no sound.
     </p>
 
     <div class="demo-video mt-10" data-reveal>
