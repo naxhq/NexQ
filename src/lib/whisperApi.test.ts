@@ -3,7 +3,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 const ipc = vi.hoisted(() => ({ has: vi.fn() }));
 vi.mock("./ipc", () => ({ hasApiKey: (p: string) => ipc.has(p) }));
 
-import { hasSttCredential, isValidWhisperBaseUrl, isWhisperApiConfigured } from "./whisperApi";
+import { hasSttCredential, isInsecureRemoteHttp, isValidWhisperBaseUrl, isWhisperApiConfigured } from "./whisperApi";
 
 beforeEach(() => ipc.has.mockReset());
 
@@ -35,4 +35,19 @@ it("validates the endpoint scheme", () => {
   expect(isValidWhisperBaseUrl("https://example.com")).toBe(true);
   expect(isValidWhisperBaseUrl("127.0.0.1:8000")).toBe(false);
   expect(isValidWhisperBaseUrl("ftp://x")).toBe(false);
+});
+
+it("does not count a custom server key alone as configured", async () => {
+  ipc.has.mockImplementation(async (p: string) => p === "whisper_api_custom_key");
+  expect(await hasSttCredential("whisper_api")).toBe(false);
+});
+
+it("flags http endpoints on other machines only", () => {
+  expect(isInsecureRemoteHttp("http://192.168.1.20:8000/v1")).toBe(true);
+  expect(isInsecureRemoteHttp("http://speech.example.com/v1")).toBe(true);
+  expect(isInsecureRemoteHttp("http://localhost:8000/v1")).toBe(false);
+  expect(isInsecureRemoteHttp("http://127.0.0.1:8000/v1")).toBe(false);
+  expect(isInsecureRemoteHttp("http://[::1]:8000/v1")).toBe(false);
+  expect(isInsecureRemoteHttp("https://speech.example.com/v1")).toBe(false);
+  expect(isInsecureRemoteHttp("")).toBe(false);
 });

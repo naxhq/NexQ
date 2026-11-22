@@ -46,7 +46,7 @@ export const WIZARD_STT_PROVIDERS: ProviderChoice[] = [
     value: "whisper_api",
     label: "Whisper API",
     icon: <Cloud className="h-4 w-4" />,
-    description: "OpenAI Whisper, excellent multilingual support",
+    description: "OpenAI or your own compatible server",
     requiresKey: true,
     free: false,
   },
