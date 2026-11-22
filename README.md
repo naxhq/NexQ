@@ -242,7 +242,22 @@ Bug reports, docs, translations, new providers and macOS testing are all welcome
 - **Security reports:** privately, via [SECURITY.md](SECURITY.md)
 - More in [SUPPORT.md](SUPPORT.md)
 
+## Contributors
+
+<a href="https://github.com/naxhq/NexQ/graphs/contributors">
+  <img alt="NexQ contributors" src="https://contrib.rocks/image?repo=naxhq/NexQ">
+</a>
+
+## Star history
+
 If NexQ helps you, a star helps others find it.
+
+<a href="https://star-history.com/#naxhq/NexQ&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=naxhq/NexQ&type=Date&theme=dark">
+    <img alt="NexQ star history" src="https://api.star-history.com/svg?repos=naxhq/NexQ&type=Date" width="600">
+  </picture>
+</a>
 
 ## License
 
