@@ -14,6 +14,16 @@ vi.mock("@tauri-apps/api/event", async (importOriginal) => ({
   emit: () => Promise.resolve(),
 }));
 
+// Which window the overlay asks to show is what the start-up ordering decides.
+const windowCalls = vi.hoisted(() => ({
+  showLauncherWindow: vi.fn(() => Promise.resolve()),
+  showOverlayWindow: vi.fn(() => Promise.resolve()),
+}));
+vi.mock("./lib/windows", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./lib/windows")>()),
+  ...windowCalls,
+}));
+
 import App from "./App";
 import { useMeetingStore } from "./stores/meetingStore";
 import { useScenarioStore } from "./stores/scenarioStore";
@@ -25,6 +35,7 @@ import type { AIScenario, AudioCaptureStatus } from "./lib/types";
 let savedConfig: Record<string, unknown> = {};
 
 const defaultAIConfigs = useAIActionsStore.getState().configs;
+const realLoadScenarioConfig = useScenarioStore.getState().loadScenarioConfig;
 
 async function launchOverlayOn(activeScenarioId: AIScenario) {
   savedConfig = { firstRunCompleted: true, activeScenarioId };
@@ -65,11 +76,18 @@ beforeAll(() => {
 });
 
 afterEach(() => {
+  windowCalls.showLauncherWindow.mockClear();
+  windowCalls.showOverlayWindow.mockClear();
   cleanup();
   listeners.clear();
   useMeetingStore.getState().stopTimer();
   useMeetingStore.setState({ activeMeeting: null, currentView: "launcher", isRecording: false });
-  useScenarioStore.setState({ activeScenarioId: "team_meeting", customScenarios: [], scenarioOverrides: {} });
+  useScenarioStore.setState({
+    activeScenarioId: "team_meeting",
+    customScenarios: [],
+    scenarioOverrides: {},
+    loadScenarioConfig: realLoadScenarioConfig,
+  });
   useAIActionsStore.setState({ configs: defaultAIConfigs });
 });
 
@@ -122,6 +140,62 @@ describe("the overlay's scenario chip", () => {
     savedConfig.customScenarios = [{ id: "custom_1", name: "Board review", is_custom: true }];
     await launcherStartsMeeting("custom_1");
     expect(await screen.findByText("Board review")).toBeTruthy();
+  });
+});
+
+describe("the overlay window when a meeting starts in the launcher", () => {
+  const meetingStarted = {
+    payload: { meeting: { id: "meeting-1", title: "Standup" }, audioMode: "online", aiScenario: "team_meeting" },
+  };
+  const showRequest = { payload: { meetingId: "meeting-1" } };
+
+  it("shows the overlay when the show request lands while the meeting is still being set up", async () => {
+    await launchOverlayOn("team_meeting");
+    // The scenario read in the meeting-start handler is slow.
+    let finishScenarioRead!: () => void;
+    useScenarioStore.setState({
+      loadScenarioConfig: () => new Promise<void>((resolve) => { finishScenarioRead = resolve; }),
+    });
+    windowCalls.showLauncherWindow.mockClear();
+
+    await act(async () => {
+      const started = listeners.get("nexq:meeting_started")?.(meetingStarted);
+      const shown = listeners.get("nexq:show_meeting_overlay")?.(showRequest);
+      await vi.waitFor(() => expect(finishScenarioRead).toBeTypeOf("function"));
+      finishScenarioRead();
+      await Promise.all([started, shown]);
+    });
+
+    expect(useMeetingStore.getState().activeMeeting?.id).toBe("meeting-1");
+    expect(windowCalls.showOverlayWindow).toHaveBeenCalledTimes(1);
+    expect(windowCalls.showLauncherWindow).not.toHaveBeenCalled();
+  });
+
+  it("shows the overlay when the show request lands before the meeting event", async () => {
+    await launchOverlayOn("team_meeting");
+    windowCalls.showLauncherWindow.mockClear();
+
+    await act(async () => {
+      const shown = listeners.get("nexq:show_meeting_overlay")?.(showRequest);
+      await listeners.get("nexq:meeting_started")?.(meetingStarted);
+      await shown;
+    });
+
+    expect(windowCalls.showOverlayWindow).toHaveBeenCalledTimes(1);
+    expect(windowCalls.showLauncherWindow).not.toHaveBeenCalled();
+  });
+
+  it("still shows the launcher when asked for the overlay with no meeting running", async () => {
+    await launchOverlayOn("team_meeting");
+    windowCalls.showLauncherWindow.mockClear();
+
+    await act(async () => {
+      await listeners.get("nexq:show_meeting_overlay")?.({ payload: {} });
+      await listeners.get("tray_show_overlay")?.({ payload: null });
+    });
+
+    expect(windowCalls.showLauncherWindow).toHaveBeenCalledTimes(2);
+    expect(windowCalls.showOverlayWindow).not.toHaveBeenCalled();
   });
 });
 

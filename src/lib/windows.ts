@@ -56,14 +56,56 @@ export async function showOverlayWindow(): Promise<void> {
 /** Window -> overlay window: bring back the floating meeting overlay. */
 export const SHOW_MEETING_OVERLAY_EVENT = "nexq:show_meeting_overlay";
 
+/** What the show event carries: the meeting the sender is running, if any. */
+export interface ShowMeetingOverlayPayload {
+  meetingId?: string;
+}
+
 /**
  * Bring back the floating meeting overlay from any window (launcher RETURN,
  * Ctrl+B, tray). The overlay window switches itself to the meeting view and
  * shows; without a running meeting it shows the launcher instead.
+ *
+ * The event names the meeting the sender runs. A meeting that has only just
+ * started reaches the overlay window as a separate event that it handles
+ * asynchronously, so the show request can arrive before the overlay knows the
+ * meeting; the id tells it to wait for that meeting instead of treating the
+ * request as "no meeting" and hiding itself.
  */
 export async function showMeetingOverlay(): Promise<void> {
   const { emit } = await import("@tauri-apps/api/event");
-  await emit(SHOW_MEETING_OVERLAY_EVENT);
+  const { useMeetingStore } = await import("../stores/meetingStore");
+  const payload: ShowMeetingOverlayPayload = { meetingId: useMeetingStore.getState().activeMeeting?.id };
+  await emit(SHOW_MEETING_OVERLAY_EVENT, payload);
+}
+
+/** How long the overlay waits for a meeting the launcher says is starting. */
+export const MEETING_START_WAIT_MS = 3000;
+
+/**
+ * Overlay window: whether a meeting is (or soon will be) running here. With no
+ * meeting yet, waits up to `timeoutMs` for one to appear when the sender named
+ * a meeting (it is mid-start); otherwise answers at once.
+ */
+export async function waitForOverlayMeeting(
+  expectedMeetingId: string | undefined,
+  timeoutMs: number = MEETING_START_WAIT_MS,
+): Promise<boolean> {
+  const { useMeetingStore } = await import("../stores/meetingStore");
+  if (useMeetingStore.getState().activeMeeting) return true;
+  if (!expectedMeetingId) return false;
+  return new Promise<boolean>((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = useMeetingStore.subscribe((state) => {
+      if (state.activeMeeting) done(true);
+    });
+    function done(started: boolean) {
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(started);
+    }
+    timer = setTimeout(() => done(false), timeoutMs);
+  });
 }
 
 /** Whether the overlay window is on screen. */

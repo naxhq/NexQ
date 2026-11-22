@@ -34,7 +34,8 @@ import { DemoPicker } from "./demo/DemoPicker";
 import { DemoBadge } from "./demo/DemoBadge";
 import { useDemoStore } from "./demo/demoStore";
 import { SCREENSHOT_EVENT, leaveSettingsForAsk } from "./lib/screenCapture";
-import { SHOW_MEETING_OVERLAY_EVENT, showLauncherWindow, showMeetingOverlay, showOverlayWindow } from "./lib/windows";
+import { SHOW_MEETING_OVERLAY_EVENT, showLauncherWindow, showMeetingOverlay, showOverlayWindow, waitForOverlayMeeting } from "./lib/windows";
+import type { ShowMeetingOverlayPayload } from "./lib/windows";
 import { logToFile } from "./lib/logger";
 import { emitOverlayMeetingReady, onAudioCaptureStatus, onAudioCaptureStopped, onCaptureWarning, onOverlayMeetingReady, onStartDetectedMeeting, onStealthModeChanged } from "./lib/events";
 import { createCaptureStatusHandler } from "./lib/captureStatus";
@@ -156,9 +157,13 @@ function App() {
   // the meeting first; with no meeting running, show the launcher instead.
   useEffect(() => {
     if (windowLabel !== "overlay") return;
-    const show = () => {
+    const show = async (e?: { payload?: ShowMeetingOverlayPayload | null }) => {
+      // A meeting the launcher has only just started reaches this window as a
+      // separate event, handled asynchronously (stores reset, scenarios read):
+      // the request can come first, and is not "no meeting running".
+      const running = await waitForOverlayMeeting(e?.payload?.meetingId);
       const store = useMeetingStore.getState();
-      if (!store.activeMeeting) {
+      if (!running || !store.activeMeeting) {
         showLauncherWindow().catch(() => {});
         return;
       }
@@ -166,8 +171,8 @@ function App() {
       showOverlayWindow().catch(() => {});
     };
     const unlisteners: Array<() => void> = [];
-    listen(SHOW_MEETING_OVERLAY_EVENT, show).then((fn) => unlisteners.push(fn));
-    listen("tray_show_overlay", show).then((fn) => unlisteners.push(fn));
+    listen<ShowMeetingOverlayPayload | null>(SHOW_MEETING_OVERLAY_EVENT, show).then((fn) => unlisteners.push(fn));
+    listen("tray_show_overlay", () => show()).then((fn) => unlisteners.push(fn));
     return () => unlisteners.forEach((fn) => fn());
   }, [windowLabel]);
 
