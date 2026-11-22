@@ -58,7 +58,8 @@ impl Drop for TranscriptTally {
     }
 }
 
-const MAI_CAPTURE_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
+// Above STOP_LIMIT (4s) + MAI_TRANSCRIPT_DRAIN_TIMEOUT (8s), with slack.
+const MAI_CAPTURE_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(14);
 const MAI_TRANSCRIPT_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
 /// Wait only for captures that installed the MAI drain receiver. On timeout or
@@ -92,11 +93,12 @@ async fn store_mai_capture_drain(
     state: &AppState,
     receiver: tokio::sync::oneshot::Receiver<()>,
 ) -> Result<(), String> {
+    // Called after the new capture is already running, so never fail here: an
+    // older receiver still in the slot belongs to a capture that is gone.
     let mut slot = state.mai_capture_drain.lock().await;
-    if slot.is_some() {
-        return Err("A previous Azure MAI Streaming capture is still draining".to_string());
+    if slot.replace(receiver).is_some() {
+        log::warn!("Azure MAI Streaming: replaced a drain barrier from an earlier capture");
     }
-    *slot = Some(receiver);
     Ok(())
 }
 
@@ -1176,7 +1178,13 @@ pub async fn start_capture_per_party(
         }
     }
     if stopped_existing_capture {
-        wait_for_mai_capture_drain(&state).await?;
+        // The old capture is already stopped. If its MAI transcripts don't
+        // drain in time, drop the barrier and start the new capture anyway:
+        // a late transcript is better than a meeting left with no audio.
+        if let Err(e) = wait_for_mai_capture_drain(&state).await {
+            log::warn!("start_capture_per_party: {e}; restarting capture anyway");
+            state.mai_capture_drain.lock().await.take();
+        }
     }
     if stopped_existing_capture {
         // The old sides have stopped; the new capture starts with a clean slate.

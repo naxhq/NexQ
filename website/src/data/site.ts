@@ -56,7 +56,7 @@ interface SttProvider {
   note?: string;
 }
 
-// Speech engines, in the order the app's STT settings group them.
+// The 11 speech engines, in the order the app's STT settings group them.
 export const STT_PROVIDERS: SttProvider[] = [
   { name: 'Parakeet', where: 'device' },
   { name: 'Sherpa-ONNX', where: 'device' },
@@ -68,7 +68,6 @@ export const STT_PROVIDERS: SttProvider[] = [
   { name: 'Groq Whisper', where: 'cloud' },
   { name: 'Whisper API', where: 'cloud' },
   { name: 'Azure Speech', where: 'cloud' },
-  { name: 'Azure MAI Streaming', where: 'cloud', note: 'Live transcription with Microsoft MAI-Transcribe-2-Streaming (public preview).' },
   { name: 'Cartesia', where: 'cloud' },
 ];
 
@@ -100,7 +99,7 @@ export const TRANSLATION_PROVIDERS: { name: string; where: 'cloud' | 'device' | 
   { name: 'OPUS-MT', where: 'device', note: 'Offline models you download once.' },
 ];
 
-/** The headline numbers, counted from the lists above so they cannot drift. */
+/** The headline numbers, counted from the lists above so they cannot drift (README's compare table says 11 and 9). */
 export const COUNTS = {
   stt: STT_PROVIDERS.length,
   llm: LLM_PROVIDERS.length,
@@ -121,7 +120,6 @@ const AUTO_DETECT: { name: string; provider: string; model?: string }[] = [
   { name: 'Whisper API', provider: 'whisper_api' },
   { name: 'Groq', provider: 'groq_whisper' },
   { name: 'Cartesia', provider: 'cartesia' },
-  { name: 'Azure MAI Streaming', provider: 'azure_mai_streaming' },
 ];
 for (const e of AUTO_DETECT) {
   const ok = autoDetectCases.cases.some((c) => c.supported && c.provider === e.provider && (e.model === undefined || c.model === e.model));

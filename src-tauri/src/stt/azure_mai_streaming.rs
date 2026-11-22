@@ -4,7 +4,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -38,6 +38,12 @@ const SILENCE_TICK: Duration = Duration::from_millis(200);
 const HOST_START_LIMIT: Duration = Duration::from_secs(12);
 const HOST_IDLE_LIMIT: Duration = Duration::from_secs(6);
 const RESUME_BYTES: usize = 16_000; // last half-second captured after unmute
+// Reconnect after a launcher stall or a network/SDK failure, backing off
+// between attempts. Credential and model failures are not retried.
+const RETRY_FIRST: Duration = Duration::from_secs(2);
+const RETRY_MAX: Duration = Duration::from_secs(30);
+// A session that stayed up this long resets the backoff.
+const RETRY_RESET_AFTER: Duration = Duration::from_secs(60);
 type SttError = Box<dyn std::error::Error + Send + Sync>;
 
 #[derive(Clone)]
@@ -343,7 +349,42 @@ fn status(app: &AppHandle, party: &str, state: &str, message: Option<&str>) {
     );
 }
 
-async fn collect(mut session: Session, party: String, tx: mpsc::Sender<TranscriptResult>) {
+/// After a retryable failure, decide whether to reconnect now. The first call
+/// schedules the attempt; later calls fire it once the backoff has passed.
+fn retry_due(
+    flagged: bool,
+    now: Instant,
+    connected_at: Option<Instant>,
+    retry_at: &mut Option<Instant>,
+    backoff: &mut Duration,
+) -> bool {
+    if !flagged {
+        return false;
+    }
+    match *retry_at {
+        Some(at) => now >= at,
+        None => {
+            if connected_at.is_some_and(|t| now.duration_since(t) >= RETRY_RESET_AFTER) {
+                *backoff = RETRY_FIRST;
+            }
+            *retry_at = Some(now + *backoff);
+            *backoff = (*backoff * 2).min(RETRY_MAX);
+            false
+        }
+    }
+}
+
+/// Whether a session that ended on this failure should be reopened.
+fn retryable(reason: &Failure) -> bool {
+    matches!(reason, Failure::Network | Failure::Launcher | Failure::Sdk)
+}
+
+async fn collect(
+    mut session: Session,
+    party: String,
+    tx: mpsc::Sender<TranscriptResult>,
+    retry: Arc<AtomicBool>,
+) {
     let mut has_interim = false;
     let started = Instant::now();
     let mut watchdog = tokio::time::interval(Duration::from_secs(1));
@@ -361,7 +402,12 @@ async fn collect(mut session: Session, party: String, tx: mpsc::Sender<Transcrip
                 let new_host = session.app.state::<MaiBridge>().host_generation.load(Ordering::Relaxed)
                     != session.host_generation;
                 if stale || new_host {
-                    status(&session.app, &party, if new_host { "reconnecting" } else { "error" }, Some(Failure::Launcher.message()));
+                    // A new host is picked up by `feed_audio` directly; a stalled
+                    // one is retried with backoff instead of ending the side.
+                    if stale && !new_host {
+                        retry.store(true, Ordering::Relaxed);
+                    }
+                    status(&session.app, &party, "reconnecting", Some(Failure::Launcher.message()));
                     break;
                 }
                 continue;
@@ -415,7 +461,14 @@ async fn collect(mut session: Session, party: String, tx: mpsc::Sender<Transcrip
                 }
             }
             SdkEvent::Failed { reason } => {
-                status(&session.app, &party, "error", Some(reason.message()));
+                let again = retryable(&reason);
+                retry.store(again, Ordering::Relaxed);
+                status(
+                    &session.app,
+                    &party,
+                    if again { "reconnecting" } else { "error" },
+                    Some(reason.message()),
+                );
                 break;
             }
             SdkEvent::Closed => break,
@@ -441,6 +494,11 @@ pub struct AzureMaiSTT {
     resume_pcm: VecDeque<Vec<u8>>,
     resume_bytes: usize,
     host_generation: u64,
+    /// Set by `collect` when its session ended on a failure worth retrying.
+    retry: Arc<AtomicBool>,
+    retry_at: Option<Instant>,
+    backoff: Duration,
+    connected_at: Option<Instant>,
 }
 
 impl AzureMaiSTT {
@@ -459,7 +517,21 @@ impl AzureMaiSTT {
             resume_pcm: VecDeque::new(),
             resume_bytes: 0,
             host_generation: 0,
+            retry: Arc::new(AtomicBool::new(false)),
+            retry_at: None,
+            backoff: RETRY_FIRST,
+            connected_at: None,
         }
+    }
+
+    fn retry_due(&mut self, now: Instant) -> bool {
+        retry_due(
+            self.retry.load(Ordering::Relaxed),
+            now,
+            self.connected_at,
+            &mut self.retry_at,
+            &mut self.backoff,
+        )
     }
 
     fn connect(
@@ -475,7 +547,15 @@ impl AzureMaiSTT {
         }
         self.resume_bytes = 0;
         self.pcm_tx = Some(pcm);
-        self.task = Some(tokio::spawn(collect(session, self.party.clone(), tx)));
+        self.retry.store(false, Ordering::Relaxed);
+        self.retry_at = None;
+        self.connected_at = Some(Instant::now());
+        self.task = Some(tokio::spawn(collect(
+            session,
+            self.party.clone(),
+            tx,
+            self.retry.clone(),
+        )));
         Ok(())
     }
 }
@@ -534,16 +614,21 @@ impl STTProvider for AzureMaiSTT {
             .host_generation
             .load(Ordering::Relaxed)
             != self.host_generation;
-        if (self.resume || host_changed) && task_finished {
+        let retry_due = task_finished && self.retry_due(Instant::now());
+        if (self.resume || host_changed || retry_due) && task_finished {
             if let Some(tx) = self.result_tx.clone() {
                 let config = Config::new(&self.key, &self.region, &self.language)?;
                 self.resume = false;
+                self.retry_at = None;
                 if let Err(error) = self.connect(config, tx) {
                     self.host_generation = self
                         .app
                         .state::<MaiBridge>()
                         .host_generation
                         .load(Ordering::Relaxed);
+                    // The launcher may still be coming back: try again after the
+                    // next backoff step rather than leaving this side dead.
+                    self.retry.store(true, Ordering::Relaxed);
                     status(&self.app, &self.party, "error", Some(&error));
                     return Err(error.into());
                 }
@@ -569,6 +654,8 @@ impl STTProvider for AzureMaiSTT {
 
     async fn stop_stream(&mut self) -> Result<(), SttError> {
         self.resume = false;
+        self.retry.store(false, Ordering::Relaxed);
+        self.retry_at = None;
         self.resume_pcm.clear();
         self.resume_bytes = 0;
         self.pcm_tx = None;
@@ -640,6 +727,41 @@ mod tests {
                 .as_deref(),
             Some("uk-UA")
         );
+    }
+
+    #[test]
+    fn a_stalled_or_dropped_session_is_retried_with_backoff() {
+        let start = Instant::now();
+        let (mut at, mut backoff) = (None, RETRY_FIRST);
+        // Nothing to retry.
+        assert!(!retry_due(false, start, Some(start), &mut at, &mut backoff));
+        // The first call schedules, the attempt fires once the delay passes.
+        assert!(!retry_due(true, start, Some(start), &mut at, &mut backoff));
+        assert!(!retry_due(true, start + Duration::from_secs(1), Some(start), &mut at, &mut backoff));
+        assert!(retry_due(true, start + RETRY_FIRST, Some(start), &mut at, &mut backoff));
+        // Repeated failures double the wait up to the cap.
+        let mut delays = vec![];
+        for _ in 0..6 {
+            at = None;
+            retry_due(true, start, Some(start), &mut at, &mut backoff);
+            delays.push(at.unwrap() - start);
+        }
+        assert_eq!(delays[0], Duration::from_secs(4));
+        assert_eq!(*delays.last().unwrap(), RETRY_MAX);
+        // A session that stayed up for a while starts over at the first delay.
+        at = None;
+        let later = start + RETRY_RESET_AFTER;
+        retry_due(true, later, Some(start), &mut at, &mut backoff);
+        assert_eq!(at.unwrap() - later, RETRY_FIRST);
+    }
+
+    #[test]
+    fn only_transient_failures_are_retried() {
+        assert!(retryable(&Failure::Network));
+        assert!(retryable(&Failure::Launcher));
+        assert!(retryable(&Failure::Sdk));
+        assert!(!retryable(&Failure::Credentials));
+        assert!(!retryable(&Failure::Model));
     }
 
     #[test]
