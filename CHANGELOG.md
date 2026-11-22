@@ -1,3 +1,9 @@
+## [2.41.4](https://github.com/naxhq/NexQ/compare/v2.41.3...v2.41.4) (2026-11-22)
+
+
+### Bug Fixes
+
+* demo mode, hotkeys, Ctrl+, and first-run fixes, plus README star history ([#135](https://github.com/naxhq/NexQ/issues/135)) ([5aa57d1](https://github.com/naxhq/NexQ/commit/5aa57d11ebcf5b0e4a724c7c728026dd0b067c12))
 ## [2.41.3](https://github.com/naxhq/NexQ/compare/v2.41.2...v2.41.3) (2026-11-22)
 
 
