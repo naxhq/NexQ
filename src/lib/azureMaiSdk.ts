@@ -214,7 +214,9 @@ export async function runMaiSession(start: MaiStart, ipc: MaiTransport, sdk: typ
           ? (phraseStart ??= Math.max(streamOrigin, Date.now() - 300))
           : streamOrigin + offset;
         if (isFinal) {
-          const identity = result.resultId || `${timestamp}:${text}`;
+          // The SDK can assign the same request ID to several phrases, so it
+          // does not identify a finalized phrase on its own.
+          const identity = `${timestamp}:${text}`;
           if (identity === lastFinal) return;
           lastFinal = identity;
           lastPartial = undefined;

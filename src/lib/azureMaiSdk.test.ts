@@ -22,7 +22,7 @@ function controlledSdk() {
     constructor() { sessions.push(this); }
     result(text: string, isFinal = false, offset = 100_000, duration = 200_000) {
       (isFinal ? this.recognized : this.recognizing)?.(undefined, {
-        result: { reason: isFinal ? reason.RecognizedSpeech : reason.RecognizingSpeech, text, offset, duration },
+        result: { resultId: "shared-sdk-request", reason: isFinal ? reason.RecognizedSpeech : reason.RecognizingSpeech, text, offset, duration },
       });
     }
     fail(errorCode = code.ConnectionFailure, errorDetails = "") {
@@ -102,13 +102,15 @@ describe("MAI Speech SDK worker", () => {
     recognizer.result("Hello");
     recognizer.result("Hello");
     recognizer.result("Hello everyone");
+    recognizer.result("Hello everyone.", true);
+    recognizer.result("How are", false, 500_000);
     end();
     await tick();
     const { calls } = stream.write.mock;
     expect(calls[calls.length - 1][0].byteLength).toBe(38_400);
     expect(stream.close).not.toHaveBeenCalled();
-    recognizer.result("Hello everyone.", true);
-    recognizer.result("Hello everyone.", true);
+    recognizer.result("How are you?", true, 500_000);
+    recognizer.result("How are you?", true, 500_000);
     await tick();
     expect(stream.close).toHaveBeenCalledTimes(1);
     recognizer.end();
@@ -118,6 +120,8 @@ describe("MAI Speech SDK worker", () => {
       { kind: "transcript", text: "Hello", isFinal: false, timestampMs: 1_700_000_000_010, durationMs: 20, language: "uk-UA" },
       expect.objectContaining({ text: "Hello everyone", isFinal: false }),
       expect.objectContaining({ text: "Hello everyone.", isFinal: true }),
+      expect.objectContaining({ text: "How are", isFinal: false }),
+      expect.objectContaining({ text: "How are you?", isFinal: true }),
       { kind: "closed" },
     ]);
     expect(recognizer.close).toHaveBeenCalledOnce();
