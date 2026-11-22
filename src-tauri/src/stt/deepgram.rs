@@ -1456,6 +1456,32 @@ mod tests {
     }
 
     #[test]
+    fn an_interim_after_a_long_silence_gets_its_own_line_before_any_final() {
+        let t0 = 1_800_000_000_000;
+        let mut tl = AudioTimeline::new();
+        for i in 1..=30 {
+            tl.sent(CHUNK, t0 + i * 100);
+        }
+        tl.skipped();
+        for i in 1..=30 {
+            tl.sent(CHUNK, t0 + 100_000 + i * 100);
+        }
+        let interim_json = results_json(3.0, 1.5, &[]).replace("\"is_final\":true", "\"is_final\":false");
+        let first = DeepgramSTT::parse_response(&results_json(0.0, 2.9, &[]), "Them", &tl).unwrap();
+        let late = DeepgramSTT::parse_response(&interim_json, "Them", &tl).unwrap();
+        assert!(!late.is_final);
+        assert_eq!(late.timestamp_ms, t0 + 100_000);
+
+        let mut acc = crate::stt::segment_accumulator::SegmentAccumulator::new(3_000);
+        let first_out = acc.feed_result(first);
+        let late_out = acc.feed_result(late);
+        assert_eq!(first_out.last().unwrap().id, "acc_1");
+        assert_eq!(late_out.len(), 1);
+        assert_eq!(late_out[0].id, "acc_2", "the interim is not appended to the first line");
+        assert_eq!(late_out[0].text, "hello world");
+    }
+
+    #[test]
     fn without_a_mapping_a_result_is_dated_by_its_arrival() {
         let before = epoch_now_ms();
         let r = DeepgramSTT::parse_response(&results_json(5.0, 2.0, &[]), "Them", &AudioTimeline::new()).unwrap();
