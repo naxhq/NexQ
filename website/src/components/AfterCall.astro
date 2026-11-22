@@ -15,7 +15,7 @@
  *   Ask tab ..... AskMeetingTab.tsx (question bubble on the right, "Ask about this meeting…")
  *   AI Log ...... AIInteractionLog.tsx (mode label, question, latency, provider/model; "Ask this meeting" group)
  *   actions ..... ActionItemsTab.tsx (checkbox, text, assignee); types.ts ActionItem
- * Features list: README.md L54-L98 ("Audio recording with synced transcript playback", "Bookmarks,
+ * Features list: README.md "Features" ("Audio recording with synced transcript playback", "Bookmarks,
  *   action items and topic sections", "Searchable meeting history, summaries and 'Ask a past
  *   meeting'", "AI Call Log: inspect every prompt, latency and token count").
  *
@@ -131,7 +131,7 @@ const FEATURES: { tab: string; title: string; text: string }[] = [
   { tab: 'actions', title: 'Action items', text: 'Pulled out of the conversation with who they belong to. Tick them off.' },
   { tab: 'bookmarks', title: 'Bookmarks and topic sections', text: 'Mark a moment yourself or let the AI suggest them. The green lines on the waveform are where the subject changed.' },
   { tab: 'ask', title: 'Ask a past meeting', text: 'Chat with the meeting. Questions and answers are saved with it.' },
-  // src: README.md L73 ("inspect every prompt, latency and token count"), docs/DEVELOPMENT.md L74 (every LLM request with
+  // src: README.md "Features" ("inspect every prompt, latency and token count"), docs/DEVELOPMENT.md L74 (every LLM request with
   // provider, model, prompt, timing, usage and errors), src/launcher/meeting-details/AIInteractionLog.tsx (mode label,
   // question, latency, provider/model, the response), src/lib/utils.ts getModeLabel (Summary and Actions are logged too).
   { tab: 'ai', title: 'AI Call Log', text: 'Every prompt and the answer it got, with timing, tokens and the model behind it. Summaries and action items are logged too, not only the answers you asked for.' },

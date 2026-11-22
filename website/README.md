@@ -96,3 +96,7 @@ The local harness lives in `.agent-logs/website/tools/` (local-only, excluded fr
 ## Commits
 
 Use `docs(website): ...` so a site change never bumps the app version.
+
+## After a release
+
+The site redeploys on its own when a release changes `CHANGELOG.md`, so new versions appear in the release timeline. Everything else is written by hand. After each release, decide what else to update: the timeline one-liner (`RELEASE_ONELINERS` in `src/data/site.ts`) always, other sections only for prominent features or fixes. Changes you decide to hold go in `docs/website-pending.md` and are offered again with the next release.

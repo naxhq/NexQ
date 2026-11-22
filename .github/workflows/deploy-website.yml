@@ -43,6 +43,9 @@ jobs:
 
       - name: Build Astro
         run: npx astro build
+        env:
+          # Read-only use: the build fetches the repo's star count for the navbar.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         working-directory: website
 
       - name: Upload artifact

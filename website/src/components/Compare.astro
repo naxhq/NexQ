@@ -1,7 +1,7 @@
 ---
 /**
  * #compare: a short, honest table. Rows are the README's "How NexQ compares" table
- * (README.md L190-200), with the counts fixed to 11 speech engines and 9 AI providers
+ * (README.md, "How NexQ compares"), with the counts fixed to 11 speech engines and 9 AI providers
  * (site.ts COUNTS). The table sits in its own scroll container, so the page never scrolls sideways.
  */
 import Icon from './Icon.astro';
@@ -9,7 +9,7 @@ import { COUNTS, SECTION } from '../data/site';
 
 const cols = ['NexQ', 'Otter.ai', 'Granola', 'Krisp'];
 type Cell = string | boolean;
-// src: README.md L190-200. Competitor cells are what the README lists; "Paid tiers" and "Fixed" are its words.
+// src: README.md "How NexQ compares". Competitor cells are what the README lists; "Paid tiers" and "Fixed" are its words.
 const rows: { label: string; values: Cell[] }[] = [
   { label: 'Price', values: ['Free', 'Paid tiers', 'Paid tiers', 'Paid tiers'] },
   { label: 'Open source', values: [true, false, false, false] },

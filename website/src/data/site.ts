@@ -27,6 +27,7 @@ export const SECTION = {
   call: 'call',
   ai: 'ai',
   after: 'after',
+  demo: 'demo',
   madeFor: 'made-for',
   privacy: 'privacy',
   releases: 'releases',

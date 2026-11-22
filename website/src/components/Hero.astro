@@ -29,6 +29,7 @@ import { planHero, mmss, TIMES, T0, HERO_SECONDS } from './overlay/content';
 import './overlay/stage.css';
 import { SECTION, REPO, RELEASES_LATEST, RELEASES_URL, COUNTS, HOTKEYS, AUTO_DETECT_ENGINES } from '../data/site';
 import { CURRENT_VERSION, RELEASES, waveFor } from '../data/releases';
+import { STARS_LABEL } from '../data/github';
 
 // The hero conversation is laid onto the phrases of this release's wave (see planHero).
 const plan = planHero(waveFor(CURRENT_VERSION));
@@ -69,7 +70,13 @@ const numberedNames = new Intl.ListFormat('en', { style: 'long', type: 'disjunct
         <span data-os="mac" hidden><Icon name="apple" class="h-[18px] w-[18px]" />Download for Mac</span>
       </a>
       <a href={`#${SECTION.download}`} class="btn-primary nx-dl nx-dl--short">Get it for Windows or Mac</a>
-      <a href={REPO} class="btn-ghost"><span><Icon name="star" class="h-[18px] w-[18px]" />Star on GitHub</span></a>
+      <a href={REPO} class="btn-ghost">
+        <span><Icon name="star" class="h-[18px] w-[18px]" />Star on GitHub{' '}{STARS_LABEL && <span class="star-count">{STARS_LABEL}<span class="sr-only"> stars</span></span>}</span>
+      </a>
+      <!-- A text link, not a button: the one blue button stays the download. Same tab, scrolls to #demo. -->
+      <a href={`#${SECTION.demo}`} class="nx-demo-link">
+        <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M3 1.5v9l7.5-4.5z" fill="currentColor" /></svg>Watch the demo
+      </a>
     </div>
     <p class="nx-small">Windows 10 and 11, macOS on Apple Silicon (beta). <a class="link" href={RELEASES_URL}>Other builds</a></p>
 
@@ -169,7 +176,7 @@ const numberedNames = new Intl.ListFormat('en', { style: 'long', type: 'disjunct
       <div class="nx-still"><BeatFrame beat="c" /></div>
     </article>
 
-    <!-- Beat d: docs/user-guide/claude-subscription.md (Personal sources), rag-context.md, README.md (Gemini Context Cache) -->
+    <!-- Beat d: docs/user-guide/claude-subscription.md (Personal sources), rag-context.md, src-tauri/src/llm/gemini_cache.rs (Gemini Context Cache) -->
     <article class="nx-beat" id="knows" data-beat-id="d" data-t={TIMES.d} data-t0={T0.d} data-hint="Notes and Tools, in the answer" aria-labelledby="beat-d">
       <p class="eyebrow">{mmss(TIMES.d)}</p>
       <h3 id="beat-d" class="h3">What it knows.</h3>
@@ -185,7 +192,7 @@ const numberedNames = new Intl.ListFormat('en', { style: 'long', type: 'disjunct
       <div class="nx-still"><BeatFrame beat="d" /></div>
     </article>
 
-    <!-- Beat e: README.md (Stealth Mode), docs/user-guide/keyboard-shortcuts.md, interview-copilot.md -->
+    <!-- Beat e: README.md "Privacy" (Hide from screen share), docs/user-guide/keyboard-shortcuts.md, interview-copilot.md -->
     <article class="nx-beat" id="stealth" data-beat-id="e" data-t={TIMES.e} data-t0={T0.e} data-hint="Hidden from the share, still on your screen" aria-labelledby="beat-e">
       <p class="eyebrow">{mmss(TIMES.e)}</p>
       <h3 id="beat-e" class="h3">Gone from the share.</h3>

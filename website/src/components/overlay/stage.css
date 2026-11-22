@@ -81,6 +81,24 @@
   align-items: center;
   gap: 0.5rem;
 }
+/* "Watch the demo": a quiet text link beside the buttons. */
+.nx-demo-link {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.5rem;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  color: hsl(var(--foreground));
+  text-decoration: underline;
+  text-decoration-color: hsl(var(--muted-foreground) / 0.5);
+  text-underline-offset: 5px;
+  transition: text-decoration-color 0.2s var(--ease-spring);
+}
+.nx-demo-link:hover {
+  text-decoration-color: hsl(var(--foreground));
+}
 .nx-small {
   margin-top: 0.9rem;
   font-size: 0.875rem;
