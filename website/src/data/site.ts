@@ -56,7 +56,7 @@ interface SttProvider {
   note?: string;
 }
 
-// The 11 speech engines, in the order the app's STT settings group them.
+// The 12 speech engines, in the order the app's STT settings group them.
 export const STT_PROVIDERS: SttProvider[] = [
   { name: 'Parakeet', where: 'device' },
   { name: 'Sherpa-ONNX', where: 'device' },
@@ -66,8 +66,9 @@ export const STT_PROVIDERS: SttProvider[] = [
   { name: 'Web Speech', where: 'cloud-nokey', note: 'No key, but the audio goes to a cloud service. Your side (the microphone) only.' },
   { name: 'Deepgram', where: 'cloud' },
   { name: 'Groq Whisper', where: 'cloud' },
-  { name: 'Whisper API', where: 'cloud' },
+  { name: 'Whisper API', where: 'cloud', note: 'OpenAI, or your own OpenAI-compatible server (for example faster-whisper on your machine).' },
   { name: 'Azure Speech', where: 'cloud' },
+  { name: 'Azure MAI Streaming', where: 'cloud', note: 'Live transcription with Microsoft MAI-Transcribe-2-Streaming (public preview).' },
   { name: 'Cartesia', where: 'cloud' },
 ];
 
@@ -99,7 +100,7 @@ export const TRANSLATION_PROVIDERS: { name: string; where: 'cloud' | 'device' | 
   { name: 'OPUS-MT', where: 'device', note: 'Offline models you download once.' },
 ];
 
-/** The headline numbers, counted from the lists above so they cannot drift (README's compare table says 11 and 9). */
+/** The headline numbers, counted from the lists above so they cannot drift (README's compare table says 12 and 9). */
 export const COUNTS = {
   stt: STT_PROVIDERS.length,
   llm: LLM_PROVIDERS.length,
@@ -120,6 +121,7 @@ const AUTO_DETECT: { name: string; provider: string; model?: string }[] = [
   { name: 'Whisper API', provider: 'whisper_api' },
   { name: 'Groq', provider: 'groq_whisper' },
   { name: 'Cartesia', provider: 'cartesia' },
+  { name: 'Azure MAI Streaming', provider: 'azure_mai_streaming' },
 ];
 for (const e of AUTO_DETECT) {
   const ok = autoDetectCases.cases.some((c) => c.supported && c.provider === e.provider && (e.model === undefined || c.model === e.model));
@@ -143,7 +145,7 @@ export interface Hotkey {
 // defaults in src/stores/configStore.ts (all CmdOrCtrl, so "Mod" below).
 export const HOTKEYS: Hotkey[] = [
   { keys: ['Mod', 'M'], action: 'Start or end a meeting', scope: 'global' },
-  { keys: ['Mod', 'B'], action: 'Show or hide the overlay', scope: 'global' },
+  { keys: ['Mod', 'B'], action: 'Switch between overlay and dashboard', scope: 'global' },
   { keys: ['Mod', 'Shift', 'Space'], action: 'Assist from any app', scope: 'global', note: 'Answers without switching to NexQ.' },
   { keys: ['Mod', 'Shift', 'H'], action: 'Hide from screen share', scope: 'global' },
   {
@@ -174,6 +176,8 @@ export const SCENARIOS = [
  * and true to that release's CHANGELOG entry.
  */
 export const RELEASE_ONELINERS: Record<string, string> = {
+  '2.43.0': 'Point Whisper API at your own speech server.',
+  '2.42.0': 'Azure MAI Streaming joins the speech engines.',
   '2.41.0': 'Notes and tools for your Claude answers.',
   '2.40.0': 'Choose how much each AI provider thinks.',
   '2.39.0': 'Switch each side’s transcription language from the overlay.',
