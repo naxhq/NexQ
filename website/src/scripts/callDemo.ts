@@ -199,17 +199,20 @@ function init(stage: HTMLElement) {
       b.setAttribute('aria-pressed', String(on));
     }
     if (assistMain) {
-      assistMain.toggleAttribute('disabled', running);
+      // aria-disabled, not disabled: a disabled button drops keyboard focus to the page while the answer streams.
+      assistMain.setAttribute('aria-disabled', String(running));
       assistMain.setAttribute('aria-busy', String(running));
     }
   }
 
-  function showAnswer(mode: string, total: number, first: number) {
+  function showAnswer(mode: string) {
     for (const w of wordsOf(mode)) w.classList.remove('off');
     ov.dataset.mode = mode;
     ov.dataset.ans = 'done';
     if (doneLabel) doneLabel.textContent = labelOf(mode);
-    if (doneTiming) doneTiming.textContent = `${secs(total)} · first words ${secs(first)}`;
+    // One timing per answer, written in content.ts and printed everywhere (not the time the animation took).
+    const own = ov.querySelector<HTMLElement>(`.ov-ans[data-answer="${mode}"]`)?.dataset.timing;
+    if (doneTiming && own) doneTiming.textContent = own;
     setModeButtons(null, false);
     const text = ov.querySelector(`.ov-ans[data-answer="${mode}"]`)?.textContent?.replace(/\s+/g, ' ').trim();
     say(`${labelOf(mode)} answer: ${text}`);
@@ -236,10 +239,7 @@ function init(stage: HTMLElement) {
     const deep = DEEP_MODES.has(mode);
     const phases = deep ? PHASES_DEEP : mode === 'Assist' ? PHASES_FAST_ASSIST : PHASES_FAST_QUICK;
     if (detEl) detEl.textContent = (deep ? detEl.dataset.sentDeep : detEl.dataset.sentFast) ?? '';
-    if (reduce) {
-      const total = phases[2] + wordsOf(mode).length * WORD_MS;
-      return showAnswer(mode, total, phases[2]);
-    }
+    if (reduce) return showAnswer(mode);
     run = { mode, t: 0, words: wordsOf(mode), phases, shown: 0, phase: '', lastElapsed: -1 };
     if (progLabel) progLabel.textContent = labelOf(mode);
     ov.dataset.ans = 'sending';
@@ -271,10 +271,9 @@ function init(stage: HTMLElement) {
         if (caret && run.words[n - 1]) run.words[n - 1].after(caret);
       }
       if (n >= run.words.length && run.t - c > run.words.length * WORD_MS + 250) {
-        const total = run.t;
         const mode = run.mode;
         run = null;
-        showAnswer(mode, total, c);
+        showAnswer(mode);
       }
     }
   }
@@ -489,8 +488,8 @@ function init(stage: HTMLElement) {
   // ── Controls ──
   pauseBtn?.addEventListener('click', () => {
     paused = !paused;
+    // A constant name with aria-pressed (pressed = paused), so the label and the state never disagree.
     pauseBtn.setAttribute('aria-pressed', String(paused));
-    pauseBtn.setAttribute('aria-label', paused ? 'Play the sample' : 'Pause the sample');
     stage.toggleAttribute('data-paused', paused);
     kick();
   });
@@ -499,7 +498,10 @@ function init(stage: HTMLElement) {
   };
   pin.addEventListener('pointerdown', touch, { capture: true, once: true });
   pin.addEventListener('keydown', touch, { capture: true, once: true });
-  assistMain?.addEventListener('click', () => start('Assist'));
+  assistMain?.addEventListener('click', () => {
+    if (assistMain.getAttribute('aria-disabled') === 'true') return;
+    start('Assist');
+  });
   $('[data-assist]', ov)?.addEventListener('click', () => start('Assist'));
   modeBtns.forEach((b) => b.addEventListener('click', () => start(b.dataset.modeBtn!)));
   ov.addEventListener('keydown', (e) => {

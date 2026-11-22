@@ -283,7 +283,8 @@
 .nx-assist svg {
   color: hsl(var(--primary));
 }
-.nx-assist:disabled {
+.nx-assist:disabled,
+.nx-assist[aria-disabled='true'] {
   opacity: 0.6;
   cursor: default;
 }

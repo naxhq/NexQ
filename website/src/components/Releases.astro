@@ -36,7 +36,8 @@ const entries: Entry[] = RELEASES.map((r, i) => {
   const patch = i === 0 && r.version !== CURRENT_VERSION;
   const headline = r.oneLiner ?? r.items[0];
   // A release without a hand-written one-liner leads with its first line, so don't repeat it.
-  const rest = r.oneLiner ? r.items : r.items.slice(1);
+  // A one-liner that already covers a release's single item (2.41.0) would be repeated by the list, so the list stays hidden.
+  const rest = r.oneLiner ? (r.items.length > 1 ? r.items : []) : r.items.slice(1);
   return {
     version: patch ? CURRENT_VERSION : r.version,
     notesFrom: patch ? r.version : undefined,
@@ -54,7 +55,7 @@ const entries: Entry[] = RELEASES.map((r, i) => {
   <div class="wrap">
     <div class="grid gap-8 lg:grid-cols-12 lg:items-end lg:gap-16">
       <div class="lg:col-span-7">
-        <h2 id="releases-title" class="h2">Every release has its own voice</h2>
+        <h2 id="releases-title" class="h2">Every release has its own voice.</h2>
         <p class="lede">
           NexQ draws a waveform from each version number. The installer and the update dialog show the same one, so you
           can tell a release by its shape.

@@ -11,7 +11,7 @@
  *                                         source secrets too); src-tauri/src/credentials/
  *   signed updates ...................... README.md L123 (installs on quit, never mid-meeting) and L219 (Ed25519)
  *   open source MIT ..................... README.md L41, LICENSE
- *   no telemetry ........................ README.md L219 (only contacts GitHub Releases for updates, besides your providers)
+ *   no telemetry ........................ README.md L219 (only contacts GitHub Releases for updates, besides your providers and the model downloads: src-tauri/src/stt/local_engines/model_registry.rs, translation/opus_mt_registry.rs fetch from huggingface.co and github.com)
  *   consent line ........................ docs/user-guide/meeting-detection.md (last line)
  * No analytics on this site: owner decision.
  */
@@ -26,7 +26,7 @@ const ROWS: { k: string; h: string; p: string; link?: { href: string; label: str
   {
     k: 'choice',
     h: 'You decide where your words go.',
-    p: 'Pair an on-device speech engine with Ollama or LM Studio and nothing leaves your computer. Pick a cloud provider and it receives only what you send it.',
+    p: 'Pair an on-device speech engine with Ollama or LM Studio and your audio and words stay on your computer. Pick a cloud provider and it receives only what you send it.',
     link: { href: '#ai', label: 'See the options' },
   },
   {
@@ -53,7 +53,7 @@ const ROWS: { k: string; h: string; p: string; link?: { href: string; label: str
   {
     k: 'tracking',
     h: 'No tracking.',
-    p: 'NexQ has no telemetry or analytics. Besides the providers you set up, it only contacts GitHub Releases to look for updates. This website has no analytics either.',
+    p: 'NexQ has no telemetry or analytics. Besides the providers you set up and the models you choose to download, it only contacts GitHub Releases to check for updates. This website has no analytics either.',
   },
 ];
 ---
@@ -61,7 +61,7 @@ const ROWS: { k: string; h: string; p: string; link?: { href: string; label: str
 <section id={SECTION.privacy} class="section" aria-labelledby="privacy-title">
   <div class="wrap pv">
     <div class="pv-intro">
-      <h2 id="privacy-title" class="h2">Nothing leaves unless you choose it</h2>
+      <h2 id="privacy-title" class="h2">Nothing leaves unless you choose it.</h2>
       <p class="lede">Your calls are yours, and the code is open, so you can check that instead of taking our word for it.</p>
       <p class="pv-note">
         Please tell the other people on the call that you are transcribing it. Many places require it.

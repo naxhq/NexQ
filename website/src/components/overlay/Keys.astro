@@ -1,0 +1,29 @@
+---
+// A key combination, one <kbd> each, from the keys a HOTKEYS entry lists (data/site.ts). "Mod" is Ctrl on
+// Windows and ⌘ on Mac, so it shows both ("Ctrl or ⌘"), unless the shortcut is only on one of them (`win`).
+import { HOTKEYS } from '../../data/site';
+interface Props {
+  /** The `action` of the HOTKEYS entry. */
+  action: string;
+  /** The shortcut exists on Windows only: "Mod" reads Ctrl. */
+  win?: boolean;
+}
+const { action, win = false } = Astro.props;
+const hotkey = HOTKEYS.find((h) => h.action === action);
+if (!hotkey) throw new Error(`Keys: no hotkey with the action "${action}" in data/site.ts HOTKEYS`);
+---
+
+{
+  hotkey.keys.map((k, i) => (
+    <>
+      {i > 0 && ' '}
+      {k === 'Mod' && !win ? (
+        <>
+          <kbd class="kbd">Ctrl</kbd> or <kbd class="kbd">⌘</kbd>
+        </>
+      ) : (
+        <kbd class="kbd">{k === 'Mod' ? 'Ctrl' : k}</kbd>
+      )}
+    </>
+  ))
+}

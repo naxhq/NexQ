@@ -24,31 +24,50 @@
  * screenshots in public/ predate the Ask tab and show demo-mode data, so they are not used here.
  */
 import { SECTION } from '../data/site';
+import { CURRENT_VERSION, waveFor } from '../data/releases';
+import {
+  planHero, A_LINES, B_LINES, B_QUESTION, D_LINES, D_QUESTION, HERO_QUESTION, ANSWERS, C_ANSWER, D_ANSWER,
+} from './overlay/content';
 
 const DUR = 2832; // 47:12, in seconds
 const START = 0.18; // where the playhead rests without JS and with reduced motion (the CTO ask, ~8:30)
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+/** "m:ss" stamp to seconds. */
+const secs = (ts: string) => {
+  const [m, s] = ts.split(':').map(Number);
+  return m * 60 + s;
+};
+/** Straight apostrophes in the shared sample text become typographic ones on this page. */
+const curly = (t: string) => t.replace(/(\w)'(\w)/g, '$1’$2');
+/** "4.1 s · first words 2.3 s" to "4100ms", the way the AI Log shows latency. */
+const logMs = (timing: string) => `${Math.round(parseFloat(timing) * 1000)}ms`;
 
-// The same interview as the hero demo and the beats above (components/overlay/content.ts: Dana leads
-// hiring for the design team; the toughest trade-off; the slow dashboard; the second round with the
-// CTO). Times are the ones the beats use (1:49 and 4:34 and 8:00); the rest are filled in.
-// [seconds, who, text, bookmarked, language]
+// The same interview as the hero demo and the beats above. Every line the overlay shows (hero opening,
+// beats a, b and d) is read from components/overlay/content.ts, with the same stamps, so the recording
+// and the call never disagree. Lines that are not on screen anywhere above are written here, with
+// stamps that continue the call. [seconds, who, text, bookmarked, language]
+const heroLines = planHero(waveFor(CURRENT_VERSION)).lines;
+const fromContent = (ls: { who: 'you' | 'them'; ts: string; text: string }[], lang?: string, bm?: (text: string) => boolean) =>
+  ls.map((l): [number, 'you' | 'them', string, boolean?, string?] => [
+    secs(l.ts), l.who, curly(l.text), bm?.(l.text) || undefined, l.who === 'them' && lang ? lang : undefined,
+  ]);
 const LINES: [number, 'you' | 'them', string, boolean?, string?][] = [
-  [3, 'them', 'Thanks for joining. I’m Dana, I lead hiring for the design team.'],
-  [11, 'you', 'Great to meet you, Dana. Happy to be here.'],
-  [22, 'them', 'What was the toughest trade-off on your last project?', true],
+  ...fromContent(heroLines, undefined, (t) => t === HERO_QUESTION),
   [49, 'you', 'We shipped the design system before the redesign. It cost two weeks up front, and every screen after that took days.'],
-  [109, 'them', 'Perfecto. Cuéntame cómo trabajas con ingeniería.', false, 'es'],
-  [117, 'you', 'I pair with them from day one.'],
-  [274, 'them', 'How would you make a slow dashboard with fifty charts feel fast?', true],
+  ...fromContent(A_LINES, 'es', () => false),
+  ...fromContent(B_LINES, undefined, (t) => t === B_QUESTION),
   [301, 'you', 'Show something useful first. Load the summary at once, then stream the charts as they arrive.'],
-  [480, 'them', 'Can you do a second round with our CTO next week?', true],
+  ...fromContent(D_LINES, undefined, (t) => t === D_QUESTION),
   [493, 'you', 'Yes. Tuesday after 2 pm or Thursday morning both work.'],
   [2410, 'them', 'That’s all from me. Any questions before we wrap up?'],
   [2531, 'you', 'Yes, about the team roadmap. Can we cover it in the second round?'],
   [2700, 'them', 'Of course. I’ll send the invite for the CTO round tomorrow.'],
 ];
+// Stamps must keep increasing, and the lines written here must sit between the lines they follow.
+LINES.forEach((l, i) => {
+  if (i > 0 && l[0] <= LINES[i - 1][0]) throw new Error(`AfterCall: transcript stamp ${fmt(l[0])} does not follow ${fmt(LINES[i - 1][0])}`);
+});
 const TOPICS: [number, string][] = [
   [0, 'Intro and trade-offs'],
   [109, 'Working with engineering'],
@@ -56,7 +75,7 @@ const TOPICS: [number, string][] = [
   [480, 'Second round'],
 ];
 const BOOKMARKS: [number, string][] = [
-  [22, 'Toughest trade-off: the design system first'],
+  [LINES.find((l) => l[2] === HERO_QUESTION)![0], 'Toughest trade-off: the design system first'],
   [274, 'A slow dashboard with fifty charts'],
   [480, 'Second round with the CTO next week'],
 ];
@@ -65,12 +84,12 @@ const ACTIONS: { text: string; who: 'you' | 'them'; name: string; t: number; don
   { text: 'Ask about the team roadmap in the second round', who: 'you', name: 'You', t: 2531 },
   { text: 'Send the invite for the CTO round', who: 'them', name: 'Dana', t: 2700 },
 ];
-// Every request NexQ sent to the AI, with its answer. `ms` for the live answers is the timing the demo shows
-// (content.ts C_ANSWER 0.9 s, D_ANSWER 4.1 s); the others are made up like the meeting.
+// Every request NexQ sent to the AI, with its answer. Titles, labels and timings of the three live answers come
+// from content.ts (the first Assist's from ANSWERS.Assist.timing); Summary and Actions are made up like the meeting.
 const LOG: { label: string; title: string; ms: string; meta: string }[] = [
-  { label: 'Assist', title: 'What was the toughest trade-off on your last project?', ms: '1380ms', meta: 'claude_cli/haiku' },
-  { label: 'Short', title: 'How would you make a slow dashboard with fifty charts feel fast?', ms: '900ms', meta: 'claude_cli/haiku' },
-  { label: 'Assist', title: 'Can you do a second round with our CTO next week?', ms: '4100ms', meta: 'claude_cli/haiku' },
+  { label: ANSWERS.Assist.label, title: HERO_QUESTION, ms: logMs(ANSWERS.Assist.timing), meta: 'claude_cli/haiku' },
+  { label: C_ANSWER.label, title: B_QUESTION, ms: logMs(C_ANSWER.timing), meta: 'claude_cli/haiku' },
+  { label: D_ANSWER.label, title: D_QUESTION, ms: logMs(D_ANSWER.timing), meta: 'claude_cli/haiku' },
   { label: 'Summary', title: 'Meeting summary', ms: '6240ms', meta: 'claude_cli/sonnet' },
   { label: 'Actions', title: 'Action items', ms: '3180ms', meta: 'claude_cli/sonnet' },
 ];
@@ -128,7 +147,7 @@ const TABS = [
 <section id={SECTION.after} class="section ac-sec" aria-labelledby="after-title">
   <div class="wrap">
     <p class="eyebrow">after 47:12</p>
-    <h2 id="after-title" class="h2 mt-3 max-w-[20ch]">Everything is still there afterwards</h2>
+    <h2 id="after-title" class="h2 mt-3 max-w-[20ch]">Everything is still there afterwards.</h2>
     <p class="lede">
       The interview with Dana ends at 47:12, and the work is not over. NexQ keeps the recording, with a
       transcript that follows it, and the notes you would otherwise write by hand.

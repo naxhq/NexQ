@@ -24,9 +24,10 @@ import BeatFrame from './overlay/BeatFrame.astro';
 import StealthPanes from './overlay/StealthPanes.astro';
 import Slide from './overlay/Slide.astro';
 import OvIcon from './overlay/OvIcon.astro';
+import Keys from './overlay/Keys.astro';
 import { planHero, mmss, TIMES, T0, HERO_SECONDS } from './overlay/content';
 import './overlay/stage.css';
-import { SECTION, REPO, RELEASES_LATEST, COUNTS } from '../data/site';
+import { SECTION, REPO, RELEASES_LATEST, COUNTS, HOTKEYS, AUTO_DETECT_ENGINES } from '../data/site';
 import { CURRENT_VERSION, RELEASES, waveFor } from '../data/releases';
 
 // The hero conversation is laid onto the phrases of this release's wave (see planHero).
@@ -36,6 +37,16 @@ const plan = planHero(waveFor(CURRENT_VERSION));
 const latest = RELEASES[0];
 const latestTag = `v${latest.version.split('.').slice(0, 2).join('.')}`;
 const latestText = (latest.oneLiner ?? latest.items[0] ?? '').replace(/\.$/, '');
+
+// Beat facts that data/site.ts owns, so a change there reaches the page.
+// Beat a: a few of the engines that detect the language (all of them are in the Your AI section and the docs).
+const detectNames = ['Deepgram Nova-3', 'Cartesia', 'Parakeet v3', 'Groq'];
+for (const n of detectNames) if (!AUTO_DETECT_ENGINES.includes(n)) throw new Error(`Hero: "${n}" is not in AUTO_DETECT_ENGINES (data/site.ts)`);
+const detectList = new Intl.ListFormat('en', { style: 'long', type: 'conjunction' }).format(detectNames);
+// Beat c: the in-overlay keys. Space is Assist and 1 to 5 are the other actions, in the order of the overlay buttons.
+const appKeys = HOTKEYS.filter((h) => h.scope === 'app');
+const numbered = appKeys.filter((h) => /^[0-9]$/.test(h.keys[0]));
+const numberedNames = new Intl.ListFormat('en', { style: 'long', type: 'disjunction' }).format(numbered.map((h) => h.action));
 ---
 
 <div class="wrap nx-stage" data-stage data-beat="h" data-stealth="on">
@@ -123,7 +134,7 @@ const latestText = (latest.oneLiner ?? latest.items[0] ?? '').replace(/\.$/, '')
       </p>
       <ul class="nx-facts">
         <li>Live translation shows under each line, from DeepL, Google, Microsoft, your own AI or offline OPUS-MT.</li>
-        <li>Some speech engines detect the language for you, such as Deepgram Nova-3, Cartesia, Parakeet v3 and Groq.</li>
+        <li>Some speech engines detect the language for you, such as {detectList}.</li>
       </ul>
       <p class="nx-also"><b>Also:</b> echo cancellation keeps the other side out of your microphone, and you can rename speakers.</p>
       <div class="nx-still"><BeatFrame beat="a" /></div>
@@ -148,12 +159,12 @@ const latestText = (latest.oneLiner ?? latest.items[0] ?? '').replace(/\.$/, '')
       <p class="eyebrow">{mmss(TIMES.c)}</p>
       <h3 id="beat-c" class="h3">One key.</h3>
       <p class="nx-beat__lede">
-        <kbd class="kbd">Space</kbd> answers, and keys <kbd class="kbd">1</kbd> to <kbd class="kbd">5</kbd> pick What to say, Shorten, Follow-up, Recap or Ask while the overlay has focus.
+        <kbd class="kbd">{appKeys[0].keys[0]}</kbd> answers, and keys <kbd class="kbd">{numbered[0].keys[0]}</kbd> to <kbd class="kbd">{numbered[numbered.length - 1].keys[0]}</kbd> pick {numberedNames} while the overlay has focus.
       </p>
       <ul class="nx-facts">
-        <li><kbd class="kbd">Ctrl</kbd> or <kbd class="kbd">⌘</kbd> <kbd class="kbd">Shift</kbd> <kbd class="kbd">Space</kbd> asks from any app, without switching windows.</li>
+        <li><Keys action="Assist from any app" /> asks from any app, without switching windows.</li>
         <li>The scope picker sets what the answer looks at: the last few minutes, since your last answer, or the whole call.</li>
-        <li><kbd class="kbd">Ctrl</kbd> <kbd class="kbd">Shift</kbd> <kbd class="kbd">S</kbd> puts a screenshot into Ask on Windows, and you can paste images into Ask too. Both need your Claude subscription.</li>
+        <li><Keys action="Capture the screen into Ask" win /> puts a screenshot into Ask on Windows, and you can paste images into Ask too. Both need your Claude subscription.</li>
       </ul>
       <div class="nx-still"><BeatFrame beat="c" /></div>
     </article>
@@ -168,7 +179,7 @@ const latestText = (latest.oneLiner ?? latest.items[0] ?? '').replace(/\.$/, '')
       <span class="nx-new">New in 2.41 · Claude subscription</span>
       <ul class="nx-facts">
         <li>Documents you load are indexed locally with vector and keyword search, and work with any AI. Gemini can also cache them.</li>
-        <li>A notes folder, such as an Obsidian vault, is read only. Tools are MCP servers, and tools that look like they change something (add, send, edit, delete) start off.</li>
+        <li>A notes folder, such as an Obsidian vault, is read only. Tools are connectors to your apps (MCP servers), like a calendar, and tools that look like they change something (add, send, edit, delete) start off.</li>
         <li>Switch Notes and Tools on for an answer you ask for. A lookup can add a few seconds, and automatic answers never use them.</li>
       </ul>
       <div class="nx-still"><BeatFrame beat="d" /></div>
@@ -189,7 +200,7 @@ const latestText = (latest.oneLiner ?? latest.items[0] ?? '').replace(/\.$/, '')
       <StealthPanes class="nx-panes--beat" />
       <ul class="nx-facts">
         <li>
-          <kbd class="kbd">Ctrl</kbd> or <kbd class="kbd">⌘</kbd> <kbd class="kbd">Shift</kbd> <kbd class="kbd">H</kbd> switches it. NexQ also leaves the taskbar on Windows (Alt+Tab still finds it) and the Dock and Cmd+Tab on macOS.
+          <Keys action="Hide from screen share" /> switches it. NexQ also leaves the taskbar on Windows (Alt+Tab still finds it) and the Dock and Cmd+Tab on macOS.
         </li>
         <li>On Windows 10 version 2004 or later it works with the usual screen-share tools. On macOS 14 and later, some recorders built on ScreenCaptureKit can still capture it, so run a test share first.</li>
         <li>It keeps your screen private, so check that using NexQ is allowed in your call.</li>

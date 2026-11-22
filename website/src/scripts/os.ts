@@ -9,9 +9,11 @@ let cached: Platform | undefined;
 export function detectOS(): Platform {
   if (cached !== undefined) return cached;
   const ua = navigator.userAgent;
-  const hint = `${ua} ${navigator.platform}`;
+  // userAgentData.platform where the browser has it (Chromium), otherwise the user agent alone says enough.
+  const uaData = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData;
+  const hint = `${ua} ${uaData?.platform ?? ''}`;
   const touchMac = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1; // iPadOS reports a Mac
   const mobile = /iPhone|iPad|iPod|Android/i.test(ua) || touchMac;
-  cached = mobile ? '' : /Windows|Win32|Win64/i.test(hint) ? 'windows' : /Macintosh|MacIntel|Mac OS X/i.test(hint) ? 'mac' : '';
+  cached = mobile ? '' : /Windows|Win32|Win64/i.test(hint) ? 'windows' : /Macintosh|MacIntel|Mac OS X|macOS/i.test(hint) ? 'mac' : '';
   return cached;
 }

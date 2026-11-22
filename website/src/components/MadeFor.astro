@@ -42,7 +42,7 @@ const DETAIL: Record<string, { text: string; href: string }> = {
 
 <section id={SECTION.madeFor} class="section" aria-labelledby="made-for-title">
   <div class="wrap">
-    <h2 id="made-for-title" class="h2 max-w-[18ch]">Made for the calls you have</h2>
+    <h2 id="made-for-title" class="h2 max-w-[18ch]">Made for the calls you have.</h2>
     <p class="lede">Pick a scenario before the call. It tunes what the AI listens for and how it answers.</p>
 
     <ul class="mf" data-mf data-reveal>
@@ -69,7 +69,7 @@ const DETAIL: Record<string, { text: string; href: string }> = {
         </p>
         <p>
           NexQ checks every 3 seconds by default, and never listens to audio before you click Start: it only reads which
-          app has the microphone open, and the titles of that app's windows. Slack huddles and Discord can be switched on too. Windows only for now.
+          app has the microphone open, and the titles of that app’s windows. Slack huddles and Discord can be switched on too. Windows only for now.
         </p>
         <p><a class="link" href={doc('meeting-detection')}>How call detection works</a></p>
       </div>
@@ -205,21 +205,31 @@ const DETAIL: Record<string, { text: string; href: string }> = {
 </style>
 
 <script>
-  // Select a scenario on hover (devices that hover), focus or click.
+  // Select a scenario on click or focus at once. On hover the change waits ~150 ms for the pointer to
+  // settle, so moving diagonally across the list to "Read the guide" does not swap the selection.
   const mf = document.querySelector<HTMLElement>('[data-mf]');
   if (mf) {
     const items = Array.from(mf.querySelectorAll<HTMLElement>('.mf-item'));
-    const pick = (i: number) =>
+    let timer = 0;
+    const pick = (i: number) => {
+      clearTimeout(timer);
       items.forEach((it, j) => {
         it.toggleAttribute('data-on', j === i);
         it.querySelector('button')!.setAttribute('aria-pressed', String(j === i));
       });
+    };
     const hover = matchMedia('(hover: hover)').matches;
     items.forEach((it, i) => {
       const b = it.querySelector('button')!;
       b.addEventListener('click', () => pick(i));
       b.addEventListener('focus', () => pick(i));
-      if (hover) b.addEventListener('pointerenter', () => pick(i));
+      if (hover) {
+        b.addEventListener('pointerenter', () => {
+          clearTimeout(timer);
+          timer = window.setTimeout(() => pick(i), 150);
+        });
+        b.addEventListener('pointerleave', () => clearTimeout(timer));
+      }
     });
   }
 </script>

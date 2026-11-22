@@ -17,21 +17,24 @@ const { ai = true, shows = 'en' } = Astro.props;
 
 <div class="ov-foot" role="group" aria-label="Services">
   {ai && (
-    <>
+    <span class="ov-side">
       <span class="ov-svc ov-svc--ai"><i class="ov-sdot"></i><OvIcon name="brain" class="ov-i ov-i--s" /><span>{OV.services.ai}</span><span class="ov-sub">{OV.services.model}</span></span>
-      <span class="ov-fsep"></span>
-    </>
-  )}
-  <span class="ov-svc ov-svc--you"><i class="ov-sdot"></i><span class="ov-who2">{OV.services.you}</span><span>{OV.services.stt}</span></span>
-  <span class="ov-lang"><OvIcon name="languages" class="ov-i ov-i--s" /><span>{OV.langs.en}</span></span>
-  <span class="ov-fsep"></span>
-  <span class="ov-svc ov-svc--them"><i class="ov-sdot"></i><span class="ov-who2">{OV.services.them}</span><span>{OV.services.stt}</span></span>
-  <span class="ov-lang ov-lang--them">
-    <OvIcon name="languages" class="ov-i ov-i--s" />
-    <span class="ov-lg">
-      <span class="l-en" aria-hidden={shows === 'es' ? 'true' : undefined}>{OV.langs.en}</span>
-      <span class="l-es" aria-hidden={shows === 'en' ? 'true' : undefined}>{OV.langs.es}</span>
     </span>
-    <span class="ov-rs" aria-hidden="true">{OV.restarting}</span>
+  )}
+  <!-- Each side and its language chip are one unit that never splits across two lines. -->
+  <span class="ov-side">
+    <span class="ov-svc ov-svc--you"><i class="ov-sdot"></i><span class="ov-who2">{OV.services.you}</span><span>{OV.services.stt}</span></span>
+    <span class="ov-lang"><OvIcon name="languages" class="ov-i ov-i--s" /><span>{OV.langs.en}</span></span>
+  </span>
+  <span class="ov-side">
+    <span class="ov-svc ov-svc--them"><i class="ov-sdot"></i><span class="ov-who2">{OV.services.them}</span><span>{OV.services.stt}</span></span>
+    <span class="ov-lang ov-lang--them">
+      <OvIcon name="languages" class="ov-i ov-i--s" />
+      <span class="ov-lg">
+        <span class="l-en" aria-hidden={shows === 'es' ? 'true' : undefined}>{OV.langs.en}</span>
+        <span class="l-es" aria-hidden={shows === 'en' ? 'true' : undefined}>{OV.langs.es}</span>
+      </span>
+      <span class="ov-rs" aria-hidden="true">{OV.restarting}</span>
+    </span>
   </span>
 </div>

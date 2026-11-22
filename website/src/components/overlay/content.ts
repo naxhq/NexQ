@@ -21,7 +21,7 @@ export interface Line {
 // from the release wave's phrases at build time (planHero), so the colours fall on real phrases.
 export const HERO_SECONDS = 38;
 export const HERO_TEXT: { who: Speaker; text: string }[] = [
-  { who: 'them', text: "Thanks for joining. I'm Dana, I lead hiring for the design team." },
+  { who: 'them', text: "Thanks for joining. I’m Dana, I lead hiring for the design team." },
   { who: 'you', text: 'Great to meet you, Dana. Happy to be here.' },
   { who: 'them', text: 'What was the toughest trade-off on your last project?' },
 ];
@@ -29,9 +29,9 @@ export const HERO_QUESTION = HERO_TEXT[HERO_TEXT.length - 1].text;
 
 // Beat a, 02:10. The other side speaks Spanish, you speak English.
 export const A_LINES: Line[] = [
-  { who: 'them', ts: '1:49', text: 'Perfecto. Cuéntame cómo trabajas con ingeniería.', tr: 'Perfect. Tell me how you work with engineering.' },
-  { who: 'you', ts: '1:57', text: 'I pair with them from day one.' },
-  { who: 'them', ts: '2:04', text: 'Me gusta. Cuéntame qué haces si no están de acuerdo.', tr: 'I like that. Tell me what you do if they disagree.' },
+  { who: 'them', ts: '1:49', text: 'Perfecto. ¿Sigo en español? Me siento más cómoda.', tr: 'Perfect. Shall I go on in Spanish? I feel more comfortable.' },
+  { who: 'you', ts: '1:57', text: 'Of course. I’ll keep my side in English.' },
+  { who: 'them', ts: '2:04', text: 'Cuéntame cómo trabajas con ingeniería.', tr: 'Tell me how you work with engineering.' },
 ];
 
 // Beat b and c, 04:40 and 05:35.
@@ -50,21 +50,37 @@ export const D_LINES: Line[] = [
 ];
 export const D_QUESTION = D_LINES[2].text;
 
-/** Answers. `**bold**` becomes a bold word. Hero answers stream word by word. */
-export const ANSWERS: Record<string, { label: string; text: string }> = {
+/**
+ * Answers, one per action. `**bold**` becomes a bold word. Hero answers stream word by word.
+ * `timing` is the one timing every place prints for that answer (the overlay, the no-JS markup, After the call):
+ * total time, then the time to the first words. Fast tier (Haiku, thinking off) answers are quick; Recap runs on the
+ * Deep tier (Sonnet, thinking on), so it takes longer (docs/user-guide/claude-subscription.md L22-26).
+ */
+export const ANSWERS: Record<string, { label: string; text: string; timing: string }> = {
   Assist: {
     label: 'Assist',
-    text: 'Pick one decision and say why. **We shipped the design system before the redesign.** It cost two weeks up front, and every screen after that took days, not weeks. Close with what you would do differently.',
+    text: 'Pick one decision and say why. **We shipped the design system before the redesign.** It cost two weeks, then every screen took days, not weeks. Close with what you would change.',
+    timing: '1.4 s · first words 0.7 s',
   },
   WhatToSay: {
     label: 'Say',
-    text: 'Say it in two sentences. **"We shipped the design system first. It slowed us by two weeks and saved us months."**',
+    text: 'Say it in two sentences. **“We shipped the design system first. It slowed us by two weeks and saved us months.”**',
+    timing: '1.0 s · first words 0.5 s',
   },
-  Shorten: { label: 'Short', text: '**Two weeks slower, months faster.** We built the system first.' },
-  FollowUp: { label: 'F/U', text: 'Ask Dana: **"How does the team weigh speed against consistency today?"**' },
+  Shorten: {
+    label: 'Short',
+    text: '**Two weeks slower, months faster.** We built the system first.',
+    timing: '0.9 s · first words 0.5 s',
+  },
+  FollowUp: {
+    label: 'F/U',
+    text: 'Ask Dana: **“How does the team weigh speed against consistency today?”**',
+    timing: '1.0 s · first words 0.5 s',
+  },
   Recap: {
     label: 'Recap',
     text: '**So far:** Dana leads hiring for design. You introduced yourself. She asked for your toughest trade-off.',
+    timing: '3.2 s · first words 2.1 s',
   },
 };
 
@@ -72,13 +88,13 @@ export const ANSWERS: Record<string, { label: string; text: string }> = {
 export const C_ANSWER = {
   label: 'Short',
   text: '**Show something useful first.** Load the summary at once, then stream the charts as they arrive.',
-  timing: '0.9 s · first words 0.4 s',
+  timing: ANSWERS.Shorten.timing,
 };
 
 // Beat d: an answer that used notes and a tool (src-tauri/src/sources/activity.rs L85-111 for the lines).
 export const D_ANSWER = {
   label: 'Assist',
-  text: '**Yes.** Tuesday after 2 pm or Thursday morning both work, so offer both. Dana\'s notes say you wanted to ask about the team roadmap, so keep that for the second round.',
+  text: '**Yes.** Tuesday after 2 pm or Thursday morning both work. Dana’s notes say you wanted to ask about the team roadmap, so save that for round two.',
   timing: '4.1 s · first words 2.3 s',
   activity: ["Searching notes for 'Dana'", 'Reading Dana.md', 'Calendar: free_slots'],
   chips: [
@@ -93,7 +109,7 @@ export const D_ANSWER = {
  * AskImages.tsx L24 (placeholder with Claude), ContextScopePicker.tsx (scope picker), SideLanguagePicker.tsx L146-147 (chip).
  */
 export const OV = {
-  title: 'NexQ',
+  title: 'Design interview with Dana',
   badge: 'ONLINE',
   /** Scenario chip (OverlayView.tsx L222-224): the active scenario's name, src/lib/scenarios.ts L57. */
   scenario: 'Interview',

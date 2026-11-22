@@ -108,9 +108,20 @@
   flex: none;
   color: hsl(var(--ov-mut) / 0.5);
 }
+.ov-hl > :not(.ov-title) {
+  flex: none;
+}
+/* The meeting title truncates at 160px of 12px text in the app (OverlayView.tsx L202), and gives way to the rest
+   of the header in a narrow window. */
 .ov-title {
+  flex: 0 1 auto;
+  min-width: 3.5em;
+  max-width: 13.3em;
+  overflow: hidden;
   font-size: max(11px, 0.92em);
   font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: hsl(var(--foreground) / 0.9);
 }
 .ov-rec {
@@ -241,7 +252,8 @@
   display: grid;
   flex: 1;
   min-height: 0;
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  /* Two equal panels, as the app's flex-1 panels are (OverlayView.tsx L345, L372). */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 0.65em;
   padding: 0.65em 0.75em;
 }
@@ -503,6 +515,43 @@ button.ov-qa:hover {
 }
 .ov[data-ans]:not([data-ans='idle']) .ov-qa[data-assist] .qa-b {
   display: inline-flex;
+}
+
+/* Beats d and e: the answer that used notes and a tool needs the room, so the card shrinks to its question on one line
+   (the full question is the last line of the transcript). The other rows leave the flow, so the card is only as tall as this
+   one; the fade between rows is unchanged. */
+.ov:is([data-view='d'], [data-view='e']) .ov-q .ov-g:not([data-for~='d']) {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
+.ov:is([data-view='d'], [data-view='e']) .ov-qrow[data-for~='d'] {
+  align-items: center;
+}
+.ov:is([data-view='d'], [data-view='e']) .ov-qrow[data-for~='d'] .ov-qt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov:is([data-view='d'], [data-view='e']) .ov-qrow[data-for~='d'] .ov-qi {
+  margin-top: 0;
+}
+.ov:is([data-view='d'], [data-view='e']) .ov-qrow[data-for~='d'] .ov-qa {
+  align-self: center;
+}
+.ov-q .ov-stack {
+  position: relative;
+}
+/* With room to spare (a taller, wider window) the card keeps two lines of the question. */
+@container (min-width: 530px) {
+  .ov:is([data-view='d'], [data-view='e']) .ov-qrow[data-for~='d'] .ov-qt {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    white-space: normal;
+  }
 }
 
 /* ─── Answer panel ─── */
@@ -945,12 +994,12 @@ button.ov-qa:hover {
 /* Sources: activity lines, chips (SourceActivityLines.tsx, SourceChips.tsx) */
 .ov-act {
   padding: 0 0 0 0.95em;
-  margin: 0 0 0.55em;
+  margin: 0 0 0.4em;
   list-style: none;
 }
 .ov-act li {
   font-size: max(11px, 0.77em);
-  line-height: 1.5;
+  line-height: 1.35;
   color: hsl(var(--ov-mut) / 0.9);
 }
 .ov-chips {
@@ -958,8 +1007,8 @@ button.ov-qa:hover {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.4em;
-  margin-top: 0.6em;
-  padding-top: 0.55em;
+  margin-top: 0.45em;
+  padding-top: 0.45em;
   border-top: 1px solid hsl(var(--border) / 0.1);
 }
 .ov-chip2 {
@@ -986,7 +1035,7 @@ button.ov-qa:hover {
   flex: none;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.45em 0.6em;
+  gap: 0.45em 0.9em;
   padding: 0.5em 0.75em;
   border-top: 1px solid hsl(var(--border) / 0.2);
 }
@@ -1033,10 +1082,13 @@ button.ov-qa:hover {
   font-size: max(11px, 0.8em);
   color: hsl(var(--foreground) / 0.65);
 }
-.ov-fsep {
-  width: 1px;
-  height: 1em;
-  background: hsl(var(--border) / 0.3);
+/* A side and its language chip stay together: when the bar wraps, it wraps between sides. */
+.ov-side {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.3em;
+  white-space: nowrap;
 }
 .ov-lang {
   display: flex;
@@ -1219,10 +1271,39 @@ button.ov-qa:hover {
   }
 }
 
-/* The header has no room for the scenario chip in a narrow window (the clock would run into the buttons). */
-@container (max-width: 499px) {
+/* Below 460px the header has no room for the scenario chip (the title and the clock come first). */
+@container (max-width: 459px) {
   .ov-scn {
     display: none;
+  }
+}
+
+/* In a window this narrow the footer is tight, and beat a's "Restarting…" has to fit to the right of the other side's code. */
+@container (max-width: 519px) {
+  .ov-foot {
+    gap: 0.45em 0.5em;
+    padding-inline: 0.6em;
+  }
+  .ov-svc {
+    gap: 0.3em;
+    padding-inline: 0.55em;
+  }
+}
+
+/* Below 640px the meeting title needs the room the mode badge and the Translate label take (the app's header is wider). */
+@container (max-width: 639px) {
+  .ov-badge,
+  .ov-tbl {
+    display: none;
+  }
+  .ov-hl {
+    gap: 0.45em;
+  }
+  .ov-head {
+    gap: 0.4em;
+  }
+  .ov-rec {
+    padding: 0.18em 0.5em;
   }
 }
 
@@ -1250,7 +1331,8 @@ button.ov-qa:hover {
   .ov-badge,
   .ov-wide,
   .ov-tbtn,
-  .ov-sep {
+  .ov-sep,
+  .ov-hb:not(.ov-hb--stealth) {
     display: none;
   }
 }

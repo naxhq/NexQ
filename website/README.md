@@ -83,6 +83,16 @@ headline, uppercase mono eyebrows, fake Zoom or Teams chrome, stock faces, scrol
 
 Copy is plain and human: short sentences, no em dashes, no "seamless" or "AI-powered" filler.
 
+## Evidence
+
+The local harness lives in `.agent-logs/website/tools/` (local-only, excluded from git; run `node .agent-logs/website/tools/evidence.mjs <roundN>` from the repo root). It builds the site and writes `.agent-logs/website/<roundN>/`:
+
+- Lighthouse, mobile (three runs, median) and desktop, against the budgets in `owner-decisions.md`.
+- axe-core at 1280 and 360 widths (no serious or critical findings).
+- Screenshots at 360, 768, 1280 and 1440, plus reduced motion, no JavaScript, `prefers-contrast: more` and forced colours.
+- Keyboard walkthrough, text contrast table, console errors, and a byte report (JavaScript and fonts, gzipped).
+- A claims trace per section author (`claims-*.md`): every fact on the page, with its source file and line.
+
 ## Commits
 
 Use `docs(website): ...` so a site change never bumps the app version.

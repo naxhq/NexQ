@@ -43,10 +43,10 @@ export const NAV: { label: string; href: string }[] = [
 ];
 
 /** Where something runs. */
-export type SttWhere = 'device' | 'cloud' | 'cloud-nokey';
-export type LlmWhere = 'local' | 'cloud' | 'plan';
+type SttWhere = 'device' | 'cloud' | 'cloud-nokey';
+type LlmWhere = 'local' | 'cloud' | 'plan';
 
-export interface SttProvider {
+interface SttProvider {
   name: string;
   /** device: runs on your PC, no key. cloud: needs your key. cloud-nokey: runs in the cloud, no key. */
   where: SttWhere;
@@ -68,7 +68,7 @@ export const STT_PROVIDERS: SttProvider[] = [
   { name: 'Cartesia', where: 'cloud' },
 ];
 
-export interface LlmProvider {
+interface LlmProvider {
   name: string;
   /** local: on your PC. cloud: your own API key. plan: your Claude subscription, no key. */
   where: LlmWhere;
@@ -145,11 +145,11 @@ export const HOTKEYS: Hotkey[] = [
 ];
 
 export const SCENARIOS = [
-  { id: 'interview', name: 'Interview', blurb: 'Hear the question, get a first line you can say in your own words.' },
-  { id: 'meeting', name: 'Team meeting', blurb: 'Keep up with decisions and leave with the action items.' },
-  { id: 'lecture', name: 'Lecture', blurb: 'Follow along, catch the terms, review it later.' },
-  { id: 'webinar', name: 'Webinar', blurb: 'Notes and a recap without taking your eyes off the talk.' },
-  { id: 'custom', name: 'Your own', blurb: 'Write a scenario with your own instructions for the AI.' },
+  { id: 'interview', name: 'Interview' },
+  { id: 'meeting', name: 'Team meeting' },
+  { id: 'lecture', name: 'Lecture' },
+  { id: 'webinar', name: 'Webinar' },
+  { id: 'custom', name: 'Your own' },
 ] as const;
 
 /**
