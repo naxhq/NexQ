@@ -1,7 +1,6 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
-import type { Speaker, IntelligenceMode, HotkeyConfig } from "./types";
-import { DEFAULT_HOTKEYS, modeHotkey } from "./hotkeys";
+import type { Speaker, IntelligenceMode } from "./types";
 
 // shadcn/ui utility
 export function cn(...inputs: ClassValue[]) {
@@ -116,11 +115,6 @@ export function getModeLabel(mode: IntelligenceMode): string {
     case "MeetingAsk":
       return "Ask meeting";
   }
-}
-
-// Get mode keyboard shortcut (the key that runs it during a meeting)
-export function getModeShortcut(mode: IntelligenceMode, hotkeys: HotkeyConfig = DEFAULT_HOTKEYS): string {
-  return modeHotkey(mode, hotkeys);
 }
 
 // Format file size

@@ -2,8 +2,14 @@ import { useState, useCallback, useEffect } from "react";
 import { useConfigStore } from "../stores/configStore";
 import { showToast } from "../stores/toastStore";
 import type { HotkeyConfig } from "../lib/types";
-import { DEFAULT_HOTKEYS, HOTKEY_ACTIONS, hotkeyConflict, hotkeyFromEvent } from "../lib/hotkeys";
-import { formatShortcut } from "../lib/shortcutLabel";
+import {
+  DEFAULT_HOTKEYS,
+  HOTKEY_ACTIONS,
+  OVERLAY_SINGLE_KEYS,
+  hotkeyConflict,
+  hotkeyFromEvent,
+} from "../lib/hotkeys";
+import { RESERVED_SHORTCUTS, formatShortcut } from "../lib/shortcutLabel";
 import { RotateCcw, Keyboard } from "lucide-react";
 
 const MODIFIER_CODES = /^(Control|Shift|Alt|Meta|OS)(Left|Right)?$/;
@@ -11,13 +17,9 @@ const MODIFIER_CODES = /^(Control|Shift|Alt|Meta|OS)(Left|Right)?$/;
 /** Fixed keys NexQ uses that can't be rebound here. */
 const FIXED_SHORTCUTS: ReadonlyArray<{ keys: string; action: string }> = [
   { keys: "Ctrl+M", action: "Start / end meeting (any app)" },
-  { keys: "Ctrl+B", action: "Switch between overlay and dashboard (any app)" },
+  { keys: "Ctrl+B", action: `${RESERVED_SHORTCUTS["CmdOrCtrl+B"]} (any app)` },
   { keys: "Ctrl+,", action: "Open / close Settings" },
-  { keys: "Escape", action: "Close open panels in the overlay" },
-  { keys: "B", action: "Add bookmark (overlay, in a meeting)" },
-  { keys: "S", action: "Speaker stats (overlay, in a meeting)" },
-  { keys: "K", action: "Bookmarks panel (overlay, in a meeting)" },
-  { keys: "M", action: "Mute (overlay, in a meeting)" },
+  ...OVERLAY_SINGLE_KEYS.map((k) => ({ keys: k.key, action: `${k.label} (${k.where})` })),
 ];
 
 export function HotkeySettings() {
@@ -35,8 +37,14 @@ export function HotkeySettings() {
     const label = HOTKEY_ACTIONS.find((a) => a.id === editingKey)!.label;
 
     const handler = (e: KeyboardEvent) => {
+      // Tab can't be a hotkey and must keep moving focus: stop recording, leave the key alone.
+      if (e.code === "Tab") {
+        setEditingKey(null);
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
+      if (e.repeat) return; // a held key (e.g. the Enter that opened this) is not a choice
       if (e.code === "Escape") {
         setEditingKey(null);
         return;
@@ -115,6 +123,13 @@ export function HotkeySettings() {
         </p>
       </div>
 
+      {/* Announces the recording state to screen readers (the region exists before its text changes). */}
+      <p role="status" aria-live="polite" className="sr-only">
+        {editingKey
+          ? `Press a key for ${HOTKEY_ACTIONS.find((a) => a.id === editingKey)!.label}. Escape cancels.`
+          : ""}
+      </p>
+
       {/* Action keys (rebindable) */}
       <div className="overflow-hidden rounded-xl border border-border/30 bg-card/50">
         <table className="w-full text-xs">
@@ -135,42 +150,39 @@ export function HotkeySettings() {
               return (
                 <tr
                   key={action}
-                  onClick={() => handleRowClick(action)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      handleRowClick(action);
-                    }
-                  }}
-                  tabIndex={0}
-                  role="button"
-                  aria-label={`Change hotkey for ${label}, currently ${binding}`}
-                  className={`cursor-pointer transition-colors duration-100 ${
+                  className={`transition-colors duration-100 ${
                     isEditing ? "bg-primary/10" : "hover:bg-accent/50"
                   } ${idx < arr.length - 1 ? "border-b border-border/20" : ""}`}
                 >
                   <td className="px-4 py-2.5 text-foreground/80">{label}</td>
                   <td className="px-4 py-2.5">
-                    {isEditing ? (
-                      <span className="inline-flex items-center gap-2">
-                        <span className="animate-pulse rounded-lg bg-primary/20 px-2.5 py-1 font-mono text-primary">
-                          Press a key...
-                        </span>
+                    <span className="inline-flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleRowClick(action)}
+                        aria-label={`Change hotkey for ${label}, currently ${binding}`}
+                        className="cursor-pointer rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                      >
+                        {isEditing ? (
+                          <span className="block animate-pulse rounded-lg bg-primary/20 px-2.5 py-1 font-mono text-primary">
+                            Press a key...
+                          </span>
+                        ) : (
+                          <kbd className="block rounded-lg bg-secondary/60 px-2 py-1 font-mono text-xs text-foreground">
+                            {binding}
+                          </kbd>
+                        )}
+                      </button>
+                      {isEditing && (
                         <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleCancelEdit();
-                          }}
+                          type="button"
+                          onClick={handleCancelEdit}
                           className="rounded-lg px-2 py-1 text-meta text-muted-foreground hover:bg-accent hover:text-foreground"
                         >
                           Cancel
                         </button>
-                      </span>
-                    ) : (
-                      <kbd className="rounded-lg bg-secondary/60 px-2 py-1 font-mono text-xs text-foreground">
-                        {binding}
-                      </kbd>
-                    )}
+                      )}
+                    </span>
                   </td>
                 </tr>
               );

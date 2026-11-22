@@ -38,7 +38,7 @@ describe("reserved shortcuts", () => {
   it("matches equivalent spellings on each platform", () => {
     expect(normalizeAccelerator("shift+ctrl+h", false)).toBe("CmdOrCtrl+Shift+H");
     expect(reservedShortcutAction("Ctrl+M", false)).toBe("Start / end meeting");
-    expect(reservedShortcutAction("CommandOrControl+B", true)).toBe("Show / hide overlay");
+    expect(reservedShortcutAction("CommandOrControl+B", true)).toBe("Switch between overlay and dashboard");
     expect(reservedShortcutAction("Cmd+M", true)).toBe("Start / end meeting");
     // Control+M on a Mac is not Command+M.
     expect(reservedShortcutAction("Ctrl+M", true)).toBeNull();

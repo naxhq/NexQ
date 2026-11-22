@@ -46,6 +46,7 @@ export function AIResponsePanel() {
   const unpinResponse = useStreamStore((s) => s.unpinResponse);
   const meetingStart = useMeetingStore((s) => s.meetingStartTime);
 
+  const assistKey = useConfigStore((s) => s.hotkeys.mode_assist);
   const aiResponseFontSize = useConfigStore((s) => s.aiResponseFontSize ?? 12);
   const aiResponseTextColor = useConfigStore((s) => s.aiResponseTextColor ?? "#d4d4d8");
   const aiResponseLineHeight = useConfigStore((s) => s.aiResponseLineHeight ?? 1.6);
@@ -286,7 +287,7 @@ export function AIResponsePanel() {
           <div className="flex h-full flex-col items-center justify-center gap-2">
             <Sparkles className="h-5 w-5 text-primary/30" />
             <p className="text-xs text-muted-foreground/50">
-              Press <kbd className="mx-0.5 rounded border border-border/30 bg-secondary/30 px-1.5 py-0.5 font-mono text-meta text-foreground/70">Space</kbd> for AI assistance
+              Press <kbd className="mx-0.5 rounded border border-border/30 bg-secondary/30 px-1.5 py-0.5 font-mono text-meta text-foreground/70">{assistKey}</kbd> for AI assistance
             </p>
           </div>
         )}

@@ -43,13 +43,45 @@ const LEGACY_DEFAULTS: Partial<Record<keyof HotkeyConfig, string>> = {
   mode_ask: "Ctrl+5",
 };
 
-/** Single keys the overlay already uses (see useMeetingShortcuts). */
-const OVERLAY_SINGLE_KEYS: Record<string, string> = {
-  B: "Add bookmark",
-  S: "Speaker stats",
-  K: "Bookmarks panel",
-  M: "Mute",
+export type OverlayKeyId = "bookmark" | "stats" | "bookmarks" | "mute" | "closePanels";
+
+export interface OverlaySingleKey {
+  /** As shown to the user and as KeyboardEvent.key spells it (letters upper case); matching ignores case. */
+  key: string;
+  id: OverlayKeyId;
+  label: string;
+  /** Where it works, for the shortcut list. */
+  where: string;
+}
+
+/**
+ * The single keys the overlay uses in a meeting. The one table behind the
+ * meeting handler (useMeetingShortcuts), the conflict check and the list in
+ * Settings > Hotkeys, so they can't drift apart.
+ */
+export const OVERLAY_SINGLE_KEYS: readonly OverlaySingleKey[] = [
+  { key: "B", id: "bookmark", label: "Add bookmark", where: "overlay, in a meeting" },
+  { key: "S", id: "stats", label: "Speaker stats", where: "overlay, in a meeting" },
+  { key: "K", id: "bookmarks", label: "Bookmarks panel", where: "overlay, in a meeting" },
+  { key: "M", id: "mute", label: "Mute", where: "overlay, in a meeting" },
+  { key: "Escape", id: "closePanels", label: "Close open panels", where: "overlay" },
+];
+
+/** Editing keys every text box answers to: never an action key. */
+const EDITING_SHORTCUTS: Record<string, string> = {
+  "Ctrl+C": "Copy",
+  "Ctrl+V": "Paste",
+  "Ctrl+X": "Cut",
+  "Ctrl+A": "Select all",
+  "Ctrl+Z": "Undo",
+  "Ctrl+Y": "Redo",
 };
+
+/** The overlay single key that `canon` (a canonical hotkey) is, if any. */
+export function overlaySingleKey(canon: string): OverlaySingleKey | undefined {
+  const upper = canon.toUpperCase();
+  return OVERLAY_SINGLE_KEYS.find((k) => k.key.toUpperCase() === upper);
+}
 
 interface ParsedHotkey {
   ctrl: boolean;
@@ -58,7 +90,8 @@ interface ParsedHotkey {
   key: string;
 }
 
-const NAMED_KEYS = new Set(["Space", "Enter", "Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
+// No Enter or Tab: Enter submits the Ask box and Tab moves focus.
+const NAMED_KEYS = new Set(["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
 
 /** The key a physical key press stands for, or null when it can't be a hotkey. */
 function keyFromCode(code: string): string | null {
@@ -68,7 +101,6 @@ function keyFromCode(code: string): string | null {
   if (m) return m[1];
   if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
   if (NAMED_KEYS.has(code)) return code;
-  if (code === "NumpadEnter") return "Enter";
   return null;
 }
 
@@ -166,7 +198,9 @@ export function hotkeyConflict(
   if (other) return other.label;
   const reserved = reservedShortcutAction(canon);
   if (reserved) return reserved;
-  if (OVERLAY_SINGLE_KEYS[canon]) return OVERLAY_SINGLE_KEYS[canon];
+  if (EDITING_SHORTCUTS[canon]) return EDITING_SHORTCUTS[canon];
+  const single = overlaySingleKey(canon);
+  if (single) return single.label;
   const wanted = normalizeAccelerator(canon);
   for (const [accel, name] of Object.entries(globals)) {
     if (accel && normalizeAccelerator(accel) === wanted) return name;
@@ -191,13 +225,23 @@ export function sanitizeHotkeys(saved: unknown): HotkeyConfig {
       canon !== canonicalHotkey(legacy) &&
       !taken.has(canon) &&
       !reservedShortcutAction(canon) &&
-      !OVERLAY_SINGLE_KEYS[canon];
+      !EDITING_SHORTCUTS[canon] &&
+      !overlaySingleKey(canon);
     result[id] = usable ? canon : DEFAULT_HOTKEYS[id];
     taken.add(result[id]);
   }
   // A fallback default can still land on a binding the user chose: start over.
   if (taken.size !== HOTKEY_ACTIONS.length) return { ...DEFAULT_HOTKEYS };
   return result;
+}
+
+/** The in-meeting action keys as "taken" entries (key -> name) for the global shortcut pickers. */
+export function hotkeysAsTaken(hotkeys: HotkeyConfig): Record<string, string> {
+  const taken: Record<string, string> = {};
+  for (const { id, label } of HOTKEY_ACTIONS) {
+    if (hotkeys[id]) taken[hotkeys[id]] = `${label} key`;
+  }
+  return taken;
 }
 
 /** The key that runs `mode` under the given bindings ("" for modes without one). */

@@ -60,6 +60,37 @@ it("refuses a key another action already has, and keeps listening", async () => 
   expect(screen.getByText("Press a key...")).toBeTruthy();
 });
 
+it("Tab ends the recording, moves focus on and changes nothing", async () => {
+  const store = await mount();
+  fireEvent.click(row("What to Say"));
+  expect(screen.getByText("Press a key...")).toBeTruthy();
+  const tab = new KeyboardEvent("keydown", { code: "Tab", cancelable: true });
+  await act(async () => {
+    window.dispatchEvent(tab);
+  });
+  expect(tab.defaultPrevented).toBe(false);
+  expect(screen.queryByText("Press a key...")).toBeNull();
+  expect(store.getState().hotkeys.mode_say).toBe("1");
+});
+
+it("refuses the editing keys such as Ctrl+C and keeps listening", async () => {
+  const store = await mount();
+  fireEvent.click(row("What to Say"));
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyC", ctrlKey: true }));
+  });
+  expect(store.getState().hotkeys.mode_say).toBe("1");
+  expect(screen.getByText("Press a key...")).toBeTruthy();
+});
+
+it("announces the recording to screen readers", async () => {
+  await mount();
+  const status = screen.getByRole("status");
+  expect(status.textContent).toBe("");
+  fireEvent.click(row("Recap"));
+  expect(status.textContent).toContain("Press a key for Recap");
+});
+
 it("Reset to Defaults restores the real keys", async () => {
   const store = await mount();
   act(() => store.getState().setHotkeys({ ...store.getState().hotkeys, mode_say: "Q", mode_assist: "Ctrl+K" }));

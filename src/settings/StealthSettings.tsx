@@ -5,6 +5,7 @@ import { showToast } from "../stores/toastStore";
 import { getStealthSupport } from "../lib/ipc";
 import { providerReadsImages } from "../lib/imageAttachments";
 import { screenCaptureSupported } from "../lib/shortcutLabel";
+import { hotkeysAsTaken } from "../lib/hotkeys";
 import { ShortcutButton } from "./ShortcutButton";
 import type { StealthSupport } from "../lib/types";
 
@@ -25,17 +26,20 @@ export function StealthSettings() {
   const canReadImages = useConfigStore((s) => providerReadsImages(s.llmProvider));
   // The capture shortcut doesn't exist where capturing isn't supported: its key stays free there.
   const captureSupported = screenCaptureSupported();
+  // The in-meeting action keys (Settings > Hotkeys) are taken too, e.g. Alt+K.
+  const hotkeys = useConfigStore((s) => s.hotkeys);
+  const actionKeys = useMemo(() => hotkeysAsTaken(hotkeys), [hotkeys]);
   const stealthTaken = useMemo(
-    () => ({ [assistShortcut]: "Assist", ...(captureSupported ? { [captureShortcut]: "Capture screen into Ask" } : {}) }),
-    [assistShortcut, captureShortcut, captureSupported],
+    () => ({ ...actionKeys, [assistShortcut]: "Assist", ...(captureSupported ? { [captureShortcut]: "Capture screen into Ask" } : {}) }),
+    [actionKeys, assistShortcut, captureShortcut, captureSupported],
   );
   const assistTaken = useMemo(
-    () => ({ [shortcut]: "Hide from screen share", ...(captureSupported ? { [captureShortcut]: "Capture screen into Ask" } : {}) }),
-    [shortcut, captureShortcut, captureSupported],
+    () => ({ ...actionKeys, [shortcut]: "Hide from screen share", ...(captureSupported ? { [captureShortcut]: "Capture screen into Ask" } : {}) }),
+    [actionKeys, shortcut, captureShortcut, captureSupported],
   );
   const captureTaken = useMemo(
-    () => ({ [shortcut]: "Hide from screen share", [assistShortcut]: "Assist" }),
-    [shortcut, assistShortcut],
+    () => ({ ...actionKeys, [shortcut]: "Hide from screen share", [assistShortcut]: "Assist" }),
+    [actionKeys, shortcut, assistShortcut],
   );
 
   const [support, setSupport] = useState<StealthSupport | null>(null);

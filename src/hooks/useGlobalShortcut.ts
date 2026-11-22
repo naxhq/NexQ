@@ -245,6 +245,8 @@ export function useGlobalShortcut() {
       const mode = modeForKeyEvent(e, useConfigStore.getState().hotkeys);
       if (!mode || !isVisible(mode)) return;
       e.preventDefault();
+      // Holding the key must not start the action again and again.
+      if (e.repeat) return;
       if (mode === "AskQuestion") {
         // Open/focus the Ask input instead of triggering generation directly
         window.dispatchEvent(new Event("nexq:toggle-ask-input"));

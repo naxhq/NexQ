@@ -122,6 +122,29 @@ it("the keys come from Settings > Hotkeys: a changed binding runs the action, th
 
   await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyQ" })); });
   await waitFor(() => expect(invoked.map(([command]) => command)).toContain("generate_assist"));
+  expect(invoked.find(([command]) => command === "generate_assist")?.[1]).toMatchObject({ mode: "WhatToSay" });
+});
+
+it("a held action key runs the action once", async () => {
+  const useMeetingStore = await mountWindow("overlay");
+  useMeetingStore.setState({ activeMeeting: { id: "m" } as Meeting });
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "Digit2" }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "Digit2", repeat: true }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "Digit2", repeat: true }));
+  });
+  await waitFor(() => expect(invoked.some(([command]) => command === "generate_assist")).toBe(true));
+  expect(invoked.filter(([command]) => command === "generate_assist")).toHaveLength(1);
+});
+
+it("a modifier binding such as Ctrl+K runs its action", async () => {
+  const useMeetingStore = await mountWindow("overlay");
+  const { useConfigStore } = await import("../stores/configStore");
+  useMeetingStore.setState({ activeMeeting: { id: "m" } as Meeting });
+  act(() => useConfigStore.getState().setHotkeys({ ...useConfigStore.getState().hotkeys, mode_assist: "Ctrl+K" }));
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyK", ctrlKey: true })); });
+  await waitFor(() => expect(invoked.map(([command]) => command)).toContain("generate_assist"));
+  expect(invoked.find(([command]) => command === "generate_assist")?.[1]).toMatchObject({ mode: "Assist" });
 });
 
 it("holds the Assist shortcut in the overlay only while a meeting runs", async () => {

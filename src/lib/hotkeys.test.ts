@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_HOTKEYS,
+  OVERLAY_SINGLE_KEYS,
   canonicalHotkey,
   hotkeyConflict,
   hotkeyFromEvent,
+  hotkeysAsTaken,
   matchesHotkey,
   modeForKeyEvent,
   modeHotkey,
@@ -120,5 +122,35 @@ describe("hotkeys: loading an old saved config", () => {
     // Two actions on one key, and a default that would clash: start over.
     expect(sanitizeHotkeys({ mode_say: "2" })).toEqual(DEFAULT_HOTKEYS);
     expect(sanitizeHotkeys({ mode_say: "Q", mode_shorten: "Q" })).toEqual({ ...DEFAULT_HOTKEYS, mode_say: "Q" });
+  });
+
+  it("Tab and Enter are never bindable", () => {
+    expect(sanitizeHotkeys({ mode_say: "Tab" }).mode_say).toBe("1");
+    expect(sanitizeHotkeys({ mode_say: "Enter" }).mode_say).toBe("1");
+    expect(sanitizeHotkeys({ mode_say: "Ctrl+Tab" }).mode_say).toBe("1");
+    expect(hotkeyFromEvent(key("Tab"))).toBeNull();
+    expect(hotkeyFromEvent(key("Enter"))).toBeNull();
+    expect(hotkeyFromEvent(key("NumpadEnter"))).toBeNull();
+    expect(canonicalHotkey("Tab")).toBeNull();
+  });
+
+  it("the editing keys and the overlay single keys are never action keys", () => {
+    for (const k of ["Ctrl+C", "Ctrl+V", "Ctrl+X", "Ctrl+A", "Ctrl+Z", "Ctrl+Y"]) {
+      expect(hotkeyConflict(k, "mode_say", DEFAULT_HOTKEYS)).not.toBeNull();
+      expect(sanitizeHotkeys({ mode_say: k }).mode_say).toBe("1");
+    }
+    for (const k of OVERLAY_SINGLE_KEYS) {
+      expect(sanitizeHotkeys({ mode_say: k.key }).mode_say).toBe("1");
+    }
+    expect(hotkeyConflict("K", "mode_say", DEFAULT_HOTKEYS)).toBe("Bookmarks panel");
+  });
+});
+
+describe("hotkeys: the action keys as taken entries", () => {
+  it("names each binding so a global shortcut can't take it", () => {
+    expect(hotkeysAsTaken({ ...DEFAULT_HOTKEYS, mode_assist: "Alt+K" })).toMatchObject({
+      "Alt+K": "Assist key",
+      "1": "What to Say key",
+    });
   });
 });

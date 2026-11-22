@@ -1,9 +1,10 @@
 // SP5 Enhancement 4: Consolidated keyboard shortcuts for live meeting overlay.
 // Single-key shortcuts (B, S, K, M) work outside inputs; Escape always works;
-// Ctrl+B and Ctrl+Shift+L are carried over from their previous individual handlers.
+// Ctrl+Shift+L (dev log) is carried over from its previous individual handler.
 
 import { useEffect } from "react";
 import { useMeetingStore } from "../stores/meetingStore";
+import { overlaySingleKey } from "../lib/hotkeys";
 
 interface ShortcutActions {
   addBookmark: () => void;
@@ -28,18 +29,12 @@ export function useMeetingShortcuts(actions: ShortcutActions) {
         target.isContentEditable;
 
       // Escape always works (even in inputs) — close all panels
-      if (e.key === "Escape") {
+      if (overlaySingleKey(e.key)?.id === "closePanels") {
         actions.closeAllPanels();
         return;
       }
 
-      // Ctrl+B: bookmark (keep existing shortcut)
-      if (e.ctrlKey && e.key === "b" && !e.shiftKey && !e.altKey) {
-        if (isInput) return;
-        e.preventDefault();
-        actions.addBookmark();
-        return;
-      }
+      // Ctrl+B is the global switch overlay / dashboard shortcut, not a bookmark key.
 
       // Ctrl+Shift+L: dev log (consolidated from OverlayView inline handler)
       if (e.ctrlKey && e.shiftKey && e.key === "L") {
@@ -48,20 +43,21 @@ export function useMeetingShortcuts(actions: ShortcutActions) {
         return;
       }
 
-      // Single-key shortcuts only outside inputs
-      if (isInput) return;
+      // Single-key shortcuts only outside inputs, and only the bare key: Ctrl+K,
+      // Shift+M and the like belong to the action keys in Settings > Hotkeys.
+      if (isInput || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
 
-      switch (e.key.toLowerCase()) {
-        case "b":
+      switch (overlaySingleKey(e.key)?.id) {
+        case "bookmark":
           actions.addBookmark();
           break;
-        case "s":
+        case "stats":
           actions.toggleStats();
           break;
-        case "k":
+        case "bookmarks":
           actions.toggleBookmarks();
           break;
-        case "m":
+        case "mute":
           actions.toggleMute();
           break;
       }

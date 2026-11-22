@@ -9,7 +9,7 @@ import {
   Globe,
 } from "lucide-react";
 import { useConfigStore } from "../../stores/configStore";
-import { formatShortcut } from "../../lib/shortcutLabel";
+import { RESERVED_SHORTCUTS, formatShortcut } from "../../lib/shortcutLabel";
 
 interface ReadyStepProps {
   onStartMeeting: () => void;
@@ -24,7 +24,7 @@ function useShortcuts() {
     { keys: hotkeys.mode_assist, action: "Trigger AI Assist", context: "During meeting" },
     { keys: formatShortcut(assistShortcut), action: "Assist from any app", context: "During meeting" },
     { keys: "Ctrl+M", action: "Start / End meeting", context: "Global" },
-    { keys: "Ctrl+B", action: "Show / Hide overlay", context: "Global" },
+    { keys: "Ctrl+B", action: RESERVED_SHORTCUTS["CmdOrCtrl+B"], context: "Global" },
     { keys: hotkeys.mode_say, action: "What to Say mode", context: "During meeting" },
     { keys: hotkeys.mode_shorten, action: "Shorten mode", context: "During meeting" },
     { keys: hotkeys.mode_followup, action: "Follow-up mode", context: "During meeting" },
