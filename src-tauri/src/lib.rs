@@ -131,6 +131,7 @@ pub fn run() {
     logging::init();
 
     tauri::Builder::default()
+        .manage(stt::azure_mai_streaming::MaiBridge::default())
         // Must be first: a second launch forwards to this process and exits,
         // preventing duplicate tray icons.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
@@ -565,6 +566,11 @@ pub fn run() {
             audio_commands::ensure_ipolicy_override,
             // == COMMANDS: stt ==
             stt_commands::set_stt_provider,
+            stt::azure_mai_streaming::azure_mai_register,
+            stt::azure_mai_streaming::azure_mai_read,
+            stt::azure_mai_streaming::azure_mai_event,
+            stt::azure_mai_streaming::azure_mai_token,
+            stt::azure_mai_streaming::test_azure_mai_connection,
             stt_commands::set_stt_language,
             stt_commands::test_stt_connection,
             stt_commands::get_available_stt_providers,

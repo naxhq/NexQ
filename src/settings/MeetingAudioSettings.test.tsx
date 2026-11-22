@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MeetingAudioConfig } from "../lib/types";
 import type * as IPC from "../lib/ipc";
 
+const savedApiKeys = vi.hoisted(() => new Set<string>());
+
 vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
 vi.mock("@tauri-apps/plugin-store", () => ({
@@ -17,7 +19,7 @@ vi.mock("../lib/ipc", async (importOriginal) => ({
     outputs: [{ id: 'Studio: USB "Audio"', name: 'Studio: USB "Audio"', is_input: false, is_default: false }],
   }),
   getAudioSessions: async () => [],
-  hasApiKey: async () => false,
+  hasApiKey: async (provider: string) => savedApiKeys.has(provider),
   listLocalSTTEngines: async () => [],
   startDeviceMonitor: async () => {},
   stopDeviceMonitor: async () => {},
@@ -38,11 +40,50 @@ const initialConfig: MeetingAudioConfig = {
 };
 
 const initialDeepgramConfig = useConfigStore.getState().deepgramConfig;
-beforeEach(() => useConfigStore.setState({ meetingAudioConfig: initialConfig }));
+beforeEach(() => {
+  savedApiKeys.clear();
+  useConfigStore.setState({ meetingAudioConfig: initialConfig });
+});
 afterEach(() => {
   cleanup();
   // A test's Deepgram model (Flux, say) must not reach the next test.
   useConfigStore.setState({ deepgramConfig: initialDeepgramConfig });
+});
+
+it("offers Azure MAI Streaming in each side's cloud provider picker when its key is saved", async () => {
+  savedApiKeys.add("azure_mai_streaming");
+  savedApiKeys.add("azure_mai_streaming_region");
+  const user = userEvent.setup();
+  render(<MeetingAudioSettings />);
+
+  for (const side of ["You", "Them"] as const) {
+    await user.click(screen.getByRole("button", { name: `${side} speech-to-text provider` }));
+    const maiChoice = await screen.findByRole("button", { name: "Azure MAI Streaming" });
+    await user.click(maiChoice);
+    expect(useConfigStore.getState().meetingAudioConfig?.[side.toLowerCase() as "you" | "them"].stt_provider)
+      .toBe("azure_mai_streaming");
+  }
+});
+
+it("uses MAI multilingual Auto-detect by default and keeps explicit per-side language selection", async () => {
+  useConfigStore.setState({
+    sttLanguage: "auto",
+    meetingAudioConfig: {
+      ...initialConfig,
+      you: { ...initialConfig.you, stt_provider: "azure_mai_streaming" },
+      them: { ...initialConfig.them, stt_provider: "azure_mai_streaming" },
+    },
+  });
+  const user = userEvent.setup();
+  render(<MeetingAudioSettings />);
+
+  expect(screen.getByText("Azure MAI Streaming uses multilingual mode with automatic language detection by default."))
+    .toBeInTheDocument();
+  expect(screen.queryByRole("alert")).toBeNull();
+
+  await user.selectOptions(screen.getByRole("combobox", { name: "You language" }), "fr-FR");
+  expect(useConfigStore.getState().meetingAudioConfig?.you.language).toBe("fr-FR");
+  expect(screen.queryByRole("alert")).toBeNull();
 });
 
 it.each([

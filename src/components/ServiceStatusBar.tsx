@@ -42,6 +42,7 @@ export const STT_LABELS: Record<string, string> = {
   deepgram: "Deepgram",
   whisper_api: "Whisper API",
   azure_speech: "Azure",
+  azure_mai_streaming: "Azure MAI Streaming",
   groq_whisper: "Groq STT",
   cartesia: "Cartesia",
   sherpa_onnx: "Sherpa-ONNX",
@@ -69,6 +70,7 @@ const STT_PROVIDER_OPTIONS: {
   { value: "deepgram", label: "Deepgram", IconComponent: Cloud, requiresKey: true, isCloud: true },
   { value: "whisper_api", label: "Whisper API", IconComponent: Cloud, requiresKey: true, isCloud: true },
   { value: "azure_speech", label: "Azure Speech", IconComponent: Cloud, requiresKey: true, isCloud: true },
+  { value: "azure_mai_streaming", label: "Azure MAI Streaming", IconComponent: Cloud, requiresKey: true, isCloud: true },
   { value: "groq_whisper", label: "Groq Whisper", IconComponent: Zap, requiresKey: true, isCloud: true },
   { value: "cartesia", label: "Cartesia", IconComponent: Cloud, requiresKey: true, isCloud: true },
 ];
@@ -79,7 +81,7 @@ const STT_PROVIDER_OPTIONS: {
 const EXCLUSIVE_PROVIDERS: STTProviderType[] = ["web_speech", "windows_native"];
 
 const EXCLUSIVE_FALLBACK_ORDER: STTProviderType[] = [
-  "deepgram", "groq_whisper", "whisper_api", "azure_speech", "cartesia",
+  "deepgram", "groq_whisper", "whisper_api", "azure_speech", "azure_mai_streaming", "cartesia",
   "sherpa_onnx", "ort_streaming", "parakeet_tdt",
 ];
 
@@ -124,6 +126,9 @@ function formatSttModel(modelId: string): string {
 
 function formatSttLabel(provider: string, localModelId?: string): { provider: string; model: string } {
   const providerLabel = STT_LABELS[provider] || provider;
+  if (provider === "azure_mai_streaming") {
+    return { provider: providerLabel, model: "MAI-Transcribe-2-Streaming" };
+  }
   const localProviders = ["whisper_cpp", "sherpa_onnx", "ort_streaming", "parakeet_tdt"];
   if (localProviders.includes(provider) && localModelId) {
     return { provider: providerLabel, model: formatSttModel(localModelId) };
@@ -651,11 +656,17 @@ function STTPickerDropdown({
     let cancelled = false;
     (async () => {
       try {
-        const cloudProviders = ["deepgram", "whisper_api", "azure_speech", "groq_whisper", "cartesia"];
+        const cloudProviders = ["deepgram", "whisper_api", "azure_speech", "azure_mai_streaming", "groq_whisper", "cartesia"];
         const [engines, ...keyResults] = await Promise.all([
           listLocalSTTEngines(),
           ...cloudProviders.map(async (p) => {
-            try { return { p, ok: await hasApiKey(p) }; }
+            try {
+              const keyExists = await hasApiKey(p);
+              const regionExists = p !== "azure_mai_streaming" || !keyExists
+                ? true
+                : await hasApiKey("azure_mai_streaming_region");
+              return { p, ok: keyExists && regionExists };
+            }
             catch { return { p, ok: false }; }
           }),
         ]);

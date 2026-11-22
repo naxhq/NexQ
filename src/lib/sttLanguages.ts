@@ -75,6 +75,7 @@ export function supportsSTTAutoDetection(
     case "whisper_api":
     case "groq_whisper":
     case "cartesia":
+    case "azure_mai_streaming":
       return true;
     default:
       return false;
@@ -111,6 +112,7 @@ const PROVIDER_NAMES: Partial<Record<STTProviderType, string>> = {
   web_speech: "Web Speech",
   windows_native: "Windows Speech",
   azure_speech: "Azure Speech",
+  azure_mai_streaming: "Azure MAI Streaming",
   sherpa_onnx: "Sherpa-ONNX",
   ort_streaming: "ORT Streaming",
 };

@@ -19,6 +19,7 @@ export interface ProviderChoice {
   description: string;
   requiresKey: boolean;
   free: boolean;
+  preview?: boolean;
 }
 
 // Only engines that survive the load-time migration in configStore.loadConfig:
@@ -47,6 +48,15 @@ export const WIZARD_STT_PROVIDERS: ProviderChoice[] = [
     description: "OpenAI Whisper, excellent multilingual support",
     requiresKey: true,
     free: false,
+  },
+  {
+    value: "azure_mai_streaming",
+    label: "Azure MAI Streaming",
+    icon: <Cloud className="h-4 w-4" />,
+    description: "MAI-Transcribe-2-Streaming",
+    requiresKey: true,
+    free: false,
+    preview: true,
   },
   {
     value: "groq_whisper",
@@ -117,11 +127,14 @@ export function STTSetupStep() {
   // Check which API keys are stored
   useEffect(() => {
     async function check() {
-      const providers = ["deepgram", "whisper_api", "azure_speech", "groq_whisper", "cartesia"];
+      const providers = ["deepgram", "whisper_api", "azure_speech", "azure_mai_streaming", "groq_whisper", "cartesia"];
       const status: Record<string, boolean> = {};
       for (const p of providers) {
         try {
           status[p] = await hasApiKey(p);
+          if (p === "azure_mai_streaming" && status[p]) {
+            status[p] = await hasApiKey("azure_mai_streaming_region");
+          }
         } catch {
           status[p] = false;
         }
@@ -235,7 +248,9 @@ function MissingKeyNote({
   if (!checked || !choice?.requiresKey || keyStatus[provider]) return null;
   return (
     <p role="status" className="mt-2 text-xs text-amber-700 dark:text-warning leading-relaxed">
-      {choice.label} needs an API key. Add it in Settings &gt; STT Providers. Free and
+      {choice.value === "azure_mai_streaming"
+        ? `${choice.label} needs a tested API key and Speech Resource region. Set both in Settings > STT Providers. `
+        : `${choice.label} needs an API key. Add it in Settings > STT Providers. `}Free and
       offline instead: in Settings &gt; STT Providers, download and activate Parakeet TDT
       (one-time 465 MB), then pick Settings &gt; Audio &amp; Devices &gt; Presets &gt; Free.
     </p>
@@ -279,6 +294,11 @@ function ProviderButton({
           {provider.free && (
             <span className="rounded-md bg-success/10 px-1.5 py-0.5 text-meta font-semibold text-success">
               FREE
+            </span>
+          )}
+          {provider.preview && (
+            <span className="rounded-md border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-meta font-semibold text-warning">
+              Public Preview
             </span>
           )}
           {provider.requiresKey && hasKey && (

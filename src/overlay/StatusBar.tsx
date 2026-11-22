@@ -23,6 +23,7 @@ const STT_SHORT_LABELS: Record<string, string> = {
   deepgram: "Deepgram",
   whisper_api: "Whisper",
   azure_speech: "Azure",
+  azure_mai_streaming: "Azure MAI Streaming",
   groq_whisper: "GroqSTT",
   cartesia: "Cartesia",
 };

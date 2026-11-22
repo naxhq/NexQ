@@ -21,6 +21,10 @@ async function wizardProviders() {
   return (await import("./STTSetupStep")).WIZARD_STT_PROVIDERS.map((p) => p.value);
 }
 
+async function wizardChoices() {
+  return (await import("./STTSetupStep")).WIZARD_STT_PROVIDERS;
+}
+
 function configWith(you: string, them: string) {
   return {
     you: { role: "You", device_id: "default", is_input_device: true, stt_provider: you },
@@ -39,6 +43,16 @@ describe("first-run STT step vs. the load-time migration", () => {
 
   it("offers no batch-only engine", async () => {
     expect(await wizardProviders()).not.toContain("whisper_cpp");
+  });
+
+  it("offers Azure MAI Streaming with its model and preview designation", async () => {
+    const mai = (await wizardChoices()).find((provider) => provider.value === "azure_mai_streaming");
+    expect(mai).toMatchObject({
+      label: "Azure MAI Streaming",
+      description: "MAI-Transcribe-2-Streaming",
+      requiresKey: true,
+      preview: true,
+    });
   });
 
   it("keeps every engine it offers for You after the next launch", async () => {

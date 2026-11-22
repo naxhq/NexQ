@@ -132,7 +132,12 @@ export function useAudioConfigSync() {
         }
         if (!swapped) {
           // Rust checks the new STT configuration before replacing the active capture.
-          useTranscriptStore.getState().finalizeAllInterim();
+          // MAI reports a real final (or withdraws the hypothesis) while the
+          // old capture drains. Do not turn either side's MAI guesses into
+          // persistent text during a full pipeline swap.
+          useTranscriptStore.getState().finalizeAllInterim((segment) =>
+            applied?.cfg[segment.speaker === "User" ? "you" : "them"].stt_provider !== "azure_mai_streaming",
+          );
           log("info", "config", "Hot-swap: starting new capture pipeline...");
           await startCapturePerParty(latestConfig.you, latestConfig.them, { skipYouStt: youSkipped });
         }

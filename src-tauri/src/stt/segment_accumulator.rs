@@ -126,6 +126,9 @@ impl SegmentAccumulator {
     /// - Final result continuing the paragraph: merges text, returns the updated final
     /// - Final result starting a new paragraph: finalizes the old one + starts the new one
     pub fn feed_result(&mut self, result: TranscriptResult) -> Vec<AccumulatorOutput> {
+        if result.is_interim_clear() {
+            return self.discard_interim().into_iter().collect();
+        }
         let speaker = result
             .speaker
             .clone()
@@ -254,6 +257,18 @@ impl SegmentAccumulator {
         Some(shown)
     }
 
+    /// Withdraw an unconfirmed hypothesis without promoting it at a provider
+    /// boundary. Confirmed paragraph text remains active for a subsequent flush.
+    pub fn discard_interim(&mut self) -> Option<AccumulatorOutput> {
+        self.interim_new_line = None;
+        self.last_interim.take().map(|mut output| {
+            output.text.clear();
+            output.is_final = false;
+            output.turn = None;
+            output
+        })
+    }
+
     /// Update the pause threshold at runtime.
     pub fn set_pause_threshold(&mut self, ms: u64) {
         self.pause_threshold_ms = ms;
@@ -267,6 +282,43 @@ mod tests {
     use std::sync::Arc;
 
     const T0: u64 = 1_700_000_000_000;
+
+    #[test]
+    fn explicit_withdrawal_removes_only_the_unconfirmed_hypothesis() {
+        let mut accumulator = SegmentAccumulator::new(3_000);
+        let mut partial = fin("Wait", T0, Some(100), None);
+        partial.is_final = false;
+        let initial = accumulator.feed_result(partial.clone());
+        let clear = accumulator.feed_result(TranscriptResult::clear_interim());
+        assert_eq!(clear[0].id, initial[0].id);
+        assert!(clear[0].text.is_empty());
+        assert!(!clear[0].is_final);
+        assert!(accumulator.close_line().is_none());
+
+        accumulator.feed_result(fin("Confirmed.", T0, Some(100), None));
+        partial.timestamp_ms += 1_000;
+        accumulator.feed_result(partial);
+        let clear = accumulator.feed_result(TranscriptResult::clear_interim());
+        assert_eq!(clear[0].id, initial[0].id);
+        assert!(clear[0].text.is_empty());
+        assert_eq!(accumulator.close_line().unwrap().text, "Confirmed.");
+    }
+
+    #[test]
+    fn discard_interim_withdraws_hypothesis_but_preserves_confirmed_text_for_flush() {
+        let mut accumulator = SegmentAccumulator::new(3_000);
+        accumulator.feed_result(fin("Confirmed.", T0, Some(500), None));
+        let mut partial = fin("guess", T0 + 600, Some(500), None);
+        partial.is_final = false;
+        let shown = accumulator.feed_result(partial).pop().unwrap();
+
+        let clear = accumulator.discard_interim().unwrap();
+        assert_eq!(clear.id, shown.id);
+        assert!(clear.text.is_empty());
+        assert!(!clear.is_final);
+        assert_eq!(accumulator.flush().unwrap().text, "Confirmed.");
+        assert!(accumulator.discard_interim().is_none());
+    }
 
     fn fin(text: &str, start: u64, duration: Option<u64>, tag: Option<&str>) -> TranscriptResult {
         TranscriptResult {

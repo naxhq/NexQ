@@ -496,6 +496,7 @@ export type STTProviderType =
   | "deepgram"
   | "whisper_api"
   | "azure_speech"
+  | "azure_mai_streaming"
   | "groq_whisper"
   | "cartesia"
   | "web_speech"

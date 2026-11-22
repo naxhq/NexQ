@@ -189,6 +189,11 @@ export async function testSTTConnection(provider: string): Promise<boolean> {
   return invoke("test_stt_connection", { provider });
 }
 
+/** Test Azure MAI Streaming credentials before saving them to the credential store. */
+export async function testAzureMaiConnection(key: string, region: string): Promise<boolean> {
+  return invoke("test_azure_mai_connection", { key, region });
+}
+
 export async function getAvailableSTTProviders(): Promise<string[]> {
   const result = await invoke<string>("get_available_stt_providers");
   return JSON.parse(result);

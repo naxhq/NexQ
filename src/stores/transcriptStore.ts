@@ -20,7 +20,8 @@ interface TranscriptState {
   // Actions
   appendSegment: (segment: TranscriptSegment) => void;
   updateInterimSegment: (segment: TranscriptSegment) => void;
-  finalizeAllInterim: () => void;
+  clearInterimSegment: (id: string) => void;
+  finalizeAllInterim: (include?: (segment: TranscriptSegment) => boolean) => void;
   dropStaleInterim: () => void;
   clearSegments: () => void;
   setSearchQuery: (query: string) => void;
@@ -62,10 +63,22 @@ export const useTranscriptStore = create<TranscriptState>((set) => ({
     });
   },
 
-  finalizeAllInterim: () =>
+  clearInterimSegment: (id) => {
+    interimUpdatedAt.delete(id);
+    set((state) => ({
+      segments: state.segments.flatMap((segment) => {
+        if (segment.id !== id) return [segment];
+        if (!segment.is_final) return [];
+        const { pending_text: _pending, ...confirmed } = segment;
+        return [confirmed];
+      }),
+    }));
+  },
+
+  finalizeAllInterim: (include = () => true) =>
     set((state) => ({
       segments: state.segments.map((s) =>
-        s.is_final
+        !include(s) ? s : s.is_final
           ? s.pending_text === undefined
             ? s
             : { ...s, text: s.pending_text, pending_text: undefined }

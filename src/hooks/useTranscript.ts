@@ -158,6 +158,10 @@ export function useTranscript() {
       const unlisten1 = await onTranscriptUpdate(
         (event: TranscriptUpdateEvent) => {
           if (!mounted) return;
+          if (event.segment.text === "") {
+            useTranscriptStore.getState().clearInterimSegment(event.segment.id);
+            return;
+          }
           const enriched = processSpeaker(event.segment);
           if (!enriched) return; // Discarded (e.g., "User" in in-person mode)
           updateRef.current(enriched);

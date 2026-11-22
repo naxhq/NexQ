@@ -5,7 +5,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invoke(...args),
 }));
 
-import { generateAssist, startCapturePerParty } from "./ipc";
+import { generateAssist, startCapturePerParty, testAzureMaiConnection } from "./ipc";
 import type { PartyAudioConfig } from "./types";
 import { useTranscriptStore } from "../stores/transcriptStore";
 
@@ -125,5 +125,20 @@ describe("startCapturePerParty", () => {
   it("starts both transcribers by default", async () => {
     await startCapturePerParty(you, them);
     expect(invoke.mock.calls[0][1].skipYouStt).toBe(false);
+  });
+});
+
+describe("testAzureMaiConnection", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    invoke.mockResolvedValue(true);
+  });
+
+  it("uses the dedicated command with key and region in camel case", async () => {
+    await expect(testAzureMaiConnection("speech-key", "swedencentral")).resolves.toBe(true);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith("test_azure_mai_connection", {
+      key: "speech-key",
+      region: "swedencentral",
+    });
   });
 });

@@ -6,7 +6,7 @@ NexQ uses two types of AI providers: **Speech-to-Text (STT)** for transcription 
 
 ![STT Providers settings panel](../../website/public/screenshots/Setting/Setting-STT%20Providers.png)
 
-NexQ supports 11 STT providers. Each channel ("You" and "Them") can use a different provider.
+NexQ supports 12 STT providers. Each channel ("You" and "Them") can use a different provider.
 
 | Provider | Type | Cost | Accuracy | Speed | Best For |
 |----------|------|------|----------|-------|----------|
@@ -19,8 +19,11 @@ NexQ supports 11 STT providers. Each channel ("You" and "Them") can use a differ
 | Sherpa-ONNX | Local | Free | Good | Medium | Lightweight local option |
 | ORT Streaming | Local | Free | Good | Medium | Streaming local inference |
 | Parakeet TDT | Local | Free | Very Good | Medium | High-quality local option |
-| Azure Speech | Cloud | Pay per use | Excellent | Real-time | Enterprise, multi-language |
+| Azure Speech | Cloud | Pay per use | Excellent | Batched (~5s) | Existing Azure Speech REST transcription |
+| Azure MAI Streaming | Cloud | [Azure pricing](https://azure.microsoft.com/en-us/pricing/details/speech/) | Not yet rated (preview) | Real-time streaming | Multilingual live transcription; interim updates and Azure finals |
 | Windows Native | Local | Free | Fair | Real-time | Offline fallback |
+
+**Azure Speech** and **Azure MAI Streaming** are separate providers. Azure Speech remains the REST-based, batched option; Azure MAI Streaming uses Microsoft's `mai-transcribe-2-streaming` model for live incremental transcripts. See [Azure MAI Streaming setup](#azure-mai-streaming-public-preview) below.
 
 ### Choosing an STT Provider
 
@@ -32,17 +35,40 @@ NexQ supports 11 STT providers. Each channel ("You" and "Them") can use a differ
 
 **Use a local provider** if privacy is critical or you need offline capability. Whisper with the large-v3 model provides the best local accuracy, but requires significant CPU/RAM. Smaller models (tiny, base) are faster but less accurate.
 
-**For Ukrainian transcription**, select **Ukrainian** under Settings > STT Providers > Transcription language. For offline transcription, use Parakeet TDT 0.6B v3 or a multilingual Whisper.cpp model such as Whisper Small. Cloud options include Deepgram Nova-3, Azure Speech, Groq Whisper, and the OpenAI Whisper API. Start a new meeting after changing the language. A side with its own language (see [A different language for each side](#a-different-language-for-each-side)) ignores this setting.
+**For Ukrainian transcription**, select **Ukrainian** under Settings > STT Providers > Transcription language. For offline transcription, use Parakeet TDT 0.6B v3 or a multilingual Whisper.cpp model such as Whisper Small. Cloud options include Deepgram Nova-3, Azure Speech, Azure MAI Streaming, Groq Whisper, and the OpenAI Whisper API. Start a new meeting after changing the language. A side with its own language (see [A different language for each side](#a-different-language-for-each-side)) ignores this setting.
 
-**For Vietnamese transcription**, select **Vietnamese** under Settings > STT Providers > Transcription language. Deepgram Nova-3, Azure Speech, and multilingual Whisper models support Vietnamese; choose a model that supports the language for each channel. The included Parakeet models do not support Vietnamese. A language change takes effect when the STT provider reconnects, so start a new meeting after changing it. A side with its own language ignores this setting.
+**For Vietnamese transcription**, select **Vietnamese** under Settings > STT Providers > Transcription language. Deepgram Nova-3, Azure Speech, Azure MAI Streaming, and multilingual Whisper models support Vietnamese; choose a model that supports the language for each channel. The included Parakeet models do not support Vietnamese. A language change takes effect when the STT provider reconnects, so start a new meeting after changing it. A side with its own language ignores this setting.
 
-**To detect the spoken language**, choose **Auto-detect** under Settings > STT Providers > Transcription language or Audio & Devices > Transcription language. Choose a provider that can detect the language for each side set to Auto-detect: Deepgram Nova-3 or Flux Multilingual, Parakeet TDT 0.6B v3, Groq Whisper, Whisper API, or Cartesia. The languages detected depend on the model. Start a new meeting after changing the language.
+**To detect the spoken language**, choose **Auto-detect** under Settings > STT Providers > Transcription language or Audio & Devices > Transcription language. Choose a provider that can detect the language for each side set to Auto-detect: Deepgram Nova-3 or Flux Multilingual, Azure MAI Streaming, Parakeet TDT 0.6B v3, Groq Whisper, Whisper API, or Cartesia. The languages detected depend on the model. Start a new meeting after changing the language.
 
 These can't detect the language: Web Speech, Windows Speech, Azure Speech, Sherpa-ONNX, ORT Streaming and Parakeet CTC 110M. If a side set to Auto-detect uses one, NexQ shows a warning in settings, and when a meeting starts that side isn't transcribed (a mid-meeting switch to one of them is refused, except for Web Speech, which stops with a notice). Pick a language or change the provider for that side.
 
 **For speech that switches languages mid-sentence**, such as Ukrainian with English technical terms, use **Deepgram Nova-3** with **Auto-detect**. This combination enables [Nova-3 multilingual transcription](https://developers.deepgram.com/docs/nova-3-language-prompting), which Deepgram bills at a higher rate than single-language Nova-3 (see [Deepgram's pricing](https://deepgram.com/pricing)).
 
-**Which engines cover which languages:** Parakeet TDT 0.6B v3 covers 25 European languages (including Ukrainian and Russian, not Chinese, Japanese, Korean, Hindi, Arabic or Turkish). Deepgram Flux is English only; Flux Multilingual covers English, Spanish, French, German, Hindi, Russian, Portuguese, Japanese, Italian and Dutch. Parakeet CTC 110M, ORT Streaming, the English Sherpa-ONNX zipformers and the `.en` and Distil Whisper.cpp models are English only. Of the other Sherpa-ONNX models, the Chinese/Multilingual zipformer covers Chinese only (not English) and SenseVoice Small covers Chinese, English, Japanese and Korean. For Chinese, use Deepgram Nova-3, a multilingual Whisper model, Azure Speech, or Sherpa-ONNX SenseVoice Small.
+**Which engines cover which languages:** Parakeet TDT 0.6B v3 covers 25 European languages (including Ukrainian and Russian, not Chinese, Japanese, Korean, Hindi, Arabic or Turkish). Deepgram Flux is English only; Flux Multilingual covers English, Spanish, French, German, Hindi, Russian, Portuguese, Japanese, Italian and Dutch. Azure MAI Streaming supports multilingual auto-detection and explicit supported locales; see [Microsoft's language list](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/mai-transcribe-2-streaming). Parakeet CTC 110M, ORT Streaming, the English Sherpa-ONNX zipformers and the `.en` and Distil Whisper.cpp models are English only. Of the other Sherpa-ONNX models, the Chinese/Multilingual zipformer covers Chinese only (not English) and SenseVoice Small covers Chinese, English, Japanese and Korean. For Chinese, use Deepgram Nova-3, a multilingual Whisper model, Azure Speech, Azure MAI Streaming, or Sherpa-ONNX SenseVoice Small.
+
+### Azure MAI Streaming (public preview)
+
+**Azure MAI Streaming** is a separate provider (`azure_mai_streaming`) that uses Microsoft's `mai-transcribe-2-streaming` model. It is not the existing **Azure Speech** provider (`azure_speech`), which still sends short audio batches to the Azure Speech REST API. The new provider uses the [official Azure Speech SDK for JavaScript](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/mai-transcribe-2-streaming-speech-sdk), bundled with NexQ; you do not need to install Node.js, the SDK, or another runtime.
+
+The model streams **interim** text that updates while someone is speaking, followed by Azure **final** results for confirmed segments. It defaults to multilingual language auto-detection; you can instead set an explicit supported locale for each side. It does **not** diarize speakers. NexQ still keeps your microphone ("You") and system audio ("Them") on separate channels, but this provider will not identify multiple speakers within one channel. This model is in public preview; Microsoft currently notes that preview features have no SLA and are not recommended for production workloads. Check Microsoft's [overview](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/mai-transcribe-2-streaming) for current availability and preview limitations.
+
+#### Set up Azure MAI Streaming
+
+1. Open the [Azure portal](https://portal.azure.com/), then go to [Azure AI Services Resources](https://portal.azure.com/#browse/Microsoft.CognitiveServices%2Faccounts).
+2. Create a **Speech** resource in one of the model's supported serving regions: `swedencentral`, `centralus`, `eastus2`, or `southeastasia`. See Microsoft's [serving-region information](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/mai-transcribe-2-streaming#availability-and-regions).
+3. Open the resource's **Keys and Endpoint** page. Copy a Speech resource key and note its region identifier. The key and region must come from the same resource.
+4. In NexQ, open **Settings > STT Providers**, select **Azure MAI Streaming**, enter the key and region, then click **Save & Test**.
+5. In **Settings > Audio & Devices**, choose **Azure MAI Streaming** for **You**, **Them**, or both. Set each side's language to **Auto-detect** or to a supported locale.
+
+The [Azure Speech SDK integration](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/mai-transcribe-2-streaming-speech-sdk) is the path NexQ uses. Microsoft's separate [Foundry Realtime API](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/mai-transcribe-2-streaming-realtime) uses an OpenAI-compatible WebSocket integration and requires a Foundry model deployment. You do **not** need to create a Foundry deployment or configure that Realtime API to use Azure MAI Streaming in NexQ.
+
+#### Verify live transcription
+
+- In a test meeting, speak into the selected microphone and play speech through the selected system-audio device. Check each side you configured.
+- Confirm interim words update as you speak and Azure final results settle into the transcript.
+- Try **Auto-detect**, then an explicit supported locale if you want to compare.
+- If multiple people share a channel, expect their words to appear without Azure speaker labels; diarization is not supported.
 
 ### A different language for each side
 
@@ -157,6 +183,7 @@ All cloud providers require an API key. Here is where to get them:
 | Google Gemini | [aistudio.google.com](https://aistudio.google.com) | Get API Key |
 | OpenRouter | [openrouter.ai](https://openrouter.ai) | Keys |
 | Azure Speech | [portal.azure.com](https://portal.azure.com) | Cognitive Services > Speech |
+| Azure MAI Streaming | [Azure portal](https://portal.azure.com/) | Speech resource > Keys and Endpoint; see [setup steps](#set-up-azure-mai-streaming) |
 
 ### Entering API Keys in NexQ
 
