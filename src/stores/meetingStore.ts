@@ -289,6 +289,15 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
       if (useDemoStore.getState().isDemoActive) {
         const { exitDemo } = await import("../demo/demoEngine");
         exitDemo();
+        // Same notice a real end sends: the updater waits for it from each window.
+        try {
+          const [{ emit }, { getCurrentWebviewWindow }] = await Promise.all([
+            import("@tauri-apps/api/event"),
+            import("@tauri-apps/api/webviewWindow"),
+          ]);
+          const payload: WindowMeetingEndedEvent = { window: getCurrentWebviewWindow().label };
+          emit("nexq:meeting_ended", payload).catch(() => {});
+        } catch { /* not running in Tauri */ }
         return;
       }
     } catch { /* non-critical */ }

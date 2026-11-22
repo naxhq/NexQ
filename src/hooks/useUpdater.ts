@@ -264,7 +264,15 @@ export async function endMeetingFromThisWindow(): Promise<boolean> {
  * before installing. Never installs if the meeting didn't end cleanly.
  */
 export async function restartToUpdate(): Promise<void> {
-  if (useMeetingStore.getState().activeMeeting) {
+  // A demo's meeting is fake: nothing to save and no other window holds it.
+  // Leave the demo and install, without the confirm or waiting on windows.
+  const { useDemoStore } = await import("../demo/demoStore");
+  const inDemo = useDemoStore.getState().isDemoActive;
+  if (inDemo) {
+    const { exitDemo } = await import("../demo/demoEngine");
+    exitDemo();
+  }
+  if (!inDemo && useMeetingStore.getState().activeMeeting) {
     const { confirm } = await import("@tauri-apps/plugin-dialog");
     const ok = await confirm(
       "Your meeting will be saved, then NexQ restarts on the new version.",
