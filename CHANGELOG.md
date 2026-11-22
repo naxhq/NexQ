@@ -1,3 +1,9 @@
+# [2.43.0](https://github.com/naxhq/NexQ/compare/v2.42.0...v2.43.0) (2026-11-22)
+
+
+### Features
+
+* **stt:** custom OpenAI-compatible endpoint for Whisper API ([#140](https://github.com/naxhq/NexQ/issues/140)) ([2d1274e](https://github.com/naxhq/NexQ/commit/2d1274e2cc4c0273afde1d43c2a93cd02d62d544))
 # [2.42.0](https://github.com/naxhq/NexQ/compare/v2.41.4...v2.42.0) (2026-11-22)
 
 
