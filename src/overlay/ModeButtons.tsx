@@ -55,7 +55,7 @@ export function ModeButtons() {
   const [askInputText, setAskInputText] = useState("");
   const [askInputVisible, setAskInputVisible] = useState(false);
 
-  // Listen for keyboard shortcut (Digit5) to toggle ask input
+  // The Ask hotkey (Settings > Hotkeys) fires this event to toggle the ask input
   useEffect(() => {
     const handler = () => setAskInputVisible((v) => !v);
     window.addEventListener("nexq:toggle-ask-input", handler);

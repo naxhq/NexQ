@@ -16,9 +16,9 @@ const MODIFIER_CODES = /^(Control|Shift|Alt|Meta|OS)(Left|Right)?$/;
 
 /** Fixed keys NexQ uses that can't be rebound here. */
 const FIXED_SHORTCUTS: ReadonlyArray<{ keys: string; action: string }> = [
-  { keys: "Ctrl+M", action: "Start / end meeting (any app)" },
-  { keys: "Ctrl+B", action: `${RESERVED_SHORTCUTS["CmdOrCtrl+B"]} (any app)` },
-  { keys: "Ctrl+,", action: "Open / close Settings" },
+  { keys: formatShortcut("CmdOrCtrl+M"), action: `${RESERVED_SHORTCUTS["CmdOrCtrl+M"]} (any app)` },
+  { keys: formatShortcut("CmdOrCtrl+B"), action: `${RESERVED_SHORTCUTS["CmdOrCtrl+B"]} (any app)` },
+  { keys: formatShortcut("CmdOrCtrl+,"), action: RESERVED_SHORTCUTS["CmdOrCtrl+,"] },
   ...OVERLAY_SINGLE_KEYS.map((k) => ({ keys: k.key, action: `${k.label} (${k.where})` })),
 ];
 
