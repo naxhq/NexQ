@@ -213,7 +213,7 @@ function init(stage: HTMLElement) {
     setModeButtons(null, false);
     const text = ov.querySelector(`.ov-ans[data-answer="${mode}"]`)?.textContent?.replace(/\s+/g, ' ').trim();
     say(`${labelOf(mode)} answer: ${text}`);
-    hint(HINT.done);
+    if (active === 'h') hint(HINT.done);
   }
 
   function setAsk(open: boolean) {

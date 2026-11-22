@@ -27,7 +27,7 @@ import OvIcon from './overlay/OvIcon.astro';
 import Keys from './overlay/Keys.astro';
 import { planHero, mmss, TIMES, T0, HERO_SECONDS } from './overlay/content';
 import './overlay/stage.css';
-import { SECTION, REPO, RELEASES_LATEST, COUNTS, HOTKEYS, AUTO_DETECT_ENGINES } from '../data/site';
+import { SECTION, REPO, RELEASES_LATEST, RELEASES_URL, COUNTS, HOTKEYS, AUTO_DETECT_ENGINES } from '../data/site';
 import { CURRENT_VERSION, RELEASES, waveFor } from '../data/releases';
 
 // The hero conversation is laid onto the phrases of this release's wave (see planHero).
@@ -71,7 +71,7 @@ const numberedNames = new Intl.ListFormat('en', { style: 'long', type: 'disjunct
       <a href={`#${SECTION.download}`} class="btn-primary nx-dl nx-dl--short">Get it for Windows or Mac</a>
       <a href={REPO} class="btn-ghost"><span><Icon name="star" class="h-[18px] w-[18px]" />Star on GitHub</span></a>
     </div>
-    <p class="nx-small">Windows 10 and 11, macOS on Apple Silicon (beta). <a class="link" href={`#${SECTION.download}`}>Other options</a></p>
+    <p class="nx-small">Windows 10 and 11, macOS on Apple Silicon (beta). <a class="link" href={RELEASES_URL}>Other builds</a></p>
 
     <ul class="nx-proof" aria-label="At a glance">
       <li><b>{COUNTS.stt}</b> speech engines</li>
@@ -186,7 +186,7 @@ const numberedNames = new Intl.ListFormat('en', { style: 'long', type: 'disjunct
     </article>
 
     <!-- Beat e: README.md (Stealth Mode), docs/user-guide/keyboard-shortcuts.md, interview-copilot.md -->
-    <article class="nx-beat" id="stealth" data-beat-id="e" data-t={TIMES.e} data-t0={T0.e} data-hint="Hidden from the share, still on your screen." aria-labelledby="beat-e">
+    <article class="nx-beat" id="stealth" data-beat-id="e" data-t={TIMES.e} data-t0={T0.e} data-hint="Hidden from the share, still on your screen" aria-labelledby="beat-e">
       <p class="eyebrow">{mmss(TIMES.e)}</p>
       <h3 id="beat-e" class="h3">Gone from the share.</h3>
       <p class="nx-beat__lede">
