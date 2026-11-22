@@ -111,7 +111,7 @@ export function OverlayView() {
   const batchProgress = useTranslationStore((s) => s.batchProgress);
   const isBatchTranslating = batchProgress !== null;
 
-  // Bookmark hotkey (Ctrl+B) — also returns addBookmarkAtNow for shortcut hook
+  // addBookmarkAtNow: used by the B key (useMeetingShortcuts) and the toolbar button
   const addBookmarkAtNow = useBookmarkHotkey();
 
   // Consolidated keyboard shortcuts for live meeting

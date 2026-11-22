@@ -26,7 +26,7 @@ export function BookmarkPanel() {
   if (sorted.length === 0) {
     return (
       <div className="flex items-center justify-center py-6 text-muted-foreground/40">
-        <p className="text-xs">No bookmarks yet. Right-click a line or use Ctrl+B to bookmark.</p>
+        <p className="text-xs">No bookmarks yet. Right-click a line or press B to bookmark.</p>
       </div>
     );
   }
