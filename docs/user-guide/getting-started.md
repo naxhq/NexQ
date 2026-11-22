@@ -13,7 +13,7 @@ NexQ is an AI Meeting Assistant and Real-Time Interview Copilot for Windows. It 
 
 ### 1. Download the Installer
 
-Download the latest `.exe` installer from the [GitHub Releases](https://github.com/VahidAlizadeh/NexQ/releases) page. The file is named `NexQ_x.x.x_x64-setup.exe`.
+Download the latest `.exe` installer from the [GitHub Releases](https://github.com/naxhq/NexQ/releases) page. The file is named `NexQ_x.x.x_x64-setup.exe`.
 
 ### 2. Run the Installer
 
