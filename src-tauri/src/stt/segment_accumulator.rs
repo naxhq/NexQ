@@ -586,4 +586,26 @@ mod tests {
         assert_eq!(next.len(), 1);
         assert_eq!((next[0].id.as_str(), next[0].text.as_str()), ("acc_3", "Hola."));
     }
+
+    #[test]
+    fn an_interim_after_close_line_or_flush_gets_a_fresh_line_decision() {
+        // Decided "new line" before the line was closed...
+        let mut a = acc();
+        a.feed_result(fin("Is that okay?", T0, Some(2_000), None));
+        a.feed_result(interim("so", T0 + 62_000));
+        a.close_line();
+        a.feed_result(fin("Fine.", T0 + 63_000, Some(500), None));
+        // ...and a new utterance right after the next final is decided again.
+        let outs = a.feed_result(interim("and", T0 + 64_000));
+        assert_eq!((outs[0].id.as_str(), outs[0].text.as_str()), ("acc_3", "Fine. and"));
+
+        // Decided "continue", then flush: the next interim is its own line, not stuck on continue.
+        let mut a = acc();
+        a.feed_result(fin("Hello.", T0, Some(500), None));
+        let outs = a.feed_result(interim("how", T0 + 700));
+        assert_eq!(outs[0].id, "acc_1");
+        a.flush();
+        let outs = a.feed_result(interim("again", T0 + 800));
+        assert_eq!((outs[0].id.as_str(), outs[0].text.as_str()), ("acc_2", "again"));
+    }
 }

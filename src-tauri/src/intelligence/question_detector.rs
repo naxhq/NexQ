@@ -151,6 +151,29 @@ impl QuestionDetector {
     }
 }
 
+/// Whether `text`, a new line from the other party that may still be growing,
+/// already reads as a question: the detector finds one, or a sentence starts
+/// with a question word after a lead-in such as "so" or "and" ("So how did you
+/// handle that"). Used only to decide that a newer question replaces an older
+/// one; it does not change what `detect_questions` reports.
+pub fn looks_like_new_question(text: &str) -> bool {
+    if !QuestionDetector::new().detect_questions(text, 0, "").is_empty() {
+        return true;
+    }
+    split_sentences(text).iter().any(|sentence| {
+        let lower = sentence.to_lowercase();
+        let words: Vec<&str> = lower
+            .split(|c: char| c.is_whitespace() || matches!(c, ',' | '.' | '?' | '？' | '!' | '…'))
+            .filter(|word| !word.is_empty())
+            .collect();
+        words
+            .iter()
+            .skip_while(|word| TAG_LEAD_INS.contains(word))
+            .next()
+            .is_some_and(|first| INTERROGATIVE_STARTERS.contains(first))
+    })
+}
+
 /// Whether a sentence is only a tag, with or without words leading into it.
 fn is_tag_question(sentence: &str) -> bool {
     let lower = sentence.to_lowercase();
