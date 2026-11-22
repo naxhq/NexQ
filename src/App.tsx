@@ -422,12 +422,7 @@ function App() {
             <ErrorBoundary fallbackMessage="Failed to load overlay">
               {/* key on the meeting id → remounts overlay UI per meeting so local
                   state (open panels, tabs, layout mode) does not carry over */}
-              <div key={activeMeetingId || "no-meeting"} className="flex h-full">
-                <div className="flex-1 min-w-0 overflow-hidden">
-                  <OverlayView />
-                </div>
-                <CallLogPanel />
-              </div>
+              <OverlayLayout key={activeMeetingId || "no-meeting"} />
             </ErrorBoundary>
           )}
           {(settingsOpen || currentView === "settings") && (
@@ -449,12 +444,7 @@ function App() {
       <ErrorBoundary fallbackMessage="NexQ encountered an error">
         {resolvedView === "overlay" && isDemoActive && (
           <ErrorBoundary fallbackMessage="Failed to load overlay">
-            <div key={activeMeetingId || "no-meeting"} className="flex h-full">
-              <div className="flex-1 min-w-0 overflow-hidden">
-                <OverlayView />
-              </div>
-              <CallLogPanel />
-            </div>
+            <OverlayLayout key={activeMeetingId || "no-meeting"} />
           </ErrorBoundary>
         )}
         {(resolvedView === "launcher" || (resolvedView === "overlay" && !isDemoActive)) && (
@@ -486,6 +476,18 @@ function App() {
       {/* Demo mode — scenario picker modal + floating exit badge */}
       <DemoPicker />
       <DemoBadge />
+    </div>
+  );
+}
+
+/** Overlay UI shared by the overlay window and the launcher's demo mode. */
+function OverlayLayout() {
+  return (
+    <div className="flex h-full">
+      <div className="flex-1 min-w-0 overflow-hidden">
+        <OverlayView />
+      </div>
+      <CallLogPanel />
     </div>
   );
 }

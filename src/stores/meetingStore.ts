@@ -141,6 +141,15 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   setSelectedMeetingId: (id) => set({ selectedMeetingId: id }),
 
   startMeetingFlow: async (title?: string, audioMode?: AudioMode, scenario?: AIScenario) => {
+    // A real meeting replaces any running demo: leave the demo first so its
+    // snapshot is restored now, not over the real meeting on Exit Demo later.
+    try {
+      const { useDemoStore } = await import("../demo/demoStore");
+      if (useDemoStore.getState().isDemoActive) {
+        const { exitDemo } = await import("../demo/demoEngine");
+        exitDemo();
+      }
+    } catch { /* non-critical */ }
     try {
       // Resolve mode and scenario (fall back to current state if not provided)
       const resolvedMode: AudioMode = audioMode ?? get().audioMode;

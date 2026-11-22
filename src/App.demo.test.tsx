@@ -1,4 +1,4 @@
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -19,6 +19,8 @@ vi.mock("./lib/windows", async (importOriginal) => ({
 import App from "./App";
 import { launchDemo, exitDemo } from "./demo/demoEngine";
 import { liveInterviewScenario } from "./demo/scenarios/liveInterview";
+import { DemoPicker } from "./demo/DemoPicker";
+import { useDemoStore } from "./demo/demoStore";
 import { useMeetingStore } from "./stores/meetingStore";
 
 beforeAll(() => {
@@ -30,6 +32,7 @@ beforeAll(() => {
       return key === "firstRunCompleted" ? [true, true] : [null, false];
     }
     if (cmd === "list_meetings") return "[]";
+    if (cmd === "start_meeting") return JSON.stringify({ id: "real-1", title: "Real call" });
     if (cmd === "get_rag_status" || cmd === "get_token_budget") return "null";
     return [];
   }, { shouldMockEvents: true });
@@ -73,5 +76,63 @@ describe("demo mode in the launcher window", () => {
     });
     expect(useMeetingStore.getState().currentView).toBe("overlay");
     expect(showMeetingOverlay).not.toHaveBeenCalled();
+  });
+
+  it("draws the overlay UI in the launcher during a demo and returns to the launcher on exit", async () => {
+    render(<App />);
+    await act(async () => {
+      launchDemo(liveInterviewScenario, "screenshot");
+    });
+    // Overlay controls are in the DOM, the launcher is not
+    expect(await screen.findByLabelText("End meeting")).toBeTruthy();
+    expect(screen.queryByText("Start Meeting")).toBeNull();
+
+    await act(async () => {
+      exitDemo();
+    });
+    expect(useDemoStore.getState().isDemoActive).toBe(false);
+    expect(useMeetingStore.getState().currentView).toBe("launcher");
+    expect(useMeetingStore.getState().activeMeeting).toBeNull();
+    await vi.waitFor(() => {
+      expect(screen.queryByLabelText("End meeting")).toBeNull();
+    });
+    expect(showMeetingOverlay).not.toHaveBeenCalled();
+  });
+
+  it("a real meeting started during a demo ends the demo and goes to the overlay window", async () => {
+    render(<App />);
+    await act(async () => {
+      launchDemo(liveInterviewScenario, "screenshot");
+    });
+    await act(async () => {
+      await useMeetingStore.getState().startMeetingFlow("Real call", "online");
+    });
+    expect(useDemoStore.getState().isDemoActive).toBe(false);
+    // The real meeting survives: Exit Demo did not restore the pre-demo snapshot over it
+    expect(useMeetingStore.getState().activeMeeting?.id).toBe("real-1");
+    await vi.waitFor(() => {
+      expect(showMeetingOverlay).toHaveBeenCalled();
+      expect(useMeetingStore.getState().currentView).toBe("launcher");
+    });
+    expect(useMeetingStore.getState().activeMeeting?.id).toBe("real-1");
+  });
+});
+
+describe("demo picker while a real meeting runs", () => {
+  it("refuses to start a demo", async () => {
+    useMeetingStore.setState({
+      activeMeeting: { id: "real-1", title: "Real call" } as never,
+      isRecording: true,
+    });
+    useDemoStore.getState().openPicker();
+    render(<DemoPicker />);
+
+    expect(await screen.findByText(/A meeting is running/)).toBeTruthy();
+    const start = screen.getByRole("button", { name: "Start Demo" }) as HTMLButtonElement;
+    expect(start.disabled).toBe(true);
+    start.click();
+    expect(useDemoStore.getState().isDemoActive).toBe(false);
+    expect(useMeetingStore.getState().activeMeeting?.id).toBe("real-1");
+    useDemoStore.getState().closePicker();
   });
 });
