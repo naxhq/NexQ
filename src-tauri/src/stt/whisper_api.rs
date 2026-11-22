@@ -421,7 +421,12 @@ impl WhisperApiSTT {
                 let status = resp.status();
                 if status.is_success() {
                     match resp.json::<WhisperResponse>().await {
+                        Ok(WhisperResponse { text: None }) => {
+                            log::error!("WhisperApiSTT: 2xx response without a text field");
+                            reporter.failure("The server returned no transcription.");
+                        }
                         Ok(whisper_resp) => {
+                            // An empty string is fine (silence); a missing field is not.
                             reporter.success();
                             if let Some(text) = whisper_resp.text {
                                 let text = text.trim().to_string();
@@ -674,6 +679,17 @@ impl STTProvider for WhisperApiSTT {
         };
         let status = probe.status();
         if status.is_success() {
+            // A 2xx alone is not enough: a web page, an empty 204 or a JSON error
+            // with status 200 is not a transcription endpoint.
+            let body = probe.text().await.unwrap_or_default();
+            let has_text = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .map(|v| v.get("text").map(|t| t.is_string()).unwrap_or(false))
+                .unwrap_or(false);
+            if !has_text {
+                log::warn!("WhisperApiSTT: Probe answered {} without a transcription body", status);
+                return Err("The server answered but didn't return a transcription. Is this an OpenAI-compatible /audio/transcriptions endpoint?".into());
+            }
             log::info!("WhisperApiSTT: Connection test passed (transcription probe)");
             return Ok(true);
         }
@@ -1019,7 +1035,7 @@ mod tests {
 
     #[tokio::test]
     async fn mock_openai_key_is_not_sent_to_custom_endpoint() {
-        let (base, rec) = mock_server(|_, _| ("200 OK", "{}".to_string())).await;
+        let (base, rec) = mock_server(|_, _| ("200 OK", r#"{"text":""}"#.to_string())).await;
         let p = mock_provider(&base, Some("sk-openai-secret"), None);
         assert!(p.test_connection().await.unwrap());
         let reqs = rec.lock().unwrap();
@@ -1029,12 +1045,56 @@ mod tests {
 
     #[tokio::test]
     async fn mock_custom_key_is_sent_as_bearer() {
-        let (base, rec) = mock_server(|_, _| ("200 OK", "{}".to_string())).await;
+        let (base, rec) = mock_server(|_, _| ("200 OK", r#"{"text":""}"#.to_string())).await;
         let p = mock_provider(&base, Some("sk-openai-secret"), Some("custom-secret"));
         assert!(p.test_connection().await.unwrap());
         let reqs = rec.lock().unwrap();
         assert!(lower(&reqs[0]).contains("authorization: bearer custom-secret"));
         assert!(!reqs[0].contains("sk-openai-secret"));
+    }
+
+    #[tokio::test]
+    async fn mock_probe_2xx_without_a_transcription_body_is_an_error() {
+        const MSG: &str = "didn't return a transcription";
+        for (status, body) in [
+            ("204 No Content", ""),
+            ("200 OK", "<html><body>Welcome</body></html>"),
+            ("200 OK", r#"{"error":{"message":"model not found"}}"#),
+            ("200 OK", r#"{"text":42}"#),
+        ] {
+            let (base, _rec) = mock_server(move |_, _| (status, body.to_string())).await;
+            let err = mock_provider(&base, None, None).test_connection().await.unwrap_err().to_string();
+            assert!(err.contains(MSG), "{} {:?}: {}", status, body, err);
+        }
+    }
+
+    #[tokio::test]
+    async fn mock_probe_empty_text_is_success() {
+        let (base, _rec) = mock_server(|_, _| ("200 OK", r#"{"text":""}"#.to_string())).await;
+        assert!(mock_provider(&base, None, None).test_connection().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn mock_segment_without_text_counts_as_failure_and_empty_text_as_success() {
+        let reply = std::sync::Arc::new(std::sync::Mutex::new(r#"{"error":"nope"}"#.to_string()));
+        let r = reply.clone();
+        let (base, _rec) = mock_server(move |_, _| ("200 OK", r.lock().unwrap().clone())).await;
+        let p = mock_provider(&base, None, None);
+        let (tx, mut rx) = mpsc::channel(4);
+
+        WhisperApiSTT::send_segment(&p.target(), &p.reporter, vec![1; 160], 0, tx.clone()).await;
+        assert!(p.reporter.failing.load(Ordering::SeqCst), "200 without text must fail");
+        assert!(rx.try_recv().is_err());
+
+        // A reply with no text must not clear an existing failure either.
+        WhisperApiSTT::send_segment(&p.target(), &p.reporter, vec![1; 160], 0, tx.clone()).await;
+        assert!(p.reporter.failing.load(Ordering::SeqCst));
+
+        // Silence: empty text is a valid reply and clears the failure.
+        *reply.lock().unwrap() = r#"{"text":""}"#.to_string();
+        WhisperApiSTT::send_segment(&p.target(), &p.reporter, vec![1; 160], 0, tx).await;
+        assert!(!p.reporter.failing.load(Ordering::SeqCst));
+        assert!(rx.try_recv().is_err(), "no transcript for silence");
     }
 
     #[tokio::test]

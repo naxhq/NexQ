@@ -686,3 +686,62 @@ it("says the Whisper API key is stored, not verified, until a test passes", asyn
   await renderWhisper();
   expect(await screen.findByText("API key verified and stored securely")).toBeInTheDocument();
 });
+
+it("chains overlapping endpoint saves so the last edit is what stays stored", async () => {
+  // The first save is slow; without chaining it would finish after the second one.
+  azureMai.store.mockImplementation(async (provider: string, key: string) => {
+    if (provider === "whisper_api_base_url" && key.includes("first")) {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    }
+    azureMai.credentials.set(provider, key);
+  });
+  useWhisperApiProvider();
+  const { user, endpoint } = await renderWhisper();
+
+  await user.type(endpoint, "http://first:1/v1");
+  await user.tab();
+  await user.clear(endpoint);
+  await user.type(endpoint, "http://second:2/v1");
+  await user.tab();
+
+  await waitFor(() => expect(azureMai.credentials.get("whisper_api_base_url")).toBe("http://second:2/v1"));
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  expect(azureMai.credentials.get("whisper_api_base_url")).toBe("http://second:2/v1");
+  const writes = azureMai.store.mock.calls.filter(([p]) => p === "whisper_api_base_url").map(([, v]) => v);
+  expect(writes).toEqual(["http://first:1/v1", "http://second:2/v1"]);
+});
+
+it("locks the Whisper inputs while a test runs", async () => {
+  let finish: (ok: boolean) => void = () => {};
+  azureMai.sttTest.mockReturnValue(new Promise<boolean>((resolve) => { finish = resolve; }));
+  useWhisperApiProvider();
+  const { user, endpoint, model } = await renderWhisper();
+
+  await user.type(endpoint, "http://127.0.0.1:8000/v1");
+  await user.click(screen.getByRole("button", { name: "Save & Test" }));
+  await waitFor(() => expect(azureMai.sttTest).toHaveBeenCalled());
+  expect(endpoint).toBeDisabled();
+  expect(model).toBeDisabled();
+  expect(screen.getByLabelText("API key for this server (optional)")).toBeDisabled();
+
+  finish(true);
+  await waitFor(() => expect(endpoint).not.toBeDisabled());
+  await waitFor(() => expect(useConfigStore.getState().verifiedCloudProviders).toContain("whisper_api"));
+});
+
+it("does not mark Whisper API verified when the config changed under a running test", async () => {
+  let finish: (ok: boolean) => void = () => {};
+  azureMai.sttTest.mockReturnValue(new Promise<boolean>((resolve) => { finish = resolve; }));
+  useWhisperApiProvider();
+  const { user, endpoint } = await renderWhisper();
+
+  await user.type(endpoint, "http://127.0.0.1:8000/v1");
+  await user.click(screen.getByRole("button", { name: "Save & Test" }));
+  await waitFor(() => expect(azureMai.sttTest).toHaveBeenCalled());
+
+  // Switching provider mid-test changes the config context: the late result is stale.
+  await user.click(screen.getByRole("button", { name: /Deepgram/ }));
+  finish(true);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(useConfigStore.getState().verifiedCloudProviders).not.toContain("whisper_api");
+});

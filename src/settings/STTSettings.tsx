@@ -369,6 +369,8 @@ export function STTSettings() {
   const savedWhisperRef = useRef({ baseUrl: "", model: "" });
   // The blur save in flight (Save & Test waits for it before reading the saved state).
   const whisperSaveRef = useRef<Promise<void>>(Promise.resolve());
+  // Bumped on every config edit; a Save & Test that finishes under an older value is ignored.
+  const whisperRevisionRef = useRef(0);
 
   const [localEngines, setLocalEngines] = useState<LocalSTTEngineInfo[]>([]);
   const activeParakeetModel = useConfigStore((s) =>
@@ -429,6 +431,8 @@ export function STTSettings() {
   const isWhisperApi = selectedProvider === "whisper_api";
   // A custom endpoint makes the API key optional (local servers usually need none).
   const whisperEndpointSet = isWhisperApi && isCustomWhisperEndpoint(whisperBaseUrl);
+  // While a Whisper test runs its inputs are locked, so the result matches what is saved.
+  const whisperTesting = isWhisperApi && connectionStatus === "testing";
   // The OpenAI key and a custom server's key live in separate slots; the OpenAI
   // key is never used for a custom endpoint.
   const activeCredentialKey = whisperEndpointSet
@@ -519,6 +523,7 @@ export function STTSettings() {
   useEffect(() => {
     let cancelled = false;
     const loadKeyForProvider = async () => {
+      whisperRevisionRef.current += 1;
       // Switching a Whisper endpoint on or off swaps the key slot but keeps a key being typed.
       const providerChanged = prevProviderRef.current !== selectedProvider;
       prevProviderRef.current = selectedProvider;
@@ -689,26 +694,32 @@ export function STTSettings() {
     setWhisperSavedBaseUrl(base);
   }, []);
 
-  /** Save the endpoint/model on blur; a changed endpoint or model must be tested again. */
-  const handleSaveWhisperEndpoint = useCallback(async () => {
+  /**
+   * Save the endpoint/model on blur; a changed endpoint or model must be tested again.
+   * Saves are chained so overlapping blurs write in order, and a write that would
+   * not change what is stored is skipped. Save & Test awaits the chain's tail.
+   */
+  const handleSaveWhisperEndpoint = useCallback(() => {
     if (!isValidWhisperBaseUrl(whisperBaseUrl)) {
       setWhisperEndpointError(WHISPER_ENDPOINT_ERROR);
-      return;
+      return Promise.resolve();
     }
     setWhisperEndpointError("");
-    const saved = savedWhisperRef.current;
-    const base = isCustomWhisperEndpoint(whisperBaseUrl) ? whisperBaseUrl.trim() : "";
-    if (saved.baseUrl === base && saved.model === whisperModel.trim()) return;
-    const run = (async () => {
+    const baseUrl = whisperBaseUrl;
+    const model = whisperModel;
+    const base = isCustomWhisperEndpoint(baseUrl) ? baseUrl.trim() : "";
+    const run = whisperSaveRef.current.then(async () => {
+      const saved = savedWhisperRef.current;
+      if (saved.baseUrl === base && saved.model === model.trim()) return;
       try {
-        await persistWhisperEndpoint(whisperBaseUrl, whisperModel);
+        await persistWhisperEndpoint(baseUrl, model);
         updateVerifiedProvider("whisper_api", false);
       } catch (e) {
         console.warn("Failed to save Whisper endpoint:", e);
       }
-    })();
+    });
     whisperSaveRef.current = run;
-    await run;
+    return run;
   }, [whisperBaseUrl, whisperModel, persistWhisperEndpoint, updateVerifiedProvider]);
 
   /**
@@ -743,8 +754,10 @@ export function STTSettings() {
 
     setConnectionStatus("testing");
     setStatusMessage("Testing connection...");
+    const revision = whisperRevisionRef.current;
+    const isStale = () => whisperRevisionRef.current !== revision;
 
-    // A blur save may still be writing the endpoint/model: let it finish first.
+    // Blur saves may still be writing the endpoint/model: let all of them finish first.
     await whisperSaveRef.current;
     const wasVerified = useConfigStore.getState().verifiedCloudProviders.includes(provider);
     let previousKey: string | null = null;
@@ -761,6 +774,8 @@ export function STTSettings() {
       const success = await testSTTConnection(provider);
       if (!success) throw new Error("Connection failed");
 
+      // The config changed while testing: this result is not about what is saved now.
+      if (isStale()) return;
       updateVerifiedProvider(provider, true);
       const keyPresent = keyDirty ? typed !== "" : hasStoredKey;
       if (slot === WHISPER_API_KEY) setWhisperStoredKey(keyPresent);
@@ -777,6 +792,7 @@ export function STTSettings() {
         if (previousKey) await storeApiKey(slot, previousKey).catch(() => {});
         else await deleteApiKey(slot).catch(() => {});
       }
+      if (isStale()) return;
       updateVerifiedProvider(provider, wasVerified);
       if (isStillSelected() && keyWritten) setHasStoredKey(previousKey !== null);
       fail(e instanceof Error ? e.message : String(e));
@@ -893,6 +909,7 @@ export function STTSettings() {
     const option = currentProviderOption;
     if (!option?.credentialKey) return;
     const slot = activeCredentialKey ?? option.credentialKey;
+    whisperRevisionRef.current += 1;
     try { await deleteApiKey(slot); } catch { /* ok */ }
     if (slot === WHISPER_API_KEY) setWhisperStoredKey(false);
     if (provider === "azure_mai_streaming" && option.regionCredentialKey) {
@@ -1047,8 +1064,9 @@ export function STTSettings() {
             id="stt-whisper-endpoint"
             type="text"
             value={whisperBaseUrl}
-            disabled={!whisperLoaded}
+            disabled={!whisperLoaded || whisperTesting}
             onChange={(e) => {
+              whisperRevisionRef.current += 1;
               setWhisperBaseUrl(e.target.value);
               setWhisperDirty(true);
               setWhisperEndpointError("");
@@ -1078,8 +1096,9 @@ export function STTSettings() {
             id="stt-whisper-model"
             type="text"
             value={whisperModel}
-            disabled={!whisperLoaded}
+            disabled={!whisperLoaded || whisperTesting}
             onChange={(e) => {
+              whisperRevisionRef.current += 1;
               setWhisperModel(e.target.value);
               setWhisperDirty(true);
               setConnectionStatus("idle");
@@ -1108,9 +1127,10 @@ export function STTSettings() {
               <input
                 id="stt-provider-api-key"
                 type={showApiKey ? "text" : "password"}
-                disabled={credentialsAreLoading || (selectedProvider === "azure_mai_streaming" && shownConnectionStatus === "testing")}
+                disabled={credentialsAreLoading || whisperTesting || (selectedProvider === "azure_mai_streaming" && shownConnectionStatus === "testing")}
                 value={shownApiKey}
                 onChange={(e) => {
+                  whisperRevisionRef.current += 1;
                   setApiKey(e.target.value);
                   setKeyDirty(true);
                   setConnectionStatus("idle");
@@ -1166,6 +1186,7 @@ export function STTSettings() {
               (selectedProvider === "azure_mai_streaming" ? !shownApiKey.trim() : !shownKeyDirty) && (
               <button
                 onClick={handleClearApiKey}
+                disabled={whisperTesting}
                 className="flex items-center gap-1.5 rounded-lg border border-destructive/30 px-3 py-2 text-xs text-destructive transition-colors hover:bg-destructive/10"
               >
                 <Trash2 className="h-3.5 w-3.5" />
