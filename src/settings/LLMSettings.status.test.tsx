@@ -203,3 +203,43 @@ describe("LLM provider cards: in use, viewing, status", () => {
     expect(within(card(/codex cli/i)).getByText("Coming soon")).toBeInTheDocument();
   });
 });
+
+describe("Custom Test Connection errors", () => {
+  beforeEach(() => {
+    resetAgentStoreForTests();
+    useConfigStore.setState({
+      llmProvider: "groq",
+      llmModel: "llama-3.3-70b",
+      lastModelByProvider: {},
+      claudeCliConfig: DEFAULT_CLAUDE_CLI_CONFIG,
+      verifiedCloudProviders: [],
+      customLlmBaseUrl: "https://api.example.com",
+      customLlmAuthType: "none",
+    });
+    ipc.claudeCliStatus.mockReset().mockResolvedValue(LOGGED_IN);
+    ipc.hasApiKey.mockReset().mockResolvedValue(false);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  async function testCustom() {
+    render(<LLMSettings />);
+    fireEvent.click(card(/^Custom\b/));
+    ipc.testLLMConnection.mockReset().mockRejectedValue(
+      "Connection test failed: Authentication failed: the server refused the request (HTTP 401). Cloud APIs usually need Auth Type Bearer Token.",
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /Test Connection/ }));
+  }
+
+  it("shows why the server refused it, from the backend's plain-string error", async () => {
+    await testCustom();
+    expect(await screen.findByText(/the server refused the request \(HTTP 401\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Auth Type Bearer Token/)).toBeInTheDocument();
+    expect(screen.queryByText("Connection failed")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Connection test failed/)).not.toBeInTheDocument();
+  });
+});

@@ -109,6 +109,12 @@ function getProviderStatus(
 
 // ══════════════════════════════════════════════════════════════
 
+/** Tauri rejects with the backend's text as a plain string, not an Error. */
+function connectionErrorText(err: unknown): string {
+  const raw = typeof err === "string" ? err : err instanceof Error ? err.message : "";
+  return raw.replace(/^Connection test failed:\s*/, "").trim() || "Connection failed";
+}
+
 export function LLMSettings() {
   const llmProvider = useConfigStore((s) => s.llmProvider);
   const llmModel = useConfigStore((s) => s.llmModel);
@@ -319,7 +325,7 @@ export function LLMSettings() {
         setLocalReach((prev) => ({ ...prev, [selectedProvider]: "down" }));
       }
       setConnectionStatus("error");
-      setConnectionMessage(err instanceof Error ? err.message : "Connection failed");
+      setConnectionMessage(connectionErrorText(err));
     }
   };
 
@@ -610,7 +616,7 @@ export function LLMSettings() {
             {connectionStatus === "error" && (
               <div className="flex items-center gap-1 text-destructive">
                 <XCircle className="h-3.5 w-3.5" />
-                <span className="text-xs truncate max-w-[200px]">{connectionMessage}</span>
+                <span className="text-xs max-w-[360px]" title={connectionMessage}>{connectionMessage}</span>
               </div>
             )}
           </div>
