@@ -8,7 +8,7 @@ export default defineConfig(async () => ({
   plugins: [react()],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      "@": path.resolve(import.meta.dirname, "./src"),
     },
   },
   test: {
@@ -17,6 +17,10 @@ export default defineConfig(async () => ({
     globals: true,
     // Agent worktrees hold full copies of the repo.
     exclude: ["**/node_modules/**", "**/dist/**", ".claude/**"],
+  },
+  build: {
+    // Vite 6's defaults. Vite 8's need Safari 16.4, but we support macOS 11.
+    target: ["es2020", "edge88", "firefox78", "chrome87", "safari14"],
   },
   clearScreen: false,
   server: {
