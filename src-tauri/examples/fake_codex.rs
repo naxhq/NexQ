@@ -22,10 +22,12 @@
 //!   (cumulative, per turn: input +1200, cached +1000, output +80, reasoning +30).
 //! - `mcp`: an `mcpToolCall` item (`mira` / `kb_search`) before the answer.
 //! - `read`: a `commandExecution` item that reads `a.md`, before the answer.
+//! - `write`: a `fileChange` item, before the answer.
 //! - `usage`: a failed turn with Codex's real usage-limit error.
 //! - `fail:<msg>`: a failed turn with `<msg>` and no error cause.
-//! - `approve:cmd|read|file|mcp-ok|mcp-no`: a server request; the answer is
-//!   `decision:<what the client replied>`.
+//! - `approve:cmd|read|file|legacy-cmd|legacy-patch|mcp-ok|mcp-no`: a server
+//!   request (`legacy-*` are `execCommandApproval` and `applyPatchApproval`);
+//!   the answer is `decision:<what the client replied>`.
 //! - `slow` mode: one delta per character, 100 ms apart, interruptible.
 //! - `crash` mode: exits with code 1 right after the first delta.
 //! - `hang` mode: sleeps forever after the first delta.
@@ -284,6 +286,13 @@ fn run_turn(
         done["status"] = json!("completed");
         completed(done);
     }
+    if q == "write" {
+        let change = json!({ "type": "fileChange", "id": "fc-0", "changes": [], "status": "inProgress" });
+        started(change.clone());
+        let mut done = change;
+        done["status"] = json!("completed");
+        completed(done);
+    }
     if let Some(kind) = q.strip_prefix("approve:") {
         let notes = cfg.notes.replace('/', "\\");
         let (method, params) = match kind {
@@ -299,6 +308,16 @@ fn run_turn(
                         "command": format!("type {notes}\\a.md"),
                         "cwd": std::env::current_dir().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default(),
                         "commandActions": [{ "type": "read", "command": "type a.md", "name": "a.md", "path": format!("{notes}\\a.md") }] }),
+            ),
+            "legacy-cmd" => (
+                "execCommandApproval",
+                json!({ "conversationId": "thread-1", "callId": "cmd-4", "command": ["type", format!("{notes}\\a.md")],
+                        "cwd": std::env::current_dir().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default(),
+                        "parsedCmd": [{ "type": "read", "cmd": "type a.md", "name": "a.md", "path": format!("{notes}\\a.md") }] }),
+            ),
+            "legacy-patch" => (
+                "applyPatchApproval",
+                json!({ "conversationId": "thread-1", "callId": "patch-1", "fileChanges": {} }),
             ),
             "file" => (
                 "item/fileChange/requestApproval",

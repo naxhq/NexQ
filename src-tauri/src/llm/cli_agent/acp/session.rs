@@ -10,9 +10,14 @@
 //!   notifications go to the event channel in order, so a turn sees all its
 //!   updates before the `session/prompt` response.
 //! - The agent sends requests too. `session/request_permission` is answered
-//!   right on the reader thread from the pure policy in [`super::permission`];
-//!   any other request (`fs/*`, `terminal/*`, ...) gets a JSON-RPC
-//!   "Method not found" so the agent never waits for a reply that never comes.
+//!   right on the reader thread from the pure policy in [`super::permission`]
+//!   (only MCP tools are ever allowed); any other request (`fs/*`,
+//!   `terminal/*`, ...) gets a JSON-RPC "Method not found" so the agent never
+//!   waits for a reply that never comes.
+//! - Fail closed: Antigravity auto-allows some tools without asking (a read or
+//!   a write in its working directory, a web search). A tool call that
+//!   completes without NexQ having allowed it cancels the turn, kills the
+//!   process and fails the turn.
 //! - There is no "append without a model call": `append_context` queues the
 //!   text and the next `ask` sends it in front of its prompt.
 //! - The system prompt travels in `session/new`'s `_meta` when the agent
@@ -31,7 +36,7 @@ use crate::llm::cli_agent::session::{
 use crate::llm::provider::CancelToken;
 use async_trait::async_trait;
 use serde_json::Value;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -63,15 +68,17 @@ pub struct AcpLaunch {
     /// The executable (`agy.exe`, see `launch::find_agy`).
     pub program: PathBuf,
     pub args: Vec<String>,
-    /// The process cwd and the session's `cwd`.
+    /// The process cwd and the session's `cwd`: an empty folder of NexQ's.
     pub cwd: PathBuf,
+    /// Delete `cwd` (with whatever the agent put in it) when the session ends.
+    /// Set for a folder made for this one session.
+    pub remove_cwd_on_close: bool,
     /// Model id for `session/set_model`; empty keeps the agent's default.
     pub model: String,
     pub system_prompt: String,
-    /// Notes folders (`session/new`'s `additionalDirectories`, when the agent supports it).
-    pub additional_dirs: Vec<PathBuf>,
     /// `session/new`'s `mcpServers`: `{name, command, args, env:[{name,value}]}`
-    /// (stdio) or `{type, name, url, headers}`. They hold secrets: never logged.
+    /// (stdio) or `{type, name, url, headers}`, NexQ's `nexq_notes` server
+    /// included. They hold secrets: never logged.
     pub mcp_servers: Vec<Value>,
     pub policy: PermissionPolicy,
     /// Extra env vars to remove, beyond [`ACP_STRIPPED_ENV`] and the Claude ones.
@@ -86,7 +93,6 @@ impl std::fmt::Debug for AcpLaunch {
             .field("cwd", &self.cwd)
             .field("model", &self.model)
             .field("system_prompt_len", &self.system_prompt.len())
-            .field("additional_dirs", &self.additional_dirs)
             .field("mcp_servers", &format_args!("<redacted, {}>", self.mcp_servers.len()))
             .field("env_remove", &self.env_remove)
             .finish()
@@ -94,15 +100,15 @@ impl std::fmt::Debug for AcpLaunch {
 }
 
 impl AcpLaunch {
-    /// A launch with no notes folders, no MCP servers and a policy that allows nothing.
+    /// A launch with no MCP servers and a policy that allows nothing.
     pub fn new(program: PathBuf, args: Vec<String>, cwd: PathBuf) -> Self {
         Self {
             program,
             args,
             cwd,
+            remove_cwd_on_close: false,
             model: String::new(),
             system_prompt: String::new(),
-            additional_dirs: Vec::new(),
             mcp_servers: Vec::new(),
             policy: PermissionPolicy::deny_all(),
             env_remove: Vec::new(),
@@ -143,6 +149,10 @@ struct Shared {
     exit_status: Mutex<Option<String>>,
     /// Short name of the agent for messages (`agy`).
     label: String,
+    /// `toolCallId` -> whether NexQ allowed it (an answered permission request).
+    decisions: Mutex<HashMap<String, bool>>,
+    /// A folder made for this session, deleted with the process.
+    owned_dir: Option<PathBuf>,
 }
 
 impl Shared {
@@ -178,7 +188,7 @@ impl Shared {
         }
     }
 
-    /// End the process and everything it started.
+    /// End the process and everything it started, and delete its own folder.
     fn kill_process(&self) {
         let child = self.child.lock().unwrap().take();
         let tree = self.tree.lock().unwrap().take();
@@ -188,8 +198,16 @@ impl Shared {
                 let _ = child.kill();
                 let _ = child.wait();
             }
-            (None, _) => {}
+            (None, _) => return,
         }
+        if let Some(dir) = &self.owned_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    /// Did NexQ allow this tool call? (Never, for one it was not asked about.)
+    fn was_allowed(&self, tool_call_id: &str) -> bool {
+        self.decisions.lock().unwrap().get(tool_call_id).copied().unwrap_or(false)
     }
 
     /// Kill an unresponsive process; `reason` becomes its crash reason.
@@ -216,6 +234,8 @@ pub struct AcpSession {
     /// The FIFO turn lock; the holder owns the current turn's events.
     turn: Arc<AsyncMutex<mpsc::UnboundedReceiver<Event>>>,
     session_id: String,
+    /// Ids of the modes `session/new` offered (what Antigravity gives, for the record).
+    modes: Vec<String>,
     timeouts: SessionTimeouts,
     /// Text from `append_context`, sent in front of the next prompt.
     pending_context: Mutex<Vec<String>>,
@@ -244,15 +264,16 @@ impl AcpSession {
         let policy = Arc::new(launch.policy.clone());
         let (program, args, cwd, env_remove) =
             (launch.program.clone(), launch.args.clone(), launch.cwd.clone(), launch.env_remove.clone());
-        let (shared, mut events) = tokio::task::spawn_blocking(move || start_process(&program, &args, &cwd, &env_remove, policy))
-            .await
-            .map_err(|e| AgentError::Spawn(format!("spawn task failed: {e}")))??;
+        let owned = launch.remove_cwd_on_close.then(|| launch.cwd.clone());
+        let (shared, mut events) =
+            tokio::task::spawn_blocking(move || start_process(&program, &args, &cwd, &env_remove, policy, owned))
+                .await
+                .map_err(|e| AgentError::Spawn(format!("spawn task failed: {e}")))??;
         let next_id = AtomicU64::new(1);
 
         let hello = Handshake {
             cwd: &launch.cwd,
             mcp_servers: &launch.mcp_servers,
-            additional_dirs: &launch.additional_dirs,
             system_prompt: &launch.system_prompt,
             model: &launch.model,
         };
@@ -286,6 +307,7 @@ impl AcpSession {
             next_id,
             turn: Arc::new(AsyncMutex::new(events)),
             session_id: opened.session.session_id,
+            modes: opened.session.modes,
             timeouts,
             pending_context: Mutex::new(Vec::new()),
             instructions: Mutex::new(instructions),
@@ -387,6 +409,11 @@ impl AcpSession {
     /// `(id, name)` of the models `session/new` offered.
     pub fn models(&self) -> &[(String, String)] {
         &self.models
+    }
+
+    /// The ids of the modes the agent offered in `session/new`.
+    pub fn modes(&self) -> &[String] {
+        &self.modes
     }
 
     /// What `initialize` said about the agent.
@@ -496,6 +523,7 @@ async fn drive_turn(
     let started = Instant::now();
     let mut text = String::new();
     let mut announced: HashSet<String> = HashSet::new();
+    let mut tool_names: HashMap<String, String> = HashMap::new();
     let mut finished: HashSet<String> = HashSet::new();
     let mut drain_deadline: Option<tokio::time::Instant> = None;
     let outcome = loop {
@@ -521,6 +549,25 @@ async fn drive_turn(
                         let _ = tx.send(TurnMsg::Thinking);
                     }
                     Update::ToolCall(info) | Update::ToolCallUpdate(info) => {
+                        // Later updates may carry no name: keep the first one.
+                        if !info.name.is_empty() {
+                            tool_names.entry(info.id.clone()).or_insert_with(|| info.name.clone());
+                        } else if !info.title.is_empty() {
+                            tool_names.entry(info.id.clone()).or_insert_with(|| info.title.clone());
+                        }
+                        // A tool that ran (it completed) without NexQ allowing it:
+                        // the agent auto-allowed it. Kill the process (a cancel
+                        // would only ask the agent to stop itself).
+                        if info.status.as_deref() == Some("completed") && !shared.was_allowed(&info.id) {
+                            let tool = tool_names.get(&info.id).cloned().unwrap_or_else(|| "unknown".to_string());
+                            shared.terminate(&format!("the agent ran {tool} without NexQ's approval"));
+                            break Err(AgentError::Cli(
+                                AgentErrorKind::Other,
+                                format!(
+                                    "Antigravity used its own {tool} tool, which NexQ does not allow. The session was closed."
+                                ),
+                            ));
+                        }
                         if announced.insert(info.id.clone()) {
                             let _ = tx.send(TurnMsg::Tool(acp::tool_use_for_activity(&info, &servers)));
                         }
@@ -593,7 +640,6 @@ fn rpc_error(e: &RpcError) -> AgentError {
 struct Handshake<'a> {
     cwd: &'a Path,
     mcp_servers: &'a [Value],
-    additional_dirs: &'a [PathBuf],
     system_prompt: &'a str,
     /// Empty: keep the agent's default model.
     model: &'a str,
@@ -637,15 +683,20 @@ async fn handshake(
     let init = rpc(shared, events, next_id, "initialize", acp::initialize_params()).await?;
     let agent = acp::parse_initialize(&init);
     let in_meta = agent.system_prompt_append && !h.system_prompt.trim().is_empty();
-    let params = acp::session_new_params(
-        h.cwd,
-        h.mcp_servers,
-        h.additional_dirs,
-        agent.additional_directories,
-        in_meta.then_some(h.system_prompt),
-    );
+    let params = acp::session_new_params(h.cwd, h.mcp_servers, in_meta.then_some(h.system_prompt));
     let new = rpc(shared, events, next_id, "session/new", params).await?;
     let session = acp::parse_session_new(&new).map_err(|e| AgentError::Cli(AgentErrorKind::Other, e))?;
+    log::info!(
+        "{} offers modes {:?} (current {:?})",
+        shared.label, session.modes, session.current_mode
+    );
+    if let Some(mode) = session.safer_mode() {
+        // A refusal is not fatal: the permission policy and the watch over tool
+        // calls hold in any mode.
+        if let Err(e) = rpc(shared, events, next_id, "session/set_mode", acp::set_mode_params(&session.session_id, &mode)).await {
+            log::warn!("{} would not switch to mode {mode}: {e}", shared.label);
+        }
+    }
     if !h.model.is_empty() && session.current_model.as_deref() != Some(h.model) {
         rpc(shared, events, next_id, "session/set_model", acp::set_model_params(&session.session_id, h.model))
             .await
@@ -665,12 +716,12 @@ pub async fn probe_models(program: PathBuf, args: Vec<String>) -> Result<Vec<(St
     let cwd = sandbox_dir();
     let (p, a, c) = (program.clone(), args, cwd.clone());
     let (shared, mut events) = tokio::task::spawn_blocking(move || {
-        start_process(&p, &a, &c, &[], Arc::new(PermissionPolicy::deny_all()))
+        start_process(&p, &a, &c, &[], Arc::new(PermissionPolicy::deny_all()), None)
     })
     .await
     .map_err(|e| AgentError::Spawn(format!("spawn task failed: {e}")))??;
     let next_id = AtomicU64::new(1);
-    let hello = Handshake { cwd: &cwd, mcp_servers: &[], additional_dirs: &[], system_prompt: "", model: "" };
+    let hello = Handshake { cwd: &cwd, mcp_servers: &[], system_prompt: "", model: "" };
     let opened = tokio::time::timeout(
         default_timeouts().init,
         handshake(&shared, &mut events, &next_id, &hello),
@@ -694,6 +745,7 @@ fn start_process(
     cwd: &Path,
     env_remove: &[String],
     policy: Arc<PermissionPolicy>,
+    owned_dir: Option<PathBuf>,
 ) -> Result<Started, AgentError> {
     let mut cmd = Command::new(program);
     cmd.args(args);
@@ -729,6 +781,8 @@ fn start_process(
         stderr_done: AtomicBool::new(false),
         exit_status: Mutex::new(None),
         label: label_of(program, args),
+        decisions: Mutex::new(HashMap::new()),
+        owned_dir,
     });
 
     // A pipe thread that fails to start must not leave the child running.
@@ -825,12 +879,14 @@ fn start_process(
 fn answer_request(shared: &Shared, policy: &PermissionPolicy, id: &Value, method: &str, params: &Value) {
     let line = if method == "session/request_permission" {
         let (req, outcome) = permission::decide_params(params, policy);
+        let allowed = outcome.is_allow(&req);
+        shared.decisions.lock().unwrap().insert(req.tool_call_id.clone(), allowed);
         log::info!(
             "{} permission: {} ({}) -> {}",
             shared.label,
             req.tool_name,
             req.kind,
-            if outcome.is_allow(&req) { "allowed" } else { "refused" }
+            if allowed { "allowed" } else { "refused" }
         );
         acp::response_ok(id, outcome.to_result())
     } else {

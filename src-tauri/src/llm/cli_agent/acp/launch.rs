@@ -2,19 +2,40 @@
 
 use std::path::{Path, PathBuf};
 
-/// Antigravity CLI: `agy acp --disable-telemetry --sandbox`.
+/// NexQ's own Antigravity data folder, `%LOCALAPPDATA%\NexQ\agent-agy`
+/// (`--gemini-dir`): sessions, the brain folder and settings of NexQ's sessions
+/// live here, not in the user's `~/.gemini`, and none of the user's own MCP
+/// servers, plugins, skills or rules in there are loaded. Checked with
+/// `agy` 1.5.14: sign-in survives (it is kept outside that folder), the folder
+/// is created by `agy`, and a user MCP server marker never started.
+pub fn agy_home_dir() -> PathBuf {
+    let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    base.join("NexQ").join("agent-agy")
+}
+
+/// Antigravity CLI: `agy acp --disable-telemetry --sandbox --gemini-dir <NexQ's folder>`.
 ///
 /// - `--disable-telemetry`: no usage reporting from a hidden session.
 /// - `--sandbox`: "terminal restrictions enabled", a second wall behind the
-///   permission policy (verified: reads and MCP calls still work).
+///   permission policy and the session's watch over tool calls.
+/// - `--gemini-dir`: see [`agy_home_dir`].
 ///
-/// `agy acp` has no flag that drops the user's own MCP servers, plugins or
-/// rules (`agy mcp`/`agy plugin` manage them, the `--settings` flag exists only
-/// on the main command), and no `--model` flag: the model is set with
-/// `session/set_model` after `session/new`. A notes folder goes in
-/// `session/new`'s `additionalDirectories` (advertised by the agent).
+/// `agy acp` has no `--model` flag: the model is set with `session/set_model`
+/// after `session/new`. No folder of the user's is given to it: the cwd is an
+/// empty NexQ folder and the notes come from the `nexq_notes` MCP server.
 pub fn antigravity_args() -> Vec<String> {
-    vec!["acp".into(), "--disable-telemetry".into(), "--sandbox".into()]
+    antigravity_args_in(&agy_home_dir())
+}
+
+/// [`antigravity_args`] for a given data folder.
+pub fn antigravity_args_in(home: &Path) -> Vec<String> {
+    vec![
+        "acp".into(),
+        "--disable-telemetry".into(),
+        "--sandbox".into(),
+        "--gemini-dir".into(),
+        home.to_string_lossy().into_owned(),
+    ]
 }
 
 /// `%LOCALAPPDATA%\agy\bin\agy.exe` (where the installer puts it) under `local_app_data`.
@@ -56,7 +77,11 @@ mod tests {
 
     #[test]
     fn antigravity_args_are_acp_without_telemetry() {
-        assert_eq!(antigravity_args(), vec!["acp", "--disable-telemetry", "--sandbox"]);
+        let args = antigravity_args_in(Path::new("C:\\Data\\agent-agy"));
+        assert_eq!(args, vec!["acp", "--disable-telemetry", "--sandbox", "--gemini-dir", "C:\\Data\\agent-agy"]);
+        // NexQ's own folder, not the user's `.gemini`.
+        let own = antigravity_args();
+        assert!(own[4].ends_with("agent-agy") && !own[4].contains(".gemini"), "{own:?}");
     }
 
     #[test]

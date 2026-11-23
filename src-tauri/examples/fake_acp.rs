@@ -3,7 +3,8 @@
 //! Launch flags (the session passes its `AcpLaunch.args` through untouched):
 //! - `--record <path>`: every stdin line received is appended to this file.
 //! - `--meta`: advertise `_meta.antigravity.systemPrompt.append` (Antigravity style).
-//! - `--dirs`: advertise `sessionCapabilities.additionalDirectories`.
+//! - `--mode-auto`: `session/new` says the current mode is `auto` (the modes
+//!   offered are `auto`, `default`, `plan`); otherwise it is `default`.
 //! - `--login-fail`: `session/new` fails with `-32000` "API key is missing".
 //! - `--bad-model`: `session/set_model` fails.
 //! - `--exit-on-start`: print an auth error on stderr and exit 1 before `initialize`.
@@ -14,6 +15,10 @@
 //! - `perm:<kind>:<tool>:<path>`: asks for permission (kind `read`, `execute`, ...),
 //!   announces a `tool_call`, then ends it `completed` or `failed` by the answer, and
 //!   says `perm:allowed` or `perm:rejected`. `<path>` may be empty.
+//! - `auto:<kind>:<tool>`: a tool call that the agent auto-allows, like
+//!   Antigravity's reads and writes in its working directory and its web
+//!   search: `tool_call` in progress and `completed`, with no permission
+//!   request. Says `auto:done` if the session lets it finish the turn.
 //! - `fsreq`: sends an `fs/read_text_file` request and says `fs:error` if it got an error reply.
 //! - `slow`: 100 chunks, 50 ms apart; `session/cancel` ends it with `stopReason: cancelled`.
 //! - `crash`: one chunk, then exit code 1 with a line on stderr.
@@ -108,9 +113,6 @@ fn main() {
                 if flag("--meta") {
                     caps["_meta"] = json!({"antigravity": {"systemPrompt": {"append": true}}});
                 }
-                if flag("--dirs") {
-                    caps["sessionCapabilities"] = json!({"additionalDirectories": {}});
-                }
                 reply(&id, json!({
                     "protocolVersion": 1,
                     "agentCapabilities": caps,
@@ -123,8 +125,17 @@ fn main() {
                     reply_err(&id, -32000, "Gemini API key is missing or not configured.");
                     continue;
                 }
+                let current_mode = if flag("--mode-auto") { "auto" } else { "default" };
                 reply(&id, json!({
                     "sessionId": "fake-sid",
+                    "modes": {
+                        "currentModeId": current_mode,
+                        "availableModes": [
+                            {"id": "auto", "name": "Auto"},
+                            {"id": "default", "name": "Default"},
+                            {"id": "plan", "name": "Plan"},
+                        ],
+                    },
                     "models": {
                         "availableModels": [
                             {"modelId": "fake-fast", "name": "Fake Fast"},
@@ -134,6 +145,7 @@ fn main() {
                     },
                 }));
             }
+            "session/set_mode" => reply(&id, json!({})),
             "session/set_model" => {
                 if flag("--bad-model") {
                     reply_err(&id, -32602, "Invalid params: unknown model");
@@ -194,6 +206,17 @@ fn prompt(rx: &Receiver<Value>, id: &Value, text: &str, last: &str, next_agent_i
             let allowed = answer["result"]["outcome"]["optionId"] == "allow";
             update(json!({"sessionUpdate": "tool_call_update", "toolCallId": call_id, "status": if allowed { "completed" } else { "failed" }}));
             chunk(if allowed { "perm:allowed" } else { "perm:rejected" });
+            end_turn(id);
+        }
+        "auto" => {
+            let mut parts = last.splitn(3, ':').skip(1);
+            let kind = parts.next().unwrap_or("read");
+            let tool = parts.next().filter(|t| !t.is_empty()).unwrap_or("read_file");
+            let call_id = format!("{tool}-auto-{}", *next_agent_id);
+            *next_agent_id += 1;
+            update(json!({"sessionUpdate": "tool_call", "toolCallId": call_id, "name": tool, "kind": kind, "status": "in_progress", "title": tool, "rawInput": {"Path": "inside.txt"}}));
+            update(json!({"sessionUpdate": "tool_call_update", "toolCallId": call_id, "status": "completed"}));
+            chunk("auto:done");
             end_turn(id);
         }
         "fsreq" => {

@@ -12,13 +12,16 @@
 //!   reader completes a `oneshot` per request.
 //! - The server asks questions (approvals). The stdout reader answers them
 //!   straight away with `policy::decide`, so a turn never waits on an approval.
+//! - Fail closed: the session has no shell and no file tools, so a command or
+//!   file change item that starts at all means something got past the launch
+//!   switches. The turn is interrupted, the process killed and the turn fails.
 //! - There is no "append without a model call" message: `append_context` queues
 //!   the text and the next `ask` prepends it.
 
 use super::launch::{build_args, configure_command, discover_user_mcp_servers, CodexLaunch};
 use super::policy::{decide, CodexPolicy};
 use super::protocol::{
-    self, Account, CommandAction, Incoming, Item, Notification, RpcError, ServerRequest, ThreadStart, TurnStatus, Usage,
+    self, Account, Incoming, Item, Notification, RpcError, ServerRequest, ThreadStart, TurnStatus, Usage,
 };
 use crate::llm::cli_agent::manager::{OnDelta, SessionHandle};
 use crate::llm::cli_agent::process_tree::ProcessTree;
@@ -28,10 +31,9 @@ use crate::llm::cli_agent::session::{
     SessionTimeouts, THINKING_SIGNAL,
 };
 use crate::llm::provider::CancelToken;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc, Mutex};
@@ -59,8 +61,6 @@ pub fn default_timeouts() -> SessionTimeouts {
 /// What the stdout reader needs to answer the server's questions.
 struct Approvals {
     policy: CodexPolicy,
-    readable_dirs: Vec<PathBuf>,
-    cwd: PathBuf,
 }
 
 /// State shared with the pipe threads and turn drivers.
@@ -199,11 +199,7 @@ impl CodexSession {
             })?,
         };
         let args = build_args(&launch, &user_servers);
-        let approvals = Arc::new(Approvals {
-            policy: launch.policy.clone(),
-            readable_dirs: launch.readable_dirs.clone(),
-            cwd: launch.cwd.clone(),
-        });
+        let approvals = Arc::new(Approvals { policy: launch.policy.clone() });
         let spawn_launch = launch.clone();
         let (shared, events) =
             tokio::task::spawn_blocking(move || start_process(&spawn_launch, &args, approvals))
@@ -220,7 +216,7 @@ impl CodexSession {
             timeouts,
             init: Mutex::new(InitInfo::default()),
         };
-        match tokio::time::timeout(timeouts.init + MCP_STARTUP_WAIT, session.prime(&launch)).await.unwrap_or(Err(AgentError::Timeout)) {
+        match tokio::time::timeout(timeouts.init + MCP_STARTUP_WAIT, session.prime(&launch, &user_servers)).await.unwrap_or(Err(AgentError::Timeout)) {
             Ok(()) => Ok(session),
             Err(e) => {
                 session.close().await;
@@ -231,7 +227,7 @@ impl CodexSession {
 
     /// `initialize`, sign-in check, `thread/start`, and (for NexQ's own MCP
     /// servers) the wait for their startup.
-    async fn prime(&mut self, launch: &CodexLaunch) -> Result<(), AgentError> {
+    async fn prime(&mut self, launch: &CodexLaunch, user_servers: &[String]) -> Result<(), AgentError> {
         let version = env!("CARGO_PKG_VERSION");
         let (id, rx) = self.shared.register();
         self.send_line(protocol::initialize_request(id, version))?;
@@ -257,13 +253,13 @@ impl CodexSession {
             }
         }
 
-        let developer = developer_instructions(&launch.readable_dirs);
+        let developer = developer_instructions(launch.has_notes);
         let start = ThreadStart {
             cwd: launch.cwd.to_string_lossy().into_owned(),
             model: launch.model.clone(),
             base_instructions: launch.system_prompt.clone(),
             developer_instructions: developer,
-            config: launch.thread_config(),
+            config: launch.thread_config(user_servers),
         };
         let (id, rx) = self.shared.register();
         self.send_line(protocol::thread_start_request(id, &start))?;
@@ -287,7 +283,9 @@ impl CodexSession {
             log::warn!("codex: unexpected MCP server `{}` ({})", server.name, server.status);
         }
         *self.init.lock().unwrap() = info.clone();
-        if !expected.is_empty() && nothing_usable(!launch.readable_dirs.is_empty(), &info) {
+        // The notes server is one of the servers: when it fails and nothing else
+        // is left, there is nothing to answer from.
+        if !expected.is_empty() && nothing_usable(false, &info) {
             let labels: Vec<(String, String)> = Vec::new();
             return Err(AgentError::NoUsableSources {
                 message: format!("{} didn't start", failed_server_names(&info, &labels)),
@@ -505,17 +503,14 @@ impl SessionHandle for CodexSession {
     }
 }
 
-/// The developer message that names the notes folders (and nothing else: the
-/// system prompt is the thread's base instructions).
-fn developer_instructions(dirs: &[PathBuf]) -> String {
-    if dirs.is_empty() {
-        return "You have no files to read. Answer from the conversation and your tools only. Never run commands that change anything.".to_string();
+/// The developer message about reading (and nothing else: the system prompt is
+/// the thread's base instructions). The session has no shell: notes come only
+/// from the `nexq_notes` tools.
+fn developer_instructions(has_notes: bool) -> String {
+    if !has_notes {
+        return "You have no files to read and no commands to run. Answer from the conversation and your tools only.".to_string();
     }
-    let list: Vec<String> = dirs.iter().map(|d| format!("- {}", d.display())).collect();
-    format!(
-        "You may read and search files only inside these notes folders:\n{}\nUse read-only commands there (list, read, search) and nothing else. Never read anywhere else, and never write, delete or run anything that changes a file.",
-        list.join("\n")
-    )
+    "You have no shell and no file access. The user's notes are available only through the nexq_notes tools: list_notes, search_notes and read_note (read-only). Call list_notes first. Do not try to run commands or change files.".to_string()
 }
 
 /// The user message: queued context first, then the question.
@@ -537,19 +532,6 @@ fn trim_queue(queue: &mut Vec<String>, max_chars: usize) {
     while total > max_chars && queue.len() > 1 {
         total -= queue.remove(0).chars().count();
     }
-}
-
-/// An activity chip for a command Codex classifies as reading notes: the same
-/// `Read` / `Grep` / `Glob` tool uses a Claude session reports.
-fn command_tool_use(id: &str, actions: &[CommandAction]) -> Option<ToolUse> {
-    let action = actions.first()?;
-    let (name, input) = match action {
-        CommandAction::Read { path } => ("Read", json!({ "file_path": path })),
-        CommandAction::Search { query, path } => ("Grep", json!({ "pattern": query, "path": path })),
-        CommandAction::ListFiles { path } => ("Glob", json!({ "pattern": path.as_deref().unwrap_or("*") })),
-        CommandAction::Unknown => return None,
-    };
-    Some(ToolUse { id: id.to_string(), name: name.to_string(), input })
 }
 
 /// A turn's token counts: Codex's `input` includes the cached part, NexQ's
@@ -655,6 +637,17 @@ async fn run_turn(
                     }
                 };
                 match event {
+                    // No shell and no file tools exist for this session: a
+                    // command or a file change that starts is a breach.
+                    Notification::ItemStarted { item: Item::CommandExecution { .. } | Item::FileChange { .. }, .. } => {
+                        interrupt(shared, &mut interrupted);
+                        shared.terminate("a command or file change started");
+                        return Err(AgentError::Cli(
+                            AgentErrorKind::Other,
+                            "Codex tried to run a command or change a file, which NexQ does not allow. The session was closed."
+                                .to_string(),
+                        ));
+                    }
                     Notification::AgentMessageDelta { turn_id: t, item_id, delta } if t == turn_id => {
                         if !commentary.contains(&item_id) {
                             // Model text can't carry the activity marker.
@@ -685,12 +678,6 @@ async fn run_turn(
                                 input: arguments,
                             }));
                         }
-                        Item::CommandExecution { id, actions, .. } => {
-                            if let Some(tool) = command_tool_use(&id, &actions) {
-                                open_tools.insert(id);
-                                let _ = tx.send(TurnMsg::Tool(tool));
-                            }
-                        }
                         _ => {}
                     },
                     Notification::ItemCompleted { turn_id: t, item } if t == turn_id => match item {
@@ -699,8 +686,7 @@ async fn run_turn(
                                 final_text = Some(strip_marker(text));
                             }
                         }
-                        Item::McpToolCall { id, status, .. } | Item::CommandExecution { id, status, .. }
-                            if open_tools.remove(&id) =>
+                        Item::McpToolCall { id, status, .. } if open_tools.remove(&id) =>
                         {
                             let _ = tx.send(TurnMsg::ToolDone(ToolResult {
                                 tool_use_id: id,
@@ -855,7 +841,7 @@ fn start_process(launch: &CodexLaunch, args: &[String], approvals: Arc<Approvals
                     let _ = event_tx.send(note);
                 }
                 Some(Incoming::Request { id, request }) => {
-                    let verdict = decide(&request, &approvals.policy, &approvals.readable_dirs, &approvals.cwd);
+                    let verdict = decide(&request, &approvals.policy);
                     log::info!("codex asked ({}): {:?}", request_name(&request), verdict);
                     let reply = protocol::reply_for(&request, verdict.is_allow());
                     out_shared.send_line(protocol::reply_line(&id, &reply));
@@ -983,26 +969,12 @@ mod tests {
     }
 
     #[test]
-    fn a_command_that_reads_notes_shows_as_a_read_chip() {
-        let read = command_tool_use("c1", &[CommandAction::Read { path: "D:\\notes\\a.md".into() }]).unwrap();
-        assert_eq!((read.name.as_str(), read.id.as_str()), ("Read", "c1"));
-        assert_eq!(read.input["file_path"], "D:\\notes\\a.md");
-        let grep =
-            command_tool_use("c2", &[CommandAction::Search { query: Some("budget".into()), path: None }]).unwrap();
-        assert_eq!(grep.name, "Grep");
-        assert_eq!(grep.input["pattern"], "budget");
-        assert_eq!(command_tool_use("c3", &[CommandAction::ListFiles { path: None }]).unwrap().name, "Glob");
-        assert!(command_tool_use("c4", &[CommandAction::Unknown]).is_none());
-        assert!(command_tool_use("c5", &[]).is_none());
-    }
-
-    #[test]
-    fn the_developer_message_names_the_notes_folders() {
-        let none = developer_instructions(&[]);
+    fn the_developer_message_points_to_the_notes_tools_only() {
+        let none = developer_instructions(false);
         assert!(none.contains("no files"));
-        let some = developer_instructions(&[PathBuf::from("D:\\notes"), PathBuf::from("D:\\wiki")]);
-        assert!(some.contains("- D:\\notes"));
-        assert!(some.contains("- D:\\wiki"));
+        let some = developer_instructions(true);
+        assert!(some.contains("list_notes") && some.contains("search_notes") && some.contains("read_note"));
+        assert!(some.contains("no shell"));
     }
 
     #[test]

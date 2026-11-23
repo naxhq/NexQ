@@ -12,7 +12,7 @@ pub mod permission;
 pub mod protocol;
 pub mod session;
 
-pub use launch::{antigravity_args, find_agy};
+pub use launch::{agy_home_dir, antigravity_args, find_agy};
 pub use permission::{decide, McpToolRule, Outcome, PermissionPolicy, PermissionRequest};
 pub use protocol::models_from_session_new;
 pub use session::{probe_models, AcpLaunch, AcpSession, ACP_STRIPPED_ENV};

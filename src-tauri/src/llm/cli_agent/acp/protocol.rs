@@ -5,7 +5,7 @@
 
 use crate::llm::cli_agent::protocol::{classify_error, AgentErrorKind, ToolUse, TurnResult};
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// The ACP protocol version NexQ speaks.
 pub const PROTOCOL_VERSION: u64 = 1;
@@ -46,26 +46,14 @@ pub fn initialize_params() -> Value {
     })
 }
 
-/// `session/new` params. `additionalDirectories` is only sent when the agent
-/// advertised it (an agent that does not know the field may reject it);
+/// `session/new` params. No `additionalDirectories`, ever: the agent reads
+/// nothing of the user's disk (the notes come through an MCP server).
 /// `system_prompt_append` goes in `_meta.antigravity.systemPrompt.append`.
-pub fn session_new_params(
-    cwd: &Path,
-    mcp_servers: &[Value],
-    additional_dirs: &[PathBuf],
-    send_additional_dirs: bool,
-    system_prompt_append: Option<&str>,
-) -> Value {
+pub fn session_new_params(cwd: &Path, mcp_servers: &[Value], system_prompt_append: Option<&str>) -> Value {
     let mut params = json!({
         "cwd": cwd.to_string_lossy(),
         "mcpServers": mcp_servers,
     });
-    if send_additional_dirs && !additional_dirs.is_empty() {
-        params["additionalDirectories"] = additional_dirs
-            .iter()
-            .map(|d| Value::String(d.to_string_lossy().into_owned()))
-            .collect();
-    }
     if let Some(text) = system_prompt_append {
         params["_meta"] = json!({ "antigravity": { "systemPrompt": { "append": text } } });
     }
@@ -75,6 +63,11 @@ pub fn session_new_params(
 /// `session/prompt` params: one text block.
 pub fn prompt_params(session_id: &str, text: &str) -> Value {
     json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": text }] })
+}
+
+/// `session/set_mode` params.
+pub fn set_mode_params(session_id: &str, mode_id: &str) -> Value {
+    json!({ "sessionId": session_id, "modeId": mode_id })
 }
 
 /// `session/set_model` params (verified against `agy acp`).
@@ -169,8 +162,6 @@ pub struct AgentInit {
     /// `agentCapabilities._meta.antigravity.systemPrompt.append`: the system
     /// prompt can travel in `session/new`'s `_meta`.
     pub system_prompt_append: bool,
-    /// `agentCapabilities.sessionCapabilities.additionalDirectories`.
-    pub additional_directories: bool,
     /// Ids of the login methods the agent offers (`oauth-personal`, ...).
     pub auth_methods: Vec<String>,
 }
@@ -185,7 +176,6 @@ pub fn parse_initialize(v: &Value) -> AgentInit {
         system_prompt_append: caps["_meta"]["antigravity"]["systemPrompt"]["append"]
             .as_bool()
             .unwrap_or(false),
-        additional_directories: caps["sessionCapabilities"]["additionalDirectories"].is_object(),
         auth_methods: v["authMethods"]
             .as_array()
             .map(|a| a.iter().filter_map(|m| m["id"].as_str().map(str::to_string)).collect())
@@ -199,6 +189,23 @@ pub struct NewSession {
     pub session_id: String,
     pub models: Vec<(String, String)>,
     pub current_model: Option<String>,
+    /// `modes.currentModeId`.
+    pub current_mode: Option<String>,
+    /// Ids of `modes.availableModes`.
+    pub modes: Vec<String>,
+}
+
+impl NewSession {
+    /// The mode to switch to: the first of `read-only`, `ask` and `default`
+    /// the agent offers, unless it is already the current one. (Antigravity
+    /// 1.5.14 offers `default`, `accept-edits`, `auto` and `plan`: no
+    /// read-only mode, and `plan` writes plan files, so only `default` fits.)
+    pub fn safer_mode(&self) -> Option<String> {
+        let wanted = ["read-only", "readonly", "read_only", "ask", "default"]
+            .iter()
+            .find(|m| self.modes.iter().any(|offered| offered == **m))?;
+        (self.current_mode.as_deref() != Some(*wanted)).then(|| wanted.to_string())
+    }
 }
 
 /// Parse the `session/new` result (the `result` object, or the whole response line).
@@ -213,6 +220,11 @@ pub fn parse_session_new(v: &Value) -> Result<NewSession, String> {
         session_id,
         models: models_from_session_new(v),
         current_model: v["models"]["currentModelId"].as_str().map(str::to_string),
+        current_mode: v["modes"]["currentModeId"].as_str().map(str::to_string),
+        modes: v["modes"]["availableModes"]
+            .as_array()
+            .map(|m| m.iter().filter_map(|m| m["id"].as_str().map(str::to_string)).collect())
+            .unwrap_or_default(),
     })
 }
 
@@ -506,16 +518,13 @@ mod tests {
 
     #[test]
     fn session_new_params_shape() {
-        let dirs = vec![PathBuf::from("C:\\Notes")];
-        let p = session_new_params(Path::new("C:\\Work"), &[], &dirs, true, Some("Be brief."));
+        let p = session_new_params(Path::new("C:\\Work"), &[], Some("Be brief."));
         assert_eq!(p["cwd"], "C:\\Work");
         assert_eq!(p["mcpServers"], json!([]));
-        assert_eq!(p["additionalDirectories"], json!(["C:\\Notes"]));
         assert_eq!(p["_meta"]["antigravity"]["systemPrompt"]["append"], "Be brief.");
-        // An agent that does not advertise additionalDirectories never gets the field.
-        let p = session_new_params(Path::new("C:\\Work"), &[], &dirs, false, None);
+        // The agent is never given a folder of the user's to read.
         assert!(p.get("additionalDirectories").is_none());
-        assert!(p.get("_meta").is_none());
+        assert!(session_new_params(Path::new("C:\\Work"), &[], None).get("_meta").is_none());
     }
 
     #[test]
@@ -559,7 +568,6 @@ mod tests {
         assert_eq!(agy.name, "Antigravity ACP Server");
         assert_eq!(agy.version, "1.5.14");
         assert!(agy.system_prompt_append);
-        assert!(agy.additional_directories);
         assert_eq!(agy.auth_methods, vec!["oauth-personal", "gemini-api-key"]);
     }
 
@@ -570,6 +578,18 @@ mod tests {
         assert_eq!(agy.current_model.as_deref(), Some("gemini-4-neon-high"));
         assert_eq!(agy.models.len(), 4);
         assert_eq!(agy.models[2], ("gemini-3.8-flash-low".to_string(), "Gemini 3.8 Flash (Low)".to_string()));
+        // The modes it offers: already in `default`, nothing to switch.
+        assert_eq!(agy.current_mode.as_deref(), Some("default"));
+        assert_eq!(agy.modes, vec!["default", "plan"]);
+        assert_eq!(agy.safer_mode(), None);
+        // Another current mode goes back to `default`; a read-only mode wins when offered.
+        let other = NewSession { current_mode: Some("auto".into()), modes: vec!["auto".into(), "default".into(), "plan".into()], ..agy.clone() };
+        assert_eq!(other.safer_mode().as_deref(), Some("default"));
+        let ro = NewSession { modes: vec!["default".into(), "read-only".into()], ..agy.clone() };
+        assert_eq!(ro.safer_mode().as_deref(), Some("read-only"));
+        // Nothing usable offered (or no modes at all): left alone.
+        assert_eq!(NewSession { modes: vec!["auto".into(), "plan".into()], ..agy.clone() }.safer_mode(), None);
+        assert_eq!(NewSession { modes: vec![], ..agy.clone() }.safer_mode(), None);
 
         // Result object or whole response: same list.
         assert_eq!(agy.models, models_from_session_new(&fixture("agy_session_new.json")["result"]));

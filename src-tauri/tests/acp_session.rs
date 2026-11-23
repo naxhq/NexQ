@@ -74,13 +74,8 @@ impl Scratch {
         let mut args: Vec<String> = vec!["--record".into(), self.record().to_string_lossy().into_owned()];
         args.extend(extra.iter().map(|a| a.to_string()));
         let mut launch = AcpLaunch::new(fake_bin(), args, self.root.clone());
-        launch.policy = PermissionPolicy::new(
-            std::slice::from_ref(&self.notes),
-            vec![McpToolRule::tool("srv", "search")],
-            vec![],
-        );
+        launch.policy = PermissionPolicy::new(vec![McpToolRule::tool("srv", "search")], vec![]);
         launch.mcp_servers = vec![serde_json::json!({"name": "srv", "command": "x", "args": [], "env": []})];
-        launch.additional_dirs = vec![self.notes.clone()];
         launch
     }
 
@@ -151,10 +146,10 @@ async fn streams_the_answer_thinking_once_and_usage() {
     let set_model = rec.iter().find(|m| m["method"] == "session/set_model").expect("set_model sent");
     assert_eq!(set_model["params"]["modelId"], "fake-deep");
     assert_eq!(set_model["params"]["sessionId"], "fake-sid");
-    // The session starts with no client fs or terminal, the cwd, the servers and the folders.
+    // The session starts with no client fs or terminal, the cwd and the servers.
     let new = rec.iter().find(|m| m["method"] == "session/new").unwrap();
     assert_eq!(new["params"]["mcpServers"][0]["name"], "srv");
-    assert!(new["params"].get("additionalDirectories").is_none(), "the fake did not advertise them");
+    assert_eq!(new["params"]["cwd"], s.root.to_string_lossy().as_ref());
     let init = rec.iter().find(|m| m["method"] == "initialize").unwrap();
     assert_eq!(init["params"]["clientCapabilities"]["terminal"], false);
 
@@ -167,13 +162,30 @@ async fn streams_the_answer_thinking_once_and_usage() {
 }
 
 #[tokio::test]
-async fn no_model_keeps_the_agents_default_and_sends_advertised_dirs() {
+async fn no_model_keeps_the_agents_default_and_no_folder_is_ever_given() {
     let s = Scratch::new("dirs");
-    let session = AcpSession::spawn(s.launch(&["--dirs"])).await.unwrap();
+    let session = AcpSession::spawn(s.launch(&[])).await.unwrap();
     let rec = s.recorded();
     assert!(rec.iter().all(|m| m["method"] != "session/set_model"));
     let new = rec.iter().find(|m| m["method"] == "session/new").unwrap();
-    assert_eq!(new["params"]["additionalDirectories"][0], s.notes.to_string_lossy().as_ref());
+    assert!(new["params"].get("additionalDirectories").is_none(), "{new}");
+    session.close().await;
+}
+
+#[tokio::test]
+async fn the_mode_goes_back_to_default_only_when_it_is_something_else() {
+    // Already `default`: nothing is sent.
+    let s = Scratch::new("mode-default");
+    let session = AcpSession::spawn(s.launch(&[])).await.unwrap();
+    assert_eq!(session.modes(), ["auto", "default", "plan"]);
+    assert!(s.recorded().iter().all(|m| m["method"] != "session/set_mode"));
+    session.close().await;
+
+    // Current mode `auto`: switched to `default`.
+    let s = Scratch::new("mode-auto");
+    let session = AcpSession::spawn(s.launch(&["--mode-auto"])).await.unwrap();
+    let set = s.recorded().into_iter().find(|m| m["method"] == "session/set_mode").expect("set_mode sent");
+    assert_eq!(set["params"], serde_json::json!({"sessionId": "fake-sid", "modeId": "default"}));
     session.close().await;
 }
 
@@ -251,21 +263,20 @@ async fn permission_requests_follow_the_policy() {
     assert_eq!(text, "perm:rejected");
     assert_eq!(tools_in(&deltas), vec![("run_command".to_string(), Some(true))]);
 
-    // read inside the notes folder: allowed, and it shows up as a Read chip source.
+    // A read of a file inside the old notes folder is refused like any other
+    // built-in tool: files are served by the notes server only.
     let (text, deltas) = ask_collect(&session, &format!("perm:read:read_file:{inside}")).await;
-    assert_eq!(text, "perm:allowed");
-    assert_eq!(tools_in(&deltas), vec![("Read".to_string(), Some(false))]);
-    let read = deltas.iter().find_map(|t| decode_activity(t)).unwrap();
-    assert_eq!(read.input["file_path"], inside.as_str());
+    assert_eq!(text, "perm:rejected");
+    assert_eq!(tools_in(&deltas), vec![("Read".to_string(), Some(true))]);
 
-    // read outside the folder, and a traversal out of it: refused.
+    // Outside the folder, a traversal, no path at all, an edit, a search, a web fetch: all refused.
     assert_eq!(ask_collect(&session, &format!("perm:read:read_file:{outside}")).await.0, "perm:rejected");
     let traversal = format!("{}\\..\\outside.md", s.notes.display());
     assert_eq!(ask_collect(&session, &format!("perm:read:read_file:{traversal}")).await.0, "perm:rejected");
-    // a read with no path at all: refused.
     assert_eq!(ask_collect(&session, "perm:read:read_file:").await.0, "perm:rejected");
-    // an edit inside the folder: refused.
     assert_eq!(ask_collect(&session, &format!("perm:edit:edit_file:{inside}")).await.0, "perm:rejected");
+    assert_eq!(ask_collect(&session, "perm:search:grep_search:").await.0, "perm:rejected");
+    assert_eq!(ask_collect(&session, "perm:fetch:read_url_content:").await.0, "perm:rejected");
 
     // An allowed MCP tool is allowed and named like Claude's `mcp__<server>__<tool>`.
     let (text, deltas) = ask_collect(&session, "perm:other:mcp_srv_search:").await;
@@ -277,10 +288,53 @@ async fn permission_requests_follow_the_policy() {
 
     // The reply the agent got is a JSON-RPC result with the selected option.
     let replies: Vec<Value> = s.recorded().into_iter().filter(|m| m["result"]["outcome"].is_object()).collect();
-    assert_eq!(replies.len(), 9);
+    assert_eq!(replies.len(), 11);
     assert_eq!(replies[0]["result"]["outcome"], serde_json::json!({"outcome": "selected", "optionId": "deny"}));
-    assert_eq!(replies[1]["result"]["outcome"]["optionId"], "allow");
+    assert_eq!(replies[1]["result"]["outcome"]["optionId"], "deny");
+    assert_eq!(replies[8]["result"]["outcome"]["optionId"], "allow", "only the MCP tool");
+    assert_eq!(replies.iter().filter(|r| r["result"]["outcome"]["optionId"] == "allow").count(), 1);
     session.close().await;
+}
+
+/// The agent runs a tool without asking (Antigravity does for reads and writes
+/// in its working directory and for web search): the turn fails, the process
+/// is killed, and nothing else is accepted from it.
+#[tokio::test]
+async fn a_tool_that_runs_without_approval_ends_the_session() {
+    for (kind, tool) in [("read", "read_file"), ("edit", "write_file"), ("search", "search_web"), ("execute", "run_command"), ("other", "mcp_srv_search")] {
+        let s = Scratch::new("auto");
+        let session = AcpSession::spawn(s.launch(&[])).await.unwrap();
+        // The session works before.
+        assert_eq!(ask(&session, "hello").await.unwrap().text, "Hello world");
+        let err = ask(&session, &format!("auto:{kind}:{tool}")).await.unwrap_err();
+        assert_eq!(err.kind(), AgentErrorKind::Other, "{tool}: {err:?}");
+        assert!(err.to_string().contains("does not allow") && err.to_string().contains(tool), "{err}");
+        assert!(!session.is_alive(), "{tool}: the process must be killed");
+        assert!(ask(&session, "hello").await.is_err(), "{tool}: no further turn");
+        session.close().await;
+    }
+}
+
+#[tokio::test]
+async fn the_sessions_own_folder_is_deleted_with_it() {
+    let s = Scratch::new("owndir");
+    let own = s.root.join("acp-session");
+    std::fs::create_dir_all(&own).unwrap();
+    let mut launch = s.launch(&[]);
+    launch.cwd = own.clone();
+    launch.remove_cwd_on_close = true;
+    let session = AcpSession::spawn(launch).await.unwrap();
+    std::fs::write(own.join("agent-wrote-this.txt"), "x").unwrap();
+    session.close().await;
+    assert!(!own.exists(), "the folder goes with the session");
+    // A folder that is not the session's own stays.
+    let keep = s.root.join("keep");
+    std::fs::create_dir_all(&keep).unwrap();
+    let mut launch = s.launch(&[]);
+    launch.cwd = keep.clone();
+    let session = AcpSession::spawn(launch).await.unwrap();
+    session.close().await;
+    assert!(keep.is_dir());
 }
 
 #[tokio::test]
@@ -420,9 +474,14 @@ fn agy() -> Option<PathBuf> {
     p.is_file().then_some(p)
 }
 
+/// A real, logged-in `agy` answers from a note through `nexq_notes` (this very
+/// test build's `nexq` in notes mode), and is refused a shell command, a read
+/// of a file outside, and every other built-in tool.
 #[tokio::test]
 #[ignore = "needs a logged-in Antigravity CLI; uses a few tokens"]
-async fn live_antigravity_reads_a_note_and_refuses_a_command() {
+async fn live_antigravity_reads_a_note_through_the_notes_server_and_refuses_the_rest() {
+    use nexq_lib::llm::cli_agent::command::SourcesLaunch;
+    use nexq_lib::llm::cli_agent::sources_convert::acp_sources_for;
     let Some(agy) = agy() else { return };
     let s = Scratch::new("live");
     std::fs::write(s.notes.join("falcon.md"), "Project Falcon launches on March 3.").unwrap();
@@ -430,24 +489,44 @@ async fn live_antigravity_reads_a_note_and_refuses_a_command() {
     assert!(!models.is_empty());
     let low = models.iter().find(|(id, _)| id.contains("flash") && id.ends_with("low")).unwrap_or(&models[0]).0.clone();
 
-    let mut launch = AcpLaunch::new(agy, nexq_lib::llm::cli_agent::acp::antigravity_args(), s.notes.clone());
+    let sources = acp_sources_for(
+        Some(&SourcesLaunch { add_dirs: vec![s.notes.clone()], ..Default::default() }),
+        Some(Path::new(env!("CARGO_BIN_EXE_nexq"))),
+    );
+    let cwd = s.root.join("acp-live");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let mut launch = AcpLaunch::new(agy, nexq_lib::llm::cli_agent::acp::antigravity_args(), cwd.clone());
+    launch.remove_cwd_on_close = true;
     launch.model = low;
-    launch.system_prompt = "Answer in one short line.".into();
-    launch.additional_dirs = vec![s.notes.clone()];
-    launch.policy = PermissionPolicy::new(std::slice::from_ref(&s.notes), vec![], vec![]);
+    launch.system_prompt = "Answer in one short line. Read the user's notes only with the list_notes, search_notes and read_note tools.".into();
+    launch.mcp_servers = sources.mcp_servers;
+    launch.policy = sources.policy;
     let session = AcpSession::spawn(launch).await.unwrap();
+    eprintln!("modes offered: {:?}", session.modes());
 
     let (text, deltas) = {
         let (deltas, on_delta) = collector();
-        let r = session.ask("What is the Project Falcon launch date? Read falcon.md in my notes folder.", on_delta, no_cancel()).await.unwrap();
+        let r = session.ask("What is the Project Falcon launch date? Look it up in my notes.", on_delta, no_cancel()).await.unwrap();
         let got = deltas.lock().unwrap().clone();
         (r.text, got)
     };
-    assert!(text.contains("March 3") || text.contains("3 March"), "{text}");
     eprintln!("tools: {:?}", tools_in(&deltas));
+    assert!(text.contains("March 3") || text.contains("3 March"), "{text}");
+    assert!(tools_in(&deltas).iter().any(|(name, done)| name.starts_with("mcp__nexq_notes__") && *done == Some(false)), "{:?}", tools_in(&deltas));
 
-    let r = ask(&session, &format!("Run the shell command: echo hi > {}\\out.txt . Then say whether it worked.", s.root.display())).await.unwrap();
-    eprintln!("command answer: {}", r.text);
-    assert!(!s.root.join("out.txt").exists(), "the command must not have run");
+    // A shell command is refused (or the model gives up): nothing runs.
+    let out = s.root.join("out.txt");
+    let r = ask(&session, &format!("Run the shell command: echo hi > {} . Then say whether it worked.", out.display())).await;
+    eprintln!("command answer: {r:?}");
+    assert!(!out.exists(), "the command must not have run");
+    // Reading a file outside is refused too.
+    if session.is_alive() {
+        let r = ask(&session, "Read the file C:\\Windows\\win.ini with read_file and quote its first line.").await;
+        eprintln!("win.ini answer: {r:?}");
+        if let Ok(r) = r {
+            assert!(!r.text.contains("[fonts]") && !r.text.to_lowercase().contains("for 16-bit app support"), "{}", r.text);
+        }
+    }
     session.close().await;
+    assert!(!cwd.exists());
 }

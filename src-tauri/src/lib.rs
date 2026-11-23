@@ -10,6 +10,7 @@ pub mod sources;
 pub mod llm;
 pub mod meeting_detect;
 pub mod nav_guard;
+pub mod notes_mcp;
 pub mod ort_runtime;
 pub mod state;
 pub mod stt;

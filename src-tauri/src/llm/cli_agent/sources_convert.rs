@@ -3,16 +3,21 @@
 //! JSON text, `--add-dir` folders, `mcp__<server>__<tool>` allow and deny
 //! lists) into what Antigravity (ACP) and Codex take.
 //!
+//! Neither of them is given a folder to read or a file tool to read it with.
+//! The notes folders become NexQ's own read-only MCP server (`nexq_notes`, see
+//! `notes_mcp`: `nexq.exe --notes-mcp`), which opens every file itself. What
+//! each CLI gets:
+//!
 //! - Antigravity: `session/new`'s `mcpServers` (stdio
 //!   `{name, command, args, env: [{name, value}]}`, http
-//!   `{type: "http", name, url, headers: [{name, value}]}`),
-//!   `additionalDirectories`, and a [`PermissionPolicy`] that answers its
-//!   `session/request_permission`.
+//!   `{type: "http", name, url, headers: [{name, value}]}`) and a
+//!   [`PermissionPolicy`] that allows only MCP tools: `nexq_notes`' three and
+//!   the user's allowed ones.
 //! - Codex: one config table per server (sent in `thread/start`'s `config`,
-//!   never on the command line), the readable folders, and a [`CodexPolicy`].
-//!   The allowed tools are also enforced by the server's own `enabled_tools`
-//!   (a tool outside it is not even offered), and the denied ones by
-//!   `disabled_tools`, on top of the approval decision.
+//!   never on the command line) and a [`CodexPolicy`]. The allowed tools are
+//!   also enforced by the server's own `enabled_tools` (a tool outside it is
+//!   not even offered), and the denied ones by `disabled_tools`, on top of the
+//!   approval decision.
 //!
 //! Secrets: each server's own values travel only in that server's entry. The
 //! outputs hold them, so none of these types is ever logged (the launch types
@@ -21,9 +26,10 @@
 use super::acp::permission::{McpToolRule, PermissionPolicy};
 use super::codex::policy::CodexPolicy;
 use super::command::SourcesLaunch;
+use crate::notes_mcp::{server_command, SERVER_KEY as NOTES_SERVER, TOOLS as NOTES_TOOLS};
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::Path;
 
 /// How long one MCP tool call may take for Codex (`tool_timeout_sec`), like
 /// Claude's `MCP_TOOL_TIMEOUT`.
@@ -31,16 +37,64 @@ const CODEX_TOOL_TIMEOUT_SEC: u64 = 20;
 /// Codex's MCP startup limit when the launch names none, like `MCP_TIMEOUT`.
 const CODEX_STARTUP_TIMEOUT_SEC: u64 = 20;
 
-/// `(server key, entry)` of every server in the launch's mcp-config JSON, in
-/// the file's order (the entry is `{command, args, env}` or `{type, url, headers}`).
-fn config_entries(launch: &SourcesLaunch) -> Vec<(String, Value)> {
-    let Some(text) = launch.mcp_config_json.as_deref() else { return Vec::new() };
-    let Ok(config) = serde_json::from_str::<Value>(text) else { return Vec::new() };
-    config["mcpServers"]
-        .as_object()
-        .map(|servers| servers.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-        .unwrap_or_default()
+/// Server keys a user server may not take: `nexq_notes` is ours, and `nexq`
+/// could name a tool that Antigravity's `mcp_<server>_<tool>` spelling makes
+/// look like one of ours (`mcp_nexq_notes_read_note`).
+const RESERVED_KEYS: [&str; 2] = [NOTES_SERVER, "nexq"];
+
+/// `(server key, entry)` of every user server in the launch's mcp-config JSON,
+/// in the file's order (the entry is `{command, args, env}` or
+/// `{type, url, headers}`), then NexQ's notes server when the launch has notes
+/// folders and `exe` (this program) is known.
+fn config_entries(launch: &SourcesLaunch, exe: Option<&Path>) -> Vec<(String, Value)> {
+    let mut entries: Vec<(String, Value)> = launch
+        .mcp_config_json
+        .as_deref()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .and_then(|config| {
+            config["mcpServers"].as_object().map(|servers| {
+                servers
+                    .iter()
+                    .filter(|(k, _)| !RESERVED_KEYS.contains(&k.as_str()))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            })
+        })
+        .unwrap_or_default();
+    if !launch.add_dirs.is_empty() {
+        match exe {
+            Some(exe) => entries.push((NOTES_SERVER.to_string(), server_command(exe, &launch.add_dirs))),
+            None => log::warn!("cannot find the NexQ program: the notes folders are not served"),
+        }
+    }
+    entries
 }
+
+/// The notes server's tools as allowed tools (`mcp__nexq_notes__<tool>`).
+fn notes_tool_names() -> Vec<String> {
+    NOTES_TOOLS.iter().map(|t| format!("mcp__{NOTES_SERVER}__{t}")).collect()
+}
+
+/// What a session that has notes folders is told about them: the Claude text
+/// from `sources::launch::sources_system_prompt` names Claude's file tools,
+/// which these CLIs do not have.
+pub fn adapt_system_prompt(prompt: &str, has_notes: bool) -> String {
+    let prompt = if has_notes {
+        prompt.replace(
+            crate::sources::launch::NOTES_TOOLS_HINT,
+            "read-only; use the list_notes, search_notes and read_note tools, which are the only way to read them",
+        )
+    } else {
+        prompt.to_string()
+    };
+    // The CLI's own tools (web search, file and shell tools) are refused, and
+    // one the CLI runs without asking ends the session, losing the answer.
+    format!("{prompt}\n\n{TOOL_RULE}")
+}
+
+/// Appended to every Antigravity and Codex session prompt.
+pub const TOOL_RULE: &str = "Never search the web, run commands, or read or write files with your own tools. \
+Answer from the conversation, and use only the MCP tools you are given.";
 
 /// Split `mcp__<key>__<tool>` into `(key, tool)` for the longest `key` among
 /// `servers` that fits (keys may contain underscores). `tool` may be `*`.
@@ -72,10 +126,8 @@ fn tools_by_server(names: &[String], servers: &[String]) -> Vec<(String, String)
 /// What an ACP session is given for its sources.
 #[derive(Clone, Default)]
 pub struct AcpSources {
-    /// `session/new`'s `mcpServers`. Hold secrets.
+    /// `session/new`'s `mcpServers`, `nexq_notes` included. Hold secrets.
     pub mcp_servers: Vec<Value>,
-    /// `session/new`'s `additionalDirectories`: the notes folders.
-    pub additional_dirs: Vec<PathBuf>,
     pub policy: PermissionPolicy,
 }
 
@@ -83,7 +135,6 @@ impl std::fmt::Debug for AcpSources {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AcpSources")
             .field("mcp_servers", &format_args!("<redacted, {}>", self.mcp_servers.len()))
-            .field("additional_dirs", &self.additional_dirs)
             .finish()
     }
 }
@@ -126,10 +177,15 @@ fn acp_server(key: &str, entry: &Value) -> Option<Value> {
 /// The ACP view of `launch`. `None` (a plain session): nothing, and a policy
 /// that allows nothing.
 pub fn acp_sources(launch: Option<&SourcesLaunch>) -> AcpSources {
+    acp_sources_for(launch, std::env::current_exe().ok().as_deref())
+}
+
+/// [`acp_sources`] for a given NexQ program (the notes server's command).
+pub fn acp_sources_for(launch: Option<&SourcesLaunch>, exe: Option<&Path>) -> AcpSources {
     let Some(launch) = launch else {
         return AcpSources { policy: PermissionPolicy::deny_all(), ..Default::default() };
     };
-    let entries = config_entries(launch);
+    let entries = config_entries(launch, exe);
     let keys: Vec<String> = entries.iter().map(|(k, _)| k.clone()).collect();
     let rule = |(key, tool): (String, String)| {
         if tool == "*" {
@@ -138,12 +194,15 @@ pub fn acp_sources(launch: Option<&SourcesLaunch>) -> AcpSources {
             McpToolRule::tool(&key, &tool)
         }
     };
-    let allow = tools_by_server(&launch.allowed_tools, &keys).into_iter().map(rule).collect();
+    let mut allowed_names = launch.allowed_tools.clone();
+    if keys.iter().any(|k| k == NOTES_SERVER) {
+        allowed_names.extend(notes_tool_names());
+    }
+    let allow = tools_by_server(&allowed_names, &keys).into_iter().map(rule).collect();
     let deny = tools_by_server(&launch.disallowed_tools, &keys).into_iter().map(rule).collect();
     AcpSources {
         mcp_servers: entries.iter().filter_map(|(k, e)| acp_server(k, e)).collect(),
-        additional_dirs: launch.add_dirs.clone(),
-        policy: PermissionPolicy::new(&launch.add_dirs, allow, deny),
+        policy: PermissionPolicy::new(allow, deny),
     }
 }
 
@@ -154,10 +213,11 @@ pub fn acp_sources(launch: Option<&SourcesLaunch>) -> AcpSources {
 /// What a Codex session is given for its sources.
 #[derive(Clone, Default)]
 pub struct CodexSources {
-    /// Server key -> its Codex config table (for `thread/start`'s `config`). Hold secrets.
+    /// Server key -> its Codex config table (for `thread/start`'s `config`),
+    /// `nexq_notes` included. Hold secrets.
     pub mcp_servers: Map<String, Value>,
-    /// The notes folders commands may read.
-    pub readable_dirs: Vec<PathBuf>,
+    /// Does the session have notes folders (served by `nexq_notes`)?
+    pub has_notes: bool,
     pub policy: CodexPolicy,
 }
 
@@ -165,7 +225,7 @@ impl std::fmt::Debug for CodexSources {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CodexSources")
             .field("mcp_servers", &format_args!("<redacted, {}>", self.mcp_servers.len()))
-            .field("readable_dirs", &self.readable_dirs)
+            .field("has_notes", &self.has_notes)
             .field("policy", &self.policy)
             .finish()
     }
@@ -199,10 +259,20 @@ fn codex_server(entry: &Value, enabled: Option<Vec<String>>, disabled: Vec<Strin
 
 /// The Codex view of `launch`. `None` (a plain session): nothing allowed.
 pub fn codex_sources(launch: Option<&SourcesLaunch>) -> CodexSources {
+    codex_sources_for(launch, std::env::current_exe().ok().as_deref())
+}
+
+/// [`codex_sources`] for a given NexQ program (the notes server's command).
+pub fn codex_sources_for(launch: Option<&SourcesLaunch>, exe: Option<&Path>) -> CodexSources {
     let Some(launch) = launch else { return CodexSources::default() };
-    let entries = config_entries(launch);
+    let entries = config_entries(launch, exe);
     let keys: Vec<String> = entries.iter().map(|(k, _)| k.clone()).collect();
-    let allowed = tools_by_server(&launch.allowed_tools, &keys);
+    let mut allowed_names = launch.allowed_tools.clone();
+    let has_notes = keys.iter().any(|k| k == NOTES_SERVER);
+    if has_notes {
+        allowed_names.extend(notes_tool_names());
+    }
+    let allowed = tools_by_server(&allowed_names, &keys);
     let denied = tools_by_server(&launch.disallowed_tools, &keys);
     let startup_sec = launch
         .mcp_startup_timeout_ms
@@ -233,17 +303,16 @@ pub fn codex_sources(launch: Option<&SourcesLaunch>) -> CodexSources {
             servers.insert(key.clone(), table);
         }
     }
-    CodexSources {
-        mcp_servers: servers,
-        readable_dirs: launch.add_dirs.clone(),
-        policy: CodexPolicy { allowed_tools: policy_tools },
-    }
+    CodexSources { mcp_servers: servers, has_notes, policy: CodexPolicy { allowed_tools: policy_tools } }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::llm::cli_agent::acp::permission::{decide, parse_request, PermissionRequest};
+    use std::path::PathBuf;
+
+    const EXE: &str = "C:\\Program Files\\NexQ\\nexq.exe";
 
     /// What `build_sources_launch` makes for a notes folder, a stdio server
     /// with two secret values and an http server with one secret header.
@@ -270,10 +339,18 @@ mod tests {
         }
     }
 
+    fn acp(l: &SourcesLaunch) -> AcpSources {
+        acp_sources_for(Some(l), Some(Path::new(EXE)))
+    }
+
+    fn codex(l: &SourcesLaunch) -> CodexSources {
+        codex_sources_for(Some(l), Some(Path::new(EXE)))
+    }
+
     #[test]
     fn acp_servers_use_the_acp_shapes() {
-        let a = acp_sources(Some(&launch("C:\\Notes")));
-        assert_eq!(a.mcp_servers.len(), 3);
+        let a = acp(&launch("C:\\Notes"));
+        assert_eq!(a.mcp_servers.len(), 4);
         let by_name = |n: &str| a.mcp_servers.iter().find(|s| s["name"] == n).unwrap().clone();
         let mira = by_name("mira");
         assert_eq!(mira["command"], "node");
@@ -289,31 +366,78 @@ mod tests {
         let srv = by_name("my_srv");
         assert_eq!(srv["env"], json!([]));
         assert_eq!(srv["args"], json!([]));
-        assert_eq!(a.additional_dirs, vec![PathBuf::from("C:\\Notes")]);
+    }
+
+    #[test]
+    fn the_notes_folders_become_the_notes_server_for_both_clis() {
+        let l = launch("C:\\My Notes");
+        let a = acp(&l);
+        let notes = a.mcp_servers.iter().find(|s| s["name"] == "nexq_notes").expect("notes server");
+        assert_eq!(notes["command"], EXE);
+        assert_eq!(notes["args"], json!(["--notes-mcp"]));
+        assert_eq!(notes["env"][0]["name"], "NEXQ_NOTES_DIRS");
+        let dirs: Vec<String> = serde_json::from_str(notes["env"][0]["value"].as_str().unwrap()).unwrap();
+        assert_eq!(dirs, ["C:\\My Notes"]);
+        let c = codex(&l);
+        let table = &c.mcp_servers["nexq_notes"];
+        assert_eq!(table["command"], EXE);
+        assert_eq!(table["args"], json!(["--notes-mcp"]));
+        assert_eq!(table["env"]["NEXQ_NOTES_DIRS"], notes["env"][0]["value"]);
+        assert_eq!(table["enabled_tools"], json!(["list_notes", "search_notes", "read_note"]));
+        assert!(c.has_notes);
+        for tool in ["list_notes", "search_notes", "read_note"] {
+            assert!(c.policy.allowed_tools.contains(&format!("mcp__nexq_notes__{tool}")), "{tool}");
+        }
+        // No notes folder, no notes server. Servers alone are not notes.
+        let mut none = launch("C:\\Notes");
+        none.add_dirs.clear();
+        assert!(!acp(&none).mcp_servers.iter().any(|s| s["name"] == "nexq_notes"));
+        assert!(!codex(&none).mcp_servers.contains_key("nexq_notes") && !codex(&none).has_notes);
+        // Without a known program there is nothing to start.
+        assert!(!acp_sources_for(Some(&l), None).mcp_servers.iter().any(|s| s["name"] == "nexq_notes"));
+    }
+
+    #[test]
+    fn a_user_server_cannot_take_the_notes_servers_name() {
+        let config = json!({ "mcpServers": {
+            "nexq_notes": { "command": "evil" },
+            "nexq": { "command": "evil2" },
+            "mira": { "command": "node" },
+        }});
+        let l = SourcesLaunch {
+            add_dirs: vec![PathBuf::from("C:\\Notes")],
+            mcp_config_json: Some(config.to_string()),
+            allowed_tools: vec!["mcp__nexq__notes_read_note".into()],
+            ..Default::default()
+        };
+        let a = acp(&l);
+        let names: Vec<&str> = a.mcp_servers.iter().map(|s| s["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["mira", "nexq_notes"]);
+        assert_eq!(a.mcp_servers[1]["command"], EXE, "the real notes server, not the user's");
+        assert!(!acp_allows(&a, "mcp_nexq_notes_write_note"));
+        assert!(!acp_allows(&a, "mcp_nexq_notes_read_note_extra"));
+        assert!(!codex(&l).mcp_servers.contains_key("nexq"));
     }
 
     #[test]
     fn secrets_stay_with_their_own_server_and_out_of_debug() {
-        let a = acp_sources(Some(&launch("C:\\Notes")));
+        let a = acp(&launch("C:\\Notes"));
         let text_of = |name: &str| a.mcp_servers.iter().find(|s| s["name"] == name).unwrap().to_string();
         assert!(text_of("mira").contains("mira-secret") && !text_of("mira").contains("wiki-secret"));
         assert!(text_of("wiki").contains("wiki-secret") && !text_of("wiki").contains("mira-secret"));
         assert!(!text_of("my_srv").contains("secret"));
         assert!(!format!("{a:?}").contains("secret"));
-        let c = codex_sources(Some(&launch("C:\\Notes")));
+        let c = codex(&launch("C:\\Notes"));
         let table = |k: &str| c.mcp_servers[k].to_string();
         assert!(table("mira").contains("mira-secret") && !table("mira").contains("wiki-secret"));
         assert!(table("wiki").contains("wiki-secret") && !table("wiki").contains("mira-secret"));
         assert!(!format!("{c:?}").contains("secret"));
     }
 
-    fn request(kind: &str, name: &str, path: Option<&str>) -> PermissionRequest {
+    fn request(kind: &str, name: &str) -> PermissionRequest {
         // Same shape the session builds from `session/request_permission`.
         parse_request(&json!({
-            "toolCall": {
-                "toolCallId": "t-1", "name": name, "kind": kind, "title": name,
-                "locations": path.map(|p| json!([{ "path": p }])).unwrap_or(json!([])),
-            },
+            "toolCall": { "toolCallId": "t-1", "name": name, "kind": kind, "title": name },
             "options": [
                 { "optionId": "allow", "name": "Allow", "kind": "allow_once" },
                 { "optionId": "reject", "name": "Reject", "kind": "reject_once" },
@@ -321,37 +445,40 @@ mod tests {
         }))
     }
 
+    fn acp_allows(a: &AcpSources, tool: &str) -> bool {
+        let r = request("other", tool);
+        decide(&r, &a.policy).is_allow(&r)
+    }
+
     #[test]
-    fn the_acp_policy_allows_allowed_tools_and_notes_reads_only() {
-        let root = std::env::temp_dir().join(format!("nexq-convert-{}", std::process::id()));
-        let notes = root.join("notes");
-        std::fs::create_dir_all(&notes).unwrap();
-        std::fs::write(notes.join("a.md"), "a").unwrap();
-        let notes = std::fs::canonicalize(&notes).unwrap();
-        let notes_plain = PathBuf::from(notes.to_string_lossy().trim_start_matches(r"\\?\").to_string());
-        let a = acp_sources(Some(&launch(&notes_plain.to_string_lossy())));
-        let allowed = |r: &PermissionRequest| decide(r, &a.policy).is_allow(r);
-        assert!(allowed(&request("read", "read_file", Some(&notes_plain.join("a.md").to_string_lossy()))));
-        assert!(!allowed(&request("read", "read_file", Some(&root.join("x.md").to_string_lossy()))));
-        assert!(allowed(&request("other", "mcp_mira_kb_search", None)));
+    fn the_acp_policy_allows_the_notes_tools_and_the_allowed_tools_only() {
+        let a = acp(&launch("C:\\Notes"));
+        for tool in ["list_notes", "search_notes", "read_note"] {
+            assert!(acp_allows(&a, &format!("mcp_nexq_notes_{tool}")), "{tool}");
+        }
+        assert!(!acp_allows(&a, "mcp_nexq_notes_write_note"));
+        assert!(acp_allows(&a, "mcp_mira_kb_search"));
         // Denied tools are refused, even one that is also in the allow list.
-        assert!(!allowed(&request("other", "mcp_mira_send_mail", None)));
-        assert!(!allowed(&request("other", "mcp_mira_kb_read", None)));
+        assert!(!acp_allows(&a, "mcp_mira_send_mail"));
+        assert!(!acp_allows(&a, "mcp_mira_kb_read"));
         // A whole-server rule, a server with an underscore in its key, an unknown tool.
-        assert!(allowed(&request("other", "mcp_wiki_anything", None)));
-        assert!(allowed(&request("other", "mcp_my_srv_do_it", None)));
-        assert!(!allowed(&request("other", "mcp_mira_other_tool", None)));
-        assert!(!allowed(&request("execute", "run_command", None)));
-        // A plain session allows nothing at all.
+        assert!(acp_allows(&a, "mcp_wiki_anything"));
+        assert!(acp_allows(&a, "mcp_my_srv_do_it"));
+        assert!(!acp_allows(&a, "mcp_mira_other_tool"));
+        // The built-in tools are never allowed, whatever they are called or ask for.
+        for (kind, name) in [("read", "read_file"), ("execute", "run_command"), ("search", "grep_search"), ("edit", "write_file")] {
+            let r = request(kind, name);
+            assert!(!decide(&r, &a.policy).is_allow(&r), "{name}");
+        }
+        // A plain session allows nothing at all and has no servers.
         let none = acp_sources(None);
-        assert!(none.mcp_servers.is_empty() && none.additional_dirs.is_empty());
-        assert!(!decide(&request("other", "mcp_mira_kb_search", None), &none.policy).is_allow(&request("other", "mcp_mira_kb_search", None)));
-        let _ = std::fs::remove_dir_all(&root);
+        assert!(none.mcp_servers.is_empty());
+        assert!(!acp_allows(&none, "mcp_mira_kb_search") && !acp_allows(&none, "mcp_nexq_notes_read_note"));
     }
 
     #[test]
     fn codex_tables_enforce_the_allowed_tools_themselves() {
-        let c = codex_sources(Some(&launch("C:\\Notes")));
+        let c = codex(&launch("C:\\Notes"));
         let mira = &c.mcp_servers["mira"];
         assert_eq!(mira["command"], "node");
         assert_eq!(mira["args"], json!(["s.js", "--x"]));
@@ -371,14 +498,13 @@ mod tests {
         // A server with nothing allowed gets an empty list: no tool at all.
         let mut none_allowed = launch("C:\\Notes");
         none_allowed.allowed_tools.retain(|t| !t.starts_with("mcp__my_srv"));
-        let c2 = codex_sources(Some(&none_allowed));
+        let c2 = codex(&none_allowed);
         assert_eq!(c2.mcp_servers["my_srv"]["enabled_tools"], json!([]));
     }
 
     #[test]
-    fn the_codex_policy_and_folders() {
-        let c = codex_sources(Some(&launch("C:\\Notes")));
-        assert_eq!(c.readable_dirs, vec![PathBuf::from("C:\\Notes")]);
+    fn the_codex_policy_allows_mcp_tools_only() {
+        let c = codex(&launch("C:\\Notes"));
         let tools = &c.policy.allowed_tools;
         assert!(tools.contains("mcp__mira__kb_search"));
         assert!(!tools.contains("mcp__mira__kb_read"), "denied");
@@ -389,27 +515,38 @@ mod tests {
         assert!(!tools.iter().any(|t| t == "Read" || t.starts_with("Read(")));
         // A plain session: nothing.
         let none = codex_sources(None);
-        assert!(none.mcp_servers.is_empty() && none.readable_dirs.is_empty() && none.policy.allowed_tools.is_empty());
+        assert!(none.mcp_servers.is_empty() && !none.has_notes && none.policy.allowed_tools.is_empty());
     }
 
     #[test]
     fn a_check_launch_timeout_becomes_seconds() {
         let mut l = launch("C:\\Notes");
         l.mcp_startup_timeout_ms = Some(60_000);
-        assert_eq!(codex_sources(Some(&l)).mcp_servers["mira"]["startup_timeout_sec"], 60);
+        assert_eq!(codex(&l).mcp_servers["mira"]["startup_timeout_sec"], 60);
         l.mcp_startup_timeout_ms = Some(1_500);
-        assert_eq!(codex_sources(Some(&l)).mcp_servers["mira"]["startup_timeout_sec"], 2);
+        assert_eq!(codex(&l).mcp_servers["mira"]["startup_timeout_sec"], 2);
     }
 
     #[test]
-    fn a_launch_without_servers_or_with_bad_json_converts_to_nothing_but_folders() {
+    fn a_launch_without_servers_or_with_bad_json_converts_to_the_notes_server_only() {
         let l = SourcesLaunch { add_dirs: vec![PathBuf::from("C:\\Notes")], ..Default::default() };
-        let a = acp_sources(Some(&l));
-        assert!(a.mcp_servers.is_empty());
-        assert_eq!(a.additional_dirs.len(), 1);
+        let a = acp(&l);
+        assert_eq!(a.mcp_servers.len(), 1);
+        assert_eq!(a.mcp_servers[0]["name"], "nexq_notes");
         let bad = SourcesLaunch { mcp_config_json: Some("{not json".into()), ..Default::default() };
-        assert!(acp_sources(Some(&bad)).mcp_servers.is_empty());
-        assert!(codex_sources(Some(&bad)).mcp_servers.is_empty());
+        assert!(acp(&bad).mcp_servers.is_empty());
+        assert!(codex(&bad).mcp_servers.is_empty());
+    }
+
+    #[test]
+    fn the_prompt_names_the_notes_tools_instead_of_claudes_file_tools() {
+        let folder = crate::sources::config::NotesFolder { id: "n".into(), label: "Notes".into(), path: "C:\\Notes".into(), enabled: true };
+        let text = crate::sources::launch::sources_system_prompt(&[&folder], &[]);
+        assert!(text.contains("Grep"), "Claude's wording: {text}");
+        let adapted = adapt_system_prompt(&text, true);
+        assert!(adapted.contains("list_notes, search_notes and read_note") && !adapted.contains("Grep"), "{adapted}");
+        assert!(adapted.ends_with(TOOL_RULE));
+        assert_eq!(adapt_system_prompt(&text, false), format!("{text}\n\n{TOOL_RULE}"));
     }
 
     #[test]

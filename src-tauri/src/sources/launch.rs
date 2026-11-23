@@ -261,6 +261,11 @@ fn server_entry(
     }
 }
 
+/// How the notes folders are read, in Claude's terms. The Antigravity and Codex
+/// sessions have no such tools: `llm::cli_agent::sources_convert::adapt_system_prompt`
+/// swaps this text for the notes server's tools.
+pub const NOTES_TOOLS_HINT: &str = "read-only; search with Grep and Glob, open with Read";
+
 /// What the with-sources session is told about its sources, appended to the
 /// plain system prompt.
 pub fn sources_system_prompt(folders: &[&NotesFolder], servers: &[&McpServer]) -> String {
@@ -269,7 +274,7 @@ pub fn sources_system_prompt(folders: &[&NotesFolder], servers: &[&McpServer]) -
 Each request says which sources are on for that answer; use only those.\n",
     );
     if !folders.is_empty() {
-        out.push_str("\nNotes folders (read-only; search with Grep and Glob, open with Read):\n");
+        out.push_str(&format!("\nNotes folders ({NOTES_TOOLS_HINT}):\n"));
         for f in folders {
             out.push_str(&format!("- {}: {}\n", f.label, f.path));
         }

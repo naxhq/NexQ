@@ -14,15 +14,16 @@
 //!   hooks, memories, computer use, browser use, image generation, the image
 //!   viewer (reads any local image path without asking) and goals are feature
 //!   flags: `--disable <name>`.
-//! - **The shell tool** (`exec_command`, and `write_stdin`) exists only when a
-//!   notes folder is enabled. Without one, `--disable shell_tool` removes it
-//!   from what the model is offered at all (checked against a mock Responses
-//!   server: with real models the tool surface is a JavaScript `exec` whose
-//!   nested tools lose `exec_command` and `write_stdin`). With notes folders it
-//!   stays, under approval policy `untrusted`: every command, in every shape
-//!   tried (cat, type, Get-Content, git status, rg, powershell -Command, ...),
-//!   raised an approval request, which `policy.rs` answers. The read-only
-//!   sandbox can read the whole disk, so the policy is the only wall there.
+//! - **The shell tool** (`exec_command`, and `write_stdin`) is always off:
+//!   `--disable shell_tool` removes it from what the model is offered at all
+//!   (checked against a mock Responses server: with real models the tool
+//!   surface is a JavaScript `exec` whose nested tools lose `exec_command` and
+//!   `write_stdin`). The read-only sandbox can read the whole disk and the
+//!   approval policy cannot tell a harmless command from a harmful one in
+//!   every shell, so NexQ never has commands to judge. The notes folders are
+//!   served by NexQ's own MCP server instead (`nexq_notes`, see `notes_mcp`),
+//!   added to the thread's config like any other server of NexQ's. If a command
+//!   or file change item starts anyway, the session ends (`session.rs`).
 //! - `notify=[]` drops the user's notify hook, `skills.include_instructions=false`
 //!   keeps the roughly 40 000 characters of skill descriptions out of the prompt.
 //!
@@ -58,8 +59,9 @@ pub struct CodexLaunch {
     /// command line. A key must not collide with a server the user already
     /// has: a collision is merged into the user's entry.
     pub mcp_servers: serde_json::Map<String, serde_json::Value>,
-    /// Enabled notes folders: the only place read-only commands may touch.
-    pub readable_dirs: Vec<PathBuf>,
+    /// Are there notes folders (served by the `nexq_notes` server in
+    /// `mcp_servers`)? Only for the developer message and the start-up check.
+    pub has_notes: bool,
     /// Which approval requests are answered yes.
     pub policy: CodexPolicy,
     /// Extra env vars to remove from the child (on top of
@@ -83,7 +85,7 @@ impl std::fmt::Debug for CodexLaunch {
             .field("mcp_overrides", &self.mcp_overrides)
             // The tables hold the servers' secrets.
             .field("mcp_servers", &format_args!("<redacted, {}>", self.mcp_servers.len()))
-            .field("readable_dirs", &self.readable_dirs)
+            .field("has_notes", &self.has_notes)
             .field("policy", &self.policy)
             .finish()
     }
@@ -103,13 +105,22 @@ impl CodexLaunch {
     }
 
     /// `thread/start`'s `config`: NexQ's own MCP servers. `None` without any.
-    pub fn thread_config(&self) -> Option<serde_json::Value> {
-        (!self.mcp_servers.is_empty()).then(|| serde_json::json!({ "mcp_servers": self.mcp_servers }))
-    }
-
-    /// Is the shell tool on? Only with a notes folder to read.
-    pub fn shell_enabled(&self) -> bool {
-        !self.readable_dirs.is_empty()
+    ///
+    /// A thread's config makes Codex read the user's config again, and the
+    /// `-c mcp_servers.<name>.enabled=false` of the command line does not
+    /// carry over: with NexQ's servers in it, all of the user's own servers
+    /// started anyway (seen with Codex 0.171.0: mira, node_repl, pencil and
+    /// web_search came up next to `nexq_notes`). So each of `user_servers` is
+    /// switched off here as well.
+    pub fn thread_config(&self, user_servers: &[String]) -> Option<serde_json::Value> {
+        if self.mcp_servers.is_empty() {
+            return None;
+        }
+        let mut servers = self.mcp_servers.clone();
+        for name in user_servers {
+            servers.entry(name.clone()).or_insert_with(|| serde_json::json!({ "enabled": false }));
+        }
+        Some(serde_json::json!({ "mcp_servers": servers }))
     }
 
     /// A launch with the defaults a plain (no sources) session uses.
@@ -123,7 +134,7 @@ impl CodexLaunch {
             system_prompt: String::new(),
             mcp_overrides: Vec::new(),
             mcp_servers: serde_json::Map::new(),
-            readable_dirs: Vec::new(),
+            has_notes: false,
             policy: CodexPolicy::default(),
             env_remove: STRIPPED_ENV.iter().map(|s| s.to_string()).collect(),
             user_mcp_servers: None,
@@ -151,7 +162,9 @@ pub const STRIPPED_ENV: [&str; 12] = [
 
 /// `--disable <feature>`: features that start things, load the user's
 /// extensions or add tools a meeting answer has no use for.
-pub const DISABLED_FEATURES: [&str; 10] = [
+pub const DISABLED_FEATURES: [&str; 11] = [
+    // `exec_command` and `write_stdin`: a shell. Never on, with or without notes.
+    "shell_tool",
     "plugins",
     "apps",
     "hooks",
@@ -164,10 +177,6 @@ pub const DISABLED_FEATURES: [&str; 10] = [
     "view_image",
     "goals",
 ];
-
-/// The feature that gives the model a shell (`exec_command`, `write_stdin`).
-/// Switched off unless a notes folder is enabled.
-pub const SHELL_FEATURE: &str = "shell_tool";
 
 /// `-c key=value` overrides applied to every session.
 pub const FIXED_OVERRIDES: [&str; 5] = [
@@ -234,10 +243,6 @@ pub fn build_args(launch: &CodexLaunch, user_servers: &[String]) -> Vec<String> 
     for feature in DISABLED_FEATURES {
         args.push("--disable".into());
         args.push(feature.into());
-    }
-    if !launch.shell_enabled() {
-        args.push("--disable".into());
-        args.push(SHELL_FEATURE.into());
     }
     let mut overrides: Vec<String> = FIXED_OVERRIDES.iter().map(|s| s.to_string()).collect();
     let own = launch.server_keys();
@@ -427,38 +432,35 @@ mod tests {
     }
 
     #[test]
-    fn no_notes_folder_means_no_shell_tool() {
+    fn the_shell_tool_is_off_with_or_without_notes() {
         let none = launch();
-        assert!(!none.shell_enabled());
         let args = build_args(&none, &[]);
         assert!(features_disabled(&args).contains(&"shell_tool"));
         // The image viewer reads any local image without an approval.
         assert!(features_disabled(&args).contains(&"view_image"));
-    }
-
-    #[test]
-    fn notes_folders_keep_the_shell_tool_behind_the_approval_policy() {
+        // Notes (an MCP server) and other servers do not bring it back.
         let mut with = launch();
-        with.readable_dirs = vec![PathBuf::from(r"D:\notes")];
-        assert!(with.shell_enabled());
-        let args = build_args(&with, &[]);
-        assert!(!features_disabled(&args).contains(&"shell_tool"));
+        with.has_notes = true;
+        with.mcp_servers.insert("nexq_notes".into(), serde_json::json!({ "command": "nexq.exe" }));
+        with.mcp_servers.insert("mira".into(), serde_json::json!({ "command": "x" }));
+        let args = build_args(&with, &["other".to_string()]);
+        assert!(features_disabled(&args).contains(&"shell_tool"));
         assert!(features_disabled(&args).contains(&"view_image"));
-        // MCP servers alone are not a reason for a shell.
-        let mut mcp_only = launch();
-        mcp_only.mcp_servers.insert("mira".into(), serde_json::json!({ "command": "x" }));
-        assert!(features_disabled(&build_args(&mcp_only, &[])).contains(&"shell_tool"));
+        assert!(!args.iter().any(|a| a.contains("shell_tool=true") || a.contains("features.shell_tool")), "{args:?}");
     }
 
     #[test]
     fn servers_with_secrets_go_in_the_thread_config_not_on_the_command_line() {
         let mut l = launch();
-        assert_eq!(l.thread_config(), None);
+        assert_eq!(l.thread_config(&["mira".to_string()]), None);
         l.mcp_servers.insert(
             "mira".into(),
             serde_json::json!({ "command": "node", "args": ["s.js"], "env": { "TOKEN": "s3cret" }, "enabled_tools": ["kb_search"] }),
         );
-        let cfg = l.thread_config().unwrap();
+        let cfg = l.thread_config(&["mira".to_string(), "other".to_string()]).unwrap();
+        // The user's servers are switched off in the thread's config too, ours are not.
+        assert_eq!(cfg["mcp_servers"]["other"], serde_json::json!({ "enabled": false }));
+        assert_eq!(cfg["mcp_servers"]["mira"]["command"], "node");
         assert_eq!(cfg["mcp_servers"]["mira"]["env"]["TOKEN"], "s3cret");
         assert_eq!(cfg["mcp_servers"]["mira"]["enabled_tools"][0], "kb_search");
         let args = build_args(&l, &["mira".to_string(), "other".to_string()]);

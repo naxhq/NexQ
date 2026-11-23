@@ -151,10 +151,10 @@ async fn streams_an_answer_and_reports_per_turn_usage() {
     assert!(turn_start.contains("\"effort\":\"high\""), "{turn_start}");
 }
 
-/// The shell tool exists only with a notes folder; MCP servers and their
+/// The shell tool is off whatever the session has; MCP servers and their
 /// secrets travel in `thread/start`'s config, never on the command line.
 #[tokio::test]
-async fn the_shell_tool_needs_a_notes_folder_and_secrets_stay_off_the_command_line() {
+async fn the_shell_tool_is_always_off_and_secrets_stay_off_the_command_line() {
     // No notes folder: the shell tool is switched off, and so is the image viewer.
     let record = record_path("shell-off");
     let rec = format!("fake_record={}", record.display());
@@ -167,9 +167,8 @@ async fn the_shell_tool_needs_a_notes_folder_and_secrets_stay_off_the_command_li
     // A notes folder and an MCP server with a secret.
     let record = record_path("shell-on");
     let rec = format!("fake_record={}", record.display());
-    let notes = scratch("shell-notes");
     let mut l = launch(&[&rec]);
-    l.readable_dirs = vec![notes];
+    l.has_notes = true;
     l.mcp_servers.insert(
         "mira".into(),
         serde_json::json!({ "command": "node", "args": ["s.js"], "env": { "TOKEN": "s3cret-token" }, "enabled_tools": ["kb_search"] }),
@@ -178,7 +177,7 @@ async fn the_shell_tool_needs_a_notes_folder_and_secrets_stay_off_the_command_li
     s.close().await;
     let text = recorded(&record);
     let argv = text.lines().find(|l| l.starts_with("ARGV")).expect("argv");
-    assert!(!argv.contains("--disable shell_tool"), "{argv}");
+    assert!(argv.contains("--disable shell_tool"), "notes must not bring the shell back: {argv}");
     assert!(argv.contains("--disable view_image"), "{argv}");
     assert!(!argv.contains("s3cret-token"), "a secret reached the command line: {argv}");
     let thread_start = text.lines().find(|l| l.contains("\"thread/start\"")).expect("thread/start");
@@ -234,14 +233,24 @@ async fn tool_activity_is_reported_like_a_claude_session_does() {
         assert!(at(&|d| decode_activity(d).is_some()) < at(&|d| d.starts_with("ans")));
     }
 
-    let (deltas, on_delta) = collector();
-    s.ask("read", on_delta, token()).await.unwrap();
-    {
-        let all = deltas.lock().unwrap();
-        let read = all.iter().find_map(|d| decode_activity(d)).expect("a read activity");
-        assert_eq!((read.name.as_str(), read.input["file_path"].as_str()), ("Read", Some("a.md")));
-    }
     s.close().await;
+}
+
+/// The session has no shell and no file tools: a command or a file change that
+/// starts at all ends the session with an error (even one that looks like a read).
+#[tokio::test]
+async fn a_command_or_file_change_that_starts_ends_the_session() {
+    for query in ["read", "write"] {
+        let s = spawn(&[]).await;
+        let (_, on_delta) = collector();
+        let err = s.ask(query, on_delta, token()).await.unwrap_err();
+        assert_eq!(err.kind(), AgentErrorKind::Other, "{query}: {err:?}");
+        assert!(err.to_string().contains("does not allow"), "{err}");
+        assert!(!s.is_alive(), "{query}: the process must be killed");
+        let (_, on_delta) = collector();
+        assert!(s.ask("hello", on_delta, token()).await.is_err(), "{query}: no further turn");
+        s.close().await;
+    }
 }
 
 async fn decision(fake: &[&str], configure: impl FnOnce(&mut CodexLaunch), query: &str) -> String {
@@ -255,26 +264,27 @@ async fn decision(fake: &[&str], configure: impl FnOnce(&mut CodexLaunch), query
 }
 
 #[tokio::test]
-async fn commands_and_file_changes_are_declined() {
+async fn commands_and_file_changes_are_declined_even_the_legacy_ones() {
     assert_eq!(decision(&[], |_| {}, "approve:cmd").await, "decision:decline");
     assert_eq!(decision(&[], |_| {}, "approve:file").await, "decision:decline");
-    // Even with notes folders enabled, a destructive command stays refused.
-    let notes = scratch("notes");
-    let dir = notes.clone();
-    assert_eq!(decision(&[], move |l| l.readable_dirs = vec![dir], "approve:cmd").await, "decision:decline");
+    // The legacy requests carry an argv or a patch: refused outright.
+    assert_eq!(decision(&[], |_| {}, "approve:legacy-cmd").await, "decision:denied");
+    assert_eq!(decision(&[], |_| {}, "approve:legacy-patch").await, "decision:denied");
 }
 
 #[tokio::test]
-async fn a_plain_read_runs_only_inside_an_enabled_notes_folder() {
+async fn a_plain_read_is_declined_too_whatever_the_session_has() {
+    // The notes come from the notes server now: no command is ever approved,
+    // not even a read inside a notes folder.
     let notes = scratch("notes");
     let directive = format!("fake_notes={}", notes.display());
-    // Enabled folder: allowed.
-    let dir = notes.clone();
-    assert_eq!(decision(&[&directive], move |l| l.readable_dirs = vec![dir], "approve:read").await, "decision:accept");
-    // No folder, or another one: declined.
     assert_eq!(decision(&[&directive], |_| {}, "approve:read").await, "decision:decline");
-    let other = scratch("other");
-    assert_eq!(decision(&[&directive], move |l| l.readable_dirs = vec![other], "approve:read").await, "decision:decline");
+    let rich = |l: &mut CodexLaunch| {
+        l.has_notes = true;
+        l.policy = CodexPolicy { allowed_tools: ["mcp__nexq_notes__read_note".to_string()].into_iter().collect() };
+    };
+    assert_eq!(decision(&[&directive], rich, "approve:read").await, "decision:decline");
+    assert_eq!(decision(&[&directive], rich, "approve:legacy-cmd").await, "decision:denied");
 }
 
 #[tokio::test]
@@ -426,10 +436,9 @@ async fn nexqs_own_mcp_servers_are_waited_for_and_their_failure_reported() {
     assert_eq!(states, [("notes".to_string(), "connected".to_string())]);
     s.close().await;
 
-    // Failed, but a notes folder is left: starts, with the failure listed.
-    let mut l = launch(&[own, "fake_mcp=notes:failed"]);
-    l.readable_dirs = vec![scratch("notes")];
-    let s = CodexSession::spawn(l).await.unwrap();
+    // Failed, but another server is up: starts, with the failure listed.
+    let both = [own, "mcp_servers.mira.command=\"x\"", "fake_mcp=notes:failed,mira:ready"];
+    let s = CodexSession::spawn(launch(&both)).await.unwrap();
     assert_eq!(s.init_info().mcp_servers[0].status, "failed");
     s.close().await;
 
@@ -533,4 +542,45 @@ async fn live_real_codex_lists_models() {
         eprintln!("LIVE:   {} ({}) default {} efforts {:?}", m.slug, m.display_name, m.default_effort, m.efforts);
     }
     assert!(!models.is_empty());
+}
+
+/// A real Codex answers from a note through `nexq_notes` (this build's `nexq`
+/// in notes mode), and starts no command. When the account's usage is used up
+/// the turn fails with a rate limit, and the check stops there.
+#[tokio::test]
+#[ignore = "talks to the real Codex CLI and the user's account"]
+async fn live_real_codex_reads_a_note_through_the_notes_server() {
+    use nexq_lib::llm::cli_agent::command::SourcesLaunch;
+    use nexq_lib::llm::cli_agent::sources_convert::{adapt_system_prompt, codex_sources_for};
+    let Some((program, prefix)) = find_codex() else { return };
+    let notes = scratch("live-notes");
+    std::fs::write(notes.join("falcon.md"), "Project Falcon launches on March 3.").unwrap();
+    let sources = codex_sources_for(
+        Some(&SourcesLaunch { add_dirs: vec![notes.clone()], ..Default::default() }),
+        Some(Path::new(env!("CARGO_BIN_EXE_nexq"))),
+    );
+    let mut l = CodexLaunch::new(program, prefix, nexq_lib::llm::cli_agent::command::sandbox_dir(), String::new());
+    l.effort = Some("low".into());
+    l.system_prompt = adapt_system_prompt("Answer in one short sentence.", true);
+    l.mcp_servers = sources.mcp_servers;
+    l.has_notes = sources.has_notes;
+    l.policy = sources.policy;
+    let s = CodexSession::spawn(l).await.expect("spawn real codex");
+    eprintln!("LIVE: mcp servers {:?}", s.init_info().mcp_servers);
+    assert!(s.init_info().mcp_servers.iter().any(|m| m.name == "nexq_notes" && m.status == "connected"));
+    let (deltas, on_delta) = collector();
+    match s.ask("What is the Project Falcon launch date? Look it up in my notes.", on_delta, token()).await {
+        Ok(r) => {
+            eprintln!("LIVE: answer {:?}", r.text);
+            let tools: Vec<String> = deltas.lock().unwrap().iter().filter_map(|d| decode_activity(d)).map(|t| t.name).collect();
+            eprintln!("LIVE: tools {tools:?}");
+            assert!(r.text.contains("March 3") || r.text.contains("3 March"), "{}", r.text);
+            assert!(tools.iter().any(|t| t.starts_with("mcp__nexq_notes__")), "{tools:?}");
+        }
+        Err(e) => {
+            eprintln!("LIVE: turn failed: {e} (kind {:?})", e.kind());
+            assert_eq!(e.kind(), AgentErrorKind::RateLimited, "{e:?}");
+        }
+    }
+    s.close().await;
 }
