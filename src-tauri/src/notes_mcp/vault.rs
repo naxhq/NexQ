@@ -435,10 +435,16 @@ fn is_absolute_input(input: &str) -> bool {
 fn absolute_check(input: &str) -> Res<String> {
     let b = input.as_bytes();
     let drive_form = b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/');
-    if !drive_form {
+    // On macOS and Linux a plain `/dir/file` is the absolute form (never `//` or a backslash).
+    let unix_form = cfg!(not(windows)) && b.first() == Some(&b'/') && b.get(1) != Some(&b'/') && !input.contains('\\');
+    let rest = if drive_form {
+        &input[3..]
+    } else if unix_form {
+        &input[1..]
+    } else {
         return Err("Use a path inside a notes folder (`<folder>/<file>`).".into());
-    }
-    for (i, seg) in input[3..].split(['\\', '/']).filter(|s| !s.is_empty() && *s != ".").enumerate() {
+    };
+    for (i, seg) in rest.split(['\\', '/']).filter(|s| !s.is_empty() && *s != ".").enumerate() {
         // Whatever starts with `$` at a drive's root belongs to the system.
         if i == 0 && seg.starts_with('$') {
             return Err(format!("\"{seg}\" is not allowed: system names are not available."));

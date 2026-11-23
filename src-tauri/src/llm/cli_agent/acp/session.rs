@@ -999,11 +999,16 @@ fn answer_request(shared: &Shared, policy: &PermissionPolicy, id: &Value, method
 
 /// `agy`: the program's name, or for `node script.js` the script's.
 fn label_of(program: &Path, args: &[String]) -> String {
-    let stem = |p: &Path| p.file_stem().and_then(|s| s.to_str()).unwrap_or("agent").to_string();
-    let program_stem = stem(program);
+    // Split on both separators so a Windows path names the same file on every OS.
+    let stem = |p: &str| {
+        let name = p.rsplit(['\\', '/']).next().unwrap_or("");
+        let stem = Path::new(name).file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        if stem.is_empty() { "agent".to_string() } else { stem.to_string() }
+    };
+    let program_stem = stem(&program.to_string_lossy());
     if program_stem.eq_ignore_ascii_case("node") {
         if let Some(script) = args.first().filter(|a| !a.starts_with('-')) {
-            return stem(Path::new(script));
+            return stem(script);
         }
     }
     program_stem
