@@ -1,3 +1,9 @@
+# [2.44.0](https://github.com/naxhq/NexQ/compare/v2.43.0...v2.44.0) (2026-11-23)
+
+
+### Features
+
+* **llm:** Antigravity and Codex as subscription providers ([#143](https://github.com/naxhq/NexQ/issues/143)) ([34ae02f](https://github.com/naxhq/NexQ/commit/34ae02fd12c2ab72f7757a9b246f630da6dd3f72))
 # [2.43.0](https://github.com/naxhq/NexQ/compare/v2.42.0...v2.43.0) (2026-11-22)
 
 
