@@ -1,0 +1,28 @@
+{
+  "method": "item/started",
+  "params": {
+    "threadId": "th1",
+    "turnId": "tu1",
+    "startedAtMs": 1,
+    "item": {
+      "type": "commandExecution",
+      "id": "cmd1",
+      "command": "powershell -Command Get-Content D:\\notes\\a.md",
+      "commandActions": [
+        {
+          "type": "read",
+          "command": "Get-Content D:\\notes\\a.md",
+          "name": "a.md",
+          "path": "D:\\notes\\a.md"
+        }
+      ],
+      "cwd": "C:\\sandbox",
+      "status": "inProgress",
+      "source": "agent",
+      "aggregatedOutput": null,
+      "exitCode": null,
+      "processId": null,
+      "durationMs": null
+    }
+  }
+}

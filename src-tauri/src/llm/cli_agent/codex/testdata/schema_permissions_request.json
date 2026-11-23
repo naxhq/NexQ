@@ -1,0 +1,17 @@
+{
+  "id": 2,
+  "method": "item/permissions/requestApproval",
+  "params": {
+    "threadId": "th1",
+    "turnId": "tu1",
+    "itemId": "pm1",
+    "startedAtMs": 1,
+    "cwd": "C:\\sandbox",
+    "reason": "needs network",
+    "permissions": {
+      "network": {
+        "enabled": true
+      }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "method": "item/reasoning/summaryTextDelta",
+  "params": {
+    "threadId": "th1",
+    "turnId": "tu1",
+    "itemId": "it2",
+    "summaryIndex": 0,
+    "delta": "Thinking"
+  }
+}

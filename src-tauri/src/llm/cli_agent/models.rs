@@ -1,5 +1,8 @@
-//! The model catalog the `claude` CLI reports, and which `--effort` each
-//! model gets.
+//! The model catalog a CLI reports, and which effort each model gets.
+//!
+//! [`ClaudeModelInfo`] is the one model shape of every CLI agent (the frontend
+//! type is shared); Antigravity and Codex fill it from their own lists.
+//! Everything below the catalog is about `claude`.
 //!
 //! The catalog comes from the CLI's `initialize` control request (no model
 //! call, no token usage): it lists the aliases (`opus`, `sonnet`, `haiku`,
@@ -7,6 +10,7 @@
 //! effort levels it accepts.
 
 use super::command::{configure_command, sandbox_dir};
+use super::CliAgentKind;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
@@ -16,7 +20,10 @@ use std::time::Duration;
 /// Effort levels the CLI accepts for `--effort`, lowest first.
 pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
-/// One model the CLI offers.
+/// Reasoning efforts Codex models take, lowest first (Claude's list plus `ultra`).
+pub const CODEX_EFFORTS: [&str; 6] = ["low", "medium", "high", "xhigh", "max", "ultra"];
+
+/// One model the CLI offers (any CLI agent).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaudeModelInfo {
     /// What `--model` takes: an alias (`sonnet`) or a pinned id.
@@ -28,6 +35,9 @@ pub struct ClaudeModelInfo {
     pub supports_effort: bool,
     /// Accepted `--effort` values (lowest first); empty without effort support.
     pub effort_levels: Vec<String>,
+    /// The effort the model uses when none is asked for (Codex reports one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_effort: Option<String>,
 }
 
 /// Request id of the probe's `initialize` control request.
@@ -98,6 +108,7 @@ fn parse_model(m: &Value) -> Option<ClaudeModelInfo> {
         description: text("description").unwrap_or_default(),
         supports_effort,
         effort_levels,
+        default_effort: None,
         value,
     })
 }
@@ -106,6 +117,12 @@ fn parse_model(m: &Value) -> Option<ClaudeModelInfo> {
 /// effort, the saved value when the model accepts it (or is not in the
 /// catalog), else the closest level it accepts (ties go to the lower one).
 pub fn effective_effort(model: Option<&ClaudeModelInfo>, saved: &str) -> Option<String> {
+    effective_effort_in(model, saved, &EFFORTS)
+}
+
+/// [`effective_effort`] with the CLI's own ordered list of levels (`ranks`),
+/// which decides "closest level" (Codex has `ultra` on top).
+pub fn effective_effort_in(model: Option<&ClaudeModelInfo>, saved: &str, ranks: &[&str]) -> Option<String> {
     let Some(model) = model else {
         return Some(saved.to_string());
     };
@@ -115,7 +132,7 @@ pub fn effective_effort(model: Option<&ClaudeModelInfo>, saved: &str) -> Option<
     if model.effort_levels.iter().any(|l| l == saved) {
         return Some(saved.to_string());
     }
-    let rank = |l: &str| EFFORTS.iter().position(|e| *e == l);
+    let rank = |l: &str| ranks.iter().position(|e| *e == l);
     let Some(target) = rank(saved) else {
         return model.effort_levels.first().cloned();
     };
@@ -139,10 +156,14 @@ impl ModelCatalog {
     /// The process-wide catalog shared by the command, the provider and the
     /// session manager.
     pub fn global() -> Arc<ModelCatalog> {
-        static GLOBAL: OnceLock<Arc<ModelCatalog>> = OnceLock::new();
-        GLOBAL
-            .get_or_init(|| Arc::new(ModelCatalog::default()))
-            .clone()
+        Self::global_for(CliAgentKind::Claude)
+    }
+
+    /// The process-wide catalog of one CLI agent (one per kind).
+    pub fn global_for(kind: CliAgentKind) -> Arc<ModelCatalog> {
+        static GLOBALS: OnceLock<[Arc<ModelCatalog>; 3]> = OnceLock::new();
+        let all = GLOBALS.get_or_init(|| std::array::from_fn(|_| Arc::new(ModelCatalog::default())));
+        all[CliAgentKind::ALL.iter().position(|k| *k == kind).unwrap_or(0)].clone()
     }
 
     pub fn get(&self) -> Option<Vec<ClaudeModelInfo>> {
@@ -169,6 +190,11 @@ impl ModelCatalog {
             }
             _ => false,
         }
+    }
+
+    /// The first model of the list (what a saved model that is gone falls back to).
+    pub fn first(&self) -> Option<ClaudeModelInfo> {
+        self.models.read().ok()?.as_ref()?.first().cloned()
     }
 
     /// The entry for `model`, matched by value, else by resolved id.
@@ -298,6 +324,7 @@ mod tests {
             description: String::new(),
             supports_effort: !levels.is_empty(),
             effort_levels: levels.iter().map(|s| s.to_string()).collect(),
+            default_effort: None,
         }
     }
 

@@ -65,6 +65,7 @@ use commands::tray_commands;
 use commands::updater_commands;
 // == MODULE COMMANDS: claude cli ==
 use commands::claude_cli_commands;
+use commands::cli_agent_commands;
 
 /// Show the launcher window and hide the overlay window.
 pub(crate) fn show_launcher(app: &tauri::AppHandle) {
@@ -310,17 +311,16 @@ pub fn run() {
             app_state.opus_mt_manager = Some(Arc::new(Mutex::new(opus_mt_mgr)));
             log::info!("OPUS-MT model manager initialized");
 
-            // -- Claude CLI session manager (sessions start lazily) --
+            // -- CLI agent session manager (Claude / Antigravity / Codex; sessions start lazily) --
             app_state.agent_sessions = Arc::new(llm::cli_agent::manager::AgentSessionManager::new(
-                Arc::new(llm::cli_agent::manager::ClaudeSpawner),
+                Arc::new(llm::cli_agent::spawner::CliSpawner),
                 Arc::new(llm::cli_agent::manager::TauriStatusSink(app.handle().clone())),
-                app_state.claude_cli_config.clone(),
-            )
-            .with_catalog(app_state.claude_models.clone()));
+                app_state.cli_settings.clone(),
+            ));
             tauri::async_runtime::spawn(llm::cli_agent::manager::run_idle_reaper(
                 app_state.agent_sessions.clone(),
             ));
-            // Re-probe an unavailable Claude every 60 s (no model call).
+            // Re-probe an unavailable CLI agent every 60 s (no model call).
             tauri::async_runtime::spawn(llm::cli_agent::routing::run_health_probe(
                 app.handle().clone(),
             ));
@@ -713,6 +713,12 @@ pub fn run() {
             claude_cli_commands::claude_cli_models,
             claude_cli_commands::seed_claude_cli_models,
             claude_cli_commands::get_agent_sessions,
+            // == COMMANDS: cli agents (Claude / Antigravity / Codex) ==
+            cli_agent_commands::cli_agent_status,
+            cli_agent_commands::cli_agent_models,
+            cli_agent_commands::seed_cli_agent_models,
+            cli_agent_commands::set_cli_agent_config,
+            cli_agent_commands::open_cli_login_terminal,
             sources_commands::inspect_notes_folder,
             sources_commands::import_mcp_servers_json,
             sources_commands::save_mcp_server_form,

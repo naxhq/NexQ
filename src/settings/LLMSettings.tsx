@@ -50,6 +50,9 @@ const PROVIDER_DISPLAY: Record<
   // Not in ALL_PROVIDERS: it gets its own "Subscription (local CLI)" group.
   // isLocal is false here because that flag drives the local-server hints below.
   claude_cli: { label: "Claude (subscription)", description: "Your own Claude login (beta)", requiresKey: false, isLocal: false },
+  // Backend providers; their cards come with the CLI agent settings UI.
+  antigravity_cli: { label: "Antigravity (subscription)", description: "Your own Google sign-in (beta)", requiresKey: false, isLocal: false },
+  codex_cli: { label: "Codex (subscription)", description: "Your own ChatGPT login (beta)", requiresKey: false, isLocal: false },
 };
 
 const ALL_PROVIDERS: LLMProviderType[] = [

@@ -1,0 +1,22 @@
+{
+  "id": 3,
+  "method": "execCommandApproval",
+  "params": {
+    "conversationId": "th1",
+    "callId": "c1",
+    "command": [
+      "cmd",
+      "/c",
+      "dir"
+    ],
+    "cwd": "C:\\sandbox",
+    "reason": null,
+    "parsedCmd": [
+      {
+        "type": "list_files",
+        "cmd": "dir",
+        "path": null
+      }
+    ]
+  }
+}

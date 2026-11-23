@@ -39,6 +39,8 @@ import type {
   ClaudeCliConfig,
   ClaudeCliStatus,
   ClaudeModelInfo,
+  CliAgentKind,
+  CliAgentStatus,
   MeetingChatMessage,
   ClaudeCodeMcpServer,
   McpServer,
@@ -874,7 +876,38 @@ export async function setClaudeCliConfig(config: ClaudeCliConfig): Promise<void>
   return invoke("set_claude_cli_config", { config });
 }
 
-/** Status of every open Claude session. */
+// == IPC: CLI agents (Claude / Antigravity / Codex subscription providers) ==
+// `kind` is the provider id: "claude_cli", "antigravity_cli" or "codex_cli".
+
+/**
+ * Detect the CLI, its version and login state (no model call). For Antigravity
+ * the login check also lists its models (the backend catalog is filled).
+ */
+export async function cliAgentStatus(kind: CliAgentKind): Promise<CliAgentStatus> {
+  return invoke<CliAgentStatus>("cli_agent_status", { kind });
+}
+
+/** The models the CLI offers (no model call). Cached by the backend; `refresh` asks the CLI again. */
+export async function cliAgentModels(kind: CliAgentKind, refresh = false): Promise<ClaudeModelInfo[]> {
+  return invoke<ClaudeModelInfo[]>("cli_agent_models", { kind, refresh });
+}
+
+/** Give the backend the saved model catalog of `kind` until (or unless) a probe answers. */
+export async function seedCliAgentModels(kind: CliAgentKind, models: ClaudeModelInfo[]): Promise<boolean> {
+  return invoke<boolean>("seed_cli_agent_models", { kind, models });
+}
+
+/** Replace the Fast/Deep model settings of `kind`; applies to sessions started afterwards. */
+export async function setCliAgentConfig(kind: CliAgentKind, config: ClaudeCliConfig): Promise<void> {
+  return invoke("set_cli_agent_config", { kind, config });
+}
+
+/** Open a visible terminal running the CLI's login (`claude`, `codex login`, `agy`). */
+export async function openCliLoginTerminal(kind: CliAgentKind): Promise<void> {
+  return invoke("open_cli_login_terminal", { kind });
+}
+
+/** Status of every open CLI agent session. */
 export async function getAgentSessions(): Promise<AgentSessionStatus[]> {
   return invoke<AgentSessionStatus[]>("get_agent_sessions");
 }

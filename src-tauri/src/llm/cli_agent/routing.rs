@@ -1,4 +1,6 @@
-//! Request routing for the Claude CLI provider.
+//! Request routing for the CLI agent providers (Claude, Antigravity, Codex:
+//! whichever is the active provider; the names `ClaudeHealth` and
+//! `Route::ClaudeSession` date from when it was only Claude).
 //!
 //! - [`choose_route`]: a request goes to a warm meeting session, to the
 //!   fallback provider (Claude unavailable), or down today's stateless path
@@ -18,7 +20,8 @@ use super::context::{
     build_delta_prompt, build_document_preload, pack_messages, transcript_lines, DeltaCursor, Seg,
     SentLine,
 };
-use super::detect::{claude_auth_status, find_claude_binary, ClaudeLogin, API_BILLED_NOTE};
+use super::status::probe_kind;
+use super::CliAgentKind;
 use super::manager::{
     tier_for, AgentSessionManager, ClaudeCliConfig, OnDelta, SessionInit, SessionKey,
     SessionScope, Tier,
@@ -78,7 +81,7 @@ pub enum Route {
     Stateless,
 }
 
-/// Pick the route of one request. Only the Claude CLI provider has sessions,
+/// Pick the route of one request. Only a CLI agent provider has sessions,
 /// and only meeting scopes (live or past) use them; Utility requests go
 /// through the provider's own `stream_completion`, never with sources. With
 /// `with_sources` a meeting request goes to the with-sources session of its
@@ -93,7 +96,7 @@ pub fn choose_route(
     cfg: &ClaudeCliConfig,
     with_sources: bool,
 ) -> Route {
-    if *active != ProviderType::ClaudeCli {
+    if !active.is_cli_agent() {
         return Route::Stateless;
     }
     match claude_health {
@@ -1055,30 +1058,7 @@ pub fn segments_from_json(json: &str, start_ms: i64) -> Vec<Seg> {
         .collect()
 }
 
-/// No-cost check that Claude is installed and logged in (to a subscription
-/// or, flagged in the UI, an API account).
-pub async fn probe_claude() -> Result<(), AgentErrorKind> {
-    let bin = tokio::task::spawn_blocking(find_claude_binary)
-        .await
-        .ok()
-        .flatten()
-        .ok_or(AgentErrorKind::NotInstalled)?;
-    let auth = claude_auth_status(&bin)
-        .await
-        .map_err(|_| AgentErrorKind::Other)?;
-    match auth.login {
-        ClaudeLogin::Subscription => Ok(()),
-        ClaudeLogin::LoggedOut => Err(AgentErrorKind::NotLoggedIn),
-        // Not blocked (the user may want it); Settings and the footer chip
-        // flag it, so it never passes for the subscription.
-        ClaudeLogin::ApiBilled => {
-            log::warn!("{API_BILLED_NOTE}");
-            Ok(())
-        }
-    }
-}
-
-/// While Claude is the active provider and unavailable, re-probe it every
+/// While a CLI agent is the active provider and unavailable, re-probe it every
 /// [`HEALTH_PROBE_INTERVAL`] (no model call; a rate limit waits
 /// [`RATE_LIMIT_BACKOFF`] first) and mark it healthy again once it is
 /// installed and logged in, so requests switch back to it.
@@ -1091,24 +1071,28 @@ pub async fn run_health_probe(app: tauri::AppHandle) {
         let Some(state) = app.try_state::<crate::state::AppState>() else {
             continue;
         };
-        if !state.claude_health.probe_due(Instant::now()) || !claude_is_active(&state) {
+        if !state.claude_health.probe_due(Instant::now()) {
             continue;
         }
-        if probe_claude().await.is_ok() && state.claude_health.mark_healthy() {
-            log::info!("Claude CLI looks available again; requests try it again");
+        let Some(kind) = active_cli_kind(&state) else { continue };
+        if probe_kind(kind).await.is_ok() && state.claude_health.mark_healthy() {
+            log::info!("{} CLI looks available again; requests try it again", kind.short_name());
         }
     }
 }
 
-/// True when the active LLM provider is the Claude CLI.
-pub fn claude_is_active(state: &crate::state::AppState) -> bool {
+/// The CLI agent the active LLM provider drives, if it is one.
+pub fn active_cli_kind(state: &crate::state::AppState) -> Option<CliAgentKind> {
     state
         .llm
         .as_ref()
         .and_then(|llm| llm.lock().ok())
-        .and_then(|router| router.active_provider_type().cloned())
-        .map(|pt| pt == ProviderType::ClaudeCli)
-        .unwrap_or(false)
+        .and_then(|router| router.active_provider_type().and_then(ProviderType::cli_agent_kind))
+}
+
+/// True when the active LLM provider is a CLI agent (Claude, Antigravity or Codex).
+pub fn cli_agent_is_active(state: &crate::state::AppState) -> bool {
+    active_cli_kind(state).is_some()
 }
 
 #[cfg(test)]
@@ -1118,10 +1102,44 @@ mod tests {
     use crate::llm::cli_agent::manager::{NoopStatusSink, SessionHandle, SessionSpawner};
     use async_trait::async_trait;
     use std::sync::atomic::AtomicUsize;
-    use std::sync::RwLock;
+    use crate::llm::cli_agent::settings::CliSettings;
 
     fn live() -> SessionScope {
         SessionScope::Live("m1".into())
+    }
+
+    #[test]
+    fn every_cli_agent_gets_sessions_and_other_providers_do_not() {
+        let cfg = ClaudeCliConfig::default();
+        for active in [ProviderType::ClaudeCli, ProviderType::AntigravityCli, ProviderType::CodexCli] {
+            match choose_route(&active, ClaudeHealth::Healthy, &live(), "Assist", &cfg, false) {
+                Route::ClaudeSession(key) => assert_eq!(key.scope, live()),
+                other => panic!("{active:?}: {other:?}"),
+            }
+            // With sources: the with-sources session.
+            match choose_route(&active, ClaudeHealth::Healthy, &live(), "Assist", &cfg, true) {
+                Route::ClaudeSession(key) => assert!(key.with_sources),
+                other => panic!("{active:?}: {other:?}"),
+            }
+            // Unavailable with a fallback: the fallback, whatever the CLI.
+            let with_fallback = ClaudeCliConfig { fallback_provider: Some("ollama".into()), ..Default::default() };
+            let down = ClaudeHealth::Unavailable(AgentErrorKind::NotLoggedIn);
+            match choose_route(&active, down, &live(), "Assist", &with_fallback, false) {
+                Route::Fallback(c) => assert_eq!(c.provider_type, "ollama"),
+                other => panic!("{active:?}: {other:?}"),
+            }
+            assert!(matches!(choose_route(&active, down, &live(), "Assist", &cfg, false), Route::Stateless));
+            assert!(matches!(
+                choose_route(&active, ClaudeHealth::Healthy, &SessionScope::Utility, "Assist", &cfg, false),
+                Route::Stateless
+            ));
+        }
+        for other in [ProviderType::Ollama, ProviderType::Openai, ProviderType::Custom] {
+            assert!(matches!(
+                choose_route(&other, ClaudeHealth::Healthy, &live(), "Assist", &cfg, false),
+                Route::Stateless
+            ));
+        }
     }
 
     #[test]
@@ -1490,7 +1508,7 @@ mod tests {
         let manager = AgentSessionManager::new(
             Arc::new(FakeSpawner(script.clone())),
             Arc::new(NoopStatusSink),
-            Arc::new(RwLock::new(ClaudeCliConfig::default())),
+            Arc::new(CliSettings::isolated()),
         );
         let key = SessionKey::plain(live(), Tier::Fast);
         let sessions = Arc::new(MeetingSessions::default());

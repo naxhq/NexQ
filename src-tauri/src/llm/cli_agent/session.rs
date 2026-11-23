@@ -183,12 +183,12 @@ impl Default for SessionTimeouts {
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum AgentError {
     /// The process could not be started (binary missing, bad path, ...).
-    #[error("could not start Claude: {0}")]
+    #[error("could not start the CLI agent: {0}")]
     Spawn(String),
     /// The process exited (or its pipes broke) while it was needed.
-    #[error("Claude session crashed: {0}")]
+    #[error("CLI agent session crashed: {0}")]
     Crashed(String),
-    #[error("Claude did not respond in time")]
+    #[error("The CLI agent did not respond in time")]
     Timeout,
     /// Stopped mid-turn: the prompt reached Claude.
     #[error("cancelled")]

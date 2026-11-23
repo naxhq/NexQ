@@ -361,7 +361,7 @@ pub(crate) fn restart_sources_sessions(app: &AppHandle) {
     }
     let live = state.live_meeting.lock().ok().and_then(|m| m.as_ref().map(|m| m.id.clone()));
     let rewarm = live.filter(|_| {
-        routing::claude_is_active(&state)
+        routing::cli_agent_is_active(&state)
             && state.personal_sources.read().map(|c| c.has_enabled()).unwrap_or(false)
     });
     let sessions = state.agent_sessions.clone();
@@ -395,11 +395,11 @@ pub async fn start_past_meeting_session(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
-    if !routing::claude_is_active(&state) {
+    let Some(kind) = routing::active_cli_kind(&state) else {
         return Ok(());
-    }
+    };
     let scope = SessionScope::Past(meeting_id.clone());
-    let cfg = state.claude_cli_config.read().map(|c| c.clone()).unwrap_or_default();
+    let cfg = state.cli_settings.config(kind);
     let key = SessionKey::plain(scope.clone(), tier_for("MeetingSummary", &scope, &cfg));
     start_session_in_background(&app, key, move |state| past_session_record(state, &meeting_id, false));
     Ok(())
@@ -506,7 +506,7 @@ pub async fn start_meeting(
             start_ms,
         });
     }
-    if routing::claude_is_active(&state) {
+    if routing::cli_agent_is_active(&state) {
         let key = SessionKey::plain(SessionScope::Live(meeting.id.clone()), Tier::Fast);
         start_session_in_background(&app, key, |state| {
             live_session_record(state, Tier::Fast, &[], false)

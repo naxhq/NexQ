@@ -5,6 +5,7 @@
 //! environment and parallel tests cannot share process env vars.
 
 use nexq_lib::llm::cli_agent::command::{SessionConfig, SourcesLaunch};
+use nexq_lib::llm::cli_agent::CliAgentKind;
 use nexq_lib::llm::cli_agent::detect::find_claude_binary;
 use nexq_lib::llm::cli_agent::models::probe_models;
 use nexq_lib::llm::cli_agent::protocol::AgentErrorKind;
@@ -71,6 +72,7 @@ fn cfg(mode: &str, record: Option<&Path>) -> SessionConfig {
         system_prompt.push_str(&format!("fake_record={}\n", path.display()));
     }
     SessionConfig {
+        kind: CliAgentKind::Claude,
         model: "haiku".into(),
         effort: Some("low".into()),
         system_prompt,
@@ -535,6 +537,7 @@ async fn real_claude_image() {
     use nexq_lib::llm::cli_agent::protocol::ImageAttachment;
     let bin = find_claude_binary().expect("claude.exe not found");
     let cfg = SessionConfig {
+        kind: CliAgentKind::Claude,
         model: "haiku".into(),
         effort: Some("low".into()),
         system_prompt: "You are a terse assistant. Answer in as few words as possible.".into(),
@@ -579,6 +582,7 @@ async fn real_claude_image() {
 async fn real_claude_two_turns() {
     let bin = find_claude_binary().expect("claude.exe not found");
     let cfg = SessionConfig {
+        kind: CliAgentKind::Claude,
         model: "haiku".into(),
         effort: Some("low".into()),
         system_prompt: "You are a terse assistant. Answer in as few words as possible.".into(),

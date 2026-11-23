@@ -1,0 +1,16 @@
+{
+  "id": 3,
+  "result": {
+    "turn": {
+      "id": "00000000-0000-0000-0000-000000000000",
+      "rootTurnId": "00000000-0000-0000-0000-000000000000",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": null,
+      "completedAt": null,
+      "durationMs": null
+    }
+  }
+}

@@ -3,7 +3,7 @@ use tauri::{command, State};
 use tokio::sync::Mutex as TokioMutex;
 
 use crate::llm::provider::LLMProvider;
-use crate::llm::{create_provider, LLMRouter, ProviderConfig};
+use crate::llm::{create_provider, LLMRouter, ProviderConfig, ProviderType};
 use crate::llm::openrouter_models;
 use crate::state::AppState;
 
@@ -65,6 +65,22 @@ pub async fn set_llm_provider(
     router
         .set_provider(config)
         .map_err(|e| format!("Failed to set provider: {}", e))?;
+
+    // A CLI agent provider: its sessions are the ones to keep. The previous CLI's
+    // sessions close in the background, and its health no longer applies.
+    drop(router);
+    if let Some(kind) = ProviderType::from_str(&provider_type).ok().and_then(|p| p.cli_agent_kind()) {
+        if state.cli_settings.set_active(kind) {
+            state.claude_health.mark_healthy();
+            let sessions = state.agent_sessions.clone();
+            tauri::async_runtime::spawn(async move {
+                let closed = sessions.close_other_kinds().await;
+                if closed > 0 {
+                    log::info!("closed {closed} session(s) of the previous CLI agent");
+                }
+            });
+        }
+    }
 
     log::info!("LLM provider set to: {}", provider_type);
     Ok(())

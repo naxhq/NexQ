@@ -1,0 +1,23 @@
+{
+  "method": "turn/completed",
+  "params": {
+    "threadId": "00000000-0000-0000-0000-000000000000",
+    "turn": {
+      "id": "00000000-0000-0000-0000-000000000000",
+      "rootTurnId": "00000000-0000-0000-0000-000000000000",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "failed",
+      "error": {
+        "message": "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Nov 26th, 2026 9:15 AM.",
+        "codexErrorInfo": "usageLimitExceeded",
+        "additionalDetails": null,
+        "misalignment": null
+      },
+      "startedAt": 1795397029,
+      "completedAt": 1795397031,
+      "durationMs": 1617
+    }
+  },
+  "emittedAtMs": 1795397031477
+}

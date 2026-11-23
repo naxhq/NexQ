@@ -1,0 +1,12 @@
+{
+  "method": "mcpServer/startupStatus/updated",
+  "params": {
+    "threadId": "00000000-0000-0000-0000-000000000000",
+    "name": "pencil",
+    "environmentId": null,
+    "status": "failed",
+    "error": "MCP client for `pencil` failed to start: MCP startup failed: The system cannot find the path specified. (os error 3)",
+    "failureReason": null
+  },
+  "emittedAtMs": 1795396819885
+}

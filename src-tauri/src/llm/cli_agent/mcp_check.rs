@@ -6,6 +6,7 @@
 //! lists every tool (`mcp__<key>__<tool>`) and each server's status.
 
 use super::command::SessionConfig;
+use super::CliAgentKind;
 use super::detect::find_claude_binary;
 use super::mcp_diagnose::diagnose_start;
 use super::session::{AgentError, ClaudeSession, InitInfo, SessionTimeouts};
@@ -70,6 +71,7 @@ pub async fn list_server_tools(
         .flatten()
         .ok_or_else(|| "Claude CLI isn't installed, so the server can't be checked.".to_string())?;
     let cfg = SessionConfig {
+        kind: CliAgentKind::Claude,
         model: "haiku".to_string(),
         effort: None,
         system_prompt: CHECK_SYSTEM_PROMPT.to_string(),

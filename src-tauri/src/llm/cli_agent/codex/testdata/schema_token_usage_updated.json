@@ -1,0 +1,25 @@
+{
+  "method": "thread/tokenUsage/updated",
+  "params": {
+    "threadId": "th1",
+    "turnId": "tu1",
+    "tokenUsage": {
+      "modelContextWindow": 272000,
+      "total": {
+        "totalTokens": 1280,
+        "inputTokens": 1200,
+        "cachedInputTokens": 1000,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 80,
+        "reasoningOutputTokens": 30
+      },
+      "last": {
+        "totalTokens": 760,
+        "inputTokens": 700,
+        "cachedInputTokens": 600,
+        "outputTokens": 60,
+        "reasoningOutputTokens": 20
+      }
+    }
+  }
+}
