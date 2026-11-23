@@ -8,7 +8,7 @@ import {
   testLLMConnection,
   openCliLoginTerminal,
 } from "../../lib/ipc";
-import { apiBilledNoteFor, isApiBilled } from "../../lib/agentUsage";
+import { CODEX_API_KEY_NOTE, apiBilledNoteFor, isApiBilled, isApiKeyLogin } from "../../lib/agentUsage";
 import { CLI_AGENTS, cliAgentInfo, isCliAgent } from "../../lib/cliAgents";
 import { ProviderLogo } from "../icons/ProviderLogos";
 import type { LLMProviderType, ModelInfo } from "../../lib/types";
@@ -309,6 +309,9 @@ export function LLMSetupStep({
             </p>
             {isApiBilled(agentStatus) && (
               <p className="text-xs font-medium text-warning">{apiBilledNoteFor(agent.name)}</p>
+            )}
+            {isApiKeyLogin(agentStatus) && (
+              <p className="text-xs font-medium text-warning">{CODEX_API_KEY_NOTE}</p>
             )}
             {agentLoggedIn ? (
               <div className="flex flex-wrap items-center gap-3">

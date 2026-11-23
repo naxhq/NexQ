@@ -13,6 +13,7 @@ pub mod detect;
 pub mod manager;
 pub mod mcp_check;
 pub mod mcp_diagnose;
+pub mod mcp_handshake;
 pub mod models;
 pub mod process_tree;
 pub mod protocol;

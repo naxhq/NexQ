@@ -75,6 +75,15 @@ function isFallbackCandidate(provider: string): boolean {
   return (CLI_FALLBACK_PROVIDERS as string[]).includes(provider);
 }
 
+/**
+ * The generic model slot of an active CLI agent: its Fast model, or, when that
+ * is "" (Codex: "first listed"), the first model of its catalog. Still "" while
+ * no catalog is known; the backend then lets the CLI provider pick its own.
+ */
+export function cliSlotModel(config: ClaudeCliConfig, catalog?: ClaudeModelInfo[]): string {
+  return config.fast_model || catalog?.[0]?.value || "";
+}
+
 /** Push one CLI agent's config to the backend, which holds it in memory only. */
 function pushCliAgentConfig(kind: CliAgentKind, config: ClaudeCliConfig): void {
   import("../lib/ipc").then(({ setCliAgentConfig }) =>
@@ -614,11 +623,13 @@ export const useConfigStore = create<ConfigState>((set) => ({
     if (!verified.includes(provider)) useConfigStore.getState().setVerifiedCloudProviders([...verified, provider]);
     // A CLI agent ignores the model (Fast / Deep come from its settings) but the
     // backend needs one: its Fast model fills the slot.
+    const state = useConfigStore.getState();
     const model = isCliAgent(provider)
-      ? useConfigStore.getState().cliAgentConfigs[provider].fast_model
+      ? cliSlotModel(state.cliAgentConfigs[provider], state.cliAgentModels[provider])
       : options.model || before.lastModelByProvider[provider] || "";
-    // Without a model, an agent's Fast model must not carry over to the new provider.
-    if (model || isCliAgent(before.llmProvider)) {
+    // Without a model, an agent's Fast model must not carry over to the new provider,
+    // and an agent with no model yet must not inherit the previous provider's.
+    if (model || isCliAgent(provider) || isCliAgent(before.llmProvider)) {
       try {
         await ipc.setActiveModel(provider, model);
       } catch (e) {
@@ -660,18 +671,19 @@ export const useConfigStore = create<ConfigState>((set) => ({
     reapplyIfActive(provider);
   },
   setCliAgentConfig: (kind, config) => {
-    const { llmProvider, llmModel, cliAgentConfigs } = useConfigStore.getState();
+    const { llmProvider, llmModel, cliAgentConfigs, cliAgentModels } = useConfigStore.getState();
     const next = { ...cliAgentConfigs, [kind]: config };
     set({ cliAgentConfigs: next });
     persistValue("cliAgentConfigs", next);
     pushCliAgentConfig(kind, config);
     // While this agent is active the generic model slot mirrors its Fast model:
     // the provider ignores it, but the backend needs one and the footer shows it.
-    if (llmProvider === kind && llmModel !== config.fast_model) {
-      set({ llmModel: config.fast_model });
-      persistValue("llmModel", config.fast_model);
+    const slot = cliSlotModel(config, cliAgentModels[kind]);
+    if (llmProvider === kind && llmModel !== slot) {
+      set({ llmModel: slot });
+      persistValue("llmModel", slot);
       import("../lib/ipc").then(({ setActiveModel }) =>
-        setActiveModel(kind, config.fast_model)
+        setActiveModel(kind, slot)
           .catch((e) => console.warn(`[configStore] Failed to set the ${kind} model:`, e))
       );
     }
@@ -1505,7 +1517,9 @@ export const useConfigStore = create<ConfigState>((set) => ({
       // The Rust side starts with Ollama as default; this pushes the user's saved provider.
       // A CLI agent ignores the model; its slot carries its Fast model.
       const loadedLLMProvider = llmProvider ?? "ollama";
-      const loadedLLMModel = isCliAgent(loadedLLMProvider) ? cliAgentConfigs[loadedLLMProvider].fast_model : (llmModel ?? "");
+      const loadedLLMModel = isCliAgent(loadedLLMProvider)
+        ? cliSlotModel(cliAgentConfigs[loadedLLMProvider], cliAgentModels[loadedLLMProvider])
+        : (llmModel ?? "");
       if (loadedLLMProvider) {
         import("../lib/ipc").then(async ({ setLLMProvider: ipcSetLLM, setActiveModel: ipcSetModel }) => {
           try {

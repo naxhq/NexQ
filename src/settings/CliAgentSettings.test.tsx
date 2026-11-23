@@ -704,16 +704,17 @@ describe("CliAgentSettings: Antigravity and Codex", () => {
     expect(screen.getByText(/Sign in with ChatGPT/)).toBeInTheDocument();
   });
 
-  it("Codex: an API-key login is not shown as connected", async () => {
+  it("Codex: an API-key login is not usable and sends the user to Sign in with ChatGPT", async () => {
     statusOf.codex_cli = {
       ...CODEX_LOGGED_IN,
-      auth: { logged_in: true, auth_method: "api_key", subscription_type: null, email: null, login: "api_billed" },
+      auth: { logged_in: false, auth_method: "api_key", subscription_type: null, email: null, login: "logged_out" },
     };
     renderSettings({ selectedProvider: "codex_cli" });
-    expect(await screen.findByText("This Codex login bills an API account, not your subscription.")).toBeInTheDocument();
-    expect(screen.getByTestId("codex-status-dot")).toHaveAttribute("data-state", "api_billed");
-    expect(within(screen.getByRole("button", { name: /^Codex\b/ })).queryByText("Connected")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Codex, api account, not in use" })).toBeInTheDocument();
+    expect(await screen.findByText(/uses an API key/)).toBeInTheDocument();
+    expect(screen.getByText(/choose Sign in with ChatGPT/)).toBeInTheDocument();
+    expect(screen.getByTestId("codex-status-dot")).toHaveAttribute("data-state", "logged_out");
+    expect(screen.getByRole("button", { name: /open terminal to log in/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Codex, logged out, not in use" })).toBeInTheDocument();
   });
 
   it("the agent in use shows a usage limit with its message and reset time", async () => {

@@ -7,7 +7,7 @@ import { showToast } from "../stores/toastStore";
 import { CallLogEntry } from "./CallLogEntry";
 import { useMeetingAgentUsage } from "../hooks/useMeetingAgentUsage";
 import { useAgentStore } from "../stores/agentStore";
-import { formatUsageSummary, formatCostEstimate, formatDuration, isApiBilled } from "../lib/agentUsage";
+import { formatUsageSummary, formatCostEstimate, formatDuration, usageAttribution } from "../lib/agentUsage";
 import { cliAgentName, isCliAgent } from "../lib/cliAgents";
 import { useConfigStore } from "../stores/configStore";
 import { PromptViewer } from "./PromptViewer";
@@ -51,8 +51,11 @@ export function CallLogPanel() {
   const targetLang = useTranslationStore((s) => s.targetLang);
   const batchProgress = useTranslationStore((s) => s.batchProgress);
   const { sessions: claudeSessions, usage: claudeUsage } = useMeetingAgentUsage();
-  const activeAgent = useConfigStore((s) => (isCliAgent(s.llmProvider) ? s.llmProvider : "claude_cli"));
-  const claudeApiBilled = useAgentStore((s) => isApiBilled(s.statuses[activeAgent]));
+  // Session rows don't say which agent produced them: name it only while a CLI
+  // agent is the active provider, else stay neutral and make no billing claim.
+  const llmProvider = useConfigStore((s) => s.llmProvider);
+  const statuses = useAgentStore((s) => s.statuses);
+  const { label: agentLabel, apiBilled: agentApiBilled } = usageAttribution(llmProvider, statuses, cliAgentName, isCliAgent);
   // Session updates only arrive once the store has subscribed in this window
   useEffect(() => {
     useAgentStore.getState().init();
@@ -230,9 +233,9 @@ export function CallLogPanel() {
             {/* CLI agent session usage for this meeting (an estimate, not quota) */}
             {claudeSessions.length > 0 && (
               <div className="mt-2 text-meta text-muted-foreground" data-testid="claude-usage">
-                <span className="font-medium text-foreground/80">{cliAgentName(activeAgent)}</span>{" "}
+                <span className="font-medium text-foreground/80">{agentLabel}</span>{" "}
                 <span className="tabular-nums">{formatUsageSummary(claudeUsage)}</span>
-                <span className="block text-muted-foreground/70">{formatCostEstimate(claudeUsage, claudeApiBilled)}</span>
+                <span className="block text-muted-foreground/70">{formatCostEstimate(claudeUsage, agentApiBilled)}</span>
               </div>
             )}
 

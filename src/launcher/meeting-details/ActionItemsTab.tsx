@@ -7,6 +7,7 @@ import { useConfigStore } from "../../stores/configStore";
 import { showToast } from "../../stores/toastStore";
 import { useAudioPlayerStore } from "../../stores/audioPlayerStore";
 import { formatTimestamp } from "../../lib/utils";
+import { isCliAgent } from "../../lib/cliAgents";
 import {
   CheckSquare,
   Square,
@@ -203,12 +204,14 @@ export function ActionItemsTab({
   const meetingStartMs = new Date(meeting.start_time).getTime();
   const isOtherStreaming = useStreamStore((s) => s.isStreaming);
   const llmModel = useConfigStore((s) => s.llmModel);
+  const llmProvider = useConfigStore((s) => s.llmProvider);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const dragItemId = useRef<string | null>(null);
   const dragOverIdRef = useRef<string | null>(null);
 
   const hasTranscript = meeting.transcript.length > 0;
-  const hasLlm = !!llmModel;
+  // A CLI agent picks its own model, so an empty slot (Codex before its catalog is read) is fine.
+  const hasLlm = !!llmModel || isCliAgent(llmProvider);
   const completedCount = items.filter((i) => i.completed).length;
 
   // Toggle completion

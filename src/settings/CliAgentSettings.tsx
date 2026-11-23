@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-shell";
 import { ExternalLink, Loader2, RefreshCw, Terminal } from "lucide-react";
-import { NPM_ONLY_NOTE, apiBilledNoteFor, isRateLimited } from "../lib/agentUsage";
+import { CODEX_API_KEY_NOTE, NPM_ONLY_NOTE, apiBilledNoteFor, isApiKeyLogin, isRateLimited } from "../lib/agentUsage";
 import { getApiKey, listModels, openCliLoginTerminal } from "../lib/ipc";
 import { ProviderLogo } from "../components/icons/ProviderLogos";
 import {
@@ -135,7 +135,7 @@ function statusLine(
     case "unknown":
       return "Installed — login state unavailable";
     case "logged_out":
-      return "Not logged in";
+      return isApiKeyLogin(status) ? "API key login, needs ChatGPT" : "Not logged in";
     case "limited":
     case "error":
       return issue?.detail || (state === "limited" ? "Usage limit reached" : "The session stopped");
@@ -471,6 +471,8 @@ function AgentDetails({
           <div className="mt-3 rounded-lg border border-warning/20 bg-warning/5 px-4 py-3">
             {state === "api_billed" ? (
               <ApiBilledNote kind={kind} />
+            ) : isApiKeyLogin(status) ? (
+              <p className="text-xs font-medium text-warning">{CODEX_API_KEY_NOTE}</p>
             ) : (
               <p className="text-xs text-muted-foreground">{agent.loginHint}</p>
             )}

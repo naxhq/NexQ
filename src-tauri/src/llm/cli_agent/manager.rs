@@ -483,7 +483,7 @@ impl AgentSessionManager {
             return Err(shut_down_error());
         }
 
-        let kind = self.settings.active();
+        let mut kind = self.settings.active();
         let stale = {
             let mut entries = self.entries.lock().unwrap();
             match entries.get_mut(key) {
@@ -499,71 +499,95 @@ impl AgentSessionManager {
             dead.handle.close().await;
         }
 
-        let (model, effort, thinking) = {
-            let cfg = self.settings.config(kind);
-            let (m, e) = cfg.model_for(key.tier);
-            let resolved = self.settings.resolve(kind, m, e);
-            // The thinking toggle is Claude's alone.
-            let thinking = kind.supports_thinking_toggle() && cfg.thinking_for(key.tier);
-            (resolved.model, resolved.effort, thinking)
-        };
-        self.emit(key, SessionState::Starting, &model, None);
-        let cfg = SessionConfig {
-            kind,
-            model: model.clone(),
-            effort,
-            system_prompt: init.system_prompt,
-            thinking,
-            sources: if key.with_sources { init.sources.clone() } else { None },
-        };
-        let handle = match self.spawner.spawn(cfg).await {
-            Ok(handle) => handle,
-            Err(e) => {
-                self.emit(key, SessionState::Error, &model, Some(TurnError::of(&e)));
-                return Err(e);
+        // The provider can change while a session starts: one of the old kind
+        // is then closed instead of kept, and the new kind is started.
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            let (model, effort, thinking) = {
+                let cfg = self.settings.config(kind);
+                let (m, e) = cfg.model_for(key.tier);
+                let resolved = self.settings.resolve(kind, m, e);
+                // The thinking toggle is Claude's alone.
+                let thinking = kind.supports_thinking_toggle() && cfg.thinking_for(key.tier);
+                (resolved.model, resolved.effort, thinking)
+            };
+            self.emit(key, SessionState::Starting, &model, None);
+            let cfg = SessionConfig {
+                kind,
+                model: model.clone(),
+                effort,
+                system_prompt: init.system_prompt.clone(),
+                thinking,
+                sources: if key.with_sources { init.sources.clone() } else { None },
+            };
+            let handle = match self.spawner.spawn(cfg).await {
+                Ok(handle) => handle,
+                Err(e) => {
+                    self.emit(key, SessionState::Error, &model, Some(TurnError::of(&e)));
+                    return Err(e);
+                }
+            };
+            for message in &init.preload {
+                if let Err(e) = handle.append_context(message).await {
+                    handle.close().await;
+                    self.emit(key, SessionState::Error, &model, Some(TurnError::of(&e)));
+                    return Err(e);
+                }
             }
-        };
-        for message in &init.preload {
-            if let Err(e) = handle.append_context(message).await {
+            // `close_all` ran while this session was starting: don't leak it.
+            if self.shutting_down.load(Ordering::SeqCst) {
                 handle.close().await;
-                self.emit(key, SessionState::Error, &model, Some(TurnError::of(&e)));
-                return Err(e);
+                self.emit(key, SessionState::Closed, &model, None);
+                return Err(shut_down_error());
             }
-        }
-        // `close_all` ran while this session was starting: don't leak it.
-        if self.shutting_down.load(Ordering::SeqCst) {
+
+            let sources_notice = match (&init.sources, key.with_sources) {
+                (Some(launch), true) => crate::sources::activity::sources_degraded_notice(
+                    &launch.server_labels,
+                    &failed_mcp_servers(&handle.init_info()),
+                    &launch.left_out,
+                ),
+                _ => None,
+            };
+            // Check the kind and insert under one lock: a switch after this
+            // point runs `close_other_kinds`, which then finds the entry.
+            let inserted = {
+                let mut entries = self.entries.lock().unwrap();
+                if self.settings.active() == kind {
+                    self.cursors.lock().unwrap().insert(
+                        key.clone(),
+                        Arc::new(AsyncMutex::new(DeltaCursor::default())),
+                    );
+                    entries.insert(
+                        key.clone(),
+                        Entry {
+                            handle: handle.clone(),
+                            kind,
+                            state: SessionState::Ready,
+                            error: None,
+                            last_used: Instant::now(),
+                            in_flight: 0,
+                            turns: 0,
+                            sources_notice,
+                        },
+                    );
+                    true
+                } else {
+                    false
+                }
+            };
+            if inserted {
+                self.emit(key, SessionState::Ready, &handle.model(), None);
+                return Ok(handle);
+            }
             handle.close().await;
             self.emit(key, SessionState::Closed, &model, None);
-            return Err(shut_down_error());
+            kind = self.settings.active();
+            if attempts >= 3 {
+                return Err(AgentError::Crashed("the AI provider kept changing while a session started".into()));
+            }
         }
-
-        let sources_notice = match (&init.sources, key.with_sources) {
-            (Some(launch), true) => crate::sources::activity::sources_degraded_notice(
-                &launch.server_labels,
-                &failed_mcp_servers(&handle.init_info()),
-                &launch.left_out,
-            ),
-            _ => None,
-        };
-        self.cursors.lock().unwrap().insert(
-            key.clone(),
-            Arc::new(AsyncMutex::new(DeltaCursor::default())),
-        );
-        self.entries.lock().unwrap().insert(
-            key.clone(),
-            Entry {
-                handle: handle.clone(),
-                kind,
-                state: SessionState::Ready,
-                error: None,
-                last_used: Instant::now(),
-                in_flight: 0,
-                turns: 0,
-                sources_notice,
-            },
-        );
-        self.emit(key, SessionState::Ready, &handle.model(), None);
-        Ok(handle)
     }
 
     /// Ask on the session `ensure` started for `key`, reporting busy, then
@@ -747,25 +771,39 @@ impl AgentSessionManager {
     /// Close the sessions started for a kind other than the active one (the
     /// user switched provider). Sessions of the active kind stay. Returns how
     /// many were closed.
+    ///
+    /// Each key is closed under its spawn lock, so the old session's `closed`
+    /// is always reported before a replacement for the same key starts (a late
+    /// `closed` would otherwise erase the replacement's status).
     pub async fn close_other_kinds(&self) -> usize {
-        let active = self.settings.active();
-        let drained: Vec<(SessionKey, Entry)> = {
-            let mut entries = self.entries.lock().unwrap();
-            let keys: Vec<SessionKey> =
-                entries.iter().filter(|(_, e)| e.kind != active).map(|(k, _)| k.clone()).collect();
-            let mut cursors = self.cursors.lock().unwrap();
-            keys.into_iter()
-                .filter_map(|key| {
-                    cursors.remove(&key);
-                    entries.remove_entry(&key)
-                })
-                .collect()
+        let keys: Vec<SessionKey> = {
+            let active = self.settings.active();
+            let entries = self.entries.lock().unwrap();
+            entries.iter().filter(|(_, e)| e.kind != active).map(|(k, _)| k.clone()).collect()
         };
-        futures::future::join_all(drained.iter().map(|(_, entry)| entry.handle.close())).await;
-        for (key, entry) in &drained {
-            self.emit(key, SessionState::Closed, &entry.handle.model(), None);
-        }
-        drained.len()
+        let closes = keys.into_iter().map(|key| async move {
+            let lock = self.spawn_lock(&key);
+            let _spawning = lock.lock().await;
+            let removed = {
+                let active = self.settings.active();
+                let mut entries = self.entries.lock().unwrap();
+                match entries.get(&key) {
+                    Some(e) if e.kind != active => {
+                        self.cursors.lock().unwrap().remove(&key);
+                        entries.remove(&key)
+                    }
+                    _ => None,
+                }
+            };
+            match removed {
+                Some(entry) => {
+                    self.close_removed(&key, entry).await;
+                    1
+                }
+                None => 0,
+            }
+        });
+        futures::future::join_all(closes).await.into_iter().sum()
     }
 
     /// Close every session (app exit). Sessions still starting are closed as
@@ -1080,6 +1118,8 @@ mod tests {
         calls: AtomicUsize,
         /// Refuse to start a with-sources session.
         fail_sources: AtomicBool,
+        /// Switch the active kind while the next session starts.
+        switch_during_spawn: Mutex<Option<(Arc<CliSettings>, CliAgentKind)>>,
     }
 
     #[async_trait]
@@ -1087,6 +1127,9 @@ mod tests {
         async fn spawn(&self, cfg: SessionConfig) -> Result<Arc<dyn SessionHandle>, AgentError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             tokio::task::yield_now().await;
+            if let Some((settings, kind)) = self.switch_during_spawn.lock().unwrap().take() {
+                settings.set_active(kind);
+            }
             if cfg.sources.is_some() && self.fail_sources.load(Ordering::SeqCst) {
                 return Err(AgentError::Spawn("MCP server mira failed to start".into()));
             }
@@ -1323,6 +1366,47 @@ mod tests {
         assert_eq!(mgr.close_other_kinds().await, 0);
         assert!(fresh.is_alive());
         assert_eq!(spawner.spawned.lock().unwrap().last().unwrap().0.kind, CliAgentKind::Codex);
+    }
+
+    #[tokio::test]
+    async fn a_switch_while_a_session_starts_closes_it_and_starts_the_new_kind() {
+        let (mgr, spawner, sink) = setup();
+        let settings = mgr.settings().clone();
+        let start = settings.active();
+        *spawner.switch_during_spawn.lock().unwrap() = Some((settings.clone(), CliAgentKind::Codex));
+        let k = key(SessionScope::Live("m1".into()), Tier::Fast);
+        let handle = mgr.ensure(&k, init(&[])).await.unwrap();
+        let spawned = spawner.spawned.lock().unwrap();
+        assert_eq!(spawned.len(), 2);
+        assert_eq!(spawned[0].0.kind, start);
+        assert!(spawned[0].1.closed.load(Ordering::SeqCst), "the old kind's session is closed, never kept");
+        assert_eq!(spawned[1].0.kind, CliAgentKind::Codex);
+        assert!(handle.is_alive());
+        drop(spawned);
+        // Nothing of the old kind is left for shared context to reach.
+        assert_eq!(mgr.close_other_kinds().await, 0);
+        assert!(mgr.append_if_running(&k, "ctx").await.unwrap());
+        assert_eq!(sink.states().last().map(String::as_str), Some("ready"));
+    }
+
+    #[tokio::test]
+    async fn the_old_sessions_closed_is_reported_before_its_replacement_starts() {
+        let (mgr, _spawner, sink) = setup();
+        let mgr = Arc::new(mgr);
+        let k = key(SessionScope::Live("m1".into()), Tier::Fast);
+        mgr.ensure(&k, init(&[])).await.unwrap();
+        mgr.settings().set_active(CliAgentKind::Antigravity);
+        let (closer, starter) = (mgr.clone(), mgr.clone());
+        let k2 = k.clone();
+        let (closed, started) = tokio::join!(
+            async move { closer.close_other_kinds().await },
+            async move { starter.ensure(&k2, init(&[])).await }
+        );
+        assert!(closed <= 1);
+        assert!(started.unwrap().is_alive());
+        // Whatever the order, the last word on the key is the replacement's.
+        assert_eq!(sink.states().last().map(String::as_str), Some("ready"));
+        assert_eq!(mgr.snapshot().len(), 1);
     }
 
     #[tokio::test]

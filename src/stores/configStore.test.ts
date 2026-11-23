@@ -255,6 +255,24 @@ describe("configStore: CLI agent config", () => {
     expect(store.getState().llmModel).toBe("");
   });
 
+  it("activating Codex with a catalog and an empty Fast model fills the slot with the first listed model", async () => {
+    const store = await freshStore();
+    store.setState({ llmProvider: "claude_cli", llmModel: "haiku" });
+    store.getState().setCliAgentModels("codex_cli", [CODEX_MODEL]);
+    await store.getState().activateLLMProvider("codex_cli");
+    expect(invoke).toHaveBeenCalledWith("set_active_model", { provider: "codex_cli", modelId: "gpt-6-sol" });
+    expect(store.getState().llmModel).toBe("gpt-6-sol");
+    // The saved Fast model stays "" (first listed).
+    expect(store.getState().cliAgentConfigs.codex_cli.fast_model).toBe("");
+  });
+
+  it("activating Codex from an API provider clears the previous provider's model in the backend", async () => {
+    const store = await freshStore();
+    store.setState({ llmProvider: "openai", llmModel: "gpt-4o" });
+    await store.getState().activateLLMProvider("codex_cli");
+    expect(invoke).toHaveBeenCalledWith("set_active_model", { provider: "codex_cli", modelId: "" });
+  });
+
   it("a model the backend refuses is reported and not recorded", async () => {
     const store = await freshStore();
     store.setState({ llmProvider: "ollama", llmModel: "llama3.2", lastModelByProvider: { openai: "gpt-4o" } });

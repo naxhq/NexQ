@@ -79,4 +79,19 @@ describe("LLMSetupStep (first-run wizard)", () => {
     fireEvent.click(screen.getByRole("button", { name: /open terminal to log in/i }));
     await waitFor(() => expect(ipc.openCliLoginTerminal).toHaveBeenCalledWith("antigravity_cli"));
   });
+  it("a Codex API-key login is not usable: login terminal and Check again, not Use Codex", async () => {
+    const apiKey = {
+      ...LOGGED_IN,
+      auth: { logged_in: false, auth_method: "api_key", subscription_type: null, email: null, login: "logged_out" as const },
+    };
+    ipc.cliAgentStatus.mockImplementation(async (kind: string) =>
+      kind === "codex_cli" ? apiKey : { installed: false, binary_path: null, version: null, auth: null, npm_only: false },
+    );
+    render(<LLMSetupStep ollamaRunning={false} ollamaModels={[]} lmStudioRunning={false} lmStudioModels={[]} />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Codex/ }));
+    expect(screen.getByText(/Sign in with ChatGPT/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Use Codex" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /open terminal to log in/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /check again/i })).toBeInTheDocument();
+  });
 });

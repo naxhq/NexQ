@@ -820,6 +820,12 @@ pub(crate) fn route_after_outage(
     }
 }
 
+/// A model name is needed unless the active provider is a CLI agent: those
+/// resolve their own default (Codex saves "" for "first listed").
+pub(crate) fn model_ready(model: &str, provider: Option<&ProviderType>) -> bool {
+    !model.is_empty() || provider.is_some_and(|p| p.is_cli_agent())
+}
+
 /// The provider for today's full-prompt path, with its model, display name
 /// and type: the fallback provider on [`Route::Fallback`] (announcing the
 /// outage once with `agent_fallback`), else the active provider.
@@ -867,7 +873,7 @@ pub(crate) async fn stateless_provider(
                 .map_err(|e| format!("No active LLM provider: {}", e))?;
 
             let model_name = router.active_model().to_string();
-            if model_name.is_empty() {
+            if !model_ready(&model_name, router.active_provider_type()) {
                 return Err("No active model selected".to_string());
             }
 
@@ -1502,6 +1508,15 @@ fn default_window_seconds(mode: &str, action_window: Option<u64>, global_window:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_empty_model_is_only_ready_for_a_cli_agent() {
+        assert!(model_ready("gpt-4o", Some(&ProviderType::Openai)));
+        assert!(!model_ready("", Some(&ProviderType::Openai)));
+        assert!(!model_ready("", None));
+        assert!(model_ready("", Some(&ProviderType::CodexCli)));
+        assert!(model_ready("", Some(&ProviderType::AntigravityCli)));
+    }
 
     #[test]
     fn meeting_view_actions_default_to_whole_meeting() {

@@ -87,12 +87,15 @@ pub fn codex_auth(login: &CodexLogin) -> Option<ClaudeAuthStatus> {
             email: email.clone(),
             login: ClaudeLogin::Subscription,
         },
+        // Codex sessions refuse an API-key login (a ChatGPT login is required),
+        // so it reads as not usable: the UI offers the login terminal and
+        // Check again. `auth_method` stays "api_key" so the UI can say why.
         CodexLogin::ApiKey => ClaudeAuthStatus {
-            logged_in: true,
+            logged_in: false,
             auth_method: "api_key".into(),
             subscription_type: None,
             email: None,
-            login: ClaudeLogin::ApiBilled,
+            login: ClaudeLogin::LoggedOut,
         },
         CodexLogin::LoggedOut => ClaudeAuthStatus {
             logged_in: false,
@@ -298,8 +301,10 @@ mod tests {
     #[test]
     fn an_api_key_login_is_not_the_subscription() {
         let a = codex_auth(&CodexLogin::ApiKey).unwrap();
-        assert_eq!(a.login, ClaudeLogin::ApiBilled);
-        assert!(a.logged_in);
+        // Sessions refuse it, so it is not usable: not "logged in", not api-billed.
+        assert_eq!(a.login, ClaudeLogin::LoggedOut);
+        assert!(!a.logged_in);
+        assert_eq!(a.auth_method, "api_key");
         assert_eq!(a.email, None);
         let out = codex_auth(&CodexLogin::LoggedOut).unwrap();
         assert_eq!((out.logged_in, out.login), (false, ClaudeLogin::LoggedOut));
