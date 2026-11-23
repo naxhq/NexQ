@@ -35,7 +35,7 @@ function styleOf(kind: "notes" | "tools", state: PillState): string {
 
 /**
  * The Notes and Tools pills: which sources the next answer you ask for may
- * use. Shown only for a kind that is set up, and only on the Claude subscription.
+ * use. Shown only for a kind that is set up, and only on a subscription CLI agent.
  */
 export function SourcePills({ scope, meetingId = null }: SourcePillsProps) {
   const provider = useConfigStore((s) => s.llmProvider);

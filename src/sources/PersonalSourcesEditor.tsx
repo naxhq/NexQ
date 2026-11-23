@@ -22,9 +22,10 @@ import {
   removeNotesFolder,
   applyCheckResult,
 } from "./sourcesActions";
+import { isCliAgent } from "../lib/cliAgents";
 
 export const SOURCES_GATING_LINE =
-  "Personal sources work with the Claude subscription. Switch to it in LLM Providers to use them.";
+  "Personal sources work with the subscription providers (Claude, Antigravity, Codex). Switch to one in LLM Providers to use them.";
 
 interface PersonalSourcesEditorProps {
   /** `compact` on the launcher main screen, `full` in Settings. */
@@ -57,7 +58,7 @@ export function PersonalSourcesEditor({ variant }: PersonalSourcesEditorProps) {
   const pushError = useSourcesStore((s) => s.pushError);
   const provider = useConfigStore((s) => s.llmProvider);
   const gatingId = useId();
-  const gated = provider !== "claude_cli";
+  const gated = !isCliAgent(provider);
 
   const [infos, setInfos] = useState<Record<string, NotesFolderInfo>>({});
   const [folderError, setFolderError] = useState<string | null>(null);

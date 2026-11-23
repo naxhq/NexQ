@@ -10,6 +10,7 @@ import type { Meeting, MeetingBookmark } from "../lib/types";
 import { pastMeetingIdFor } from "../stores/meetingStore";
 import { useConfigStore } from "../stores/configStore";
 import { assistSegments } from "../lib/assistSegments";
+import { isCliAgent } from "../lib/cliAgents";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -282,7 +283,7 @@ export function useBookmarkSuggestions(
       // except for a Claude session, which needs every segment under its own id.
       // All finals are kept for timestamp lookup either way.
       const finals = meeting.transcript.filter((s) => s.is_final);
-      const segments = assistSegments(finals, useConfigStore.getState().llmProvider !== "claude_cli", meeting.speakers);
+      const segments = assistSegments(finals, !isCliAgent(useConfigStore.getState().llmProvider), meeting.speakers);
       const allSegments = finals.map((s) => ({ id: s.id, timestamp_ms: s.timestamp_ms }));
 
       const unEnd = await onStreamEnd(async (event) => {

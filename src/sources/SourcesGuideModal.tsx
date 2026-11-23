@@ -20,8 +20,8 @@ const NOTES_TOPICS: Topic[] = [
     body: "Change, create or delete a note. Notes are read only. NexQ tells the AI to treat what it reads in your notes as information, not as instructions.",
   },
   {
-    title: "Claude subscription only",
-    body: "Your folders are saved either way, but only the Claude subscription can use them. Other providers ignore them.",
+    title: "Subscription providers only",
+    body: "Your folders are saved either way, but only the Claude, Antigravity and Codex subscriptions can use them. Other providers ignore them.",
   },
   {
     title: "It can add a few seconds",
@@ -43,8 +43,8 @@ const TOOLS_TOPICS: Topic[] = [
     body: "Call a tool you switched off. Tools whose names suggest they change something (add, send, edit, delete) start off, and you should still read the list. NexQ tells the AI to treat what a tool returns as information, not as instructions.",
   },
   {
-    title: "Claude subscription only",
-    body: "Your servers are saved either way, but only the Claude subscription can use them. Other providers ignore them.",
+    title: "Subscription providers only",
+    body: "Your servers are saved either way, but only the Claude, Antigravity and Codex subscriptions can use them. Other providers ignore them.",
   },
   {
     title: "It can add a few seconds",

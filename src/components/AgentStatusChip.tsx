@@ -1,16 +1,17 @@
-// Footer chip for the Claude subscription provider: a status dot, the live
+// Footer chip for the active subscription CLI agent (Claude, Antigravity, Codex): a status dot, the live
 // session's state during a meeting, and a hover card with login state, model,
 // effort and thinking per tier, and the meeting's usage and response times.
 // Rendered by ServiceStatusBar in both windows.
 
 import { useEffect, useId, useState, type ReactNode } from "react";
-import { Brain, ChevronUp } from "lucide-react";
+import { ChevronUp } from "lucide-react";
+import { ProviderLogo } from "./icons/ProviderLogos";
 import { useAgentStore } from "../stores/agentStore";
 import { useConfigStore } from "../stores/configStore";
 import { useMeetingAgentUsage } from "../hooks/useMeetingAgentUsage";
 import {
-  API_BILLED_NOTE,
   NPM_ONLY_NOTE,
+  apiBilledNoteFor,
   avgFirstTokenMs,
   avgLatencyMs,
   formatAgo,
@@ -20,8 +21,15 @@ import {
   isApiBilled,
   isRateLimited,
 } from "../lib/agentUsage";
-import { claudeTierLabel } from "../settings/ClaudeCliSettings";
-import type { AgentSessionStatus, ClaudeCliConfig, ClaudeCliStatus, ClaudeModelInfo, SessionUsage } from "../lib/types";
+import { cliAgentInfo, cliTierLabel } from "../lib/cliAgents";
+import type {
+  AgentSessionStatus,
+  ClaudeCliConfig,
+  ClaudeCliStatus,
+  ClaudeModelInfo,
+  CliAgentKind,
+  SessionUsage,
+} from "../lib/types";
 
 export type AgentChipState = "idle" | "starting" | "ready" | "busy" | "error" | "limited" | "attention";
 
@@ -73,8 +81,9 @@ function providerState(
   return { state: "ready", label: "Ready" };
 }
 
-function providerNote(status: ClaudeCliStatus | undefined): string {
-  if (status && !status.installed) return status.npm_only ? NPM_ONLY_NOTE : "Claude Code is not installed on this PC";
+function providerNote(kind: CliAgentKind, status: ClaudeCliStatus | undefined): string {
+  const product = kind === "claude_cli" ? "Claude Code" : cliAgentInfo(kind).name;
+  if (status && !status.installed) return status.npm_only ? NPM_ONLY_NOTE : `${product} is not installed on this PC`;
   if (status?.auth && !status.auth.logged_in) return "Not logged in — sign in from Settings";
   return "";
 }
@@ -94,14 +103,19 @@ interface TierRow {
   state: AgentSessionStatus["state"] | null;
 }
 
-function tierRows(sessions: AgentSessionStatus[], cfg: ClaudeCliConfig, models?: ClaudeModelInfo[]): TierRow[] {
+function tierRows(
+  kind: CliAgentKind,
+  sessions: AgentSessionStatus[],
+  cfg: ClaudeCliConfig,
+  models?: ClaudeModelInfo[],
+): TierRow[] {
   return (["fast", "deep"] as const).map((tier) => {
     const s = sessions.find((x) => x.tier === tier && !x.with_sources) ?? sessions.find((x) => x.tier === tier);
     const effort = tier === "fast" ? cfg.fast_effort : cfg.deep_effort;
     const model = s?.model ?? (tier === "fast" ? cfg.fast_model : cfg.deep_model);
     return {
       tier: tier === "fast" ? "Fast" : "Deep",
-      label: claudeTierLabel(model, effort, models),
+      label: cliTierLabel(kind, model, effort, models),
       thinking: tier === "fast" ? cfg.fast_thinking : cfg.deep_thinking,
       state: s?.state ?? null,
     };
@@ -119,6 +133,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 
 function HoverCard({
   id,
+  kind,
   sessions,
   usage,
   cfg,
@@ -128,6 +143,7 @@ function HoverCard({
   models,
 }: {
   id: string;
+  kind: CliAgentKind;
   sessions: AgentSessionStatus[];
   usage: SessionUsage;
   cfg: ClaudeCliConfig;
@@ -147,6 +163,7 @@ function HoverCard({
   const detail = sessions.find((s) => s.state === "error" && s.detail)?.detail;
   const avg = avgLatencyMs(usage);
   const avgFirst = avgFirstTokenMs(usage);
+  const agent = cliAgentInfo(kind);
 
   return (
     <div
@@ -157,16 +174,17 @@ function HoverCard({
     >
       <div className="flex items-baseline justify-between gap-3">
         <span className="text-xs font-semibold text-foreground">
-          {apiBilled ? "Claude (API account)" : "Claude (subscription)"}
+          {apiBilled ? `${agent.name} (API account)` : `${agent.name} (subscription)`}
         </span>
         {login && <span className="truncate text-muted-foreground">{login}</span>}
       </div>
-      {apiBilled && <p className="mt-1 text-warning">{API_BILLED_NOTE}</p>}
+      {apiBilled && <p className="mt-1 text-warning">{apiBilledNoteFor(agent.name)}</p>}
 
       <dl className="mt-2.5 space-y-1">
-        {tierRows(sessions, cfg, models).map((row) => (
+        {tierRows(kind, sessions, cfg, models).map((row) => (
           <Row key={row.tier} label={row.tier}>
-            {row.label} · thinking {row.thinking ? "on" : "off"}
+            {row.label}
+            {agent.supportsThinking && <> · thinking {row.thinking ? "on" : "off"}</>}
             {row.state && <span className="text-muted-foreground"> · {SESSION_STATE_LABEL[row.state]}</span>}
           </Row>
         ))}
@@ -204,18 +222,22 @@ function HoverCard({
 }
 
 export function AgentStatusChip({
+  kind = "claude_cli",
   compact = false,
   onClick,
   pickerOpen = false,
 }: {
+  /** The CLI agent in use. */
+  kind?: CliAgentKind;
   compact?: boolean;
   onClick?: () => void;
   pickerOpen?: boolean;
 }) {
-  const status = useAgentStore((s) => s.status);
-  const statusError = useAgentStore((s) => s.statusError);
-  const cfg = useConfigStore((s) => s.claudeCliConfig);
-  const claudeModels = useConfigStore((s) => s.claudeModels);
+  const agent = cliAgentInfo(kind);
+  const status = useAgentStore((s) => s.statuses[kind]);
+  const statusError = useAgentStore((s) => s.statusErrors[kind]);
+  const cfg = useConfigStore((s) => s.cliAgentConfigs[kind]);
+  const agentModels = useConfigStore((s) => s.cliAgentModels[kind]);
   const { sessions, usage } = useMeetingAgentUsage();
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -226,8 +248,8 @@ export function AgentStatusChip({
   useEffect(() => {
     const store = useAgentStore.getState();
     store.init();
-    if (!store.status) void store.refreshStatus();
-  }, []);
+    if (!store.statuses[kind]) void store.refreshStatus(kind);
+  }, [kind]);
 
   // Closed sessions are dropped from the store, so any session here is open.
   const inSession = sessions.length > 0;
@@ -253,7 +275,7 @@ export function AgentStatusChip({
         data-testid="agent-status-chip"
         role={onClick ? "button" : undefined}
         tabIndex={0}
-        aria-label={`AI provider: Claude${label ? `, ${label}` : ""}`}
+        aria-label={`AI provider: ${agent.name}${label ? `, ${label}` : ""}`}
         aria-describedby={cardOpen ? cardId : undefined}
         aria-expanded={onClick ? pickerOpen : undefined}
         className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-primary/40 ${style.pill} ${
@@ -283,9 +305,9 @@ export function AgentStatusChip({
             className={`relative inline-flex h-2 w-2 rounded-full transition-colors duration-200 ${style.dot}`}
           />
         </span>
-        <Brain className={`h-3.5 w-3.5 shrink-0 ${state === "idle" ? "text-muted-foreground/60" : "text-foreground/70"}`} />
+        <ProviderLogo id={agent.logo} className={`h-3.5 w-3.5 shrink-0 ${state === "idle" ? "opacity-50" : ""}`} />
         <div className="flex min-w-0 items-center gap-1">
-          {!compact && <span className="text-xs font-medium text-foreground/90">Claude</span>}
+          {!compact && <span className="text-xs font-medium text-foreground/90">{agent.name}</span>}
           {label && (
             <span className={`truncate ${compact ? "text-xs font-medium text-foreground/90" : "text-meta text-foreground/60"}`}>
               {label}
@@ -303,13 +325,14 @@ export function AgentStatusChip({
       {cardOpen && (
         <HoverCard
           id={cardId}
+          kind={kind}
           sessions={sessions}
           usage={usage}
           cfg={cfg}
           status={status}
-          note={inSession ? "" : providerNote(status)}
+          note={inSession ? "" : providerNote(kind, status)}
           apiBilled={apiBilled}
-          models={claudeModels ?? undefined}
+          models={agentModels}
         />
       )}
     </div>

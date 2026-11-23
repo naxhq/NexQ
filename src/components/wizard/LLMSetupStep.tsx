@@ -6,9 +6,11 @@ import {
   listModels,
   storeApiKey,
   testLLMConnection,
-  openClaudeLoginTerminal,
+  openCliLoginTerminal,
 } from "../../lib/ipc";
-import { API_BILLED_NOTE, isApiBilled } from "../../lib/agentUsage";
+import { apiBilledNoteFor, isApiBilled } from "../../lib/agentUsage";
+import { CLI_AGENTS, cliAgentInfo, isCliAgent } from "../../lib/cliAgents";
+import { ProviderLogo } from "../icons/ProviderLogos";
 import type { LLMProviderType, ModelInfo } from "../../lib/types";
 import {
   Server,
@@ -80,15 +82,14 @@ export function LLMSetupStep({
 
   const hasLocalLLM = ollamaRunning || lmStudioRunning;
 
-  // Claude Code on this PC: offered as a provider once detected.
-  const claudeStatus = useAgentStore((s) => s.status);
-  const claudeChecking = useAgentStore((s) => s.checking);
-  const refreshClaudeStatus = useAgentStore((s) => s.refreshStatus);
+  // Subscription CLIs on this PC (Claude Code, Antigravity, Codex): offered as providers once detected.
+  const agentStatuses = useAgentStore((s) => s.statuses);
+  const agentChecking = useAgentStore((s) => s.checking);
+  const refreshAgentStatus = useAgentStore((s) => s.refreshStatus);
   useEffect(() => {
-    refreshClaudeStatus();
-  }, [refreshClaudeStatus]);
-  const claudeInstalled = !!claudeStatus?.installed;
-  const claudeLoggedIn = !!claudeStatus?.auth?.logged_in;
+    for (const { id } of CLI_AGENTS) void refreshAgentStatus(id);
+  }, [refreshAgentStatus]);
+  const installedAgents = CLI_AGENTS.filter((a) => !!agentStatuses[a.id]?.installed);
 
   const [selectedProvider, setSelectedProvider] = useState<LLMProviderType>(
     hasLocalLLM
@@ -118,16 +119,21 @@ export function LLMSetupStep({
   const requiresApiKey = ["openai", "anthropic", "groq", "gemini", "openrouter"].includes(
     selectedProvider
   );
-  const isClaudeCli = selectedProvider === "claude_cli";
+  const isCliProvider = isCliAgent(selectedProvider);
+  const agent = isCliAgent(selectedProvider) ? cliAgentInfo(selectedProvider) : null;
+  const agentStatus = isCliAgent(selectedProvider) ? agentStatuses[selectedProvider] : undefined;
+  const agentLoggedIn = !!agentStatus?.auth?.logged_in;
+  const agentChecked = isCliAgent(selectedProvider) && !!agentChecking[selectedProvider];
 
-  // Claude has no model to pick (Fast / Deep come from its settings); the
+  // A CLI agent has no model to pick (Fast / Deep come from its settings); the
   // backend still needs one, so the Fast model fills the slot.
-  async function handleUseClaude() {
+  async function handleUseAgent() {
+    if (!isCliAgent(selectedProvider)) return;
     try {
-      await activateLLMProvider("claude_cli");
+      await activateLLMProvider(selectedProvider);
     } catch (err) {
       setConnectionStatus("error");
-      setConnectionMessage(err instanceof Error ? err.message : "Couldn't switch to Claude");
+      setConnectionMessage(err instanceof Error ? err.message : `Couldn't switch to ${cliAgentInfo(selectedProvider).name}`);
     }
   }
 
@@ -270,45 +276,53 @@ export function LLMSetupStep({
           </div>
         )}
 
-        {/* Subscription (local CLI): Claude Code, when detected */}
-        {claudeInstalled && (
+        {/* Subscription (local CLI): the agents found on this PC */}
+        {installedAgents.length > 0 && (
           <div className="space-y-2">
             <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Subscription <span className="ml-1 normal-case tracking-normal text-warning">Beta</span>
             </p>
-            <ProviderButton
-              label="Claude"
-              description={
-                claudeLoggedIn
-                  ? `Your Claude login${claudeStatus?.auth?.email ? ` (${claudeStatus.auth.email})` : ""}`
-                  : "Claude Code found — log in to use it"
-              }
-              icon={<Terminal className="h-5 w-5" />}
-              selected={isClaudeCli}
-              onClick={() => handleProviderSelect("claude_cli")}
-            />
+            {installedAgents.map((a) => {
+              const st = agentStatuses[a.id];
+              return (
+                <ProviderButton
+                  key={a.id}
+                  label={a.name}
+                  description={
+                    st?.auth?.logged_in
+                      ? `Your ${a.name} login${st.auth.email ? ` (${st.auth.email})` : ""}`
+                      : `${a.id === "claude_cli" ? "Claude Code" : a.name} found — log in to use it`
+                  }
+                  icon={<ProviderLogo id={a.logo} className="h-5 w-5" />}
+                  selected={selectedProvider === a.id}
+                  onClick={() => handleProviderSelect(a.id)}
+                />
+              );
+            })}
           </div>
         )}
 
-        {isClaudeCli && (
+        {agent && (
           <div className="space-y-3 rounded-xl border border-border/30 bg-secondary/20 px-5 py-4">
             <p className="text-xs text-muted-foreground">
-              Uses your own Claude login on this PC. NexQ never sees your credentials.
+              Uses your own {agent.name} login on this PC. NexQ never sees your credentials.
             </p>
-            {isApiBilled(claudeStatus) && <p className="text-xs font-medium text-warning">{API_BILLED_NOTE}</p>}
-            {claudeLoggedIn ? (
+            {isApiBilled(agentStatus) && (
+              <p className="text-xs font-medium text-warning">{apiBilledNoteFor(agent.name)}</p>
+            )}
+            {agentLoggedIn ? (
               <div className="flex flex-wrap items-center gap-3">
                 <button
-                  onClick={handleUseClaude}
+                  onClick={handleUseAgent}
                   className="inline-flex items-center gap-2 rounded-xl border border-primary/30 bg-primary/5 px-4 py-2 text-xs font-semibold text-primary transition-colors hover:bg-primary/10"
                 >
                   <CheckCircle className="h-3.5 w-3.5" />
-                  Use Claude
+                  Use {agent.name}
                 </button>
-                {llmProvider === "claude_cli" && (
+                {llmProvider === agent.id && (
                   <span className="flex items-center gap-1 text-xs text-success">
                     <CheckCircle className="h-3 w-3" />
-                    Claude is your AI provider
+                    {agent.name} is your AI provider
                   </span>
                 )}
                 {connectionStatus === "error" && (
@@ -322,7 +336,7 @@ export function LLMSetupStep({
               <div className="flex flex-wrap items-center gap-3">
                 <button
                   onClick={() =>
-                    openClaudeLoginTerminal().catch((e) =>
+                    openCliLoginTerminal(agent.id).catch((e) =>
                       showToast(`Couldn't open a terminal: ${e instanceof Error ? e.message : String(e)}`, "error")
                     )
                   }
@@ -332,11 +346,11 @@ export function LLMSetupStep({
                   Open terminal to log in
                 </button>
                 <button
-                  onClick={() => refreshClaudeStatus()}
-                  disabled={claudeChecking}
+                  onClick={() => refreshAgentStatus(agent.id)}
+                  disabled={agentChecked}
                   className="inline-flex items-center gap-2 rounded-xl border border-border/40 bg-background px-4 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {claudeChecking ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                  {agentChecked ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
                   Check again
                 </button>
               </div>
@@ -400,7 +414,7 @@ export function LLMSetupStep({
         )}
 
         {/* Test Connection & Load Models */}
-        {!isClaudeCli && (
+        {!isCliProvider && (
           <div className="flex flex-wrap items-center gap-3">
             <button
               onClick={handleTestConnection}
@@ -445,7 +459,7 @@ export function LLMSetupStep({
         )}
 
         {/* Model Selection */}
-        {!isClaudeCli && models.length > 0 && (
+        {!isCliProvider && models.length > 0 && (
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground">
               Select Model

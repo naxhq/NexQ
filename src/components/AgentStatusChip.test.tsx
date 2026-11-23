@@ -12,12 +12,12 @@ vi.mock("@tauri-apps/plugin-store", () => ({
 vi.mock("@tauri-apps/plugin-shell", () => ({ open: vi.fn() }));
 
 const ipc = vi.hoisted(() => ({
-  claudeCliStatus: vi.fn(),
+  cliAgentStatus: vi.fn(),
   getAgentSessions: vi.fn(),
 }));
 vi.mock("../lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/ipc")>()),
-  claudeCliStatus: () => ipc.claudeCliStatus(),
+  cliAgentStatus: (kind: string) => ipc.cliAgentStatus(kind),
   getAgentSessions: () => ipc.getAgentSessions(),
 }));
 
@@ -57,7 +57,7 @@ function cardText(): string {
 beforeEach(() => {
   resetAgentStoreForTests();
   ipc.getAgentSessions.mockResolvedValue([]);
-  ipc.claudeCliStatus.mockResolvedValue({
+  ipc.cliAgentStatus.mockResolvedValue({
     installed: true,
     binary_path: "claude",
     version: "2.1.0",
@@ -122,7 +122,10 @@ describe("AgentStatusChip", () => {
   it("hover card shows login, thinking per tier, requests, last request and averages", async () => {
     const now = Date.now();
     useConfigStore.setState({
-      claudeCliConfig: { ...useConfigStore.getState().claudeCliConfig, fast_thinking: false, deep_thinking: true },
+      cliAgentConfigs: {
+        ...useConfigStore.getState().cliAgentConfigs,
+        claude_cli: { ...useConfigStore.getState().cliAgentConfigs.claude_cli, fast_thinking: false, deep_thinking: true },
+      },
     });
     render(<AgentStatusChip onClick={() => {}} />);
     await act(async () => {});
@@ -193,7 +196,7 @@ describe("AgentStatusChip", () => {
 
   it("is amber with the API note outside a meeting when the login bills an API account", async () => {
     useMeetingStore.setState({ activeMeeting: null });
-    ipc.claudeCliStatus.mockResolvedValue({
+    ipc.cliAgentStatus.mockResolvedValue({
       installed: true,
       binary_path: "claude",
       version: "2.1.0",
@@ -210,7 +213,7 @@ describe("AgentStatusChip", () => {
   });
 
   it("never shows a ready session green on an API-billed login", async () => {
-    ipc.claudeCliStatus.mockResolvedValue({
+    ipc.cliAgentStatus.mockResolvedValue({
       installed: true,
       binary_path: "claude",
       version: "2.1.0",
@@ -229,7 +232,7 @@ describe("AgentStatusChip", () => {
 
   it("names an npm-only install outside a meeting", async () => {
     useMeetingStore.setState({ activeMeeting: null });
-    ipc.claudeCliStatus.mockResolvedValue({ installed: false, binary_path: null, version: null, auth: null, npm_only: true });
+    ipc.cliAgentStatus.mockResolvedValue({ installed: false, binary_path: null, version: null, auth: null, npm_only: true });
     render(<AgentStatusChip />);
     await act(async () => {});
     expect(screen.getByTestId("agent-status-dot")).toHaveAttribute("data-state", "attention");
@@ -317,5 +320,68 @@ describe("scopeUsage", () => {
   it("fills fields an older backend did not send", () => {
     const legacy = { input_tokens: 5, output_tokens: 1, cost_usd: 0.1 } as unknown as AgentSessionStatus["usage"];
     expect(scopeUsage([session({ usage: legacy })])).toEqual({ ...EMPTY_USAGE, input_tokens: 5, output_tokens: 1, cost_usd: 0.1 });
+  });
+});
+
+describe("AgentStatusChip for other CLI agents", () => {
+  const CODEX_MODELS = [
+    {
+      value: "gpt-6-sol",
+      resolved_model: "gpt-6-sol",
+      display_name: "GPT-6 Sol",
+      description: "",
+      supports_effort: true,
+      effort_levels: ["low", "medium", "high"],
+      default_effort: "medium",
+    },
+  ];
+
+  beforeEach(() => {
+    ipc.cliAgentStatus.mockImplementation(async (kind: string) => ({
+      installed: true,
+      binary_path: kind,
+      version: "1.0.0",
+      auth: { logged_in: true, auth_method: "chatgpt", subscription_type: "plus", email: null, login: "subscription" },
+      npm_only: false,
+    }));
+    useConfigStore.setState({ cliAgentModels: { codex_cli: CODEX_MODELS } });
+  });
+
+  it("names the agent, reads its own status and shows its Fast and Deep models without thinking", async () => {
+    render(<AgentStatusChip kind="codex_cli" onClick={() => {}} />);
+    await act(async () => {});
+    expect(screen.getByLabelText("AI provider: Codex, Ready")).toBeInTheDocument();
+    expect(screen.getByText("Codex")).toBeInTheDocument();
+    expect(ipc.cliAgentStatus).toHaveBeenCalledWith("codex_cli");
+    const tip = cardText();
+    expect(tip).toContain("Codex (subscription)");
+    expect(tip).toContain("Signed in · Plus plan");
+    // The empty saved model means the first listed one.
+    expect(tip).toContain("GPT-6 Sol · Low");
+    expect(tip).toContain("GPT-6 Sol · Medium");
+    expect(tip).not.toContain("thinking");
+  });
+
+  it("Antigravity shows no effort either", async () => {
+    useConfigStore.setState({
+      cliAgentModels: {
+        antigravity_cli: [
+          {
+            value: "gemini-3.8-flash-low",
+            resolved_model: "x",
+            display_name: "Gemini 3.8 Flash (Low)",
+            description: "",
+            supports_effort: false,
+            effort_levels: [],
+          },
+        ],
+      },
+    });
+    render(<AgentStatusChip kind="antigravity_cli" />);
+    await act(async () => {});
+    const tip = cardText();
+    expect(tip).toContain("Antigravity (subscription)");
+    expect(tip).toContain("Gemini 3.8 Flash (Low)");
+    expect(tip).not.toContain("thinking");
   });
 });

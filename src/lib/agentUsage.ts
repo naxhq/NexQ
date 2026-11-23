@@ -4,7 +4,11 @@
 import type { AgentSessionStatus, ClaudeCliStatus, SessionUsage } from "./types";
 
 /** Shown wherever a login that bills an API account would read as connected. */
-export const API_BILLED_NOTE = "This Claude login bills an API account, not your subscription.";
+export function apiBilledNoteFor(agentName: string): string {
+  return `This ${agentName} login bills an API account, not your subscription.`;
+}
+
+export const API_BILLED_NOTE = apiBilledNoteFor("Claude");
 
 /** Shown when only an npm install of Claude Code (`claude.cmd`) was found. */
 export const NPM_ONLY_NOTE = "Found an npm install of Claude Code — NexQ needs the native installer";

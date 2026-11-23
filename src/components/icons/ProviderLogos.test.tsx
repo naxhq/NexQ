@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
 import { ProviderLogo, type CliLogoId } from "./ProviderLogos";
 
-const IDS: CliLogoId[] = ["claude_cli", "gemini_cli", "antigravity_cli", "codex_cli"];
+const IDS: CliLogoId[] = ["claude_cli", "antigravity_cli", "codex_cli"];
 
 describe("ProviderLogo", () => {
   it.each(IDS)("renders an aria-hidden svg for %s", (id) => {
@@ -20,16 +20,16 @@ describe("ProviderLogo", () => {
     expect(container.querySelector("svg")?.getAttribute("class")).toBe("h-8 w-8");
   });
 
-  it("uses unique gradient ids across Gemini instances", () => {
+  it("uses unique gradient ids across Antigravity instances", () => {
     const { container } = render(
       <>
-        <ProviderLogo id="gemini_cli" />
-        <ProviderLogo id="gemini_cli" />
+        <ProviderLogo id="antigravity_cli" />
+        <ProviderLogo id="antigravity_cli" />
       </>,
     );
     const ids = Array.from(container.querySelectorAll("linearGradient")).map((g) => g.id);
-    expect(ids.length).toBe(6);
-    expect(new Set(ids).size).toBe(6);
+    expect(ids.length).toBe(2);
+    expect(new Set(ids).size).toBe(2);
     for (const p of Array.from(container.querySelectorAll("path"))) {
       const m = p.getAttribute("fill")?.match(/^url\(#(.+)\)$/);
       if (m) expect(ids).toContain(m[1]);

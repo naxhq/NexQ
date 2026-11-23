@@ -17,6 +17,7 @@ import type {
   AIScenario,
   ClaudeCliConfig,
   ClaudeModelInfo,
+  CliAgentKind,
   ContextScopeSetting,
   ThinkingSetting,
 } from "../lib/types";
@@ -25,6 +26,7 @@ import {
   normalizeThinkingMap,
   requestOptionFields,
 } from "../lib/llmRequestOptions";
+import { CLI_AGENTS, cliAgentInfo, cliAgentName, isCliAgent } from "../lib/cliAgents";
 import { clampMinutes, DEFAULT_CONTEXT_SCOPE, SCOPE_KINDS } from "../lib/contextScope";
 
 const DEFAULT_DEEPGRAM_CONFIG: DeepgramConfig = {
@@ -54,39 +56,55 @@ const DEFAULT_GROQ_CONFIG: GroqConfig = {
 const STORE_FILE = "config.json";
 
 /** Claude CLI defaults (mirror Rust `ClaudeCliConfig::default`). */
-export const DEFAULT_CLAUDE_CLI_CONFIG: ClaudeCliConfig = {
-  fast_model: "haiku",
-  fast_effort: "low",
-  deep_model: "sonnet",
-  deep_effort: "medium",
-  fast_thinking: false,
-  deep_thinking: true,
-  fallback_provider: null,
-  fallback_model: null,
-};
+export const DEFAULT_CLAUDE_CLI_CONFIG: ClaudeCliConfig = cliAgentInfo("claude_cli").defaultConfig;
+
+/** Per-agent defaults (mirror Rust `ClaudeCliConfig::default_for`). */
+export const DEFAULT_CLI_AGENT_CONFIGS: Record<CliAgentKind, ClaudeCliConfig> = Object.fromEntries(
+  CLI_AGENTS.map((a) => [a.id, a.defaultConfig]),
+) as Record<CliAgentKind, ClaudeCliConfig>;
 
 /**
- * Providers that can stand in for Claude CLI. "custom" is left out: the
+ * Providers that can stand in for a CLI agent. "custom" is left out: the
  * fallback is built from the provider type alone and custom needs its URL.
  */
-export const CLAUDE_FALLBACK_PROVIDERS: LLMProviderType[] = [
+export const CLI_FALLBACK_PROVIDERS: LLMProviderType[] = [
   "ollama", "lm_studio", "openai", "anthropic", "groq", "gemini", "openrouter",
 ];
 
 function isFallbackCandidate(provider: string): boolean {
-  return (CLAUDE_FALLBACK_PROVIDERS as string[]).includes(provider);
+  return (CLI_FALLBACK_PROVIDERS as string[]).includes(provider);
 }
 
-/** Push the Claude CLI config to the backend, which holds it in memory only. */
-function pushClaudeCliConfig(config: ClaudeCliConfig): void {
-  import("../lib/ipc").then(({ setClaudeCliConfig }) =>
-    setClaudeCliConfig(config).catch((e) => {
-      console.warn("[configStore] Failed to push Claude CLI config:", e);
+/** Push one CLI agent's config to the backend, which holds it in memory only. */
+function pushCliAgentConfig(kind: CliAgentKind, config: ClaudeCliConfig): void {
+  import("../lib/ipc").then(({ setCliAgentConfig }) =>
+    setCliAgentConfig(kind, config).catch((e) => {
+      console.warn(`[configStore] Failed to push the ${kind} config:`, e);
       import("./toastStore").then(({ showToast }) =>
-        showToast(`Claude settings not applied: ${e instanceof Error ? e.message : String(e)}`, "error")
+        showToast(`${cliAgentName(kind)} settings not applied: ${e instanceof Error ? e.message : String(e)}`, "error")
       );
     })
   );
+}
+
+/** Saved per-agent configs over each agent's defaults (tolerates fields added later). */
+function mergeAgentConfigs(
+  saved: Partial<Record<string, Partial<ClaudeCliConfig>>> | null | undefined,
+): Record<CliAgentKind, ClaudeCliConfig> {
+  const out = {} as Record<CliAgentKind, ClaudeCliConfig>;
+  for (const a of CLI_AGENTS) out[a.id] = { ...a.defaultConfig, ...(saved?.[a.id] ?? {}) };
+  return out;
+}
+
+/** Only non-empty catalogs of known agents. */
+function cleanAgentModels(saved: unknown): Partial<Record<CliAgentKind, ClaudeModelInfo[]>> {
+  const out: Partial<Record<CliAgentKind, ClaudeModelInfo[]>> = {};
+  if (!saved || typeof saved !== "object") return out;
+  for (const a of CLI_AGENTS) {
+    const list = (saved as Record<string, unknown>)[a.id];
+    if (Array.isArray(list) && list.length > 0) out[a.id] = list as ClaudeModelInfo[];
+  }
+  return out;
 }
 
 // Singleton store instance, lazily initialized
@@ -127,7 +145,7 @@ async function storedProviderConfig(provider: LLMProviderType): Promise<string> 
       const token = await getApiKey("custom").catch(() => null);
       if (token) config.auth_value = token;
     }
-  } else if (provider !== "claude_cli") {
+  } else if (!isCliAgent(provider)) {
     const key = await getApiKey(provider).catch(() => null);
     if (key) config.api_key = key;
   }
@@ -154,7 +172,7 @@ function enqueueProviderChange<T>(task: () => Promise<T>): Promise<T> {
  * switch asked for earlier, so a stale update is dropped.
  */
 function reapplyIfActive(provider: LLMProviderType): void {
-  if (provider === "claude_cli") return;
+  if (isCliAgent(provider)) return;
   enqueueProviderChange(async () => {
     if (useConfigStore.getState().llmProvider !== provider) return;
     const config = await storedProviderConfig(provider);
@@ -224,19 +242,19 @@ interface ConfigState {
   /** Advanced: extra JSON merged into each provider's request (only valid JSON is kept). */
   llmExtraRequestJson: Record<string, string>;
 
-  // Claude CLI (subscription) settings; the backend gets a copy on load and on change.
-  claudeCliConfig: ClaudeCliConfig;
+  // CLI agent (subscription) settings by provider id; the backend gets a copy on load and on change.
+  cliAgentConfigs: Record<CliAgentKind, ClaudeCliConfig>;
   /**
-   * The user picked the fallback themselves. Until then the fallback follows
+   * The user picked that agent's fallback themselves. Until then it follows
    * the last active non-CLI provider and its model.
    */
-  claudeCliFallbackPinned: boolean;
+  cliFallbackPinned: Partial<Record<CliAgentKind, boolean>>;
   /**
-   * Last model catalog the Claude CLI reported (refreshed by the launcher on
-   * every start and on Check connection). Null until fetched once; the
-   * pickers then offer the static aliases.
+   * Last model catalog each CLI agent reported (refreshed by the launcher on
+   * every start and on Check connection). Missing until fetched once; the
+   * pickers then offer the static aliases (Claude) or what the config names.
    */
-  claudeModels: ClaudeModelInfo[] | null;
+  cliAgentModels: Partial<Record<CliAgentKind, ClaudeModelInfo[]>>;
   // Custom LLM provider (persisted so a custom endpoint survives restarts).
   // The auth token itself is stored via the credential manager under "custom".
   customLlmBaseUrl: string;
@@ -384,12 +402,12 @@ interface ConfigState {
   setLlmThinking: (provider: LLMProviderType, value: ThinkingSetting) => void;
   /** Set `provider`'s extra request JSON; the caller passes valid JSON or "". */
   setLlmExtraRequestJson: (provider: LLMProviderType, json: string) => void;
-  /** Replace the Claude CLI config (persisted + pushed to the backend). */
-  setClaudeCliConfig: (config: ClaudeCliConfig) => void;
-  /** The user's fallback choice: pins it so it no longer follows the active provider. */
-  setClaudeCliFallback: (provider: string | null, model: string | null) => void;
-  /** Keep the latest Claude model catalog (persisted, shared with every window). */
-  setClaudeModels: (models: ClaudeModelInfo[]) => void;
+  /** Replace one CLI agent's config (persisted + pushed to the backend). */
+  setCliAgentConfig: (kind: CliAgentKind, config: ClaudeCliConfig) => void;
+  /** The user's fallback choice for `kind`: pins it so it no longer follows the active provider. */
+  setCliAgentFallback: (kind: CliAgentKind, provider: string | null, model: string | null) => void;
+  /** Keep the latest model catalog of one CLI agent (persisted, shared with every window). */
+  setCliAgentModels: (kind: CliAgentKind, models: ClaudeModelInfo[]) => void;
   setCustomLlmConfig: (baseUrl: string, authType: CustomLlmAuthType) => void;
   setMicDeviceId: (id: string | null) => void;
   setSystemDeviceId: (id: string | null) => void;
@@ -457,12 +475,15 @@ interface ConfigState {
  * provider just made active) with the last model used there.
  */
 function followFallback(provider: string): void {
-  const state = useConfigStore.getState();
-  if (state.claudeCliFallbackPinned || !isFallbackCandidate(provider)) return;
-  const model = state.lastModelByProvider[provider] ?? null;
-  const cfg = state.claudeCliConfig;
-  if (cfg.fallback_provider === provider && cfg.fallback_model === model) return;
-  state.setClaudeCliConfig({ ...cfg, fallback_provider: provider, fallback_model: model });
+  if (!isFallbackCandidate(provider)) return;
+  for (const { id } of CLI_AGENTS) {
+    const state = useConfigStore.getState();
+    if (state.cliFallbackPinned[id]) continue;
+    const model = state.lastModelByProvider[provider] ?? null;
+    const cfg = state.cliAgentConfigs[id];
+    if (cfg.fallback_provider === provider && cfg.fallback_model === model) continue;
+    state.setCliAgentConfig(id, { ...cfg, fallback_provider: provider, fallback_model: model });
+  }
 }
 
 export const useConfigStore = create<ConfigState>((set) => ({
@@ -474,9 +495,9 @@ export const useConfigStore = create<ConfigState>((set) => ({
   lastModelByProvider: {},
   llmThinking: {},
   llmExtraRequestJson: {},
-  claudeCliConfig: DEFAULT_CLAUDE_CLI_CONFIG,
-  claudeCliFallbackPinned: false,
-  claudeModels: null,
+  cliAgentConfigs: DEFAULT_CLI_AGENT_CONFIGS,
+  cliFallbackPinned: {},
+  cliAgentModels: {},
   customLlmBaseUrl: "",
   customLlmAuthType: "none",
   micDeviceId: null,
@@ -591,14 +612,13 @@ export const useConfigStore = create<ConfigState>((set) => ({
     // An activated provider counts as verified (the "Ready" badge in Settings).
     const verified = useConfigStore.getState().verifiedCloudProviders;
     if (!verified.includes(provider)) useConfigStore.getState().setVerifiedCloudProviders([...verified, provider]);
-    // Claude ignores the model (Fast / Deep come from its settings) but the
+    // A CLI agent ignores the model (Fast / Deep come from its settings) but the
     // backend needs one: its Fast model fills the slot.
-    const model =
-      provider === "claude_cli"
-        ? useConfigStore.getState().claudeCliConfig.fast_model
-        : options.model || before.lastModelByProvider[provider] || "";
-    // Without a model, Claude's Fast model must not carry over to the new provider.
-    if (model || before.llmProvider === "claude_cli") {
+    const model = isCliAgent(provider)
+      ? useConfigStore.getState().cliAgentConfigs[provider].fast_model
+      : options.model || before.lastModelByProvider[provider] || "";
+    // Without a model, an agent's Fast model must not carry over to the new provider.
+    if (model || isCliAgent(before.llmProvider)) {
       try {
         await ipc.setActiveModel(provider, model);
       } catch (e) {
@@ -609,7 +629,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
     }
   }),
   rememberModel: (provider, model) => {
-    if (!model || provider === "claude_cli") return;
+    if (!model || isCliAgent(provider)) return;
     const { lastModelByProvider } = useConfigStore.getState();
     if (lastModelByProvider[provider] !== model) {
       const next = { ...lastModelByProvider, [provider]: model };
@@ -617,9 +637,12 @@ export const useConfigStore = create<ConfigState>((set) => ({
       persistValue("lastModelByProvider", next);
     }
     // An unpinned fallback on this provider tracks its latest model.
-    const { claudeCliFallbackPinned, claudeCliConfig: cfg } = useConfigStore.getState();
-    if (!claudeCliFallbackPinned && cfg.fallback_provider === provider && cfg.fallback_model !== model) {
-      useConfigStore.getState().setClaudeCliConfig({ ...cfg, fallback_model: model });
+    for (const { id } of CLI_AGENTS) {
+      const { cliFallbackPinned, cliAgentConfigs } = useConfigStore.getState();
+      const cfg = cliAgentConfigs[id];
+      if (!cliFallbackPinned[id] && cfg.fallback_provider === provider && cfg.fallback_model !== model) {
+        useConfigStore.getState().setCliAgentConfig(id, { ...cfg, fallback_model: model });
+      }
     }
   },
   setLlmThinking: (provider, value) => {
@@ -636,31 +659,34 @@ export const useConfigStore = create<ConfigState>((set) => ({
     persistValue("llmExtraRequestJson", next);
     reapplyIfActive(provider);
   },
-  setClaudeCliConfig: (config) => {
-    const { llmProvider, llmModel } = useConfigStore.getState();
-    set({ claudeCliConfig: config });
-    persistValue("claudeCliConfig", config);
-    pushClaudeCliConfig(config);
-    // While Claude is active the generic model slot mirrors the Fast model:
+  setCliAgentConfig: (kind, config) => {
+    const { llmProvider, llmModel, cliAgentConfigs } = useConfigStore.getState();
+    const next = { ...cliAgentConfigs, [kind]: config };
+    set({ cliAgentConfigs: next });
+    persistValue("cliAgentConfigs", next);
+    pushCliAgentConfig(kind, config);
+    // While this agent is active the generic model slot mirrors its Fast model:
     // the provider ignores it, but the backend needs one and the footer shows it.
-    if (llmProvider === "claude_cli" && llmModel !== config.fast_model) {
+    if (llmProvider === kind && llmModel !== config.fast_model) {
       set({ llmModel: config.fast_model });
       persistValue("llmModel", config.fast_model);
       import("../lib/ipc").then(({ setActiveModel }) =>
-        setActiveModel("claude_cli", config.fast_model)
-          .catch((e) => console.warn("[configStore] Failed to set Claude model:", e))
+        setActiveModel(kind, config.fast_model)
+          .catch((e) => console.warn(`[configStore] Failed to set the ${kind} model:`, e))
       );
     }
   },
-  setClaudeModels: (models) => {
-    set({ claudeModels: models });
-    persistValue("claudeModels", models);
+  setCliAgentModels: (kind, models) => {
+    const next = { ...useConfigStore.getState().cliAgentModels, [kind]: models };
+    set({ cliAgentModels: next });
+    persistValue("cliAgentModels", next);
   },
-  setClaudeCliFallback: (provider, model) => {
-    set({ claudeCliFallbackPinned: true });
-    persistValue("claudeCliFallbackPinned", true);
-    const cfg = useConfigStore.getState().claudeCliConfig;
-    useConfigStore.getState().setClaudeCliConfig({
+  setCliAgentFallback: (kind, provider, model) => {
+    const pinned = { ...useConfigStore.getState().cliFallbackPinned, [kind]: true };
+    set({ cliFallbackPinned: pinned });
+    persistValue("cliFallbackPinned", pinned);
+    const cfg = useConfigStore.getState().cliAgentConfigs[kind];
+    useConfigStore.getState().setCliAgentConfig(kind, {
       ...cfg,
       fallback_provider: provider,
       fallback_model: provider ? model : null,
@@ -1083,26 +1109,44 @@ export const useConfigStore = create<ConfigState>((set) => ({
       const savedMeetingDetection = await store.get<Partial<MeetingDetectionConfig>>("meetingDetection");
       const meetingDetection = { ...DEFAULT_MEETING_DETECTION, ...(savedMeetingDetection ?? {}) };
       const storedLastModels = await store.get<Record<string, string>>("lastModelByProvider");
+      // Per-agent keys; configs saved before them hold Claude's under the old keys.
+      const storedAgentConfigs = await store.get<Partial<Record<string, Partial<ClaudeCliConfig>>>>("cliAgentConfigs");
       const storedClaudeCliConfig = await store.get<Partial<ClaudeCliConfig>>("claudeCliConfig");
-      const claudeCliFallbackPinned = (await store.get<boolean>("claudeCliFallbackPinned")) ?? false;
-      const claudeModels = await store.get<ClaudeModelInfo[]>("claudeModels");
+      const storedFallbackPinned = await store.get<Record<string, boolean>>("cliFallbackPinned");
+      const oldClaudeFallbackPinned = (await store.get<boolean>("claudeCliFallbackPinned")) ?? false;
+      const storedAgentModels = await store.get<unknown>("cliAgentModels");
+      const oldClaudeModels = await store.get<ClaudeModelInfo[]>("claudeModels");
       // Absent in configs saved before these settings: every provider is Auto, no extra JSON.
       const llmThinking = normalizeThinkingMap(await store.get<unknown>("llmThinking"));
       const llmExtraRequestJson = normalizeExtraJsonMap(await store.get<unknown>("llmExtraRequestJson"));
 
       // Last model per provider; seeded from the saved active provider on upgrade.
       const lastModelByProvider: Record<string, string> = { ...(storedLastModels ?? {}) };
-      if (llmProvider && llmModel && llmProvider !== "claude_cli" && !lastModelByProvider[llmProvider]) {
+      if (llmProvider && llmModel && !isCliAgent(llmProvider) && !lastModelByProvider[llmProvider]) {
         lastModelByProvider[llmProvider] = llmModel;
       }
-      // Claude CLI config: saved values over the defaults (tolerates fields
-      // added later). Without a saved config the fallback starts as the last
-      // active non-CLI provider and its model.
-      const claudeCliConfig: ClaudeCliConfig = { ...DEFAULT_CLAUDE_CLI_CONFIG, ...(storedClaudeCliConfig ?? {}) };
-      if (!storedClaudeCliConfig && !claudeCliFallbackPinned && llmProvider && isFallbackCandidate(llmProvider)) {
-        claudeCliConfig.fallback_provider = llmProvider;
-        claudeCliConfig.fallback_model = lastModelByProvider[llmProvider] ?? null;
+      // CLI agent configs: saved values over the defaults (tolerates fields
+      // added later). Without a saved config an agent's fallback starts as the
+      // last active non-CLI provider and its model.
+      const savedConfigs = storedAgentConfigs ?? (storedClaudeCliConfig ? { claude_cli: storedClaudeCliConfig } : null);
+      const cliAgentConfigs = mergeAgentConfigs(savedConfigs);
+      const cliFallbackPinned: Partial<Record<CliAgentKind, boolean>> = {
+        ...(oldClaudeFallbackPinned && { claude_cli: true }),
+        ...(storedFallbackPinned ?? {}),
+      };
+      for (const { id } of CLI_AGENTS) {
+        if (!savedConfigs?.[id] && !cliFallbackPinned[id] && llmProvider && isFallbackCandidate(llmProvider)) {
+          cliAgentConfigs[id] = {
+            ...cliAgentConfigs[id],
+            fallback_provider: llmProvider,
+            fallback_model: lastModelByProvider[llmProvider] ?? null,
+          };
+        }
       }
+      const cliAgentModels = cleanAgentModels({
+        ...(Array.isArray(oldClaudeModels) && { claude_cli: oldClaudeModels }),
+        ...(storedAgentModels && typeof storedAgentModels === "object" ? storedAgentModels : {}),
+      });
 
       // Auto-migrate: if no meetingAudioConfig exists but old fields do,
       // build a MeetingAudioConfig from legacy fields.
@@ -1213,9 +1257,9 @@ export const useConfigStore = create<ConfigState>((set) => ({
         lastModelByProvider,
         llmThinking,
         llmExtraRequestJson,
-        claudeCliConfig,
-        claudeCliFallbackPinned,
-        ...(Array.isArray(claudeModels) && claudeModels.length > 0 && { claudeModels }),
+        cliAgentConfigs,
+        cliFallbackPinned,
+        cliAgentModels,
         ...(customLlmBaseUrl != null && { customLlmBaseUrl }),
         ...(customLlmAuthType != null && { customLlmAuthType }),
         ...(micDeviceId !== undefined && { micDeviceId }),
@@ -1324,14 +1368,15 @@ export const useConfigStore = create<ConfigState>((set) => ({
       store.onKeyChange<string>("llmModel", (val) => {
         if (val != null) set({ llmModel: val });
       });
-      store.onKeyChange<ClaudeCliConfig>("claudeCliConfig", (val) => {
-        if (val != null) set({ claudeCliConfig: { ...DEFAULT_CLAUDE_CLI_CONFIG, ...val } });
+      store.onKeyChange<Partial<Record<string, Partial<ClaudeCliConfig>>>>("cliAgentConfigs", (val) => {
+        if (val != null) set({ cliAgentConfigs: mergeAgentConfigs(val) });
       });
-      store.onKeyChange<ClaudeModelInfo[]>("claudeModels", (val) => {
-        if (Array.isArray(val) && val.length > 0) set({ claudeModels: val });
+      store.onKeyChange<unknown>("cliAgentModels", (val) => {
+        const models = cleanAgentModels(val);
+        if (Object.keys(models).length > 0) set({ cliAgentModels: models });
       });
-      store.onKeyChange<boolean>("claudeCliFallbackPinned", (val) => {
-        if (val != null) set({ claudeCliFallbackPinned: val });
+      store.onKeyChange<Record<string, boolean>>("cliFallbackPinned", (val) => {
+        if (val != null) set({ cliFallbackPinned: val });
       });
       store.onKeyChange<Record<string, string>>("lastModelByProvider", (val) => {
         if (val != null) set({ lastModelByProvider: val });
@@ -1441,24 +1486,26 @@ export const useConfigStore = create<ConfigState>((set) => ({
           .catch((e) => console.warn("[configStore] Failed to sync echo cancellation on load:", e))
       );
 
-      // Sync the Claude CLI config to the backend (it starts with the defaults
-      // and keeps the config in memory only).
-      pushClaudeCliConfig(claudeCliConfig);
-      // ...and the saved model catalog, so effort is clamped even before (or
+      // Sync every CLI agent's config to the backend (it starts with the
+      // defaults and keeps the config in memory only).
+      for (const { id } of CLI_AGENTS) pushCliAgentConfig(id, cliAgentConfigs[id]);
+      // ...and the saved model catalogs, so effort is clamped even before (or
       // without) this start's probe. A fresher probe answer always wins.
-      if (Array.isArray(claudeModels) && claudeModels.length > 0) {
-        import("../lib/ipc").then(({ seedClaudeCliModels }) =>
-          seedClaudeCliModels(claudeModels).catch((e) =>
-            console.warn("[configStore] Failed to seed the Claude model list:", e),
+      for (const { id } of CLI_AGENTS) {
+        const saved = cliAgentModels[id];
+        if (!saved || saved.length === 0) continue;
+        import("../lib/ipc").then(({ seedCliAgentModels }) =>
+          seedCliAgentModels(id, saved).catch((e) =>
+            console.warn(`[configStore] Failed to seed the ${id} model list:`, e),
           ),
         );
       }
 
       // Sync persisted LLM provider + model to Rust backend on startup.
       // The Rust side starts with Ollama as default; this pushes the user's saved provider.
-      // Claude CLI ignores the model; its slot carries the Fast model.
+      // A CLI agent ignores the model; its slot carries its Fast model.
       const loadedLLMProvider = llmProvider ?? "ollama";
-      const loadedLLMModel = loadedLLMProvider === "claude_cli" ? claudeCliConfig.fast_model : (llmModel ?? "");
+      const loadedLLMModel = isCliAgent(loadedLLMProvider) ? cliAgentConfigs[loadedLLMProvider].fast_model : (llmModel ?? "");
       if (loadedLLMProvider) {
         import("../lib/ipc").then(async ({ setLLMProvider: ipcSetLLM, setActiveModel: ipcSetModel }) => {
           try {

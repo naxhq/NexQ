@@ -6,6 +6,9 @@ import type { ClaudeModelInfo } from "./types";
 /** Effort levels the CLI accepts for `--effort`, lowest first. */
 export const CLAUDE_EFFORT_VALUES = ["low", "medium", "high", "xhigh", "max"] as const;
 
+/** Every effort level any CLI agent takes, lowest first (Codex adds "ultra" on top). */
+export const CLI_EFFORT_RANKS = [...CLAUDE_EFFORT_VALUES, "ultra"] as const;
+
 function staticAlias(value: string, name: string): ClaudeModelInfo {
   return {
     value,
@@ -74,13 +77,18 @@ export function findClaudeModel(models: ClaudeModelInfo[], value: string): Claud
 /**
  * The effort a session actually gets: null when the model takes none, the
  * saved one when accepted (or the model is unknown), else the closest level
- * the model accepts (ties go to the lower one).
+ * the model accepts (ties go to the lower one). `ranks` orders the levels
+ * ("closest" is measured on it); Codex passes `CLI_EFFORT_RANKS`.
  */
-export function effectiveEffort(model: ClaudeModelInfo | undefined, saved: string): string | null {
+export function effectiveEffort(
+  model: ClaudeModelInfo | undefined,
+  saved: string,
+  ranks: readonly string[] = CLAUDE_EFFORT_VALUES,
+): string | null {
   if (!model) return saved;
   if (!model.supports_effort || model.effort_levels.length === 0) return null;
   if (model.effort_levels.includes(saved)) return saved;
-  const rank = (l: string) => (CLAUDE_EFFORT_VALUES as readonly string[]).indexOf(l);
+  const rank = (l: string) => ranks.indexOf(l);
   const target = rank(saved);
   if (target < 0) return model.effort_levels[0];
   let best = model.effort_levels[0];

@@ -1,4 +1,5 @@
 import type { LLMProviderType, ThinkingSetting } from "./types";
+import { isCliAgent } from "./cliAgents";
 
 /** The choices, in the order the select shows them. */
 export const THINKING_OPTIONS: { value: ThinkingSetting; label: string }[] = [
@@ -11,9 +12,9 @@ export const THINKING_OPTIONS: { value: ThinkingSetting; label: string }[] = [
 /** Providers that accept an advanced "Extra request JSON". */
 export const EXTRA_JSON_PROVIDERS: LLMProviderType[] = ["ollama", "lm_studio", "openrouter", "custom"];
 
-/** Providers with a thinking setting (the Claude subscription has its own). */
+/** Providers with a thinking setting (the subscription CLI agents have their own settings). */
 export function supportsThinking(provider: LLMProviderType): boolean {
-  return provider !== "claude_cli";
+  return !isCliAgent(provider);
 }
 
 export function supportsExtraJson(provider: LLMProviderType): boolean {

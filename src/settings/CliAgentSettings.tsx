@@ -1,31 +1,30 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-shell";
 import { ExternalLink, Loader2, RefreshCw, Terminal } from "lucide-react";
-import { API_BILLED_NOTE, NPM_ONLY_NOTE } from "../lib/agentUsage";
-import { getApiKey, listModels, openClaudeLoginTerminal } from "../lib/ipc";
+import { NPM_ONLY_NOTE, apiBilledNoteFor, isRateLimited } from "../lib/agentUsage";
+import { getApiKey, listModels, openCliLoginTerminal } from "../lib/ipc";
+import { ProviderLogo } from "../components/icons/ProviderLogos";
 import {
+  CLAUDE_EFFORT_VALUES,
   STATIC_CLAUDE_MODELS,
-  effectiveEffort,
   findClaudeModel,
   formatCheckedAgo,
   groupClaudeModels,
-  isClaudeAlias,
 } from "../lib/claudeModels";
-import type { ClaudeCliConfig, ClaudeCliStatus, ClaudeModelInfo } from "../lib/types";
+import {
+  CLI_AGENTS,
+  cliAgentInfo,
+  cliEffectiveEffort,
+  cliEffortLabel,
+  effortRanks,
+  resolveListedModel,
+  type CliAgentInfo,
+} from "../lib/cliAgents";
+import type { AgentSessionStatus, ClaudeCliConfig, ClaudeModelInfo, CliAgentKind, CliAgentStatus } from "../lib/types";
 import { isSessionRunning, useAgentStore } from "../stores/agentStore";
-import { CLAUDE_FALLBACK_PROVIDERS, useConfigStore } from "../stores/configStore";
+import { CLI_FALLBACK_PROVIDERS, useConfigStore } from "../stores/configStore";
 import { showToast } from "../stores/toastStore";
-import { ProviderCard, STATUS_DOT_CLASS, type StatusTone } from "./ProviderCard";
-
-export const CLAUDE_INSTALL_URL = "https://code.claude.com/docs/en/setup";
-
-export const CLAUDE_EFFORTS = [
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-  { value: "xhigh", label: "Extra high" },
-  { value: "max", label: "Max" },
-] as const;
+import { ProviderCard, type StatusTone } from "./ProviderCard";
 
 const FALLBACK_LABELS: Record<string, string> = {
   ollama: "Ollama",
@@ -37,25 +36,9 @@ const FALLBACK_LABELS: Record<string, string> = {
   openrouter: "OpenRouter",
 };
 
-function currentCatalog(): ClaudeModelInfo[] {
-  return useConfigStore.getState().claudeModels ?? STATIC_CLAUDE_MODELS;
-}
-
-/** "haiku" → "Haiku", a pinned id → its name ("Opus 4.8"); unknown ids as they are. */
-export function claudeModelLabel(model: string, models: ClaudeModelInfo[] = currentCatalog()): string {
-  if (isClaudeAlias(model)) return model.charAt(0).toUpperCase() + model.slice(1);
-  return findClaudeModel(models, model)?.display_name || model;
-}
-
-function effortLabel(effort: string): string {
-  return CLAUDE_EFFORTS.find((x) => x.value === effort)?.label ?? effort;
-}
-
-/** "Sonnet · Medium" with the effort the session actually gets; just "Haiku" without effort. */
-export function claudeTierLabel(model: string, effort: string, models: ClaudeModelInfo[] = currentCatalog()): string {
-  const effective = effectiveEffort(findClaudeModel(models, model), effort);
-  const label = claudeModelLabel(model, models);
-  return effective === null ? label : `${label} · ${effortLabel(effective)}`;
+/** What the status line calls the program ("Claude Code"; the others by their own name). */
+function productName(kind: CliAgentKind): string {
+  return kind === "claude_cli" ? "Claude Code" : cliAgentInfo(kind).name;
 }
 
 type ConnectionState =
@@ -66,16 +49,38 @@ type ConnectionState =
   | "logged_out"
   | "not_installed"
   | "npm_only"
-  | "unknown";
+  | "unknown"
+  | "limited"
+  | "error";
 
-function connectionState(status: ClaudeCliStatus | undefined, failed: boolean): ConnectionState {
+/** A session of the agent in use that stopped: a usage limit, or a fault. */
+interface SessionIssue {
+  kind: "limited" | "error";
+  detail: string;
+}
+
+/** The first failed plain session, as the card shows it. */
+function sessionIssueOf(sessions: AgentSessionStatus[]): SessionIssue | null {
+  const failed = sessions.filter((s) => s.state === "error" && !s.with_sources);
+  if (failed.length === 0) return null;
+  const real = failed.filter((s) => !isRateLimited(s));
+  const pick = real[0] ?? failed[0];
+  return { kind: real.length === 0 ? "limited" : "error", detail: pick.detail ?? "" };
+}
+
+function connectionState(
+  status: CliAgentStatus | undefined,
+  failed: boolean,
+  issue: SessionIssue | null,
+): ConnectionState {
   // No answer yet: still checking, or the check itself failed.
   if (!status) return failed ? "failed" : "checking";
   if (!status.installed) return status.npm_only ? "npm_only" : "not_installed";
   if (!status.auth) return "unknown";
   if (!status.auth.logged_in) return "logged_out";
   // Only a subscription login counts as connected; any other login bills an API account.
-  return status.auth.login === "subscription" ? "connected" : "api_billed";
+  if (status.auth.login !== "subscription") return "api_billed";
+  return issue ? issue.kind : "connected";
 }
 
 // Color carries the state: green ok, amber needs the user, neutral absent.
@@ -88,6 +93,8 @@ const STATE_TONE: Record<ConnectionState, StatusTone> = {
   unknown: "warn",
   not_installed: "neutral",
   npm_only: "warn",
+  limited: "warn",
+  error: "warn",
 };
 
 function planLabel(plan: string | null): string | null {
@@ -105,15 +112,22 @@ const ROW_LABEL: Record<ConnectionState, string> = {
   unknown: "Login state unknown",
   not_installed: "Not installed",
   npm_only: "Needs native install",
+  limited: "Usage limit",
+  error: "Session error",
 };
 
 /** Full state line of the details panel. */
-function statusLine(state: ConnectionState, status: ClaudeCliStatus | undefined): string {
+function statusLine(
+  kind: CliAgentKind,
+  state: ConnectionState,
+  status: CliAgentStatus | undefined,
+  issue: SessionIssue | null,
+): string {
   switch (state) {
     case "checking":
-      return "Looking for Claude Code…";
+      return `Looking for ${productName(kind)}…`;
     case "failed":
-      return "Couldn't check for Claude Code";
+      return `Couldn't check for ${productName(kind)}`;
     case "not_installed":
       return "Not installed";
     case "npm_only":
@@ -122,13 +136,17 @@ function statusLine(state: ConnectionState, status: ClaudeCliStatus | undefined)
       return "Installed — login state unavailable";
     case "logged_out":
       return "Not logged in";
-    case "connected": {
+    case "limited":
+    case "error":
+      return issue?.detail || (state === "limited" ? "Usage limit reached" : "The session stopped");
+    case "connected":
+    case "api_billed": {
       const auth = status?.auth;
-      const plan = planLabel(auth?.subscription_type ?? null);
-      return [auth?.email ?? "Logged in", plan].filter(Boolean).join(" · ");
+      const who = auth?.email ?? (auth?.auth_method === "google" ? "Signed in with Google" : "Logged in");
+      return state === "api_billed"
+        ? [who, "Not on a subscription"].join(" · ")
+        : [who, planLabel(auth?.subscription_type ?? null)].filter(Boolean).join(" · ");
     }
-    case "api_billed":
-      return [status?.auth?.email ?? "Logged in", "API account"].join(" · ");
   }
 }
 
@@ -139,9 +157,11 @@ function checkResult(state: ConnectionState, error: string | undefined): { text:
   if (error) return { text: `Couldn't check: ${error}`, className: "text-warning" };
   switch (state) {
     case "connected":
+    case "limited":
+    case "error":
       return { text: "✓ Connected", className: "text-success" };
     case "api_billed":
-      return { text: "API account, not your subscription", className: "text-warning" };
+      return { text: "Not on your subscription", className: "text-warning" };
     case "logged_out":
       return { text: "Not logged in", className: "text-warning" };
     case "unknown":
@@ -175,34 +195,55 @@ const SELECT_CLASS =
 const BUTTON_CLASS =
   "inline-flex items-center gap-1.5 rounded-lg border border-border/50 bg-background px-3.5 py-2 text-sm font-medium text-foreground transition-all duration-150 hover:bg-accent hover:-translate-y-px active:translate-y-px active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:active:scale-100 cursor-pointer";
 
-interface ClaudeCliSettingsProps {
-  /** The Claude row is the provider being viewed (shows its details). */
-  selected: boolean;
-  /** Claude CLI is the provider in use. */
-  active: boolean;
+/** The agent's status as the store has it, plus the state derived from it. */
+function useAgentConnection(kind: CliAgentKind, active: boolean) {
+  const status = useAgentStore((s) => s.statuses[kind]);
+  const checking = useAgentStore((s) => !!s.checking[kind]);
+  const statusFailed = useAgentStore((s) => !!s.statusErrors[kind]);
+  const sessions = useAgentStore((s) => s.sessions);
+  // Sessions belong to the agent in use.
+  const issue = active ? sessionIssueOf(Object.values(sessions)) : null;
+  const state = connectionState(status, statusFailed && !checking, issue);
+  return { status, checking, state, issue };
+}
+
+interface CliAgentSettingsProps {
+  /** Provider id being viewed (shows its details); anything else shows none. */
+  selectedProvider: string;
+  /** Provider in use. */
+  activeProvider: string;
   /** Name of the provider in use, for the "Viewing Claude" line while another one is. */
   inUseLabel?: string;
-  onSelect: () => void;
+  onSelect: (kind: CliAgentKind) => void;
 }
 
 /**
- * "Subscription (local CLI)" group of the AI provider settings: Claude Code
- * driven through the user's own login (Beta), plus placeholder rows for
- * Gemini CLI and Codex CLI.
+ * "Subscription (local CLI)" group of the AI provider settings: Claude,
+ * Antigravity and Codex driven through the user's own login (Beta). One tile
+ * per agent; the selected one shows its connection, models and fallback.
  */
-export function ClaudeCliSettings({ selected, active, inUseLabel, onSelect }: ClaudeCliSettingsProps) {
-  const status = useAgentStore((s) => s.status);
-  const checking = useAgentStore((s) => s.checking);
-  const statusFailed = useAgentStore((s) => !!s.statusError);
+export function CliAgentSettings({ selectedProvider, activeProvider, inUseLabel, onSelect }: CliAgentSettingsProps) {
   const refreshStatus = useAgentStore((s) => s.refreshStatus);
   const initAgentStore = useAgentStore((s) => s.init);
 
+  // The viewed agent is checked each time the panel opens; the others only if
+  // never checked (the launcher already did at start), so a tile never sits
+  // on "Checking…" and opening Settings doesn't start three CLIs.
   useEffect(() => {
     initAgentStore();
-    refreshStatus();
+    const store = useAgentStore.getState();
+    for (const { id } of CLI_AGENTS) {
+      if (id === selectedProvider || !store.statuses[id]) void refreshStatus(id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initAgentStore, refreshStatus]);
 
-  const state = connectionState(status, statusFailed && !checking);
+  // A different agent opened: check it too.
+  useEffect(() => {
+    if (CLI_AGENTS.some((a) => a.id === selectedProvider)) void refreshStatus(selectedProvider as CliAgentKind);
+  }, [selectedProvider, refreshStatus]);
+
+  const viewed = CLI_AGENTS.find((a) => a.id === selectedProvider);
 
   return (
     <div className="rounded-xl border border-border/30 bg-card/50 p-5">
@@ -213,83 +254,86 @@ export function ClaudeCliSettings({ selected, active, inUseLabel, onSelect }: Cl
         </span>
       </div>
       <p className="mt-1 text-xs text-muted-foreground">
-        Uses your own Claude login on this PC. NexQ never sees your credentials.
+        Uses your own Claude, Antigravity or Codex login on this PC. NexQ never sees your credentials.
       </p>
 
       <div className="mt-4 grid grid-cols-3 gap-2.5">
-        <ProviderCard
-          name="Claude"
-          icon={<Terminal className="h-3.5 w-3.5 text-muted-foreground" />}
-          status={{ label: ROW_LABEL[state], tone: STATE_TONE[state] }}
-          inUse={active}
-          viewing={selected}
-          onClick={onSelect}
-          dotTestId="claude-status-dot"
-          dotState={state}
-        />
-        {["Gemini CLI", "Codex CLI"].map((label) => (
-          <button
-            key={label}
-            type="button"
-            disabled
-            className="flex flex-col items-start rounded-xl border border-dashed border-border/40 p-3 text-left opacity-60 cursor-not-allowed"
-          >
-            <div className="flex w-full items-center gap-1.5">
-              <Terminal className="h-3.5 w-3.5 text-muted-foreground/60" />
-              <span className="text-xs font-medium text-muted-foreground">{label}</span>
-            </div>
-            <span className="mt-1.5 flex items-center gap-1.5 text-meta text-muted-foreground/70">
-              <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT_CLASS.neutral}`} />
-              Coming soon
-            </span>
-          </button>
+        {CLI_AGENTS.map((agent) => (
+          <AgentTile
+            key={agent.id}
+            agent={agent}
+            active={activeProvider === agent.id}
+            viewing={selectedProvider === agent.id}
+            onSelect={() => onSelect(agent.id)}
+          />
         ))}
       </div>
 
-      {selected && (
-        <ClaudeDetails
-          status={status}
-          state={state}
-          checking={checking}
-          active={active}
+      {viewed && (
+        <AgentDetails
+          key={viewed.id}
+          agent={viewed}
+          active={activeProvider === viewed.id}
           inUseLabel={inUseLabel}
-          refreshStatus={refreshStatus}
         />
       )}
     </div>
   );
 }
 
-function ClaudeDetails({
-  status,
-  state,
-  checking,
+function AgentTile({
+  agent,
+  active,
+  viewing,
+  onSelect,
+}: {
+  agent: CliAgentInfo;
+  active: boolean;
+  viewing: boolean;
+  onSelect: () => void;
+}) {
+  const { state } = useAgentConnection(agent.id, active);
+  return (
+    <ProviderCard
+      name={agent.name}
+      icon={<ProviderLogo id={agent.logo} className="h-3.5 w-3.5 shrink-0" />}
+      status={{ label: ROW_LABEL[state], tone: STATE_TONE[state] }}
+      inUse={active}
+      viewing={viewing}
+      onClick={onSelect}
+      dotTestId={`${agent.name.toLowerCase()}-status-dot`}
+      dotState={state}
+    />
+  );
+}
+
+function AgentDetails({
+  agent,
   active,
   inUseLabel,
-  refreshStatus,
 }: {
-  status: ClaudeCliStatus | undefined;
-  state: ConnectionState;
-  checking: boolean;
+  agent: CliAgentInfo;
   active: boolean;
   inUseLabel?: string;
-  refreshStatus: () => Promise<void>;
 }) {
+  const kind = agent.id;
+  const { status, checking, state, issue } = useAgentConnection(kind, active);
   const [awaitingLogin, setAwaitingLogin] = useState(false);
   const [activating, setActivating] = useState(false);
-  const checkedAt = useAgentStore((s) => s.checkedAt);
-  const statusError = useAgentStore((s) => s.statusError);
+  const refreshStatus = useAgentStore((s) => s.refreshStatus);
   const refreshModels = useAgentStore((s) => s.refreshModels);
-  const modelsRefreshing = useAgentStore((s) => s.modelsRefreshing);
+  const checkedAt = useAgentStore((s) => s.checkedAt[kind]);
+  const statusError = useAgentStore((s) => s.statusErrors[kind]);
+  const modelsRefreshing = useAgentStore((s) => !!s.modelsRefreshing[kind]);
   const now = useNow(15_000);
   const result = checkResult(state, statusError);
   // A check covers both the connection and the model list.
   const busy = checking || modelsRefreshing;
 
-  // A check also refreshes the model catalog.
+  // A check also refreshes the model catalog (nothing to ask a missing CLI).
   const handleCheck = () => {
-    void refreshStatus();
-    void refreshModels();
+    void refreshStatus(kind);
+    if (status?.installed !== false) void refreshModels(kind);
   };
   // Same rule as "Set as Active": usable unless known to be missing or logged out.
   const unusable = state === "not_installed" || state === "npm_only" || state === "logged_out";
@@ -298,9 +342,9 @@ function ClaudeDetails({
   const handleActivate = async () => {
     setActivating(true);
     try {
-      await useConfigStore.getState().activateLLMProvider("claude_cli");
+      await useConfigStore.getState().activateLLMProvider(kind);
     } catch (e) {
-      showToast(`Couldn't switch to Claude: ${e instanceof Error ? e.message : String(e)}`, "error");
+      showToast(`Couldn't switch to ${agent.name}: ${e instanceof Error ? e.message : String(e)}`, "error");
     } finally {
       setActivating(false);
     }
@@ -317,32 +361,37 @@ function ClaudeDetails({
     let tries = 0;
     const timer = window.setInterval(() => {
       tries += 1;
-      refreshStatus();
+      void refreshStatus(kind);
       if (tries >= LOGIN_POLL_TRIES) setAwaitingLogin(false);
     }, LOGIN_POLL_MS);
-    const onFocus = () => refreshStatus();
+    const onFocus = () => void refreshStatus(kind);
     window.addEventListener("focus", onFocus);
     return () => {
       window.clearInterval(timer);
       window.removeEventListener("focus", onFocus);
     };
-  }, [awaitingLogin, state, refreshStatus]);
+  }, [awaitingLogin, state, refreshStatus, kind]);
 
   const handleOpenLogin = async () => {
     try {
-      await openClaudeLoginTerminal();
+      await openCliLoginTerminal(kind);
       setAwaitingLogin(true);
     } catch (e) {
       showToast(`Couldn't open a terminal: ${e instanceof Error ? e.message : String(e)}`, "error");
     }
   };
 
+  const openInstallPage = (url: string) =>
+    open(url).catch((err) =>
+      showToast(`Couldn't open the browser: ${err instanceof Error ? err.message : String(err)}`, "error"),
+    );
+
   return (
     <div className="mt-4 space-y-4 border-t border-border/20 pt-4">
       {!active && (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3">
           <p className="text-xs text-muted-foreground">
-            Viewing Claude. NexQ is using {inUseLabel ?? "another provider"}.
+            Viewing {agent.name}. NexQ is using {inUseLabel ?? "another provider"}.
           </p>
           <button
             type="button"
@@ -351,7 +400,7 @@ function ClaudeDetails({
             className={`${BUTTON_CLASS} shrink-0 border-primary/30 text-primary`}
           >
             {activating && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            Use Claude
+            Use {agent.name}
           </button>
         </div>
       )}
@@ -360,7 +409,11 @@ function ClaudeDetails({
       <div>
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-xs font-medium text-foreground">{statusLine(state, status)}</p>
+            <p
+              className={`text-xs font-medium ${state === "limited" || state === "error" ? "text-warning" : "text-foreground"}`}
+            >
+              {statusLine(kind, state, status, issue)}
+            </p>
             {status?.installed && (
               <p className="mt-0.5 truncate font-mono text-meta text-muted-foreground/70" title={status.binary_path ?? undefined}>
                 {[status.version && `v${status.version}`, status.binary_path].filter(Boolean).join(" — ")}
@@ -394,41 +447,32 @@ function ClaudeDetails({
             <p className="text-xs text-muted-foreground">
               {state === "npm_only"
                 ? "NexQ runs Claude Code's native app, not the npm package. Install it with the native installer, log in once, then check the connection."
-                : "Claude Code isn't installed on this PC. Install it, log in once, then check the connection."}
+                : agent.installHint}
             </p>
-            <a
-              href={CLAUDE_INSTALL_URL}
-              target="_blank"
-              rel="noreferrer"
-              onClick={(e) => {
-                e.preventDefault();
-                open(CLAUDE_INSTALL_URL).catch((err) =>
-                  showToast(`Couldn't open the browser: ${err instanceof Error ? err.message : String(err)}`, "error")
-                );
-              }}
-              className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-            >
-              Install Claude Code
-              <ExternalLink className="h-3 w-3" />
-            </a>
+            {agent.installUrl && (
+              <a
+                href={agent.installUrl}
+                target="_blank"
+                rel="noreferrer"
+                onClick={(e) => {
+                  e.preventDefault();
+                  void openInstallPage(agent.installUrl as string);
+                }}
+                className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+              >
+                {agent.installLinkLabel ?? `Install ${agent.name}`}
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            )}
           </div>
         )}
 
         {(state === "logged_out" || state === "unknown" || state === "api_billed") && (
           <div className="mt-3 rounded-lg border border-warning/20 bg-warning/5 px-4 py-3">
             {state === "api_billed" ? (
-              <>
-                <p className="text-xs font-medium text-warning">{API_BILLED_NOTE}</p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  It still works, at API prices. To use your subscription, log in with your Claude account
-                  in a terminal (run /login there).
-                </p>
-              </>
+              <ApiBilledNote kind={kind} />
             ) : (
-              <p className="text-xs text-muted-foreground">
-                Log in once in a terminal: Claude opens there and walks you through it. Your login stays
-                between you and Claude.
-              </p>
+              <p className="text-xs text-muted-foreground">{agent.loginHint}</p>
             )}
             <div className="mt-2.5 flex items-center gap-3">
               <button type="button" onClick={handleOpenLogin} className={BUTTON_CLASS}>
@@ -443,21 +487,44 @@ function ClaudeDetails({
         )}
       </div>
 
-      <ModelSettings />
-      <FallbackSettings />
+      <ModelSettings agent={agent} active={active} />
+      <FallbackSettings agent={agent} />
     </div>
   );
 }
 
-function ModelSettings() {
-  const config = useConfigStore((s) => s.claudeCliConfig);
-  const setConfig = useConfigStore((s) => s.setClaudeCliConfig);
-  const sessionRunning = useAgentStore((s) => Object.values(s.sessions).some(isSessionRunning));
-  const catalog = useConfigStore((s) => s.claudeModels);
-  const modelsError = useAgentStore((s) => s.modelsError);
+function ApiBilledNote({ kind }: { kind: CliAgentKind }) {
+  const name = cliAgentInfo(kind).name;
+  return (
+    <>
+      <p className="text-xs font-medium text-warning">{apiBilledNoteFor(name)}</p>
+      <p className="mt-1 text-xs text-muted-foreground">
+        It still works, at API prices. To use your subscription, log in with your {name} account
+        {kind === "claude_cli"
+          ? " in a terminal (run /login there)."
+          : kind === "codex_cli"
+            ? " in a terminal and choose Sign in with ChatGPT."
+            : " in a terminal."}
+      </p>
+    </>
+  );
+}
+
+/** The model list of an agent: Claude falls back to its static aliases; the others have none until fetched. */
+function modelsFor(kind: CliAgentKind, catalog: ClaudeModelInfo[] | undefined): ClaudeModelInfo[] {
+  return catalog ?? (kind === "claude_cli" ? STATIC_CLAUDE_MODELS : []);
+}
+
+function ModelSettings({ agent, active }: { agent: CliAgentInfo; active: boolean }) {
+  const kind = agent.id;
+  const config = useConfigStore((s) => s.cliAgentConfigs[kind]);
+  const setAgentConfig = useConfigStore((s) => s.setCliAgentConfig);
+  const sessionRunning = useAgentStore((s) => active && Object.values(s.sessions).some(isSessionRunning));
+  const catalog = useConfigStore((s) => s.cliAgentModels[kind]);
+  const modelsError = useAgentStore((s) => s.modelsErrors[kind]);
   const [changed, setChanged] = useState(false);
-  // The CLI's catalog; the static aliases only until it was fetched once.
-  const models = catalog ?? STATIC_CLAUDE_MODELS;
+  const models = modelsFor(kind, catalog);
+  const isClaude = kind === "claude_cli";
   const { latest, pinned } = groupClaudeModels(models);
 
   // The hint is about sessions running now; once they end it no longer applies.
@@ -466,7 +533,7 @@ function ModelSettings() {
   }, [sessionRunning]);
 
   const update = (patch: Partial<ClaudeCliConfig>) => {
-    setConfig({ ...config, ...patch });
+    setAgentConfig(kind, { ...config, ...patch });
     setChanged(true);
   };
 
@@ -474,6 +541,21 @@ function ModelSettings() {
     { tier: "Fast", hint: "Live answers and quick actions", model: "fast_model", effort: "fast_effort", thinking: "fast_thinking" },
     { tier: "Deep", hint: "Recaps and past meetings", model: "deep_model", effort: "deep_effort", thinking: "deep_thinking" },
   ] as const;
+
+  // Picking a model whose effort levels don't include the saved one saves a
+  // level it takes (its own default where it names one), so what is saved is
+  // what runs.
+  const pickModel = (row: (typeof rows)[number], value: string) => {
+    const next = findClaudeModel(models, value);
+    const patch: Partial<ClaudeCliConfig> = { [row.model]: value };
+    if (agent.supportsEffort && next && next.supports_effort && !next.effort_levels.includes(config[row.effort])) {
+      patch[row.effort] =
+        next.default_effort && next.effort_levels.includes(next.default_effort)
+          ? next.default_effort
+          : (cliEffectiveEffort(kind, next, config[row.effort]) ?? config[row.effort]);
+    }
+    update(patch);
+  };
 
   return (
     <div>
@@ -484,8 +566,10 @@ function ModelSettings() {
         ) : (
           modelsError && (
             <span className="text-meta text-muted-foreground" title={modelsError}>
-              {catalog === null
-                ? "Model list unavailable — showing the standard models"
+              {catalog === undefined
+                ? isClaude
+                  ? "Model list unavailable — showing the standard models"
+                  : "Model list unavailable — log in and check the connection"
                 : "Couldn't refresh model list — showing last known"}
             </span>
           )
@@ -494,14 +578,22 @@ function ModelSettings() {
       <div className="mt-2 space-y-2">
         {rows.map((row) => {
           const saved = config[row.model];
-          const info = findClaudeModel(models, saved);
-          const listed = [...latest, ...pinned].some((o) => o.value === saved);
+          // Claude passes its aliases through; the others run the first listed model when the saved one is gone.
+          const info = isClaude ? findClaudeModel(models, saved) : resolveListedModel(models, saved);
+          const listed = isClaude
+            ? [...latest, ...pinned].some((o) => o.value === saved)
+            : models.some((m) => m.value === info?.value);
           // Only a fetched catalog can say a model is gone.
-          const unavailable = !info && catalog !== null;
+          const unavailable = catalog !== undefined && (isClaude ? !info : !!saved && !findClaudeModel(models, saved));
           const noEffort = !!info && !info.supports_effort;
-          const levels = info ? info.effort_levels : CLAUDE_EFFORTS.map((x) => x.value);
+          const levels = info
+            ? info.effort_levels
+            : isClaude
+              ? [...CLAUDE_EFFORT_VALUES]
+              : [...effortRanks(kind)];
           // Shown as the session will run it; the saved effort is kept as chosen.
-          const effort = effectiveEffort(info, config[row.effort]) ?? "";
+          const effort = cliEffectiveEffort(kind, info, config[row.effort]) ?? "";
+          const selectValue = isClaude ? saved : (info?.value ?? saved);
           return (
             <div key={row.tier} className="flex items-start gap-3">
               <div className="w-40 shrink-0 pt-0.5">
@@ -511,58 +603,83 @@ function ModelSettings() {
               <div className="min-w-0 flex-1">
                 <select
                   aria-label={`${row.tier} model`}
-                  value={saved}
+                  value={selectValue}
                   title={info?.description || undefined}
-                  onChange={(e) => update({ [row.model]: e.target.value })}
+                  onChange={(e) => pickModel(row, e.target.value)}
                   className={`${SELECT_CLASS} w-full ${unavailable ? "border-warning/50" : ""}`}
                 >
-                  {!listed && <option value={saved}>{info?.display_name || saved}</option>}
-                  <optgroup label="Latest">
-                    {latest.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
+                  {isClaude ? (
+                    <>
+                      {!listed && <option value={saved}>{info?.display_name || saved}</option>}
+                      <optgroup label="Latest">
+                        {latest.map((o) => (
+                          <option key={o.value} value={o.value}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                      {pinned.length > 0 && (
+                        <optgroup label="Pinned versions">
+                          {pinned.map((o) => (
+                            <option key={o.value} value={o.value}>
+                              {o.label}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                    </>
+                  ) : models.length === 0 ? (
+                    <option value={saved}>{saved || "Default model"}</option>
+                  ) : (
+                    models.map((m) => (
+                      <option key={m.value} value={m.value}>
+                        {m.display_name || m.value}
                       </option>
-                    ))}
-                  </optgroup>
-                  {pinned.length > 0 && (
-                    <optgroup label="Pinned versions">
-                      {pinned.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </optgroup>
+                    ))
                   )}
                 </select>
-                {unavailable && <p className="mt-1 text-meta text-warning">No longer available</p>}
-                <ThinkingToggle
-                  tier={row.tier}
-                  checked={config[row.thinking]}
-                  onChange={(on) => update({ [row.thinking]: on })}
-                />
-              </div>
-              <select
-                aria-label={`${row.tier} effort`}
-                value={effort}
-                disabled={noEffort}
-                title={noEffort ? "This model doesn't take an effort level" : undefined}
-                onChange={(e) => update({ [row.effort]: e.target.value })}
-                className={`${SELECT_CLASS} w-36`}
-              >
-                {noEffort ? (
-                  <option value="">Not supported</option>
-                ) : (
-                  levels.map((level) => (
-                    <option key={level} value={level}>
-                      {effortLabel(level)}
-                    </option>
-                  ))
+                {unavailable && (
+                  <p className="mt-1 text-meta text-warning">
+                    {isClaude ? "No longer available" : `No longer offered — using ${info?.display_name || info?.value}`}
+                  </p>
                 )}
-              </select>
+                {agent.supportsThinking && (
+                  <ThinkingToggle
+                    tier={row.tier}
+                    checked={config[row.thinking]}
+                    onChange={(on) => update({ [row.thinking]: on })}
+                  />
+                )}
+              </div>
+              {agent.supportsEffort && (
+                <select
+                  aria-label={`${row.tier} effort`}
+                  value={effort}
+                  disabled={noEffort}
+                  title={noEffort ? "This model doesn't take an effort level" : undefined}
+                  onChange={(e) => update({ [row.effort]: e.target.value })}
+                  className={`${SELECT_CLASS} w-36`}
+                >
+                  {noEffort ? (
+                    <option value="">Not supported</option>
+                  ) : (
+                    levels.map((level) => (
+                      <option key={level} value={level}>
+                        {cliEffortLabel(level)}
+                      </option>
+                    ))
+                  )}
+                </select>
+              )}
             </div>
           );
         })}
       </div>
+      {!agent.supportsEffort && (
+        <p className="mt-2 text-meta text-muted-foreground/70">
+          {agent.name} puts the effort level in the model name, so there is no separate effort setting.
+        </p>
+      )}
     </div>
   );
 }
@@ -597,10 +714,11 @@ function ThinkingToggle({ tier, checked, onChange }: { tier: string; checked: bo
   );
 }
 
-function FallbackSettings() {
-  const config = useConfigStore((s) => s.claudeCliConfig);
+function FallbackSettings({ agent }: { agent: CliAgentInfo }) {
+  const kind = agent.id;
+  const config = useConfigStore((s) => s.cliAgentConfigs[kind]);
   const lastModelByProvider = useConfigStore((s) => s.lastModelByProvider);
-  const setFallback = useConfigStore((s) => s.setClaudeCliFallback);
+  const setFallback = useConfigStore((s) => s.setCliAgentFallback);
   const provider = config.fallback_provider;
   const [models, setModels] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -638,7 +756,7 @@ function FallbackSettings() {
     <div>
       <h4 className="text-xs font-semibold text-foreground">Fallback</h4>
       <p className="mt-0.5 text-meta text-muted-foreground/70">
-        Answers while Claude is unavailable (not logged in, usage limit, crash).
+        Answers while {agent.name} is unavailable (not logged in, usage limit, crash).
       </p>
       <div className="mt-2 flex items-center gap-3">
         <select
@@ -646,12 +764,12 @@ function FallbackSettings() {
           value={provider ?? ""}
           onChange={(e) => {
             const next = e.target.value || null;
-            setFallback(next, next ? lastModelByProvider[next] ?? null : null);
+            setFallback(kind, next, next ? lastModelByProvider[next] ?? null : null);
           }}
           className={`${SELECT_CLASS} flex-1`}
         >
           <option value="">None</option>
-          {CLAUDE_FALLBACK_PROVIDERS.map((p) => (
+          {CLI_FALLBACK_PROVIDERS.map((p) => (
             <option key={p} value={p}>
               {FALLBACK_LABELS[p] ?? p}
             </option>
@@ -661,7 +779,7 @@ function FallbackSettings() {
           aria-label="Fallback model"
           value={config.fallback_model ?? ""}
           disabled={!provider}
-          onChange={(e) => setFallback(provider, e.target.value || null)}
+          onChange={(e) => setFallback(kind, provider, e.target.value || null)}
           className={`${SELECT_CLASS} flex-1`}
         >
           <option value="">{loading ? "Loading models…" : "Provider's first model"}</option>

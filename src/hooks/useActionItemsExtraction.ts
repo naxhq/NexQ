@@ -11,6 +11,7 @@ import { useConfigStore } from "../stores/configStore";
 import { assistSegments } from "../lib/assistSegments";
 import { showToast } from "../stores/toastStore";
 import type { Meeting, ActionItem } from "../lib/types";
+import { isCliAgent } from "../lib/cliAgents";
 
 // ---------------------------------------------------------------------------
 // Defensive JSON parsing — strips markdown fences, finds the array, and
@@ -212,7 +213,7 @@ export function useActionItemsExtraction(
       // Merge consecutive same-speaker segments to reduce prompt size, except
       // for a Claude session, which needs every segment under its own id.
       const finals = meeting.transcript.filter((s) => s.is_final);
-      const segments = assistSegments(finals, useConfigStore.getState().llmProvider !== "claude_cli", meeting.speakers);
+      const segments = assistSegments(finals, !isCliAgent(useConfigStore.getState().llmProvider), meeting.speakers);
 
       await generateAssist("ActionItemsExtraction", customQuestion, {
         requestId,

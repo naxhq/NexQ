@@ -4,7 +4,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClaudeCliStatus } from "../lib/types";
+import type { ClaudeCliStatus, ClaudeModelInfo } from "../lib/types";
 
 vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: async () => null }));
@@ -14,15 +14,15 @@ vi.mock("@tauri-apps/plugin-store", () => ({
 vi.mock("@tauri-apps/plugin-shell", () => ({ open: vi.fn() }));
 
 const ipc = vi.hoisted(() => ({
-  claudeCliStatus: vi.fn(),
+  cliAgentStatus: vi.fn(),
   testLLMConnection: vi.fn(),
   hasApiKey: vi.fn(),
 }));
 
 vi.mock("../lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/ipc")>()),
-  claudeCliStatus: () => ipc.claudeCliStatus(),
-  claudeCliModels: async () => [],
+  cliAgentStatus: (kind: string) => ipc.cliAgentStatus(kind),
+  cliAgentModels: async () => [],
   getAgentSessions: async () => [],
   testLLMConnection: (...a: unknown[]) => ipc.testLLMConnection(...a),
   hasApiKey: (...a: unknown[]) => ipc.hasApiKey(...a),
@@ -34,7 +34,7 @@ vi.mock("../lib/ipc", async (importOriginal) => ({
 
 import { LLMSettings } from "./LLMSettings";
 import { resetAgentStoreForTests } from "../stores/agentStore";
-import { DEFAULT_CLAUDE_CLI_CONFIG, useConfigStore } from "../stores/configStore";
+import { DEFAULT_CLI_AGENT_CONFIGS, useConfigStore } from "../stores/configStore";
 
 const LOGGED_IN: ClaudeCliStatus = {
   installed: true,
@@ -42,6 +42,16 @@ const LOGGED_IN: ClaudeCliStatus = {
   version: "2.1.288",
   auth: { logged_in: true, auth_method: "claude.ai", subscription_type: "max", email: "me@example.com", login: "subscription" },
   npm_only: false,
+};
+const NOT_INSTALLED: ClaudeCliStatus = { installed: false, binary_path: null, version: null, auth: null, npm_only: false };
+const CODEX_MODEL: ClaudeModelInfo = {
+  value: "gpt-6-sol",
+  resolved_model: "gpt-6-sol",
+  display_name: "GPT-6 Sol",
+  description: "",
+  supports_effort: true,
+  effort_levels: ["low", "medium", "high"],
+  default_effort: "medium",
 };
 const LOGGED_OUT: ClaudeCliStatus = {
   ...LOGGED_IN,
@@ -63,11 +73,11 @@ describe("LLM provider cards: in use, viewing, status", () => {
       llmProvider: "groq",
       llmModel: "llama-3.3-70b",
       lastModelByProvider: { groq: "llama-3.3-70b" },
-      claudeCliConfig: DEFAULT_CLAUDE_CLI_CONFIG,
+      cliAgentConfigs: DEFAULT_CLI_AGENT_CONFIGS,
       verifiedCloudProviders: [],
       customLlmBaseUrl: "",
     });
-    ipc.claudeCliStatus.mockReset().mockResolvedValue(LOGGED_IN);
+    ipc.cliAgentStatus.mockReset().mockResolvedValue(LOGGED_IN);
     ipc.testLLMConnection
       .mockReset()
       .mockImplementation(async (json: string) => localUp[JSON.parse(json).provider_type] ?? false);
@@ -191,16 +201,32 @@ describe("LLM provider cards: in use, viewing, status", () => {
   });
 
   it("Claude logged out reads Logged out, whether or not it is in use", async () => {
-    ipc.claudeCliStatus.mockResolvedValue(LOGGED_OUT);
+    ipc.cliAgentStatus.mockResolvedValue(LOGGED_OUT);
     render(<LLMSettings />);
     await waitFor(() => expect(within(card(/^Claude\b/)).getByText("Logged out")).toBeInTheDocument());
     expect(card(/^Claude\b/)).toHaveAttribute("aria-label", "Claude, logged out, not in use");
   });
 
-  it("Gemini CLI and Codex CLI read Coming soon", async () => {
+  it("Antigravity and Codex are real tiles that read their own status, not Coming soon", async () => {
+    ipc.cliAgentStatus.mockImplementation(async (kind: string) =>
+      kind === "claude_cli" ? LOGGED_IN : NOT_INSTALLED,
+    );
     render(<LLMSettings />);
-    expect(within(card(/gemini cli/i)).getByText("Coming soon")).toBeInTheDocument();
-    expect(within(card(/codex cli/i)).getByText("Coming soon")).toBeInTheDocument();
+    await waitFor(() => expect(within(card(/^Antigravity\b/)).getByText("Not installed")).toBeInTheDocument());
+    expect(within(card(/^Codex\b/)).getByText("Not installed")).toBeInTheDocument();
+    expect(screen.queryByText("Coming soon")).not.toBeInTheDocument();
+    expect(card(/^Codex\b/)).not.toBeDisabled();
+  });
+
+  it("the In use banner names the active agent with its Fast and Deep models", async () => {
+    useConfigStore.setState({
+      llmProvider: "codex_cli",
+      llmModel: "",
+      cliAgentModels: { codex_cli: [CODEX_MODEL] },
+    });
+    render(<LLMSettings />);
+    expect(screen.getByText(/In use: Codex \(subscription\) · Fast: GPT-6 Sol · Low · Deep: GPT-6 Sol · Medium/)).toBeInTheDocument();
+    expect(within(card(/^Codex\b/)).getByText("In use")).toBeInTheDocument();
   });
 });
 
@@ -211,12 +237,12 @@ describe("Custom Test Connection errors", () => {
       llmProvider: "groq",
       llmModel: "llama-3.3-70b",
       lastModelByProvider: {},
-      claudeCliConfig: DEFAULT_CLAUDE_CLI_CONFIG,
+      cliAgentConfigs: DEFAULT_CLI_AGENT_CONFIGS,
       verifiedCloudProviders: [],
       customLlmBaseUrl: "https://api.example.com",
       customLlmAuthType: "none",
     });
-    ipc.claudeCliStatus.mockReset().mockResolvedValue(LOGGED_IN);
+    ipc.cliAgentStatus.mockReset().mockResolvedValue(LOGGED_IN);
     ipc.hasApiKey.mockReset().mockResolvedValue(false);
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });

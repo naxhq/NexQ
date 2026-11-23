@@ -8,6 +8,8 @@ import { CallLogEntry } from "./CallLogEntry";
 import { useMeetingAgentUsage } from "../hooks/useMeetingAgentUsage";
 import { useAgentStore } from "../stores/agentStore";
 import { formatUsageSummary, formatCostEstimate, formatDuration, isApiBilled } from "../lib/agentUsage";
+import { cliAgentName, isCliAgent } from "../lib/cliAgents";
+import { useConfigStore } from "../stores/configStore";
 import { PromptViewer } from "./PromptViewer";
 import { callLogStats, formatCompactTokens } from "./stats";
 import type { LogFilterKind } from "../lib/types";
@@ -49,7 +51,8 @@ export function CallLogPanel() {
   const targetLang = useTranslationStore((s) => s.targetLang);
   const batchProgress = useTranslationStore((s) => s.batchProgress);
   const { sessions: claudeSessions, usage: claudeUsage } = useMeetingAgentUsage();
-  const claudeApiBilled = useAgentStore((s) => isApiBilled(s.status));
+  const activeAgent = useConfigStore((s) => (isCliAgent(s.llmProvider) ? s.llmProvider : "claude_cli"));
+  const claudeApiBilled = useAgentStore((s) => isApiBilled(s.statuses[activeAgent]));
   // Session updates only arrive once the store has subscribed in this window
   useEffect(() => {
     useAgentStore.getState().init();
@@ -224,10 +227,10 @@ export function CallLogPanel() {
               </div>
             </div>
 
-            {/* Claude session usage for this meeting (an estimate, not quota) */}
+            {/* CLI agent session usage for this meeting (an estimate, not quota) */}
             {claudeSessions.length > 0 && (
               <div className="mt-2 text-meta text-muted-foreground" data-testid="claude-usage">
-                <span className="font-medium text-foreground/80">Claude</span>{" "}
+                <span className="font-medium text-foreground/80">{cliAgentName(activeAgent)}</span>{" "}
                 <span className="tabular-nums">{formatUsageSummary(claudeUsage)}</span>
                 <span className="block text-muted-foreground/70">{formatCostEstimate(claudeUsage, claudeApiBilled)}</span>
               </div>

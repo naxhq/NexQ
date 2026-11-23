@@ -15,6 +15,7 @@ import {
   HelpCircle,
   X,
 } from "lucide-react";
+import { isCliAgent } from "../lib/cliAgents";
 
 // ─── Constants ───────────────────────────────────────────
 
@@ -235,9 +236,9 @@ export function AIActionsSettings() {
   const removeCustomAction = useAIActionsStore((s) => s.removeCustomAction);
   const setInstructionPresets = useAIActionsStore((s) => s.setInstructionPresets);
   const setCustomInstructions = useAIActionsStore((s) => s.setCustomInstructions);
-  // Claude CLI sessions get the transcript as deltas and run without
+  // CLI agent sessions get the transcript as deltas and run without
   // temperature or tools, so those controls don't apply.
-  const cliActive = useConfigStore((s) => s.llmProvider === "claude_cli");
+  const cliActive = useConfigStore((s) => isCliAgent(s.llmProvider));
 
   const [expandedActions, setExpandedActions] = useState<Record<string, boolean>>({});
   const [expandedOverrides, setExpandedOverrides] = useState<Record<string, boolean>>({});

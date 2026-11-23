@@ -3,15 +3,17 @@ import { emitAgentFallbackShown, onAgentFallback, onAgentFallbackShown } from ".
 import { isRateLimitText } from "../lib/agentUsage";
 import { isWindowShown } from "../lib/windows";
 import { useMeetingStore } from "../stores/meetingStore";
+import { useConfigStore } from "../stores/configStore";
+import { cliAgentName, isCliAgent } from "../lib/cliAgents";
 import { showToast } from "../stores/toastStore";
 import type { AgentFallbackEvent } from "../lib/types";
 
 /** Toast copy for one `agent_fallback` event. */
-export function fallbackMessage({ reason, provider }: AgentFallbackEvent): string {
+export function fallbackMessage({ reason, provider }: AgentFallbackEvent, agentName = "Claude"): string {
   if (isRateLimitText(reason)) {
-    return provider ? `Claude usage limit reached — using ${provider}` : "Claude usage limit reached";
+    return provider ? `${agentName} usage limit reached — using ${provider}` : `${agentName} usage limit reached`;
   }
-  return `Claude unavailable (${reason}) — using ${provider}`;
+  return `${agentName} unavailable (${reason}) — using ${provider}`;
 }
 
 /**
@@ -32,7 +34,7 @@ export function shouldToastHere(o: {
 }
 
 /**
- * Toast when requests move from Claude to the fallback provider (or a usage
+ * Toast when requests move from the CLI agent to the fallback provider (or a usage
  * limit is hit with no fallback). The backend announces each outage once and
  * the event reaches both windows, so the notice is held until a window the
  * user can see claims it (`shouldToastHere`); the claim is broadcast so the
@@ -56,7 +58,8 @@ export function useAgentFallbackToast(windowLabel: string): void {
       const inMeeting = useMeetingStore.getState().activeMeeting != null;
       if (!shouldToastHere({ windowLabel: me, inMeeting, thisShown, otherShown })) return;
       pending = null;
-      showToast(fallbackMessage(event), "warning");
+      const active = useConfigStore.getState().llmProvider;
+      showToast(fallbackMessage(event, isCliAgent(active) ? cliAgentName(active) : "Claude"), "warning");
       emitAgentFallbackShown().catch(() => {});
     };
 

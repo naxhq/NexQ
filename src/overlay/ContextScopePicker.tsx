@@ -13,6 +13,7 @@ import {
   scopeChipLabel,
 } from "../lib/contextScope";
 import type { ContextScopeKind, ContextScopeSetting } from "../lib/types";
+import { cliAgentName, isCliAgent } from "../lib/cliAgents";
 
 const OPTION_LABEL: Record<ContextScopeKind, string> = {
   default: "Action default",
@@ -49,9 +50,9 @@ export function ContextScopePicker() {
   const sticky = useConfigStore((s) => s.contextScopeSticky ?? true);
   const setScope = useConfigStore((s) => s.setContextScope);
   const setSticky = useConfigStore((s) => s.setContextScopeSticky);
-  const isClaude = useConfigStore((s) => s.llmProvider === "claude_cli");
-  // Claude ignores per-action windows: its session holds the whole meeting.
-  const defaultHint = isClaude ? "Claude decides from the whole meeting" : OPTION_HINT.default;
+  const agentName = useConfigStore((s) => (isCliAgent(s.llmProvider) ? cliAgentName(s.llmProvider) : null));
+  // A CLI agent ignores per-action windows: its session holds the whole meeting.
+  const defaultHint = agentName ? `${agentName} decides from the whole meeting` : OPTION_HINT.default;
   const openActionSettings = () => {
     setOpen(false);
     useMeetingStore.getState().openSettings("ai_actions");
@@ -301,8 +302,8 @@ export function ContextScopePicker() {
             </div>
 
             <p className="px-2 pb-1 pt-1.5 text-meta leading-snug text-muted-foreground/55">
-              {isClaude ? (
-                "Claude's live session already holds the whole meeting; each request sends only new lines. This only tells it where to focus."
+              {agentName ? (
+                `${agentName}'s live session already holds the whole meeting; each request sends only new lines. This only tells it where to focus.`
               ) : (
                 <>
                   Each action's window is set in{" "}
