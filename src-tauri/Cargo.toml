@@ -33,7 +33,7 @@ rusqlite = { version = "0.43", features = ["bundled"] }
 reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
 async-trait = "0.1"
 futures = "0.3"
-thiserror = "1"
+thiserror = "2"
 log = "0.4"
 hound = "3.5"
 pdf-extract = "0.12"
