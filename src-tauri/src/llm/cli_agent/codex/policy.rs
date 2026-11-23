@@ -198,6 +198,13 @@ fn spec_for(program: &str) -> Option<Spec> {
     })
 }
 
+/// Characters PowerShell reads as quotes, dashes or separators though this
+/// tokenizer does not: typographic quotes and dashes (U+2010..U+201F) and any
+/// whitespace other than space and tab (no-break space, em space, ...).
+fn shell_lookalike(c: char) -> bool {
+    ('\u{2010}'..='\u{201F}').contains(&c) || (c.is_whitespace() && c != ' ' && c != '\t')
+}
+
 /// Split a command line into words: whitespace separates, single or double
 /// quotes group (and are removed), nothing escapes (backslash is a path
 /// character on Windows). `None` for an unbalanced quote or an empty word.
@@ -246,10 +253,15 @@ fn tokenize(command: &str) -> Option<Vec<String>> {
 /// No path argument at all yields an empty list: the program then works in its
 /// current directory.
 fn safe_read_paths(command: &str) -> Option<Vec<String>> {
-    if command.contains(SHELL_OPERATORS) {
+    if command.contains(SHELL_OPERATORS) || command.chars().any(shell_lookalike) {
         return None;
     }
     let tokens = tokenize(command)?;
+    // No `..` at all: a parser difference between this tokenizer and the
+    // real shell must not be able to turn into a climb out of a folder.
+    if tokens.iter().any(|t| t.split(['/', '\\']).any(|seg| seg == "..")) {
+        return None;
+    }
     let (program, args) = tokens.split_first()?;
     // A bare name only: `C:\evil\cat.exe` is not `cat`.
     if program.contains(['/', '\\', ':']) {
@@ -547,6 +559,21 @@ mod tests {
     }
 
     #[test]
+    fn typographic_quotes_dashes_odd_spaces_and_dot_dot_are_refused() {
+        let t = Tree::new("lookalike");
+        let a = t.n("a.md");
+        let s = t.secret.join("s.md").to_string_lossy().into_owned();
+        // PowerShell reads these as quotes, dashes or separators; we don't.
+        for c in ['\u{2018}', '\u{2019}', '\u{201C}', '\u{201D}', '\u{2013}', '\u{2014}', '\u{00A0}', '\u{2003}'] {
+            assert!(!ok(&t, &format!("type {a}{c}{s}"), vec![read(&a)]), "{:?}", c);
+        }
+        let up = t.n("sub/../a.md");
+        assert!(!ok(&t, &format!("type {up}"), vec![read(&up)]));
+        assert!(!ok(&t, &format!("type {}", t.n("..\\secret\\s.md")), vec![read(&a)]));
+        assert!(ok(&t, &format!("type {a}"), vec![read(&a)]), "a plain read still runs");
+    }
+
+    #[test]
     fn a_search_without_a_path_uses_the_session_directory_and_a_foreign_cwd_is_refused() {
         let t = Tree::new("cwd");
         let search = vec![CommandAction::Search { query: Some("x".into()), path: None }];
@@ -573,7 +600,7 @@ mod tests {
     #[test]
     fn slashes_case_and_dot_segments_do_not_matter() {
         let t = Tree::new("norm");
-        let messy = format!("{}/./SUB/../A.md", t.notes.to_string_lossy().replace('\\', "/"));
+        let messy = format!("{}/./SUB/B.md", t.notes.to_string_lossy().replace('\\', "/"));
         assert!(ok(&t, &format!("type \"{messy}\""), vec![read(&messy)]));
     }
 
