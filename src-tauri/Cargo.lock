@@ -3260,7 +3260,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-store",
  "tauri-plugin-updater",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
  "tokenizers",
  "tokio",
  "tokio-tungstenite",
