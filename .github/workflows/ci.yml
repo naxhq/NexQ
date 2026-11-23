@@ -67,7 +67,7 @@ jobs:
         run: npm test
 
       - name: Cache ONNX Runtime
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: src-tauri/ort
           key: ort-${{ runner.os }}-${{ hashFiles('scripts/fetch-onnxruntime.mjs') }}
@@ -103,7 +103,7 @@ jobs:
         run: npm ci
 
       - name: Cache ONNX Runtime
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: src-tauri/ort
           key: ort-${{ runner.os }}-${{ hashFiles('scripts/fetch-onnxruntime.mjs') }}
