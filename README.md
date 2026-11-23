@@ -38,7 +38,7 @@ It hears both sides of a call, answers on a private overlay, and can hide from y
 - **Answers in the moment.** Questions are caught as they are asked. Press one key, or turn on Auto-Answer, and the answer streams in, grounded in your resume, notes or slides.
 - **Yours to run.** Free, MIT licensed, no account and no usage caps. No bot joins your call. Use fully offline engines or the cloud providers you pick.
 - **Hidden from the share.** Turn on Hide from screen share and the overlay stays visible to you but is left out of screen shares and recordings, and off the taskbar or Dock.
-- **Bring your own models.** 12 speech-to-text engines and 9 LLM providers, including your existing Claude subscription.
+- **Bring your own models.** 12 speech-to-text engines and 11 LLM providers, including your existing Claude, Google AI or ChatGPT subscription.
 
 ## Quick start
 
@@ -58,7 +58,7 @@ It hears both sides of a call, answers on a private overlay, and can hide from y
 The first launch opens a short setup. You can skip it; everything below is also in Settings.
 
 1. **Set up speech-to-text.** In Settings → STT Providers, download the Parakeet model (local, free) or add a Deepgram or Groq key. Then in Settings → Audio & Devices, choose an engine for each side, or pick the **Free** preset (Web Speech for your mic, Parakeet for the other side). Web Speech needs no key but sends your mic audio to a cloud service.
-2. **Pick an LLM** in Settings → LLM Providers. [Ollama](https://ollama.com) is found automatically, cloud providers need a key, and Claude can use your subscription.
+2. **Pick an LLM** in Settings → LLM Providers. [Ollama](https://ollama.com) is found automatically, cloud providers need a key, and Claude, Antigravity or Codex can use your subscription.
 3. **Optional:** add your resume or notes under **Meeting Context** on the dashboard.
 4. **Press** <kbd>Ctrl</kbd>+<kbd>M</kbd>. NexQ captures system audio, so it works with Zoom, Teams, Meet, Discord or anything that plays sound.
 5. **Get an answer.** When a question comes up, press <kbd>Space</kbd> in the overlay, or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> from any app.
@@ -69,6 +69,7 @@ Guides: [Getting started](docs/user-guide/getting-started.md) · [Choosing provi
 
 ## What's new
 
+- **v2.44 Antigravity and Codex.** Use your Google AI or ChatGPT plan like Claude, with Fast and Deep models, live model lists and personal sources. Beta.
 - **v2.41 Personal sources.** Let Claude look things up in your notes folders and MCP servers while it answers. Claude subscription only.
 - **v2.40 Thinking control.** Choose how much each provider's model thinks.
 - **v2.38 and v2.39 Language per side.** Transcribe each side in its own language, switch it from the overlay without ending the meeting, or let NexQ detect it. Ukrainian was added.
@@ -104,7 +105,7 @@ The full history is in the [CHANGELOG](CHANGELOG.md).
 
 **Your context**
 - Local RAG over your PDF, DOCX, TXT and MD files (SQLite FTS plus embeddings)
-- Personal sources: notes folders and MCP servers (Claude subscription)
+- Personal sources: notes folders and MCP servers (Claude, Antigravity or Codex subscription)
 - Thinking control per provider
 - AI Call Log: every prompt, latency and token count
 
@@ -143,25 +144,25 @@ Audio is captured on your machine. What leaves it depends on the engines you pic
 | | Runs on your device | Cloud |
 |---|---|---|
 | **Speech-to-text (12)** | Parakeet TDT, Sherpa-ONNX, ORT Streaming, Windows Speech (Windows, mic only), Whisper.cpp (recordings only, not live calls) | Deepgram, Groq Whisper, Whisper API, Azure Speech, Azure MAI Streaming (public preview), Cartesia, Web Speech (no key, mic only) |
-| **LLM (9)** | Ollama, LM Studio | OpenAI, Anthropic, Google Gemini, Groq, OpenRouter, any custom endpoint, and Claude through your Pro or Max subscription (official Claude Code CLI, beta, no API key) |
+| **LLM (11)** | Ollama, LM Studio | OpenAI, Anthropic, Google Gemini, Groq, OpenRouter, any custom endpoint, and, with no API key (beta): Claude through your Pro or Max plan (Claude Code CLI), Antigravity through your Google AI plan, Codex through your ChatGPT plan |
 | **Translation (5)** | OPUS-MT (offline) | DeepL, Google, Microsoft, or any LLM you configured |
 
 Not every engine covers every language. [Choosing providers](docs/user-guide/ai-providers.md) lists what each one supports.
 
 <details>
-<summary><b>Personal sources (Claude subscription only)</b></summary>
+<summary><b>Personal sources (Claude, Antigravity or Codex subscription)</b></summary>
 
 <br>
 
-Let Claude look things up in your own notes and tools while it answers, for example "who is Dana and what is open with her?".
+Let the AI look things up in your own notes and tools while it answers, for example "who is Dana and what is open with her?".
 
-- **Notes folders.** Add folders of `.md` files, such as an Obsidian vault. Claude can search and read them. It cannot change them, and nothing is copied or indexed.
+- **Notes folders.** Add folders of `.md` files, such as an Obsidian vault. The AI can search and read them. It cannot change them, and nothing is copied or indexed.
 - **Tool servers (MCP).** Paste the `mcpServers` JSON from a server's README, fill in a form, or import from Claude Code. New servers start off and are checked right away. OAuth sign-in is not supported yet.
 - **Permissions.** Each tool has its own switch, and tools that sound like they change something start off.
 - **You choose per answer.** The Notes and Tools pills decide whether an answer may use them. Automatic answers never use your sources.
-- **Privacy.** Secret values are kept in the OS credential store. Notes and tool results go to Claude as part of the answer, so only add sources you are happy to share with it.
+- **Privacy.** Secret values are kept in the OS credential store. Notes and tool results go to your AI provider as part of the answer, so only add sources you are happy to share with it.
 
-With any other provider your sources stay saved but are not used. Details: [Claude subscription guide](docs/user-guide/claude-subscription.md).
+With an API or local provider your sources stay saved but are not used. Details: [Claude subscription guide](docs/user-guide/claude-subscription.md).
 
 </details>
 
