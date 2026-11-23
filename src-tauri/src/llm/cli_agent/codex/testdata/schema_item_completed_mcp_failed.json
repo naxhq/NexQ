@@ -1,0 +1,23 @@
+{
+  "method": "item/completed",
+  "params": {
+    "threadId": "th1",
+    "turnId": "tu1",
+    "completedAtMs": 2,
+    "item": {
+      "type": "mcpToolCall",
+      "id": "call1",
+      "server": "mira",
+      "tool": "kb_search",
+      "status": "failed",
+      "arguments": {
+        "query": "budget"
+      },
+      "result": null,
+      "error": {
+        "message": "server crashed"
+      },
+      "durationMs": 12
+    }
+  }
+}

@@ -1,13 +1,21 @@
-//! Checking one MCP server: start it the way a with-sources session would and
-//! read the tools the CLI reports, with no model call.
+//! Checking one MCP server and reading its tools, with no model call.
 //!
-//! The session is primed with an empty `shouldQuery:false` message, which makes
-//! the CLI print `system/init` after it connected its MCP servers. That init
-//! lists every tool (`mcp__<key>__<tool>`) and each server's status.
+//! With Claude installed, the server is started the way a with-sources session
+//! would and the tools are what the CLI reports: the session is primed with an
+//! empty `shouldQuery:false` message, which makes the CLI print `system/init`
+//! after it connected its MCP servers. That init lists every tool
+//! (`mcp__<key>__<tool>`) and each server's status.
+//!
+//! Without Claude (a PC with only Antigravity or Codex), NexQ connects to the
+//! server itself with a minimal MCP client (`mcp_handshake`: `initialize`, then
+//! `tools/list`), so the server still gets its tool list and can be used. A
+//! failed Check of either kind then starts the server alone to find the cause.
 
 use super::command::SessionConfig;
+use super::CliAgentKind;
 use super::detect::find_claude_binary;
 use super::mcp_diagnose::diagnose_start;
+use super::mcp_handshake;
 use super::session::{AgentError, ClaudeSession, InitInfo, SessionTimeouts};
 use crate::sources::config::McpServer;
 use crate::sources::launch::single_server_launch;
@@ -55,7 +63,8 @@ pub fn check_launch(
     Ok(launch)
 }
 
-/// Start `server` alone and list its tools. `secret` looks a saved value up by
+/// Start `server` alone and list its tools: through Claude when it is
+/// installed, else through NexQ's own MCP client. `secret` looks a saved value up by
 /// credential id. Takes up to [`CHECK_INIT_TIMEOUT`] (a hung server holds
 /// `system/init` back for [`CHECK_MCP_TIMEOUT_MS`]), then up to
 /// [`super::mcp_diagnose::DIAGNOSE_LIMIT`] more to find the cause.
@@ -64,30 +73,33 @@ pub async fn list_server_tools(
     secret: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Vec<String>, String> {
     let launch = check_launch(server, secret)?;
-    let bin = tokio::task::spawn_blocking(find_claude_binary)
-        .await
-        .ok()
-        .flatten()
-        .ok_or_else(|| "Claude CLI isn't installed, so the server can't be checked.".to_string())?;
-    let cfg = SessionConfig {
-        model: "haiku".to_string(),
-        effort: None,
-        system_prompt: CHECK_SYSTEM_PROMPT.to_string(),
-        thinking: false,
-        sources: Some(launch),
-    };
-    let timeouts = SessionTimeouts { init: CHECK_INIT_TIMEOUT, ..SessionTimeouts::default() };
-    let failure = match ClaudeSession::spawn_with_timeouts(bin, cfg, timeouts).await {
-        Ok(session) => {
-            let info = session.init_info();
-            session.close().await;
-            tools_of_server(&info, &server.key)
+    let bin = tokio::task::spawn_blocking(find_claude_binary).await.ok().flatten();
+    let failure = match bin {
+        Some(bin) => {
+            let cfg = SessionConfig {
+                kind: CliAgentKind::Claude,
+                model: "haiku".to_string(),
+                effort: None,
+                system_prompt: CHECK_SYSTEM_PROMPT.to_string(),
+                thinking: false,
+                sources: Some(launch),
+            };
+            let timeouts = SessionTimeouts { init: CHECK_INIT_TIMEOUT, ..SessionTimeouts::default() };
+            match ClaudeSession::spawn_with_timeouts(bin, cfg, timeouts).await {
+                Ok(session) => {
+                    let info = session.init_info();
+                    session.close().await;
+                    tools_of_server(&info, &server.key)
+                }
+                // Nothing usable left: the statuses say why, no error text to parse.
+                Err(AgentError::NoUsableSources { info, .. }) => tools_of_server(&info, &server.key),
+                Err(AgentError::Timeout) => Err("The server took too long to start.".to_string()),
+                // Claude itself is the problem, not the server: no point diagnosing it.
+                Err(e) => return Err(e.to_string()),
+            }
         }
-        // Nothing usable left: the statuses say why, no error text to parse.
-        Err(AgentError::NoUsableSources { info, .. }) => tools_of_server(&info, &server.key),
-        Err(AgentError::Timeout) => Err("The server took too long to start.".to_string()),
-        // Claude itself is the problem, not the server: no point diagnosing it.
-        Err(e) => return Err(e.to_string()),
+        // No Claude: NexQ's own MCP client asks the server.
+        None => mcp_handshake::list_tools(server, secret).await,
     };
     match failure {
         Ok(tools) => Ok(tools),

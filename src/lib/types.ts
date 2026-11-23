@@ -313,7 +313,9 @@ export type LLMProviderType =
   | "gemini"
   | "openrouter"
   | "custom"
-  | "claude_cli";
+  | "claude_cli"
+  | "antigravity_cli"
+  | "codex_cli";
 
 /**
  * How much a provider's model thinks before answering. "auto" sends nothing
@@ -332,9 +334,17 @@ export interface LLMProviderConfig {
   is_local: boolean;
 }
 
-// == CLAUDE CLI (SUBSCRIPTION) TYPES ==
+// == CLI AGENT (SUBSCRIPTION) TYPES: Claude, Antigravity, Codex ==
 
-/** Mirrors Rust `ClaudeAuthStatus` (output of `claude auth status`). */
+/** The CLI agent providers; serialised as the provider id (Rust `CliAgentKind`). */
+export type CliAgentKind = "claude_cli" | "antigravity_cli" | "codex_cli";
+
+/**
+ * Mirrors Rust `ClaudeAuthStatus`: the account of a CLI agent. For Claude the
+ * output of `claude auth status`; for Codex `auth_method` is "chatgpt" or
+ * "api_key" and `subscription_type` the ChatGPT plan; Antigravity reports
+ * "google" with no email or plan.
+ */
 export interface ClaudeAuthStatus {
   logged_in: boolean;
   auth_method: string;
@@ -359,10 +369,24 @@ export interface ClaudeCliStatus {
   npm_only: boolean;
 }
 
-/** Mirrors Rust `ClaudeCliConfig` (`set_claude_cli_config` command). */
+/**
+ * Mirrors Rust `CliAgentStatus` (`cli_agent_status` command): what a CLI agent's
+ * installation and login look like. `ClaudeCliStatus` is its Claude shape.
+ */
+export interface CliAgentStatus extends ClaudeCliStatus {
+  kind: CliAgentKind;
+}
+
+/**
+ * Mirrors Rust `ClaudeCliConfig` (`set_claude_cli_config` / `set_cli_agent_config`):
+ * the model settings of one CLI agent. Antigravity ignores the efforts (they are part
+ * of its model ids) and both thinking flags; Codex ignores the thinking flags, takes
+ * efforts up to "ultra" where its model offers them, and an empty model means "the
+ * first one the CLI lists".
+ */
 export interface ClaudeCliConfig {
   fast_model: string;
-  /** "low" | "medium" | "high" | "xhigh" | "max" */
+  /** "low" | "medium" | "high" | "xhigh" | "max" ("ultra" too for Codex) */
   fast_effort: string;
   deep_model: string;
   deep_effort: string;
@@ -376,7 +400,11 @@ export interface ClaudeCliConfig {
   fallback_model: string | null;
 }
 
-/** Mirrors Rust `ClaudeModelInfo`: one model the Claude CLI offers (`claude_cli_models`). */
+/**
+ * Mirrors Rust `ClaudeModelInfo`: one model a CLI agent offers (`claude_cli_models`,
+ * `cli_agent_models`). Shared by all three CLI agents: Antigravity lists one entry per
+ * model id with no effort; Codex lists its own efforts and `default_effort`.
+ */
 export interface ClaudeModelInfo {
   /** What `--model` takes: an alias ("sonnet") or a pinned id ("claude-opus-4-8"). */
   value: string;
@@ -387,6 +415,8 @@ export interface ClaudeModelInfo {
   supports_effort: boolean;
   /** Accepted efforts, lowest first; empty without effort support. */
   effort_levels: string[];
+  /** The effort the model uses when none is asked for (Codex reports one); absent otherwise. */
+  default_effort?: string;
 }
 
 /** Mirrors Rust `AgentFallbackPayload` (payload of `agent_fallback`). */

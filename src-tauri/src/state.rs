@@ -9,10 +9,9 @@ use crate::tray::TrayManager;
 use crate::credentials::CredentialManager;
 use crate::db::DatabaseManager;
 use crate::intelligence::IntelligenceEngine;
-use crate::llm::cli_agent::manager::{
-    AgentSessionManager, ClaudeCliConfig, ClaudeSpawner, NoopStatusSink,
-};
-use crate::llm::cli_agent::models::ModelCatalog;
+use crate::llm::cli_agent::manager::{AgentSessionManager, NoopStatusSink};
+use crate::llm::cli_agent::settings::CliSettings;
+use crate::llm::cli_agent::spawner::CliSpawner;
 use crate::llm::cli_agent::routing::{CachedFallback, HealthTracker, MeetingSessions};
 use crate::llm::gemini_cache::CachedContent;
 use crate::llm::openrouter_models::OpenRouterModelCache;
@@ -132,14 +131,14 @@ pub struct AppState {
     pub meeting_active: Arc<AtomicBool>,
     /// Post-meeting recording pipelines still running (WAV → Opus + DB update).
     pub recording_jobs: Arc<AtomicUsize>,
-    /// Claude CLI sessions (live / past meeting / utility). `setup` replaces
-    /// this with one that emits `agent_session_status` to the app.
+    /// CLI agent sessions (live / past meeting / utility) of the active
+    /// provider (Claude, Antigravity or Codex). `setup` replaces this with one
+    /// that emits `agent_session_status` to the app.
     pub agent_sessions: Arc<AgentSessionManager>,
-    /// Claude CLI model settings, read whenever a session is spawned.
-    pub claude_cli_config: Arc<RwLock<ClaudeCliConfig>>,
-    /// Last model catalog the Claude CLI reported (`claude_cli_models`).
-    pub claude_models: Arc<ModelCatalog>,
-    /// Whether Claude can take requests (else they go to the fallback).
+    /// Per-CLI model settings and catalogs (one of each per CLI agent), read
+    /// whenever a session is spawned, and which CLI is active.
+    pub cli_settings: Arc<CliSettings>,
+    /// Whether the active CLI agent can take requests (else they go to the fallback).
     pub claude_health: Arc<HealthTracker>,
     /// What each open meeting session was given, for restarts.
     pub meeting_sessions: Arc<MeetingSessions>,
@@ -177,8 +176,7 @@ pub struct LiveMeeting {
 
 impl AppState {
     pub fn new() -> Self {
-        let claude_cli_config = Arc::new(RwLock::new(ClaudeCliConfig::default()));
-        let claude_models = ModelCatalog::global();
+        let cli_settings = Arc::new(CliSettings::new());
         Self {
             database: None,
             audio: Arc::new(Mutex::new(Some(AudioCaptureManager::new()))),
@@ -213,13 +211,11 @@ impl AppState {
             meeting_active: Arc::new(AtomicBool::new(false)),
             recording_jobs: Arc::new(AtomicUsize::new(0)),
             agent_sessions: Arc::new(AgentSessionManager::new(
-                Arc::new(ClaudeSpawner),
+                Arc::new(CliSpawner),
                 Arc::new(NoopStatusSink),
-                claude_cli_config.clone(),
-            )
-            .with_catalog(claude_models.clone())),
-            claude_cli_config,
-            claude_models,
+                cli_settings.clone(),
+            )),
+            cli_settings,
             claude_health: Arc::new(HealthTracker::default()),
             meeting_sessions: Arc::new(MeetingSessions::default()),
             live_meeting: Arc::new(Mutex::new(None)),

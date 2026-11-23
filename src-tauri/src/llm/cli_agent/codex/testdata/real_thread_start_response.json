@@ -1,0 +1,70 @@
+{
+  "id": 2,
+  "result": {
+    "thread": {
+      "id": "00000000-0000-0000-0000-000000000000",
+      "environments": [
+        {
+          "environmentId": "local",
+          "cwd": "C:\\sandbox",
+          "runtimeWorkspaceRoots": [
+            "C:\\sandbox"
+          ]
+        }
+      ],
+      "extra": null,
+      "sessionId": "00000000-0000-0000-0000-000000000000",
+      "forkedFromId": null,
+      "attachedToThreadId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": true,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "paginated",
+      "modelProvider": "openai",
+      "model": "gpt-6.2-sol",
+      "reasoningEffort": null,
+      "createdAt": 1795397029,
+      "updatedAt": 1795397029,
+      "recencyAt": 1795397029,
+      "status": {
+        "type": "idle"
+      },
+      "path": null,
+      "cwd": "C:\\sandbox",
+      "cliVersion": "0.171.0",
+      "originator": "nexq",
+      "source": "vscode",
+      "canAcceptDirectInput": true,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "daybreakEnabled": null,
+      "turns": []
+    },
+    "model": "gpt-6.2-sol",
+    "modelProvider": "openai",
+    "serviceTier": "default",
+    "disabledPluginIds": [],
+    "cwd": "C:\\sandbox",
+    "runtimeWorkspaceRoots": [
+      "C:\\sandbox"
+    ],
+    "instructionSources": [
+      "C:\\Users\\test\\.codex\\AGENTS.md"
+    ],
+    "approvalPolicy": "untrusted",
+    "approvalsReviewer": "user",
+    "sandbox": {
+      "type": "readOnly",
+      "networkAccess": false
+    },
+    "activePermissionProfile": null,
+    "reasoningEffort": null,
+    "multiAgentMode": "explicitRequestOnly"
+  }
+}

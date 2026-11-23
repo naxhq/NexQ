@@ -60,10 +60,10 @@ describe("configStore: active LLM across windows", () => {
     expect(overlay.getState().llmModel).toBe("haiku");
   });
 
-  it("the Claude model catalog fetched by the launcher reaches the overlay and the next start", async () => {
+  it("a CLI agent's model catalog fetched by the launcher reaches the overlay and the next start", async () => {
     const launcher = await openWindow();
     const overlay = await openWindow();
-    expect(overlay.getState().claudeModels).toBeNull();
+    expect(overlay.getState().cliAgentModels).toEqual({});
     const catalog = [
       {
         value: "haiku",
@@ -74,10 +74,10 @@ describe("configStore: active LLM across windows", () => {
         effort_levels: [],
       },
     ];
-    launcher.getState().setClaudeModels(catalog);
-    await vi.waitFor(() => expect(overlay.getState().claudeModels).toEqual(catalog));
+    launcher.getState().setCliAgentModels("codex_cli", catalog);
+    await vi.waitFor(() => expect(overlay.getState().cliAgentModels).toEqual({ codex_cli: catalog }));
     const nextStart = await openWindow();
-    expect(nextStart.getState().claudeModels).toEqual(catalog);
+    expect(nextStart.getState().cliAgentModels).toEqual({ codex_cli: catalog });
   });
 
   it("the transcript scope picked in the overlay reaches the launcher and the next start", async () => {

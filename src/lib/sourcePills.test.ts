@@ -20,6 +20,11 @@ describe("pillState", () => {
   it("pillState table", () => {
     expect(pillState("notes", { provider: "openai", enabled: true, on: true })).toBe("hidden");
     expect(pillState("notes", { provider: "claude_cli", enabled: false, on: true })).toBe("hidden");
+    // Every subscription CLI agent has the pills; only API providers hide them.
+    for (const provider of ["claude_cli", "antigravity_cli", "codex_cli"]) {
+      expect(pillState("notes", { provider, enabled: true, on: true })).toBe("on");
+      expect(pillState("tools", { provider, enabled: true, on: false })).toBe("off");
+    }
     expect(pillState("tools", { provider: "claude_cli", enabled: true, on: false })).toBe("off");
     expect(pillState("tools", { provider: "claude_cli", enabled: true, on: true })).toBe("on");
     expect(

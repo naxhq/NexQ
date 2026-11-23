@@ -367,7 +367,11 @@ pub async fn test_rag_answer(
         let router = llm_arc.lock().map_err(|e| e.to_string())?;
         let model_name = llm_model.clone()
             .unwrap_or_else(|| router.active_model().to_string());
-        if model_name.is_empty() {
+        let model_ok = match &temp_provider {
+            Some(_) => !model_name.is_empty(),
+            None => crate::commands::intelligence_commands::model_ready(&model_name, router.active_provider_type()),
+        };
+        if !model_ok {
             return Err("No active model selected — configure one in LLM settings".to_string());
         }
         match temp_provider {

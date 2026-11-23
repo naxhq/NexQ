@@ -32,6 +32,7 @@ import { BookmarksTab } from "./BookmarksTab";
 import { AskMeetingTab } from "./AskMeetingTab";
 import { AudioPlayer, AudioPlayerSkeleton } from "../../components/AudioPlayer";
 import { Loader2 } from "lucide-react";
+import { isCliAgent } from "../../lib/cliAgents";
 
 interface MeetingDetailsProps {
   meetingId: string;
@@ -136,7 +137,7 @@ export function MeetingDetails({ meetingId, onBack }: MeetingDetailsProps) {
   // True while this view's summary / action items / bookmark generation runs.
   const aiBusyRef = useRef(false);
   useEffect(() => {
-    if (isDemoActive || isActiveMeeting || llmProvider !== "claude_cli") return;
+    if (isDemoActive || isActiveMeeting || !isCliAgent(llmProvider)) return;
     startPastMeetingSession(meetingId).catch((err) =>
       console.warn("[MeetingDetails] Claude session did not start:", err)
     );
@@ -261,7 +262,7 @@ export function MeetingDetails({ meetingId, onBack }: MeetingDetailsProps) {
   const showAsk = !isDemoActive && !isActiveMeeting;
   const meetingChat = useMeetingChat(meetingId, {
     enabled: showAsk,
-    trackSession: showAsk && llmProvider === "claude_cli",
+    trackSession: showAsk && isCliAgent(llmProvider),
   });
   const chatExchanges = useMemo(() => answeredExchanges(meetingChat.items), [meetingChat.items]);
   const otherAiBusy =

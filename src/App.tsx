@@ -20,7 +20,7 @@ import { useTraySync } from "./hooks/useTraySync";
 import { useStealthCursor } from "./hooks/useStealthCursor";
 import { useUpdater } from "./hooks/useUpdater";
 import { useAgentFallbackToast } from "./hooks/useAgentFallbackToast";
-import { refreshClaudeModelsOnStart } from "./stores/agentStore";
+import { refreshCliModelsOnStart } from "./stores/agentStore";
 import { useTranslationStore } from "./stores/translationStore";
 import { CallLogPanel } from "./calllog";
 import { OverlayResizeHandles } from "./overlay/OverlayResizeHandles";
@@ -288,7 +288,7 @@ function App() {
   // Claude's model catalog: asked once per app start by the launcher (no
   // model call); the overlay gets it through the persisted config store.
   useEffect(() => {
-    if (configLoaded && windowLabel === "launcher") refreshClaudeModelsOnStart();
+    if (configLoaded && windowLabel === "launcher") refreshCliModelsOnStart();
   }, [configLoaded, windowLabel]);
 
   const previousView = useMeetingStore((s) => s.previousView);

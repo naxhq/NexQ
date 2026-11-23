@@ -310,10 +310,10 @@ pub(crate) fn request_route(state: &AppState, mode: &str, scope: &SessionScope, 
     let Some(active) = active else {
         return Route::Stateless;
     };
-    let cfg = state
-        .claude_cli_config
-        .read()
-        .map(|c| c.clone())
+    // The configuration of the CLI agent that is active (none for other providers).
+    let cfg = active
+        .cli_agent_kind()
+        .map(|kind| state.cli_settings.config(kind))
         .unwrap_or_default();
     choose_route(&active, state.claude_health.get(), scope, mode, &cfg, with_sources)
 }
@@ -361,7 +361,7 @@ pub(crate) fn sources_failure_notice(reason: &str) -> SourceActivity {
 /// meeting open to hold a Claude session. It names no cause because this path
 /// can't tell which one it was.
 pub(crate) fn sources_unavailable_notice() -> SourceActivity {
-    notice("Your sources weren't used for this answer. They only work in a Claude subscription session for a meeting.")
+    notice("Your sources weren't used for this answer. They only work in a meeting with a subscription provider (Claude, Antigravity or Codex).")
 }
 
 /// Does `err`, from a with-sources session, mean its sources could not start
@@ -379,8 +379,9 @@ pub(crate) fn is_sources_start_failure(err: &AgentError) -> bool {
 }
 
 /// Why a request with images can't be answered statelessly: another provider
-/// is active (it can't take images), or it is Claude but its session isn't
-/// available for this request (outage, fallback, meeting too long).
+/// is active (it can't take images; of the CLI agents only Claude does), or it
+/// is Claude but its session isn't available for this request (outage,
+/// fallback, meeting too long).
 pub(crate) fn images_refusal(active: Option<&ProviderType>) -> &'static str {
     if active == Some(&ProviderType::ClaudeCli) {
         "Claude can't read images right now. Try again in a moment, or remove the image and ask again."
@@ -406,10 +407,10 @@ async fn resolve_fallback(
             .and_then(|c| c.get_key(&config.provider_type).ok().flatten());
     }
     let configured = state
-        .claude_cli_config
-        .read()
-        .ok()
-        .and_then(|c| c.fallback_model.clone())
+        .cli_settings
+        .active_config()
+        .fallback_model
+        .clone()
         .filter(|m| !m.trim().is_empty());
     let cache_key = (config.provider_type.clone(), configured.clone(), config.api_key.clone());
     if let Some(cached) = state.claude_fallback.lock().ok().and_then(|slot| {
@@ -634,7 +635,7 @@ pub(crate) async fn session_assist(state: &AppState, app: &AppHandle, req: Sessi
             StreamStartPayload {
                 mode: mode.to_string(),
                 model: model.to_string(),
-                provider: ProviderType::ClaudeCli.display_name().to_string(),
+                provider: state.cli_settings.active().display_name().to_string(),
                 system_prompt: record.system_prompt.clone(),
                 user_prompt: prompt.to_string(),
                 include_transcript: new_count > 0,
@@ -795,7 +796,8 @@ pub(crate) fn route_after_outage(
     reason: &str,
     params: &GenerationParams,
 ) -> Result<Route, String> {
-    log::warn!("Claude unavailable ({reason}); falling back");
+    let agent = state.cli_settings.active().display_name().trim_end_matches(" (subscription)");
+    log::warn!("{agent} unavailable ({reason}); falling back");
     state.claude_health.mark_unavailable(kind);
     match request_route(state, mode, scope, false) {
         fallback @ Route::Fallback(_) => Ok(fallback),
@@ -811,11 +813,17 @@ pub(crate) fn route_after_outage(
                     },
                 );
             }
-            let message = format!("Claude unavailable ({}): {}", routing::reason_label(kind), reason);
+            let message = format!("{agent} unavailable ({}): {}", routing::reason_label(kind), reason);
             emit_error(app, params, &message);
             Err(message)
         }
     }
+}
+
+/// A model name is needed unless the active provider is a CLI agent: those
+/// resolve their own default (Codex saves "" for "first listed").
+pub(crate) fn model_ready(model: &str, provider: Option<&ProviderType>) -> bool {
+    !model.is_empty() || provider.is_some_and(|p| p.is_cli_agent())
 }
 
 /// The provider for today's full-prompt path, with its model, display name
@@ -865,7 +873,7 @@ pub(crate) async fn stateless_provider(
                 .map_err(|e| format!("No active LLM provider: {}", e))?;
 
             let model_name = router.active_model().to_string();
-            if model_name.is_empty() {
+            if !model_ready(&model_name, router.active_provider_type()) {
                 return Err("No active model selected".to_string());
             }
 
@@ -988,6 +996,11 @@ pub async fn generate_assist(
     // `sources` at all means automatic: Auto-Answer, summaries, background tasks).
     let with_sources = request_with_sources(&state, &mode, &scope, sources);
     let mut route = request_route(&state, &mode, &scope, with_sources);
+    // Only a Claude session carries images: the other CLI agents' requests with
+    // images take the stateless path, which says so.
+    if !images.is_empty() && matches!(route, Route::ClaudeSession(_)) && !state.cli_settings.active().supports_images() {
+        route = Route::Stateless;
+    }
 
     if let Route::ClaudeSession(key) = &route {
         // The action's own prompt (or the mode template) and presets travel in
@@ -1497,6 +1510,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_empty_model_is_only_ready_for_a_cli_agent() {
+        assert!(model_ready("gpt-4o", Some(&ProviderType::Openai)));
+        assert!(!model_ready("", Some(&ProviderType::Openai)));
+        assert!(!model_ready("", None));
+        assert!(model_ready("", Some(&ProviderType::CodexCli)));
+        assert!(model_ready("", Some(&ProviderType::AntigravityCli)));
+    }
+
+    #[test]
     fn meeting_view_actions_default_to_whole_meeting() {
         assert_eq!(default_window_seconds("MeetingSummary", None, 300), 0);
         assert_eq!(default_window_seconds("ActionItemsExtraction", None, 300), 0);
@@ -1510,6 +1532,10 @@ mod tests {
         assert!(images_refusal(Some(&ProviderType::Openai)).starts_with("Images work only with Claude"));
         assert!(images_refusal(None).starts_with("Images work only with Claude"));
         assert!(images_refusal(Some(&ProviderType::ClaudeCli)).starts_with("Claude can't read images right now"));
+        // Antigravity and Codex sessions never take images: the Claude-only message.
+        for other in [ProviderType::AntigravityCli, ProviderType::CodexCli] {
+            assert!(images_refusal(Some(&other)).starts_with("Images work only with Claude"));
+        }
     }
 
     #[test]

@@ -16,23 +16,23 @@ vi.mock("@tauri-apps/plugin-store", () => ({
 vi.mock("@tauri-apps/plugin-shell", () => ({ open: vi.fn() }));
 
 const ipc = vi.hoisted(() => ({
-  claudeCliStatus: vi.fn(),
-  claudeCliModels: vi.fn(),
+  cliAgentStatus: vi.fn(),
+  cliAgentModels: vi.fn(),
   getAgentSessions: vi.fn(),
   setLLMProvider: vi.fn(),
   setActiveModel: vi.fn(),
-  setClaudeCliConfig: vi.fn(),
+  setCliAgentConfig: vi.fn(),
   storeApiKey: vi.fn(),
 }));
 
 vi.mock("../lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/ipc")>()),
-  claudeCliStatus: () => ipc.claudeCliStatus(),
-  claudeCliModels: (...a: unknown[]) => ipc.claudeCliModels(...a),
+  cliAgentStatus: (kind: string) => ipc.cliAgentStatus(kind),
+  cliAgentModels: (...a: unknown[]) => ipc.cliAgentModels(...a),
   getAgentSessions: () => ipc.getAgentSessions(),
   setLLMProvider: (...a: unknown[]) => ipc.setLLMProvider(...a),
   setActiveModel: (...a: unknown[]) => ipc.setActiveModel(...a),
-  setClaudeCliConfig: (...a: unknown[]) => ipc.setClaudeCliConfig(...a),
+  setCliAgentConfig: (...a: unknown[]) => ipc.setCliAgentConfig(...a),
   storeApiKey: (...a: unknown[]) => ipc.storeApiKey(...a),
   getApiKey: async () => null,
   hasApiKey: async () => false,
@@ -45,7 +45,7 @@ import { LLMSettings } from "./LLMSettings";
 import { ServiceStatusBar } from "../components/ServiceStatusBar";
 import { resetAgentStoreForTests } from "../stores/agentStore";
 import { useStreamStore } from "../stores/streamStore";
-import { DEFAULT_CLAUDE_CLI_CONFIG, useConfigStore } from "../stores/configStore";
+import { DEFAULT_CLI_AGENT_CONFIGS, useConfigStore } from "../stores/configStore";
 
 const LOGGED_IN: ClaudeCliStatus = {
   installed: true,
@@ -71,16 +71,16 @@ describe("Settings ↔ footer sync of the active LLM", () => {
       llmProvider: "ollama",
       llmModel: "llama3.2",
       lastModelByProvider: { ollama: "llama3.2" },
-      claudeCliConfig: DEFAULT_CLAUDE_CLI_CONFIG,
-      claudeCliFallbackPinned: false,
+      cliAgentConfigs: DEFAULT_CLI_AGENT_CONFIGS,
+      cliFallbackPinned: {},
       verifiedCloudProviders: [],
     });
-    ipc.claudeCliStatus.mockReset().mockResolvedValue(LOGGED_IN);
-    ipc.claudeCliModels.mockReset().mockResolvedValue([]);
+    ipc.cliAgentStatus.mockReset().mockResolvedValue(LOGGED_IN);
+    ipc.cliAgentModels.mockReset().mockResolvedValue([]);
     ipc.getAgentSessions.mockReset().mockResolvedValue([]);
     ipc.setLLMProvider.mockReset().mockResolvedValue(undefined);
     ipc.setActiveModel.mockReset().mockResolvedValue(undefined);
-    ipc.setClaudeCliConfig.mockReset().mockResolvedValue(undefined);
+    ipc.setCliAgentConfig.mockReset().mockResolvedValue(undefined);
     ipc.storeApiKey.mockReset().mockResolvedValue(undefined);
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });

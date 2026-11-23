@@ -1,0 +1,12 @@
+{
+  "id": 1,
+  "method": "item/fileChange/requestApproval",
+  "params": {
+    "threadId": "th1",
+    "turnId": "tu1",
+    "itemId": "fc1",
+    "startedAtMs": 1,
+    "reason": "write notes",
+    "grantRoot": null
+  }
+}

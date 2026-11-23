@@ -12,6 +12,7 @@ import type {
 } from "../lib/types";
 import { setPersonalSources } from "../lib/ipc";
 import { useConfigStore } from "./configStore";
+import { isCliAgent } from "../lib/cliAgents";
 
 // Same plugin-store file as `configStore`, so the launcher and the overlay see
 // each other's changes through `onKeyChange`.
@@ -331,13 +332,13 @@ export const useSourcesStore = create<SourcesState>((set, get) => ({
 
 /**
  * The pills as they are right now, for a request the user makes. `undefined`
- * off the Claude subscription, or with no source set up at all (nothing to
+ * off the CLI agents, or with no source set up at all (nothing to
  * send, so nobody who never set sources up sends anything new); otherwise each
  * pill that is on and has a source behind it. Both off still goes out when
  * sources exist: Shorten and FollowUp follow the answer they work on.
  */
 export function requestToggles(): SourceToggles | undefined {
-  if (useConfigStore.getState().llmProvider !== "claude_cli") return undefined;
+  if (!isCliAgent(useConfigStore.getState().llmProvider)) return undefined;
   const { config, toggles } = useSourcesStore.getState();
   const kinds = enabledKinds(config);
   if (!kinds.notes && !kinds.tools) return undefined;

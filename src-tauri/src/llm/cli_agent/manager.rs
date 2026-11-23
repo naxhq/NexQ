@@ -1,5 +1,10 @@
-//! `AgentSessionManager`: the Claude CLI sessions NexQ keeps open, keyed by
-//! meeting scope and model tier.
+//! `AgentSessionManager`: the CLI agent sessions NexQ keeps open (Claude,
+//! Antigravity or Codex: whichever provider is active), keyed by meeting
+//! scope and model tier.
+//!
+//! One kind is active at a time (`CliSettings::active`). Switching it closes
+//! the sessions of the other kind (`close_other_kinds`; `ensure` also refuses
+//! to reuse one), so a meeting never answers from two agents at once.
 //!
 //! - Lazy start: `ensure` spawns (once per key, even under concurrent calls)
 //!   and preloads a session, and restarts one that died.
@@ -16,16 +21,16 @@
 
 use super::command::{SessionConfig, SourcesLaunch};
 use super::context::DeltaCursor;
-use super::detect::find_claude_binary;
-use super::models::{effective_effort, ModelCatalog};
 use super::protocol::{AgentErrorKind, ImageAttachment, TurnResult};
-use super::session::{failed_mcp_servers, AgentError, ClaudeSession, InitInfo, SessionTimeouts};
+use super::session::{failed_mcp_servers, AgentError, ClaudeSession, InitInfo};
+use super::settings::CliSettings;
+use super::CliAgentKind;
 use crate::llm::provider::CancelToken;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
@@ -111,7 +116,9 @@ impl SessionKey {
     }
 }
 
-/// Claude CLI model settings (persisted by the settings UI).
+/// One CLI agent's model settings (persisted by the settings UI; one per
+/// [`CliAgentKind`], see `settings.rs` for the defaults). Named for Claude,
+/// where it started: the saved Claude config keeps loading unchanged.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ClaudeCliConfig {
@@ -124,7 +131,7 @@ pub struct ClaudeCliConfig {
     pub fast_thinking: bool,
     /// Extended thinking on the Deep tier.
     pub deep_thinking: bool,
-    /// Provider id used when Claude is unavailable; `None` = no fallback.
+    /// Provider id used when this CLI is unavailable; `None` = no fallback.
     pub fallback_provider: Option<String>,
     /// Model used on the fallback provider; `None` = its first listed model.
     pub fallback_model: Option<String>,
@@ -278,8 +285,8 @@ pub struct SessionInit {
 /// higher-ranked `&str` lifetime alone.
 pub type OnDelta = Box<dyn Fn(&str) + Send + Sync>;
 
-/// What the manager needs from a running session ([`ClaudeSession`] in the
-/// app, fakes in tests).
+/// What the manager needs from a running session ([`ClaudeSession`],
+/// `AcpSession` or `CodexSession` in the app, fakes in tests).
 #[async_trait]
 pub trait SessionHandle: Send + Sync {
     async fn append_context(&self, text: &str) -> Result<(), AgentError>;
@@ -301,7 +308,7 @@ pub trait SessionHandle: Send + Sync {
         if !images.is_empty() {
             return Err(AgentError::Cli(
                 AgentErrorKind::Other,
-                "This Claude session can't take images".to_string(),
+                "This session can't take images".to_string(),
             ));
         }
         self.ask(prompt, on_delta, cancel).await
@@ -358,33 +365,11 @@ impl SessionHandle for ClaudeSession {
     }
 }
 
-/// Starts sessions for the manager.
+/// Starts sessions for the manager. The app's is `spawner::CliSpawner`, which
+/// dispatches on [`SessionConfig::kind`].
 #[async_trait]
 pub trait SessionSpawner: Send + Sync {
     async fn spawn(&self, cfg: SessionConfig) -> Result<Arc<dyn SessionHandle>, AgentError>;
-}
-
-/// Spawns real `claude.exe` sessions (binary resolved on every spawn, so a
-/// fresh install is picked up without restarting NexQ).
-pub struct ClaudeSpawner;
-
-#[async_trait]
-impl SessionSpawner for ClaudeSpawner {
-    async fn spawn(&self, cfg: SessionConfig) -> Result<Arc<dyn SessionHandle>, AgentError> {
-        let bin = tokio::task::spawn_blocking(find_claude_binary)
-            .await
-            .ok()
-            .flatten()
-            .ok_or_else(|| {
-                AgentError::Spawn("Claude CLI not installed: claude.exe not found".into())
-            })?;
-        let timeouts = if cfg.sources.is_some() {
-            SessionTimeouts { init: SOURCES_INIT_TIMEOUT, ..SessionTimeouts::default() }
-        } else {
-            SessionTimeouts::default()
-        };
-        Ok(Arc::new(ClaudeSession::spawn_with_timeouts(bin, cfg, timeouts).await?))
-    }
 }
 
 /// Receives every session status transition.
@@ -434,6 +419,8 @@ impl SessionState {
 
 struct Entry {
     handle: Arc<dyn SessionHandle>,
+    /// The CLI agent the session was started for.
+    kind: CliAgentKind,
     state: SessionState,
     error: Option<TurnError>,
     last_used: Instant,
@@ -448,9 +435,9 @@ struct Entry {
 pub struct AgentSessionManager {
     spawner: Arc<dyn SessionSpawner>,
     sink: Arc<dyn StatusSink>,
-    config: Arc<RwLock<ClaudeCliConfig>>,
-    /// Which efforts each model accepts (`--effort` is clamped to it).
-    catalog: Arc<ModelCatalog>,
+    /// Per-kind configuration and catalogs (efforts are clamped to the
+    /// catalog of the kind), and which kind is active.
+    settings: Arc<CliSettings>,
     entries: Mutex<HashMap<SessionKey, Entry>>,
     /// Serializes spawning per key so concurrent `ensure`s start one session.
     spawn_locks: Mutex<HashMap<SessionKey, Arc<AsyncMutex<()>>>>,
@@ -463,13 +450,12 @@ impl AgentSessionManager {
     pub fn new(
         spawner: Arc<dyn SessionSpawner>,
         sink: Arc<dyn StatusSink>,
-        config: Arc<RwLock<ClaudeCliConfig>>,
+        settings: Arc<CliSettings>,
     ) -> Self {
         Self {
             spawner,
             sink,
-            config,
-            catalog: Arc::new(ModelCatalog::default()),
+            settings,
             entries: Mutex::new(HashMap::new()),
             spawn_locks: Mutex::new(HashMap::new()),
             cursors: Mutex::new(HashMap::new()),
@@ -478,12 +464,9 @@ impl AgentSessionManager {
         }
     }
 
-    /// Clamp `--effort` to what each model accepts, per `catalog` (the app
-    /// passes the catalog the CLI reported). Without one the saved effort is
-    /// passed as is.
-    pub fn with_catalog(mut self, catalog: Arc<ModelCatalog>) -> Self {
-        self.catalog = catalog;
-        self
+    /// The settings the manager reads (configuration, catalogs, active kind).
+    pub fn settings(&self) -> &Arc<CliSettings> {
+        &self.settings
     }
 
     /// The running session for `key`, spawning it (with `init`) if there is
@@ -500,10 +483,11 @@ impl AgentSessionManager {
             return Err(shut_down_error());
         }
 
+        let mut kind = self.settings.active();
         let stale = {
             let mut entries = self.entries.lock().unwrap();
             match entries.get_mut(key) {
-                Some(entry) if entry.handle.is_alive() && !restart_after_error(key, entry) => {
+                Some(entry) if entry.kind == kind && entry.handle.is_alive() && !restart_after_error(key, entry) => {
                     entry.last_used = Instant::now();
                     return Ok(entry.handle.clone());
                 }
@@ -515,70 +499,95 @@ impl AgentSessionManager {
             dead.handle.close().await;
         }
 
-        let (model, effort, thinking) = {
-            let cfg = self.config.read().unwrap();
-            let (m, e) = cfg.model_for(key.tier);
-            (
-                m.to_string(),
-                effective_effort(self.catalog.find(m).as_ref(), e),
-                cfg.thinking_for(key.tier),
-            )
-        };
-        self.emit(key, SessionState::Starting, &model, None);
-        let cfg = SessionConfig {
-            model: model.clone(),
-            effort,
-            system_prompt: init.system_prompt,
-            thinking,
-            sources: if key.with_sources { init.sources.clone() } else { None },
-        };
-        let handle = match self.spawner.spawn(cfg).await {
-            Ok(handle) => handle,
-            Err(e) => {
-                self.emit(key, SessionState::Error, &model, Some(TurnError::of(&e)));
-                return Err(e);
+        // The provider can change while a session starts: one of the old kind
+        // is then closed instead of kept, and the new kind is started.
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            let (model, effort, thinking) = {
+                let cfg = self.settings.config(kind);
+                let (m, e) = cfg.model_for(key.tier);
+                let resolved = self.settings.resolve(kind, m, e);
+                // The thinking toggle is Claude's alone.
+                let thinking = kind.supports_thinking_toggle() && cfg.thinking_for(key.tier);
+                (resolved.model, resolved.effort, thinking)
+            };
+            self.emit(key, SessionState::Starting, &model, None);
+            let cfg = SessionConfig {
+                kind,
+                model: model.clone(),
+                effort,
+                system_prompt: init.system_prompt.clone(),
+                thinking,
+                sources: if key.with_sources { init.sources.clone() } else { None },
+            };
+            let handle = match self.spawner.spawn(cfg).await {
+                Ok(handle) => handle,
+                Err(e) => {
+                    self.emit(key, SessionState::Error, &model, Some(TurnError::of(&e)));
+                    return Err(e);
+                }
+            };
+            for message in &init.preload {
+                if let Err(e) = handle.append_context(message).await {
+                    handle.close().await;
+                    self.emit(key, SessionState::Error, &model, Some(TurnError::of(&e)));
+                    return Err(e);
+                }
             }
-        };
-        for message in &init.preload {
-            if let Err(e) = handle.append_context(message).await {
+            // `close_all` ran while this session was starting: don't leak it.
+            if self.shutting_down.load(Ordering::SeqCst) {
                 handle.close().await;
-                self.emit(key, SessionState::Error, &model, Some(TurnError::of(&e)));
-                return Err(e);
+                self.emit(key, SessionState::Closed, &model, None);
+                return Err(shut_down_error());
             }
-        }
-        // `close_all` ran while this session was starting: don't leak it.
-        if self.shutting_down.load(Ordering::SeqCst) {
+
+            let sources_notice = match (&init.sources, key.with_sources) {
+                (Some(launch), true) => crate::sources::activity::sources_degraded_notice(
+                    &launch.server_labels,
+                    &failed_mcp_servers(&handle.init_info()),
+                    &launch.left_out,
+                ),
+                _ => None,
+            };
+            // Check the kind and insert under one lock: a switch after this
+            // point runs `close_other_kinds`, which then finds the entry.
+            let inserted = {
+                let mut entries = self.entries.lock().unwrap();
+                if self.settings.active() == kind {
+                    self.cursors.lock().unwrap().insert(
+                        key.clone(),
+                        Arc::new(AsyncMutex::new(DeltaCursor::default())),
+                    );
+                    entries.insert(
+                        key.clone(),
+                        Entry {
+                            handle: handle.clone(),
+                            kind,
+                            state: SessionState::Ready,
+                            error: None,
+                            last_used: Instant::now(),
+                            in_flight: 0,
+                            turns: 0,
+                            sources_notice,
+                        },
+                    );
+                    true
+                } else {
+                    false
+                }
+            };
+            if inserted {
+                self.emit(key, SessionState::Ready, &handle.model(), None);
+                return Ok(handle);
+            }
             handle.close().await;
             self.emit(key, SessionState::Closed, &model, None);
-            return Err(shut_down_error());
+            kind = self.settings.active();
+            if attempts >= 3 {
+                return Err(AgentError::Crashed("the AI provider kept changing while a session started".into()));
+            }
         }
-
-        let sources_notice = match (&init.sources, key.with_sources) {
-            (Some(launch), true) => crate::sources::activity::sources_degraded_notice(
-                &launch.server_labels,
-                &failed_mcp_servers(&handle.init_info()),
-                &launch.left_out,
-            ),
-            _ => None,
-        };
-        self.cursors.lock().unwrap().insert(
-            key.clone(),
-            Arc::new(AsyncMutex::new(DeltaCursor::default())),
-        );
-        self.entries.lock().unwrap().insert(
-            key.clone(),
-            Entry {
-                handle: handle.clone(),
-                state: SessionState::Ready,
-                error: None,
-                last_used: Instant::now(),
-                in_flight: 0,
-                turns: 0,
-                sources_notice,
-            },
-        );
-        self.emit(key, SessionState::Ready, &handle.model(), None);
-        Ok(handle)
     }
 
     /// Ask on the session `ensure` started for `key`, reporting busy, then
@@ -607,7 +616,7 @@ impl AgentSessionManager {
         let handle = {
             let mut entries = self.entries.lock().unwrap();
             let entry = entries.get_mut(key).ok_or_else(|| {
-                AgentError::Crashed("no Claude session is running for this request".into())
+                AgentError::Crashed("no CLI agent session is running for this request".into())
             })?;
             entry.in_flight += 1;
             entry.last_used = Instant::now();
@@ -759,6 +768,44 @@ impl AgentSessionManager {
         Ok(true)
     }
 
+    /// Close the sessions started for a kind other than the active one (the
+    /// user switched provider). Sessions of the active kind stay. Returns how
+    /// many were closed.
+    ///
+    /// Each key is closed under its spawn lock, so the old session's `closed`
+    /// is always reported before a replacement for the same key starts (a late
+    /// `closed` would otherwise erase the replacement's status).
+    pub async fn close_other_kinds(&self) -> usize {
+        let keys: Vec<SessionKey> = {
+            let active = self.settings.active();
+            let entries = self.entries.lock().unwrap();
+            entries.iter().filter(|(_, e)| e.kind != active).map(|(k, _)| k.clone()).collect()
+        };
+        let closes = keys.into_iter().map(|key| async move {
+            let lock = self.spawn_lock(&key);
+            let _spawning = lock.lock().await;
+            let removed = {
+                let active = self.settings.active();
+                let mut entries = self.entries.lock().unwrap();
+                match entries.get(&key) {
+                    Some(e) if e.kind != active => {
+                        self.cursors.lock().unwrap().remove(&key);
+                        entries.remove(&key)
+                    }
+                    _ => None,
+                }
+            };
+            match removed {
+                Some(entry) => {
+                    self.close_removed(&key, entry).await;
+                    1
+                }
+                None => 0,
+            }
+        });
+        futures::future::join_all(closes).await.into_iter().sum()
+    }
+
     /// Close every session (app exit). Sessions still starting are closed as
     /// soon as they come up, and no new session starts afterwards.
     pub async fn close_all(&self) {
@@ -793,7 +840,7 @@ impl AgentSessionManager {
                 .collect()
         };
         for (key, entry) in stale {
-            log::info!("closing idle Claude session for {:?}", key.scope);
+            log::info!("closing idle {} session for {:?}", entry.kind.short_name(), key.scope);
             self.close_removed(&key, entry).await;
         }
     }
@@ -980,6 +1027,7 @@ fn shut_down_error() -> AgentError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm::cli_agent::session::SessionTimeouts;
     use std::sync::atomic::AtomicUsize;
 
     struct FakeSession {
@@ -1070,6 +1118,8 @@ mod tests {
         calls: AtomicUsize,
         /// Refuse to start a with-sources session.
         fail_sources: AtomicBool,
+        /// Switch the active kind while the next session starts.
+        switch_during_spawn: Mutex<Option<(Arc<CliSettings>, CliAgentKind)>>,
     }
 
     #[async_trait]
@@ -1077,6 +1127,9 @@ mod tests {
         async fn spawn(&self, cfg: SessionConfig) -> Result<Arc<dyn SessionHandle>, AgentError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             tokio::task::yield_now().await;
+            if let Some((settings, kind)) = self.switch_during_spawn.lock().unwrap().take() {
+                settings.set_active(kind);
+            }
             if cfg.sources.is_some() && self.fail_sources.load(Ordering::SeqCst) {
                 return Err(AgentError::Spawn("MCP server mira failed to start".into()));
             }
@@ -1114,11 +1167,7 @@ mod tests {
     fn setup() -> (AgentSessionManager, Arc<FakeSpawner>, Arc<RecordingSink>) {
         let spawner = Arc::new(FakeSpawner::default());
         let sink = Arc::new(RecordingSink::default());
-        let mgr = AgentSessionManager::new(
-            spawner.clone(),
-            sink.clone(),
-            Arc::new(RwLock::new(ClaudeCliConfig::default())),
-        );
+        let mgr = AgentSessionManager::new(spawner.clone(), sink.clone(), Arc::new(CliSettings::isolated()));
         (mgr, spawner, sink)
     }
 
@@ -1182,7 +1231,7 @@ mod tests {
     async fn ensure_passes_each_tiers_thinking_setting() {
         let spawner = Arc::new(FakeSpawner::default());
         let cfg = ClaudeCliConfig { fast_thinking: true, deep_thinking: false, ..Default::default() };
-        let mgr = AgentSessionManager::new(spawner.clone(), Arc::new(NoopStatusSink), Arc::new(RwLock::new(cfg)));
+        let mgr = AgentSessionManager::new(spawner.clone(), Arc::new(NoopStatusSink), CliSettings::isolated_with(cfg));
         mgr.ensure(&key(SessionScope::Utility, Tier::Fast), init(&[])).await.unwrap();
         mgr.ensure(&key(SessionScope::Past("m".into()), Tier::Deep), init(&[])).await.unwrap();
         let thinking: Vec<bool> = spawner.spawned.lock().unwrap().iter().map(|(c, _)| c.thinking).collect();
@@ -1192,7 +1241,6 @@ mod tests {
     #[tokio::test]
     async fn ensure_clamps_effort_to_the_model_catalog() {
         let spawner = Arc::new(FakeSpawner::default());
-        let catalog = Arc::new(ModelCatalog::default());
         let info = |value: &str, levels: &[&str]| crate::llm::cli_agent::models::ClaudeModelInfo {
             value: value.into(),
             resolved_model: value.into(),
@@ -1200,22 +1248,19 @@ mod tests {
             description: String::new(),
             supports_effort: !levels.is_empty(),
             effort_levels: levels.iter().map(|s| s.to_string()).collect(),
+            default_effort: None,
         };
-        catalog.set(vec![
-            info("haiku", &[]),
-            info("claude-opus-4-6", &["low", "medium", "high", "max"]),
-        ]);
         let cfg = ClaudeCliConfig {
             deep_model: "claude-opus-4-6".into(),
             deep_effort: "xhigh".into(),
             ..ClaudeCliConfig::default()
         };
-        let mgr = AgentSessionManager::new(
-            spawner.clone(),
-            Arc::new(NoopStatusSink),
-            Arc::new(RwLock::new(cfg)),
-        )
-        .with_catalog(catalog);
+        let settings = CliSettings::isolated_with(cfg);
+        settings.catalog(CliAgentKind::Claude).set(vec![
+            info("haiku", &[]),
+            info("claude-opus-4-6", &["low", "medium", "high", "max"]),
+        ]);
+        let mgr = AgentSessionManager::new(spawner.clone(), Arc::new(NoopStatusSink), settings);
         mgr.ensure(&key(SessionScope::Utility, Tier::Fast), init(&[])).await.unwrap();
         mgr.ensure(&key(SessionScope::Past("m".into()), Tier::Deep), init(&[])).await.unwrap();
         let spawned = spawner.spawned.lock().unwrap();
@@ -1223,6 +1268,159 @@ mod tests {
         assert_eq!((spawned[0].0.model.as_str(), spawned[0].0.effort.as_deref()), ("haiku", None));
         // xhigh isn't offered by this model: the closest lower level is used.
         assert_eq!(spawned[1].0.effort.as_deref(), Some("high"));
+    }
+
+    fn catalog_entry(value: &str, levels: &[&str]) -> crate::llm::cli_agent::models::ClaudeModelInfo {
+        crate::llm::cli_agent::models::ClaudeModelInfo {
+            value: value.into(),
+            resolved_model: value.into(),
+            display_name: value.into(),
+            description: String::new(),
+            supports_effort: !levels.is_empty(),
+            effort_levels: levels.iter().map(|s| s.to_string()).collect(),
+            default_effort: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn the_active_kind_decides_what_is_spawned_and_with_which_model() {
+        let spawner = Arc::new(FakeSpawner::default());
+        let settings = Arc::new(CliSettings::isolated());
+        settings.catalog(CliAgentKind::Codex).set(vec![
+            catalog_entry("gpt-6.2-sol", &["low", "medium", "high", "xhigh", "max", "ultra"]),
+            catalog_entry("gpt-6-luna", &["low", "medium"]),
+        ]);
+        settings.catalog(CliAgentKind::Antigravity).set(vec![
+            catalog_entry("gemini-4-neon-high", &[]),
+            catalog_entry("gemini-3.8-flash-low", &[]),
+        ]);
+        let mgr = AgentSessionManager::new(spawner.clone(), Arc::new(NoopStatusSink), settings.clone());
+
+        // Codex: Fast and Deep are the first listed model at low and medium effort.
+        settings.set_active(CliAgentKind::Codex);
+        mgr.ensure(&key(SessionScope::Utility, Tier::Fast), init(&[])).await.unwrap();
+        mgr.ensure(&key(SessionScope::Past("m".into()), Tier::Deep), init(&[])).await.unwrap();
+        // Antigravity: Fast is listed, Deep (`gemini-4-neon-medium`) is not, so the first listed
+        // one; no effort, no thinking toggle.
+        settings.set_active(CliAgentKind::Antigravity);
+        mgr.ensure(&key(SessionScope::Live("l".into()), Tier::Fast), init(&[])).await.unwrap();
+        mgr.ensure(&key(SessionScope::Live("l2".into()), Tier::Deep), init(&[])).await.unwrap();
+        let spawned = spawner.spawned.lock().unwrap();
+        let seen: Vec<_> = spawned
+            .iter()
+            .map(|(c, _)| (c.kind, c.model.as_str(), c.effort.as_deref(), c.thinking))
+            .collect();
+        assert_eq!(
+            seen,
+            vec![
+                (CliAgentKind::Codex, "gpt-6.2-sol", Some("low"), false),
+                (CliAgentKind::Codex, "gpt-6.2-sol", Some("medium"), false),
+                (CliAgentKind::Antigravity, "gemini-3.8-flash-low", None, false),
+                (CliAgentKind::Antigravity, "gemini-4-neon-high", None, false),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn claude_keeps_its_thinking_toggle_and_the_others_ignore_it() {
+        let spawner = Arc::new(FakeSpawner::default());
+        let settings = Arc::new(CliSettings::isolated());
+        for kind in CliAgentKind::ALL {
+            let mut cfg = ClaudeCliConfig::default_for(kind);
+            cfg.fast_thinking = true;
+            settings.set_config(kind, cfg);
+        }
+        let mgr = AgentSessionManager::new(spawner.clone(), Arc::new(NoopStatusSink), settings.clone());
+        for (i, kind) in CliAgentKind::ALL.into_iter().enumerate() {
+            settings.set_active(kind);
+            mgr.ensure(&key(SessionScope::Live(format!("m{i}")), Tier::Fast), init(&[])).await.unwrap();
+        }
+        let thinking: Vec<(CliAgentKind, bool)> =
+            spawner.spawned.lock().unwrap().iter().map(|(c, _)| (c.kind, c.thinking)).collect();
+        assert_eq!(
+            thinking,
+            vec![(CliAgentKind::Claude, true), (CliAgentKind::Antigravity, false), (CliAgentKind::Codex, false)]
+        );
+    }
+
+    #[tokio::test]
+    async fn switching_the_active_kind_replaces_the_sessions_of_the_other_kind() {
+        let (mgr, spawner, sink) = setup();
+        let settings = mgr.settings().clone();
+        let k = key(SessionScope::Live("m1".into()), Tier::Fast);
+        let first = mgr.ensure(&k, init(&[])).await.unwrap();
+        // Same kind: the session is reused.
+        let again = mgr.ensure(&k, init(&[])).await.unwrap();
+        assert!(same_session(&first, &again));
+        assert_eq!(spawner.calls.load(Ordering::SeqCst), 1);
+
+        // Another kind became active: the old session is closed on request...
+        assert!(settings.set_active(CliAgentKind::Codex));
+        assert_eq!(mgr.close_other_kinds().await, 1);
+        assert!(!first.is_alive());
+        assert!(mgr.snapshot().is_empty());
+        assert!(sink.states().last().is_some_and(|s| s == "closed"));
+        // ...and nothing of the active kind is touched.
+        let fresh = mgr.ensure(&k, init(&[])).await.unwrap();
+        assert!(!same_session(&first, &fresh));
+        assert_eq!(mgr.close_other_kinds().await, 0);
+        assert!(fresh.is_alive());
+        assert_eq!(spawner.spawned.lock().unwrap().last().unwrap().0.kind, CliAgentKind::Codex);
+    }
+
+    #[tokio::test]
+    async fn a_switch_while_a_session_starts_closes_it_and_starts_the_new_kind() {
+        let (mgr, spawner, sink) = setup();
+        let settings = mgr.settings().clone();
+        let start = settings.active();
+        *spawner.switch_during_spawn.lock().unwrap() = Some((settings.clone(), CliAgentKind::Codex));
+        let k = key(SessionScope::Live("m1".into()), Tier::Fast);
+        let handle = mgr.ensure(&k, init(&[])).await.unwrap();
+        let spawned = spawner.spawned.lock().unwrap();
+        assert_eq!(spawned.len(), 2);
+        assert_eq!(spawned[0].0.kind, start);
+        assert!(spawned[0].1.closed.load(Ordering::SeqCst), "the old kind's session is closed, never kept");
+        assert_eq!(spawned[1].0.kind, CliAgentKind::Codex);
+        assert!(handle.is_alive());
+        drop(spawned);
+        // Nothing of the old kind is left for shared context to reach.
+        assert_eq!(mgr.close_other_kinds().await, 0);
+        assert!(mgr.append_if_running(&k, "ctx").await.unwrap());
+        assert_eq!(sink.states().last().map(String::as_str), Some("ready"));
+    }
+
+    #[tokio::test]
+    async fn the_old_sessions_closed_is_reported_before_its_replacement_starts() {
+        let (mgr, _spawner, sink) = setup();
+        let mgr = Arc::new(mgr);
+        let k = key(SessionScope::Live("m1".into()), Tier::Fast);
+        mgr.ensure(&k, init(&[])).await.unwrap();
+        mgr.settings().set_active(CliAgentKind::Antigravity);
+        let (closer, starter) = (mgr.clone(), mgr.clone());
+        let k2 = k.clone();
+        let (closed, started) = tokio::join!(
+            async move { closer.close_other_kinds().await },
+            async move { starter.ensure(&k2, init(&[])).await }
+        );
+        assert!(closed <= 1);
+        assert!(started.unwrap().is_alive());
+        // Whatever the order, the last word on the key is the replacement's.
+        assert_eq!(sink.states().last().map(String::as_str), Some("ready"));
+        assert_eq!(mgr.snapshot().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn ensure_never_reuses_a_session_of_another_kind() {
+        let (mgr, spawner, _sink) = setup();
+        let k = key(SessionScope::Past("m1".into()), Tier::Deep);
+        let first = mgr.ensure(&k, init(&[])).await.unwrap();
+        // The switch was not announced to the manager (no `close_other_kinds`):
+        // `ensure` still starts a session for the active kind.
+        mgr.settings().set_active(CliAgentKind::Antigravity);
+        let second = mgr.ensure(&k, init(&[])).await.unwrap();
+        assert!(!same_session(&first, &second));
+        assert!(!first.is_alive(), "the old one is closed");
+        assert_eq!(spawner.calls.load(Ordering::SeqCst), 2);
     }
 
     #[test]

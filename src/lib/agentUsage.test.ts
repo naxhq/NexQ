@@ -9,6 +9,10 @@ import {
   formatUsageSummary,
   lastAnswerTooltip,
   promptTokens,
+  formatCostEstimate,
+  usageAttribution,
+  NEUTRAL_AGENT_LABEL,
+  isApiKeyLogin,
 } from "./agentUsage";
 
 describe("formatDuration", () => {
@@ -79,5 +83,34 @@ describe("usage formatting", () => {
   it("describes the last answer for the footer tooltip", () => {
     expect(lastAnswerTooltip(1_200, 600)).toBe("Last answer: 1.2 s total, first words after 600 ms");
     expect(lastAnswerTooltip(31_000, null)).toBe("Last answer: 31 s total");
+  });
+});
+
+describe("usageAttribution", () => {
+  const apiBilledStatus = {
+    installed: true,
+    binary_path: null,
+    version: null,
+    npm_only: false,
+    auth: { logged_in: true, auth_method: "api_key", subscription_type: null, email: null, login: "api_billed" as const },
+  };
+  const name = (p: string) => (p === "codex_cli" ? "Codex" : p);
+  const isAgent = (p: string) => p === "codex_cli" || p === "claude_cli";
+
+  it("names the active CLI agent and its billing", () => {
+    expect(usageAttribution("codex_cli", {}, name, isAgent)).toEqual({ label: "Codex", apiBilled: false });
+    expect(usageAttribution("claude_cli", { claude_cli: apiBilledStatus }, name, isAgent).apiBilled).toBe(true);
+  });
+
+  it("is neutral, with no billing claim, while an API provider is active", () => {
+    const r = usageAttribution("openai", { claude_cli: apiBilledStatus }, name, isAgent);
+    expect(r).toEqual({ label: NEUTRAL_AGENT_LABEL, apiBilled: null });
+    expect(formatCostEstimate({ ...EMPTY_USAGE, cost_usd: 0.5 }, r.apiBilled)).toBe("≈ $0.50 estimate");
+    expect(formatCostEstimate({ ...EMPTY_USAGE, cost_usd: 0.5 })).toContain("included in your subscription");
+  });
+
+  it("an API-key login is not logged in", () => {
+    expect(isApiKeyLogin({ ...apiBilledStatus, auth: { ...apiBilledStatus.auth, logged_in: false, login: "logged_out" } })).toBe(true);
+    expect(isApiKeyLogin(apiBilledStatus)).toBe(false);
   });
 });

@@ -1,0 +1,16 @@
+{
+  "method": "turn/completed",
+  "params": {
+    "threadId": "th1",
+    "turn": {
+      "id": "tu1",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "completed",
+      "error": null,
+      "startedAt": 1,
+      "completedAt": 2,
+      "durationMs": 1500
+    }
+  }
+}

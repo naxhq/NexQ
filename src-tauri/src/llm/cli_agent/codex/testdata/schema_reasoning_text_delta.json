@@ -1,0 +1,10 @@
+{
+  "method": "item/reasoning/textDelta",
+  "params": {
+    "threadId": "th1",
+    "turnId": "tu1",
+    "itemId": "it2",
+    "contentIndex": 0,
+    "delta": "..."
+  }
+}

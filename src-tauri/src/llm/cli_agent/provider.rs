@@ -1,11 +1,13 @@
-//! `ClaudeCliProvider`: the `LLMProvider` face of the Claude CLI, so every
-//! existing caller works with the user's subscription on day one.
+//! `CliAgentProvider`: the `LLMProvider` face of a CLI agent (Claude,
+//! Antigravity or Codex), so every existing caller works with the user's
+//! subscription on day one.
 //!
-//! `stream_completion` runs on the shared Utility Fast session. That session
-//! outlives any single request, so each call's system prompt travels inside
-//! the user message as an `## Instructions` block instead of the session's
-//! system prompt. The `model` argument is not used: the session model comes
-//! from `ClaudeCliConfig` (Fast tier).
+//! `stream_completion` runs on the shared Utility Fast session of the kind. That
+//! session outlives any single request, so each call's system prompt travels
+//! inside the user message as an `## Instructions` block instead of the
+//! session's system prompt. The `model` argument is not used: the session model
+//! comes from the kind's `ClaudeCliConfig` (Fast tier). Only the active kind
+//! has sessions: asking another kind's provider is an error.
 //!
 //! The Utility session is recycled once its context grows past
 //! [`UTILITY_MAX_CONTEXT_TOKENS`], after [`UTILITY_MAX_TURNS`] turns, or right
@@ -18,6 +20,8 @@
 
 use super::detect::{claude_status, find_claude_binary, ClaudeLogin, API_BILLED_NOTE};
 use super::models::ModelCatalog;
+use super::status::{probe_kind, CODEX_API_KEY_NOTE};
+use super::CliAgentKind;
 use super::manager::{AgentSessionManager, OnDelta, SessionInit, SessionKey, SessionScope, Tier};
 use super::protocol::{AgentErrorKind, TurnResult};
 use super::session::AgentError;
@@ -55,28 +59,40 @@ const MODELS: [(&str, &str); 4] = [
     ("fable", "Claude Fable"),
 ];
 
-pub struct ClaudeCliProvider {
+pub struct CliAgentProvider {
+    kind: CliAgentKind,
     catalog: Arc<ModelCatalog>,
 }
 
-impl ClaudeCliProvider {
+impl CliAgentProvider {
     /// Lists the app-wide catalog the CLI reported.
-    pub fn new() -> Self {
-        Self::with_catalog(ModelCatalog::global())
+    pub fn new(kind: CliAgentKind) -> Self {
+        Self::with_catalog(kind, ModelCatalog::global_for(kind))
     }
 
-    pub fn with_catalog(catalog: Arc<ModelCatalog>) -> Self {
-        Self { catalog }
+    pub fn with_catalog(kind: CliAgentKind, catalog: Arc<ModelCatalog>) -> Self {
+        Self { kind, catalog }
     }
-}
 
-impl Default for ClaudeCliProvider {
-    fn default() -> Self {
-        Self::new()
+    pub fn kind(&self) -> CliAgentKind {
+        self.kind
     }
 }
 
-/// The session serving every caller without a meeting scope.
+/// What a missing login is told to do, per CLI.
+fn login_hint(kind: CliAgentKind) -> String {
+    match kind {
+        CliAgentKind::Claude => "Claude CLI is not logged in. Run `claude` in a terminal to log in.".into(),
+        CliAgentKind::Codex => {
+            "Codex CLI is not logged in. Run `codex login` in a terminal and choose Sign in with ChatGPT.".into()
+        }
+        CliAgentKind::Antigravity => {
+            "Antigravity CLI is not logged in. Run `agy` in a terminal and sign in with Google.".into()
+        }
+    }
+}
+
+/// The session serving every caller without a meeting scope (of the active kind).
 pub fn utility_key() -> SessionKey {
     SessionKey::plain(SessionScope::Utility, Tier::Fast)
 }
@@ -224,38 +240,62 @@ impl StreamTiming {
 }
 
 #[async_trait::async_trait]
-impl LLMProvider for ClaudeCliProvider {
+impl LLMProvider for CliAgentProvider {
     fn provider_name(&self) -> &str {
-        "claude_cli"
+        self.kind.provider_id()
     }
 
     async fn list_models(&self) -> Result<Vec<ModelInfo>, LLMError> {
+        let provider = self.kind.provider_id();
         if let Some(models) = self.catalog.get().filter(|m| !m.is_empty()) {
             return Ok(models
                 .into_iter()
                 .map(|m| ModelInfo {
                     id: m.value,
                     name: m.display_name,
-                    provider: "claude_cli".to_string(),
+                    provider: provider.to_string(),
                     context_window: None,
                 })
                 .collect());
+        }
+        // Claude's aliases always resolve; the others list nothing until the
+        // CLI has reported its models.
+        if self.kind != CliAgentKind::Claude {
+            return Ok(Vec::new());
         }
         Ok(MODELS
             .iter()
             .map(|(id, name)| ModelInfo {
                 id: id.to_string(),
                 name: name.to_string(),
-                provider: "claude_cli".to_string(),
+                provider: provider.to_string(),
                 context_window: None,
             })
             .collect())
     }
 
-    /// `Ok(true)` when `claude.exe` is installed and logged in to a Claude
-    /// subscription. A login that bills an API account still works for
-    /// requests, but is reported as an error here, never as connected.
+    /// `Ok(true)` when the CLI is installed and logged in to a subscription.
+    /// A Claude login that bills an API account still works for requests, but
+    /// is reported as an error here, never as connected. No model call.
     async fn test_connection(&self) -> Result<bool, LLMError> {
+        let kind = self.kind;
+        if kind != CliAgentKind::Claude {
+            return match probe_kind(kind).await {
+                Ok(()) => Ok(true),
+                Err(AgentErrorKind::NotInstalled) => {
+                    Err(LLMError::NotConfigured(format!("{} CLI is not installed", kind.short_name())))
+                }
+                Err(AgentErrorKind::NotLoggedIn) if kind == CliAgentKind::Codex => {
+                    // An API-key login reads the same here; the status card tells them apart.
+                    Err(LLMError::AuthError(format!("{} {CODEX_API_KEY_NOTE}", login_hint(kind))))
+                }
+                Err(AgentErrorKind::NotLoggedIn) => Err(LLMError::AuthError(login_hint(kind))),
+                Err(other) => Err(LLMError::ConnectionFailed(format!(
+                    "Could not check {} ({other:?})",
+                    kind.short_name()
+                ))),
+            };
+        }
         let bin = tokio::task::spawn_blocking(find_claude_binary)
             .await
             .ok()
@@ -286,11 +326,16 @@ impl LLMProvider for ClaudeCliProvider {
         let manager = match app_handle.try_state::<AppState>() {
             Some(state) => state.agent_sessions.clone(),
             None => {
-                let msg = "Claude CLI sessions are not initialized";
+                let msg = "CLI agent sessions are not initialized";
                 emit_error(&app_handle, &params, msg);
                 return Err(LLMError::NotConfigured(msg.to_string()));
             }
         };
+        if manager.settings().active() != self.kind {
+            let msg = format!("{} is not the active provider", self.kind.display_name());
+            emit_error(&app_handle, &params, &msg);
+            return Err(LLMError::NotConfigured(msg));
+        }
         let cancel = params
             .cancel
             .clone()
@@ -343,11 +388,10 @@ mod tests {
     use super::*;
     use crate::llm::cli_agent::command::SessionConfig;
     use crate::llm::cli_agent::models::ClaudeModelInfo;
-    use crate::llm::cli_agent::manager::{
-        ClaudeCliConfig, NoopStatusSink, SessionHandle, SessionSpawner,
-    };
+    use crate::llm::cli_agent::manager::{NoopStatusSink, SessionHandle, SessionSpawner};
+    use crate::llm::cli_agent::settings::CliSettings;
     use async_trait::async_trait;
-    use std::sync::{Mutex, RwLock};
+    use std::sync::Mutex;
 
     fn msg(role: &str, content: &str) -> LLMMessage {
         LLMMessage {
@@ -358,7 +402,7 @@ mod tests {
 
     #[tokio::test]
     async fn claude_cli_list_models_static() {
-        let models = ClaudeCliProvider::with_catalog(Arc::new(ModelCatalog::default()))
+        let models = CliAgentProvider::with_catalog(CliAgentKind::Claude, Arc::new(ModelCatalog::default()))
             .list_models()
             .await
             .unwrap();
@@ -372,7 +416,7 @@ mod tests {
     #[tokio::test]
     async fn claude_cli_list_models_uses_the_cli_catalog() {
         let catalog = Arc::new(ModelCatalog::default());
-        let provider = ClaudeCliProvider::with_catalog(catalog.clone());
+        let provider = CliAgentProvider::with_catalog(CliAgentKind::Claude, catalog.clone());
         // Nothing probed yet: the static aliases.
         assert_eq!(provider.list_models().await.unwrap().len(), 4);
         catalog.set(vec![ClaudeModelInfo {
@@ -382,11 +426,38 @@ mod tests {
             description: String::new(),
             supports_effort: true,
             effort_levels: vec!["low".into()],
+            default_effort: None,
         }]);
         let models = provider.list_models().await.unwrap();
         assert_eq!(models.len(), 1);
         assert_eq!((models[0].id.as_str(), models[0].name.as_str()), ("claude-opus-4-8", "Opus 4.8"));
         assert_eq!(models[0].provider, "claude_cli");
+    }
+
+    #[tokio::test]
+    async fn each_kind_names_and_lists_its_own_models() {
+        for kind in CliAgentKind::ALL {
+            let catalog = Arc::new(ModelCatalog::default());
+            let provider = CliAgentProvider::with_catalog(kind, catalog.clone());
+            assert_eq!(provider.provider_name(), kind.provider_id());
+            catalog.set(vec![ClaudeModelInfo {
+                value: "m1".into(),
+                resolved_model: "m1".into(),
+                display_name: "Model One".into(),
+                description: String::new(),
+                supports_effort: false,
+                effort_levels: vec![],
+                default_effort: None,
+            }]);
+            let models = provider.list_models().await.unwrap();
+            assert_eq!(models.len(), 1);
+            assert_eq!(models[0].provider, kind.provider_id());
+        }
+        // Without a catalog: Claude's aliases, nothing for the others.
+        let empty = |kind| CliAgentProvider::with_catalog(kind, Arc::new(ModelCatalog::default()));
+        assert_eq!(empty(CliAgentKind::Claude).list_models().await.unwrap().len(), 4);
+        assert!(empty(CliAgentKind::Antigravity).list_models().await.unwrap().is_empty());
+        assert!(empty(CliAgentKind::Codex).list_models().await.unwrap().is_empty());
     }
 
     #[test]
@@ -481,7 +552,7 @@ mod tests {
         AgentSessionManager::new(
             Arc::new(FakeSpawner(rec.clone())),
             Arc::new(NoopStatusSink),
-            Arc::new(RwLock::new(ClaudeCliConfig::default())),
+            Arc::new(CliSettings::isolated()),
         )
     }
 

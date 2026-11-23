@@ -1,16 +1,21 @@
 //! Launch arguments and process hygiene for the `claude` child process.
 
+use super::CliAgentKind;
 use std::path::{Path, PathBuf};
 
 /// Model/effort/system prompt for one session.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionConfig {
+    /// Which CLI agent the session is for. The Claude launch args below
+    /// ignore it; the spawner dispatches on it.
+    pub kind: CliAgentKind,
     pub model: String,
     /// `None` for a model that takes no effort: `--effort` is left out.
     pub effort: Option<String>,
     pub system_prompt: String,
-    /// Extended thinking. Off sets [`DISABLE_THINKING_ENV`] on the process:
-    /// the first words then come far sooner (Haiku thinks on every turn).
+    /// Extended thinking (Claude only). Off sets [`DISABLE_THINKING_ENV`] on
+    /// the process: the first words then come far sooner (Haiku thinks on
+    /// every turn).
     pub thinking: bool,
     /// Personal sources for a with-sources session; `None` for the plain one.
     pub sources: Option<SourcesLaunch>,
@@ -220,6 +225,7 @@ mod tests {
 
     fn cfg() -> SessionConfig {
         SessionConfig {
+            kind: CliAgentKind::Claude,
             model: "haiku".into(),
             effort: Some("low".into()),
             system_prompt: "sp".into(),

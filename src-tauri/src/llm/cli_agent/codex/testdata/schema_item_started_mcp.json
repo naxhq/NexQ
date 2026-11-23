@@ -1,0 +1,21 @@
+{
+  "method": "item/started",
+  "params": {
+    "threadId": "th1",
+    "turnId": "tu1",
+    "startedAtMs": 1,
+    "item": {
+      "type": "mcpToolCall",
+      "id": "call1",
+      "server": "mira",
+      "tool": "kb_search",
+      "status": "inProgress",
+      "arguments": {
+        "query": "budget"
+      },
+      "result": null,
+      "error": null,
+      "durationMs": null
+    }
+  }
+}

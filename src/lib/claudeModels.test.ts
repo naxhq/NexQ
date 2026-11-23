@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ClaudeModelInfo } from "./types";
 import {
   STATIC_CLAUDE_MODELS,
+  CLI_EFFORT_RANKS,
   effectiveEffort,
   findClaudeModel,
   formatCheckedAgo,
@@ -80,6 +81,11 @@ describe("effectiveEffort", () => {
     expect(effectiveEffort(m("x", "x", "x", ["medium", "high"]), "max")).toBe("high");
     expect(effectiveEffort(m("x", "x", "x", ["medium", "high"]), "low")).toBe("medium");
     expect(effectiveEffort(m("x", "x", "x", ["medium", "high"]), "ultra")).toBe("medium");
+  });
+
+  it("measures closeness on the given ranks (Codex has ultra on top)", () => {
+    expect(effectiveEffort(m("x", "x", "x", ["medium", "high"]), "ultra", CLI_EFFORT_RANKS)).toBe("high");
+    expect(effectiveEffort(m("x", "x", "x", ["low", "medium"]), "ultra", CLI_EFFORT_RANKS)).toBe("medium");
   });
 });
 

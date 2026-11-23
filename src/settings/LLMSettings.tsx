@@ -14,7 +14,8 @@ import {
 } from "../lib/ipc";
 import type { CustomLlmAuthType as CustomAuthType, LLMProviderType, ModelInfo, OpenRouterModel } from "../lib/types";
 import { OpenRouterModelCatalog } from "./openrouter/OpenRouterModelCatalog";
-import { ClaudeCliSettings, claudeTierLabel } from "./ClaudeCliSettings";
+import { CliAgentSettings } from "./CliAgentSettings";
+import { cliTierLabel, isCliAgent } from "../lib/cliAgents";
 import { ThinkingSettings } from "./ThinkingSettings";
 import { ProviderCard, type StatusTone } from "./ProviderCard";
 import { requestOptionFields } from "../lib/llmRequestOptions";
@@ -50,6 +51,9 @@ const PROVIDER_DISPLAY: Record<
   // Not in ALL_PROVIDERS: it gets its own "Subscription (local CLI)" group.
   // isLocal is false here because that flag drives the local-server hints below.
   claude_cli: { label: "Claude (subscription)", description: "Your own Claude login (beta)", requiresKey: false, isLocal: false },
+  // Subscription CLI agents (cards in CliAgentSettings).
+  antigravity_cli: { label: "Antigravity (subscription)", description: "Your own Google sign-in (beta)", requiresKey: false, isLocal: false },
+  codex_cli: { label: "Codex (subscription)", description: "Your own ChatGPT login (beta)", requiresKey: false, isLocal: false },
 };
 
 const ALL_PROVIDERS: LLMProviderType[] = [
@@ -122,9 +126,9 @@ export function LLMSettings() {
   const activateLLMProvider = useConfigStore((s) => s.activateLLMProvider);
   const verifiedCloudProviders = useConfigStore((s) => s.verifiedCloudProviders);
   const setVerifiedCloudProviders = useConfigStore((s) => s.setVerifiedCloudProviders);
-  const claudeCliConfig = useConfigStore((s) => s.claudeCliConfig);
-  const claudeModels = useConfigStore((s) => s.claudeModels) ?? undefined;
-  const claudeStatus = useAgentStore((s) => s.status);
+  const cliAgentConfigs = useConfigStore((s) => s.cliAgentConfigs);
+  const cliAgentModels = useConfigStore((s) => s.cliAgentModels);
+  const agentStatuses = useAgentStore((s) => s.statuses);
 
   const [selectedProvider, setSelectedProvider] = useState<LLMProviderType>(llmProvider);
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -379,11 +383,12 @@ export function LLMSettings() {
   const requiresApiKey = info?.requiresKey ?? false;
   const isLocal = info?.isLocal ?? false;
   const isCustom = selectedProvider === "custom";
-  const isClaudeCli = selectedProvider === "claude_cli";
-  // Claude can be made active once the CLI is found and logged in (or while
-  // its login state is unknown); it has no model of its own to pick here.
-  const claudeUnusable =
-    isClaudeCli && !!claudeStatus && (!claudeStatus.installed || claudeStatus.auth?.logged_in === false);
+  const isCliProvider = isCliAgent(selectedProvider);
+  // A CLI agent can be made active once the CLI is found and logged in (or
+  // while its login state is unknown); it has no model of its own to pick here.
+  const agentStatus = isCliAgent(selectedProvider) ? agentStatuses[selectedProvider] : undefined;
+  const cliUnusable =
+    isCliProvider && !!agentStatus && (!agentStatus.installed || agentStatus.auth?.logged_in === false);
 
   // Same path as the footer. Without a pick, the model last used with the
   // provider; Claude takes its Fast model.
@@ -416,12 +421,12 @@ export function LLMSettings() {
           <p className="text-sm font-medium text-foreground">
             In use: {inUseLabel}
             {" · "}
-            {llmProvider === "claude_cli"
-              ? `Fast: ${claudeTierLabel(claudeCliConfig.fast_model, claudeCliConfig.fast_effort, claudeModels)} · Deep: ${claudeTierLabel(claudeCliConfig.deep_model, claudeCliConfig.deep_effort, claudeModels)}`
+            {isCliAgent(llmProvider)
+              ? `Fast: ${cliTierLabel(llmProvider, cliAgentConfigs[llmProvider].fast_model, cliAgentConfigs[llmProvider].fast_effort, cliAgentModels[llmProvider])} · Deep: ${cliTierLabel(llmProvider, cliAgentConfigs[llmProvider].deep_model, cliAgentConfigs[llmProvider].deep_effort, cliAgentModels[llmProvider])}`
               : llmModel || "no model selected"}
           </p>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {llmProvider !== "claude_cli" && !llmModel
+            {!isCliAgent(llmProvider) && !llmModel
               ? "Select a provider, test connection, and load models below"
               : "NexQ answers with this provider"}
           </p>
@@ -429,11 +434,11 @@ export function LLMSettings() {
       </div>
 
       {/* Subscription (local CLI) providers */}
-      <ClaudeCliSettings
-        selected={isClaudeCli}
-        active={llmProvider === "claude_cli"}
+      <CliAgentSettings
+        selectedProvider={selectedProvider}
+        activeProvider={llmProvider}
         inUseLabel={inUseLabel}
-        onSelect={() => handleProviderChange("claude_cli")}
+        onSelect={handleProviderChange}
       />
 
       {/* Provider Selection */}
@@ -474,7 +479,7 @@ export function LLMSettings() {
       </div>
 
       {/* Viewing a provider that isn't in use: say so, and offer the switch right here */}
-      {!isClaudeCli && selectedProvider !== llmProvider && (
+      {!isCliProvider && selectedProvider !== llmProvider && (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3">
           <p className="text-xs text-muted-foreground">
             Viewing {selectedLabel}. NexQ is using {inUseLabel}.
@@ -586,8 +591,8 @@ export function LLMSettings() {
         </div>
       )}
 
-      {/* Connection Test & Model Loading (Claude has its own above) */}
-      {!isClaudeCli && (
+      {/* Connection Test & Model Loading (the CLI agents have their own above) */}
+      {!isCliProvider && (
         <div className="rounded-xl border border-border/30 bg-card/50 p-5">
           <h3 className="mb-3 text-sm font-semibold text-primary/80">Connection</h3>
           <div className="flex items-center gap-2">
@@ -623,8 +628,8 @@ export function LLMSettings() {
         </div>
       )}
 
-      {/* Model Selection (Claude uses its Fast / Deep settings instead) */}
-      {!isClaudeCli && (
+      {/* Model Selection (the CLI agents use their Fast / Deep settings instead) */}
+      {!isCliProvider && (
         <div className="rounded-xl border border-border/30 bg-card/50 p-5">
           <h3 className="mb-3 text-sm font-semibold text-primary/80">Model</h3>
           {selectedProvider === "openrouter" && openRouterModels.length > 0 ? (
@@ -653,12 +658,12 @@ export function LLMSettings() {
       )}
 
       {/* Thinking (how long the model reasons before answering) + advanced request JSON */}
-      {!isClaudeCli && <ThinkingSettings key={selectedProvider} provider={selectedProvider} />}
+      {!isCliProvider && <ThinkingSettings key={selectedProvider} provider={selectedProvider} />}
 
-      {/* Use button: only when this is not the provider in use (Claude: disabled while unusable) */}
+      {/* Use button: only when this is not the provider in use (CLI agents: disabled while unusable) */}
       {selectedProvider !== llmProvider && (
         <button
-          disabled={claudeUnusable}
+          disabled={cliUnusable}
           onClick={handleActivate}
           className="w-full rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 text-sm font-medium text-primary transition-all duration-150 hover:bg-primary/10 hover:-translate-y-px active:translate-y-px active:scale-[0.99] cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:active:scale-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
         >

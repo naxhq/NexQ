@@ -1,0 +1,19 @@
+{
+  "id": 0,
+  "method": "item/commandExecution/requestApproval",
+  "params": {
+    "threadId": "th1",
+    "turnId": "tu1",
+    "itemId": "cmd2",
+    "startedAtMs": 1,
+    "command": "del C:\\x.txt",
+    "cwd": "C:\\sandbox",
+    "commandActions": [
+      {
+        "type": "unknown",
+        "command": "del C:\\x.txt"
+      }
+    ],
+    "reason": "Needs to delete a file"
+  }
+}

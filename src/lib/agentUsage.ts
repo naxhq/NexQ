@@ -4,7 +4,11 @@
 import type { AgentSessionStatus, ClaudeCliStatus, SessionUsage } from "./types";
 
 /** Shown wherever a login that bills an API account would read as connected. */
-export const API_BILLED_NOTE = "This Claude login bills an API account, not your subscription.";
+export function apiBilledNoteFor(agentName: string): string {
+  return `This ${agentName} login bills an API account, not your subscription.`;
+}
+
+export const API_BILLED_NOTE = apiBilledNoteFor("Claude");
 
 /** Shown when only an npm install of Claude Code (`claude.cmd`) was found. */
 export const NPM_ONLY_NOTE = "Found an npm install of Claude Code — NexQ needs the native installer";
@@ -12,6 +16,15 @@ export const NPM_ONLY_NOTE = "Found an npm install of Claude Code — NexQ needs
 /** The Claude login bills an API account (usable, but not the subscription). */
 export function isApiBilled(status: ClaudeCliStatus | undefined | null): boolean {
   return status?.auth?.login === "api_billed";
+}
+
+/** Shown where a Codex API-key login would otherwise read as connected. */
+export const CODEX_API_KEY_NOTE =
+  "This Codex login uses an API key. NexQ needs Codex signed in with your ChatGPT account: run `codex login` and choose Sign in with ChatGPT.";
+
+/** Codex is logged in with an API key: not usable (the backend reports it as not logged in, with this method). */
+export function isApiKeyLogin(status: ClaudeCliStatus | undefined | null): boolean {
+  return status?.auth?.auth_method === "api_key" && !status.auth.logged_in;
 }
 
 const NUMBER = new Intl.NumberFormat("en-US");
@@ -109,9 +122,33 @@ export function formatUsageSummary(u: SessionUsage): string {
   return parts.join(" · ");
 }
 
-/** The cost line shown wherever usage appears. */
-export function formatCostEstimate(u: SessionUsage, apiBilled = false): string {
-  return `≈ ${formatCost(u.cost_usd)} estimate — ${apiBilled ? "billed to your API account" : "included in your subscription"}`;
+/**
+ * The cost line shown wherever usage appears. `apiBilled` null: the agent that
+ * ran the sessions is unknown, so no billing claim is made.
+ */
+export function formatCostEstimate(u: SessionUsage, apiBilled: boolean | null = false): string {
+  const estimate = `≈ ${formatCost(u.cost_usd)} estimate`;
+  if (apiBilled === null) return estimate;
+  return `${estimate} — ${apiBilled ? "billed to your API account" : "included in your subscription"}`;
+}
+
+/** Name used when the agent behind the sessions is not known. */
+export const NEUTRAL_AGENT_LABEL = "Subscription AI";
+
+/**
+ * Who the meeting's agent sessions are attributed to. Session rows carry no
+ * agent kind, so only an active CLI agent can be named (and its billing
+ * claimed); with an API provider active the sessions may come from any agent,
+ * so the label is neutral and no billing is claimed.
+ */
+export function usageAttribution(
+  llmProvider: string,
+  statuses: Record<string, ClaudeCliStatus | undefined>,
+  agentName: (provider: string) => string,
+  isAgent: (provider: string) => boolean,
+): { label: string; apiBilled: boolean | null } {
+  if (!isAgent(llmProvider)) return { label: NEUTRAL_AGENT_LABEL, apiBilled: null };
+  return { label: agentName(llmProvider), apiBilled: isApiBilled(statuses[llmProvider]) };
 }
 
 /** Live-scope sessions of one meeting (fast and/or deep). */

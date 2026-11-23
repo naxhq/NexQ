@@ -112,6 +112,8 @@ NexQ supports 9 LLM providers. The LLM powers all AI features: Assist, What to S
 | LM Studio | Local | Free | Varies by model | Local with GUI model management |
 | OpenRouter | Cloud | Pay per use | Varies | Access to hundreds of models |
 | Claude (subscription, Beta) | Local CLI | Included in your Claude plan | Fast | Using your own Claude Pro/Max login, no API key |
+| Antigravity (subscription, Beta) | Local CLI | Included in your Google AI plan | Fast | Gemini (and other) models through your Google login, no API key |
+| Codex (subscription, Beta) | Local CLI | Included in your ChatGPT plan | Fast | OpenAI models through your ChatGPT login, no API key |
 | Custom | Configurable | Varies | Varies | Self-hosted or custom endpoints |
 
 ### Choosing an LLM Provider
@@ -123,6 +125,8 @@ NexQ supports 9 LLM providers. The LLM powers all AI features: Assist, What to S
 **Use Groq** if you want the fastest responses at no cost. Groq's free tier with Llama models provides fast inference with good quality.
 
 **Use Claude (subscription, Beta)** if you already pay for Claude Pro or Max and want to use it without an API key. See the [Claude subscription guide](claude-subscription.md).
+
+**Use Antigravity or Codex (subscription, Beta)** the same way if you pay for Google AI or ChatGPT. Install the CLI (Antigravity from antigravity.google, Codex with `npm i -g @openai/codex`), sign in once with the Log in button in Settings > LLM Providers, then pick Fast and Deep models there. NexQ fetches each CLI's current model list every time it starts. Notes folders and MCP servers from Personal Sources work with all three. Antigravity and Codex read your notes only through NexQ's own read-only notes tool, and they can't run commands, write files or search the web. Image attachments still need Claude.
 
 **Use Anthropic (Claude)** if you prefer nuanced, well-reasoned responses, especially for complex or sensitive topics.
 

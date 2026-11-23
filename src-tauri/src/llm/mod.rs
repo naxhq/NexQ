@@ -29,6 +29,10 @@ pub enum ProviderType {
     Custom,
     /// The local Claude Code CLI on the user's own subscription login.
     ClaudeCli,
+    /// The local Antigravity CLI (`agy`) on the user's Google sign-in.
+    AntigravityCli,
+    /// The local Codex CLI on the user's ChatGPT sign-in.
+    CodexCli,
 }
 
 impl ProviderType {
@@ -43,6 +47,8 @@ impl ProviderType {
             "openrouter" => Ok(Self::Openrouter),
             "custom" => Ok(Self::Custom),
             "claude_cli" => Ok(Self::ClaudeCli),
+            "antigravity_cli" => Ok(Self::AntigravityCli),
+            "codex_cli" => Ok(Self::CodexCli),
             _ => Err(LLMError::NotConfigured(format!(
                 "Unknown provider type: {}",
                 s
@@ -61,6 +67,8 @@ impl ProviderType {
             Self::Openrouter => "openrouter",
             Self::Custom => "custom",
             Self::ClaudeCli => "claude_cli",
+            Self::AntigravityCli => "antigravity_cli",
+            Self::CodexCli => "codex_cli",
         }
     }
 
@@ -75,6 +83,8 @@ impl ProviderType {
             Self::Openrouter => "OpenRouter",
             Self::Custom => "Custom",
             Self::ClaudeCli => "Claude (subscription)",
+            Self::AntigravityCli => "Antigravity (subscription)",
+            Self::CodexCli => "Codex (subscription)",
         }
     }
 
@@ -87,7 +97,7 @@ impl ProviderType {
             Self::Groq => "https://api.groq.com/openai/v1",
             Self::Gemini => "https://generativelanguage.googleapis.com",
             Self::Openrouter => "https://openrouter.ai/api/v1",
-            Self::Custom | Self::ClaudeCli => "",
+            Self::Custom | Self::ClaudeCli | Self::AntigravityCli | Self::CodexCli => "",
         }
     }
 
@@ -99,7 +109,23 @@ impl ProviderType {
     }
 
     pub fn is_local(&self) -> bool {
-        matches!(self, Self::Ollama | Self::LmStudio | Self::ClaudeCli)
+        matches!(self, Self::Ollama | Self::LmStudio) || self.is_cli_agent()
+    }
+
+    /// A provider that drives a local, logged-in coding-agent CLI (Claude,
+    /// Antigravity, Codex): long-lived sessions, no API key.
+    pub fn is_cli_agent(&self) -> bool {
+        self.cli_agent_kind().is_some()
+    }
+
+    /// Which CLI agent this provider drives, if it is one.
+    pub fn cli_agent_kind(&self) -> Option<cli_agent::CliAgentKind> {
+        match self {
+            Self::ClaudeCli => Some(cli_agent::CliAgentKind::Claude),
+            Self::AntigravityCli => Some(cli_agent::CliAgentKind::Antigravity),
+            Self::CodexCli => Some(cli_agent::CliAgentKind::Codex),
+            _ => None,
+        }
     }
 }
 
@@ -224,7 +250,10 @@ pub fn create_provider(config: &ProviderConfig) -> Result<Box<dyn LLMProvider>, 
         }
         // Needs no config: it reaches the session manager through the
         // `AppHandle` passed to every `stream_completion` call.
-        ProviderType::ClaudeCli => Box::new(cli_agent::provider::ClaudeCliProvider::new()),
+        ProviderType::ClaudeCli | ProviderType::AntigravityCli | ProviderType::CodexCli => {
+            let kind = provider_type.cli_agent_kind().expect("a CLI agent provider type");
+            Box::new(cli_agent::provider::CliAgentProvider::new(kind))
+        }
     };
 
     Ok(provider)
@@ -311,6 +340,8 @@ impl LLMRouter {
             ProviderType::Openrouter,
             ProviderType::Custom,
             ProviderType::ClaudeCli,
+            ProviderType::AntigravityCli,
+            ProviderType::CodexCli,
         ];
 
         all_types
@@ -365,6 +396,35 @@ mod tests {
         assert_eq!(ProviderType::from_str(pt.as_str()).unwrap(), pt);
         assert_eq!(serde_json::to_string(&pt).unwrap(), "\"claude_cli\"");
         assert_eq!(pt.display_name(), "Claude (subscription)");
+    }
+
+    #[test]
+    fn antigravity_and_codex_provider_types() {
+        let cases = [
+            ("antigravity_cli", ProviderType::AntigravityCli, "Antigravity (subscription)"),
+            ("codex_cli", ProviderType::CodexCli, "Codex (subscription)"),
+        ];
+        for (id, pt, name) in cases {
+            assert_eq!(ProviderType::from_str(id).unwrap(), pt);
+            assert_eq!(pt.as_str(), id);
+            assert_eq!(pt.display_name(), name);
+            assert_eq!(serde_json::to_string(&pt).unwrap(), format!("\"{id}\""));
+            assert!(!pt.requires_api_key());
+            assert!(pt.is_local());
+            assert!(pt.is_cli_agent());
+            assert_eq!(pt.default_base_url(), "");
+            assert!(create_provider(&cfg(id, None, None)).is_ok());
+            assert!(LLMRouter::get_all_providers()
+                .iter()
+                .any(|p| p.provider_type == id && !p.requires_api_key && p.is_local));
+        }
+        assert!(ProviderType::ClaudeCli.is_cli_agent());
+        for pt in [ProviderType::Ollama, ProviderType::LmStudio, ProviderType::Openai, ProviderType::Custom, ProviderType::Gemini] {
+            assert!(!pt.is_cli_agent());
+            assert_eq!(pt.cli_agent_kind(), None);
+        }
+        // Gemini CLI is not a provider here (Google does not allow it on a subscription).
+        assert!(ProviderType::from_str("gemini_cli").is_err());
     }
 
     #[test]

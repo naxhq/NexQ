@@ -1,0 +1,23 @@
+{
+  "id": 4,
+  "method": "mcpServer/elicitation/request",
+  "params": {
+    "threadId": "th1",
+    "turnId": "tu1",
+    "serverName": "mira",
+    "mode": "form",
+    "message": "Allow the mira MCP server to run tool \"kb_search\"?",
+    "_meta": {
+      "codex_approval_kind": "mcp_tool_call",
+      "persist": [
+        "session",
+        "always"
+      ],
+      "tool_title": "kb_search"
+    },
+    "requestedSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  }
+}

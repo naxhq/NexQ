@@ -2,6 +2,7 @@
 
 import { formatTokens } from "../lib/agentUsage";
 import type { LogEntry, StreamUsage } from "../lib/types";
+import { CLI_AGENTS, isCliAgent } from "../lib/cliAgents";
 
 /** One request's cost: "$0.0043" below a cent, "$0.12" above. */
 export function formatRequestCost(usd: number): string {
@@ -27,9 +28,12 @@ export function formatActualUsage(u: StreamUsage): string {
 /** Display name the backend gives the Claude subscription provider. */
 export const CLAUDE_PROVIDER_LABEL = "Claude (subscription)";
 
-/** Answered by the Claude CLI (session or stateless): temperature does not apply there. */
+/** Display names the backend gives the subscription CLI agents. */
+const CLI_PROVIDER_LABELS = new Set(CLI_AGENTS.map((a) => `${a.name} (subscription)`));
+
+/** Answered by a CLI agent (session or stateless): temperature does not apply there. */
 export function isClaudeEntry(e: Pick<LogEntry, "provider" | "sessionKey">): boolean {
-  return !!e.sessionKey || e.provider === CLAUDE_PROVIDER_LABEL || e.provider === "claude_cli";
+  return !!e.sessionKey || CLI_PROVIDER_LABELS.has(e.provider) || isCliAgent(e.provider);
 }
 
 /** Time from the request to its first words (ms): measured by the backend when it reports it. */

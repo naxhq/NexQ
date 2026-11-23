@@ -40,7 +40,7 @@ async fn diagnose_inner(
             for var in &server.env {
                 let value = if var.secret {
                     let value = secret(&credential_id(&server.key, &var.name))?;
-                    secrets.push(value.clone());
+                    secrets.extend(secret_variants(&value));
                     value
                 } else {
                     var.value.clone().unwrap_or_default()
@@ -58,10 +58,23 @@ async fn diagnose_inner(
             for name in header_names {
                 headers.push((name.clone(), secret(&header_credential_id(&server.key, name))?));
             }
-            let secrets: Vec<String> = headers.iter().map(|(_, v)| v.clone()).collect();
+            let secrets: Vec<String> = headers.iter().flat_map(|(_, v)| secret_variants(v)).collect();
             diagnose_http(url, &headers, &secrets).await
         }
     }
+}
+
+/// What to hide for a saved value: the value itself, and, for a header like
+/// `Bearer abc`, the token without its scheme (a server may echo just that).
+pub fn secret_variants(value: &str) -> Vec<String> {
+    let mut out = vec![value.to_string()];
+    if let Some((scheme, rest)) = value.split_once(' ') {
+        let rest = rest.trim();
+        if ["bearer", "basic", "token"].contains(&scheme.to_ascii_lowercase().as_str()) && !rest.is_empty() {
+            out.push(rest.to_string());
+        }
+    }
+    out
 }
 
 /// The last non-empty line of `text`, with every secret value hidden and cut
@@ -190,7 +203,12 @@ fn code_text(status: std::process::ExitStatus) -> String {
 
 /// Ask the URL what an MCP client asks first and report a refusal.
 pub async fn diagnose_http(url: &str, headers: &[(String, String)], secrets: &[String]) -> Option<String> {
-    let client = reqwest::Client::builder().timeout(DIAGNOSE_WAIT).build().ok()?;
+    // No redirects: the headers (saved secrets) go only to the URL that was saved.
+    let client = reqwest::Client::builder()
+        .timeout(DIAGNOSE_WAIT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .ok()?;
     let mut req = client
         .post(url)
         .header("Accept", "application/json, text/event-stream")
@@ -204,6 +222,9 @@ pub async fn diagnose_http(url: &str, headers: &[(String, String)], secrets: &[S
     }
     match req.send().await {
         Ok(resp) if resp.status().is_success() => None,
+        Ok(resp) if resp.status().is_redirection() => {
+            Some("The server answered with a redirect; use the final URL.".to_string())
+        }
         Ok(resp) => {
             let status = resp.status();
             let reason = status.canonical_reason().map(|r| format!(" {r}")).unwrap_or_default();
@@ -225,6 +246,34 @@ pub async fn diagnose_http(url: &str, headers: &[(String, String)], secrets: &[S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn secret_variants_add_the_token_without_its_scheme() {
+        assert_eq!(secret_variants("Bearer abc123"), vec!["Bearer abc123", "abc123"]);
+        assert_eq!(secret_variants("basic dXNlcjpwdw=="), vec!["basic dXNlcjpwdw==", "dXNlcjpwdw=="]);
+        assert_eq!(secret_variants("TOKEN x y"), vec!["TOKEN x y", "x y"]);
+        assert_eq!(secret_variants("plainvalue"), vec!["plainvalue"]);
+        assert_eq!(secret_variants("two words"), vec!["two words"]);
+    }
+
+    #[tokio::test]
+    async fn diagnose_http_does_not_follow_a_redirect() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 2048];
+                let _ = sock.read(&mut buf).await;
+                let _ = sock
+                    .write_all(b"HTTP/1.1 307 Temporary Redirect\r\nLocation: http://127.0.0.1:1/x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await;
+                let _ = sock.shutdown().await;
+            }
+        });
+        let cause = diagnose_http(&url, &[("Authorization".into(), "Bearer abc".into())], &[]).await.unwrap();
+        assert!(cause.contains("redirect"), "{cause}");
+    }
 
     #[test]
     fn redact_hides_secrets_and_keeps_one_short_line() {

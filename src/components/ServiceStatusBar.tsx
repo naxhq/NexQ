@@ -19,8 +19,9 @@ import { showToast } from "../stores/toastStore";
 import { useUpdaterStore } from "../stores/updaterStore";
 import { useAgentStore } from "../stores/agentStore";
 import { AgentStatusChip } from "./AgentStatusChip";
+import { ProviderLogo } from "./icons/ProviderLogos";
 import { StreamLatency } from "./StreamLatency";
-import { claudeTierLabel } from "../settings/ClaudeCliSettings";
+import { CLI_AGENTS, cliAgentInfo, cliTierLabel, isCliAgent } from "../lib/cliAgents";
 import { openUpdateDialog } from "../hooks/useUpdater";
 import { SideLanguagePicker } from "../overlay/SideLanguagePicker";
 
@@ -35,6 +36,8 @@ const LLM_LABELS: Record<string, string> = {
   openrouter: "OpenRouter",
   custom: "Custom",
   claude_cli: "Claude",
+  antigravity_cli: "Antigravity",
+  codex_cli: "Codex",
 };
 
 export const STT_LABELS: Record<string, string> = {
@@ -230,8 +233,9 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
     <div className={`flex flex-wrap items-center gap-2.5 ${compact ? "px-3 py-2" : "px-5 py-2.5"}`}>
       {/* LLM — always interactive */}
       <div className="relative">
-        {llmProvider === "claude_cli" ? (
+        {isCliAgent(llmProvider) ? (
           <AgentStatusChip
+            kind={llmProvider}
             compact={compact}
             pickerOpen={pickerOpen === "llm"}
             onClick={() => setPickerOpen(pickerOpen === "llm" ? null : "llm")}
@@ -945,28 +949,32 @@ function LLMPickerDropdown({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const verifiedProviders = useConfigStore((s) => s.verifiedCloudProviders);
-  const claudeCliConfig = useConfigStore((s) => s.claudeCliConfig);
-  const claudeModels = useConfigStore((s) => s.claudeModels) ?? undefined;
-  const claudeStatus = useAgentStore((s) => s.status);
-  const refreshClaudeStatus = useAgentStore((s) => s.refreshStatus);
+  const cliAgentConfigs = useConfigStore((s) => s.cliAgentConfigs);
+  const cliAgentModels = useConfigStore((s) => s.cliAgentModels);
+  const agentStatuses = useAgentStore((s) => s.statuses);
+  const refreshAgentStatus = useAgentStore((s) => s.refreshStatus);
 
-  // Detect Claude once per window so a logged-in CLI shows up here.
+  // Detect each CLI agent once per window so a logged-in one shows up here.
   useEffect(() => {
-    if (!useAgentStore.getState().status) refreshClaudeStatus();
-  }, [refreshClaudeStatus]);
-  const claudeAvailable = currentProvider === "claude_cli" || !!claudeStatus?.auth?.logged_in;
+    for (const { id } of CLI_AGENTS) {
+      if (!useAgentStore.getState().statuses[id]) void refreshAgentStatus(id);
+    }
+  }, [refreshAgentStatus]);
+  const availableAgents = CLI_AGENTS.filter(
+    (a) => currentProvider === a.id || !!agentStatuses[a.id]?.auth?.logged_in,
+  );
 
   // Internal state: pending provider (may differ from active while browsing)
   const [pendingProvider, setPendingProvider] = useState(currentProvider);
   const [models, setModels] = useState<{ id: string; name: string }[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
 
-  // Load models when pending provider changes (Claude has none to pick:
+  // Load models when pending provider changes (a CLI agent has none to pick:
   // Fast / Deep come from its settings)
   useEffect(() => {
     let cancelled = false;
     setModels([]);
-    if (pendingProvider === "claude_cli") {
+    if (isCliAgent(pendingProvider)) {
       setModelsLoading(false);
       return;
     }
@@ -1084,50 +1092,65 @@ function LLMPickerDropdown({
         </div>
       )}
 
-      {claudeAvailable && (
+      {availableAgents.length > 0 && (
         <div className={available.length > 0 ? "border-t border-border/20" : ""}>
           <div className="flex items-center gap-1.5 bg-muted/20 px-3 py-1.5 border-b border-border/20">
             <Cpu className="h-2.5 w-2.5 text-muted-foreground" />
             <span className="text-meta font-semibold uppercase tracking-wider text-muted-foreground/70">Subscription</span>
           </div>
-          <button
-            onClick={() => setPendingProvider("claude_cli")}
-            className={`flex w-full items-center gap-2.5 px-3 py-2 text-xs transition-colors cursor-pointer ${
-              pendingProvider === "claude_cli" ? "bg-primary/10 text-primary" : "text-foreground/80 hover:bg-accent/40"
-            }`}
-          >
-            <Brain className={`h-3.5 w-3.5 shrink-0 ${pendingProvider === "claude_cli" ? "text-primary" : "text-muted-foreground"}`} />
-            <span className="flex-1 text-left font-medium">Claude</span>
-            {currentProvider === "claude_cli" && <span className="text-meta text-primary/80">active</span>}
-          </button>
+          {availableAgents.map((agent) => (
+            <button
+              key={agent.id}
+              onClick={() => setPendingProvider(agent.id)}
+              className={`flex w-full items-center gap-2.5 px-3 py-2 text-xs transition-colors cursor-pointer ${
+                pendingProvider === agent.id ? "bg-primary/10 text-primary" : "text-foreground/80 hover:bg-accent/40"
+              }`}
+            >
+              <ProviderLogo id={agent.logo} className="h-3.5 w-3.5 shrink-0" />
+              <span className="flex-1 text-left font-medium">{agent.name}</span>
+              {currentProvider === agent.id && <span className="text-meta text-primary/80">active</span>}
+            </button>
+          ))}
         </div>
       )}
 
-      {available.length === 0 && !claudeAvailable && (
+      {available.length === 0 && availableAgents.length === 0 && (
         <div className="px-4 py-3 text-meta text-muted-foreground/60">
           No verified providers — test connection in Settings first
         </div>
       )}
 
-      {/* ── Claude: no model list, Fast / Deep come from its settings ── */}
-      {pendingProvider === "claude_cli" ? (
+      {/* ── CLI agent: no model list, Fast / Deep come from its settings ── */}
+      {isCliAgent(pendingProvider) ? (
         <div className="border-t border-border/20">
           <button
-            onClick={() => onApply("claude_cli", claudeCliConfig.fast_model)}
+            onClick={() => onApply(pendingProvider, cliAgentConfigs[pendingProvider].fast_model)}
             className={`flex w-full items-center gap-2.5 px-3 py-2 text-xs transition-colors cursor-pointer ${
-              currentProvider === "claude_cli" ? "bg-primary/10 text-primary" : "text-foreground/80 hover:bg-accent/40"
+              currentProvider === pendingProvider ? "bg-primary/10 text-primary" : "text-foreground/80 hover:bg-accent/40"
             }`}
           >
             <span className="flex-1 text-left">
               <span className="block font-medium">
-                {currentProvider === "claude_cli" ? "Using Claude" : "Use Claude"}
+                {currentProvider === pendingProvider ? "Using" : "Use"} {cliAgentInfo(pendingProvider).name}
               </span>
               <span className="block text-meta text-muted-foreground">
-                Fast {claudeTierLabel(claudeCliConfig.fast_model, claudeCliConfig.fast_effort, claudeModels)}, Deep{" "}
-                {claudeTierLabel(claudeCliConfig.deep_model, claudeCliConfig.deep_effort, claudeModels)}
+                Fast{" "}
+                {cliTierLabel(
+                  pendingProvider,
+                  cliAgentConfigs[pendingProvider].fast_model,
+                  cliAgentConfigs[pendingProvider].fast_effort,
+                  cliAgentModels[pendingProvider],
+                )}
+                , Deep{" "}
+                {cliTierLabel(
+                  pendingProvider,
+                  cliAgentConfigs[pendingProvider].deep_model,
+                  cliAgentConfigs[pendingProvider].deep_effort,
+                  cliAgentModels[pendingProvider],
+                )}
               </span>
             </span>
-            {currentProvider === "claude_cli" && <CheckCircle className="h-3 w-3 shrink-0 text-primary" />}
+            {currentProvider === pendingProvider && <CheckCircle className="h-3 w-3 shrink-0 text-primary" />}
           </button>
         </div>
       ) : (

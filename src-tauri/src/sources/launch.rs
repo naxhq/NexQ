@@ -17,7 +17,8 @@ use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
 /// Places a notes folder must not be, or contain: NexQ's private session
-/// files, the user's home, and the folders that hold Claude's sign-in.
+/// files, the user's home, and the folders that hold a CLI's sign-in (Claude's
+/// `~/.claude`, Codex's `~/.codex`, Antigravity's `~/.gemini`).
 #[derive(Debug, Clone)]
 pub struct Protected {
     pub private: PathBuf,
@@ -30,15 +31,28 @@ impl Protected {
         let home = std::env::var_os("USERPROFILE")
             .or_else(|| std::env::var_os("HOME"))
             .map(PathBuf::from);
+        let appdata = std::env::var_os("APPDATA").map(PathBuf::from);
+        let mut protected = Self::for_home(home, appdata, private_dir());
+        // `CODEX_HOME` moves Codex's sign-in (auth.json); protect it too.
+        if let Some(codex_home) = std::env::var_os("CODEX_HOME").filter(|d| !d.is_empty()) {
+            protected.credentials.push(PathBuf::from(codex_home));
+        }
+        protected
+    }
+
+    /// The protected places for a given home and `%APPDATA%`.
+    pub fn for_home(home: Option<PathBuf>, appdata: Option<PathBuf>, private: PathBuf) -> Self {
         let mut credentials = Vec::new();
         if let Some(h) = &home {
             credentials.push(h.join(".claude"));
             credentials.push(h.join(".claude.json"));
+            credentials.push(h.join(".codex"));
+            credentials.push(h.join(".gemini"));
         }
-        if let Some(appdata) = std::env::var_os("APPDATA") {
-            credentials.push(PathBuf::from(appdata).join("Claude"));
+        if let Some(appdata) = appdata {
+            credentials.push(appdata.join("Claude"));
         }
-        Self { private: private_dir(), home, credentials }
+        Self { private, home, credentials }
     }
 }
 
@@ -247,6 +261,11 @@ fn server_entry(
     }
 }
 
+/// How the notes folders are read, in Claude's terms. The Antigravity and Codex
+/// sessions have no such tools: `llm::cli_agent::sources_convert::adapt_system_prompt`
+/// swaps this text for the notes server's tools.
+pub const NOTES_TOOLS_HINT: &str = "read-only; search with Grep and Glob, open with Read";
+
 /// What the with-sources session is told about its sources, appended to the
 /// plain system prompt.
 pub fn sources_system_prompt(folders: &[&NotesFolder], servers: &[&McpServer]) -> String {
@@ -255,7 +274,7 @@ pub fn sources_system_prompt(folders: &[&NotesFolder], servers: &[&McpServer]) -
 Each request says which sources are on for that answer; use only those.\n",
     );
     if !folders.is_empty() {
-        out.push_str("\nNotes folders (read-only; search with Grep and Glob, open with Read):\n");
+        out.push_str(&format!("\nNotes folders ({NOTES_TOOLS_HINT}):\n"));
         for f in folders {
             out.push_str(&format!("- {}: {}\n", f.label, f.path));
         }
@@ -308,6 +327,34 @@ mod tests {
 
     fn folder(label: &str, path: &std::path::Path) -> NotesFolder {
         NotesFolder { id: label.into(), label: label.into(), path: path.to_string_lossy().into(), enabled: true }
+    }
+
+    #[test]
+    fn every_clis_sign_in_folder_is_protected() {
+        let home = real_dir("protected-home");
+        let protected = Protected::for_home(Some(home.clone()), None, real_dir("protected-private"));
+        for (dir, name) in [(".claude", "Claude"), (".codex", "Codex"), (".gemini", "Antigravity")] {
+            let cred = home.join(dir);
+            std::fs::create_dir_all(cred.join("sub")).unwrap();
+            // The folder itself, a folder inside it, and a folder that contains it.
+            for path in [cred.clone(), cred.join("sub")] {
+                let problem = folder_problem_with(&path, &protected);
+                assert!(problem.as_deref().is_some_and(|p| p.contains("sign-in")), "{name}: {problem:?}");
+            }
+        }
+        // An ordinary folder in the same home is fine.
+        let notes = home.join("notes");
+        std::fs::create_dir_all(&notes).unwrap();
+        assert_eq!(folder_problem_with(&notes, &protected), None);
+        // The files of the list include all three CLIs.
+        let names: Vec<String> = protected
+            .credentials
+            .iter()
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .collect();
+        for expected in [".claude", ".claude.json", ".codex", ".gemini"] {
+            assert!(names.iter().any(|n| n == expected), "{expected}");
+        }
     }
 
     fn no_secrets(_: &str) -> Option<String> {
