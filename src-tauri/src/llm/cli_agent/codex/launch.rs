@@ -104,14 +104,18 @@ impl CodexLaunch {
         keys
     }
 
-    /// `thread/start`'s `config`: NexQ's own MCP servers. `None` without any.
+    /// `thread/start`'s `config`: NexQ's own MCP servers, with every fixed
+    /// override and disabled feature of the command line repeated. `None`
+    /// without any server (the command line's settings then stand alone).
     ///
     /// A thread's config makes Codex read the user's config again, and the
-    /// `-c mcp_servers.<name>.enabled=false` of the command line does not
-    /// carry over: with NexQ's servers in it, all of the user's own servers
-    /// started anyway (seen with Codex 0.171.0: mira, node_repl, pencil and
-    /// web_search came up next to `nexq_notes`). So each of `user_servers` is
-    /// switched off here as well.
+    /// command line's `-c mcp_servers.<name>.enabled=false` and `-c notify=[]`
+    /// do not carry over: with NexQ's servers in it, all of the user's own
+    /// servers started anyway (seen with Codex 0.171.0: mira, node_repl, pencil
+    /// and web_search came up next to `nexq_notes`). So each of `user_servers`
+    /// is switched off here as well, and so is everything else the command
+    /// line switches off: web search, the notify hook, skill instructions,
+    /// history, analytics and the disabled features.
     pub fn thread_config(&self, user_servers: &[String]) -> Option<serde_json::Value> {
         if self.mcp_servers.is_empty() {
             return None;
@@ -120,7 +124,9 @@ impl CodexLaunch {
         for name in user_servers {
             servers.entry(name.clone()).or_insert_with(|| serde_json::json!({ "enabled": false }));
         }
-        Some(serde_json::json!({ "mcp_servers": servers }))
+        let mut config = fixed_config();
+        config.insert("mcp_servers".into(), serde_json::Value::Object(servers));
+        Some(serde_json::Value::Object(config))
     }
 
     /// A launch with the defaults a plain (no sources) session uses.
@@ -191,6 +197,33 @@ pub const FIXED_OVERRIDES: [&str; 5] = [
     // Turn-ended hooks and similar stay off even if a plugin sneaks one in.
     "analytics.enabled=false",
 ];
+
+/// [`FIXED_OVERRIDES`] and [`DISABLED_FEATURES`] as the nested config object
+/// `thread/start` takes (`--disable x` is `features.x=false`).
+pub(crate) fn fixed_config() -> serde_json::Map<String, serde_json::Value> {
+    use serde_json::{json, Map, Value};
+    let mut config = Map::new();
+    let mut set = |path: &[&str], value: Value| {
+        let mut table = &mut config;
+        for key in &path[..path.len() - 1] {
+            table = table
+                .entry(key.to_string())
+                .or_insert_with(|| Value::Object(Map::new()))
+                .as_object_mut()
+                .expect("a table");
+        }
+        table.insert(path[path.len() - 1].to_string(), value);
+    };
+    for pair in FIXED_OVERRIDES {
+        let (key, value) = pair.split_once('=').expect("key=value");
+        let path: Vec<&str> = key.split('.').collect();
+        set(&path, serde_json::from_str(value).unwrap_or_else(|_| json!(value)));
+    }
+    for feature in DISABLED_FEATURES {
+        set(&["features", feature], json!(false));
+    }
+    config
+}
 
 /// A TOML key as a dotted-path segment: bare when it can be, else quoted.
 pub(crate) fn toml_key(name: &str) -> String {
@@ -470,6 +503,34 @@ mod tests {
         assert!(args.contains(&"mcp_servers.other.enabled=false".to_string()));
         assert_eq!(l.server_keys(), ["mira"]);
         assert!(!format!("{l:?}").contains("s3cret"), "Debug leaked a secret");
+    }
+
+    #[test]
+    fn the_thread_config_repeats_everything_the_command_line_switches_off() {
+        let mut l = launch();
+        l.mcp_servers.insert("nexq_notes".into(), serde_json::json!({ "command": "nexq", "args": ["--notes-mcp"] }));
+        let cfg = l.thread_config(&["mira".to_string()]).unwrap();
+        // The values the thread must carry (a thread config re-reads the user's config).
+        assert_eq!(cfg["web_search"], "disabled");
+        assert_eq!(cfg["notify"], serde_json::json!([]));
+        assert_eq!(cfg["skills"]["include_instructions"], false);
+        assert_eq!(cfg["history"]["persistence"], "none");
+        assert_eq!(cfg["analytics"]["enabled"], false);
+        for feature in DISABLED_FEATURES {
+            assert_eq!(cfg["features"][feature], false, "{feature}");
+        }
+        assert_eq!(cfg["mcp_servers"]["mira"], serde_json::json!({ "enabled": false }));
+        // Every fixed override of the command line is in there, whatever new one is added.
+        for pair in FIXED_OVERRIDES {
+            let (key, value) = pair.split_once('=').unwrap();
+            let mut at = &cfg;
+            for part in key.split('.') {
+                at = &at[part];
+            }
+            assert_eq!(*at, serde_json::from_str::<serde_json::Value>(value).unwrap(), "{pair}");
+        }
+        // Without servers there is no thread config at all (the command line stands alone).
+        assert_eq!(launch().thread_config(&["mira".to_string()]), None);
     }
 
     #[test]

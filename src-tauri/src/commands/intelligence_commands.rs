@@ -796,7 +796,8 @@ pub(crate) fn route_after_outage(
     reason: &str,
     params: &GenerationParams,
 ) -> Result<Route, String> {
-    log::warn!("Claude unavailable ({reason}); falling back");
+    let agent = state.cli_settings.active().display_name().trim_end_matches(" (subscription)");
+    log::warn!("{agent} unavailable ({reason}); falling back");
     state.claude_health.mark_unavailable(kind);
     match request_route(state, mode, scope, false) {
         fallback @ Route::Fallback(_) => Ok(fallback),
@@ -812,7 +813,7 @@ pub(crate) fn route_after_outage(
                     },
                 );
             }
-            let message = format!("Claude unavailable ({}): {}", routing::reason_label(kind), reason);
+            let message = format!("{agent} unavailable ({}): {}", routing::reason_label(kind), reason);
             emit_error(app, params, &message);
             Err(message)
         }

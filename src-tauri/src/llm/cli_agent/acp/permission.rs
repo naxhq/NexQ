@@ -11,7 +11,9 @@
 //! `cancelled` when the agent offered none.
 //!
 //! The session also watches what actually runs (`session.rs`): a tool call that
-//! completes without NexQ having allowed it ends the session.
+//! runs without NexQ having allowed it ends the session. Tool names are split
+//! into server and tool with the session's known server keys, the longest key
+//! winning (`mcp_a_b_x` is server `a_b`'s `x`, never server `a`'s `b_x`).
 
 use serde_json::{json, Value};
 
@@ -32,19 +34,44 @@ impl McpToolRule {
         Self { server: server.to_string(), tool: None }
     }
 
+    /// Does this rule cover `tool` of `server` (already split from the agent's name)?
+    fn covers(&self, server: &str, tool: &str) -> bool {
+        self.server == server
+            && match &self.tool {
+                Some(t) => t == tool,
+                None => !tool.is_empty(),
+            }
+    }
+
     /// Does the agent's tool `name` (`mcp_<server>_<tool>`, which
     /// Antigravity uses; `mcp__<server>__<tool>` and
     /// `<server>__<tool>` are accepted too) name a tool this rule covers?
+    /// Only this rule's own server is known here; a policy splits with every
+    /// server key it knows (see [`split_tool`]).
     pub fn matches(&self, name: &str) -> bool {
-        let s = &self.server;
-        [format!("mcp_{s}_"), format!("mcp__{s}__"), format!("{s}__")]
-            .iter()
-            .filter_map(|prefix| name.strip_prefix(prefix.as_str()))
-            .any(|rest| match &self.tool {
-                Some(tool) => rest == tool,
-                None => !rest.is_empty(),
-            })
+        split_tool(name, std::slice::from_ref(&self.server)).is_some_and(|(s, t)| self.covers(&s, &t))
     }
+}
+
+/// Split the agent's tool `name` into `(server, tool)` using the known server
+/// keys: the longest key that fits wins, so the server `a` never swallows the
+/// tool of the server `a_b` (`mcp_a_b_x`). Forms: `mcp_<s>_<t>`,
+/// `mcp__<s>__<t>` and `<s>__<t>`. A name with no tool part, or of an unknown
+/// server, gives `None`.
+pub fn split_tool<S: AsRef<str>>(name: &str, servers: &[S]) -> Option<(String, String)> {
+    servers
+        .iter()
+        .map(AsRef::as_ref)
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| {
+            [format!("mcp_{s}_"), format!("mcp__{s}__"), format!("{s}__")]
+                .iter()
+                .find_map(|prefix| name.strip_prefix(prefix.as_str()))
+                .filter(|tool| !tool.is_empty())
+                .map(|tool| (s, tool))
+        })
+        .max_by_key(|(s, _)| s.len())
+        .map(|(s, tool)| (s.to_string(), tool.to_string()))
 }
 
 /// Which MCP tools may run.
@@ -52,13 +79,37 @@ impl McpToolRule {
 pub struct PermissionPolicy {
     allow_mcp: Vec<McpToolRule>,
     deny_mcp: Vec<McpToolRule>,
+    /// Server keys the session has beyond the rules' (a server with nothing
+    /// allowed still must be told apart from one whose key is its prefix).
+    other_servers: Vec<String>,
 }
 
 impl PermissionPolicy {
     /// `allow_mcp`/`deny_mcp`: tool rules; a denied tool is refused even when
     /// a rule allows it.
     pub fn new(allow_mcp: Vec<McpToolRule>, deny_mcp: Vec<McpToolRule>) -> Self {
-        Self { allow_mcp, deny_mcp }
+        Self { allow_mcp, deny_mcp, other_servers: Vec::new() }
+    }
+
+    /// Also know these server keys (every `mcpServers` name of the session)
+    /// when splitting a tool name.
+    pub fn with_servers(mut self, servers: &[String]) -> Self {
+        self.other_servers = servers.to_vec();
+        self
+    }
+
+    /// Every server key this policy knows.
+    fn server_keys(&self) -> Vec<&str> {
+        let mut keys: Vec<&str> = self
+            .allow_mcp
+            .iter()
+            .chain(&self.deny_mcp)
+            .map(|r| r.server.as_str())
+            .chain(self.other_servers.iter().map(String::as_str))
+            .collect();
+        keys.sort_unstable();
+        keys.dedup();
+        keys
     }
 
     /// A policy that allows nothing.
@@ -67,7 +118,10 @@ impl PermissionPolicy {
     }
 
     fn mcp_allowed(&self, name: &str) -> bool {
-        !self.deny_mcp.iter().any(|r| r.matches(name)) && self.allow_mcp.iter().any(|r| r.matches(name))
+        let Some((server, tool)) = split_tool(name, &self.server_keys()) else {
+            return false;
+        };
+        !self.deny_mcp.iter().any(|r| r.covers(&server, &tool)) && self.allow_mcp.iter().any(|r| r.covers(&server, &tool))
     }
 }
 
@@ -254,6 +308,27 @@ mod tests {
         // Underscored keys.
         let q = PermissionPolicy::new(vec![McpToolRule::tool("my_srv", "do_it")], vec![]);
         assert!(is_allowed(&req("other", "mcp_my_srv_do_it", json!({})), &q));
+    }
+
+    #[test]
+    fn a_server_key_that_prefixes_another_never_swallows_its_tools() {
+        // Server `a` allows tool `b_x`; the session also has a server `a_b`: `mcp_a_b_x` is a_b's `x`.
+        let p = PermissionPolicy::new(vec![McpToolRule::tool("a", "b_x")], vec![]).with_servers(&["a".into(), "a_b".into()]);
+        assert!(!is_allowed(&req("other", "mcp_a_b_x", json!({})), &p), "a_b allows nothing");
+        assert!(is_allowed(&req("other", "mcp__a__b_x", json!({})), &p), "the unambiguous form is a's");
+        // Both servers have rules: each tool goes to its own server.
+        let both = PermissionPolicy::new(vec![McpToolRule::tool("a", "b_x"), McpToolRule::tool("a_b", "x")], vec![]);
+        assert!(is_allowed(&req("other", "mcp_a_b_x", json!({})), &both));
+        // A deny of the longer key's tool wins, and a rule of `a` cannot allow it.
+        let deny = PermissionPolicy::new(vec![McpToolRule::tool("a", "b_x"), McpToolRule::whole_server("a_b")], vec![McpToolRule::tool("a_b", "x")]);
+        assert!(!is_allowed(&req("other", "mcp_a_b_x", json!({})), &deny));
+        assert_eq!(split_tool("mcp_a_b_x", &["a", "a_b"]), Some(("a_b".to_string(), "x".to_string())));
+        assert_eq!(split_tool("mcp__a__b_x", &["a", "a_b"]), Some(("a".to_string(), "b_x".to_string())));
+        assert_eq!(split_tool("a__b_x", &["a"]), Some(("a".to_string(), "b_x".to_string())));
+        assert_eq!(split_tool("mcp_a_", &["a"]), None);
+        assert_eq!(split_tool("mcp_zzz_t", &["a"]), None);
+        assert!(McpToolRule::tool("a", "b_x").matches("mcp_a_b_x"));
+        assert!(!McpToolRule::whole_server("a").matches("mcp_a_"));
     }
 
     #[test]

@@ -315,6 +315,110 @@ async fn a_tool_that_runs_without_approval_ends_the_session() {
     }
 }
 
+/// A scripted turn (`raw:` in the fake): the steps as one prompt.
+async fn raw(session: &AcpSession, steps: Value) -> Result<nexq_lib::llm::cli_agent::protocol::TurnResult, AgentError> {
+    ask(session, &format!("raw:{steps}")).await
+}
+
+fn call(id: &str, name: &str, status: &str) -> Value {
+    serde_json::json!({"sessionUpdate": "tool_call", "toolCallId": id, "name": name, "kind": "other", "status": status})
+}
+
+fn call_update(id: &str, name: Option<&str>, status: &str) -> Value {
+    let mut v = serde_json::json!({"sessionUpdate": "tool_call_update", "toolCallId": id, "status": status});
+    if let Some(name) = name {
+        v["name"] = name.into();
+    }
+    v
+}
+
+fn perm_call(id: &str, name: &str) -> Value {
+    serde_json::json!({"toolCallId": id, "name": name, "kind": "other", "status": "pending"})
+}
+
+/// The turn must fail as a breach, the process must be killed, and no further turn works.
+async fn assert_breach(session: &AcpSession, result: Result<nexq_lib::llm::cli_agent::protocol::TurnResult, AgentError>, why: &str) {
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), AgentErrorKind::Other, "{why}: {err:?}");
+    assert!(err.to_string().contains("does not allow"), "{why}: {err}");
+    assert!(!session.is_alive(), "{why}: the process must be killed");
+    assert!(ask(session, "hello").await.is_err(), "{why}: no further turn");
+}
+
+#[tokio::test]
+async fn a_call_nexq_never_approved_cannot_run_start_or_fail() {
+    use serde_json::json;
+    let cases: Vec<(&str, Value)> = vec![
+        // Never asked about: an update that says it is running (after the announcement), ...
+        ("in_progress update", json!([{"update": call("c1", "run_command", "in_progress")}, {"update": call_update("c1", None, "in_progress")}])),
+        // ... one that says it failed, ...
+        ("failed", json!([{"update": call("c1", "run_command", "in_progress")}, {"update": call_update("c1", Some("run_command"), "failed")}])),
+        // ... an update with no id at all, completed.
+        ("no id", json!([{"update": {"sessionUpdate": "tool_call_update", "status": "completed"}}])),
+        // Refused, and it ran anyway.
+        ("refused then completed", json!([{"perm": perm_call("c1", "run_command")}, {"update": call_update("c1", Some("run_command"), "completed")}])),
+        // Approved as one tool, an update for another one ran.
+        ("approved name differs", json!([{"perm": perm_call("c1", "mcp_srv_search")}, {"update": call_update("c1", Some("run_command"), "completed")}])),
+        // No call id in the request: refused, so what then completes is unapproved.
+        ("empty id request", json!([{"perm": perm_call("", "mcp_srv_search")}, {"update": {"sessionUpdate": "tool_call_update", "name": "mcp_srv_search", "status": "completed"}}])),
+        // Announced as a built-in, never asked about, and the turn ends.
+        ("dangling built-in", json!([{"update": call("c1", "write_file", "in_progress")}])),
+    ];
+    for (why, steps) in cases {
+        let s = Scratch::new("breach");
+        let session = AcpSession::spawn(s.launch(&[])).await.unwrap();
+        assert_eq!(ask(&session, "hello").await.unwrap().text, "Hello world");
+        let result = raw(&session, steps).await;
+        assert_breach(&session, result, why).await;
+        session.close().await;
+    }
+}
+
+#[tokio::test]
+async fn the_agy_sequences_are_not_breaches() {
+    use serde_json::json;
+    let s = Scratch::new("normal");
+    let session = AcpSession::spawn(s.launch(&[])).await.unwrap();
+    // Real agy: tool_call in_progress, update pending, request, update in_progress, then the end.
+    let approved = raw(&session, json!([
+        {"update": call("c1", "mcp_srv_search", "in_progress")},
+        {"update": call_update("c1", Some("mcp_srv_search"), "pending")},
+        {"perm": perm_call("c1", "mcp_srv_search")},
+        {"update": call_update("c1", Some("mcp_srv_search"), "in_progress")},
+        {"update": call_update("c1", Some("mcp_srv_search"), "completed")},
+        {"update": call_update("c1", None, "completed")},
+    ])).await.unwrap();
+    assert!(approved.text.contains("answer:allow"), "{}", approved.text);
+    // A refused call: in_progress then failed (what agy sends around a refusal).
+    let refused = raw(&session, json!([
+        {"update": call("c2", "run_command", "in_progress")},
+        {"update": call_update("c2", Some("run_command"), "pending")},
+        {"perm": perm_call("c2", "run_command")},
+        {"update": call_update("c2", Some("run_command"), "in_progress")},
+        {"update": call_update("c2", Some("run_command"), "failed")},
+    ])).await.unwrap();
+    assert!(refused.text.contains("answer:deny"), "{}", refused.text);
+    // An announced MCP call that ends the turn undecided is not a built-in: fine.
+    raw(&session, json!([{"update": call("c3", "mcp_srv_search", "in_progress")}])).await.unwrap();
+    // A pending-only built-in announcement that was asked about and refused, no more updates.
+    raw(&session, json!([{"update": call("c4", "read_file", "pending")}, {"perm": perm_call("c4", "read_file")}])).await.unwrap();
+    assert!(session.is_alive());
+    session.close().await;
+}
+
+#[tokio::test]
+async fn call_ids_belong_to_one_turn() {
+    use serde_json::json;
+    let s = Scratch::new("turns");
+    let session = AcpSession::spawn(s.launch(&[])).await.unwrap();
+    let first = raw(&session, json!([{"perm": perm_call("same", "mcp_srv_search")}, {"update": call_update("same", Some("mcp_srv_search"), "completed")}])).await.unwrap();
+    assert!(first.text.contains("answer:allow"));
+    // The same id next turn, with no new request, is an unapproved call.
+    let result = raw(&session, json!([{"update": call_update("same", Some("mcp_srv_search"), "completed")}])).await;
+    assert_breach(&session, result, "id reused across turns").await;
+    session.close().await;
+}
+
 #[tokio::test]
 async fn the_sessions_own_folder_is_deleted_with_it() {
     let s = Scratch::new("owndir");

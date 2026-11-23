@@ -12,9 +12,14 @@
 //! The behaviour of a prompt is picked by its last paragraph:
 //! - `hello`: a thought chunk, then `Hello`, ` world`, then usage.
 //! - `echo`: the whole prompt text back as `echo:<text>`.
-//! - `perm:<kind>:<tool>:<path>`: asks for permission (kind `read`, `execute`, ...),
-//!   announces a `tool_call`, then ends it `completed` or `failed` by the answer, and
+//! - `perm:<kind>:<tool>:<path>`: like `agy`: a `tool_call` `in_progress`, an
+//!   update `pending`, the permission request (kind `read`, `execute`, ...), an
+//!   update `in_progress`, then `completed` or `failed` by the answer, and
 //!   says `perm:allowed` or `perm:rejected`. `<path>` may be empty.
+//! - `raw:<json array>`: a scripted turn. Steps: `{"update": {...}}` sends that
+//!   `session/update`, `{"perm": {...toolCall...}}` sends a permission request for
+//!   that tool call and says `answer:<optionId>` (or `answer:cancelled`),
+//!   `{"chunk": "text"}` sends text. Then the turn ends normally.
 //! - `auto:<kind>:<tool>`: a tool call that the agent auto-allows, like
 //!   Antigravity's reads and writes in its working directory and its web
 //!   search: `tool_call` in progress and `completed`, with no permission
@@ -193,6 +198,7 @@ fn prompt(rx: &Receiver<Value>, id: &Value, text: &str, last: &str, next_agent_i
                 tool_call["locations"] = json!([{ "path": path }]);
             }
             update(json!({"sessionUpdate": "tool_call", "toolCallId": call_id, "name": tool, "kind": kind, "status": "in_progress", "title": tool, "locations": tool_call["locations"].clone(), "rawInput": tool_call["rawInput"].clone()}));
+            update(json!({"sessionUpdate": "tool_call_update", "toolCallId": call_id, "name": tool, "status": "pending"}));
             let req_id = json!(*next_agent_id);
             *next_agent_id += 1;
             emit(&json!({
@@ -204,8 +210,32 @@ fn prompt(rx: &Receiver<Value>, id: &Value, text: &str, last: &str, next_agent_i
             }));
             let (answer, _) = wait_reply(rx, &req_id);
             let allowed = answer["result"]["outcome"]["optionId"] == "allow";
-            update(json!({"sessionUpdate": "tool_call_update", "toolCallId": call_id, "status": if allowed { "completed" } else { "failed" }}));
+            update(json!({"sessionUpdate": "tool_call_update", "toolCallId": call_id, "name": tool, "status": "in_progress"}));
+            update(json!({"sessionUpdate": "tool_call_update", "toolCallId": call_id, "name": tool, "status": if allowed { "completed" } else { "failed" }}));
             chunk(if allowed { "perm:allowed" } else { "perm:rejected" });
+            end_turn(id);
+        }
+        "raw" => {
+            let steps: Vec<Value> = serde_json::from_str(last.strip_prefix("raw:").unwrap_or("[]")).unwrap_or_default();
+            for step in steps {
+                if let Some(u) = step.get("update") {
+                    update(u.clone());
+                } else if let Some(c) = step.get("chunk").and_then(Value::as_str) {
+                    chunk(c);
+                } else if let Some(tool_call) = step.get("perm") {
+                    let req_id = json!(*next_agent_id);
+                    *next_agent_id += 1;
+                    emit(&json!({
+                        "jsonrpc": "2.0", "id": req_id, "method": "session/request_permission",
+                        "params": {"sessionId": "fake-sid", "toolCall": tool_call, "options": [
+                            {"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                            {"optionId": "deny", "name": "Deny", "kind": "reject_once"},
+                        ]},
+                    }));
+                    let (answer, _) = wait_reply(rx, &req_id);
+                    chunk(&format!("answer:{}", answer["result"]["outcome"]["optionId"].as_str().unwrap_or("cancelled")));
+                }
+            }
             end_turn(id);
         }
         "auto" => {

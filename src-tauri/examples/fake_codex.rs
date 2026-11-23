@@ -23,6 +23,8 @@
 //! - `mcp`: an `mcpToolCall` item (`mira` / `kb_search`) before the answer.
 //! - `read`: a `commandExecution` item that reads `a.md`, before the answer.
 //! - `write`: a `fileChange` item, before the answer.
+//! - `item:<type>`: an item of that type (`webSearch`, `plan`, `whatever`, ...)
+//!   before the answer; `item:mcpToolCall:<server>:<tool>` an MCP call.
 //! - `usage`: a failed turn with Codex's real usage-limit error.
 //! - `fail:<msg>`: a failed turn with `<msg>` and no error cause.
 //! - `approve:cmd|read|file|legacy-cmd|legacy-patch|mcp-ok|mcp-no`: a server
@@ -285,6 +287,19 @@ fn run_turn(
         let mut done = cmd;
         done["status"] = json!("completed");
         completed(done);
+    }
+    if let Some(spec) = q.strip_prefix("item:") {
+        let mut parts = spec.split(':');
+        let kind = parts.next().unwrap_or("plan");
+        let mut it = json!({ "type": kind, "id": "item-x", "status": "inProgress", "text": "" });
+        if kind == "mcpToolCall" {
+            it["server"] = json!(parts.next().unwrap_or("mira"));
+            it["tool"] = json!(parts.next().unwrap_or("kb_search"));
+            it["arguments"] = json!({});
+        }
+        started(it.clone());
+        it["status"] = json!("completed");
+        completed(it);
     }
     if q == "write" {
         let change = json!({ "type": "fileChange", "id": "fc-0", "changes": [], "status": "inProgress" });

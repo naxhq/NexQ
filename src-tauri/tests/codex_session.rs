@@ -217,7 +217,9 @@ async fn context_is_queued_and_sent_with_the_next_question_only() {
 
 #[tokio::test]
 async fn tool_activity_is_reported_like_a_claude_session_does() {
-    let s = spawn(&[]).await;
+    let mut l = launch(&[]);
+    l.policy.allowed_tools.insert("mcp__mira__kb_search".into());
+    let s = CodexSession::spawn(l).await.unwrap();
     let (deltas, on_delta) = collector();
     s.ask("mcp", on_delta, token()).await.unwrap();
     {
@@ -251,6 +253,69 @@ async fn a_command_or_file_change_that_starts_ends_the_session() {
         assert!(s.ask("hello", on_delta, token()).await.is_err(), "{query}: no further turn");
         s.close().await;
     }
+}
+
+/// Only model text, reasoning and the allowed MCP tools may appear: any other
+/// item (web search, an image, a client tool, a sub agent, an item kind nobody
+/// has seen) or an MCP tool the policy does not allow ends the session.
+#[tokio::test]
+async fn any_item_but_text_reasoning_and_allowed_tools_ends_the_session() {
+    for query in [
+        "item:webSearch",
+        "item:imageView",
+        "item:dynamicToolCall",
+        "item:collabAgentToolCall",
+        "item:imageGeneration",
+        "item:sleep",
+        "item:hookPrompt",
+        "item:somethingNew",
+        "item:mcpToolCall:mira:send_mail",
+        "item:mcpToolCall:evil:kb_search",
+        "item:mcpToolCall:mira:*",
+    ] {
+        let mut l = launch(&[]);
+        l.policy.allowed_tools.insert("mcp__mira__kb_search".into());
+        let s = CodexSession::spawn(l).await.unwrap();
+        let (_, on_delta) = collector();
+        let err = s.ask(query, on_delta, token()).await.unwrap_err();
+        assert_eq!(err.kind(), AgentErrorKind::Other, "{query}: {err:?}");
+        assert!(err.to_string().contains("does not allow"), "{query}: {err}");
+        assert!(!s.is_alive(), "{query}: the process must be killed");
+        s.close().await;
+    }
+}
+
+#[tokio::test]
+async fn inert_items_and_allowed_mcp_tools_pass() {
+    let mut l = launch(&[]);
+    l.policy.allowed_tools.insert("mcp__mira__kb_search".into());
+    l.policy.allowed_tools.insert("mcp__wiki__*".into());
+    let s = CodexSession::spawn(l).await.unwrap();
+    for query in ["item:plan", "item:contextCompaction", "item:userMessage", "item:mcpToolCall:mira:kb_search", "item:mcpToolCall:wiki:anything"] {
+        let (_, on_delta) = collector();
+        let r = s.ask(query, on_delta, token()).await.unwrap_or_else(|e| panic!("{query}: {e:?}"));
+        assert_eq!(r.text, format!("answer:{query}"));
+    }
+    assert!(s.is_alive());
+    s.close().await;
+}
+
+/// An MCP server NexQ did not configure that starts anyway fails the session
+/// start; the ones it configured (and a failed unexpected one) do not.
+#[tokio::test]
+async fn an_unexpected_mcp_server_that_starts_fails_the_session() {
+    for status in ["ready", "starting"] {
+        // Only `starting` is reported for this one: the fake's `fake_mcp` sends starting, then the status.
+        let l = launch(&[&format!("fake_mcp=sneaky:{status}")]);
+        let err = CodexSession::spawn(l).await.err().expect("spawn must fail");
+        assert!(err.to_string().contains("sneaky"), "{status}: {err}");
+    }
+    // NexQ's own server is fine, and an unexpected one that failed never ran.
+    let mut l = launch(&["fake_mcp=nexq_notes:ready,other:failed"]);
+    l.has_notes = true;
+    l.mcp_servers.insert("nexq_notes".into(), serde_json::json!({ "command": "nexq", "args": ["--notes-mcp"] }));
+    let s = CodexSession::spawn(l).await.unwrap();
+    s.close().await;
 }
 
 async fn decision(fake: &[&str], configure: impl FnOnce(&mut CodexLaunch), query: &str) -> String {

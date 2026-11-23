@@ -15,7 +15,7 @@
 //!   the result must lie inside the canonical allowed folder. A junction or
 //!   symlink that leaves the folder fails here; one that stays inside is fine.
 //! - Files with the Windows hidden or system attribute are never listed or
-//!   read, and the walk never enters a reparse point.
+//!   read, and the walk never enters a symlink or junction.
 //!
 //! Only `.md`, `.markdown` and `.txt` files are listed, searched or read.
 
@@ -49,9 +49,11 @@ type Res<T> = Result<T, String>;
 struct Root {
     /// What the model calls it (the folder's own name, made unique).
     label: String,
-    /// The canonical path, without a `\\?\` prefix.
+    /// The canonical path as the file system gave it (`\\?\` prefix and all, so
+    /// a path over 260 characters can still be opened). For IO only: compare
+    /// through `key`, show through [`display`].
     path: PathBuf,
-    /// `path` as a comparable string.
+    /// `path` as a comparable string (verbatim prefix stripped).
     key: String,
 }
 
@@ -82,7 +84,6 @@ impl Notes {
                 skipped.push(format!("{}: folder not found", dir.display()));
                 continue;
             };
-            let real = plain(real);
             if !real.is_dir() {
                 skipped.push(format!("{}: not a folder", dir.display()));
                 continue;
@@ -376,13 +377,14 @@ impl Notes {
     /// Is `path` (an existing item found by the walk) still inside `root`
     /// after the file system resolves it?
     fn inside_root(&self, root: &Root, path: &Path) -> bool {
-        std::fs::canonicalize(path).map(|p| is_inside(&comparable(&plain(p)), &root.key)).unwrap_or(false)
+        std::fs::canonicalize(path).map(|p| is_inside(&comparable(&p), &root.key)).unwrap_or(false)
     }
 }
 
 // ---- pure helpers -------------------------------------------------------
 
-/// `path` without the `\\?\` prefix (`\\?\UNC\a\b` becomes `\\a\b`).
+/// `path` without the `\\?\` prefix (`\\?\UNC\a\b` becomes `\\a\b`): for
+/// comparing only. Never open a path in this form, it breaks over 260 characters.
 fn plain(path: PathBuf) -> PathBuf {
     let text = path.to_string_lossy();
     if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
@@ -394,17 +396,19 @@ fn plain(path: PathBuf) -> PathBuf {
     }
 }
 
-/// `canonicalize`, plain.
+/// `canonicalize`, verbatim prefix kept (for IO; [`comparable`] strips it).
 fn real_path(path: &Path) -> Res<PathBuf> {
     match std::fs::canonicalize(path) {
-        Ok(p) => Ok(plain(p)),
+        Ok(p) => Ok(p),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err("Not found.".into()),
         Err(e) => Err(format!("Can't open that path: {e}")),
     }
 }
 
-/// The form two paths are compared in: backslashes, lowercase on Windows.
+/// The form two paths are compared in: no `\\?\` prefix, backslashes,
+/// lowercase on Windows.
 fn comparable(path: &Path) -> String {
+    let path = plain(path.to_path_buf());
     let text = path.to_string_lossy().replace('/', "\\");
     let text = text.trim_end_matches('\\').to_string();
     if cfg!(windows) {
@@ -434,7 +438,11 @@ fn absolute_check(input: &str) -> Res<String> {
     if !drive_form {
         return Err("Use a path inside a notes folder (`<folder>/<file>`).".into());
     }
-    for seg in input[3..].split(['\\', '/']).filter(|s| !s.is_empty() && *s != ".") {
+    for (i, seg) in input[3..].split(['\\', '/']).filter(|s| !s.is_empty() && *s != ".").enumerate() {
+        // Whatever starts with `$` at a drive's root belongs to the system.
+        if i == 0 && seg.starts_with('$') {
+            return Err(format!("\"{seg}\" is not allowed: system names are not available."));
+        }
         if let Some(why) = segment_problem(seg) {
             return Err(format!("\"{seg}\" is not allowed: {why}."));
         }
@@ -466,7 +474,7 @@ pub fn segment_problem(seg: &str) -> Option<&'static str> {
     if seg.starts_with('.') {
         return Some("hidden names are not available");
     }
-    if seg.starts_with('$') {
+    if is_ntfs_system_name(seg) {
         return Some("system names are not available");
     }
     if seg.chars().any(|c| c.is_control() || matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|')) {
@@ -479,6 +487,18 @@ pub fn segment_problem(seg: &str) -> Option<&'static str> {
         return Some("it is a Windows device name");
     }
     None
+}
+
+/// The NTFS metafiles and the system folders found at a drive's root, by exact
+/// name (any case). Other names that start with `$` (`$100 budget.md`) are
+/// ordinary files.
+fn is_ntfs_system_name(seg: &str) -> bool {
+    const NAMES: [&str; 23] = [
+        "$MFT", "$MFTMirr", "$LogFile", "$Volume", "$AttrDef", "$Bitmap", "$Boot", "$BadClus", "$Secure", "$UpCase",
+        "$Extend", "$Quota", "$ObjId", "$Reparse", "$RmMetadata", "$Txf", "$TxfLog", "$Recycle.Bin", "$WinREAgent",
+        "$SysReset", "$Windows.~BT", "$Windows.~WS", "$GetCurrent",
+    ];
+    NAMES.iter().any(|n| seg.eq_ignore_ascii_case(n))
 }
 
 /// `CON`, `PRN`, `AUX`, `NUL`, `COM1`..`COM9`, `LPT1`..`LPT9` (also with the
@@ -525,16 +545,12 @@ fn is_hidden_attr(_meta: &std::fs::Metadata) -> bool {
     false
 }
 
-/// A hidden or system item, or a reparse point (junction, symlink): not
-/// listed and never entered by a walk.
+/// A hidden or system item, or a symlink or junction: not listed and never
+/// entered by a walk. Std reports a junction (a name-surrogate reparse point)
+/// as a symlink, while cloud placeholders (OneDrive, Dropbox: reparse points
+/// that are not name surrogates) are ordinary files and stay listed. A link
+/// that slipped through still fails the canonical containment checks.
 fn hidden_or_link(meta: &std::fs::Metadata) -> bool {
-    #[cfg(windows)]
-    {
-        const REPARSE_POINT: u32 = 0x400;
-        if attributes(meta) & REPARSE_POINT != 0 {
-            return true;
-        }
-    }
     meta.file_type().is_symlink() || is_hidden_attr(meta)
 }
 
@@ -792,6 +808,62 @@ mod tests {
         }
         let _ = std::fs::remove_dir(&link);
         let _ = std::fs::remove_dir(&inner);
+    }
+
+    #[test]
+    fn ordinary_dollar_names_are_notes_but_ntfs_metafiles_are_not() {
+        let t = Tree::new("dollar");
+        std::fs::write(t.0.join("notes").join("$100 budget.md"), "falcon budget $100").unwrap();
+        let n = t.notes();
+        assert!(n.list(None, None).unwrap().contains("$100 budget.md"));
+        assert!(n.read("$100 budget.md").unwrap().contains("$100"));
+        assert!(n.read(&t.0.join("notes").join("$100 budget.md").to_string_lossy()).is_ok());
+        assert!(n.search("budget $100", None).unwrap().contains("$100 budget.md:1"));
+        for bad in ["$MFT", "$mft", "$Extend/x.md", "sub/$Recycle.Bin/x.md", "$RECYCLE.BIN/x.md", "$Secure"] {
+            assert!(n.read(bad).is_err(), "{bad}");
+        }
+        assert!(segment_problem("$Volume").is_some() && segment_problem("$Volumes.md").is_none());
+        // Whatever starts with `$` at a drive's root is refused as an absolute path.
+        assert!(absolute_check("C:\\$100\\a.md").is_err());
+        assert!(absolute_check("C:\\Users\\a\\$100 budget.md").is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_path_over_260_characters_is_read_listed_and_searched() {
+        let t = Tree::new("long");
+        let mut dir = t.0.join("notes");
+        let mut rel = Vec::new();
+        while dir.to_string_lossy().len() < 300 {
+            let seg = format!("a-rather-long-folder-name-{}", rel.len());
+            dir.push(&seg);
+            rel.push(seg);
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("deep.md"), "falcon deep note").unwrap();
+        assert!(dir.join("deep.md").to_string_lossy().len() > 260);
+        let n = t.notes();
+        let rel_path = format!("{}/deep.md", rel.join("/"));
+        assert!(n.read(&rel_path).unwrap().contains("deep note"));
+        assert!(n.read(&dir.join("deep.md").to_string_lossy()).unwrap().contains("deep note"));
+        assert!(n.list(None, Some(&rel.join("/"))).unwrap().contains("deep.md"));
+        assert!(n.search("deep note", None).unwrap().contains("deep.md:1"));
+        // The shown path is still plain, never `\\?\`.
+        assert!(!n.search("deep note", None).unwrap().contains("\\\\?\\"));
+        // Outside is still outside.
+        assert!(n.read("../outside/secret.md").is_err());
+    }
+
+    #[test]
+    fn a_normal_file_stays_listed_and_readable() {
+        // A cloud placeholder cannot be made here; an ordinary file (archive attribute only) must list.
+        let t = Tree::new("placeholder");
+        std::fs::write(t.0.join("notes").join("cloud.md"), "falcon cloud").unwrap();
+        let n = t.notes();
+        assert!(n.list(None, None).unwrap().contains("cloud.md"));
+        assert!(n.search("cloud", None).unwrap().contains("cloud.md"));
+        let meta = std::fs::symlink_metadata(t.0.join("notes").join("cloud.md")).unwrap();
+        assert!(!hidden_or_link(&meta));
     }
 
     #[cfg(windows)]

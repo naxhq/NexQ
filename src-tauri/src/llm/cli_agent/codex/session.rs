@@ -19,7 +19,7 @@
 //!   the text and the next `ask` prepends it.
 
 use super::launch::{build_args, configure_command, discover_user_mcp_servers, CodexLaunch};
-use super::policy::{decide, CodexPolicy};
+use super::policy::{self, decide, CodexPolicy};
 use super::protocol::{
     self, Account, Incoming, Item, Notification, RpcError, ServerRequest, ThreadStart, TurnStatus, Usage,
 };
@@ -80,6 +80,10 @@ struct Shared {
     mcp: Mutex<Vec<McpServerState>>,
     /// The thread's cumulative token usage when the last turn ended.
     usage_baseline: Mutex<Usage>,
+    /// Which MCP tools may run: the allowlist `item_breach` checks every item against.
+    policy: CodexPolicy,
+    /// The keys of the MCP servers NexQ configured: any other that starts is a breach.
+    expected_servers: Vec<String>,
 }
 
 impl Shared {
@@ -141,6 +145,33 @@ impl Shared {
             Some(s) => s.status = status.to_string(),
             None => all.push(McpServerState { name: name.to_string(), status: status.to_string() }),
         }
+    }
+}
+
+/// The first MCP server that is starting or ready although NexQ did not
+/// configure it (one that merely failed never ran).
+fn unexpected_server<'a>(servers: &'a [McpServerState], expected: &[String]) -> Option<&'a McpServerState> {
+    servers
+        .iter()
+        .find(|s| !expected.contains(&s.name) && matches!(s.status.as_str(), "pending" | "connected"))
+}
+
+/// A thread item the session may not see: `Some(what it was)` for anything
+/// but model text, reasoning and the other kinds that are inert by
+/// construction (the user's message, the plan text, a context compaction), and
+/// an MCP tool call that the policy allows. An allowlist: a new item kind
+/// that Codex adds is refused until it is looked at.
+fn item_breach(item: &Item, policy: &CodexPolicy) -> Option<String> {
+    match item {
+        Item::AgentMessage { .. } | Item::Reasoning { .. } => None,
+        Item::McpToolCall { server, tool, .. } => {
+            (!policy::tool_allowed(&policy.allowed_tools, server, tool)).then(|| format!("the MCP tool {server}.{tool}"))
+        }
+        Item::CommandExecution { .. } => Some("a command".to_string()),
+        Item::FileChange { .. } => Some("a file change".to_string()),
+        Item::Other { kind } if matches!(kind.as_str(), "userMessage" | "plan" | "contextCompaction") => None,
+        Item::Other { kind } if kind.is_empty() => Some("an unknown tool".to_string()),
+        Item::Other { kind } => Some(format!("a {kind} tool")),
     }
 }
 
@@ -275,12 +306,24 @@ impl CodexSession {
         let expected = launch.server_keys();
         if !expected.is_empty() {
             self.wait_for_mcp(&expected).await;
+        } else {
+            // Nothing to wait for, but whatever server started anyway has been
+            // announced before this answer comes back (the pipe is ordered).
+            let (id, rx) = self.shared.register();
+            self.send_line(protocol::account_read_request(id))?;
+            self.await_response(rx).await?;
         }
         let info = InitInfo { tools: Vec::new(), mcp_servers: self.shared.mcp.lock().unwrap().clone() };
-        for server in info.mcp_servers.iter().filter(|s| !expected.contains(&s.name)) {
-            // The user's own servers are switched off: one starting means the
-            // config changed under us. Worth a line, not a failed session.
-            log::warn!("codex: unexpected MCP server `{}` ({})", server.name, server.status);
+        // The user's own servers are switched off: one that starts anyway means
+        // the config was not honoured, and its tools are not ours to vouch for.
+        if let Some(server) = unexpected_server(&info.mcp_servers, &expected) {
+            return Err(AgentError::Cli(
+                AgentErrorKind::Other,
+                format!(
+                    "Codex started an MCP server NexQ did not configure (`{}`), so the session was closed.",
+                    server.name
+                ),
+            ));
         }
         *self.init.lock().unwrap() = info.clone();
         // The notes server is one of the servers: when it fails and nothing else
@@ -636,18 +679,31 @@ async fn run_turn(
                         return Err(AgentError::Timeout);
                     }
                 };
-                match event {
-                    // No shell and no file tools exist for this session: a
-                    // command or a file change that starts is a breach.
-                    Notification::ItemStarted { item: Item::CommandExecution { .. } | Item::FileChange { .. }, .. } => {
+                // A server NexQ did not configure that came up (the user's own,
+                // switched off, or a plugin's): nothing it offers is vouched for.
+                if let Some(server) = unexpected_server(&shared.mcp.lock().unwrap(), &shared.expected_servers) {
+                    let name = server.name.clone();
+                    interrupt(shared, &mut interrupted);
+                    shared.terminate(&format!("unexpected MCP server {name} started"));
+                    return Err(AgentError::Cli(
+                        AgentErrorKind::Other,
+                        format!("Codex started an MCP server NexQ did not configure (`{name}`), which NexQ does not allow. The session was closed."),
+                    ));
+                }
+                // The session has no shell, no file tools and no web: only
+                // model text, reasoning and the allowed MCP tools may appear
+                // (any turn: this thread runs one at a time).
+                if let Notification::ItemStarted { item, .. } | Notification::ItemCompleted { item, .. } = &event {
+                    if let Some(what) = item_breach(item, &shared.policy) {
                         interrupt(shared, &mut interrupted);
-                        shared.terminate("a command or file change started");
+                        shared.terminate(&format!("{what} started"));
                         return Err(AgentError::Cli(
                             AgentErrorKind::Other,
-                            "Codex tried to run a command or change a file, which NexQ does not allow. The session was closed."
-                                .to_string(),
+                            format!("Codex tried to use {what}, which NexQ does not allow. The session was closed."),
                         ));
                     }
+                }
+                match event {
                     Notification::AgentMessageDelta { turn_id: t, item_id, delta } if t == turn_id => {
                         if !commentary.contains(&item_id) {
                             // Model text can't carry the activity marker.
@@ -775,6 +831,8 @@ fn start_process(launch: &CodexLaunch, args: &[String], approvals: Arc<Approvals
         pending: Mutex::new(HashMap::new()),
         mcp: Mutex::new(Vec::new()),
         usage_baseline: Mutex::new(Usage::default()),
+        policy: approvals.policy.clone(),
+        expected_servers: launch.server_keys(),
     });
     let (event_tx, event_rx) = mpsc::unbounded_channel();
 
@@ -958,6 +1016,57 @@ mod tests {
         assert_eq!(r.duration_ms, 1500);
         assert_eq!(r.cost_usd, 0.0);
         assert!(!r.is_error);
+    }
+
+    #[test]
+    fn items_are_an_allowlist() {
+        let policy = CodexPolicy { allowed_tools: ["mcp__nexq_notes__read_note".to_string(), "mcp__wiki__*".to_string()].into() };
+        let mcp = |server: &str, tool: &str| Item::McpToolCall {
+            id: "i".into(),
+            server: server.into(),
+            tool: tool.into(),
+            arguments: Value::Null,
+            status: "inProgress".into(),
+            error: None,
+        };
+        let other = |kind: &str| Item::Other { kind: kind.into() };
+        for ok in [
+            Item::AgentMessage { id: "m".into(), text: String::new(), phase: None },
+            Item::Reasoning { id: "r".into() },
+            other("userMessage"),
+            other("plan"),
+            other("contextCompaction"),
+            mcp("nexq_notes", "read_note"),
+            mcp("wiki", "anything"),
+        ] {
+            assert_eq!(item_breach(&ok, &policy), None, "{ok:?}");
+        }
+        for bad in [
+            Item::CommandExecution { id: "c".into(), command: "dir".into(), actions: vec![], status: String::new() },
+            Item::FileChange { id: "f".into() },
+            other("webSearch"),
+            other("imageView"),
+            other("dynamicToolCall"),
+            other("collabAgentToolCall"),
+            other("hookPrompt"),
+            other("somethingNew"),
+            other(""),
+            mcp("nexq_notes", "write_note"),
+            mcp("evil", "read_note"),
+            mcp("", ""),
+        ] {
+            assert!(item_breach(&bad, &policy).is_some(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn only_a_started_unexpected_server_counts() {
+        let state = |name: &str, status: &str| McpServerState { name: name.into(), status: status.into() };
+        let expected = vec!["nexq_notes".to_string()];
+        let all = [state("nexq_notes", "connected"), state("old", "failed"), state("auth", "needs-auth")];
+        assert!(unexpected_server(&all, &expected).is_none());
+        assert_eq!(unexpected_server(&[state("mira", "pending")], &expected).map(|s| s.name.as_str()), Some("mira"));
+        assert_eq!(unexpected_server(&[state("mira", "connected")], &expected).map(|s| s.name.as_str()), Some("mira"));
     }
 
     #[test]
