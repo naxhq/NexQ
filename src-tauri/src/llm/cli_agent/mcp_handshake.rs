@@ -5,16 +5,22 @@
 //! Antigravity or Codex can still Check a server and get its tool list.
 //! stdio servers talk newline-delimited JSON-RPC over their stdin and stdout;
 //! http servers get one POST per message (streamable HTTP), answered as plain
-//! JSON or as an SSE stream. Secret values never appear in the errors.
+//! JSON or as an SSE stream.
+//!
+//! The server is untrusted: what it sends is capped (bytes per handshake, per
+//! line, per event, tools, name length), the clock is enforced even when it
+//! never reads or never answers, redirects are not followed (the headers carry
+//! saved secrets), and nothing it says is repeated in an error, only its
+//! JSON-RPC error code.
 
 use super::command::{configure_command, sandbox_dir};
 use super::mcp_check::CHECK_MCP_TIMEOUT_MS;
-use super::mcp_diagnose::{redact, resolve_command};
+use super::mcp_diagnose::{resolve_command, secret_variants};
 use super::process_tree::ProcessTree;
 use crate::sources::config::{McpServer, McpTransport};
 use crate::sources::mcp_json::{credential_id, header_credential_id};
 use serde_json::{json, Value};
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -23,6 +29,20 @@ use std::time::{Duration, Instant};
 const PROTOCOL_VERSION: &str = "2025-06-18";
 /// A server with more `tools/list` pages than this gets the first ones only.
 const MAX_PAGES: usize = 10;
+/// Most bytes read from a server in one handshake (all HTTP responses, or all
+/// stdout lines, together), and the most one SSE event may grow to.
+const MAX_BYTES: usize = 4 * 1024 * 1024;
+/// Longest stdout line from a stdio server.
+const MAX_LINE: usize = 2 * 1024 * 1024;
+/// Most tools kept, and the longest tool name (longer ones are left out).
+const MAX_TOOLS: usize = 1000;
+const MAX_TOOL_NAME: usize = 200;
+/// A server request whose id is longer than this (as JSON) is not answered.
+const MAX_ID_BYTES: usize = 256;
+/// Lines the stdout reader may run ahead of the handshake.
+const LINE_QUEUE: usize = 64;
+/// How long past the deadline the watchdog waits before ending the process.
+const WATCHDOG_GRACE: Duration = Duration::from_secs(2);
 
 /// Why a handshake did not give a tool list.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,26 +51,32 @@ pub enum HandshakeError {
     Timeout,
     /// The command could not be started, or ended before it answered.
     Stopped,
-    /// The server answered a request with a JSON-RPC error.
-    Rpc(String),
-    /// What came back wasn't an MCP answer.
+    /// The server answered a request with a JSON-RPC error (its code, if any).
+    Rpc(Option<i64>),
+    /// What came back wasn't an MCP answer (our own description).
     Protocol(String),
     /// A URL answered with this HTTP status.
     Http(u16),
+    /// A URL answered with a redirect, which is not followed.
+    Redirect,
+    /// The server sent more than a Check reads.
+    TooLarge,
     /// The URL could not be reached.
     Unreachable,
 }
 
 impl HandshakeError {
-    /// Short plain text for the user, with every secret value hidden.
+    /// Short plain text for the user. Nothing the server said is in it; every
+    /// secret value is hidden anyway.
     pub fn message(&self, secrets: &[String]) -> String {
-        match self {
+        let text = match self {
             Self::Timeout => "The server took too long to start.".to_string(),
             Self::Stopped => {
                 "The server failed to start. Check its command, arguments and sign-in values.".to_string()
             }
-            Self::Rpc(text) => format!("The server refused the request: {}", redact(text, secrets)),
-            Self::Protocol(text) => format!("The server's answer wasn't valid MCP: {}", redact(text, secrets)),
+            Self::Rpc(Some(code)) => format!("The server refused the request (error {code})."),
+            Self::Rpc(None) => "The server refused the request.".to_string(),
+            Self::Protocol(text) => format!("The server's answer wasn't valid MCP: {text}"),
             Self::Http(401 | 403) => {
                 "The server needs a sign-in NexQ doesn't have. Check its header values.".to_string()
             }
@@ -58,7 +84,40 @@ impl HandshakeError {
                  speak the older SSE transport can't be checked yet."
                 .to_string(),
             Self::Http(code) => format!("The server didn't accept the request (HTTP {code})."),
+            Self::Redirect => "The server answered with a redirect; use the final URL.".to_string(),
+            Self::TooLarge => "The server sent more data than a Check reads.".to_string(),
             Self::Unreachable => "The server couldn't be reached.".to_string(),
+        };
+        scrub(&text, secrets)
+    }
+}
+
+/// `text` with every secret value hidden.
+fn scrub(text: &str, secrets: &[String]) -> String {
+    let mut out = text.to_string();
+    for secret in secrets.iter().filter(|s| s.len() >= 3) {
+        out = out.replace(secret.as_str(), "***");
+    }
+    out
+}
+
+/// A running count against a limit.
+struct Budget {
+    used: usize,
+    limit: usize,
+}
+
+impl Budget {
+    fn new(limit: usize) -> Self {
+        Self { used: 0, limit }
+    }
+
+    fn charge(&mut self, bytes: usize) -> Result<(), HandshakeError> {
+        self.used = self.used.saturating_add(bytes);
+        if self.used > self.limit {
+            Err(HandshakeError::TooLarge)
+        } else {
+            Ok(())
         }
     }
 }
@@ -95,8 +154,8 @@ fn tools_list_request(id: u64, cursor: Option<&str>) -> Value {
 /// What one message from the server is, seen from the request `want` we wait on.
 #[derive(Debug, PartialEq)]
 enum Incoming {
-    /// The answer to our request: its `result`, or the error text.
-    Response(Result<Value, String>),
+    /// The answer to our request: its `result`, or the error code.
+    Response(Result<Value, Option<i64>>),
     /// A request of the server's own (it carries an `id` and a `method`).
     ServerRequest { id: Value, method: String },
     /// A notification, an answer to something else, or noise.
@@ -122,12 +181,7 @@ fn classify(message: &Value, want: u64) -> Incoming {
         return Incoming::Ignore;
     }
     if let Some(error) = message.get("error") {
-        let text = error
-            .get("message")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| error.to_string());
-        return Incoming::Response(Err(text));
+        return Incoming::Response(Err(error.get("code").and_then(Value::as_i64)));
     }
     match message.get("result") {
         Some(result) => Incoming::Response(Ok(result.clone())),
@@ -142,7 +196,8 @@ fn tool_name(key: &str, tool: &str) -> String {
     format!("mcp__{key}__{clean}")
 }
 
-/// The tools of one `tools/list` result (full names) and the cursor of the next page.
+/// The tools of one `tools/list` result (full names; a name over
+/// [`MAX_TOOL_NAME`] characters is left out) and the cursor of the next page.
 fn tools_page(result: &Value, key: &str) -> Result<(Vec<String>, Option<String>), HandshakeError> {
     let tools = result
         .get("tools")
@@ -151,6 +206,8 @@ fn tools_page(result: &Value, key: &str) -> Result<(Vec<String>, Option<String>)
     let names = tools
         .iter()
         .filter_map(|t| t.get("name").and_then(Value::as_str))
+        .filter(|name| name.chars().count() <= MAX_TOOL_NAME)
+        .take(MAX_TOOLS)
         .map(|name| tool_name(key, name))
         .collect();
     let next = result
@@ -159,6 +216,17 @@ fn tools_page(result: &Value, key: &str) -> Result<(Vec<String>, Option<String>)
         .filter(|c| !c.is_empty())
         .map(str::to_string);
     Ok((names, next))
+}
+
+/// Add a page to `tools`; true when [`MAX_TOOLS`] is reached and paging stops.
+fn add_tools(tools: &mut Vec<String>, names: Vec<String>) -> bool {
+    tools.extend(names);
+    if tools.len() >= MAX_TOOLS {
+        tools.truncate(MAX_TOOLS);
+        true
+    } else {
+        false
+    }
 }
 
 /// The messages in a JSON body: one object, or a batch (array).
@@ -171,23 +239,43 @@ fn json_messages(body: &str) -> Vec<Value> {
 }
 
 /// Incremental reader of a server-sent-events body: feed it bytes, get the
-/// `data` of every event that is complete.
-#[derive(Default)]
+/// `data` of every event that is complete. Holds at most `limit` bytes of an
+/// unfinished event, and looks for the blank line only in what is new.
 struct SseBuffer {
     buf: Vec<u8>,
+    /// Where the next search for an event end starts.
+    scanned: usize,
+    limit: usize,
 }
 
 impl SseBuffer {
-    fn push(&mut self, bytes: &[u8]) -> Vec<String> {
+    fn new(limit: usize) -> Self {
+        Self { buf: Vec::new(), scanned: 0, limit }
+    }
+
+    fn push(&mut self, bytes: &[u8]) -> Result<Vec<String>, HandshakeError> {
         self.buf.extend_from_slice(bytes);
         let mut events = Vec::new();
-        while let Some((end, gap)) = event_end(&self.buf) {
-            let raw: Vec<u8> = self.buf.drain(..end + gap).take(end).collect();
-            if let Some(data) = event_data(&String::from_utf8_lossy(&raw)) {
-                events.push(data);
+        loop {
+            match event_end(&self.buf, self.scanned) {
+                Some((end, gap)) => {
+                    let raw: Vec<u8> = self.buf.drain(..end + gap).take(end).collect();
+                    self.scanned = 0;
+                    if let Some(data) = event_data(&String::from_utf8_lossy(&raw)) {
+                        events.push(data);
+                    }
+                }
+                None => {
+                    // A blank line split across chunks starts up to 3 bytes back.
+                    self.scanned = self.buf.len().saturating_sub(3);
+                    break;
+                }
             }
         }
-        events
+        if self.buf.len() > self.limit {
+            return Err(HandshakeError::TooLarge);
+        }
+        Ok(events)
     }
 
     /// The last event, when the stream ended without a closing blank line.
@@ -197,10 +285,12 @@ impl SseBuffer {
     }
 }
 
-/// Where the first event in `buf` ends and how long the blank line after it is.
-fn event_end(buf: &[u8]) -> Option<(usize, usize)> {
-    let lf = buf.windows(2).position(|w| w == b"\n\n").map(|p| (p, 2));
-    let crlf = buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| (p, 4));
+/// Where the first event in `buf[from..]` ends and how long the blank line
+/// after it is.
+fn event_end(buf: &[u8], from: usize) -> Option<(usize, usize)> {
+    let tail = buf.get(from..)?;
+    let lf = tail.windows(2).position(|w| w == b"\n\n").map(|p| (from + p, 2));
+    let crlf = tail.windows(4).position(|w| w == b"\r\n\r\n").map(|p| (from + p, 4));
     match (lf, crlf) {
         (Some(a), Some(b)) => Some(if a.0 <= b.0 { a } else { b }),
         (a, b) => a.or(b),
@@ -220,8 +310,8 @@ fn event_data(event: &str) -> Option<String> {
 /// The messages in a complete SSE body.
 #[cfg(test)]
 fn sse_messages(body: &str) -> Vec<Value> {
-    let mut sse = SseBuffer::default();
-    let mut events = sse.push(body.as_bytes());
+    let mut sse = SseBuffer::new(MAX_BYTES);
+    let mut events = sse.push(body.as_bytes()).unwrap();
     events.extend(sse.finish());
     events.iter().flat_map(|d| json_messages(d)).collect()
 }
@@ -234,28 +324,44 @@ trait LineSource {
     fn next_line(&mut self, deadline: Instant) -> Result<Option<String>, HandshakeError>;
 }
 
-/// Lines from any reader (tests; the deadline can't interrupt a blocking read).
-struct BufLines<R: BufRead>(R);
-
-impl<R: BufRead> LineSource for BufLines<R> {
-    fn next_line(&mut self, _deadline: Instant) -> Result<Option<String>, HandshakeError> {
-        let mut line = String::new();
-        match self.0.read_line(&mut line) {
-            Ok(0) => Ok(None),
-            Ok(_) => Ok(Some(line)),
-            Err(_) => Ok(None),
-        }
+/// The next line of `reader` (at most `max` bytes), `None` at its end;
+/// [`HandshakeError::TooLarge`] for a longer line.
+fn read_capped_line<R: BufRead>(reader: &mut R, max: usize) -> Result<Option<String>, HandshakeError> {
+    let mut buf = Vec::new();
+    match reader.by_ref().take(max as u64 + 1).read_until(b'\n', &mut buf) {
+        Ok(0) | Err(_) => Ok(None),
+        Ok(_) if buf.len() > max && !buf.ends_with(b"\n") => Err(HandshakeError::TooLarge),
+        Ok(_) => Ok(Some(String::from_utf8_lossy(&buf).into_owned())),
     }
 }
 
-/// Lines a reader thread sends over a channel, so the deadline holds.
-struct ChannelLines(mpsc::Receiver<String>);
+/// Lines from any reader (tests; the deadline can't interrupt a blocking read).
+struct BufLines<R: BufRead> {
+    reader: R,
+    max_line: usize,
+}
+
+impl<R: BufRead> BufLines<R> {
+    fn new(reader: R) -> Self {
+        Self { reader, max_line: MAX_LINE }
+    }
+}
+
+impl<R: BufRead> LineSource for BufLines<R> {
+    fn next_line(&mut self, _deadline: Instant) -> Result<Option<String>, HandshakeError> {
+        read_capped_line(&mut self.reader, self.max_line)
+    }
+}
+
+/// Lines a reader thread sends over a bounded channel, so the deadline holds
+/// and a flood waits in the pipe instead of in memory.
+struct ChannelLines(mpsc::Receiver<Result<String, HandshakeError>>);
 
 impl LineSource for ChannelLines {
     fn next_line(&mut self, deadline: Instant) -> Result<Option<String>, HandshakeError> {
         let left = deadline.checked_duration_since(Instant::now()).ok_or(HandshakeError::Timeout)?;
         match self.0.recv_timeout(left) {
-            Ok(line) => Ok(Some(line)),
+            Ok(line) => line.map(Some),
             Err(mpsc::RecvTimeoutError::Timeout) => Err(HandshakeError::Timeout),
             Err(mpsc::RecvTimeoutError::Disconnected) => Ok(None),
         }
@@ -266,21 +372,34 @@ fn send_line(out: &mut impl Write, message: &Value) -> Result<(), HandshakeError
     writeln!(out, "{message}").and_then(|_| out.flush()).map_err(|_| HandshakeError::Stopped)
 }
 
+fn check_deadline(deadline: Instant) -> Result<(), HandshakeError> {
+    if Instant::now() >= deadline {
+        Err(HandshakeError::Timeout)
+    } else {
+        Ok(())
+    }
+}
+
 /// Send `message` (a request with id `want`) and read until its answer. The
-/// server's own requests get an error back (`ping` an empty result); anything
-/// else it says in between is skipped, including lines that aren't JSON.
+/// server's own requests get an error back (`ping` an empty result; one with a
+/// long id none at all); anything else it says in between is skipped,
+/// including lines that aren't JSON. The deadline is checked for every message.
 fn stdio_request(
     src: &mut impl LineSource,
     out: &mut impl Write,
     message: &Value,
     want: u64,
     deadline: Instant,
+    budget: &mut Budget,
 ) -> Result<Value, HandshakeError> {
+    check_deadline(deadline)?;
     send_line(out, message)?;
     loop {
+        check_deadline(deadline)?;
         let Some(line) = src.next_line(deadline)? else {
             return Err(HandshakeError::Stopped);
         };
+        budget.charge(line.len())?;
         let Ok(parsed) = serde_json::from_str::<Value>(line.trim()) else {
             continue;
         };
@@ -289,10 +408,14 @@ fn stdio_request(
             other => vec![other],
         };
         for msg in &messages {
+            check_deadline(deadline)?;
             match classify(msg, want) {
                 Incoming::Response(Ok(result)) => return Ok(result),
-                Incoming::Response(Err(text)) => return Err(HandshakeError::Rpc(text)),
+                Incoming::Response(Err(code)) => return Err(HandshakeError::Rpc(code)),
                 Incoming::ServerRequest { id, method } => {
+                    if id.to_string().len() > MAX_ID_BYTES {
+                        continue;
+                    }
                     let reply = if method == "ping" {
                         json!({ "jsonrpc": "2.0", "id": id, "result": {} })
                     } else {
@@ -314,15 +437,29 @@ fn stdio_handshake(
     key: &str,
     deadline: Instant,
 ) -> Result<Vec<String>, HandshakeError> {
-    stdio_request(src, out, &initialize_request(1), 1, deadline)?;
+    stdio_handshake_within(src, out, key, deadline, MAX_BYTES)
+}
+
+fn stdio_handshake_within(
+    src: &mut impl LineSource,
+    out: &mut impl Write,
+    key: &str,
+    deadline: Instant,
+    max_bytes: usize,
+) -> Result<Vec<String>, HandshakeError> {
+    let mut budget = Budget::new(max_bytes);
+    stdio_request(src, out, &initialize_request(1), 1, deadline, &mut budget)?;
     send_line(out, &initialized_notification())?;
     let mut tools = Vec::new();
     let mut cursor: Option<String> = None;
     for page in 0..MAX_PAGES {
         let id = 2 + page as u64;
-        let result = stdio_request(src, out, &tools_list_request(id, cursor.as_deref()), id, deadline)?;
+        let result =
+            stdio_request(src, out, &tools_list_request(id, cursor.as_deref()), id, deadline, &mut budget)?;
         let (names, next) = tools_page(&result, key)?;
-        tools.extend(names);
+        if add_tools(&mut tools, names) {
+            break;
+        }
         match next {
             Some(c) => cursor = Some(c),
             None => break,
@@ -332,8 +469,9 @@ fn stdio_handshake(
 }
 
 /// Start the command like a session would (same folder, environment, shims and
-/// no console window) and run the handshake on its pipes. The command and
-/// everything it started are ended afterwards.
+/// no console window) and run the handshake on its pipes. A watchdog ends the
+/// command and everything it started at the deadline, so a server that never
+/// reads or never answers can't hold this up; they are ended afterwards too.
 fn stdio_check(
     command: &str,
     args: &[String],
@@ -356,24 +494,36 @@ fn stdio_check(
         tree.kill(&mut child);
         return Err(HandshakeError::Stopped);
     };
-    let (tx, rx) = mpsc::channel::<String>();
-    // Ends when the pipe closes (the tree is killed below); never joined.
+    let (tx, rx) = mpsc::sync_channel::<Result<String, HandshakeError>>(LINE_QUEUE);
+    // Ends when the pipe closes (the tree is killed below) or the handshake is done.
     std::thread::spawn(move || {
         let mut reader = std::io::BufReader::new(stdout);
         loop {
-            let mut line = String::new();
-            match reader.read_line(&mut line) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {
-                    if tx.send(line).is_err() {
+            match read_capped_line(&mut reader, MAX_LINE) {
+                Ok(Some(line)) => {
+                    if tx.send(Ok(line)).is_err() {
                         break;
                     }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    let _ = tx.send(Err(e));
+                    break;
                 }
             }
         }
     });
-    let result = stdio_handshake(&mut ChannelLines(rx), &mut stdin, key, deadline);
-    drop(stdin);
+    let (done_tx, done_rx) = mpsc::channel();
+    let key = key.to_string();
+    std::thread::spawn(move || {
+        let result = stdio_handshake(&mut ChannelLines(rx), &mut stdin, &key, deadline);
+        drop(stdin);
+        let _ = done_tx.send(result);
+    });
+    // The handshake gives up at the deadline itself; this is for a write that blocks.
+    let wait = (deadline + WATCHDOG_GRACE).saturating_duration_since(Instant::now());
+    let result = done_rx.recv_timeout(wait).unwrap_or(Err(HandshakeError::Timeout));
+    // Ending the tree also frees a thread stuck on a pipe.
     tree.kill(&mut child);
     result
 }
@@ -381,7 +531,8 @@ fn stdio_check(
 // ---- streamable HTTP --------------------------------------------------------
 
 /// POST one message and return the answer to request `want` (`None` for a
-/// notification: any 2xx will do). Takes a plain JSON body or an SSE stream.
+/// notification: any 2xx will do). Takes a plain JSON body or an SSE stream,
+/// read with a counter against `budget`.
 async fn http_post(
     client: &reqwest::Client,
     url: &str,
@@ -389,6 +540,7 @@ async fn http_post(
     session: Option<&str>,
     message: &Value,
     want: Option<u64>,
+    budget: &mut Budget,
 ) -> Result<(Option<Value>, Option<String>), HandshakeError> {
     use futures::StreamExt;
 
@@ -404,6 +556,9 @@ async fn http_post(
     }
     let resp = req.json(message).send().await.map_err(|_| HandshakeError::Unreachable)?;
     let status = resp.status();
+    if status.is_redirection() {
+        return Err(HandshakeError::Redirect);
+    }
     if !status.is_success() {
         return Err(HandshakeError::Http(status.as_u16()));
     }
@@ -424,23 +579,29 @@ async fn http_post(
     let outcome = |messages: &[Value]| -> Option<Result<Value, HandshakeError>> {
         messages.iter().find_map(|m| match classify(m, want) {
             Incoming::Response(Ok(result)) => Some(Ok(result)),
-            Incoming::Response(Err(text)) => Some(Err(HandshakeError::Rpc(text))),
+            Incoming::Response(Err(code)) => Some(Err(HandshakeError::Rpc(code))),
             _ => None,
         })
     };
+    let mut stream = resp.bytes_stream();
     if !is_sse {
-        let body = resp.text().await.map_err(|_| HandshakeError::Unreachable)?;
-        return match outcome(&json_messages(&body)) {
+        let mut body: Vec<u8> = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|_| HandshakeError::Unreachable)?;
+            budget.charge(chunk.len())?;
+            body.extend_from_slice(&chunk);
+        }
+        return match outcome(&json_messages(&String::from_utf8_lossy(&body))) {
             Some(result) => result.map(|r| (Some(r), session_id)),
             None => Err(protocol("no answer to the request")),
         };
     }
     // Stop at the answer: some servers keep the stream open afterwards.
-    let mut stream = resp.bytes_stream();
-    let mut sse = SseBuffer::default();
+    let mut sse = SseBuffer::new(MAX_BYTES);
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|_| HandshakeError::Unreachable)?;
-        for data in sse.push(&chunk) {
+        budget.charge(chunk.len())?;
+        for data in sse.push(&chunk)? {
             if let Some(result) = outcome(&json_messages(&data)) {
                 return result.map(|r| (Some(r), session_id));
             }
@@ -459,19 +620,22 @@ async fn http_handshake(
     headers: &[(String, String)],
     key: &str,
 ) -> Result<Vec<String>, HandshakeError> {
+    // No redirects: the headers (saved secrets) go only to the URL that was saved.
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|_| HandshakeError::Unreachable)?;
-    let (_, session) = http_post(&client, url, headers, None, &initialize_request(1), Some(1)).await?;
-    http_post(&client, url, headers, session.as_deref(), &initialized_notification(), None).await?;
+    let mut budget = Budget::new(MAX_BYTES);
+    let (_, session) = http_post(&client, url, headers, None, &initialize_request(1), Some(1), &mut budget).await?;
+    http_post(&client, url, headers, session.as_deref(), &initialized_notification(), None, &mut budget).await?;
     let mut tools = Vec::new();
     let mut cursor: Option<String> = None;
     let mut outcome = Ok(());
     for page in 0..MAX_PAGES {
         let id = 2 + page as u64;
         let message = tools_list_request(id, cursor.as_deref());
-        let step = http_post(&client, url, headers, session.as_deref(), &message, Some(id)).await;
+        let step = http_post(&client, url, headers, session.as_deref(), &message, Some(id), &mut budget).await;
         let result = match step {
             Ok((Some(result), _)) => tools_page(&result, key),
             Ok((None, _)) => Err(HandshakeError::Protocol("no answer to the request".to_string())),
@@ -479,7 +643,9 @@ async fn http_handshake(
         };
         match result {
             Ok((names, next)) => {
-                tools.extend(names);
+                if add_tools(&mut tools, names) {
+                    break;
+                }
                 match next {
                     Some(c) => cursor = Some(c),
                     None => break,
@@ -520,7 +686,7 @@ pub async fn list_tools(
             for var in &server.env {
                 let value = if var.secret {
                     let value = secret(&credential_id(&server.key, &var.name)).ok_or_else(|| missing(&var.name))?;
-                    secrets.push(value.clone());
+                    secrets.extend(secret_variants(&value));
                     value
                 } else {
                     var.value.clone().unwrap_or_default()
@@ -537,7 +703,7 @@ pub async fn list_tools(
             for name in header_names {
                 let value = secret(&header_credential_id(&server.key, name))
                     .ok_or_else(|| missing(&format!("the {name} header")))?;
-                secrets.push(value.clone());
+                secrets.extend(secret_variants(&value));
                 headers.push((name.clone(), value));
             }
             match tokio::time::timeout(limit, http_handshake(url, &headers, &server.key)).await {
@@ -577,7 +743,7 @@ mod tests {
         assert_eq!(classify(&ok, 2), Incoming::Response(Ok(json!({ "tools": [] }))));
         assert_eq!(classify(&ok, 3), Incoming::Ignore);
         let err = json!({ "jsonrpc": "2.0", "id": 2, "error": { "code": -1, "message": "boom" } });
-        assert_eq!(classify(&err, 2), Incoming::Response(Err("boom".to_string())));
+        assert_eq!(classify(&err, 2), Incoming::Response(Err(Some(-1))));
         let ping = json!({ "jsonrpc": "2.0", "id": 9, "method": "ping" });
         assert_eq!(classify(&ping, 2), Incoming::ServerRequest { id: json!(9), method: "ping".into() });
         let note = json!({ "jsonrpc": "2.0", "method": "notifications/message" });
@@ -623,18 +789,18 @@ mod tests {
 
     #[test]
     fn sse_events_can_arrive_in_pieces() {
-        let mut sse = SseBuffer::default();
-        assert!(sse.push(b"data: {\"id\":1,").is_empty());
-        assert!(sse.push(b"\"result\":{}}\n").is_empty());
-        let events = sse.push(b"\ndata: next\n\n");
+        let mut sse = SseBuffer::new(MAX_BYTES);
+        assert!(sse.push(b"data: {\"id\":1,").unwrap().is_empty());
+        assert!(sse.push(b"\"result\":{}}\n").unwrap().is_empty());
+        let events = sse.push(b"\ndata: next\n\n").unwrap();
         assert_eq!(events, vec!["{\"id\":1,\"result\":{}}".to_string(), "next".to_string()]);
     }
 
     #[test]
     fn messages_hide_secrets_and_stay_plain() {
         let secrets = vec!["s3cret-value".to_string()];
-        let rpc = HandshakeError::Rpc("bad key s3cret-value".to_string()).message(&secrets);
-        assert!(!rpc.contains("s3cret-value"), "{rpc}");
+        let proto = HandshakeError::Protocol("echo s3cret-value".to_string()).message(&secrets);
+        assert!(!proto.contains("s3cret-value"), "{proto}");
         assert!(HandshakeError::Timeout.message(&[]).contains("too long"));
         assert!(HandshakeError::Http(401).message(&[]).contains("sign-in"));
         assert!(HandshakeError::Http(405).message(&[]).contains("SSE"));
@@ -647,12 +813,12 @@ mod tests {
         for line in lines {
             text.push_str(&format!("{line}\n"));
         }
-        BufLines(Cursor::new(text.into_bytes()))
+        BufLines::new(Cursor::new(text.into_bytes()))
     }
 
     #[test]
     fn handshake_follows_pages_and_answers_the_server() {
-        let mut src = BufLines(Cursor::new(
+        let mut src = BufLines::new(Cursor::new(
             [
                 "Starting server...\n".to_string(), // not JSON: skipped
                 format!("{}\n", json!({ "jsonrpc": "2.0", "id": 1, "result": { "protocolVersion": "2025-06-18" } })),
@@ -682,17 +848,17 @@ mod tests {
     fn handshake_reports_rpc_errors_and_closed_servers() {
         let mut src = transcript(&[json!({ "jsonrpc": "2.0", "id": 1, "error": { "code": -32000, "message": "no" } })]);
         let err = stdio_handshake(&mut src, &mut Vec::new(), "k", far()).unwrap_err();
-        assert_eq!(err, HandshakeError::Rpc("no".to_string()));
+        assert_eq!(err, HandshakeError::Rpc(Some(-32000)));
         let mut empty = transcript(&[]);
         assert_eq!(stdio_handshake(&mut empty, &mut Vec::new(), "k", far()).unwrap_err(), HandshakeError::Stopped);
         // initialize fine, then tools/list refused.
         let mut half = transcript(&[
             json!({ "id": 1, "result": {} }),
-            json!({ "id": 2, "error": { "message": "tools unsupported" } }),
+            json!({ "id": 2, "error": { "code": -32602, "message": "tools unsupported" } }),
         ]);
         assert!(matches!(
             stdio_handshake(&mut half, &mut Vec::new(), "k", far()),
-            Err(HandshakeError::Rpc(m)) if m == "tools unsupported"
+            Err(HandshakeError::Rpc(Some(-32602)))
         ));
     }
 
@@ -707,7 +873,7 @@ mod tests {
 
     #[test]
     fn a_silent_server_times_out() {
-        let (tx, rx) = mpsc::channel::<String>();
+        let (tx, rx) = mpsc::channel::<Result<String, HandshakeError>>();
         let started = Instant::now();
         let err = stdio_handshake(
             &mut ChannelLines(rx),
@@ -730,12 +896,94 @@ mod tests {
             let (notes, _) = crate::notes_mcp::vault::Notes::open(&[]);
             crate::notes_mcp::serve(std::io::BufReader::new(server_in), server_out, &notes)
         });
-        let mut src = BufLines(std::io::BufReader::new(client_in));
+        let mut src = BufLines::new(std::io::BufReader::new(client_in));
         let tools = stdio_handshake(&mut src, &mut client_out, "nexq_notes", far()).unwrap();
         assert!(!tools.is_empty(), "{tools:?}");
         assert!(tools.iter().all(|t| t.starts_with("mcp__nexq_notes__")), "{tools:?}");
         drop(client_out); // the server sees EOF and ends
         server.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn rpc_error_text_is_never_echoed() {
+        let mut src = transcript(&[json!({ "id": 1, "error": { "code": -32602,
+            "message": "bad token abc-SECRET-xyz from /home/user/.env" } })]);
+        let err = stdio_handshake(&mut src, &mut Vec::new(), "k", far()).unwrap_err();
+        let text = err.message(&[]);
+        assert_eq!(text, "The server refused the request (error -32602).");
+        assert_eq!(HandshakeError::Rpc(None).message(&[]), "The server refused the request.");
+    }
+
+    #[test]
+    fn a_line_over_the_cap_is_refused() {
+        let mut src = BufLines { reader: Cursor::new(format!("{}\n", "x".repeat(300)).into_bytes()), max_line: 100 };
+        assert_eq!(src.next_line(far()).unwrap_err(), HandshakeError::TooLarge);
+        // A line exactly at the cap is fine.
+        let mut ok = BufLines { reader: Cursor::new(format!("{}\nnext\n", "y".repeat(99)).into_bytes()), max_line: 100 };
+        assert_eq!(ok.next_line(far()).unwrap().unwrap().trim_end().len(), 99);
+        assert_eq!(ok.next_line(far()).unwrap().as_deref(), Some("next\n"));
+        // Through the handshake: an endless line without a newline.
+        let mut flood = BufLines { reader: Cursor::new(vec![b'z'; 5000]), max_line: 1000 };
+        assert_eq!(
+            stdio_handshake(&mut flood, &mut Vec::new(), "k", far()).unwrap_err(),
+            HandshakeError::TooLarge
+        );
+    }
+
+    #[test]
+    fn the_whole_handshake_is_capped_in_bytes() {
+        let page = |i: u64| json!({ "id": 2 + i, "result": { "tools": [{ "name": "t" }], "nextCursor": "more" } });
+        let mut src = transcript(&[json!({ "id": 1, "result": {} }), page(0), page(1), page(2)]);
+        let err = stdio_handshake_within(&mut src, &mut Vec::new(), "k", far(), 100).unwrap_err();
+        assert_eq!(err, HandshakeError::TooLarge);
+    }
+
+    #[test]
+    fn an_sse_event_that_never_ends_is_refused() {
+        let mut sse = SseBuffer::new(1000);
+        assert!(sse.push(&[b'a'; 600]).unwrap().is_empty());
+        assert_eq!(sse.push(&[b'a'; 600]).unwrap_err(), HandshakeError::TooLarge);
+        // A blank line split over two chunks is still found by the resumed scan.
+        let mut split = SseBuffer::new(1000);
+        assert!(split.push(b"data: one\r\n\r").unwrap().is_empty());
+        assert_eq!(split.push(b"\n").unwrap(), vec!["one".to_string()]);
+    }
+
+    #[test]
+    fn tools_over_the_caps_are_trimmed() {
+        let long = "n".repeat(MAX_TOOL_NAME + 1);
+        let fine = "n".repeat(MAX_TOOL_NAME);
+        let (names, _) = tools_page(&json!({ "tools": [{ "name": long }, { "name": fine }] }), "k").unwrap();
+        assert_eq!(names.len(), 1);
+        let many: Vec<Value> = (0..1500).map(|i| json!({ "name": format!("t{i}") })).collect();
+        let (names, _) = tools_page(&json!({ "tools": many }), "k").unwrap();
+        assert_eq!(names.len(), MAX_TOOLS);
+        let mut all = Vec::new();
+        assert!(add_tools(&mut all, names));
+        assert_eq!(all.len(), MAX_TOOLS);
+    }
+
+    #[test]
+    fn server_requests_with_a_huge_id_get_no_answer() {
+        let huge = "i".repeat(MAX_ID_BYTES + 10);
+        let mut src = transcript(&[
+            json!({ "id": 7, "method": "ping" }),
+            json!({ "id": huge, "method": "roots/list" }),
+            json!({ "id": 1, "result": {} }),
+            json!({ "id": 2, "result": { "tools": [] } }),
+        ]);
+        let mut out: Vec<u8> = Vec::new();
+        stdio_handshake(&mut src, &mut out, "k", far()).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(!text.contains("iiiiiiiiii"), "the huge id was echoed");
+    }
+
+    #[test]
+    fn a_passed_deadline_stops_a_flood_of_messages() {
+        let noise: Vec<Value> = (0..50).map(|i| json!({ "id": 100 + i, "method": "ping" })).collect();
+        let mut src = transcript(&noise);
+        let err = stdio_handshake(&mut src, &mut Vec::new(), "k", Instant::now()).unwrap_err();
+        assert_eq!(err, HandshakeError::Timeout);
     }
 
     // ---- HTTP against a tiny local server ----
@@ -791,6 +1039,9 @@ mod tests {
                     .find(|(m, ..)| key == *m || method == *m)
                     .map(|(_, ct, body, extra)| (ct.clone(), body.clone(), extra.clone()));
                 let response = match reply {
+                    Some((ct, _, extra)) if ct == "307" => format!(
+                        "HTTP/1.1 307 Temporary Redirect\r\n{extra}Content-Length: 0\r\nConnection: close\r\n\r\n"
+                    ),
                     Some((ct, body, extra)) if ct == "202" => {
                         format!("HTTP/1.1 202 Accepted\r\n{extra}Content-Length: 0\r\nConnection: close\r\n\r\n{body}")
                     }
@@ -832,6 +1083,33 @@ mod tests {
         assert!(!lower[0].contains("mcp-session-id"));
         // Everything after initialize carries the session id.
         assert!(lower[1..4].iter().all(|r| r.contains("mcp-session-id: sess-42")));
+    }
+
+    #[tokio::test]
+    async fn http_redirects_are_refused() {
+        let (url, seen) = fake_http(vec![(
+            "initialize",
+            "307".into(),
+            String::new(),
+            "Location: http://127.0.0.1:1/elsewhere\r\n".into(),
+        )])
+        .await;
+        let headers = vec![("Authorization".to_string(), "Bearer abc".to_string())];
+        let err = http_handshake(&url, &headers, "k").await.unwrap_err();
+        assert_eq!(err, HandshakeError::Redirect);
+        assert!(err.message(&[]).contains("redirect"));
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn http_bodies_over_the_cap_are_refused() {
+        let big = format!("{{\"pad\":\"{}\"}}", "x".repeat(MAX_BYTES + 1000));
+        let (url, _) = fake_http(vec![("initialize", "application/json".into(), big, String::new())]).await;
+        assert_eq!(http_handshake(&url, &[], "k").await.unwrap_err(), HandshakeError::TooLarge);
+        // An SSE event that never ends.
+        let endless = format!("data: {}", "y".repeat(MAX_BYTES + 1000));
+        let (url, _) = fake_http(vec![("initialize", "text/event-stream".into(), endless, String::new())]).await;
+        assert_eq!(http_handshake(&url, &[], "k").await.unwrap_err(), HandshakeError::TooLarge);
     }
 
     #[tokio::test]
