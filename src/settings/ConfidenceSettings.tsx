@@ -50,7 +50,7 @@ export function ConfidenceSettings() {
           <div>
             <label className="text-sm font-medium text-foreground">Confidence Threshold</label>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Words below this score are highlighted
+              Words below this score get a dotted underline
             </p>
           </div>
           <span className="text-sm font-semibold text-primary tabular-nums">
@@ -69,9 +69,9 @@ export function ConfidenceSettings() {
           aria-label="Confidence threshold"
         />
         <div className="mt-1.5 flex justify-between text-meta text-muted-foreground/50">
-          <span>0% (always)</span>
+          <span>0% (never)</span>
           <span>50%</span>
-          <span>100% (never)</span>
+          <span>100% (always)</span>
         </div>
       </div>
     </div>
