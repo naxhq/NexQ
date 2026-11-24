@@ -1,5 +1,6 @@
 //! How NexQ starts Antigravity CLI: its arguments and where `agy` lives.
 
+use super::super::detect::find_on_path;
 use std::path::{Path, PathBuf};
 
 /// NexQ's own Antigravity data folder, `%LOCALAPPDATA%\NexQ\agent-agy`
@@ -44,7 +45,7 @@ pub fn agy_in_local_app_data(local_app_data: &Path) -> PathBuf {
 }
 
 /// Where `agy.exe` is: the installer's folder first, else the first real
-/// `agy.exe` on `PATH` (`where.exe agy`). NexQ never spawns through a shell,
+/// `agy.exe` on `PATH` (`find_on_path`). NexQ never spawns through a shell,
 /// so only an `.exe` counts. Resolved on every spawn, so a fresh install is
 /// picked up without restarting NexQ.
 pub fn find_agy() -> Option<PathBuf> {
@@ -54,19 +55,12 @@ pub fn find_agy() -> Option<PathBuf> {
             return Some(p);
         }
     }
-    #[cfg(windows)]
-    let out = {
-        use std::os::windows::process::CommandExt;
-        std::process::Command::new("where.exe").arg("agy").creation_flags(0x0800_0000).output().ok()?
-    };
-    #[cfg(not(windows))]
-    let out = std::process::Command::new("which").arg("agy").output().ok()?;
-    first_exe(&String::from_utf8_lossy(&out.stdout))
+    first_exe(find_on_path("agy"))
 }
 
-/// The first line of `where agy` output that is an existing `.exe`.
-pub fn first_exe(where_output: &str) -> Option<PathBuf> {
-    where_output.lines().map(str::trim).filter(|l| !l.is_empty()).map(PathBuf::from).find(|p| {
+/// The first of `candidates` that is an existing `.exe`.
+pub fn first_exe(candidates: Vec<PathBuf>) -> Option<PathBuf> {
+    candidates.into_iter().find(|p| {
         p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("exe")) && p.is_file()
     })
 }
@@ -93,18 +87,17 @@ mod tests {
     }
 
     #[test]
-    fn only_an_existing_exe_counts_from_where() {
+    fn only_an_existing_exe_counts() {
         let dir = std::env::temp_dir().join(format!("nexq-agy-where-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let exe = dir.join("agy.exe");
         let shim = dir.join("agy.cmd");
         std::fs::write(&exe, "").unwrap();
         std::fs::write(&shim, "").unwrap();
-        let out = format!("{}\r\n{}\r\n", shim.display(), exe.display());
-        assert_eq!(first_exe(&out), Some(exe.clone()));
-        assert_eq!(first_exe(&format!("{}\n", shim.display())), None);
-        assert_eq!(first_exe(&format!("{}\\missing.exe\n", dir.display())), None);
-        assert_eq!(first_exe(""), None);
+        assert_eq!(first_exe(vec![shim.clone(), exe.clone()]), Some(exe.clone()));
+        assert_eq!(first_exe(vec![shim]), None);
+        assert_eq!(first_exe(vec![dir.join("missing.exe")]), None);
+        assert_eq!(first_exe(Vec::new()), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -31,6 +31,7 @@
 //! default `initialize` + `thread/start` took 1.9 to 3.2 s and started 10 MCP
 //! servers; with the overrides below 0.25 s to the thread and no server starts.
 
+use super::super::detect::find_on_path;
 use super::policy::CodexPolicy;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -424,17 +425,9 @@ pub fn resolve_program(shim_or_exe: &Path) -> Option<(PathBuf, Vec<String>)> {
     None
 }
 
-/// `where.exe codex` (or `which`) -> a program NexQ can spawn.
+/// The first `codex` on PATH that NexQ can spawn.
 pub fn find_codex() -> Option<(PathBuf, Vec<String>)> {
-    #[cfg(windows)]
-    let out = {
-        use std::os::windows::process::CommandExt;
-        std::process::Command::new("where.exe").arg("codex").creation_flags(0x0800_0000).output().ok()?
-    };
-    #[cfg(not(windows))]
-    let out = std::process::Command::new("which").arg("codex").output().ok()?;
-    let text = String::from_utf8_lossy(&out.stdout).into_owned();
-    text.lines().map(str::trim).filter(|l| !l.is_empty()).find_map(|l| resolve_program(Path::new(l)))
+    find_on_path("codex").iter().find_map(|p| resolve_program(p))
 }
 
 #[cfg(test)]
