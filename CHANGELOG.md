@@ -1,3 +1,21 @@
+# [2.45.0](https://github.com/naxhq/NexQ/compare/v2.44.1...v2.45.0) (2026-11-24)
+
+
+### Bug Fixes
+
+* **claude:** say when Claude Code is too old instead of crashing ([a67d2f8](https://github.com/naxhq/NexQ/commit/a67d2f889457281ca6fec0a0b13e4ddbebc2b7cd)), closes [#171](https://github.com/naxhq/NexQ/issues/171)
+* **launcher:** group meeting history by local calendar day ([#163](https://github.com/naxhq/NexQ/issues/163)) ([3c8d2d4](https://github.com/naxhq/NexQ/commit/3c8d2d43b0e32d96a79919a67259ac77987897d3))
+* **launcher:** X cancels an action item edit instead of saving it ([#168](https://github.com/naxhq/NexQ/issues/168)) ([5f4b146](https://github.com/naxhq/NexQ/commit/5f4b146569d0122af1a8f6b2204dd13b62a5b957))
+* **macos:** show Cmd in the remaining shortcut hints ([#164](https://github.com/naxhq/NexQ/issues/164)) ([ac95e3d](https://github.com/naxhq/NexQ/commit/ac95e3d51940390858acdf44d55fbd0efeeef1ec))
+* **security:** never take a CLI from the current folder ([a47556b](https://github.com/naxhq/NexQ/commit/a47556bf3e9b530a227214141ce4c0c21a1596ef))
+* **settings:** confidence help text says dotted underline, not amber ([#170](https://github.com/naxhq/NexQ/issues/170)) ([e605dbc](https://github.com/naxhq/NexQ/commit/e605dbc2f7be7081bb5b0883b1fed65c910fd817))
+* **settings:** confidence slider labels the right way round ([#166](https://github.com/naxhq/NexQ/issues/166)) ([94e1ae9](https://github.com/naxhq/NexQ/commit/94e1ae9f4f79f301331640bcbc5f074f1170bf37))
+* **settings:** Documentation opens the user guide, not a missing wiki ([4c6a6b6](https://github.com/naxhq/NexQ/commit/4c6a6b64ea8b0ed62b812a6d7218d74ee69a76d1))
+
+
+### Features
+
+* **launcher:** ask for a GitHub star once, after the fifth finished meeting ([87cb1c9](https://github.com/naxhq/NexQ/commit/87cb1c9cd16ad5454100cb93249c844104c347a6))
 ## [2.44.1](https://github.com/naxhq/NexQ/compare/v2.44.0...v2.44.1) (2026-11-24)
 
 

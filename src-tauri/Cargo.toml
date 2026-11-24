@@ -1,6 +1,6 @@
 [package]
 name = "nexq"
-version = "2.44.1"
+version = "2.45.0"
 description = "AI Meeting Assistant & Real-Time Interview Copilot"
 authors = ["NexQ"]
 edition = "2021"
