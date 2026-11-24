@@ -10,7 +10,7 @@ NexQ supports 12 STT providers. Each channel ("You" and "Them") can use a differ
 
 | Provider | Type | Cost | Accuracy | Speed | Best For |
 |----------|------|------|----------|-------|----------|
-| Web Speech API | Browser | Free | Good | Real-time | Quick setup, long sessions, English |
+| Web Speech API | Cloud (browser, no key) | Free | Good | Real-time | Quick setup, long sessions, English |
 | Deepgram | Cloud | Pay per use | Excellent | Real-time | Production use, high accuracy; Flux knows when a speaker finishes |
 | Groq Whisper | Cloud | Free tier | Very Good | Very Fast | High accuracy at no cost |
 | [Whisper API](#custom-whisper-endpoint-local-servers) | Cloud or self-hosted | OpenAI pricing / free self-hosted | Very Good | Batched (~5 s) | OpenAI or your own compatible server |
@@ -22,7 +22,7 @@ NexQ supports 12 STT providers. Each channel ("You" and "Them") can use a differ
 | Parakeet TDT | Local | Free | Very Good | Medium | High-quality local option |
 | Azure Speech | Cloud | Pay per use | Excellent | Batched (~5s) | Existing Azure Speech REST transcription |
 | Azure MAI Streaming | Cloud | [Azure pricing](https://azure.microsoft.com/en-us/pricing/details/speech/) | Not yet rated (preview) | Real-time streaming | Multilingual live transcription; interim updates and Azure finals |
-| Windows Native | Local | Free | Fair | Real-time | Offline fallback |
+| Windows Speech | Cloud (Microsoft, no key) | Free | Fair | Real-time | No-key fallback for your mic on Windows |
 
 **Azure Speech** and **Azure MAI Streaming** are separate providers. Azure Speech remains the REST-based, batched option; Azure MAI Streaming uses Microsoft's `mai-transcribe-2-streaming` model for live incremental transcripts. See [Azure MAI Streaming setup](#azure-mai-streaming-public-preview) below.
 
