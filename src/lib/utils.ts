@@ -125,14 +125,19 @@ export function formatFileSize(bytes: number): string {
 }
 
 // Group meetings by date category
+// A calendar-day number in local time. Using UTC from the local Y/M/D keeps
+// the difference whole across daylight-saving changes.
+function localDayNumber(date: Date) {
+  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86400000;
+}
+
 export function getDateGroup(isoDate: string): string {
   const date = new Date(isoDate);
   const now = new Date();
-  const diffDays = Math.floor(
-    (now.getTime() - date.getTime()) / 86400000
-  );
+  const diffDays = localDayNumber(now) - localDayNumber(date);
 
-  if (diffDays === 0) return "Today";
+  // A future date (clock skew or a scheduled meeting) reads as today.
+  if (diffDays <= 0) return "Today";
   if (diffDays === 1) return "Yesterday";
   if (diffDays < 7) return "This Week";
   return "Earlier";
