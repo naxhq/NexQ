@@ -126,7 +126,7 @@ function StarPromptCard({ onAcknowledge, onClose }: { onAcknowledge: () => void;
             <h2 id={titleId} className="text-sm font-semibold tracking-tight text-foreground">
               {STAR_PROMPT_TITLE}
             </h2>
-            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{STAR_PROMPT_BODY}</p>
+            <p className="mt-1 text-pretty text-xs leading-relaxed text-muted-foreground">{STAR_PROMPT_BODY}</p>
             {openFailed && <p className="mt-2 text-xs font-medium text-destructive">{STAR_PROMPT_OPEN_FAILED}</p>}
 
             <div className="mt-4 flex items-center gap-2">
