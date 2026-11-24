@@ -58,7 +58,7 @@ It transcribes both sides of a call live and answers from your own notes, with l
 - **Two sides, one transcript.** Your mic ("You") and the call audio ("Them") are separate streams. Each has its own speech engine, language and mute, so answers know who said what.
 - **Answers in the moment.** Questions are caught as they are asked. Press one key, or turn on Auto-Answer, and the answer streams in, grounded in your notes, slides or other files.
 - **Yours to run.** Free, MIT licensed, no account and no usage caps. No bot joins your call. Use fully offline engines or the cloud providers you pick.
-- **Bring your own models.** 12 speech-to-text engines and 11 LLM providers, including your existing Claude, Google AI or ChatGPT subscription.
+- **Bring your own models.** 12 speech-to-text engines and 10 LLM providers, including your existing Claude or ChatGPT subscription.
 - **Private notes while you present.** Hide from screen share (off by default) leaves the overlay out of screen shares and recordings, and off the taskbar or Dock. See [Use it responsibly](#use-it-responsibly).
 
 ## Quick start
@@ -79,7 +79,7 @@ It transcribes both sides of a call live and answers from your own notes, with l
 The first launch opens a short setup. You can skip it; everything below is also in Settings.
 
 1. **Set up speech-to-text.** In Settings → STT Providers, download the Parakeet model (local, free) or add a Deepgram or Groq key. Then in Settings → Audio & Devices, choose an engine for each side. A fresh install starts with cloud engines: Web Speech for your mic (no key) and Deepgram for the other side (needs a key). To keep audio on your computer, pick the **Local Only (Parakeet)** or **Fully Offline** preset. The **Free** preset needs no key, but your mic still goes through Web Speech.
-2. **Pick an LLM** in Settings → LLM Providers. [Ollama](https://ollama.com) is found automatically, cloud providers need a key, and Claude, Antigravity or Codex can use your subscription.
+2. **Pick an LLM** in Settings → LLM Providers. [Ollama](https://ollama.com) is found automatically, cloud providers need a key, and Claude or Codex can use your subscription.
 3. **Optional:** add your resume or notes under **Meeting Context** on the dashboard.
 4. **Press** <kbd>Ctrl</kbd>+<kbd>M</kbd>. NexQ captures system audio, so it works with Zoom, Teams, Meet, Discord or anything that plays sound.
 5. **Get an answer.** When a question comes up, press <kbd>Space</kbd> in the overlay, or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> from any app.
@@ -92,7 +92,7 @@ How-to: [Transcribe both sides of a call](https://getnexq.com/guides/transcribe-
 
 ## What's new
 
-- **v2.44 Antigravity and Codex.** Use your Google AI or ChatGPT plan like Claude, with Fast and Deep models, live model lists and personal sources. Beta.
+- **v2.44 Codex.** Use your ChatGPT plan like Claude, with Fast and Deep models, live model lists and personal sources. Beta.
 - **v2.41 Personal sources.** Let Claude look things up in your notes folders and MCP servers while it answers. Claude subscription only.
 - **v2.40 Thinking control.** Choose how much each provider's model thinks.
 - **v2.38 and v2.39 Language per side.** Transcribe each side in its own language, switch it from the overlay without ending the meeting, or let NexQ detect it. Ukrainian was added.
@@ -128,7 +128,7 @@ The full history is in the [CHANGELOG](CHANGELOG.md).
 
 **Your context**
 - Local RAG over your PDF, DOCX, TXT and MD files (SQLite FTS plus embeddings)
-- Personal sources: notes folders and MCP servers (Claude, Antigravity or Codex subscription)
+- Personal sources: notes folders and MCP servers (Claude or Codex subscription)
 - Thinking control per provider
 - AI Call Log: every prompt, latency and token count
 
@@ -167,7 +167,7 @@ Audio is captured on your machine. What leaves it depends on the engines you pic
 | | Runs on your device | Cloud |
 |---|---|---|
 | **Speech-to-text (12)** | Parakeet TDT, Sherpa-ONNX, ORT Streaming, Whisper.cpp (recordings only, not live calls) | Deepgram, Groq Whisper, Whisper API, Azure Speech, Azure MAI Streaming (public preview), Cartesia, Web Speech (no key, mic only), Windows Speech (no key, Windows, mic only) |
-| **LLM (11)** | Ollama, LM Studio | OpenAI, Anthropic, Google Gemini, Groq, OpenRouter, any custom endpoint, and, with no API key (beta): Claude through your Pro or Max plan (Claude Code CLI), Antigravity through your Google AI plan, Codex through your ChatGPT plan |
+| **LLM (10)** | Ollama, LM Studio | OpenAI, Anthropic, Google Gemini, Groq, OpenRouter, any custom endpoint, and, with no API key (beta): Claude through your Pro or Max plan (Claude Code CLI), Codex through your ChatGPT plan |
 | **Translation (5)** | OPUS-MT (offline) | DeepL, Google, Microsoft, or any LLM you configured |
 
 <div align="center">
@@ -179,7 +179,7 @@ Audio is captured on your machine. What leaves it depends on the engines you pic
 Not every engine covers every language. [Choosing providers](docs/user-guide/ai-providers.md) lists what each one supports.
 
 <details>
-<summary><b>Personal sources (Claude, Antigravity or Codex subscription)</b></summary>
+<summary><b>Personal sources (Claude or Codex subscription)</b></summary>
 
 <br>
 

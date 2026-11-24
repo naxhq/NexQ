@@ -74,7 +74,7 @@ export const STT_PROVIDERS: SttProvider[] = [
 
 interface LlmProvider {
   name: string;
-  /** local: on your PC. cloud: your own API key. plan: your Claude, Google AI or ChatGPT subscription, no key. */
+  /** local: on your PC. cloud: your own API key. plan: your Claude or ChatGPT subscription, no key. */
   where: LlmWhere;
   note?: string;
 }
@@ -90,7 +90,7 @@ export const LLM_PROVIDERS: LlmProvider[] = [
   { name: 'Custom endpoint', where: 'cloud', note: 'Any OpenAI-compatible server.' },
   { name: 'Claude subscription', where: 'plan', note: 'Your Claude Pro or Max plan, no API key.' },
   // docs/user-guide/ai-providers.md L115-116, L129; CHANGELOG.md 2.44.0
-  { name: 'Antigravity subscription', where: 'plan', note: 'Gemini and other models through your Google AI plan, no API key.' },
+  // Antigravity (Google AI plan) is in the app but left out here: antigravity.google/terms and /docs/faq don't allow other apps (read 24 Nov 2026).
   { name: 'Codex subscription', where: 'plan', note: 'OpenAI models through your ChatGPT plan, no API key.' },
 ];
 
@@ -103,7 +103,7 @@ export const TRANSLATION_PROVIDERS: { name: string; where: 'cloud' | 'device' | 
   { name: 'OPUS-MT', where: 'device', note: 'Offline models you download once.' },
 ];
 
-/** The headline numbers, counted from the lists above so they cannot drift (README's compare table says 12 and 11). */
+/** The headline numbers, counted from the lists above so they cannot drift (the README says 12 and 10). */
 export const COUNTS = {
   stt: STT_PROVIDERS.length,
   llm: LLM_PROVIDERS.length,
@@ -179,7 +179,7 @@ export const SCENARIOS = [
  * and true to that release's CHANGELOG entry.
  */
 export const RELEASE_ONELINERS: Record<string, string> = {
-  '2.44.0': 'Your Google AI or ChatGPT plan, through Antigravity and Codex.',
+  '2.44.0': 'Your ChatGPT plan, through Codex.',
   '2.43.0': 'Point Whisper API at your own speech server.',
   '2.42.0': 'Azure MAI Streaming joins the speech engines.',
   '2.41.0': 'Notes and tools for your Claude answers.',
@@ -227,11 +227,11 @@ export const FAQ: { q: string; a: string }[] = [
   },
   {
     q: 'Do I need an API key?',
-    a: 'No. Web Speech and the on-device engines need no key, and Ollama or LM Studio can write the answers locally. If you already pay for Claude, Google AI or ChatGPT, NexQ can use that plan through the provider’s own command-line tool (Claude Code, Antigravity or Codex), also without an API key.',
+    a: 'No. Web Speech and the on-device engines need no key, and Ollama or LM Studio can write the answers locally. If you already pay for Claude or ChatGPT, NexQ can use that plan through the provider’s own command-line tool (Claude Code or Codex), also without an API key.',
   },
   {
-    q: 'Can I use my ChatGPT or Google AI plan?',
-    a: 'Yes, in beta. Install Codex or Antigravity, sign in once from Settings, then pick Fast and Deep models there. NexQ reads each tool’s current model list every time it starts. They run without commands, file writes or web search, and can reach only the notes folders and tools you add, so the same Personal sources work with all three plans. Screenshots and pasted images still need Claude.',
+    q: 'Can I use my ChatGPT plan?',
+    a: 'Yes, in beta. Install Codex, sign in once from Settings, then pick Fast and Deep models there. NexQ reads its current model list every time it starts. It runs without commands, file writes or web search, and can reach only the notes folders and tools you add, so the same Personal sources work with your Claude and ChatGPT plans. For Gemini, add a Google AI Studio API key. Screenshots and pasted images still need Claude.',
   },
   {
     q: 'How does the Claude subscription option work?',
