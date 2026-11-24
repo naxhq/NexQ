@@ -281,7 +281,7 @@ pub fn list_available_providers() -> Vec<STTProviderInfo> {
             provider_type: "web_speech".to_string(),
             name: "Web Speech API".to_string(),
             requires_api_key: false,
-            is_local: true,
+            is_local: false,
             supported_languages: vec![
                 "en-US".to_string(),
                 "en-GB".to_string(),
@@ -467,7 +467,7 @@ pub fn list_available_providers() -> Vec<STTProviderInfo> {
         },
         STTProviderInfo {
             provider_type: "ort_streaming".to_string(),
-            name: "ORT Streaming (Local, GPU)".to_string(),
+            name: "ORT Streaming (Local)".to_string(),
             requires_api_key: false,
             is_local: true,
             supported_languages: vec![

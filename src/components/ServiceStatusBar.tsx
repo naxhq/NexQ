@@ -66,8 +66,8 @@ const STT_PROVIDER_OPTIONS: {
   inputOnly?: boolean;
   requiresDownload?: string;
 }[] = [
-  { value: "web_speech", label: "Web Speech", IconComponent: Globe, requiresKey: false, isCloud: false, inputOnly: true },
-  { value: "windows_native", label: "Windows Speech", IconComponent: Monitor, requiresKey: false, isCloud: false, inputOnly: true },
+  { value: "web_speech", label: "Web Speech", IconComponent: Globe, requiresKey: false, isCloud: true, inputOnly: true },
+  { value: "windows_native", label: "Windows Speech", IconComponent: Monitor, requiresKey: false, isCloud: true, inputOnly: true },
   { value: "sherpa_onnx", label: "Sherpa-ONNX", IconComponent: HardDrive, requiresKey: false, isCloud: false, requiresDownload: "sherpa_onnx" },
   { value: "ort_streaming", label: "ORT Streaming", IconComponent: Zap, requiresKey: false, isCloud: false, requiresDownload: "ort_streaming" },
   { value: "parakeet_tdt", label: "Parakeet TDT", IconComponent: Cpu, requiresKey: false, isCloud: false, requiresDownload: "parakeet_tdt" },
@@ -803,7 +803,7 @@ function STTPickerDropdown({
               <div className="flex items-center gap-1.5 bg-muted/20 px-3 py-1.5 border-b border-border/20">
                 <HardDrive className="h-2.5 w-2.5 text-emerald-400" />
                 <span className="text-meta font-semibold uppercase tracking-wider text-muted-foreground/70">
-                  Local & Built-in
+                  Local
                 </span>
               </div>
               {localOpts.map((opt) => {

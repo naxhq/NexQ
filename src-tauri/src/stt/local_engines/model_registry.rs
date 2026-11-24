@@ -166,7 +166,7 @@ static ORT_STREAMING_MODELS: &[ModelDefinition] = &[
     ModelDefinition {
         engine: "ort_streaming",
         model_id: "zipformer-en-20M",
-        display_name: "Zipformer English (20M params, GPU-accel)",
+        display_name: "Zipformer English (20M params)",
         size_bytes: 310_414_022, // actual: 296 MB
         download_url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2",
         sha256: "",
@@ -264,7 +264,7 @@ pub fn get_engines() -> Vec<EngineInfo> {
         EngineInfo {
             engine: "ort_streaming",
             name: "ORT Streaming",
-            description: "ONNX Runtime in-process streaming. Zero IPC overhead, GPU-accelerated. For advanced users.",
+            description: "ONNX Runtime in-process streaming. Runs on the CPU. For advanced users.",
         },
         EngineInfo {
             engine: "parakeet_tdt",

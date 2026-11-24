@@ -93,18 +93,18 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
   {
     value: "web_speech",
     label: "Web Speech",
-    description: "Browser-native, free",
+    description: "Cloud, free, no key",
     requiresApiKey: false,
-    isLocal: true,
+    isLocal: false,
     credentialKey: "",
     alwaysReady: true,
   },
   {
     value: "windows_native",
     label: "Windows Speech",
-    description: "Built-in, zero download",
+    description: "Microsoft cloud, free, no key",
     requiresApiKey: false,
-    isLocal: true,
+    isLocal: false,
     credentialKey: "",
     alwaysReady: true,
   },
@@ -120,7 +120,7 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
   {
     value: "ort_streaming",
     label: "ORT Streaming",
-    description: "Local, GPU-accelerated",
+    description: "Local streaming, offline, free",
     requiresApiKey: false,
     isLocal: true,
     credentialKey: "",
@@ -986,8 +986,8 @@ export function STTSettings() {
             <div className="flex h-5 w-5 items-center justify-center rounded bg-success/10">
               <HardDrive className="h-3 w-3 text-success" />
             </div>
-            <span className="text-xs font-semibold text-foreground">Local & Built-in</span>
-            <span className="ml-auto text-meta text-muted-foreground/60 font-medium uppercase tracking-wider">Free · No API Key</span>
+            <span className="text-xs font-semibold text-foreground">Local</span>
+            <span className="ml-auto text-meta text-muted-foreground/60 font-medium uppercase tracking-wider">Free · Runs on this computer</span>
           </div>
           <div className="grid grid-cols-3 gap-2">
             {localProviders.map((p) => (
@@ -1010,7 +1010,7 @@ export function STTSettings() {
               <Cloud className="h-3 w-3 text-info" />
             </div>
             <span className="text-xs font-semibold text-foreground">Cloud</span>
-            <span className="ml-auto text-meta text-muted-foreground/60 font-medium uppercase tracking-wider">Requires API Key</span>
+            <span className="ml-auto text-meta text-muted-foreground/60 font-medium uppercase tracking-wider">API key, unless noted</span>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
             {cloudProviders.map((p) => (

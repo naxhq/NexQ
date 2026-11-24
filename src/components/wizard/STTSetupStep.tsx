@@ -30,7 +30,7 @@ export const WIZARD_STT_PROVIDERS: ProviderChoice[] = [
     value: "web_speech",
     label: "Web Speech API",
     icon: <Globe className="h-4 w-4" />,
-    description: "Browser-native, works with microphone input",
+    description: "Microphone only, audio goes to a cloud service",
     requiresKey: false,
     free: true,
   },

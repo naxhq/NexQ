@@ -35,6 +35,15 @@ describe("built-in meeting presets vs. the load-time migration", () => {
     }
   });
 
+  it("only claim private, offline or local when both sides run on this computer", async () => {
+    const { BUILT_IN_PRESETS } = await import("./presets");
+    const onDevice = ["parakeet_tdt", "sherpa_onnx", "ort_streaming"];
+    for (const p of BUILT_IN_PRESETS) {
+      if (onDevice.includes(p.you.stt) && onDevice.includes(p.them.stt)) continue;
+      expect(`${p.name} ${p.description}`, p.name).not.toMatch(/private|offline|local/i);
+    }
+  });
+
   it("keep both providers after the next launch", async () => {
     vi.resetModules();
     const { BUILT_IN_PRESETS, applyPreset } = await import("./presets");

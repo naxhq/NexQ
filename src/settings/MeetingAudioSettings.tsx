@@ -69,7 +69,7 @@ const STT_OPTIONS: {
     shortLabel: "Web Speech",
     icon: <Globe className="h-3.5 w-3.5" />,
     requiresKey: false,
-    isCloud: false,
+    isCloud: true,
     inputOnly: true,
   },
   {
@@ -78,7 +78,7 @@ const STT_OPTIONS: {
     shortLabel: "Windows Speech",
     icon: <Monitor className="h-3.5 w-3.5" />,
     requiresKey: false,
-    isCloud: false,
+    isCloud: true,
     inputOnly: true,
   },
   {
@@ -405,6 +405,7 @@ export function MeetingAudioSettings() {
             <button
               key={preset.name}
               onClick={() => handlePresetSelect(preset)}
+              title={preset.description}
               className={`cursor-pointer rounded-lg border px-3 py-1 text-xs font-medium transition-all duration-150 active:scale-95 ${
                 config.preset_name === preset.name
                   ? "border-primary/50 bg-primary/10 text-primary shadow-sm shadow-primary/10"
@@ -1150,7 +1151,7 @@ function ProviderSelect({
               <div className="flex items-center gap-1.5 border-b border-border/20 bg-muted/30 px-3 py-1.5">
                 <HardDrive className="h-2.5 w-2.5 text-emerald-500" />
                 <span className="text-meta font-semibold uppercase tracking-wider text-muted-foreground">
-                  Local & Built-in
+                  Local
                 </span>
               </div>
               {localOptions.map((opt) => {
