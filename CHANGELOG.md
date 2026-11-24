@@ -1,3 +1,9 @@
+## [2.44.1](https://github.com/naxhq/NexQ/compare/v2.44.0...v2.44.1) (2026-11-24)
+
+
+### Bug Fixes
+
+* correct local and GPU claims, add responsible use, reframe Oral Exam ([#154](https://github.com/naxhq/NexQ/issues/154)) ([9d304fd](https://github.com/naxhq/NexQ/commit/9d304fda24bb7faaf58cf2d3d0b03cdbfab8b543))
 # [2.44.0](https://github.com/naxhq/NexQ/compare/v2.43.0...v2.44.0) (2026-11-23)
 
 
