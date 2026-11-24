@@ -23,14 +23,14 @@ function useShortcuts() {
   return [
     { keys: hotkeys.mode_assist, action: "Trigger AI Assist", context: "During meeting" },
     { keys: formatShortcut(assistShortcut), action: "Assist from any app", context: "During meeting" },
-    { keys: "Ctrl+M", action: "Start / End meeting", context: "Global" },
-    { keys: "Ctrl+B", action: RESERVED_SHORTCUTS["CmdOrCtrl+B"], context: "Global" },
+    { keys: formatShortcut("CmdOrCtrl+M"), action: "Start / End meeting", context: "Global" },
+    { keys: formatShortcut("CmdOrCtrl+B"), action: RESERVED_SHORTCUTS["CmdOrCtrl+B"], context: "Global" },
     { keys: hotkeys.mode_say, action: "What to Say mode", context: "During meeting" },
     { keys: hotkeys.mode_shorten, action: "Shorten mode", context: "During meeting" },
     { keys: hotkeys.mode_followup, action: "Follow-up mode", context: "During meeting" },
     { keys: hotkeys.mode_recap, action: "Recap mode", context: "During meeting" },
     { keys: hotkeys.mode_ask, action: "Ask Question mode", context: "During meeting" },
-    { keys: "Ctrl+,", action: "Open Settings", context: "Global" },
+    { keys: formatShortcut("CmdOrCtrl+,"), action: "Open Settings", context: "Global" },
   ];
 }
 

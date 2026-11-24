@@ -1,4 +1,5 @@
 import { useRef, useEffect, useLayoutEffect, useMemo, useState, useCallback } from "react";
+import { formatShortcut } from "../../lib/shortcutLabel";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { TranscriptSegment, SpeakerIdentity, MeetingBookmark, TranslationResult, TranslationDisplayMode } from "../../lib/types";
 import type { TranscriptSearchState } from "../../hooks/useTranscriptSearch";
@@ -651,7 +652,7 @@ export function TranscriptView({ segments, mergedSegments, isVisible = true, sea
               className="w-full resize-none rounded-lg border border-border/30 bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20"
             />
             <div className="mt-3 flex items-center justify-between">
-              <span className="text-[10px] text-muted-foreground/40">Ctrl+Enter to save</span>
+              <span className="text-[10px] text-muted-foreground/40">{formatShortcut("CmdOrCtrl+Enter")} to save</span>
               <div className="flex gap-2">
                 <button
                   onClick={() => setNoteEdit(null)}
