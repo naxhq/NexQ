@@ -1,0 +1,79 @@
+---
+import Guide from '../../layouts/Guide.astro';
+import { doc } from '../../data/site';
+---
+
+<Guide
+  slug="transcribe-both-sides-of-a-call"
+  lede="Capture your microphone and your computer’s sound as two separate streams, and transcribe each one on its own. Then the transcript knows who spoke, and nothing has to join the call."
+>
+  <h2>Why one recording isn’t enough</h2>
+  <p>
+    If you record a call as a single stream, the software has to guess who is talking from the sound of each voice. That
+    gets hard when people talk over each other, have a bad line, or sound alike.
+  </p>
+  <p>
+    Your computer already has the two sides apart. Your voice comes in through the microphone. Everyone else goes out
+    through the speakers or headphones. Keep those apart from the start and “you” and “them” need no guessing.
+  </p>
+  <p>
+    One limit: everyone on the other side still shares one stream. To tell several remote people apart you need an engine
+    that separates speakers. In NexQ that is Deepgram.
+  </p>
+
+  <h2>What captures the system sound</h2>
+  <ul>
+    <li><strong>Windows 10 and 11:</strong> WASAPI loopback, which records what an output device plays. No virtual cable.</li>
+    <li><strong>macOS 14.2 and later:</strong> a Core Audio tap on the output. The Mac asks for permission.</li>
+    <li><strong>Older macOS:</strong> you need a virtual audio device that shows up as an input.</li>
+  </ul>
+  <p>
+    This works with Zoom, Teams, Google Meet, Discord or anything else, because it listens to the output and not to the
+    app. It also means music or notification sounds on the same device can end up in the transcript.
+  </p>
+
+  <h2>Set it up in NexQ</h2>
+  <ol>
+    <li>Install NexQ and open <strong>Settings, Audio & Devices</strong>.</li>
+    <li>Under <strong>You</strong>, choose your microphone. Press <strong>Test</strong> and speak.</li>
+    <li>
+      Under <strong>Them</strong>, choose the output your call plays through, usually your headset. Press
+      <strong>Test</strong> while something is playing.
+    </li>
+    <li>
+      Choose a speech engine for each side. Parakeet, Sherpa-ONNX and ORT Streaming run on your computer. Deepgram, Groq,
+      Azure and Cartesia are online services.
+    </li>
+    <li>If the two sides speak different languages, set a <strong>Language</strong> on each card.</li>
+    <li>
+      Press <kbd class="kbd">Ctrl</kbd> <kbd class="kbd">M</kbd> to start (<kbd class="kbd">Cmd</kbd>
+      <kbd class="kbd">M</kbd> on a Mac).
+    </li>
+  </ol>
+  <p>
+    Check the engines before your first call. A fresh install uses online engines: Web Speech for you and Deepgram for
+    them. To keep both on your computer, follow the
+    <a class="link" href="../local-call-transcription-windows/">local guide</a>.
+  </p>
+
+  <h2>The same sentence shows up twice</h2>
+  <p>
+    Without headphones, your microphone also hears the other person from the speakers, so their words appear on both
+    sides. Headphones avoid it. If you use speakers, keep <strong>Echo cancellation</strong> on (Settings, Audio). It is
+    on by default and removes what the output plays from your microphone before transcribing. It works when Them is an
+    output device.
+  </p>
+
+  <h2>The other side stays empty</h2>
+  <p>
+    First check the output. Play something and watch the Them meter, then match it to the output your call app uses. On a
+    Mac, also check the microphone and system audio permissions under Privacy & Security. The
+    <a class="link" href={doc('audio-setup')}>audio setup guide</a> covers the rest.
+  </p>
+
+  <h2>Tell people</h2>
+  <p>
+    A bot in the call at least shows that something is listening. Without one, telling people is up to you. Some places
+    require everyone’s consent, and some workplaces don’t allow transcription at all.
+  </p>
+</Guide>

@@ -1,0 +1,210 @@
+---
+// One how-to page: title, the answer in one line, prose, then a download link and the other guides.
+import Layout from './Layout.astro';
+import Navbar from '../components/Navbar.astro';
+import Footer from '../components/Footer.astro';
+import Icon from '../components/Icon.astro';
+import { GUIDES, guideBySlug } from '../data/guides';
+import { REPO, RELEASES_LATEST, SECTION } from '../data/site';
+
+interface Props {
+  slug: string;
+  /** The answer, up front. */
+  lede: string;
+}
+const { slug, lede } = Astro.props;
+const guide = guideBySlug(slug);
+const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
+
+const breadcrumbLd = {
+  '@context': 'https://schema.org',
+  '@type': 'BreadcrumbList',
+  itemListElement: [
+    { '@type': 'ListItem', position: 1, name: 'NexQ', item: new URL(base, Astro.site).href },
+    { '@type': 'ListItem', position: 2, name: 'Guides', item: new URL(`${base}guides/`, Astro.site).href },
+    { '@type': 'ListItem', position: 3, name: guide.label },
+  ],
+};
+---
+
+<Layout title={`${guide.title} | NexQ`} description={guide.description} jsonLd={[breadcrumbLd]} ogType="article">
+  <Navbar />
+  <main id="main" tabindex="-1" class="outline-hidden">
+    <article class="wrap guide">
+      <nav aria-label="Breadcrumb">
+        <ol class="guide-crumbs">
+          <li><a class="link" href={base}>NexQ</a></li>
+          <li><a class="link" href={`${base}guides/`}>Guides</a></li>
+          <li aria-current="page">{guide.label}</li>
+        </ol>
+      </nav>
+      <h1 class="h2 guide-title">{guide.title}</h1>
+      <p class="lede">{lede}</p>
+      <div class="guide-body"><slot /></div>
+
+      <aside class="guide-end" aria-labelledby="guide-end-title">
+        <h2 id="guide-end-title" class="h3">Try it on your next call</h2>
+        <p>
+          NexQ is free and open source (MIT), for Windows and, as a beta, for Macs with Apple Silicon. This is the NexQ
+          site, so read the comparison parts with that in mind.
+        </p>
+        <div class="guide-cta">
+          <a href={`${base}#${SECTION.download}`} class="btn-primary"><Icon name="download" class="h-5 w-5" />Download NexQ</a>
+          <a href={REPO} class="btn-ghost"><Icon name="github" class="h-5 w-5" />See the code</a>
+        </div>
+        <p class="guide-small">
+          The Windows installer isn’t code signed and the Mac beta isn’t notarized. All builds are on the
+          <a class="link" href={RELEASES_LATEST}>releases page</a>.
+        </p>
+      </aside>
+
+      <nav class="guide-more" aria-labelledby="guide-more-title">
+        <h2 id="guide-more-title" class="h3">More guides</h2>
+        <ul>
+          {GUIDES.filter((g) => g.slug !== slug).map((g) => (
+            <li><a class="link" href={`${base}guides/${g.slug}/`}>{g.label}</a></li>
+          ))}
+        </ul>
+      </nav>
+    </article>
+  </main>
+  <Footer />
+</Layout>
+
+<style is:global>
+  .guide {
+    padding-top: calc(var(--nav-h) + 3.5rem);
+    padding-bottom: 5rem;
+  }
+  .guide > * {
+    max-width: 44rem;
+  }
+  .guide-crumbs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 0.5rem;
+    font-size: 0.875rem;
+    line-height: 1.75rem;
+    color: hsl(var(--muted-foreground));
+  }
+  .guide-crumbs li + li::before {
+    content: '/';
+    margin-right: 0.5rem;
+  }
+  .guide .guide-title {
+    margin-top: 1.5rem;
+    max-width: 22ch;
+    text-wrap: balance;
+  }
+  .guide-body {
+    margin-top: 3rem;
+    font-size: 1.0625rem;
+    line-height: 1.65;
+    color: hsl(var(--foreground) / 0.88);
+  }
+  .guide-body h2 {
+    margin-top: 3rem;
+    margin-bottom: 0.875rem;
+    font-size: clamp(1.375rem, 1.6vw + 0.9rem, 1.75rem);
+    font-weight: 750;
+    line-height: 1.15;
+    letter-spacing: -0.03em;
+    color: hsl(var(--foreground));
+  }
+  .guide-body h2:first-child {
+    margin-top: 0;
+  }
+  .guide-body p,
+  .guide-body li {
+    text-wrap: pretty;
+  }
+  .guide-body :is(p, ul, ol) + :is(p, ul, ol),
+  .guide-table + p {
+    margin-top: 1rem;
+  }
+  .guide-body :is(ul, ol) {
+    padding-left: 1.375rem;
+  }
+  .guide-body ul {
+    list-style: disc;
+  }
+  .guide-body ol {
+    list-style: decimal;
+  }
+  .guide-body li + li {
+    margin-top: 0.5rem;
+  }
+  .guide-body li::marker {
+    color: hsl(var(--muted-foreground));
+  }
+  .guide-body strong {
+    font-weight: 650;
+    color: hsl(var(--foreground));
+  }
+  .guide-body code {
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.375rem;
+    background-color: hsl(var(--card));
+    padding: 0.0625rem 0.375rem;
+    font-family: var(--font-mono);
+    font-size: 0.8125em;
+    overflow-wrap: anywhere;
+  }
+  .guide-table {
+    margin-top: 1.5rem;
+    overflow-x: auto;
+    border: 1px solid hsl(var(--border));
+    border-radius: 1rem;
+  }
+  .guide-table table {
+    width: 100%;
+    min-width: 36rem;
+    border-collapse: collapse;
+    text-align: left;
+    font-size: 0.875rem;
+    line-height: 1.45;
+  }
+  .guide-table :is(th, td) {
+    padding: 0.75rem 0.875rem;
+    vertical-align: top;
+  }
+  .guide-table th {
+    font-weight: 600;
+    color: hsl(var(--foreground));
+  }
+  .guide-table tbody tr {
+    border-top: 1px solid hsl(var(--border));
+  }
+  .guide-end {
+    margin-top: 4rem;
+    border-top: 1px solid hsl(var(--border));
+    padding-top: 2.5rem;
+    color: hsl(var(--muted-foreground));
+  }
+  :is(.guide-end, .guide-more) h2 {
+    color: hsl(var(--foreground));
+  }
+  .guide-end p {
+    margin-top: 0.75rem;
+  }
+  .guide-cta {
+    margin-top: 1.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+  .guide-small {
+    font-size: 0.875rem;
+  }
+  .guide-more {
+    margin-top: 3rem;
+  }
+  .guide-more ul {
+    margin-top: 0.75rem;
+  }
+  .guide-more a {
+    display: inline-flex;
+    min-height: 2.5rem;
+    align-items: center;
+  }
+</style>

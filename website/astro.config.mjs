@@ -2,10 +2,10 @@ import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 import tailwindcss from '@tailwindcss/vite';
 
-// Deployed to GitHub Pages as a project site: https://naxhq.github.io/NexQ/
+// Deployed to GitHub Pages on its own domain (naxhq.github.io/NexQ redirects there).
 export default defineConfig({
-  site: 'https://naxhq.github.io',
-  base: '/NexQ/',
+  site: 'https://getnexq.com',
+  base: '/',
   output: 'static',
   // Astro 7 defaults to 'jsx', which strips whitespace between inline elements.
   // Keep the previous HTML compression so text spacing renders exactly as before.

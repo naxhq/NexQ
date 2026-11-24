@@ -1,0 +1,87 @@
+---
+import Guide from '../../layouts/Guide.astro';
+import { doc } from '../../data/site';
+// Model sizes and languages: src-tauri/src/stt/local_engines/model_registry.rs, docs/user-guide/ai-providers.md.
+---
+
+<Guide
+  slug="local-call-transcription-windows"
+  lede="Pick a speech engine that runs on your CPU, download its model once, and use it for both sides of the call. After that, turning speech into text needs no internet."
+>
+  <h2>What you need</h2>
+  <ul>
+    <li>Windows 10 or 11, 64-bit. You don’t need a graphics card: these engines run on the CPU.</li>
+    <li>100 to 470 MB for a model.</li>
+    <li>Headphones, if you can. They give the cleanest result.</li>
+  </ul>
+
+  <h2>Choose a model</h2>
+  <div class="guide-table" role="region" aria-label="Local speech models" tabindex="0">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Model</th><th scope="col">Download</th><th scope="col">Languages</th><th scope="col">When text appears</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><th scope="row">Parakeet TDT 0.6B v3</th><td>465 MB</td><td>25 European languages</td><td>After each pause</td></tr>
+        <tr><th scope="row">Parakeet CTC 110M</th><td>100 MB</td><td>English</td><td>After each pause</td></tr>
+        <tr><th scope="row">Sherpa-ONNX Zipformer</th><td>122 or 296 MB</td><td>English, or Chinese</td><td>While you speak</td></tr>
+        <tr><th scope="row">ORT Streaming Zipformer</th><td>122 or 296 MB</td><td>English</td><td>While you speak</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    Start with Parakeet v3 if it covers your language. Choose a Zipformer if you want to see words as they are spoken.
+    Whisper.cpp is in the app too, but only for recordings, not for live calls.
+  </p>
+
+  <h2>Set it up</h2>
+  <ol>
+    <li>
+      <a class="link" href="../../#download">Download NexQ</a> and run the installer. It installs for your user only and
+      needs no admin rights. It isn’t code signed, so SmartScreen may warn you. You can also build it from source.
+    </li>
+    <li>Open <strong>Settings, STT Providers</strong>, choose Parakeet or Sherpa-ONNX, and download a model.</li>
+    <li>
+      Open <strong>Settings, Audio & Devices</strong> and pick a preset. <strong>Local Only (Parakeet)</strong> and
+      <strong>Fully Offline</strong> (Sherpa-ONNX) put both sides on your PC.
+    </li>
+    <li>Check that You is your microphone and Them is the output your call plays through. Use <strong>Test</strong> on both.</li>
+    <li>Press <kbd class="kbd">Ctrl</kbd> <kbd class="kbd">M</kbd> and join your call.</li>
+  </ol>
+
+  <h2>What “local” covers, and what it doesn’t</h2>
+  <ul>
+    <li>
+      <strong>The default isn’t local.</strong> A fresh install uses Web Speech for you and Deepgram for them, both
+      online. The <strong>Free</strong> preset still sends your microphone to Web Speech.
+    </li>
+    <li>
+      <strong>Answers are separate.</strong> Local speech with an online AI still sends your transcript to that AI when
+      you ask for an answer. To keep that local too, use
+      <a class="link" href="../ollama-lm-studio-meeting-assistant/">Ollama or LM Studio</a>.
+    </li>
+    <li><strong>It checks for updates.</strong> NexQ contacts GitHub for updates and release notes.</li>
+    <li>
+      <strong>Files on disk aren’t encrypted.</strong> Transcripts and recordings are in
+      <code>%APPDATA%\com.nexq.app</code>. API keys are in Windows Credential Manager.
+    </li>
+  </ul>
+
+  <h2>Check it yourself</h2>
+  <p>
+    After the model has downloaded, disconnect from the internet, start a meeting in NexQ, play a video file and talk over
+    it. If both sides get text, nothing online was involved.
+  </p>
+
+  <h2>If it struggles</h2>
+  <ul>
+    <li>Text comes in bursts: Parakeet writes after a pause. Use a Zipformer for live words.</li>
+    <li>It falls behind on an older PC: try a smaller model.</li>
+    <li>
+      Wrong words in your language: check that the model covers it. The
+      <a class="link" href={doc('ai-providers')}>providers guide</a> lists each one.
+    </li>
+  </ul>
+</Guide>

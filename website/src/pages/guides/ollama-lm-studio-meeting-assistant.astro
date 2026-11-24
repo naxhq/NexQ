@@ -1,0 +1,66 @@
+---
+import Guide from '../../layouts/Guide.astro';
+import { doc } from '../../data/site';
+---
+
+<Guide
+  slug="ollama-lm-studio-meeting-assistant"
+  lede="Run a model in Ollama or LM Studio, let NexQ transcribe the call, and ask it questions while people are still talking. With a local speech engine too, the transcript and the answers stay on your computer."
+>
+  <h2>How the pieces fit</h2>
+  <p>
+    Three things happen during a call: speech becomes text, the text and your notes become a prompt, and a model writes an
+    answer. You choose where each one runs. Ollama and LM Studio do the last part, so pair them with a
+    <a class="link" href="../local-call-transcription-windows/">local speech engine</a> if nothing should leave your
+    computer.
+  </p>
+
+  <h2>With Ollama</h2>
+  <ol>
+    <li>Install <a class="link" href="https://ollama.com">Ollama</a> and pull a model: <code>ollama pull llama3.2</code></li>
+    <li>Start NexQ. It finds Ollama at <code>http://localhost:11434</code>.</li>
+    <li>Open <strong>Settings, LLM Providers</strong>, choose Ollama and pick the model.</li>
+  </ol>
+
+  <h2>With LM Studio</h2>
+  <ol>
+    <li>Download a model in <a class="link" href="https://lmstudio.ai">LM Studio</a> and start its local server.</li>
+    <li>Open <strong>Settings, LLM Providers</strong> in NexQ, choose LM Studio and pick the model.</li>
+  </ol>
+  <p>
+    Another OpenAI-compatible server works with the <strong>Custom</strong> provider: enter its base URL and load the
+    models.
+  </p>
+
+  <h2>Which model size</h2>
+  <p>
+    In a live call, a fast answer beats a perfect one. Start with a small model, around 3B, and move up to 7B or 8B if your
+    computer keeps up. A local speech engine uses your CPU at the same time.
+  </p>
+
+  <h2>Answers from your own notes</h2>
+  <ol>
+    <li>For search by meaning, pull an embedding model: <code>ollama pull nomic-embed-text</code></li>
+    <li>Add PDF, DOCX, TXT or MD files under <strong>Meeting Context</strong> on the dashboard and update the knowledge base.</li>
+    <li>
+      In the call, press <kbd class="kbd">Space</kbd> in the overlay to answer the latest question, or
+      <kbd class="kbd">5</kbd> to ask your own.
+    </li>
+  </ol>
+  <p>
+    The files are split up and indexed in a local database. The parts that match go into the prompt, so a local model sees
+    them without an upload. More in the <a class="link" href={doc('rag-context')}>context guide</a>.
+  </p>
+
+  <h2>Honest limits</h2>
+  <ul>
+    <li>Small local models get facts wrong more often than the large online ones. Read an answer before you repeat it.</li>
+    <li>
+      Looking things up live in notes folders and MCP tools needs a Claude, Google AI or ChatGPT plan (beta). It doesn’t
+      work with Ollama or LM Studio.
+    </li>
+    <li>Screenshots and pasted images need the Claude plan.</li>
+    <li>For live translation, choose OPUS-MT or your local model. DeepL, Google and Microsoft are online services.</li>
+  </ul>
+  <p>The AI Call Log shows every prompt and how long it took, so you can see exactly what your model was given.</p>
+</Guide>
