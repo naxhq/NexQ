@@ -264,6 +264,20 @@ export async function endMeetingFromThisWindow(): Promise<boolean> {
  * before installing. Never installs if the meeting didn't end cleanly.
  */
 export async function restartToUpdate(): Promise<void> {
+  // From here until it fails or is cancelled, NexQ is on its way out: other
+  // notices (the star prompt) must not appear in between.
+  useUpdaterStore.getState().setInstalling(true);
+  try {
+    await installAfterEndingMeeting();
+  } catch (err) {
+    useUpdaterStore.getState().setInstalling(false);
+    throw err;
+  }
+}
+
+async function installAfterEndingMeeting(): Promise<void> {
+  const cancelled = () => useUpdaterStore.getState().setInstalling(false);
+
   // A demo's meeting is fake: nothing to save and no other window holds it.
   // Leave the demo and install, without the confirm or waiting on windows.
   const { useDemoStore } = await import("../demo/demoStore");
@@ -283,11 +297,11 @@ export async function restartToUpdate(): Promise<void> {
         cancelLabel: "Cancel",
       },
     );
-    if (!ok) return;
+    if (!ok) return cancelled();
 
     if (!(await endMeetingInAllWindows())) {
       showToast("Couldn't finish saving the meeting. Update postponed.", "error");
-      return;
+      return cancelled();
     }
   }
 
@@ -295,6 +309,7 @@ export async function restartToUpdate(): Promise<void> {
     await installUpdateNow();
   } catch (err) {
     showToast(`Update not installed: ${errorMessage(err)}`, "error");
+    cancelled();
   }
 }
 

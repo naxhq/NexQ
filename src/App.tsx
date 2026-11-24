@@ -13,6 +13,7 @@ import { showToast } from "./stores/toastStore";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { UpdateReadyToast } from "./components/UpdateToast";
 import { UpdateDialog } from "./components/UpdateDialog";
+import { StarPrompt } from "./components/StarPrompt";
 import { useTheme } from "./hooks/useTheme";
 import { useGlobalShortcut } from "./hooks/useGlobalShortcut";
 import { useTranslation } from "./hooks/useTranslation";
@@ -477,6 +478,9 @@ function App() {
       {/* One-time "update ready" notice (the footer pill stays) */}
       <UpdateReadyToast />
       <UpdateDialog />
+
+      {/* One-time "star NexQ" card after the fifth finished meeting (launcher only) */}
+      {windowLabel === "launcher" && <StarPrompt />}
 
       {/* Demo mode — scenario picker modal + floating exit badge */}
       <DemoPicker />
