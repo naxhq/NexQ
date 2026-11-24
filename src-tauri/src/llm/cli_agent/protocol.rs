@@ -303,6 +303,9 @@ pub fn user_message_with_images(text: &str, query: bool, images: &[ImageAttachme
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentErrorKind {
     NotInstalled,
+    /// Claude Code is installed but older than NexQ needs (see
+    /// `detect::MIN_CLAUDE_VERSION`). A real outage like `NotInstalled`.
+    Outdated,
     NotLoggedIn,
     RateLimited,
     /// The conversation no longer fits the model's context window.
@@ -316,6 +319,7 @@ impl AgentErrorKind {
     pub fn as_str(self) -> &'static str {
         match self {
             AgentErrorKind::NotInstalled => "not_installed",
+            AgentErrorKind::Outdated => "outdated",
             AgentErrorKind::NotLoggedIn => "not_logged_in",
             AgentErrorKind::RateLimited => "rate_limited",
             AgentErrorKind::ContextOverflow => "context_overflow",
@@ -328,7 +332,11 @@ impl AgentErrorKind {
 /// Map error text (a failed result, stderr, or spawn error) to a coarse kind.
 pub fn classify_error(text: &str) -> AgentErrorKind {
     let t = text.to_lowercase();
-    if t.contains("not logged in") || t.contains("/login") || t.contains("please log in") {
+    // First: the refusal text of `detect::outdated_message`, and before the
+    // crash pattern ("exited") that an old binary's own error would match.
+    if t.contains("is too old for nexq") {
+        AgentErrorKind::Outdated
+    } else if t.contains("not logged in") || t.contains("/login") || t.contains("please log in") {
         AgentErrorKind::NotLoggedIn
     } else if t.contains("rate limit")
         || t.contains("usage limit")
@@ -602,6 +610,21 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn classify_outdated() {
+        let refusal = "Claude Code 2.1.206 is too old for NexQ. Update it to 2.1.259 or newer.";
+        assert_eq!(classify_error(refusal), AgentErrorKind::Outdated);
+        assert_eq!(classify_error(&format!("could not start the CLI agent: {refusal}")), AgentErrorKind::Outdated);
+        // Before the crash pattern.
+        assert_eq!(classify_error(&format!("claude exited unexpectedly: {refusal}")), AgentErrorKind::Outdated);
+        // The old binary's own crash stays a crash; other "too old" texts are not ours.
+        assert_eq!(
+            classify_error("claude exited unexpectedly (exit code 1): error: unknown option '--permission-prompts'"),
+            AgentErrorKind::Crashed
+        );
+        assert_eq!(classify_error("your token is too old"), AgentErrorKind::Other);
+    }
+
+    #[test]
     fn classify_not_logged_in() {
         assert_eq!(classify_error("Not logged in · Please run /login"), AgentErrorKind::NotLoggedIn);
     }
@@ -611,6 +634,7 @@ pub(crate) mod tests {
         assert_eq!(AgentErrorKind::RateLimited.as_str(), "rate_limited");
         assert_eq!(AgentErrorKind::NotLoggedIn.as_str(), "not_logged_in");
         assert_eq!(AgentErrorKind::NotInstalled.as_str(), "not_installed");
+        assert_eq!(AgentErrorKind::Outdated.as_str(), "outdated");
         assert_eq!(AgentErrorKind::ContextOverflow.as_str(), "context_overflow");
         assert_eq!(AgentErrorKind::Crashed.as_str(), "crashed");
         assert_eq!(AgentErrorKind::Other.as_str(), "other");

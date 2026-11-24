@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useConfigStore } from "../stores/configStore";
 import { showToast } from "../stores/toastStore";
+import { isOutdated } from "../lib/agentUsage";
 import {
   getLLMProviders,
   listModels,
@@ -388,7 +389,9 @@ export function LLMSettings() {
   // while its login state is unknown); it has no model of its own to pick here.
   const agentStatus = isCliAgent(selectedProvider) ? agentStatuses[selectedProvider] : undefined;
   const cliUnusable =
-    isCliProvider && !!agentStatus && (!agentStatus.installed || agentStatus.auth?.logged_in === false);
+    isCliProvider &&
+    !!agentStatus &&
+    (!agentStatus.installed || isOutdated(agentStatus) || agentStatus.auth?.logged_in === false);
 
   // Same path as the footer. Without a pick, the model last used with the
   // provider; Claude takes its Fast model.

@@ -8,7 +8,15 @@ import {
   testLLMConnection,
   openCliLoginTerminal,
 } from "../../lib/ipc";
-import { CODEX_API_KEY_NOTE, apiBilledNoteFor, isApiBilled, isApiKeyLogin } from "../../lib/agentUsage";
+import {
+  CODEX_API_KEY_NOTE,
+  apiBilledNoteFor,
+  isApiBilled,
+  isApiKeyLogin,
+  isOutdated,
+  outdatedLine,
+  outdatedNote,
+} from "../../lib/agentUsage";
 import { CLI_AGENTS, cliAgentInfo, isCliAgent } from "../../lib/cliAgents";
 import { ProviderLogo } from "../icons/ProviderLogos";
 import type { LLMProviderType, ModelInfo } from "../../lib/types";
@@ -122,7 +130,9 @@ export function LLMSetupStep({
   const isCliProvider = isCliAgent(selectedProvider);
   const agent = isCliAgent(selectedProvider) ? cliAgentInfo(selectedProvider) : null;
   const agentStatus = isCliAgent(selectedProvider) ? agentStatuses[selectedProvider] : undefined;
-  const agentLoggedIn = !!agentStatus?.auth?.logged_in;
+  // A Claude that is too old can't start, whatever its login says.
+  const agentOutdated = isOutdated(agentStatus);
+  const agentLoggedIn = !!agentStatus?.auth?.logged_in && !agentOutdated;
   const agentChecked = isCliAgent(selectedProvider) && !!agentChecking[selectedProvider];
 
   // A CLI agent has no model to pick (Fast / Deep come from its settings); the
@@ -289,9 +299,11 @@ export function LLMSetupStep({
                   key={a.id}
                   label={a.name}
                   description={
-                    st?.auth?.logged_in
-                      ? `Your ${a.name} login${st.auth.email ? ` (${st.auth.email})` : ""}`
-                      : `${a.id === "claude_cli" ? "Claude Code" : a.name} found — log in to use it`
+                    isOutdated(st)
+                      ? `${outdatedLine(st)}: update it to use it`
+                      : st?.auth?.logged_in
+                        ? `Your ${a.name} login${st.auth.email ? ` (${st.auth.email})` : ""}`
+                        : `${a.id === "claude_cli" ? "Claude Code" : a.name} found — log in to use it`
                   }
                   icon={<ProviderLogo id={a.logo} className="h-5 w-5" />}
                   selected={selectedProvider === a.id}
@@ -307,7 +319,12 @@ export function LLMSetupStep({
             <p className="text-xs text-muted-foreground">
               Uses your own {agent.name} login on this PC. NexQ never sees your credentials.
             </p>
-            {isApiBilled(agentStatus) && (
+            {agentOutdated && (
+              <p className="text-xs font-medium text-warning">
+                {outdatedLine(agentStatus)}. {outdatedNote(agentStatus)}
+              </p>
+            )}
+            {isApiBilled(agentStatus) && !agentOutdated && (
               <p className="text-xs font-medium text-warning">{apiBilledNoteFor(agent.name)}</p>
             )}
             {isApiKeyLogin(agentStatus) && (
@@ -337,17 +354,19 @@ export function LLMSetupStep({
               </div>
             ) : (
               <div className="flex flex-wrap items-center gap-3">
-                <button
-                  onClick={() =>
-                    openCliLoginTerminal(agent.id).catch((e) =>
-                      showToast(`Couldn't open a terminal: ${e instanceof Error ? e.message : String(e)}`, "error")
-                    )
-                  }
-                  className="inline-flex items-center gap-2 rounded-xl border border-border/40 bg-background px-4 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-accent"
-                >
-                  <Terminal className="h-3.5 w-3.5" />
-                  Open terminal to log in
-                </button>
+                {!agentOutdated && (
+                  <button
+                    onClick={() =>
+                      openCliLoginTerminal(agent.id).catch((e) =>
+                        showToast(`Couldn't open a terminal: ${e instanceof Error ? e.message : String(e)}`, "error")
+                      )
+                    }
+                    className="inline-flex items-center gap-2 rounded-xl border border-border/40 bg-background px-4 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-accent"
+                  >
+                    <Terminal className="h-3.5 w-3.5" />
+                    Open terminal to log in
+                  </button>
+                )}
                 <button
                   onClick={() => refreshAgentStatus(agent.id)}
                   disabled={agentChecked}

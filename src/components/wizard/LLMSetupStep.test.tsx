@@ -26,7 +26,7 @@ const LOGGED_IN: ClaudeCliStatus = {
   binary_path: "claude.exe",
   version: "2.1.0",
   auth: { logged_in: true, auth_method: "claude.ai", subscription_type: "max", email: "me@example.com", login: "subscription" },
-  npm_only: false,
+  npm_only: false, required_version: null,
 };
 
 describe("LLMSetupStep (first-run wizard)", () => {
@@ -52,10 +52,10 @@ describe("LLMSetupStep (first-run wizard)", () => {
   it("offers only the agents found on this PC, and activates the chosen one", async () => {
     ipc.cliAgentStatus.mockImplementation(async (kind: string) =>
       kind === "claude_cli"
-        ? { installed: false, binary_path: null, version: null, auth: null, npm_only: false }
+        ? { installed: false, binary_path: null, version: null, auth: null, npm_only: false, required_version: null }
         : kind === "codex_cli"
           ? { ...LOGGED_IN, auth: { ...LOGGED_IN.auth!, email: "me@openai.example" } }
-          : { installed: false, binary_path: null, version: null, auth: null, npm_only: false },
+          : { installed: false, binary_path: null, version: null, auth: null, npm_only: false, required_version: null },
     );
     render(<LLMSetupStep ollamaRunning={false} ollamaModels={[]} lmStudioRunning={false} lmStudioModels={[]} />);
     fireEvent.click(await screen.findByRole("button", { name: /^Codex/ }));
@@ -66,12 +66,29 @@ describe("LLMSetupStep (first-run wizard)", () => {
     await waitFor(() => expect(activate).toHaveBeenCalledWith("codex_cli"));
   });
 
+  it("a Claude Code that is too old is not offered as ready, even when logged in", async () => {
+    ipc.cliAgentStatus.mockImplementation(async (kind: string) =>
+      kind === "claude_cli"
+        ? { ...LOGGED_IN, version: "2.1.206 (Claude Code)", required_version: "2.1.259" }
+        : { installed: false, binary_path: null, version: null, auth: null, npm_only: false, required_version: null },
+    );
+    render(<LLMSetupStep ollamaRunning={false} ollamaModels={[]} lmStudioRunning={false} lmStudioModels={[]} />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Claude/ }));
+    expect(screen.getByText("Claude Code 2.1.206 is too old: update it to use it")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Claude Code 2\.1\.206 is too old\. NexQ needs Claude Code 2\.1\.259 or newer/),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Use Claude" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /open terminal to log in/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /check again/i })).toBeInTheDocument();
+  });
+
   it("a found agent that is logged out offers its own login terminal", async () => {
     const loggedOut = { ...LOGGED_IN, auth: { ...LOGGED_IN.auth!, logged_in: false, login: "logged_out" as const } };
     ipc.cliAgentStatus.mockImplementation(async (kind: string) =>
       kind === "antigravity_cli"
         ? loggedOut
-        : { installed: false, binary_path: null, version: null, auth: null, npm_only: false },
+        : { installed: false, binary_path: null, version: null, auth: null, npm_only: false, required_version: null },
     );
     render(<LLMSetupStep ollamaRunning={false} ollamaModels={[]} lmStudioRunning={false} lmStudioModels={[]} />);
     fireEvent.click(await screen.findByRole("button", { name: /^Antigravity/ }));
@@ -85,7 +102,7 @@ describe("LLMSetupStep (first-run wizard)", () => {
       auth: { logged_in: false, auth_method: "api_key", subscription_type: null, email: null, login: "logged_out" as const },
     };
     ipc.cliAgentStatus.mockImplementation(async (kind: string) =>
-      kind === "codex_cli" ? apiKey : { installed: false, binary_path: null, version: null, auth: null, npm_only: false },
+      kind === "codex_cli" ? apiKey : { installed: false, binary_path: null, version: null, auth: null, npm_only: false, required_version: null },
     );
     render(<LLMSetupStep ollamaRunning={false} ollamaModels={[]} lmStudioRunning={false} lmStudioModels={[]} />);
     fireEvent.click(await screen.findByRole("button", { name: /^Codex/ }));

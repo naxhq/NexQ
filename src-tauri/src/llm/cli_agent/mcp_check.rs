@@ -13,7 +13,7 @@
 
 use super::command::SessionConfig;
 use super::CliAgentKind;
-use super::detect::find_claude_binary;
+use super::detect::find_current_claude;
 use super::mcp_diagnose::diagnose_start;
 use super::mcp_handshake;
 use super::session::{AgentError, ClaudeSession, InitInfo, SessionTimeouts};
@@ -73,7 +73,9 @@ pub async fn list_server_tools(
     secret: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Vec<String>, String> {
     let launch = check_launch(server, secret)?;
-    let bin = tokio::task::spawn_blocking(find_claude_binary).await.ok().flatten();
+    // A Claude that is too old counts as no Claude here: the Check is about the
+    // server, so NexQ's own client answers (Settings says Claude needs an update).
+    let bin = tokio::task::spawn_blocking(|| find_current_claude().ok()).await.ok().flatten();
     let failure = match bin {
         Some(bin) => {
             let cfg = SessionConfig {

@@ -83,6 +83,7 @@ mod tests {
                 login: ClaudeLogin::Subscription,
             }),
             npm_only: false,
+            required_version: None,
         };
         let json = serde_json::to_value(&status).unwrap();
         assert_eq!(json["kind"], "claude_cli");
@@ -91,5 +92,8 @@ mod tests {
         assert_eq!(json["auth"]["subscription_type"], "max");
         assert_eq!(json["auth"]["login"], "subscription");
         assert_eq!(json["npm_only"], false);
+        assert!(json["required_version"].is_null());
+        let outdated = ClaudeCliStatus { required_version: Some("2.1.259".into()), ..status };
+        assert_eq!(serde_json::to_value(&outdated).unwrap()["required_version"], "2.1.259");
     }
 }

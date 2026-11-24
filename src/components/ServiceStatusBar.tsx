@@ -20,6 +20,7 @@ import { showToast } from "../stores/toastStore";
 import { useUpdaterStore } from "../stores/updaterStore";
 import { useAgentStore } from "../stores/agentStore";
 import { AgentStatusChip } from "./AgentStatusChip";
+import { isOutdated } from "../lib/agentUsage";
 import { ProviderLogo } from "./icons/ProviderLogos";
 import { StreamLatency } from "./StreamLatency";
 import { CLI_AGENTS, cliAgentInfo, cliTierLabel, isCliAgent } from "../lib/cliAgents";
@@ -929,7 +930,7 @@ function LLMPickerDropdown({
     }
   }, [refreshAgentStatus]);
   const availableAgents = CLI_AGENTS.filter(
-    (a) => currentProvider === a.id || !!agentStatuses[a.id]?.auth?.logged_in,
+    (a) => currentProvider === a.id || (!!agentStatuses[a.id]?.auth?.logged_in && !isOutdated(agentStatuses[a.id])),
   );
 
   // Internal state: pending provider (may differ from active while browsing)

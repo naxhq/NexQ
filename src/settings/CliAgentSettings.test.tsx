@@ -54,14 +54,14 @@ import { resetAgentStoreForTests } from "../stores/agentStore";
 import { DEFAULT_CLI_AGENT_CONFIGS, useConfigStore } from "../stores/configStore";
 import { EMPTY_USAGE } from "../lib/agentUsage";
 
-const NOT_INSTALLED: ClaudeCliStatus = { installed: false, binary_path: null, version: null, auth: null, npm_only: false };
-const NPM_ONLY: ClaudeCliStatus = { ...NOT_INSTALLED, npm_only: true };
+const NOT_INSTALLED: ClaudeCliStatus = { installed: false, binary_path: null, version: null, auth: null, npm_only: false, required_version: null };
+const NPM_ONLY: ClaudeCliStatus = { ...NOT_INSTALLED, npm_only: true, required_version: null };
 const LOGGED_OUT: ClaudeCliStatus = {
   installed: true,
   binary_path: "C:\\Users\\me\\.local\\bin\\claude.exe",
   version: "2.1.288",
   auth: { logged_in: false, auth_method: "none", subscription_type: null, email: null, login: "logged_out" },
-  npm_only: false,
+  npm_only: false, required_version: null,
 };
 const LOGGED_IN: ClaudeCliStatus = {
   ...LOGGED_OUT,
@@ -77,6 +77,9 @@ const API_BILLED: ClaudeCliStatus = {
   ...LOGGED_OUT,
   auth: { logged_in: true, auth_method: "api_key", subscription_type: null, email: "me@example.com", login: "api_billed" },
 };
+
+/** A Claude Code older than NexQ can launch, signed in. */
+const OUTDATED: ClaudeCliStatus = { ...LOGGED_IN, version: "2.1.206 (Claude Code)", required_version: "2.1.259" };
 
 const ALL_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 function model(value: string, resolved: string, display: string, levels: string[] = ALL_EFFORTS): ClaudeModelInfo {
@@ -168,6 +171,67 @@ describe("CliAgentSettings", () => {
       "href",
       "https://code.claude.com/docs/en/setup",
     );
+  });
+
+  it("says plainly that Claude Code is too old, never connected, with the update command", async () => {
+    claudeStatus(OUTDATED);
+    renderSettings({ activeProvider: "claude_cli" });
+    expect(await screen.findByText("Claude Code 2.1.206 is too old")).toBeInTheDocument();
+    expect(screen.getByTestId("claude-status-dot")).toHaveAttribute("data-state", "outdated");
+    expect(screen.getByText("Needs update")).toBeInTheDocument();
+    expect(
+      screen.getByText("NexQ needs Claude Code 2.1.259 or newer. Update it, then check the connection."),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("update-command")).toHaveTextContent(
+      "& 'C:\\Users\\me\\.local\\bin\\claude.exe' update",
+    );
+    expect(screen.getByText("In PowerShell:")).toBeInTheDocument();
+    // The check result is "Update needed", never a green connected line.
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Update needed"));
+    expect(screen.queryByText(/Connected/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/✓/)).not.toBeInTheDocument();
+    // No login prompt: the login is not the problem.
+    expect(screen.queryByRole("button", { name: /open terminal to log in/i })).not.toBeInTheDocument();
+  });
+
+  it("can't make an outdated Claude the active provider", async () => {
+    claudeStatus(OUTDATED);
+    renderSettings();
+    await screen.findByText("Claude Code 2.1.206 is too old");
+    expect(screen.getByRole("button", { name: /use claude/i })).toBeDisabled();
+  });
+
+  it("doesn't ask an outdated Claude for its models", async () => {
+    claudeStatus(OUTDATED);
+    renderSettings();
+    await screen.findByText("Claude Code 2.1.206 is too old");
+    ipc.cliAgentModels.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: /check connection/i }));
+    await waitFor(() => expect(claudeCalls().length).toBeGreaterThan(1));
+    await waitFor(() => expect(screen.getByRole("button", { name: /check connection/i })).toBeEnabled());
+    expect(ipc.cliAgentModels.mock.calls.filter(([kind]) => kind === "claude_cli")).toHaveLength(0);
+  });
+
+  it("loads the models on the check that finds Claude updated", async () => {
+    claudeStatus(OUTDATED);
+    renderSettings();
+    await screen.findByText("Claude Code 2.1.206 is too old");
+    ipc.cliAgentModels.mockClear();
+    claudeStatus(LOGGED_IN);
+    fireEvent.click(screen.getByRole("button", { name: /check connection/i }));
+    await waitFor(() =>
+      expect(ipc.cliAgentModels.mock.calls.filter(([kind]) => kind === "claude_cli")).toHaveLength(1),
+    );
+    expect(screen.queryByText("Claude Code 2.1.206 is too old")).not.toBeInTheDocument();
+  });
+
+  it("shows a plain quoted command off Windows", async () => {
+    claudeStatus({ ...OUTDATED, binary_path: "/home/me/.local/bin/claude" });
+    renderSettings();
+    await screen.findByText("Claude Code 2.1.206 is too old");
+    expect(screen.getByTestId("update-command")).toHaveTextContent("'/home/me/.local/bin/claude' update");
+    expect(screen.getByTestId("update-command").textContent).not.toContain("&");
+    expect(screen.getByText("In a terminal:")).toBeInTheDocument();
   });
 
   it("never shows an API-billed login as connected", async () => {
@@ -464,14 +528,14 @@ const CODEX_LOGGED_IN: ClaudeCliStatus = {
   binary_path: "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd",
   version: "0.171.0",
   auth: { logged_in: true, auth_method: "chatgpt", subscription_type: "plus", email: "me@openai.example", login: "subscription" },
-  npm_only: false,
+  npm_only: false, required_version: null,
 };
 const AG_LOGGED_IN: ClaudeCliStatus = {
   installed: true,
   binary_path: "C:\\Users\\me\\AppData\\Local\\agy\\agy.exe",
   version: "1.5.14",
   auth: { logged_in: true, auth_method: "google", subscription_type: null, email: null, login: "subscription" },
-  npm_only: false,
+  npm_only: false, required_version: null,
 };
 
 function codexModel(value: string, display: string, levels: string[], def?: string): ClaudeModelInfo {

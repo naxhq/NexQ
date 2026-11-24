@@ -667,6 +667,7 @@ pub fn unavailable_kind(err: &AgentError) -> Option<AgentErrorKind> {
 pub fn reason_label(kind: AgentErrorKind) -> &'static str {
     match kind {
         AgentErrorKind::NotInstalled => "not installed",
+        AgentErrorKind::Outdated => "too old",
         AgentErrorKind::NotLoggedIn => "not logged in",
         AgentErrorKind::RateLimited => "usage limit reached",
         AgentErrorKind::ContextOverflow => "conversation too long",
@@ -1249,6 +1250,11 @@ mod tests {
         assert!(!health.probe_due(t0), "healthy: nothing to probe");
         health.mark_unavailable_at(AgentErrorKind::NotLoggedIn, t0);
         assert!(health.probe_due(t0), "logged out: probe every tick");
+        // Too old clears the way NotInstalled does: probed every tick until updated.
+        health.mark_unavailable_at(AgentErrorKind::Outdated, t0);
+        assert!(health.probe_due(t0), "too old: probe every tick");
+        assert!(health.mark_healthy(), "an updated Claude passes the probe and clears it");
+        assert_eq!(health.get(), ClaudeHealth::Healthy);
         health.mark_unavailable_at(AgentErrorKind::RateLimited, t0);
         assert!(!health.probe_due(t0 + Duration::from_secs(60)));
         assert!(!health.probe_due(t0 + Duration::from_secs(14 * 60)));
@@ -1277,6 +1283,15 @@ mod tests {
             unavailable_kind(&AgentError::Spawn("Claude CLI not installed".into())),
             Some(AgentErrorKind::NotInstalled)
         );
+        // Too old: a real outage, never restarted (it would fail the same way).
+        let too_old = AgentError::Spawn("Claude Code 2.1.206 is too old for NexQ. Update it to 2.1.259 or newer.".into());
+        assert!(!is_restartable(&too_old));
+        assert_eq!(unavailable_kind(&too_old), Some(AgentErrorKind::Outdated));
+        assert_eq!(
+            unavailable_kind(&AgentError::Cli(AgentErrorKind::Outdated, "x".into())),
+            Some(AgentErrorKind::Outdated)
+        );
+        assert_eq!(reason_label(AgentErrorKind::Outdated), "too old");
         assert_eq!(unavailable_kind(&AgentError::Timeout), Some(AgentErrorKind::Crashed));
         assert_eq!(
             unavailable_kind(&AgentError::Crashed("exit code 1".into())),

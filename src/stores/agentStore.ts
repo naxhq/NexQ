@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { AgentSessionStatus, CliAgentKind, CliAgentStatus } from "../lib/types";
 import { cliAgentModels, cliAgentStatus, getAgentSessions } from "../lib/ipc";
 import { CLI_AGENTS } from "../lib/cliAgents";
+import { isOutdated } from "../lib/agentUsage";
 import { onAgentSessionStatus } from "../lib/events";
 import { useConfigStore } from "./configStore";
 
@@ -172,7 +173,8 @@ export function refreshCliModelsOnStart(): void {
   for (const { id } of CLI_AGENTS) {
     void store.refreshStatus(id).then(() => {
       const status = useAgentStore.getState().statuses[id];
-      if (status?.installed && status.auth?.logged_in) return useAgentStore.getState().refreshModels(id);
+      // A Claude that is too old can't list models (it isn't started).
+      if (status?.installed && status.auth?.logged_in && !isOutdated(status)) return useAgentStore.getState().refreshModels(id);
     });
   }
 }

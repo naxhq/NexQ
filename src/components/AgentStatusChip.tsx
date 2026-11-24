@@ -19,7 +19,10 @@ import {
   formatDuration,
   formatTokenUsage,
   isApiBilled,
+  isOutdated,
   isRateLimited,
+  outdatedLine,
+  outdatedNote,
 } from "../lib/agentUsage";
 import { cliAgentInfo, cliTierLabel } from "../lib/cliAgents";
 import type {
@@ -74,6 +77,7 @@ function providerState(
 ): { state: AgentChipState; label: string } {
   if (!status) return { state: "idle", label: statusError ? "" : "Checking…" };
   if (!status.installed) return { state: "attention", label: status.npm_only ? "Needs native install" : "Not installed" };
+  if (isOutdated(status)) return { state: "attention", label: "Needs update" };
   if (!status.auth) return { state: "idle", label: "" };
   if (!status.auth.logged_in) return { state: "attention", label: "Not logged in" };
   // Usable, but never green: it doesn't use the subscription.
@@ -84,6 +88,7 @@ function providerState(
 function providerNote(kind: CliAgentKind, status: ClaudeCliStatus | undefined): string {
   const product = kind === "claude_cli" ? "Claude Code" : cliAgentInfo(kind).name;
   if (status && !status.installed) return status.npm_only ? NPM_ONLY_NOTE : `${product} is not installed on this PC`;
+  if (isOutdated(status)) return `${outdatedLine(status)}. ${outdatedNote(status)}`;
   if (status?.auth && !status.auth.logged_in) return "Not logged in — sign in from Settings";
   return "";
 }
@@ -160,7 +165,8 @@ function HoverCard({
 
   const inSession = sessions.length > 0;
   const login = loginLine(status);
-  const detail = sessions.find((s) => s.state === "error" && s.detail)?.detail;
+  // A Claude that is too old fails every session the same way: the update note says more.
+  const detail = isOutdated(status) ? undefined : sessions.find((s) => s.state === "error" && s.detail)?.detail;
   const avg = avgLatencyMs(usage);
   const avgFirst = avgFirstTokenMs(usage);
   const agent = cliAgentInfo(kind);
@@ -254,7 +260,8 @@ export function AgentStatusChip({
   // Closed sessions are dropped from the store, so any session here is open.
   const inSession = sessions.length > 0;
   const apiBilled = isApiBilled(status);
-  const chip = inSession ? sessionState(sessions) : providerState(status, statusError);
+  // Too old to start: its failed sessions only repeat it, so the update need leads.
+  const chip = inSession && !isOutdated(status) ? sessionState(sessions) : providerState(status, statusError);
   // An API-billed login is never shown green, in a session or not.
   const state: AgentChipState = apiBilled && chip.state === "ready" ? "attention" : chip.state;
   const label = chip.label;
@@ -330,7 +337,7 @@ export function AgentStatusChip({
           usage={usage}
           cfg={cfg}
           status={status}
-          note={inSession ? "" : providerNote(kind, status)}
+          note={inSession && !isOutdated(status) ? "" : providerNote(kind, status)}
           apiBilled={apiBilled}
           models={agentModels}
         />

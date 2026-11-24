@@ -35,7 +35,7 @@ const API_BILLED_CLAUDE: CliAgentStatus = {
   binary_path: "claude.exe",
   version: "2.1.0",
   auth: { logged_in: true, auth_method: "api_key", subscription_type: null, email: null, login: "api_billed" },
-  npm_only: false,
+  npm_only: false, required_version: null,
 };
 
 describe("CallLogPanel agent usage line", () => {

@@ -367,6 +367,12 @@ export interface ClaudeCliStatus {
   auth: ClaudeAuthStatus | null;
   /** Not installed, but an npm install (`claude.cmd`) was found: NexQ needs the native installer. */
   npm_only: boolean;
+  /**
+   * Claude only: the oldest Claude Code NexQ can launch ("2.1.259"), set only
+   * when it is installed, its version is known and older than that. null
+   * otherwise, and always for Codex and Antigravity.
+   */
+  required_version: string | null;
 }
 
 /**
@@ -463,7 +469,8 @@ export interface AgentSessionStatus {
   detail: string | null;
   /**
    * Classified cause of `detail`: "rate_limited" | "not_logged_in" |
-   * "not_installed" | "context_overflow" | "crashed" | "other". Set with `detail`.
+   * "not_installed" | "outdated" | "context_overflow" | "crashed" | "other".
+   * Set with `detail`.
    */
   error_kind: string | null;
   /** The with-sources session (notes folders, MCP tools), not the plain one. */

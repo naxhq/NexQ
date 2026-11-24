@@ -62,7 +62,7 @@ beforeEach(() => {
     binary_path: "claude",
     version: "2.1.0",
     auth: { logged_in: true, auth_method: "claude.ai", subscription_type: "max", email: "a@b.c", login: "subscription" },
-    npm_only: false,
+    npm_only: false, required_version: null,
   });
   useMeetingStore.setState({ activeMeeting: { id: "m1" } as Meeting });
 });
@@ -201,7 +201,7 @@ describe("AgentStatusChip", () => {
       binary_path: "claude",
       version: "2.1.0",
       auth: { logged_in: true, auth_method: "api_key", subscription_type: null, email: null, login: "api_billed" },
-      npm_only: false,
+      npm_only: false, required_version: null,
     });
     render(<AgentStatusChip />);
     await act(async () => {});
@@ -218,7 +218,7 @@ describe("AgentStatusChip", () => {
       binary_path: "claude",
       version: "2.1.0",
       auth: { logged_in: true, auth_method: "claude.ai", subscription_type: null, email: null, login: "api_billed" },
-      npm_only: false,
+      npm_only: false, required_version: null,
     });
     render(<AgentStatusChip />);
     await act(async () => {});
@@ -230,9 +230,36 @@ describe("AgentStatusChip", () => {
     expect(tip).not.toContain("included in your subscription");
   });
 
+  it("says 'Needs update' for a Claude Code that is too old, even with a failed session", async () => {
+    ipc.cliAgentStatus.mockResolvedValue({
+      installed: true,
+      binary_path: "C:\\claude.exe",
+      version: "2.1.206 (Claude Code)",
+      auth: { logged_in: true, auth_method: "claude.ai", subscription_type: "max", email: "a@b.c", login: "subscription" },
+      npm_only: false,
+      required_version: "2.1.259",
+    });
+    render(<AgentStatusChip />);
+    await act(async () => {});
+    await act(async () =>
+      setSessions(
+        session({
+          state: "error",
+          detail: "could not start the CLI agent: Claude Code 2.1.206 is too old for NexQ. Update it to 2.1.259 or newer.",
+          error_kind: "outdated",
+        }),
+      ),
+    );
+    expect(screen.getByTestId("agent-status-dot")).toHaveAttribute("data-state", "attention");
+    expect(screen.getByText("Needs update")).toBeInTheDocument();
+    const tip = cardText();
+    expect(tip).toContain("Claude Code 2.1.206 is too old.");
+    expect(tip).toContain("NexQ needs Claude Code 2.1.259 or newer. Update it, then check the connection.");
+  });
+
   it("names an npm-only install outside a meeting", async () => {
     useMeetingStore.setState({ activeMeeting: null });
-    ipc.cliAgentStatus.mockResolvedValue({ installed: false, binary_path: null, version: null, auth: null, npm_only: true });
+    ipc.cliAgentStatus.mockResolvedValue({ installed: false, binary_path: null, version: null, auth: null, npm_only: true, required_version: null });
     render(<AgentStatusChip />);
     await act(async () => {});
     expect(screen.getByTestId("agent-status-dot")).toHaveAttribute("data-state", "attention");
@@ -342,7 +369,7 @@ describe("AgentStatusChip for other CLI agents", () => {
       binary_path: kind,
       version: "1.0.0",
       auth: { logged_in: true, auth_method: "chatgpt", subscription_type: "plus", email: null, login: "subscription" },
-      npm_only: false,
+      npm_only: false, required_version: null,
     }));
     useConfigStore.setState({ cliAgentModels: { codex_cli: CODEX_MODELS } });
   });
