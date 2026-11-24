@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useConfigStore } from "../../stores/configStore";
 import { RESERVED_SHORTCUTS, formatShortcut } from "../../lib/shortcutLabel";
+import { STT_LABELS } from "../ServiceStatusBar";
 
 interface ReadyStepProps {
   onStartMeeting: () => void;
@@ -73,7 +74,7 @@ export function ReadyStep({
               <span className="text-muted-foreground">
                 {meetingAudioConfig.you.stt_provider === "web_speech"
                   ? "Web Speech API"
-                  : meetingAudioConfig.you.stt_provider.replace("_", " ")}
+                  : STT_LABELS[meetingAudioConfig.you.stt_provider] || meetingAudioConfig.you.stt_provider.replaceAll("_", " ")}
               </span>
             </div>
             <div className="flex items-center gap-2 text-xs">
@@ -82,7 +83,7 @@ export function ReadyStep({
               <span className="text-muted-foreground">
                 {meetingAudioConfig.them.stt_provider === "web_speech"
                   ? "Web Speech API"
-                  : meetingAudioConfig.them.stt_provider.replace("_", " ")}
+                  : STT_LABELS[meetingAudioConfig.them.stt_provider] || meetingAudioConfig.them.stt_provider.replaceAll("_", " ")}
               </span>
             </div>
           </div>
