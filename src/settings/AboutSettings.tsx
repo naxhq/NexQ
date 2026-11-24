@@ -339,7 +339,7 @@ export function AboutSettings() {
           </span>
         </button>
         <button
-          onClick={() => open(`${GITHUB_URL}/wiki`)}
+          onClick={() => open(`${GITHUB_URL}/tree/main/docs/user-guide`)}
           className="flex flex-col items-center gap-2 rounded-xl border border-border/30 bg-card/50 p-4 transition-colors hover:bg-secondary/30"
         >
           <HelpCircle className="h-4 w-4 text-muted-foreground" />
