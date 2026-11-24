@@ -10,7 +10,6 @@ The General settings panel controls app-wide behavior and preferences. Here you 
 
 - **App behavior** -- startup options, system tray behavior, and window preferences
 - **Theme and appearance** -- light/dark mode and visual customization
-- **Language** -- interface language selection
 - **Update preferences** -- NexQ downloads updates quietly in the background and shows an "Update ready" button in the footer. Click it to see what's new and install when convenient, or it installs when you quit (never during a meeting). You always get the newest version, even if several came out since your last update. Turn this off under Settings > About > Automatic updates
 - **Data management** -- storage location and cleanup options
 
@@ -240,11 +239,10 @@ Select a scenario in Settings before starting a meeting to get the most relevant
 
 The Confidence settings control how NexQ displays transcription confidence indicators. Configure:
 
-- **Confidence threshold** -- set the minimum confidence level for displaying transcribed text
-- **Visual indicators** -- toggle color-coded confidence highlighting on transcript segments
-- **Low-confidence handling** -- choose how to display uncertain transcriptions (dim, strikethrough, or hide)
+- **Highlight Low Confidence** -- underline words with uncertain recognition using a dotted line and reduced opacity
+- **Confidence threshold** -- words below this score (0-100%) get the dotted underline
 
-Higher confidence thresholds filter out uncertain transcriptions, giving you a cleaner transcript at the cost of potentially missing some words.
+A higher threshold marks more words. The setting only changes the transcript display; it does not hide or delete text.
 
 ## Hotkeys
 

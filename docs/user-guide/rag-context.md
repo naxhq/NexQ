@@ -71,7 +71,7 @@ Open Settings (`Ctrl+,`) > Context to configure RAG parameters:
 | Chunk Size | How many tokens per document chunk | Provider default |
 | Chunk Overlap | Overlap between adjacent chunks (for context continuity) | Provider default |
 | Top-K Results | Number of relevant chunks included in each AI request | 5 |
-| Similarity Threshold | Minimum relevance score for a chunk to be included | 0.7 |
+| Similarity Threshold | Minimum relevance score for a chunk to be included | 0.3 |
 | Search Mode | Semantic, Keyword (FTS), or Hybrid | Hybrid |
 
 ### Token Budget

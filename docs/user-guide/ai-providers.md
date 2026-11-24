@@ -15,7 +15,7 @@ NexQ supports 12 STT providers. Each channel ("You" and "Them") can use a differ
 | Groq Whisper | Cloud | Free tier | Very Good | Very Fast | High accuracy at no cost |
 | [Whisper API](#custom-whisper-endpoint-local-servers) | Cloud or self-hosted | OpenAI pricing / free self-hosted | Very Good | Batched (~5 s) | OpenAI or your own compatible server |
 | Cartesia | Cloud | Pay per second | Very Good | Real-time | Lines that end when the speaker finishes (English, French, Hindi, Japanese, Spanish) |
-| Whisper (local) | Local | Free | Excellent | Slow | Privacy, offline use |
+| Whisper.cpp (local) | Local | Free | Excellent | Slow | Recorded meetings only; not a live engine |
 | ONNX Runtime | Local | Free | Good | Medium | Balanced local option |
 | Sherpa-ONNX | Local | Free | Good | Medium | Lightweight local option |
 | ORT Streaming | Local | Free | Good | Medium | Streaming local inference |
@@ -36,7 +36,7 @@ NexQ supports 12 STT providers. Each channel ("You" and "Them") can use a differ
 
 **Use a local provider** if privacy is critical or you need offline capability. Whisper with the large-v3 model provides the best local accuracy, but requires significant CPU/RAM. Smaller models (tiny, base) are faster but less accurate.
 
-**For Ukrainian transcription**, select **Ukrainian** under Settings > STT Providers > Transcription language. For offline transcription, use Parakeet TDT 0.6B v3 or a multilingual Whisper.cpp model such as Whisper Small. Cloud options include Deepgram Nova-3, Azure Speech, Azure MAI Streaming, Groq Whisper, and the OpenAI Whisper API. Start a new meeting after changing the language. A side with its own language (see [A different language for each side](#a-different-language-for-each-side)) ignores this setting.
+**For Ukrainian transcription**, select **Ukrainian** under Settings > STT Providers > Transcription language. For offline live transcription, use Parakeet TDT 0.6B v3 or an offline Sherpa-ONNX/ORT model. Whisper.cpp is for recorded meetings only. Cloud options include Deepgram Nova-3, Azure Speech, Azure MAI Streaming, Groq Whisper, and the OpenAI Whisper API. Start a new meeting after changing the language. A side with its own language (see [A different language for each side](#a-different-language-for-each-side)) ignores this setting.
 
 **For Vietnamese transcription**, select **Vietnamese** under Settings > STT Providers > Transcription language. Deepgram Nova-3, Azure Speech, Azure MAI Streaming, and multilingual Whisper models support Vietnamese; choose a model that supports the language for each channel. The included Parakeet models do not support Vietnamese. A language change takes effect when the STT provider reconnects, so start a new meeting after changing it. A side with its own language ignores this setting.
 
@@ -100,7 +100,7 @@ Changing a side's language during a meeting briefly restarts transcription, the 
 
 ![LLM Providers settings panel](../../website/public/screenshots/Setting/Setting-LLM%20Providers.png)
 
-NexQ supports 9 LLM providers. The LLM powers all AI features: Assist, What to Say, Shorten, Follow-Up, Recap, Ask Question, Meeting Summary, and Action Items.
+NexQ supports 11 LLM providers. The LLM powers all AI features: Assist, What to Say, Shorten, Follow-Up, Recap, Ask Question, Meeting Summary, and Action Items.
 
 | Provider | Type | Cost | Speed | Best For |
 |----------|------|------|-------|----------|
@@ -174,7 +174,7 @@ Ollama is the easiest way to run a local LLM. NexQ auto-detects it on startup.
 Local Whisper provides high-accuracy transcription without sending audio to the cloud.
 
 1. Open Settings > Speech-to-Text
-2. Select a local engine: **whisper.cpp**, **Sherpa-ONNX**, **ORT Streaming**, or **Parakeet TDT**
+2. Select a local engine for live meetings: **Sherpa-ONNX**, **ORT Streaming**, or **Parakeet TDT**. **whisper.cpp** is available for recorded meetings only
 3. Click **Download Model** and choose a model size:
 
 | Model | Size | Accuracy | Speed | RAM Required |
