@@ -19,7 +19,7 @@
 use super::acp::{antigravity_args, find_agy, session::default_timeouts as acp_timeouts, AcpLaunch, AcpSession};
 use super::codex::{find_codex, CodexLaunch, CodexSession};
 use super::command::{sandbox_dir, SessionConfig};
-use super::detect::find_claude_binary;
+use super::detect::{find_current_claude, ClaudeBinaryError};
 use super::manager::{SessionHandle, SessionSpawner, SOURCES_INIT_TIMEOUT};
 use super::session::{AgentError, ClaudeSession, SessionTimeouts};
 use super::sources_convert::{acp_sources, adapt_system_prompt, codex_sources};
@@ -42,17 +42,25 @@ impl SessionSpawner for CliSpawner {
 }
 
 async fn spawn_claude(cfg: SessionConfig) -> Result<Arc<dyn SessionHandle>, AgentError> {
-    let bin = tokio::task::spawn_blocking(find_claude_binary)
-        .await
-        .ok()
-        .flatten()
-        .ok_or_else(|| AgentError::Spawn("Claude CLI not installed: claude.exe not found".into()))?;
+    let bin = claude_binary_for_spawn(tokio::task::spawn_blocking(find_current_claude).await.ok())?;
     let timeouts = if cfg.sources.is_some() {
         SessionTimeouts { init: SOURCES_INIT_TIMEOUT, ..SessionTimeouts::default() }
     } else {
         SessionTimeouts::default()
     };
     Ok(Arc::new(ClaudeSession::spawn_with_timeouts(bin, cfg, timeouts).await?))
+}
+
+/// The binary of a Claude session, or why none is started: missing, or too old
+/// (no process is launched for it, see `detect::MIN_CLAUDE_VERSION`).
+fn claude_binary_for_spawn(found: Option<Result<std::path::PathBuf, ClaudeBinaryError>>) -> Result<std::path::PathBuf, AgentError> {
+    match found {
+        Some(Ok(bin)) => Ok(bin),
+        Some(Err(ClaudeBinaryError::TooOld(message))) => Err(AgentError::Spawn(message)),
+        Some(Err(ClaudeBinaryError::NotFound)) | None => {
+            Err(AgentError::Spawn("Claude CLI not installed: claude.exe not found".into()))
+        }
+    }
 }
 
 /// A new empty working folder for one Antigravity session, `acp-<id>` in the
@@ -205,6 +213,21 @@ mod tests {
         assert!(!plain.has_notes && plain.mcp_servers.is_empty());
         let args = crate::llm::cli_agent::codex::launch::build_args(&plain, &[]);
         assert!(args.windows(2).any(|w| w[0] == "--disable" && w[1] == "shell_tool"));
+    }
+
+    #[test]
+    fn a_claude_that_is_too_old_is_refused_with_its_versions_and_reads_as_outdated() {
+        use crate::llm::cli_agent::detect::outdated_message;
+        use crate::llm::cli_agent::protocol::AgentErrorKind;
+        let refusal = outdated_message((2, 1, 206));
+        let err = claude_binary_for_spawn(Some(Err(ClaudeBinaryError::TooOld(refusal.clone())))).unwrap_err();
+        assert_eq!(err.kind(), AgentErrorKind::Outdated);
+        assert!(err.to_string().contains("Claude Code 2.1.206 is too old for NexQ. Update it to 2.1.259 or newer."), "{err}");
+        // Missing stays not installed; a usable binary passes.
+        let missing = claude_binary_for_spawn(Some(Err(ClaudeBinaryError::NotFound))).unwrap_err();
+        assert_eq!(missing.kind(), AgentErrorKind::NotInstalled);
+        assert_eq!(claude_binary_for_spawn(None).unwrap_err().kind(), AgentErrorKind::NotInstalled);
+        assert_eq!(claude_binary_for_spawn(Some(Ok(PathBuf::from("claude.exe")))), Ok(PathBuf::from("claude.exe")));
     }
 
     #[test]

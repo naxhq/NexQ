@@ -16,8 +16,9 @@ use super::acp::{antigravity_args, find_agy, probe_models as acp_probe_models};
 use super::codex::launch::run_probe;
 use super::codex::{find_codex, login_status, probe_models as codex_probe_models, CodexLogin, CodexModel};
 use super::detect::{
-    claude_auth_status, claude_version, find_claude_binary, find_npm_claude, ClaudeAuthStatus, ClaudeLogin,
-    API_BILLED_NOTE,
+    claude_auth_status, claude_too_old, claude_version, find_claude_binary, find_current_claude, find_npm_claude,
+    format_version, is_too_old, parse_claude_version, ClaudeAuthStatus, ClaudeBinaryError, ClaudeLogin, API_BILLED_NOTE,
+    MIN_CLAUDE_VERSION,
 };
 use super::models::{probe_models as claude_probe_models, ClaudeModelInfo};
 use super::protocol::AgentErrorKind;
@@ -42,12 +43,27 @@ pub struct CliAgentStatus {
     /// Claude only: not installed, but an npm install (`claude.cmd`) was found:
     /// NexQ needs the native installer's `claude.exe`.
     pub npm_only: bool,
+    /// Claude only: `Some("2.1.259")` (the oldest Claude Code NexQ can launch)
+    /// when it is installed, its version is known and older than that. `None`
+    /// otherwise, and always for Codex and Antigravity.
+    pub required_version: Option<String>,
 }
 
 impl CliAgentStatus {
     fn not_installed(kind: CliAgentKind, npm_only: bool) -> Self {
-        Self { kind, installed: false, binary_path: None, version: None, auth: None, npm_only }
+        Self { kind, installed: false, binary_path: None, version: None, auth: None, npm_only, required_version: None }
     }
+}
+
+/// The minimum Claude Code version as the status reports it, when `version`
+/// (the `--version` output) names an older one. Unknown or unreadable
+/// versions, and the other CLIs, report nothing.
+pub fn required_version_for(kind: CliAgentKind, version: Option<&str>) -> Option<String> {
+    if kind != CliAgentKind::Claude {
+        return None;
+    }
+    let found = parse_claude_version(version?)?;
+    is_too_old(found).then(|| format_version(MIN_CLAUDE_VERSION))
 }
 
 /// Shown where an API-key Codex login would otherwise read as connected.
@@ -177,7 +193,8 @@ pub async fn cli_agent_status(kind: CliAgentKind) -> (CliAgentStatus, Option<Vec
             (version, auth, probe.ok().map(|m| acp_models(&m)))
         }
     };
-    (CliAgentStatus { kind, installed: true, binary_path, version, auth, npm_only: false }, models)
+    let required_version = required_version_for(kind, version.as_deref());
+    (CliAgentStatus { kind, installed: true, binary_path, version, auth, npm_only: false, required_version }, models)
 }
 
 /// `agy`'s `(id, name)` models as catalog entries: one entry per model id, no
@@ -216,13 +233,21 @@ pub fn codex_models(models: &[CodexModel]) -> Vec<ClaudeModelInfo> {
 /// The models the CLI offers (no model call). Antigravity needs a signed-in
 /// agent (the list comes with the session).
 pub async fn fetch_models(kind: CliAgentKind) -> Result<Vec<ClaudeModelInfo>, String> {
+    // A Claude that is too old is not launched, not even for the list.
+    if kind == CliAgentKind::Claude {
+        match tokio::task::spawn_blocking(find_current_claude).await {
+            Ok(Err(ClaudeBinaryError::TooOld(message))) => return Err(message),
+            Ok(Ok(program)) => return claude_probe_models(&program).await,
+            _ => return Err(format!("{} CLI is not installed", kind.short_name())),
+        }
+    }
     let (program, prefix_args) = tokio::task::spawn_blocking(move || find_binary(kind))
         .await
         .ok()
         .flatten()
         .ok_or_else(|| format!("{} CLI is not installed", kind.short_name()))?;
     match kind {
-        CliAgentKind::Claude => claude_probe_models(&program).await,
+        CliAgentKind::Claude => unreachable!("handled above"),
         CliAgentKind::Codex => codex_probe_models(&program, &prefix_args).await.map(|m| codex_models(&m)),
         CliAgentKind::Antigravity => acp_probe_models(program, antigravity_args())
             .await
@@ -241,6 +266,12 @@ pub async fn probe_kind(kind: CliAgentKind) -> Result<(), AgentErrorKind> {
         .ok_or(AgentErrorKind::NotInstalled)?;
     match kind {
         CliAgentKind::Claude => {
+            // Too old to launch: unavailable, so requests don't try it and the
+            // probe keeps checking until it is updated.
+            let probed = program.clone();
+            if tokio::task::spawn_blocking(move || claude_too_old(&probed)).await.ok().flatten().is_some() {
+                return Err(AgentErrorKind::Outdated);
+            }
             let auth = claude_auth_status(&program).await.map_err(|_| AgentErrorKind::Other)?;
             match auth.login {
                 ClaudeLogin::Subscription => Ok(()),
@@ -285,6 +316,22 @@ mod tests {
         assert_eq!(parse_version("\n  \nclaude 2.1.0 (Claude Code)\n").as_deref(), Some("2.1.0"));
         assert_eq!(parse_version("no number here"), None);
         assert_eq!(parse_version(""), None);
+    }
+
+    #[test]
+    fn only_a_known_older_claude_reports_a_required_version() {
+        let claude = CliAgentKind::Claude;
+        assert_eq!(required_version_for(claude, Some("2.1.206 (Claude Code)")).as_deref(), Some("2.1.259"));
+        assert_eq!(required_version_for(claude, Some("2.1.99 (Claude Code)")).as_deref(), Some("2.1.259"));
+        assert_eq!(required_version_for(claude, Some("2.1.259 (Claude Code)")), None);
+        assert_eq!(required_version_for(claude, Some("2.1.330 (Claude Code)")), None);
+        assert_eq!(required_version_for(claude, Some("3.0.0")), None);
+        // Unknown or unreadable: nothing is claimed.
+        assert_eq!(required_version_for(claude, None), None);
+        assert_eq!(required_version_for(claude, Some("garbage")), None);
+        // Never for the other CLIs, whatever their version looks like.
+        assert_eq!(required_version_for(CliAgentKind::Codex, Some("0.1.0")), None);
+        assert_eq!(required_version_for(CliAgentKind::Antigravity, Some("1.5.14")), None);
     }
 
     #[test]

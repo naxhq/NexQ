@@ -374,7 +374,7 @@ pub(crate) fn is_sources_start_failure(err: &AgentError) -> bool {
         AgentError::Spawn(_) | AgentError::NoUsableSources { .. } | AgentError::Timeout | AgentError::Crashed(_)
     ) && !matches!(
         err.kind(),
-        AgentErrorKind::NotInstalled | AgentErrorKind::NotLoggedIn | AgentErrorKind::RateLimited
+        AgentErrorKind::NotInstalled | AgentErrorKind::Outdated | AgentErrorKind::NotLoggedIn | AgentErrorKind::RateLimited
     )
 }
 
@@ -1653,6 +1653,10 @@ mod tests {
         assert!(!is_sources_start_failure(&AgentError::Cli(AgentErrorKind::RateLimited, "limit".into())));
         assert!(!is_sources_start_failure(&AgentError::Spawn("Claude CLI not installed: claude.exe not found".into())));
         assert!(!is_sources_start_failure(&AgentError::Crashed("Not logged in. Please run /login".into())));
+        // A Claude that is too old is an outage of Claude, not of the sources.
+        assert!(!is_sources_start_failure(&AgentError::Spawn(
+            "Claude Code 2.1.206 is too old for NexQ. Update it to 2.1.259 or newer.".into()
+        )));
         assert!(!is_sources_start_failure(&AgentError::Cancelled));
     }
 

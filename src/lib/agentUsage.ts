@@ -13,6 +13,48 @@ export const API_BILLED_NOTE = apiBilledNoteFor("Claude");
 /** Shown when only an npm install of Claude Code (`claude.cmd`) was found. */
 export const NPM_ONLY_NOTE = "Found an npm install of Claude Code — NexQ needs the native installer";
 
+/** Claude Code is installed but older than NexQ can launch (the backend sets `required_version` only then). */
+export function isOutdated(status: ClaudeCliStatus | undefined | null): boolean {
+  return !!status?.installed && !!status.required_version;
+}
+
+/** The `2.1.206` of a `--version` output such as "2.1.206 (Claude Code)", or null. */
+export function versionNumber(version: string | null | undefined): string | null {
+  return version?.match(/\d+\.\d+\.\d+/)?.[0] ?? null;
+}
+
+/** "Claude Code 2.1.206 is too old" (the version is left out when unknown). */
+export function outdatedLine(status: ClaudeCliStatus | undefined | null): string {
+  const version = versionNumber(status?.version);
+  return `Claude Code${version ? ` ${version}` : ""} is too old`;
+}
+
+/** What to do about an outdated Claude Code. */
+export function outdatedNote(status: ClaudeCliStatus | undefined | null): string {
+  return `NexQ needs Claude Code ${status?.required_version ?? "a newer version"} or newer. Update it, then check the connection.`;
+}
+
+/** A Windows path (drive letter or network share). */
+function isWindowsPath(path: string): boolean {
+  return /^[A-Za-z]:[\\/]|^\\\\/.test(path);
+}
+
+/** Where the update command is typed. */
+export function updateShell(binaryPath: string): string {
+  return isWindowsPath(binaryPath) ? "PowerShell" : "a terminal";
+}
+
+/**
+ * The command that updates the Claude Code at `binaryPath`. Single quotes, so a
+ * `$` in the path stays literal; PowerShell also needs its call operator to run
+ * a quoted path.
+ */
+export function updateCommand(binaryPath: string): string {
+  return isWindowsPath(binaryPath)
+    ? `& '${binaryPath.replace(/'/g, "''")}' update`
+    : `'${binaryPath.replace(/'/g, "'\\''")}' update`;
+}
+
 /** The Claude login bills an API account (usable, but not the subscription). */
 export function isApiBilled(status: ClaudeCliStatus | undefined | null): boolean {
   return status?.auth?.login === "api_billed";

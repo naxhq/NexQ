@@ -283,7 +283,7 @@ pub(crate) fn start_session_in_background(
                 if key.with_sources && crate::commands::intelligence_commands::is_sources_start_failure(&e) {
                     note_sources_failure(&app, &key, &e.to_string());
                 }
-                if let Some(kind @ (AgentErrorKind::NotInstalled | AgentErrorKind::NotLoggedIn)) =
+                if let Some(kind @ (AgentErrorKind::NotInstalled | AgentErrorKind::Outdated | AgentErrorKind::NotLoggedIn)) =
                     routing::unavailable_kind(&e)
                 {
                     state.claude_health.mark_unavailable(kind);

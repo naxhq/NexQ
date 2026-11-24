@@ -18,7 +18,7 @@
 //! `AppHandle` every `stream_completion` call already receives, so
 //! `create_provider` needs no access to `AppState`.
 
-use super::detect::{claude_status, find_claude_binary, ClaudeLogin, API_BILLED_NOTE};
+use super::detect::{claude_status, find_current_claude, ClaudeBinaryError, ClaudeLogin, API_BILLED_NOTE};
 use super::models::ModelCatalog;
 use super::status::{probe_kind, CODEX_API_KEY_NOTE};
 use super::CliAgentKind;
@@ -168,7 +168,7 @@ pub fn to_llm_error(err: AgentError) -> LLMError {
     }
     let message = err.to_string();
     match err.kind() {
-        AgentErrorKind::NotInstalled => LLMError::NotConfigured(message),
+        AgentErrorKind::NotInstalled | AgentErrorKind::Outdated => LLMError::NotConfigured(message),
         AgentErrorKind::NotLoggedIn => LLMError::AuthError(message),
         _ => LLMError::ProviderError(message),
     }
@@ -296,11 +296,14 @@ impl LLMProvider for CliAgentProvider {
                 ))),
             };
         }
-        let bin = tokio::task::spawn_blocking(find_claude_binary)
-            .await
-            .ok()
-            .flatten()
-            .ok_or_else(|| LLMError::NotConfigured("Claude CLI is not installed".to_string()))?;
+        let bin = match tokio::task::spawn_blocking(find_current_claude).await.ok() {
+            Some(Ok(bin)) => bin,
+            // Too old to launch: said plainly, never as connected.
+            Some(Err(ClaudeBinaryError::TooOld(message))) => return Err(LLMError::NotConfigured(message)),
+            Some(Err(ClaudeBinaryError::NotFound)) | None => {
+                return Err(LLMError::NotConfigured("Claude CLI is not installed".to_string()))
+            }
+        };
         let (_version, auth) = claude_status(&bin)
             .await
             .map_err(LLMError::ConnectionFailed)?;
@@ -474,6 +477,10 @@ mod tests {
         assert!(matches!(
             to_llm_error(AgentError::Spawn("Claude CLI not installed: claude.exe not found".into())),
             LLMError::NotConfigured(_)
+        ));
+        assert!(matches!(
+            to_llm_error(AgentError::Spawn("Claude Code 2.1.206 is too old for NexQ. Update it to 2.1.259 or newer.".into())),
+            LLMError::NotConfigured(m) if m.contains("too old")
         ));
         assert!(matches!(
             to_llm_error(AgentError::Cli(AgentErrorKind::NotLoggedIn, "Not logged in".into())),

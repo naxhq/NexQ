@@ -41,9 +41,9 @@ const LOGGED_IN: ClaudeCliStatus = {
   binary_path: "C:\\Users\\me\\.local\\bin\\claude.exe",
   version: "2.1.288",
   auth: { logged_in: true, auth_method: "claude.ai", subscription_type: "max", email: "me@example.com", login: "subscription" },
-  npm_only: false,
+  npm_only: false, required_version: null,
 };
-const NOT_INSTALLED: ClaudeCliStatus = { installed: false, binary_path: null, version: null, auth: null, npm_only: false };
+const NOT_INSTALLED: ClaudeCliStatus = { installed: false, binary_path: null, version: null, auth: null, npm_only: false, required_version: null };
 const CODEX_MODEL: ClaudeModelInfo = {
   value: "gpt-6-sol",
   resolved_model: "gpt-6-sol",

@@ -22,13 +22,13 @@ vi.mock("../lib/ipc", async (importOriginal) => ({
 import { refreshCliModelsOnStart, resetAgentStoreForTests, useAgentStore } from "./agentStore";
 import { useConfigStore } from "./configStore";
 
-const NOT_INSTALLED: ClaudeCliStatus = { installed: false, binary_path: null, version: null, auth: null, npm_only: false };
+const NOT_INSTALLED: ClaudeCliStatus = { installed: false, binary_path: null, version: null, auth: null, npm_only: false, required_version: null };
 const LOGGED_IN: ClaudeCliStatus = {
   installed: true,
   binary_path: "agent.exe",
   version: "1.0.0",
   auth: { logged_in: true, auth_method: "chatgpt", subscription_type: "plus", email: null, login: "subscription" },
-  npm_only: false,
+  npm_only: false, required_version: null,
 };
 const LOGGED_OUT: ClaudeCliStatus = {
   ...LOGGED_IN,

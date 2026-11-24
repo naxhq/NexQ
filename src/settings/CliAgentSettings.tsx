@@ -1,7 +1,18 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-shell";
 import { ExternalLink, Loader2, RefreshCw, Terminal } from "lucide-react";
-import { CODEX_API_KEY_NOTE, NPM_ONLY_NOTE, apiBilledNoteFor, isApiKeyLogin, isRateLimited } from "../lib/agentUsage";
+import {
+  CODEX_API_KEY_NOTE,
+  NPM_ONLY_NOTE,
+  apiBilledNoteFor,
+  isApiKeyLogin,
+  isOutdated,
+  isRateLimited,
+  outdatedLine,
+  outdatedNote,
+  updateCommand,
+  updateShell,
+} from "../lib/agentUsage";
 import { getApiKey, listModels, openCliLoginTerminal } from "../lib/ipc";
 import { ProviderLogo } from "../components/icons/ProviderLogos";
 import {
@@ -49,6 +60,7 @@ type ConnectionState =
   | "logged_out"
   | "not_installed"
   | "npm_only"
+  | "outdated"
   | "unknown"
   | "limited"
   | "error";
@@ -76,6 +88,8 @@ function connectionState(
   // No answer yet: still checking, or the check itself failed.
   if (!status) return failed ? "failed" : "checking";
   if (!status.installed) return status.npm_only ? "npm_only" : "not_installed";
+  // Too old to launch: whatever the login says, nothing works until it is updated.
+  if (isOutdated(status)) return "outdated";
   if (!status.auth) return "unknown";
   if (!status.auth.logged_in) return "logged_out";
   // Only a subscription login counts as connected; any other login bills an API account.
@@ -93,6 +107,7 @@ const STATE_TONE: Record<ConnectionState, StatusTone> = {
   unknown: "warn",
   not_installed: "neutral",
   npm_only: "warn",
+  outdated: "warn",
   limited: "warn",
   error: "warn",
 };
@@ -112,6 +127,7 @@ const ROW_LABEL: Record<ConnectionState, string> = {
   unknown: "Login state unknown",
   not_installed: "Not installed",
   npm_only: "Needs native install",
+  outdated: "Needs update",
   limited: "Usage limit",
   error: "Session error",
 };
@@ -132,6 +148,8 @@ function statusLine(
       return "Not installed";
     case "npm_only":
       return NPM_ONLY_NOTE;
+    case "outdated":
+      return outdatedLine(status);
     case "unknown":
       return "Installed — login state unavailable";
     case "logged_out":
@@ -168,6 +186,8 @@ function checkResult(state: ConnectionState, error: string | undefined): { text:
       return { text: "Login state unavailable", className: "text-warning" };
     case "npm_only":
       return { text: "npm install found — needs the native installer", className: "text-warning" };
+    case "outdated":
+      return { text: "Update needed", className: "text-warning" };
     case "not_installed":
       return { text: "Not installed", className: "text-muted-foreground" };
     case "failed":
@@ -330,13 +350,18 @@ function AgentDetails({
   // A check covers both the connection and the model list.
   const busy = checking || modelsRefreshing;
 
-  // A check also refreshes the model catalog (nothing to ask a missing CLI).
-  const handleCheck = () => {
-    void refreshStatus(kind);
+  // A check also refreshes the model catalog (nothing to ask a missing CLI). One
+  // that was too old is checked first: after an update its models load too.
+  const handleCheck = async () => {
+    const checked = refreshStatus(kind);
+    if (isOutdated(status)) {
+      await checked;
+      if (isOutdated(useAgentStore.getState().statuses[kind])) return;
+    }
     if (status?.installed !== false) void refreshModels(kind);
   };
-  // Same rule as "Set as Active": usable unless known to be missing or logged out.
-  const unusable = state === "not_installed" || state === "npm_only" || state === "logged_out";
+  // Same rule as "Set as Active": usable unless known to be missing, too old or logged out.
+  const unusable = state === "not_installed" || state === "npm_only" || state === "outdated" || state === "logged_out";
 
   // The same store action as the footer, so both always agree.
   const handleActivate = async () => {
@@ -410,7 +435,7 @@ function AgentDetails({
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <p
-              className={`text-xs font-medium ${state === "limited" || state === "error" ? "text-warning" : "text-foreground"}`}
+              className={`text-xs font-medium ${state === "limited" || state === "error" || state === "outdated" ? "text-warning" : "text-foreground"}`}
             >
               {statusLine(kind, state, status, issue)}
             </p>
@@ -463,6 +488,25 @@ function AgentDetails({
                 {agent.installLinkLabel ?? `Install ${agent.name}`}
                 <ExternalLink className="h-3 w-3" />
               </a>
+            )}
+          </div>
+        )}
+
+        {state === "outdated" && status && (
+          <div className="mt-3 rounded-lg border border-warning/20 bg-warning/5 px-4 py-3">
+            <p className="text-xs text-muted-foreground">{outdatedNote(status)}</p>
+            {status.binary_path && (
+              <>
+                <p className="mt-2 text-meta text-muted-foreground">
+                  {`In ${updateShell(status.binary_path)}:`}
+                </p>
+                <code
+                  data-testid="update-command"
+                  className="mt-1 block select-all break-all rounded-md border border-border/30 bg-background px-2.5 py-1.5 font-mono text-meta text-foreground"
+                >
+                  {updateCommand(status.binary_path)}
+                </code>
+              </>
             )}
           </div>
         )}

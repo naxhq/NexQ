@@ -13,6 +13,12 @@ import {
   usageAttribution,
   NEUTRAL_AGENT_LABEL,
   isApiKeyLogin,
+  isOutdated,
+  outdatedLine,
+  outdatedNote,
+  updateCommand,
+  updateShell,
+  versionNumber,
 } from "./agentUsage";
 
 describe("formatDuration", () => {
@@ -91,7 +97,7 @@ describe("usageAttribution", () => {
     installed: true,
     binary_path: null,
     version: null,
-    npm_only: false,
+    npm_only: false, required_version: null,
     auth: { logged_in: true, auth_method: "api_key", subscription_type: null, email: null, login: "api_billed" as const },
   };
   const name = (p: string) => (p === "codex_cli" ? "Codex" : p);
@@ -112,5 +118,49 @@ describe("usageAttribution", () => {
   it("an API-key login is not logged in", () => {
     expect(isApiKeyLogin({ ...apiBilledStatus, auth: { ...apiBilledStatus.auth, logged_in: false, login: "logged_out" } })).toBe(true);
     expect(isApiKeyLogin(apiBilledStatus)).toBe(false);
+  });
+});
+
+describe("outdated Claude Code", () => {
+  const base = {
+    installed: true,
+    binary_path: "C:\\Users\\me\\.local\\bin\\claude.exe",
+    version: "2.1.206 (Claude Code)",
+    auth: null,
+    npm_only: false,
+    required_version: "2.1.259",
+  };
+
+  it("is outdated only when installed and the backend names a required version", () => {
+    expect(isOutdated(base)).toBe(true);
+    expect(isOutdated({ ...base, required_version: null })).toBe(false);
+    expect(isOutdated({ ...base, installed: false })).toBe(false);
+    expect(isOutdated(undefined)).toBe(false);
+    expect(isOutdated(null)).toBe(false);
+  });
+
+  it("shows just the version number", () => {
+    expect(versionNumber("2.1.206 (Claude Code)")).toBe("2.1.206");
+    expect(versionNumber("2.1.206")).toBe("2.1.206");
+    expect(versionNumber("nope")).toBeNull();
+    expect(versionNumber(null)).toBeNull();
+    expect(outdatedLine(base)).toBe("Claude Code 2.1.206 is too old");
+    expect(outdatedLine({ ...base, version: null })).toBe("Claude Code is too old");
+  });
+
+  it("says what to do, with the required version", () => {
+    expect(outdatedNote(base)).toBe("NexQ needs Claude Code 2.1.259 or newer. Update it, then check the connection.");
+  });
+
+  it("builds the update command for the platform of the path", () => {
+    expect(updateCommand("C:\\Users\\me\\.local\\bin\\claude.exe")).toBe("& 'C:\\Users\\me\\.local\\bin\\claude.exe' update");
+    expect(updateCommand("D:/tools/claude.exe")).toBe("& 'D:/tools/claude.exe' update");
+    expect(updateCommand("\\\\server\\tools\\claude.exe")).toBe("& '\\\\server\\tools\\claude.exe' update");
+    expect(updateCommand("/Users/me/.local/bin/claude")).toBe("'/Users/me/.local/bin/claude' update");
+    // A quote in the path is escaped the way each shell does it.
+    expect(updateCommand("C:\\Users\\O'Brien\\claude.exe")).toBe("& 'C:\\Users\\O''Brien\\claude.exe' update");
+    expect(updateCommand("/Users/O'Brien/claude")).toBe("'/Users/O'\\''Brien/claude' update");
+    expect(updateShell("\\\\server\\tools\\claude.exe")).toBe("PowerShell");
+    expect(updateShell("/usr/local/bin/claude")).toBe("a terminal");
   });
 });
