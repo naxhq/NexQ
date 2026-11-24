@@ -16,10 +16,10 @@ export const DOCS = `${REPO}/tree/main/docs/user-guide`;
 /** Link to a user-guide page, e.g. doc('keyboard-shortcuts'). */
 export const doc = (name: string) => `${REPO}/blob/main/docs/user-guide/${name}.md`;
 
-export const SITE_TITLE = 'NexQ: Open-Source AI Meeting Assistant & Interview Copilot';
+export const SITE_TITLE = 'NexQ: Open-Source AI Meeting Assistant for Windows and Mac';
 // Keep at or under 160 characters (checked at build time in Layout.astro).
 export const SITE_DESCRIPTION =
-  'Free, open-source desktop copilot for calls and interviews. Live transcripts of both sides, answers from your own AI, no bot joins. Windows and Mac.';
+  'Free, open-source meeting assistant. Transcribes both sides of a call live and answers from your notes, with local models or your own AI. No bot joins.';
 
 /** Section ids, in page order. Components use these for `id=` and nav links. */
 export const SECTION = {
@@ -62,7 +62,7 @@ export const STT_PROVIDERS: SttProvider[] = [
   { name: 'Sherpa-ONNX', where: 'device' },
   { name: 'ORT Streaming', where: 'device' },
   { name: 'Whisper.cpp', where: 'device', note: 'Transcribes recordings only, not live calls.' },
-  { name: 'Windows Speech', where: 'device', note: 'Windows only, and only your side (the microphone).' },
+  { name: 'Windows Speech', where: 'cloud-nokey', note: 'No key, but the audio goes to Microsoft’s online speech service. Windows only, and only your side (the microphone).' },
   { name: 'Web Speech', where: 'cloud-nokey', note: 'No key, but the audio goes to a cloud service. Your side (the microphone) only.' },
   { name: 'Deepgram', where: 'cloud' },
   { name: 'Groq Whisper', where: 'cloud' },
@@ -215,7 +215,7 @@ export const FAQ: { q: string; a: string }[] = [
   },
   {
     q: 'Does my audio leave my computer?',
-    a: 'Only if you choose a cloud provider. With an on-device speech engine such as Parakeet and a local model through Ollama or LM Studio, audio, transcripts and answers stay on your machine. A cloud provider receives what you send it, and Web Speech sends your microphone audio to a cloud service even though it needs no key. Meetings are stored in a local database on your computer, and API keys sit in the system credential store (Windows Credential Manager, or Keychain on a Mac).',
+    a: 'With the settings a new install starts with, yes: Web Speech (your microphone) is an online service, and so is Deepgram (the other side), which starts once you add a key. You can change both. With an on-device speech engine such as Parakeet and a local model through Ollama or LM Studio, audio, transcripts and answers stay on your machine. A cloud provider receives what you send it, and Web Speech and Windows Speech send your microphone audio online even though they need no key. Meetings are stored in a local database on your computer, and API keys sit in the system credential store (Windows Credential Manager, or Keychain on a Mac).',
   },
   {
     q: 'Can other people see NexQ when I share my screen?',

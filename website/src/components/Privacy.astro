@@ -1,6 +1,6 @@
 ---
 /**
- * #privacy: "Nothing leaves unless you choose it". A typographic list of claims, each backed by the repo:
+ * #privacy: "You choose what leaves your computer". A typographic list of claims, each backed by the repo:
  *   no bot, audio on your device ........ README.md "How it works" ("Audio is captured on your machine ... No bot joins your call"),
  *                                         docs FAQ in data/site.ts
  *   you decide where data goes .......... README.md "Privacy" ("Nothing leaves your machine unless you choose a cloud provider")
@@ -26,8 +26,8 @@ const ROWS: { k: string; h: string; p: string; link?: { href: string; label: str
   {
     k: 'choice',
     h: 'You decide where your words go.',
-    p: 'Pair an on-device speech engine with Ollama or LM Studio and your audio and words stay on your computer. Pick a cloud provider and it receives only what you send it.',
-    link: { href: '#ai', label: 'See the options' },
+    p: 'A new install starts with online speech: Web Speech for you and Deepgram, with your key, for them. Switch both sides to an on-device engine and answer with Ollama or LM Studio, and your audio and words stay on your computer.',
+    link: { href: 'guides/local-call-transcription-windows/', label: 'How to keep it local' },
   },
   {
     k: 'storage',
@@ -61,7 +61,7 @@ const ROWS: { k: string; h: string; p: string; link?: { href: string; label: str
 <section id={SECTION.privacy} class="section" aria-labelledby="privacy-title">
   <div class="wrap pv">
     <div class="pv-intro">
-      <h2 id="privacy-title" class="h2">Nothing leaves unless you choose it.</h2>
+      <h2 id="privacy-title" class="h2">You choose what leaves your computer.</h2>
       <p class="lede">Your calls are yours, and the code is open, so you can check that instead of taking our word for it.</p>
       <p class="pv-note">
         Please tell the other people on the call that you are transcribing it. Many places require it.

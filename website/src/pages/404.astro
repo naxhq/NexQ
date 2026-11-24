@@ -1,0 +1,25 @@
+---
+// GitHub Pages serves this for any address that doesn't exist.
+import Layout from '../layouts/Layout.astro';
+import Navbar from '../components/Navbar.astro';
+import Footer from '../components/Footer.astro';
+import { GUIDES } from '../data/guides';
+
+const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
+---
+
+<Layout title="Page not found | NexQ" description="This page doesn’t exist. Go to the NexQ home page or pick a guide." noindex>
+  <Navbar />
+  <main id="main" tabindex="-1" class="outline-hidden">
+    <div class="wrap pb-20 pt-[calc(var(--nav-h)+3.5rem)]">
+      <h1 class="h2">Nothing at this address.</h1>
+      <p class="lede">The link may be old. The <a class="link" href={base}>home page</a> has everything, or pick a guide:</p>
+      <ul class="mt-8">
+        {GUIDES.map((g) => (
+          <li><a class="link inline-flex min-h-[2.5rem] items-center" href={`${base}guides/${g.slug}/`}>{g.label}</a></li>
+        ))}
+      </ul>
+    </div>
+  </main>
+  <Footer />
+</Layout>
