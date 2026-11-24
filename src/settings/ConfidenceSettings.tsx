@@ -19,7 +19,7 @@ export function ConfidenceSettings() {
         <div>
           <label className="text-sm font-medium text-foreground">Highlight Low Confidence</label>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Mark transcript words with uncertain recognition in amber
+            Put a dotted underline under text that may be wrong
           </p>
         </div>
         <button
