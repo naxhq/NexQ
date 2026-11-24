@@ -141,53 +141,51 @@ pub fn find_claude_binary() -> Option<PathBuf> {
     select_claude(claude_candidates(), claude_version_cached)
 }
 
-/// Native install location, then `where.exe`'s `.exe` lines (`where.exe` only
-/// runs when the iterator reaches it).
+/// Native install location, then every `claude.exe` on PATH (PATH is only
+/// searched when the iterator reaches it).
 #[cfg(windows)]
 fn claude_candidates() -> impl Iterator<Item = PathBuf> {
     let native = std::env::var_os("USERPROFILE")
         .map(|home| PathBuf::from(home).join(".local").join("bin").join("claude.exe"))
         .filter(|p| p.is_file());
-    native.into_iter().chain(
-        std::iter::once(()).flat_map(|_| where_claude().map(|o| lines_ending(&o, ".exe")).unwrap_or_default()),
-    )
+    native
+        .into_iter()
+        .chain(std::iter::once(()).flat_map(|_| find_on_path("claude").into_iter().filter(|p| has_extension(p, "exe"))))
 }
 
 /// An npm install of Claude Code (`claude.cmd` on PATH). NexQ can't use it:
 /// it spawns `claude.exe` directly, never through a shell.
 #[cfg(windows)]
 pub fn find_npm_claude() -> Option<PathBuf> {
-    first_line_ending(&where_claude()?, ".cmd")
+    find_on_path("claude").into_iter().find(|p| has_extension(p, "cmd"))
 }
 
-/// `where.exe claude` output (no console window).
 #[cfg(windows)]
-fn where_claude() -> Option<String> {
-    let mut cmd = std::process::Command::new("where.exe");
-    cmd.arg("claude");
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000);
-    }
-    let out = cmd.output().ok()?;
-    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+fn has_extension(p: &Path, ext: &str) -> bool {
+    p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case(ext))
 }
 
-/// Every `where.exe` line ending in `ext` (case-insensitive), in order.
-#[cfg(windows)]
-fn lines_ending(stdout: &str, ext: &str) -> Vec<PathBuf> {
-    stdout
-        .lines()
-        .map(str::trim)
-        .filter(|l| l.to_lowercase().ends_with(ext))
-        .map(PathBuf::from)
-        .collect()
+/// Every program `name` on PATH, in order (see [`find_on_path_in`]). Read here
+/// rather than from `where.exe` / `which`: no process to resolve, and
+/// `where.exe` looks in the current directory first.
+pub(super) fn find_on_path(name: &str) -> Vec<PathBuf> {
+    std::env::var_os("PATH").map(|path| find_on_path_in(&path, name)).unwrap_or_default()
 }
 
-/// First `where.exe` line ending in `ext` (case-insensitive).
-#[cfg(windows)]
-fn first_line_ending(stdout: &str, ext: &str) -> Option<PathBuf> {
-    lines_ending(stdout, ext).into_iter().next()
+/// [`find_on_path`] for a given `PATH`. On Windows the `.exe` and the `.cmd` of
+/// each folder, elsewhere the executable file. Empty and relative entries are
+/// skipped: they name a folder under the current directory, where anyone could
+/// have left a program of the same name.
+fn find_on_path_in(path: &std::ffi::OsStr, name: &str) -> Vec<PathBuf> {
+    let dirs = std::env::split_paths(path).filter(|dir| dir.is_absolute());
+    #[cfg(windows)]
+    let found = dirs
+        .flat_map(|dir| ["exe", "cmd"].map(|ext| dir.join(format!("{name}.{ext}"))))
+        // Not `is_file`: a Windows Store alias is a link that can't be followed.
+        .filter(|p| std::fs::symlink_metadata(p).is_ok_and(|m| !m.is_dir()));
+    #[cfg(unix)]
+    let found = dirs.map(|dir| dir.join(name)).filter(|p| is_executable_file(p));
+    found.collect()
 }
 
 /// The native installer location (`~/.local/bin/claude`, used by
@@ -204,11 +202,7 @@ fn claude_candidates_in(home: Option<&std::ffi::OsStr>, path: Option<&std::ffi::
     let native = home
         .map(|home| Path::new(home).join(".local").join("bin").join("claude"))
         .filter(|p| is_executable_file(p));
-    let on_path = path
-        .into_iter()
-        .flat_map(std::env::split_paths)
-        .map(|dir| dir.join("claude"))
-        .filter(|p| is_executable_file(p));
+    let on_path = path.map(|path| find_on_path_in(path, "claude")).unwrap_or_default();
     native.into_iter().chain(on_path).collect()
 }
 
@@ -452,25 +446,8 @@ mod tests {
         assert!(parse_auth_status("nope").is_err());
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn where_output_picks_exe_line() {
-        let out = "C:\\npm\\claude\r\nC:\\npm\\claude.cmd\r\nC:\\bin\\claude.exe\r\n";
-        assert_eq!(first_line_ending(out, ".exe"), Some(PathBuf::from("C:\\bin\\claude.exe")));
-        assert_eq!(first_line_ending("C:\\npm\\claude.cmd\r\n", ".exe"), None);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn where_output_finds_an_npm_install() {
-        let out = "C:\\npm\\claude\r\nC:\\npm\\CLAUDE.CMD\r\n";
-        assert_eq!(first_line_ending(out, ".cmd"), Some(PathBuf::from("C:\\npm\\CLAUDE.CMD")));
-        assert_eq!(first_line_ending("", ".cmd"), None);
-    }
-
     /// A fresh directory for one test. Tests pass `HOME`/`PATH` explicitly:
     /// changing the process environment would race the tests running beside them.
-    #[cfg(unix)]
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("nexq-detect-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -511,6 +488,48 @@ mod tests {
         let found = claude_candidates_in(Some(home.as_os_str()), Some(on_path.parent().unwrap().as_os_str()));
         assert_eq!(found, vec![native, on_path]);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn programs_are_found_on_path_in_order() {
+        let root = temp_dir("find");
+        for (dir, file) in [("a", "tool"), ("a", "tool.cmd"), ("b", "tool.cmd"), ("b", "tool.EXE"), ("c", "other.exe")] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+            std::fs::write(root.join(dir).join(file), "x").unwrap();
+        }
+        std::fs::create_dir_all(root.join("c").join("tool.exe")).unwrap();
+        let path = std::env::join_paths([root.join("a"), root.join("b"), root.join("c"), root.join("missing")]).unwrap();
+        // npm's extensionless script and a folder of that name don't count.
+        assert_eq!(
+            find_on_path_in(&path, "tool"),
+            [root.join("a").join("tool.cmd"), root.join("b").join("tool.exe"), root.join("b").join("tool.cmd")]
+        );
+        assert!(find_on_path_in(&path, "absent").is_empty());
+        assert!(find_on_path_in(std::ffi::OsStr::new(""), "tool").is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The manifest folder is the current directory of a test run.
+    #[test]
+    fn the_current_directory_is_never_searched() {
+        let dir = PathBuf::from("target").join(format!("nexq-cwd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(if cfg!(windows) { "nexqtool.exe" } else { "nexqtool" });
+        std::fs::write(&file, "x").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        // Found by its full path, so the file is really there to be found.
+        let absolute = std::env::current_dir().unwrap().join(&dir);
+        let full = std::env::join_paths([absolute.clone()]).unwrap();
+        assert_eq!(find_on_path_in(&full, "nexqtool").len(), 1);
+        // Not through a relative or an empty entry.
+        let relative = std::env::join_paths([dir.as_path(), Path::new("."), Path::new("")]).unwrap();
+        assert!(find_on_path_in(&relative, "nexqtool").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -640,7 +659,7 @@ mod tests {
         });
         let found = select_claude(lazy, |_| Some(NEW));
         assert_eq!(found, Some(PathBuf::from("a")));
-        assert_eq!(pulled.get(), 1, "the where.exe / PATH scan stays unrun");
+        assert_eq!(pulled.get(), 1, "the PATH scan stays unrun");
     }
 
     #[test]
