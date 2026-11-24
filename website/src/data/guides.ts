@@ -29,11 +29,32 @@ export const GUIDES: Guide[] = [
       'Transcribe Zoom, Teams or Meet calls on your own PC with Parakeet or Sherpa-ONNX. What to download, what to set, and what still goes online.',
   },
   {
+    slug: 'transcribe-calls-on-a-mac',
+    label: 'Transcribe calls on a Mac',
+    title: 'Transcribe Calls on a Mac Without a Bot or Audio Driver',
+    description:
+      'Transcribe Zoom, Teams or Meet calls on an Apple Silicon Mac, both sides, with a local speech engine. Setup, permissions and what the beta lacks.',
+  },
+  {
     slug: 'ollama-lm-studio-meeting-assistant',
     label: 'Meeting assistant with Ollama or LM Studio',
     title: 'Use Ollama or LM Studio as a Live Meeting Assistant',
     description:
       'Get answers during a call from a model on your own computer, using your own notes. Setup with Ollama or LM Studio, and honest limits.',
+  },
+  {
+    slug: 'own-whisper-server',
+    label: 'Use your own Whisper server',
+    title: 'Live Call Transcription With Your Own Whisper Server',
+    description:
+      'Point a call transcription app at faster-whisper (Speaches), whisper.cpp or any OpenAI-compatible speech server. Commands, settings and limits.',
+  },
+  {
+    slug: 'live-call-translation',
+    label: 'Translate a call live',
+    title: 'Translate a Call Live, Offline or With Your Own Key',
+    description:
+      'See a translation under each line of a call as it happens. Offline between English and 11 languages with OPUS-MT, or with DeepL, Google or an LLM.',
   },
   {
     slug: 'open-source-otter-granola-alternative',

@@ -1,0 +1,90 @@
+---
+import Guide from '../../layouts/Guide.astro';
+import { doc, REPO, RELEASES_LATEST } from '../../data/site';
+// Mac facts: README.md "Quick start", docs/user-guide/audio-setup.md, src-tauri/src/audio/macos_system_capture.rs (14.2).
+---
+
+<Guide
+  slug="transcribe-calls-on-a-mac"
+  lede="On macOS 14.2 and later, an app can record the sound your Mac is playing if you allow it. NexQ uses that for the other side and your microphone for you, so no bot joins and you don’t need a virtual audio driver."
+>
+  <h2>What you need</h2>
+  <ul>
+    <li>A Mac with Apple Silicon. Intel Macs aren’t supported.</li>
+    <li>macOS 14.2 or later for the other side’s sound.</li>
+    <li>465 MB for the local speech model, or a key for an online engine.</li>
+  </ul>
+  <p>The Mac version is a beta. What it doesn’t do yet is listed below.</p>
+
+  <h2>Install it</h2>
+  <ol>
+    <li>
+      Download the <code>.dmg</code> from the <a class="link" href={RELEASES_LATEST}>latest release</a> and drag NexQ into
+      Applications.
+    </li>
+    <li>
+      The beta isn’t notarized, so macOS blocks it. If you trust the download, clear the flag once in Terminal:
+      <code class="guide-cmd">xattr -cr /Applications/NexQ.app</code>
+      If you’d rather not, you can
+      <a class="link" href={`${REPO}#development`}>build it from source</a>.
+    </li>
+    <li>Allow the microphone and system audio recording when macOS asks. If it wants NexQ reopened, do that.</li>
+  </ol>
+
+  <h2>Set both sides to the local engine</h2>
+  <p>
+    Do this before your first call. A new install starts with Web Speech for you, which may not work on a Mac, and Deepgram
+    for them, which needs a key. Both are online.
+  </p>
+  <ol>
+    <li>
+      Open <strong>Settings, STT Providers</strong>, choose Parakeet and download <strong>Parakeet TDT 0.6B v3</strong>.
+    </li>
+    <li>Open <strong>Settings, Audio & Devices</strong> and pick the <strong>Local Only (Parakeet)</strong> preset.</li>
+    <li>Set You to your microphone and Them to the output your call plays through, usually your headphones.</li>
+    <li>Press <strong>Test</strong> on both. Play something for Them.</li>
+    <li>Press <kbd class="kbd">Cmd</kbd> <kbd class="kbd">M</kbd> and join your call.</li>
+  </ol>
+  <p>
+    Parakeet v3 covers 25 European languages. It writes a line after each pause, so you don’t see words one by one. For
+    other languages, the <a class="link" href={doc('ai-providers')}>providers guide</a> says which engine covers what.
+  </p>
+
+  <h2>Why no extra audio driver</h2>
+  <p>
+    Many guides have you install a virtual audio device and route your call through it. Since macOS 14.2 that isn’t needed:
+    a Core Audio tap gives the app you allowed a copy of what an output plays, and you keep hearing it as usual. On an
+    older macOS you still need a virtual device, and you select it as an input.
+  </p>
+
+  <h2>If the other side stays empty</h2>
+  <ul>
+    <li>Match Them to the output your call app uses. It can differ from the output in System Settings.</li>
+    <li>
+      In <strong>System Settings, Privacy & Security</strong>, check that NexQ has microphone and system audio recording
+      access, then reopen NexQ.
+    </li>
+    <li>
+      If NexQ shows an error when the meeting starts, read it. It never swaps in your microphone for the other side.
+    </li>
+  </ul>
+
+  <h2>What the Mac version doesn’t do yet</h2>
+  <ul>
+    <li>It doesn’t notice that a call started. You start the meeting yourself.</li>
+    <li>The shortcut that captures your screen for a question is Windows only.</li>
+    <li>
+      <strong>Hide from screen share</strong> isn’t complete: on macOS 14 and later some recorders can still capture NexQ.
+      Run a test share first.
+    </li>
+  </ul>
+  <p>
+    Something broken? <a class="link" href={`${REPO}/issues/new?template=bug_report.yml`}>Report it</a> and pick macOS.
+  </p>
+
+  <h2>Tell people</h2>
+  <p>
+    Nobody on the call can see that it is being transcribed, so tell them. Some places require everyone’s consent, and some
+    workplaces don’t allow it.
+  </p>
+</Guide>
