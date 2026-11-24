@@ -1,9 +1,15 @@
 ---
 import { REPO, RELEASES_URL, CHANGELOG, CONTRIBUTING, LICENSE, ISSUES, DOCS } from '../data/site';
+import { GUIDES } from '../data/guides';
 import { CURRENT_VERSION } from '../data/releases';
 
-const base = import.meta.env.BASE_URL;
+const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
 const year = new Date().getFullYear();
+
+const guides = [
+  { label: 'Guides', href: `${base}guides/` },
+  ...GUIDES.map((g) => ({ label: g.label, href: `${base}guides/${g.slug}/` })),
+];
 
 const links = [
   { label: 'Docs', href: DOCS },
@@ -43,6 +49,20 @@ const links = [
       </ul>
     </nav>
   </div>
+  <nav class="wrap border-t border-border py-6" aria-label="Guides">
+    <ul class="flex flex-wrap gap-x-6 gap-y-1">
+      {guides.map((l) => (
+        <li>
+          <a
+            href={l.href}
+            class="inline-flex min-h-[36px] items-center text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            {l.label}
+          </a>
+        </li>
+      ))}
+    </ul>
+  </nav>
   <div class="wrap flex flex-col gap-2 border-t border-border py-6 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
     <span>© {year} Vahid Alizadeh and contributors</span>
     <span class="font-mono text-xs">v{CURRENT_VERSION}</span>

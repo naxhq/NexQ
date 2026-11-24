@@ -9,15 +9,15 @@ import { COUNTS, SECTION } from '../data/site';
 
 const cols = ['NexQ', 'Otter.ai', 'Granola', 'Krisp'];
 type Cell = string | boolean;
-// src: README.md "How NexQ compares". Competitor cells are what the README lists; "Paid tiers" and "Fixed" are its words.
+// src: README.md "How NexQ compares". Competitor cells: each vendor's own pages, read on 24 Nov 2026.
 const rows: { label: string; values: Cell[] }[] = [
-  { label: 'Price', values: ['Free', 'Paid tiers', 'Paid tiers', 'Paid tiers'] },
+  { label: 'Price', values: ['Free', 'Free plan, then paid', 'Free plan, then paid', 'Free trial, then paid'] },
   { label: 'Open source', values: [true, false, false, false] },
-  { label: 'Works without a meeting bot', values: [true, false, true, true] },
-  { label: 'Fully local option', values: [true, false, false, 'Partial'] },
-  { label: 'Speech engines / AI providers', values: [`${COUNTS.stt} / ${COUNTS.llm}`, 'Fixed', 'Fixed', 'Fixed'] },
+  { label: 'Works without a meeting bot', values: [true, 'Desktop app', true, true] },
+  { label: 'Fully local option', values: [true, false, false, 'Paid plan'] },
+  { label: 'Speech engines / AI providers', values: [`${COUNTS.stt} / ${COUNTS.llm}`, 'Fixed', 'AI from a list', 'Fixed'] },
   { label: 'Local LLM', values: [true, false, false, false] },
-  { label: 'Your own documents as context', values: [true, false, false, false] },
+  { label: 'Your own documents as context', values: [true, 'Connectors', 'In chat', false] },
 ];
 ---
 
@@ -65,7 +65,7 @@ const rows: { label: string; values: Cell[] }[] = [
       </table>
     </div>
     <p class="cmp-note">
-      Competitor details are taken from the NexQ README and change over time, so check each vendor’s own page.
+      Competitor details are from each vendor’s own pages on 24 November 2026 and change over time, so check each vendor’s own page.
       “Fully local option” for NexQ means choosing an on-device speech engine and a local model.
     </p>
   </div>

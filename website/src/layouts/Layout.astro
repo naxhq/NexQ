@@ -7,18 +7,23 @@ import { CURRENT_VERSION } from '../data/releases';
 interface Props {
   title?: string;
   description?: string;
+  /** Structured data for this page. The home page describes the app and its FAQ instead. */
+  jsonLd?: object[];
+  ogType?: 'website' | 'article';
 }
 
-const { title = SITE_TITLE, description = SITE_DESCRIPTION } = Astro.props;
+const { title = SITE_TITLE, description = SITE_DESCRIPTION, jsonLd = [], ogType = 'website' } = Astro.props;
 if (description.length > 160) {
   throw new Error(`Meta description is ${description.length} characters; keep it at 160 or fewer.`);
 }
 
 const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
 const canonical = new URL(Astro.url.pathname, Astro.site).href;
-const ogImage = new URL(`${base}og.jpg`, Astro.site).href;
-const ogAlt =
-  'NexQ social card: the headline "The answer stays on your side of the screen." next to the overlay catching a question and answering it.';
+const isHome = Astro.url.pathname.replace(/\/?$/, '/') === base;
+const ogImage = new URL(`${base}${isHome ? 'og.jpg' : 'og-guides.jpg'}`, Astro.site).href;
+const ogAlt = isHome
+  ? 'NexQ social card: the headline "The answer stays on your side of the screen." next to the overlay catching a question and answering it.'
+  : 'NexQ social card: the headline "One call, two voices" over a sound wave that splits into Them (orange) and You (green).';
 
 const softwareLd = {
   '@context': 'https://schema.org',
@@ -63,7 +68,7 @@ const faqLd = {
     <meta name="generator" content={Astro.generator} />
 
     <!-- Open Graph -->
-    <meta property="og:type" content="website" />
+    <meta property="og:type" content={ogType} />
     <meta property="og:site_name" content="NexQ" />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
@@ -91,8 +96,9 @@ const faqLd = {
 
     <script is:inline>document.documentElement.classList.add('js');</script>
 
-    <script type="application/ld+json" set:html={JSON.stringify(softwareLd)} />
-    <script type="application/ld+json" set:html={JSON.stringify(faqLd)} />
+    {(isHome ? [softwareLd, faqLd] : jsonLd).map((ld) => (
+      <script is:inline type="application/ld+json" set:html={JSON.stringify(ld)} />
+    ))}
   </head>
   <body class="min-h-screen">
     <a

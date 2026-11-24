@@ -1,14 +1,14 @@
 # NexQ website
 
 Static marketing site for NexQ. Astro 7, Tailwind 4 (Vite plugin), no client framework.
-Deployed to https://naxhq.github.io/NexQ/ (base `/NexQ/`) by `.github/workflows/deploy-website.yml`.
+Deployed to https://getnexq.com/ (GitHub Pages with a custom domain, DNS on Cloudflare) by `.github/workflows/deploy-website.yml`.
 
 ## Run it
 
 ```bash
 cd website
 npm ci
-npm run dev        # http://localhost:4321/NexQ/
+npm run dev        # http://localhost:4321/
 npx astro build    # static output in dist/
 npm run preview
 ```
@@ -17,6 +17,7 @@ npm run preview
 
 ```
 src/
+  pages/guides/            how-to pages, one question each; the list is data/guides.ts, the shell layouts/Guide.astro
   pages/index.astro        page order: Navbar, Hero (hero + "The call" as one stage), YourAI, AfterCall,
                            MadeFor, Privacy, Releases, Download, Compare, FAQ, FinalCTA, Footer
   layouts/Layout.astro     head, OG/Twitter, JSON-LD, font preload, reveal-on-scroll helper

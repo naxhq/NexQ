@@ -3,7 +3,7 @@ import Icon from './Icon.astro';
 import { REPO, NAV, SECTION } from '../data/site';
 import { STARS_LABEL } from '../data/github';
 
-const base = import.meta.env.BASE_URL;
+const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
 ---
 
 <header id="navbar" class="fixed inset-x-0 top-0 z-50 h-16 border-b border-border bg-background">
@@ -16,7 +16,7 @@ const base = import.meta.env.BASE_URL;
     <ul class="hidden items-center gap-1 lg:flex">
       {NAV.map((l) => (
         <li>
-          <a href={l.href} class="rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground">
+          <a href={`${base}${l.href}`} class="rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground">
             {l.label}
           </a>
         </li>
@@ -33,7 +33,7 @@ const base = import.meta.env.BASE_URL;
         {STARS_LABEL && <span class="star-count">{STARS_LABEL}<span class="sr-only"> stars</span></span>}
       </a>
       <!-- Says "Download" at every width, so the wordmark always fits (the hero says "Get it for Windows or Mac"). -->
-      <a href={`#${SECTION.download}`} class="btn-primary min-h-[40px] px-4 text-sm">Download</a>
+      <a href={`${base}#${SECTION.download}`} class="btn-primary min-h-[40px] px-4 text-sm">Download</a>
       <button
         id="nav-toggle"
         type="button"
@@ -52,7 +52,7 @@ const base = import.meta.env.BASE_URL;
     <ul class="wrap flex flex-col py-3">
       {NAV.map((l) => (
         <li>
-          <a href={l.href} class="flex min-h-[48px] items-center rounded-lg px-2 text-base text-muted-foreground hover:text-foreground">
+          <a href={`${base}${l.href}`} class="flex min-h-[48px] items-center rounded-lg px-2 text-base text-muted-foreground hover:text-foreground">
             {l.label}
           </a>
         </li>

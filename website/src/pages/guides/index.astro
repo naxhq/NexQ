@@ -1,0 +1,33 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import Navbar from '../../components/Navbar.astro';
+import Footer from '../../components/Footer.astro';
+import { GUIDES } from '../../data/guides';
+import { DOCS } from '../../data/site';
+
+const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
+---
+
+<Layout
+  title="Guides: Call Transcription on Your Own Computer | NexQ"
+  description="Short how-to guides: transcribe both sides of a call, keep it local on Windows, use Ollama or LM Studio, and compare open-source options."
+>
+  <Navbar />
+  <main id="main" tabindex="-1" class="outline-hidden">
+    <div class="wrap pb-20 pt-[calc(var(--nav-h)+3.5rem)]">
+      <h1 class="h2">Guides</h1>
+      <p class="lede">
+        One question per page. For every setting in the app, see the <a class="link" href={DOCS}>user guide</a>.
+      </p>
+      <ul class="mt-12 max-w-[44rem] border-b border-border">
+        {GUIDES.map((g) => (
+          <li class="border-t border-border py-6">
+            <a class="link text-lg font-semibold" href={`${base}guides/${g.slug}/`}>{g.label}</a>
+            <p class="mt-2 text-muted-foreground">{g.description}</p>
+          </li>
+        ))}
+      </ul>
+    </div>
+  </main>
+  <Footer />
+</Layout>

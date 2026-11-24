@@ -1,0 +1,76 @@
+---
+import Guide from '../../layouts/Guide.astro';
+
+// Facts about the others, read on their own pages on 24 Nov 2026. Check them again before changing the date in the text.
+//   Otter    otter.ai/integrations/desktop (no bot, Mac and Windows), otter.ai/pricing (Basic is free)
+//   Granola  granola.ai/pricing, docs.granola.ai (transcription, chatting-with-your-meetings, model selection)
+//   Meetily  github.com/Zackriya-Solutions/meetily (README)
+//   anarlog  github.com/fastrepl/anarlog (README)
+---
+
+<Guide
+  slug="open-source-otter-granola-alternative"
+  lede="If you want notes after the meeting, look at Meetily or anarlog first. If you want help while the call is still going, and to choose the engine for each side, that is what NexQ is for."
+>
+  <h2>What Otter and Granola do well</h2>
+  <p>
+    Both have a free plan, and both can work without a bot: Granola records on your device, and Otter’s desktop app can
+    too. If your company is fine with a cloud service, either is a reasonable choice.
+  </p>
+  <p>The difference is where your audio and text go, and how much of that you can change.</p>
+
+  <div class="guide-table" role="region" aria-label="Comparison of meeting tools" tabindex="0">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col"><span class="sr-only">Question</span></th>
+          <th scope="col">NexQ</th><th scope="col">Meetily</th><th scope="col">anarlog</th><th scope="col">Otter</th><th scope="col">Granola</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><th scope="row">License</th><td>MIT</td><td>MIT, with a paid Pro</td><td>MIT, with paid parts</td><td>Closed</td><td>Closed</td></tr>
+        <tr><th scope="row">Works without a bot</th><td>Yes</td><td>Yes</td><td>Yes</td><td>Yes, desktop app</td><td>Yes</td></tr>
+        <tr><th scope="row">Speech on your device</th><td>Yes, if you pick it</td><td>Yes</td><td>Yes, on supported Macs</td><td>Not stated</td><td>No, uses a provider</td></tr>
+        <tr><th scope="row">Your own AI model</th><td>Yes</td><td>Yes</td><td>Yes</td><td>Not stated</td><td>From their list, paid plans</td></tr>
+        <tr><th scope="row">Main job</th><td>Answers during the call</td><td>Transcript and summary</td><td>Meeting notes</td><td>Transcript and summary</td><td>Meeting notes</td></tr>
+        <tr><th scope="row">Computers</th><td>Windows, Mac (beta)</td><td>Windows, Mac, Linux</td><td>Windows, Mac, Linux</td><td>Windows, Mac</td><td>Windows, Mac</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    Checked on 24 November 2026 on each project’s own pages. “Not stated” means it wasn’t on the pages we read. These
+    change, so check again before you decide.
+  </p>
+
+  <h2>Pick Meetily if</h2>
+  <p>
+    You want a local transcript and summary after each meeting, or you use Linux. It has the most GitHub stars of the
+    three. <a class="link" href="https://github.com/Zackriya-Solutions/meetily">Meetily on GitHub</a>
+  </p>
+
+  <h2>Pick anarlog if</h2>
+  <p>
+    You like how Granola works, but want it open and with your data in local files. It used to be called Hyprnote.
+    <a class="link" href="https://github.com/fastrepl/anarlog">anarlog on GitHub</a>
+  </p>
+
+  <h2>Pick NexQ if</h2>
+  <ul>
+    <li>You want answers while people are still talking, from your own files.</li>
+    <li>The two sides of your calls speak different languages, or you want a different engine for each.</li>
+    <li>You want to use Ollama, LM Studio, an API key, or a Claude, Google AI or ChatGPT plan you already pay for (beta).</li>
+  </ul>
+
+  <h2>Don’t pick NexQ if</h2>
+  <ul>
+    <li>You need Linux, an Intel Mac, a phone app or team sharing. It has none of those.</li>
+    <li>You need signed installers. The Windows build isn’t code signed and the Mac beta isn’t notarized.</li>
+    <li>You want local without touching settings. NexQ starts with online speech and you switch it yourself.</li>
+  </ul>
+
+  <h2>Before you switch</h2>
+  <p>
+    Run the new tool next to the old one for a week, on calls that don’t matter and with everyone’s OK. Compare the names
+    and numbers in the two transcripts. That tells you more than any table.
+  </p>
+</Guide>
