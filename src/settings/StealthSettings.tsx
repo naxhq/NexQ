@@ -76,7 +76,7 @@ export function StealthSettings() {
             </label>
             <p className="mt-0.5 text-xs text-muted-foreground">
               NexQ stays on your screen but won't appear in screen sharing, recordings or
-              screenshots (Zoom, Teams, Meet, OBS and others).
+              screenshots (Zoom, Teams, Meet, OBS and others). Use it only where that's allowed.
             </p>
           </div>
         </div>
