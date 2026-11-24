@@ -526,6 +526,25 @@ select option {
   .meeting-prompt-enter { animation: none; }
 }
 
+/* One-time star prompt: settles in from below, leaves quickly (spring decel, no overshoot) */
+@keyframes star-prompt-enter {
+  0% { opacity: 0; transform: translateY(8px) scale(0.98); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes star-prompt-exit {
+  0% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(6px) scale(0.98); }
+}
+.star-prompt-enter {
+  animation: star-prompt-enter 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.star-prompt-exit {
+  animation: star-prompt-exit 180ms cubic-bezier(0.25, 1, 0.5, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .star-prompt-enter, .star-prompt-exit { animation: none; }
+}
+
 /* A phase change in the progress line */
 @keyframes progress-phase-enter {
   0% { opacity: 0; transform: translateY(3px); }

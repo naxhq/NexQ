@@ -32,6 +32,10 @@ interface UpdaterState {
   refreshVersion?: string;
   /** The "what's new" dialog shown before installing. */
   dialogOpen: boolean;
+  /** An install is under way (NexQ is about to restart): nothing else should pop up. */
+  installing: boolean;
+  /** The one-time "update ready" notice is on screen. */
+  readyToastVisible: boolean;
 
   // Persisted preferences (hydrated by useUpdater)
   autoUpdate: boolean;
@@ -55,6 +59,8 @@ interface UpdaterState {
   failDownload: (error: string) => void;
   setRefresh: (refresh: UpdateRefresh, version?: string) => void;
   setDialogOpen: (open: boolean) => void;
+  setInstalling: (installing: boolean) => void;
+  setReadyToastVisible: (visible: boolean) => void;
   setAutoUpdate: (enabled: boolean) => void;
   setSkippedVersion: (version: string | undefined) => void;
   /** Skip a version and drop it from view unless it is mid-download. */
@@ -72,6 +78,8 @@ const initialState = {
   refresh: "idle" as UpdateRefresh,
   refreshVersion: undefined as string | undefined,
   dialogOpen: false,
+  installing: false,
+  readyToastVisible: false,
 };
 
 export const useUpdaterStore = create<UpdaterState>((set, get) => ({
@@ -133,6 +141,10 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
     })),
 
   setDialogOpen: (open) => set({ dialogOpen: open }),
+
+  setInstalling: (installing) => set({ installing }),
+
+  setReadyToastVisible: (visible) => set({ readyToastVisible: visible }),
 
   setAutoUpdate: (enabled) => set({ autoUpdate: enabled }),
 

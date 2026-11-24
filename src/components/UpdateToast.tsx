@@ -29,7 +29,15 @@ export function UpdateReadyToast() {
   }, [visibleVersion]);
 
   // Hide if the update was skipped or installed meanwhile.
-  if (!visibleVersion || phase !== "ready" || version !== visibleVersion) return null;
+  const showing = !!visibleVersion && phase === "ready" && version === visibleVersion;
+
+  // Other corner notices (the star prompt) wait for this one to go.
+  useEffect(() => {
+    useUpdaterStore.getState().setReadyToastVisible(showing);
+    return () => useUpdaterStore.getState().setReadyToastVisible(false);
+  }, [showing]);
+
+  if (!showing) return null;
 
   return (
     <div className="fixed bottom-14 right-4 z-50">

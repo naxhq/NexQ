@@ -34,6 +34,7 @@ vi.mock("@tauri-apps/api/webviewWindow", () => ({
 import { endMeetingFromThisWindow, restartToUpdate, MEETING_END_TIMEOUT_MS } from "./useUpdater";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useToastStore } from "../stores/toastStore";
+import { useUpdaterStore } from "../stores/updaterStore";
 
 function windowEnded(window: string) {
   listeners.get("nexq:meeting_ended")?.forEach((cb) => cb({ payload: { window } }));
@@ -128,6 +129,68 @@ describe("restartToUpdate", () => {
 
     expect(installUpdateNow).not.toHaveBeenCalled();
     expect(useToastStore.getState().toasts.some((t) => t.type === "error")).toBe(true);
+  });
+});
+
+describe("restartToUpdate: the installing flag (other notices stay away)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    listeners.clear();
+    emitted.length = 0;
+    confirm.mockReset();
+    installUpdateNow.mockReset().mockResolvedValue(undefined);
+    useToastStore.setState({ toasts: [] });
+    useMeetingStore.setState({ activeMeeting: null });
+    useUpdaterStore.getState().reset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("is on while the install runs, and stays on once it was handed to the installer", async () => {
+    let release: () => void = () => {};
+    installUpdateNow.mockReturnValue(new Promise<void>((resolve) => (release = resolve)));
+    const run = restartToUpdate();
+    await flush();
+    expect(useUpdaterStore.getState().installing).toBe(true);
+    release();
+    await run;
+    expect(useUpdaterStore.getState().installing).toBe(true);
+  });
+
+  it("is on while a running meeting is ended, so its end event can't raise a notice", async () => {
+    useMeetingStore.setState({ activeMeeting: { id: "m1" } as never });
+    confirm.mockResolvedValue(true);
+    const run = restartToUpdate();
+    await flush();
+    expect(useUpdaterStore.getState().installing).toBe(true);
+    windowEnded("launcher");
+    windowEnded("overlay");
+    await run;
+  });
+
+  it("goes off when the user cancels", async () => {
+    useMeetingStore.setState({ activeMeeting: { id: "m1" } as never });
+    confirm.mockResolvedValue(false);
+    await restartToUpdate();
+    expect(useUpdaterStore.getState().installing).toBe(false);
+  });
+
+  it("goes off when the meeting could not be saved", async () => {
+    useMeetingStore.setState({ activeMeeting: { id: "m1" } as never });
+    confirm.mockResolvedValue(true);
+    const run = restartToUpdate();
+    await flush();
+    await vi.advanceTimersByTimeAsync(MEETING_END_TIMEOUT_MS);
+    await run;
+    expect(useUpdaterStore.getState().installing).toBe(false);
+  });
+
+  it("goes off when the install fails", async () => {
+    installUpdateNow.mockRejectedValue(new Error("disk full"));
+    await restartToUpdate();
+    expect(useUpdaterStore.getState().installing).toBe(false);
   });
 });
 
