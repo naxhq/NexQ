@@ -10,9 +10,11 @@ interface Props {
   /** Structured data for this page. The home page describes the app and its FAQ instead. */
   jsonLd?: object[];
   ogType?: 'website' | 'article';
+  /** Keep the page out of search results (the 404 page). */
+  noindex?: boolean;
 }
 
-const { title = SITE_TITLE, description = SITE_DESCRIPTION, jsonLd = [], ogType = 'website' } = Astro.props;
+const { title = SITE_TITLE, description = SITE_DESCRIPTION, jsonLd = [], ogType = 'website', noindex = false } = Astro.props;
 if (description.length > 160) {
   throw new Error(`Meta description is ${description.length} characters; keep it at 160 or fewer.`);
 }
@@ -22,7 +24,7 @@ const canonical = new URL(Astro.url.pathname, Astro.site).href;
 const isHome = Astro.url.pathname.replace(/\/?$/, '/') === base;
 const ogImage = new URL(`${base}${isHome ? 'og.jpg' : 'og-guides.jpg'}`, Astro.site).href;
 const ogAlt = isHome
-  ? 'NexQ social card: the headline "The answer stays on your side of the screen." next to the overlay catching a question and answering it.'
+  ? 'NexQ social card: the headline "Hears both sides. Answers from your notes." between an orange sound wave above and a green one below.'
   : 'NexQ social card: the headline "One call, two voices" over a sound wave that splits into Them (orange) and You (green).';
 
 const softwareLd = {
@@ -62,7 +64,7 @@ const faqLd = {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
     <meta name="description" content={description} />
-    <link rel="canonical" href={canonical} />
+    {noindex ? <meta name="robots" content="noindex" /> : <link rel="canonical" href={canonical} />}
     <meta name="theme-color" content="#080c16" />
     <meta name="color-scheme" content="dark" />
     <meta name="generator" content={Astro.generator} />
