@@ -55,6 +55,9 @@ export function ReadyStep({
         <p className="mt-3 text-sm text-muted-foreground leading-relaxed">
           NexQ is ready to be your AI meeting assistant.
         </p>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Check that it's allowed in your call, and tell people when you transcribe or record them.
+        </p>
       </div>
 
       <div className="w-full max-w-lg space-y-6">

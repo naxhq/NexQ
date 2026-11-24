@@ -35,6 +35,7 @@ import {
   isValidWhisperBaseUrl,
 } from "../lib/whisperApi";
 import type { STTProviderType, LocalSTTEngineInfo, DeepgramConfig, GroqConfig } from "../lib/types";
+import { STT_GROUPS, sttGroup, type SttGroupId } from "../lib/sttGroups";
 import {
   CheckCircle,
   XCircle,
@@ -58,6 +59,8 @@ import {
 import { LocalModelManager } from "./LocalModelManager";
 import { open } from "@tauri-apps/plugin-shell";
 
+const GROUP_ICONS: Record<SttGroupId, typeof HardDrive> = { device: HardDrive, builtin: Globe, cloud: Cloud };
+
 // ── Provider definitions ──
 
 interface ProviderOption {
@@ -65,7 +68,6 @@ interface ProviderOption {
   label: string;
   description: string;
   requiresApiKey: boolean;
-  isLocal: boolean;
   credentialKey: string;
   needsRegion?: boolean;
   regionCredentialKey?: string;
@@ -93,18 +95,16 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
   {
     value: "web_speech",
     label: "Web Speech",
-    description: "Browser-native, free",
+    description: "Browser speech, your mic only",
     requiresApiKey: false,
-    isLocal: true,
     credentialKey: "",
     alwaysReady: true,
   },
   {
     value: "windows_native",
     label: "Windows Speech",
-    description: "Built-in, zero download",
+    description: "Microsoft online speech, your mic only",
     requiresApiKey: false,
-    isLocal: true,
     credentialKey: "",
     alwaysReady: true,
   },
@@ -113,16 +113,14 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
     label: "Sherpa-ONNX",
     description: "Local streaming, offline, free",
     requiresApiKey: false,
-    isLocal: true,
     credentialKey: "",
     requiresModels: "sherpa_onnx",
   },
   {
     value: "ort_streaming",
     label: "ORT Streaming",
-    description: "Local, GPU-accelerated",
+    description: "Local streaming, offline, free",
     requiresApiKey: false,
-    isLocal: true,
     credentialKey: "",
     requiresModels: "ort_streaming",
   },
@@ -131,7 +129,6 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
     label: "Whisper.cpp",
     description: "Batch transcription of recorded meetings",
     requiresApiKey: false,
-    isLocal: true,
     credentialKey: "",
     requiresModels: "whisper_cpp",
     batchOnly: true,
@@ -141,7 +138,6 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
     label: "Parakeet TDT",
     description: "Best accuracy, offline, multilingual",
     requiresApiKey: false,
-    isLocal: true,
     credentialKey: "",
     requiresModels: "parakeet_tdt",
   },
@@ -150,7 +146,6 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
     label: "Deepgram",
     description: "Real-time streaming, best quality",
     requiresApiKey: true,
-    isLocal: false,
     credentialKey: "deepgram",
   },
   {
@@ -158,7 +153,6 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
     label: "Whisper API",
     description: "OpenAI or your own compatible server",
     requiresApiKey: true,
-    isLocal: false,
     credentialKey: "whisper_api",
   },
   {
@@ -166,7 +160,6 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
     label: "Azure Speech",
     description: "Azure Cognitive Services",
     requiresApiKey: true,
-    isLocal: false,
     credentialKey: "azure_speech",
     needsRegion: true,
     regionCredentialKey: "azure_speech_region",
@@ -176,7 +169,6 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
     label: "Azure MAI Streaming",
     description: "MAI-Transcribe-2-Streaming · Public Preview",
     requiresApiKey: true,
-    isLocal: false,
     credentialKey: "azure_mai_streaming",
     needsRegion: true,
     regionCredentialKey: "azure_mai_streaming_region",
@@ -188,7 +180,6 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
     label: "Groq Whisper",
     description: "Ultra-fast Whisper inference",
     requiresApiKey: true,
-    isLocal: false,
     credentialKey: "groq_whisper",
   },
   {
@@ -196,7 +187,6 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
     label: "Cartesia",
     description: "Ink-2 streaming with turn detection",
     requiresApiKey: true,
-    isLocal: false,
     credentialKey: "cartesia",
   },
 ];
@@ -973,58 +963,37 @@ export function STTSettings() {
   const showModelPanel = !!currentProviderOption?.requiresModels;
   const modelEngineId = currentProviderOption?.requiresModels;
 
-  const localProviders = PROVIDER_OPTIONS.filter((p) => p.isLocal);
-  const cloudProviders = PROVIDER_OPTIONS.filter((p) => !p.isLocal);
-
   return (
     <div className="space-y-6">
-      {/* Provider Selection — grouped: Local then Cloud */}
-      <div className="rounded-xl border border-border/30 bg-card/50 overflow-hidden">
-        {/* Local Providers */}
-        <div className="px-5 pt-4 pb-3 border-b border-border/20 bg-muted/10">
-          <div className="flex items-center gap-2 mb-3">
-            <div className="flex h-5 w-5 items-center justify-center rounded bg-success/10">
-              <HardDrive className="h-3 w-3 text-success" />
-            </div>
-            <span className="text-xs font-semibold text-foreground">Local & Built-in</span>
-            <span className="ml-auto text-meta text-muted-foreground/60 font-medium uppercase tracking-wider">Free · No API Key</span>
-          </div>
-          <div className="grid grid-cols-3 gap-2">
-            {localProviders.map((p) => (
-              <ProviderCard
-                key={p.value}
-                provider={p}
-                isSelected={selectedProvider === p.value}
-                isActive={sttProvider === p.value}
-                badge={getBadgeState(p)}
-                onClick={() => handleProviderChange(p.value)}
-              />
-            ))}
-          </div>
-        </div>
-
-        {/* Cloud Providers */}
-        <div className="px-5 pt-4 pb-4">
-          <div className="flex items-center gap-2 mb-3">
-            <div className="flex h-5 w-5 items-center justify-center rounded bg-info/10">
-              <Cloud className="h-3 w-3 text-info" />
-            </div>
-            <span className="text-xs font-semibold text-foreground">Cloud</span>
-            <span className="ml-auto text-meta text-muted-foreground/60 font-medium uppercase tracking-wider">Requires API Key</span>
-          </div>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
-            {cloudProviders.map((p) => (
-              <ProviderCard
-                key={p.value}
-                provider={p}
-                isSelected={selectedProvider === p.value}
-                isActive={sttProvider === p.value}
-                badge={getBadgeState(p)}
-                onClick={() => handleProviderChange(p.value)}
-              />
-            ))}
-          </div>
-        </div>
+      {/* Provider selection, grouped by where the audio goes */}
+      <div className="rounded-xl border border-border/30 bg-card/50 overflow-hidden divide-y divide-border/20">
+        {STT_GROUPS.map((group) => {
+          const GroupIcon = GROUP_ICONS[group.id];
+          const onDevice = group.id === "device";
+          return (
+            <section key={group.id} aria-labelledby={`stt-group-${group.id}`} className="px-5 py-4">
+              <div className="mb-3 flex items-center gap-2">
+                <div className={`flex h-5 w-5 shrink-0 items-center justify-center rounded ${onDevice ? "bg-success/10" : "bg-info/10"}`}>
+                  <GroupIcon className={`h-3 w-3 ${onDevice ? "text-success" : "text-info"}`} />
+                </div>
+                <h3 id={`stt-group-${group.id}`} className="text-xs font-semibold text-foreground">{group.label}</h3>
+                <span className="ml-auto text-right text-meta font-medium text-muted-foreground/70">{group.note}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {PROVIDER_OPTIONS.filter((p) => sttGroup(p.value) === group.id).map((p) => (
+                  <ProviderCard
+                    key={p.value}
+                    provider={p}
+                    isSelected={selectedProvider === p.value}
+                    isActive={sttProvider === p.value}
+                    badge={getBadgeState(p)}
+                    onClick={() => handleProviderChange(p.value)}
+                  />
+                ))}
+              </div>
+            </section>
+          );
+        })}
       </div>
 
       {/* Inline Model Panel — shown when the selected provider needs models */}
@@ -1449,7 +1418,7 @@ function ProviderCard({
       <div className="flex w-full items-start justify-between gap-1 mb-1">
         <div className="flex items-center gap-1.5 min-w-0">
           <ProviderIcon value={provider.value} isSelected={isSelected} />
-          <span className={`text-xs font-medium truncate ${isSelected ? "text-primary" : "text-foreground"}`}>
+          <span className={`text-xs font-medium leading-tight ${isSelected ? "text-primary" : "text-foreground"}`}>
             {provider.label}
           </span>
         </div>
@@ -1458,7 +1427,7 @@ function ProviderCard({
           variant={badge.variant}
         />
       </div>
-      <span className="text-meta text-muted-foreground/70 line-clamp-1 leading-tight">
+      <span className="text-meta text-muted-foreground/70 leading-snug">
         {provider.batchOnly ? "Batch mode only" : provider.description}
       </span>
     </button>

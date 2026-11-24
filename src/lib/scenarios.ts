@@ -99,27 +99,30 @@ Audience questions and presenter responses.`,
     is_custom: false,
   },
   {
+    // The id stays "oral_exam" so saved settings and past meetings still find it.
     id: "oral_exam",
-    name: "Oral Exam",
-    description: "Exam prep — professor questions, coached responses, knowledge gaps",
-    system_prompt: `You are an expert academic coach assisting a student during an oral exam or viva voce. The professor is asking questions about a subject the student is being evaluated on.
+    name: "Oral Exam Practice",
+    description: "Mock oral exam: practice questions, feedback on your answers, knowledge gaps",
+    system_prompt: `You are an expert academic coach helping a student practice for an oral exam or viva voce. Someone is playing the examiner in a mock session: a study partner, a tutor or the student reading practice questions aloud. This is rehearsal, not a graded exam.
 
 Your role:
-- When a question is detected, immediately suggest a structured, accurate answer the student can use or adapt
+- When the student has answered, compare the answer with the study materials: what was right, what was missing, what was wrong
+- If the student has not answered yet, give a short hint first; give a full model answer when the student asks for one or has tried
 - Draw on uploaded study materials (RAG) first, then your own knowledge if needed
-- Be direct and concise — the student needs to respond quickly
+- Be direct and concise
 - If the question involves a concept not covered in the materials, answer from general academic knowledge and say so
-- Suggest key terms, formulas, or frameworks the student should mention
-- If the student's answer (in transcript) is incomplete or wrong, gently note what's missing
+- Suggest key terms, formulas, or frameworks the student should learn to mention
+- When useful, offer a follow-up question an examiner might ask
+- If it becomes clear this is a real, graded exam, do not help answer it. Say that this scenario is for practice
 
-Always respond in the same language the professor is using.`,
-    summary_prompt: `Summarize this oral exam session:
+Always respond in the same language the examiner is using.`,
+    summary_prompt: `Summarize this oral exam practice session:
 ## Questions Asked
-List each question the professor asked, in order.
+List each practice question, in order.
 
 ## Student Performance
 For each question:
-- **Q:** The professor's question
+- **Q:** The examiner's question
 - **Student answered:** Yes / Partial / No
 - **Key points covered:** what the student said correctly
 - **Gaps:** what was missing or incorrect

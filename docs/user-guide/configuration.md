@@ -24,7 +24,7 @@ NexQ uses a two-party audio model: **"You"** (microphone) and **"Them"** (system
 
 - **Setup**: None -- works out of the box
 - **Requires API Key**: No
-- **Runs Locally**: Yes (browser engine)
+- **Runs Locally**: No (your mic audio goes to the browser's cloud speech service)
 - **Best For**: Quick start, low resource usage
 - **Limitations**: Requires an active internet connection on some systems; accuracy varies by browser engine
 
@@ -90,10 +90,10 @@ See [Choosing AI Providers](ai-providers.md#azure-mai-streaming-public-preview) 
 
 ### Windows Native Speech
 
-- **Setup**: None -- uses Windows built-in speech recognition
+- **Setup**: Turn on "Online speech recognition" in Windows Settings > Privacy & security > Speech
 - **Requires API Key**: No
-- **Runs Locally**: Yes
-- **Best For**: Offline fallback
+- **Runs Locally**: No (dictation uses Microsoft's online speech service)
+- **Best For**: No-key fallback for your mic on Windows
 
 ## LLM Providers
 

@@ -57,7 +57,7 @@ It hears both sides of a call, answers on a private overlay, and can hide from y
 
 The first launch opens a short setup. You can skip it; everything below is also in Settings.
 
-1. **Set up speech-to-text.** In Settings → STT Providers, download the Parakeet model (local, free) or add a Deepgram or Groq key. Then in Settings → Audio & Devices, choose an engine for each side, or pick the **Free** preset (Web Speech for your mic, Parakeet for the other side). Web Speech needs no key but sends your mic audio to a cloud service.
+1. **Set up speech-to-text.** In Settings → STT Providers, download the Parakeet model (local, free) or add a Deepgram or Groq key. Then in Settings → Audio & Devices, choose an engine for each side. A fresh install starts with cloud engines: Web Speech for your mic (no key) and Deepgram for the other side (needs a key). To keep audio on your computer, pick the **Local Only (Parakeet)** or **Fully Offline** preset. The **Free** preset needs no key, but your mic still goes through Web Speech.
 2. **Pick an LLM** in Settings → LLM Providers. [Ollama](https://ollama.com) is found automatically, cloud providers need a key, and Claude, Antigravity or Codex can use your subscription.
 3. **Optional:** add your resume or notes under **Meeting Context** on the dashboard.
 4. **Press** <kbd>Ctrl</kbd>+<kbd>M</kbd>. NexQ captures system audio, so it works with Zoom, Teams, Meet, Discord or anything that plays sound.
@@ -95,7 +95,7 @@ The full history is in the [CHANGELOG](CHANGELOG.md).
 **Answer in the moment**
 - Assist, What to Say, Shorten, Follow-Up, Recap and free-form Ask
 - Question Detection, with optional Auto-Answer
-- Scenarios for interviews, lectures, oral exams, webinars and team meetings, with editable prompts
+- Scenarios for interviews, lectures, oral exam practice, webinars and team meetings, with editable prompts
 - Ask about your screen with a screenshot (Claude subscription)
 
 </td>
@@ -143,7 +143,7 @@ Audio is captured on your machine. What leaves it depends on the engines you pic
 
 | | Runs on your device | Cloud |
 |---|---|---|
-| **Speech-to-text (12)** | Parakeet TDT, Sherpa-ONNX, ORT Streaming, Windows Speech (Windows, mic only), Whisper.cpp (recordings only, not live calls) | Deepgram, Groq Whisper, Whisper API, Azure Speech, Azure MAI Streaming (public preview), Cartesia, Web Speech (no key, mic only) |
+| **Speech-to-text (12)** | Parakeet TDT, Sherpa-ONNX, ORT Streaming, Whisper.cpp (recordings only, not live calls) | Deepgram, Groq Whisper, Whisper API, Azure Speech, Azure MAI Streaming (public preview), Cartesia, Web Speech (no key, mic only), Windows Speech (no key, Windows, mic only) |
 | **LLM (11)** | Ollama, LM Studio | OpenAI, Anthropic, Google Gemini, Groq, OpenRouter, any custom endpoint, and, with no API key (beta): Claude through your Pro or Max plan (Claude Code CLI), Antigravity through your Google AI plan, Codex through your ChatGPT plan |
 | **Translation (5)** | OPUS-MT (offline) | DeepL, Google, Microsoft, or any LLM you configured |
 
@@ -168,13 +168,19 @@ With an API or local provider your sources stay saved but are not used. Details:
 
 ## Privacy
 
-- **Nothing leaves your machine unless you use a cloud provider.** Web Speech, the default for your mic, is one. A local speech engine on both sides plus a local LLM works offline.
+- **Nothing leaves your machine unless you use a cloud provider.** The defaults are: Web Speech for your mic and Deepgram for the other side. A local speech engine on both sides plus a local LLM works offline.
 - **Your data stays on disk you control.** Meetings, transcripts, recordings, models and the RAG index live in the app data folder (`%APPDATA%\com.nexq.app` on Windows, `~/Library/Application Support/com.nexq.app` on macOS).
 - **Secrets go to the OS credential store.** Windows Credential Manager or the macOS Keychain.
 - **No telemetry or analytics.** Besides the providers you configure and the models you download, NexQ only contacts GitHub, to check for signed updates and show release notes.
 - **Hide from screen share** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd>) works on Windows 10 version 2004 and later, and on macOS. On macOS 14 and later, some recorders that use ScreenCaptureKit can still capture NexQ, so run a test share first. It also hides NexQ from the taskbar (Windows) or the Dock and <kbd>Cmd</kbd>+<kbd>Tab</kbd> (macOS).
 - **Claude screenshots** can contain other people's video or documents. They go to Anthropic with your question, and NexQ does not save them.
 - Found a security issue? Follow [SECURITY.md](SECURITY.md).
+
+## Use it responsibly
+
+- **Tell people.** Let the others on the call know you are transcribing or recording, and get their consent where the law asks for it. Rules differ by place. Recording is off until you turn it on.
+- **Check that it is allowed.** Some interviews, exams, classes and workplaces forbid AI help or transcription. If yours does, do not use NexQ there.
+- **Know the limits of hiding.** Hide from screen share is off by default. It keeps private notes out of what you present. It does not make NexQ undetectable.
 
 ## How NexQ compares
 
