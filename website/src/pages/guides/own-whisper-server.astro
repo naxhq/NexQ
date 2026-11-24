@@ -1,0 +1,104 @@
+---
+import Guide from '../../layouts/Guide.astro';
+import { doc } from '../../data/site';
+// src-tauri/src/stt/whisper_api.rs, docs/user-guide/ai-providers.md "Custom Whisper endpoint".
+// Server commands: speaches.ai/installation, speaches.ai/usage/model-discovery, whisper.cpp examples/server (checked 24 Nov 2026).
+---
+
+<Guide
+  slug="own-whisper-server"
+  lede="Run a speech server on your own machine, or on another one you control, and point NexQ at it. Any server with OpenAI’s /v1/audio/transcriptions route will do, so you can use a model NexQ doesn’t include."
+>
+  <h2>When this is worth it</h2>
+  <ul>
+    <li>You want a model or a language that the built-in local engines don’t cover.</li>
+    <li>Another computer has a good graphics card, and you want it to do the work for your laptop.</li>
+    <li>Your team already runs a transcription server.</li>
+  </ul>
+  <p>
+    Otherwise, a <a class="link" href="../local-call-transcription-windows/">built-in engine</a> is less work and needs no
+    server.
+  </p>
+
+  <h2>Option 1: Speaches (faster-whisper)</h2>
+  <p>
+    <a class="link" href="https://speaches.ai/installation/">Speaches</a> runs in Docker. This is the version without a
+    graphics card:
+  </p>
+  <ol>
+    <li>
+      Start it:
+      <code class="guide-cmd">docker run --rm --detach --publish 127.0.0.1:8000:8000 --name speaches --volume hf-hub-cache:/home/ubuntu/.cache/huggingface/hub ghcr.io/speaches-ai/speaches:latest-cpu</code>
+    </li>
+    <li>
+      Download a model into it:
+      <code class="guide-cmd">curl -X POST http://127.0.0.1:8000/v1/models/Systran/faster-whisper-small</code>
+      In Windows PowerShell, type <code>curl.exe</code> instead of <code>curl</code>.
+    </li>
+    <li>
+      In NexQ, Endpoint is <code>http://127.0.0.1:8000/v1</code> and Model is
+      <code>Systran/faster-whisper-small</code>.
+    </li>
+  </ol>
+  <p>For an NVIDIA card, use the CUDA image from the Speaches installation page.</p>
+
+  <h2>Option 2: whisper.cpp server</h2>
+  <p>
+    If you already have <a class="link" href="https://github.com/ggml-org/whisper.cpp">whisper.cpp</a> and a model, its
+    server works once you give it the route NexQ calls:
+  </p>
+  <p>
+    <code class="guide-cmd">whisper-server -m ggml-small.bin --port 8080 --inference-path /v1/audio/transcriptions</code>
+  </p>
+  <p>
+    In NexQ, Endpoint is <code>http://127.0.0.1:8080/v1</code>. Model can stay empty: this server uses the model it was
+    started with.
+  </p>
+
+  <h2>Connect NexQ</h2>
+  <ol>
+    <li>Open <strong>Settings, STT Providers</strong> and choose <strong>Whisper API</strong>.</li>
+    <li>Fill in <strong>Endpoint</strong> and <strong>Model</strong>. Leave the key empty if your server needs none.</li>
+    <li>
+      Press <strong>Save & Test</strong>. It sends half a second of silence to the transcription route, so a server that
+      can’t transcribe fails here and not in your call.
+    </li>
+    <li>Open <strong>Settings, Audio & Devices</strong> and choose Whisper API for You, Them or both.</li>
+  </ol>
+  <p>If you have an OpenAI key saved, it is never sent to your own server. A server’s key is stored separately.</p>
+
+  <h2>What to expect</h2>
+  <ul>
+    <li>
+      <strong>Not word by word.</strong> Audio goes out in pieces of about 5 seconds, and a piece can end in the middle of
+      a word. Text shows up a few seconds after it is spoken.
+    </li>
+    <li>
+      <strong>The server has to keep up.</strong> With both sides on it, it gets up to two pieces every 5 seconds. A
+      request that takes over 30 seconds is dropped. If text lags, use a smaller model.
+    </li>
+    <li>
+      <strong>No speaker names.</strong> You and Them stay apart because they are separate streams. Several people on the
+      other side share one.
+    </li>
+    <li>
+      <strong>On another machine, use https.</strong> Over plain <code>http://</code> the audio and any key travel
+      unencrypted.
+    </li>
+    <li>
+      <strong>Ollama and LM Studio don’t work here.</strong> NexQ uses them for
+      <a class="link" href="../ollama-lm-studio-meeting-assistant/">the answers</a>, not for speech.
+    </li>
+  </ul>
+
+  <h2>If the test fails</h2>
+  <ul>
+    <li><strong>Couldn’t reach it:</strong> the server isn’t running, or the address or port is wrong.</li>
+    <li><strong>404:</strong> usually a missing <code>/v1</code> at the end of the Endpoint.</li>
+    <li>
+      <strong>400 or “model not found”:</strong> the name doesn’t match a model on the server, or the model isn’t
+      downloaded yet.
+    </li>
+  </ul>
+  <p>More causes are in the <a class="link" href={doc('troubleshooting')}>troubleshooting guide</a>.</p>
+</Guide>

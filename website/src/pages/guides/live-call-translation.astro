@@ -1,0 +1,90 @@
+---
+import Guide from '../../layouts/Guide.astro';
+import { doc, COUNTS } from '../../data/site';
+// src/settings/TranslationSettings.tsx, src/overlay/OverlayView.tsx, src/hooks/useTranslation.ts,
+// src-tauri/src/translation/opus_mt_registry.rs (22 models, English to and from 11 languages, about 310 MB each).
+---
+
+<Guide
+  slug="live-call-translation"
+  lede="NexQ writes down what each side says and shows a translation under each line. It can do that offline between English and 11 other languages, or with an online service for many more."
+>
+  <h2>How it works</h2>
+  <p>
+    The call is transcribed first, and each finished line is translated. So you read the translation a moment after the
+    sentence ends, like subtitles. NexQ doesn’t speak it, and the other side doesn’t see it.
+  </p>
+  <p>Both sides of the call are translated into the one language you choose.</p>
+
+  <h2>Choose what translates</h2>
+  <div class="guide-table" role="region" aria-label="Translation options" tabindex="0">
+    <table>
+      <thead>
+        <tr><th scope="col">Option</th><th scope="col">Where your text goes</th><th scope="col">What it needs</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row">OPUS-MT</th><td>Stays on your computer</td><td>One model per direction, about 310 MB each</td>
+        </tr>
+        <tr>
+          <th scope="row">LLM Translation</th>
+          <td>To the AI you chose. With Ollama or LM Studio it stays on your computer</td>
+          <td>An AI provider set up in NexQ</td>
+        </tr>
+        <tr><th scope="row">DeepL</th><td>To DeepL</td><td>Your DeepL key</td></tr>
+        <tr><th scope="row">Google Translate</th><td>To Google</td><td>Your Google Cloud key</td></tr>
+        <tr><th scope="row">Microsoft Translator</th><td>To Microsoft</td><td>Your Azure key and region</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    Those are all {COUNTS.translation}. OPUS-MT has models from English and to English for Spanish, French, German, Italian,
+    Portuguese, Dutch, Russian, Chinese, Arabic, Japanese and Korean. For Spanish to German, or a language that isn’t
+    listed, use one of the others.
+  </p>
+
+  <h2>Set it up offline</h2>
+  <ol>
+    <li>
+      Choose a speech engine that covers the language being spoken. For a fully local setup, start with the
+      <a class="link" href="../local-call-transcription-windows/">Windows</a> or
+      <a class="link" href="../transcribe-calls-on-a-mac/">Mac</a> guide.
+    </li>
+    <li>
+      If the two sides speak different languages, set <strong>Language</strong> on each card in
+      <strong>Settings, Audio & Devices</strong>.
+    </li>
+    <li>
+      Open <strong>Settings, Translation</strong>, choose <strong>OPUS-MT</strong>, download the direction you need, for
+      example German to English, and set it as the active model.
+    </li>
+    <li>
+      Press <strong>Set OPUS-MT as Active Translation Provider</strong> and set <strong>Target Language</strong> to match.
+    </li>
+    <li>
+      Start a meeting and press <strong>Translate</strong> at the top of the overlay. <strong>Inline</strong> puts the
+      translation under each line. <strong>Hover</strong> shows it when you point at a line.
+    </li>
+  </ol>
+  <p>
+    Turned it on late? <strong>Translate All</strong> does the earlier lines. You can also select a few words and translate
+    only those.
+  </p>
+
+  <h2>Honest limits</h2>
+  <ul>
+    <li>
+      A wrong word in the transcript becomes a wrong translation. A good speech engine for the language matters more than
+      the translator.
+    </li>
+    <li>
+      OPUS-MT works in one direction at a time. With German to English active, lines that are already English go through
+      the same model and can come out odd. If both languages are spoken, use one of the other options.
+    </li>
+    <li>
+      Parakeet doesn’t cover Chinese, Japanese, Korean or Arabic. The
+      <a class="link" href={doc('ai-providers')}>providers guide</a> lists what does.
+    </li>
+    <li>Use it to follow a conversation. For anything legal or medical, get an interpreter.</li>
+  </ul>
+</Guide>
