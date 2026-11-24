@@ -35,7 +35,6 @@ const SHORT: Record<string, string> = {
   'OPUS-MT': 'offline models, downloaded once',
   'Your AI provider': 'whichever you set up',
   'Claude subscription': 'Pro or Max, no API key',
-  'Antigravity subscription': 'Google AI plan, no API key',
   'Codex subscription': 'ChatGPT plan, no API key',
 };
 const short = (rows: Row[]) => rows.map((r) => ({ name: r.name, note: SHORT[r.name] }));
@@ -81,9 +80,9 @@ const POSITIONS = [
     id: 'plan',
     label: 'Your AI plan',
     tag: 'No API key',
-    verdict: 'Text goes to Anthropic, Google or OpenAI through their own tool, under your account.',
+    verdict: 'Text goes to Anthropic or OpenAI through their own tool, under your account.',
     detail:
-      'Claude, Google AI or ChatGPT. You still pick any speech engine, so keep it on-device if the audio should stay home. You sign in inside each provider’s own tool.',
+      'Claude or ChatGPT. You still pick any speech engine, so keep it on-device if the audio should stay home. You sign in inside each provider’s own tool.',
     nodes: [
       { title: 'Speech engine', sub: 'your pick, here or cloud', where: 'mix' },
       { title: 'Your plan', sub: 'leaves: the provider, via its own CLI', where: 'out' },
