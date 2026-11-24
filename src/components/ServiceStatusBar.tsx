@@ -15,6 +15,7 @@ import { useAudioLevel } from "../hooks/useAudioLevel";
 import { hasApiKey, listLocalSTTEngines, getApiKey } from "../lib/ipc";
 import { hasSttCredential } from "../lib/whisperApi";
 import type { STTProviderType, LLMProviderType, LocalSTTEngineInfo } from "../lib/types";
+import { STT_GROUPS, sttGroup, type SttGroupId } from "../lib/sttGroups";
 import { showToast } from "../stores/toastStore";
 import { useUpdaterStore } from "../stores/updaterStore";
 import { useAgentStore } from "../stores/agentStore";
@@ -62,22 +63,29 @@ const STT_PROVIDER_OPTIONS: {
   label: string;
   IconComponent: React.ComponentType<{ className?: string }>;
   requiresKey: boolean;
-  isCloud: boolean;
   inputOnly?: boolean;
   requiresDownload?: string;
 }[] = [
-  { value: "web_speech", label: "Web Speech", IconComponent: Globe, requiresKey: false, isCloud: true, inputOnly: true },
-  { value: "windows_native", label: "Windows Speech", IconComponent: Monitor, requiresKey: false, isCloud: true, inputOnly: true },
-  { value: "sherpa_onnx", label: "Sherpa-ONNX", IconComponent: HardDrive, requiresKey: false, isCloud: false, requiresDownload: "sherpa_onnx" },
-  { value: "ort_streaming", label: "ORT Streaming", IconComponent: Zap, requiresKey: false, isCloud: false, requiresDownload: "ort_streaming" },
-  { value: "parakeet_tdt", label: "Parakeet TDT", IconComponent: Cpu, requiresKey: false, isCloud: false, requiresDownload: "parakeet_tdt" },
-  { value: "deepgram", label: "Deepgram", IconComponent: Cloud, requiresKey: true, isCloud: true },
-  { value: "whisper_api", label: "Whisper API", IconComponent: Cloud, requiresKey: true, isCloud: true },
-  { value: "azure_speech", label: "Azure Speech", IconComponent: Cloud, requiresKey: true, isCloud: true },
-  { value: "azure_mai_streaming", label: "Azure MAI Streaming", IconComponent: Cloud, requiresKey: true, isCloud: true },
-  { value: "groq_whisper", label: "Groq Whisper", IconComponent: Zap, requiresKey: true, isCloud: true },
-  { value: "cartesia", label: "Cartesia", IconComponent: Cloud, requiresKey: true, isCloud: true },
+  { value: "web_speech", label: "Web Speech", IconComponent: Globe, requiresKey: false, inputOnly: true },
+  { value: "windows_native", label: "Windows Speech", IconComponent: Monitor, requiresKey: false, inputOnly: true },
+  { value: "sherpa_onnx", label: "Sherpa-ONNX", IconComponent: HardDrive, requiresKey: false, requiresDownload: "sherpa_onnx" },
+  { value: "ort_streaming", label: "ORT Streaming", IconComponent: Zap, requiresKey: false, requiresDownload: "ort_streaming" },
+  { value: "parakeet_tdt", label: "Parakeet TDT", IconComponent: Cpu, requiresKey: false, requiresDownload: "parakeet_tdt" },
+  { value: "deepgram", label: "Deepgram", IconComponent: Cloud, requiresKey: true },
+  { value: "whisper_api", label: "Whisper API", IconComponent: Cloud, requiresKey: true },
+  { value: "azure_speech", label: "Azure Speech", IconComponent: Cloud, requiresKey: true },
+  { value: "azure_mai_streaming", label: "Azure MAI Streaming", IconComponent: Cloud, requiresKey: true },
+  { value: "groq_whisper", label: "Groq Whisper", IconComponent: Zap, requiresKey: true },
+  { value: "cartesia", label: "Cartesia", IconComponent: Cloud, requiresKey: true },
 ];
+
+/** Green stays on this computer, blue goes online. */
+const groupColor = (id: SttGroupId) => (id === "device" ? "text-emerald-400" : "text-blue-400");
+
+function GroupIcon({ id }: { id: SttGroupId }) {
+  const Icon = id === "device" ? HardDrive : id === "builtin" ? Globe : Cloud;
+  return <Icon className={`h-2.5 w-2.5 ${groupColor(id)}`} />;
+}
 
 // ── Web Speech / Windows Speech mutual exclusion ──
 // These providers capture from the OS default mic via a single SpeechRecognition instance.
@@ -786,8 +794,10 @@ function STTPickerDropdown({
     onClose();
   }
 
-  const localOpts = STT_PROVIDER_OPTIONS.filter((o) => !o.isCloud && isAvailable(o));
-  const cloudOpts = STT_PROVIDER_OPTIONS.filter((o) => o.isCloud && isAvailable(o));
+  const groups = STT_GROUPS.map((group) => ({
+    ...group,
+    options: STT_PROVIDER_OPTIONS.filter((o) => sttGroup(o.value) === group.id && isAvailable(o)),
+  })).filter((group) => group.options.length > 0);
 
   return (
     <div
@@ -798,15 +808,15 @@ function STTPickerDropdown({
         <div className="px-4 py-3 text-xs text-muted-foreground">Loading providers...</div>
       ) : (
         <>
-          {localOpts.length > 0 && (
-            <div>
+          {groups.map((group, i) => (
+            <div key={group.id} className={i > 0 ? "border-t border-border/20" : ""}>
               <div className="flex items-center gap-1.5 bg-muted/20 px-3 py-1.5 border-b border-border/20">
-                <HardDrive className="h-2.5 w-2.5 text-emerald-400" />
+                <GroupIcon id={group.id} />
                 <span className="text-meta font-semibold uppercase tracking-wider text-muted-foreground/70">
-                  Local
+                  {group.menuLabel}
                 </span>
               </div>
-              {localOpts.map((opt) => {
+              {group.options.map((opt) => {
                 const Icon = opt.IconComponent;
                 const selected = currentProvider === opt.value;
                 const locked = isExclusiveLocked(opt);
@@ -826,7 +836,7 @@ function STTPickerDropdown({
                       selected ? "bg-primary/10 text-primary" : "text-foreground/80 hover:bg-accent/40"
                     }`}
                   >
-                    <Icon className={`h-3.5 w-3.5 shrink-0 ${selected ? "text-primary" : "text-emerald-400"}`} />
+                    <Icon className={`h-3.5 w-3.5 shrink-0 ${selected ? "text-primary" : groupColor(group.id)}`} />
                     <span className="flex-1 text-left font-medium">
                       {opt.label}
                       {locked && (
@@ -838,51 +848,9 @@ function STTPickerDropdown({
                 );
               })}
             </div>
-          )}
+          ))}
 
-          {cloudOpts.length > 0 && (
-            <div className={localOpts.length > 0 ? "border-t border-border/20" : ""}>
-              <div className="flex items-center gap-1.5 bg-muted/20 px-3 py-1.5 border-b border-border/20">
-                <Cloud className="h-2.5 w-2.5 text-blue-400" />
-                <span className="text-meta font-semibold uppercase tracking-wider text-muted-foreground/70">
-                  Cloud
-                </span>
-              </div>
-              {cloudOpts.map((opt) => {
-                const Icon = opt.IconComponent;
-                const selected = currentProvider === opt.value;
-                const locked = isExclusiveLocked(opt);
-                return (
-                  <button
-                    key={opt.value}
-                    onClick={() => {
-                      if (locked) {
-                        setStealTarget(opt.value);
-                      } else {
-                        onSelect(opt.value);
-                      }
-                    }}
-                    className={`flex w-full items-center gap-2.5 px-3 py-2 text-xs transition-colors cursor-pointer ${
-                      locked ? "opacity-50 hover:opacity-70" : ""
-                    } ${
-                      selected ? "bg-primary/10 text-primary" : "text-foreground/80 hover:bg-accent/40"
-                    }`}
-                  >
-                    <Icon className={`h-3.5 w-3.5 shrink-0 ${selected ? "text-primary" : "text-blue-400"}`} />
-                    <span className="flex-1 text-left font-medium">
-                      {opt.label}
-                      {locked && (
-                        <span className="block text-meta text-muted-foreground/50">In use by {otherPartyLabel}</span>
-                      )}
-                    </span>
-                    {selected && !locked && <CheckCircle className="h-3 w-3 shrink-0 text-primary" />}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-
-          {localOpts.length === 0 && cloudOpts.length === 0 && (
+          {groups.length === 0 && (
             <p className="px-4 py-3 text-meta text-muted-foreground/60">
               No providers available — configure in Settings
             </p>

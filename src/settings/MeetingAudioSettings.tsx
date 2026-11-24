@@ -35,6 +35,7 @@ import type {
   PartyAudioConfig,
   STTProviderType,
 } from "../lib/types";
+import { STT_GROUPS, sttGroup, type SttGroupId } from "../lib/sttGroups";
 import {
   Mic,
   Volume2,
@@ -59,7 +60,6 @@ const STT_OPTIONS: {
   shortLabel: string;
   icon: React.ReactNode;
   requiresKey: boolean;
-  isCloud: boolean;
   inputOnly?: boolean;
   requiresDownload?: string;
 }[] = [
@@ -69,7 +69,6 @@ const STT_OPTIONS: {
     shortLabel: "Web Speech",
     icon: <Globe className="h-3.5 w-3.5" />,
     requiresKey: false,
-    isCloud: true,
     inputOnly: true,
   },
   {
@@ -78,7 +77,6 @@ const STT_OPTIONS: {
     shortLabel: "Windows Speech",
     icon: <Monitor className="h-3.5 w-3.5" />,
     requiresKey: false,
-    isCloud: true,
     inputOnly: true,
   },
   {
@@ -87,7 +85,6 @@ const STT_OPTIONS: {
     shortLabel: "Sherpa-ONNX",
     icon: <HardDrive className="h-3.5 w-3.5" />,
     requiresKey: false,
-    isCloud: false,
     requiresDownload: "sherpa_onnx",
   },
   {
@@ -96,7 +93,6 @@ const STT_OPTIONS: {
     shortLabel: "ORT",
     icon: <Zap className="h-3.5 w-3.5" />,
     requiresKey: false,
-    isCloud: false,
     requiresDownload: "ort_streaming",
   },
   {
@@ -105,7 +101,6 @@ const STT_OPTIONS: {
     shortLabel: "Parakeet",
     icon: <Cpu className="h-3.5 w-3.5" />,
     requiresKey: false,
-    isCloud: false,
     requiresDownload: "parakeet_tdt",
   },
   {
@@ -114,7 +109,6 @@ const STT_OPTIONS: {
     shortLabel: "Deepgram",
     icon: <Cloud className="h-3.5 w-3.5" />,
     requiresKey: true,
-    isCloud: true,
   },
   {
     value: "whisper_api",
@@ -122,7 +116,6 @@ const STT_OPTIONS: {
     shortLabel: "Whisper API",
     icon: <Cloud className="h-3.5 w-3.5" />,
     requiresKey: true,
-    isCloud: true,
   },
   {
     value: "azure_speech",
@@ -130,7 +123,6 @@ const STT_OPTIONS: {
     shortLabel: "Azure",
     icon: <Cloud className="h-3.5 w-3.5" />,
     requiresKey: true,
-    isCloud: true,
   },
   {
     value: "azure_mai_streaming",
@@ -138,7 +130,6 @@ const STT_OPTIONS: {
     shortLabel: "Azure MAI Streaming",
     icon: <Cloud className="h-3.5 w-3.5" />,
     requiresKey: true,
-    isCloud: true,
   },
   {
     value: "groq_whisper",
@@ -146,7 +137,6 @@ const STT_OPTIONS: {
     shortLabel: "Groq",
     icon: <Zap className="h-3.5 w-3.5" />,
     requiresKey: true,
-    isCloud: true,
   },
   {
     value: "cartesia",
@@ -154,9 +144,16 @@ const STT_OPTIONS: {
     shortLabel: "Cartesia",
     icon: <Cloud className="h-3.5 w-3.5" />,
     requiresKey: true,
-    isCloud: true,
   },
 ];
+
+/** Green stays on this computer, blue goes online. */
+const groupColor = (id: SttGroupId) => (id === "device" ? "text-emerald-500" : "text-blue-500");
+
+function GroupIcon({ id }: { id: SttGroupId }) {
+  const Icon = id === "device" ? HardDrive : id === "builtin" ? Globe : Cloud;
+  return <Icon className={`h-2.5 w-2.5 ${groupColor(id)}`} />;
+}
 
 // ── Web Speech / Windows Speech mutual exclusion ──
 // These providers capture from the OS default mic via a single SpeechRecognition instance.
@@ -1119,9 +1116,11 @@ function ProviderSelect({
     }
   }, [localEngines, apiKeyStatus]);
 
-  const localOptions = STT_OPTIONS.filter((o) => !o.isCloud && isAvailable(o));
-  const cloudOptions = STT_OPTIONS.filter((o) => o.isCloud && isAvailable(o));
-  const hasAny = localOptions.length > 0 || cloudOptions.length > 0;
+  const groups = STT_GROUPS.map((group) => ({
+    ...group,
+    options: STT_OPTIONS.filter((o) => sttGroup(o.value) === group.id && isAvailable(o)),
+  })).filter((group) => group.options.length > 0);
+  const hasAny = groups.length > 0;
 
   const current = STT_OPTIONS.find((o) => o.value === value);
 
@@ -1146,15 +1145,15 @@ function ProviderSelect({
 
       {open && (
         <div className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-xl border border-border/50 bg-popover shadow-xl">
-          {localOptions.length > 0 && (
-            <div>
+          {groups.map((group, i) => (
+            <div key={group.id} className={i > 0 ? "border-t border-border/20" : ""}>
               <div className="flex items-center gap-1.5 border-b border-border/20 bg-muted/30 px-3 py-1.5">
-                <HardDrive className="h-2.5 w-2.5 text-emerald-500" />
+                <GroupIcon id={group.id} />
                 <span className="text-meta font-semibold uppercase tracking-wider text-muted-foreground">
-                  Local
+                  {group.menuLabel}
                 </span>
               </div>
-              {localOptions.map((opt) => {
+              {group.options.map((opt) => {
                 const locked = isExclusiveLocked(opt);
                 return (
                   <button
@@ -1174,7 +1173,7 @@ function ProviderSelect({
                       value === opt.value ? "bg-primary/5 text-primary" : "text-foreground"
                     }`}
                   >
-                    <span className={`shrink-0 ${value === opt.value ? "text-primary" : "text-emerald-500"}`}>
+                    <span className={`shrink-0 ${value === opt.value ? "text-primary" : groupColor(group.id)}`}>
                       {opt.icon}
                     </span>
                     <span className="flex-1 text-left">
@@ -1190,53 +1189,7 @@ function ProviderSelect({
                 );
               })}
             </div>
-          )}
-
-          {cloudOptions.length > 0 && (
-            <div className={localOptions.length > 0 ? "border-t border-border/20" : ""}>
-              <div className="flex items-center gap-1.5 border-b border-border/20 bg-muted/30 px-3 py-1.5">
-                <Cloud className="h-2.5 w-2.5 text-blue-500" />
-                <span className="text-meta font-semibold uppercase tracking-wider text-muted-foreground">
-                  Cloud
-                </span>
-              </div>
-              {cloudOptions.map((opt) => {
-                const locked = isExclusiveLocked(opt);
-                return (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => {
-                      if (locked) {
-                        setStealTarget(opt.value);
-                      } else {
-                        onChange(opt.value);
-                        setOpen(false);
-                      }
-                    }}
-                    className={`flex w-full cursor-pointer items-center gap-2.5 px-3 py-2.5 text-xs transition-colors hover:bg-accent ${
-                      locked ? "opacity-50 hover:opacity-70" : ""
-                    } ${
-                      value === opt.value ? "bg-primary/5 text-primary" : "text-foreground"
-                    }`}
-                  >
-                    <span className={`shrink-0 ${value === opt.value ? "text-primary" : "text-blue-500"}`}>
-                      {opt.icon}
-                    </span>
-                    <span className="flex-1 text-left">
-                      {opt.label}
-                      {locked && (
-                        <span className="block text-meta text-muted-foreground/50">In use by {otherPartyLabel}</span>
-                      )}
-                    </span>
-                    {value === opt.value && !locked && (
-                      <CheckCircle className="h-3 w-3 shrink-0 text-primary" />
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          )}
+          ))}
 
           {!hasAny && (
             <p className="px-3 py-3 text-meta text-muted-foreground">
