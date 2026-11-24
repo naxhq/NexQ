@@ -32,7 +32,7 @@ interface ActionItemsTabProps {
 // ---------------------------------------------------------------------------
 // Individual action item row with inline edit, drag handle, delete
 // ---------------------------------------------------------------------------
-function ActionItemRow({
+export function ActionItemRow({
   item,
   assignee,
   meetingStartMs,
@@ -125,10 +125,19 @@ function ActionItemRow({
               onBlur={handleSave}
               className="flex-1 rounded-md border border-border/30 bg-background px-2 py-1 text-sm text-foreground outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20"
             />
-            <button onClick={handleSave} className="rounded p-0.5 text-success hover:bg-success/10 cursor-pointer">
+            <button
+              onClick={handleSave}
+              aria-label="Save edit"
+              className="rounded p-0.5 text-success hover:bg-success/10 cursor-pointer"
+            >
               <Check className="h-3.5 w-3.5" />
             </button>
-            <button onClick={() => { setEditText(item.text); setEditing(false); }} className="rounded p-0.5 text-muted-foreground hover:bg-secondary cursor-pointer">
+            <button
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => { setEditText(item.text); setEditing(false); }}
+              aria-label="Cancel edit"
+              className="rounded p-0.5 text-muted-foreground hover:bg-secondary cursor-pointer"
+            >
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
