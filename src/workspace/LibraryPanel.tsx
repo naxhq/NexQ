@@ -62,7 +62,7 @@ function useIndexProgress(workspaceId: string): IndexProgress | null {
  * the talking points and memory slots; what an answer would see; and the
  * knowledge base actions. Removing a row removes it from this workspace only.
  */
-export function LibraryPanel({ workspaceId }: { workspaceId: string }) {
+export function LibraryPanel({ workspaceId, inSheet = false }: { workspaceId: string; inSheet?: boolean }) {
   const detail = useWorkspaceStore((s) => s.details[workspaceId]);
   const revision = useWorkspaceStore((s) => s.revision);
   const loadDetail = useWorkspaceStore((s) => s.loadDetail);
@@ -160,11 +160,16 @@ export function LibraryPanel({ workspaceId }: { workspaceId: string }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex items-center justify-between px-4 pb-1 pt-3">
-        <h2 className="ui-section flex items-center gap-1.5 text-foreground">
-          <LibraryIcon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
-          Library
-          <span className="ui-meta font-normal tabular-nums text-muted-foreground">{items.length || ""}</span>
-        </h2>
+        {inSheet ? (
+          // The sheet's own title already says "Library of ...".
+          <p className="ui-meta tabular-nums text-muted-foreground">{items.length === 1 ? "1 item" : `${items.length} items`}</p>
+        ) : (
+          <h2 className="ui-section flex items-center gap-1.5 text-foreground">
+            <LibraryIcon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+            Library
+            <span className="ui-meta font-normal tabular-nums text-muted-foreground">{items.length || ""}</span>
+          </h2>
+        )}
         <Menu
           label="Add to this workspace"
           items={addItems}

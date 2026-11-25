@@ -173,7 +173,7 @@ export function WorkspaceHome({
       {mode !== "wide" && (
         <SlideOver open={sheetOpen && view === "home"} onClose={() => setSheetOpen(false)} title={`Library of ${open.name}`}>
           <div className="-mx-5 -my-3 h-[calc(100vh-7rem)]">
-            <LibraryPanel workspaceId={open.id} />
+            <LibraryPanel workspaceId={open.id} inSheet />
           </div>
         </SlideOver>
       )}

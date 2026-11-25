@@ -124,7 +124,7 @@ export function WorkspaceRail({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <nav aria-label="Workspaces" className="flex max-h-[42%] shrink-0 flex-col border-b border-border">
+      <nav aria-label="Workspaces" className="flex max-h-[34%] shrink-0 flex-col border-b border-border">
         <div className="flex items-center justify-between px-4 pb-1 pt-3">
           <h2 className="ui-section text-foreground">Workspaces</h2>
           <div className="flex items-center gap-0.5">

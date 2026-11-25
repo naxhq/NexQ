@@ -212,9 +212,9 @@ export function LauncherView() {
 
         <footer className="flex items-center justify-between border-t border-border">
           <ServiceStatusBar />
-          <div className="flex items-center gap-2 pr-5 ui-meta text-muted-foreground">
-            <span>&copy; {new Date().getFullYear()} {NEXQ_DEVELOPER}</span>
-            <span className="text-muted-foreground/60">|</span>
+          <div className="flex shrink-0 items-center gap-2 whitespace-nowrap pr-5 ui-meta text-muted-foreground">
+            <span className="hidden min-[900px]:inline">&copy; {new Date().getFullYear()} {NEXQ_DEVELOPER}</span>
+            <span className="hidden text-muted-foreground/60 min-[900px]:inline">|</span>
             <span className="font-medium">NexQ v{NEXQ_VERSION}</span>
           </div>
         </footer>

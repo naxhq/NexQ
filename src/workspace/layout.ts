@@ -45,3 +45,32 @@ export function useElementWidth(ref: RefObject<HTMLElement | null>): number {
   }, [ref]);
   return width;
 }
+
+/** Below this pane height the header is one line even on the start screen: the chat needs the room. */
+export const SHORT_PANE = 640;
+
+/** The element's own width and height (container measurements), falling back to the window where nothing is laid out. */
+export function useElementSize(ref: RefObject<HTMLElement | null>): { width: number; height: number } {
+  const [size, setSize] = useState(() => ({
+    width: typeof window === "undefined" ? 1200 : window.innerWidth,
+    height: typeof window === "undefined" ? 800 : window.innerHeight,
+  }));
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const read = () => {
+      const r = el.getBoundingClientRect();
+      const next = { width: r.width > 0 ? Math.round(r.width) : window.innerWidth, height: r.height > 0 ? Math.round(r.height) : window.innerHeight };
+      setSize((cur) => (cur.width === next.width && cur.height === next.height ? cur : next));
+    };
+    read();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", read);
+      return () => window.removeEventListener("resize", read);
+    }
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+  return size;
+}

@@ -1,6 +1,9 @@
+import { useRef } from "react";
 import { ChevronDown, Library, Loader2, PencilLine, Play, Radio } from "lucide-react";
 import { MeetingWave, VoiceprintMark } from "../voiceprint";
-import { Tooltip, Button } from "../ui";
+import { Tooltip, Button, IconButton } from "../ui";
+import { cn } from "../lib/utils";
+import { SHORT_PANE, useElementSize } from "./layout";
 import { formatShortcut } from "../lib/shortcutLabel";
 import { useConfigStore } from "../stores/configStore";
 import { useMeetingStore } from "../stores/meetingStore";
@@ -31,6 +34,10 @@ function useChatHasMessages(workspaceId: string): boolean {
     return !!session && (session.messages.length > 0 || !!session.turn);
   });
 }
+
+/** Column widths (of this pane, not the window) where the header gives something up. */
+export const HEADER_ICONS_BELOW = 700;
+export const HEADER_NAME_ONLY_BELOW = 440;
 
 /** One recipe for both Start meeting buttons: md in the header, lg on the empty start screen. */
 function StartButton({ starting, onStart, small }: { starting: boolean; onStart: () => void; small?: boolean }) {
@@ -77,71 +84,106 @@ export function MiddlePane({
   const activeMeeting = useMeetingStore((s) => s.activeMeeting);
   const unavailable = useWorkspaceStore((s) => s.unavailable);
   const { meetings, total } = useWorkspaceMeetings(workspace.id, "", "here");
-  const compact = useChatHasMessages(workspace.id);
+  const hasMessages = useChatHasMessages(workspace.id);
+  const box = useRef<HTMLDivElement | null>(null);
+  const { width, height } = useElementSize(box);
+  // A chat with messages, or a pane too short to spare the room: one line.
+  const compact = hasMessages || height < SHORT_PANE;
+  // Measured on this column: with the Library docked it is narrower than the window.
+  const iconsOnly = width < HEADER_ICONS_BELOW;
+  const nameOnly = width < HEADER_NAME_ONLY_BELOW;
 
   const wave = meetings.map((m) => ({ id: m.id, title: m.title, date: m.start_time, duration_seconds: m.duration_seconds }));
 
   const crumbs = (
-    <nav aria-label="Breadcrumb" className="ui-meta flex min-w-0 items-center gap-1 text-muted-foreground">
-      <Button variant="ghost" size="sm" onClick={onGoAll} className="px-1.5">
-        Workspaces
-      </Button>
-      <span aria-hidden="true">/</span>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => onSwitcherOpenChange(true)}
-        aria-haspopup="dialog"
-        aria-label={`${workspace.name}, switch workspace (${formatShortcut(SWITCHER_SHORTCUT)})`}
-        className="min-w-0 px-1.5 text-foreground"
-      >
-        <VoiceprintMark id={workspace.id} hue={workspace.color} size={13} />
-        <span className="truncate">{workspace.name}</span>
-        <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
-      </Button>
+    <nav aria-label="Breadcrumb" className="ui-meta flex min-w-0 flex-1 items-center gap-1 overflow-hidden text-muted-foreground">
+      {!nameOnly && (
+        <>
+          <Button variant="ghost" size="sm" onClick={onGoAll} className="px-1.5">
+            Workspaces
+          </Button>
+          <span aria-hidden="true" className="shrink-0">
+            /
+          </span>
+        </>
+      )}
+      <Tooltip content={workspace.name}>
+        {/* Buttons do not shrink by default: this one must, or a long name runs under the tools. */}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => onSwitcherOpenChange(true)}
+          aria-haspopup="dialog"
+          aria-label={`${workspace.name}, switch workspace (${formatShortcut(SWITCHER_SHORTCUT)})`}
+          className="min-w-0 shrink overflow-hidden px-1.5 text-foreground"
+        >
+          <VoiceprintMark id={workspace.id} hue={workspace.color} size={13} />
+          <span dir="auto" className="min-w-0 truncate">
+            {workspace.name}
+          </span>
+          <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
+        </Button>
+      </Tooltip>
     </nav>
   );
 
   const tools = (
     <div className="flex shrink-0 items-center gap-1">
       {activeMeeting && (
-        <span className="ui-meta inline-flex items-center gap-1.5 px-2 text-success">
+        <span className="ui-meta inline-flex items-center gap-1.5 px-1 text-success">
           <Radio className="h-3 w-3" aria-hidden="true" />
-          Live
+          {iconsOnly ? <span className="sr-only">Live</span> : "Live"}
         </span>
       )}
-      <Button variant="ghost" onClick={() => actions.edit(workspace.id)}>
-        <PencilLine className="h-3.5 w-3.5" aria-hidden="true" />
-        Edit workspace
-      </Button>
-      {showLibraryToggle && (
-        <Button variant="ghost" onClick={onToggleLibrary}>
-          <Library className="h-3.5 w-3.5" aria-hidden="true" />
-          Library
+      {iconsOnly ? (
+        <Tooltip content="Edit workspace">
+          <IconButton aria-label="Edit workspace" onClick={() => actions.edit(workspace.id)}>
+            <PencilLine className="h-3.5 w-3.5" aria-hidden="true" />
+          </IconButton>
+        </Tooltip>
+      ) : (
+        <Button variant="ghost" onClick={() => actions.edit(workspace.id)}>
+          <PencilLine className="h-3.5 w-3.5" aria-hidden="true" />
+          Edit workspace
         </Button>
       )}
+      {showLibraryToggle &&
+        (iconsOnly ? (
+          <Tooltip content="Library">
+            <IconButton aria-label="Library" onClick={onToggleLibrary}>
+              <Library className="h-3.5 w-3.5" aria-hidden="true" />
+            </IconButton>
+          </Tooltip>
+        ) : (
+          <Button variant="ghost" onClick={onToggleLibrary}>
+            <Library className="h-3.5 w-3.5" aria-hidden="true" />
+            Library
+          </Button>
+        ))}
     </div>
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-col" data-header={compact ? "compact" : "full"}>
+    <div ref={box} className="flex h-full min-h-0 min-w-0 flex-col" data-header={compact ? "compact" : "full"} data-narrow={iconsOnly ? "true" : undefined}>
       {compact ? (
-        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-5 py-2">
+        <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-2">
           {crumbs}
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1.5">
             {tools}
             <StartButton starting={starting} onStart={onStart} small />
           </div>
         </header>
       ) : (
-        <header className="shrink-0 px-6 pb-4 pt-4">
-          {crumbs}
+        <header className={cn("shrink-0 pb-4 pt-4", iconsOnly ? "px-4" : "px-6")}>
+          <div className="flex min-w-0">{crumbs}</div>
 
           <div className="mt-3 flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
-            <div className="min-w-0 flex-1 basis-64">
-              <div className="flex items-center gap-3">
+            <div className="min-w-0 flex-1 basis-48">
+              <div className="flex min-w-0 items-center gap-3">
                 <VoiceprintMark id={workspace.id} hue={workspace.color} size={26} />
-                <h1 className="ui-title truncate text-foreground">{workspace.name}</h1>
+                <h1 dir="auto" className="ui-title min-w-0 truncate text-foreground">
+                  {workspace.name}
+                </h1>
               </div>
               {workspace.description && <p className="ui-body ui-measure mt-1.5 text-muted-foreground">{workspace.description}</p>}
             </div>
@@ -151,7 +193,7 @@ export function MiddlePane({
             </div>
           </div>
 
-          <div className="mt-4 flex items-end justify-between gap-4">
+          <div className="mt-4 flex min-w-0 items-end justify-between gap-3">
             <div className="min-w-0 flex-1 pb-3">
               {wave.length > 0 ? (
                 <>
