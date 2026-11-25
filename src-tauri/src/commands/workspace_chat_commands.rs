@@ -30,6 +30,10 @@ pub async fn rescan_workspace(id: String, state: State<'_, AppState>, app: AppHa
     with_conn(&state, |conn| wstore::get_workspace(conn, &id).map(|_| ()))?;
     let hub = state.workspace_chat.clone();
     hub.set_open_workspace(Some(id.clone()));
+    let _ = with_conn(&state, |conn| {
+        crate::workspace_search::cards::clear_recap_failures_of(conn, &id);
+        Ok(())
+    });
     runtime::ensure_indexer(&app, &state)?;
     runtime::material_changed(&hub);
     if let Ok(deps) = runtime::build_deps(&app, &state) {

@@ -95,31 +95,48 @@ fn chat() -> WorkspaceChat {
 
 #[test]
 fn event_chat_start() {
-    assert_contract!("workspace_chat_start", json!({ "chat_id": "c1", "request_id": "ask-1", "model": "sonnet" }));
+    assert_contract!("workspace_chat_start", ChatStartEvent { chat_id: "c1".into(), request_id: "ask-1".into(), model: Some("sonnet".into()) });
 }
 
 #[test]
 fn event_chat_token() {
-    assert_contract!("workspace_chat_token", json!({ "chat_id": "c1", "request_id": "ask-1", "token": "The budget" }));
+    assert_contract!("workspace_chat_token", ChatTokenEvent { chat_id: "c1".into(), request_id: "ask-1".into(), token: "The budget".into() });
 }
 
 #[test]
 fn event_chat_context() {
-    assert_contract!("workspace_chat_context", json!({ "chat_id": "c1", "request_id": "ask-1", "report": report() }));
+    assert_contract!("workspace_chat_context", ChatContextEvent { chat_id: "c1".into(), request_id: "ask-1".into(), report: report() });
 }
 
 #[test]
 fn event_chat_end() {
     let m = message(5, "assistant", "It was agreed [S1].", vec![citation("S1", "folder", "f1", Some("notes/plan.md"), None)], Some(report()));
-    assert_contract!("workspace_chat_end", json!({ "chat_id": "c1", "request_id": "ask-1", "message": m, "cancelled": false }));
+    assert_contract!("workspace_chat_end", ChatEndEvent { chat_id: "c1".into(), request_id: "ask-1".into(), message: m, cancelled: false });
 }
 
 #[test]
 fn event_chat_error() {
     assert_contract!(
         "workspace_chat_error",
-        json!({ "chat_id": "c1", "request_id": "ask-1", "error": super::guard::STOPPED, "error_kind": "access_changed", "error_detail": "moved" })
+        ChatErrorEvent {
+            chat_id: "c1".into(),
+            request_id: "ask-1".into(),
+            error: super::guard::STOPPED_MOVED.into(),
+            error_kind: "access_changed".into(),
+            error_detail: Some("moved".into()),
+        }
     );
+}
+
+/// What the engine really emits goes through the same types: run an answer and read its events back.
+#[test]
+fn the_emitted_events_read_back_into_the_contract_types() {
+    use crate::contract::read;
+    let _: ChatStartEvent = serde_json::from_value(read("workspace_chat_start")).unwrap();
+    let _: ChatTokenEvent = serde_json::from_value(read("workspace_chat_token")).unwrap();
+    let _: ChatContextEvent = serde_json::from_value(read("workspace_chat_context")).unwrap();
+    let _: ChatEndEvent = serde_json::from_value(read("workspace_chat_end")).unwrap();
+    let _: ChatErrorEvent = serde_json::from_value(read("workspace_chat_error")).unwrap();
 }
 
 #[test]
@@ -156,6 +173,7 @@ fn result_get_index_status() {
         skipped: vec![SkippedFile { folder_id: "f1".into(), path: "big.pdf".into(), reason: "Too large to read".into() }],
         last_indexed_at: Some(1_700_000_000_000),
         ai_recaps: 2,
+        ai_recaps_failed: RecapFailures { count: 1, reason: Some("The model did not answer in time".into()) },
     };
     assert_contract!("get_index_status_result", s);
 }
@@ -232,6 +250,9 @@ fn command_arguments() {
     // "Search deeper" asks the same question again with `deeper`; "Leave out of this chat" is pref "exclude".
     assert_contract!("ask_workspace_deeper", json!({ "chatId": "c1", "question": "What was agreed?", "requestId": "ask-2", "deeper": true }));
     assert_contract!("set_chat_item_pref_exclude", json!({ "chatId": "c1", "kind": "meeting", "refId": "m1", "pref": "exclude" }));
+    assert_contract!("count_unfiled_meetings", json!({}));
+    // the meetings filed in no workspace: the same list command with the scope id "unfiled"
+    assert_contract!("list_workspace_meetings_unfiled", json!({ "id": "unfiled", "query": null, "limit": 50, "offset": 0 }));
     assert_contract!("get_meeting_recap", json!({ "meetingId": "m1" }));
     assert_contract!("delete_meeting_recap", json!({ "meetingId": "m1" }));
     assert_contract!("cancel_workspace_request", json!({ "requestId": "ask-1" }));

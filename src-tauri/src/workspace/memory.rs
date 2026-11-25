@@ -61,6 +61,14 @@ pub fn list_memory(conn: &Connection, workspace_id: &str) -> Result<Vec<MemoryIt
 pub fn create_memory(conn: &Connection, input: MemoryCreate) -> Result<MemoryItem, String> {
     get_workspace(conn, &input.workspace_id)?;
     check_kind(&input.kind)?;
+    if let Some(m) = input.source_meeting.as_deref() {
+        // Denied unless the meeting is positively filed in this workspace: an unreadable
+        // home, a missing meeting, an unfiled one or a missing workspace all refuse.
+        match crate::workspace::store::home_of(conn, m) {
+            Ok(Some(home)) if home == input.workspace_id => {}
+            _ => return Err("This meeting is not filed in this workspace".to_string()),
+        }
+    }
     let status = input.status.unwrap_or_else(|| "saved".to_string());
     check_status(&status)?;
     if input.text.trim().is_empty() && input.title.trim().is_empty() {
@@ -176,6 +184,31 @@ mod tests {
             status: None,
             unsupported: false,
         }
+    }
+
+    fn from_meeting(ws: &str, meeting: &str) -> MemoryCreate {
+        MemoryCreate { source_meeting: Some(meeting.into()), ..input(ws, "from a meeting") }
+    }
+
+    #[test]
+    fn memory_from_a_meeting_is_saved_only_when_the_meeting_is_positively_filed_in_that_workspace() {
+        let conn = memory_db();
+        let a = new_ws(&conn, "A", false, false);
+        let b = new_ws(&conn, "B", false, false);
+        conn.execute("INSERT INTO meetings (id, title, start_time, workspace_id) VALUES ('m-a', 'A', '2026-01-01T00:00:00Z', ?1)", [&a]).unwrap();
+        conn.execute("INSERT INTO meetings (id, title, start_time, workspace_id) VALUES ('m-lost', 'L', '2026-01-01T00:00:00Z', 'gone-ws')", []).unwrap();
+        assert!(create_memory(&conn, from_meeting(&a, "m-a")).is_ok(), "filed here: allowed");
+        for (why, ws, meeting) in [
+            ("filed in another workspace", b.as_str(), "m-a"),
+            ("unfiled (its workspace no longer exists)", a.as_str(), "m-lost"),
+            ("no such meeting", a.as_str(), "m-missing"),
+            ("no such workspace", "ws-missing", "m-a"),
+        ] {
+            assert!(create_memory(&conn, from_meeting(ws, meeting)).is_err(), "{why}: refused");
+        }
+        // the home can't be read at all: refused, not skipped
+        conn.execute_batch("DROP TABLE meetings").unwrap();
+        assert!(create_memory(&conn, from_meeting(&a, "m-a")).is_err(), "an unreadable home refuses");
     }
 
     #[test]

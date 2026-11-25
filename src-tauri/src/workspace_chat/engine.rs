@@ -697,17 +697,21 @@ pub fn start_ask(
 
 async fn run_ask(deps: Arc<ChatDeps>, permit: Permit, chat_id: String, question: String, request_id: String, deeper: bool) {
     let guarded = AssertUnwindSafe(answer(&deps, &permit, &chat_id, &question, &request_id, deeper)).catch_unwind().await;
-    let base = |extra: serde_json::Value| {
-        let mut v = json!({ "chat_id": chat_id, "request_id": request_id });
-        if let (Some(o), Some(e)) = (v.as_object_mut(), extra.as_object()) {
-            for (k, val) in e {
-                o.insert(k.clone(), val.clone());
-            }
+    let end = |message: WorkspaceMessage, cancelled: bool| ChatEndEvent { chat_id: chat_id.clone(), request_id: request_id.clone(), message, cancelled };
+    let error = |error: &str, kind: &str, detail: Option<&str>| ChatErrorEvent {
+        chat_id: chat_id.clone(),
+        request_id: request_id.clone(),
+        error: error.to_string(),
+        error_kind: kind.to_string(),
+        error_detail: detail.map(str::to_string),
+    };
+    let emit = |name: &str, payload: serde_json::Result<serde_json::Value>| {
+        if let Ok(p) = payload {
+            deps.emit(name, p);
         }
-        v
     };
     match guarded {
-        Ok(Outcome::Answered(message)) => deps.emit("workspace_chat_end", base(json!({ "message": message, "cancelled": false }))),
+        Ok(Outcome::Answered(message)) => emit("workspace_chat_end", serde_json::to_value(end(message, false))),
         Ok(Outcome::Cancelled(partial)) => {
             deps.tools.on_cancel(&chat_id);
             let placeholder = WorkspaceMessage {
@@ -722,20 +726,23 @@ async fn run_ask(deps: Arc<ChatDeps>, permit: Permit, chat_id: String, question:
                 output_tokens: 0,
                 created_at: crate::db::workspace_migrations::now_ms(),
             };
-            deps.emit("workspace_chat_end", base(json!({ "message": placeholder, "cancelled": true })));
+            emit("workspace_chat_end", serde_json::to_value(end(placeholder, true)));
         }
         Ok(Outcome::Revoked(detail)) => {
             deps.tools.on_cancel(&chat_id);
             let message = if detail == "deleted" { super::guard::STOPPED_DELETED } else { super::guard::STOPPED_MOVED };
-            deps.emit("workspace_chat_error", base(json!({ "error": message, "error_kind": "access_changed", "error_detail": detail })))
+            emit("workspace_chat_error", serde_json::to_value(error(message, "access_changed", Some(detail))))
         }
-        Ok(Outcome::Failed(message, kind)) => deps.emit("workspace_chat_error", base(json!({ "error": message, "error_kind": kind }))),
-        Err(_) => deps.emit(
-            "workspace_chat_error",
-            base(json!({ "error": "Something went wrong while answering. Nothing was saved.", "error_kind": "internal" })),
-        ),
+        Ok(Outcome::Failed(message, kind)) => emit("workspace_chat_error", serde_json::to_value(error(&message, kind, None))),
+        Err(_) => emit("workspace_chat_error", serde_json::to_value(error("Something went wrong while answering. Nothing was saved.", "internal", None))),
     }
     drop(permit);
+}
+
+fn emit_event<T: serde::Serialize>(deps: &ChatDeps, name: &str, payload: &T) {
+    if let Ok(p) = serde_json::to_value(payload) {
+        deps.emit(name, p);
+    }
 }
 
 /// A transcript cited as a whole (or by its recap) has no moment of its own: find the
@@ -890,7 +897,8 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
         };
         // a session built from something that changed starts again
         let seen = if cli { deps.hub.fingerprint_status(chat_id, &a.fingerprint) } else { super::hub::Seen::First };
-        if seen == super::hub::Seen::Same {
+        // claimed only while the session that got the last turn is still the live one
+        if seen == super::hub::Seen::Same && deps.hub.session_is_current(chat_id, (gen_plain, gen_sources)) {
             // the session already holds the stable part; this turn sends only what is new
             let held = crate::workspace_search::cjk::estimate_tokens(&a.system);
             a.report.notices.push(format!(
@@ -952,13 +960,13 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
         }
         if cli {
             // the session receives this turn: from now on it holds what it rests on
-            deps.hub.hold_in_session(chat_id, &a.provenance);
+            deps.hub.hold_in_session(chat_id, &a.provenance, (gen_plain, gen_sources));
         }
         if !started {
             started = true;
-            deps.emit("workspace_chat_start", json!({ "chat_id": chat_id, "request_id": request_id, "model": a.selection.model }));
+            emit_event(deps, "workspace_chat_start", &ChatStartEvent { chat_id: chat_id.to_string(), request_id: request_id.to_string(), model: Some(a.selection.model.clone()) });
         }
-        deps.emit("workspace_chat_context", json!({ "chat_id": chat_id, "request_id": request_id, "report": a.report }));
+        emit_event(deps, "workspace_chat_context", &ChatContextEvent { chat_id: chat_id.to_string(), request_id: request_id.to_string(), report: a.report.clone() });
         let sink: crate::llm::provider::TokenSink = {
             let (deps, partial, raw_so_far, chat, request) = (deps.clone(), partial.clone(), raw_so_far.clone(), chat_id.to_string(), request_id.to_string());
             let (guard, cancel) = (guard.clone(), permit.cancel.clone());
@@ -986,7 +994,7 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
                     }
                 };
                 if !gained.is_empty() {
-                    deps.emit("workspace_chat_token", json!({ "chat_id": chat, "request_id": request, "token": gained }));
+                    emit_event(&deps, "workspace_chat_token", &ChatTokenEvent { chat_id: chat.clone(), request_id: request.clone(), token: gained });
                 }
             })
         };

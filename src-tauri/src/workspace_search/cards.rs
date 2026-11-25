@@ -330,6 +330,60 @@ pub fn decline_recap(conn: &Connection, meeting_id: &str) -> rusqlite::Result<()
     Ok(())
 }
 
+/// A recap that could not be written, remembered with the transcript it failed for: the
+/// same meeting is not tried again until its transcript changes or the user rescans.
+pub fn record_recap_failure(conn: &Connection, meeting_id: &str, source_hash: &str, reason: &str) {
+    let _ = conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS meeting_recap_failed (
+            meeting_id TEXT PRIMARY KEY NOT NULL, source_hash TEXT NOT NULL, reason TEXT NOT NULL, failed_at INTEGER NOT NULL)",
+    );
+    let _ = conn.execute(
+        "INSERT INTO meeting_recap_failed(meeting_id, source_hash, reason, failed_at) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(meeting_id) DO UPDATE SET source_hash = excluded.source_hash, reason = excluded.reason, failed_at = excluded.failed_at",
+        params![meeting_id, source_hash, reason, now_ms()],
+    );
+}
+
+pub fn recap_failed(conn: &Connection, meeting_id: &str, source_hash: &str) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM meeting_recap_failed WHERE meeting_id = ?1 AND source_hash = ?2",
+        params![meeting_id, source_hash],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
+pub fn clear_recap_failure(conn: &Connection, meeting_id: &str) {
+    let _ = conn.execute("DELETE FROM meeting_recap_failed WHERE meeting_id = ?1", params![meeting_id]);
+}
+
+/// Forget the failures of a workspace's meetings (an explicit rescan tries them again).
+pub fn clear_recap_failures_of(conn: &Connection, workspace_id: &str) {
+    let _ = conn.execute(
+        "DELETE FROM meeting_recap_failed WHERE meeting_id IN (SELECT id FROM meetings WHERE workspace_id = ?1)",
+        params![workspace_id],
+    );
+}
+
+/// How many meetings of a workspace have a failed recap, and the latest short reason.
+pub fn recap_failures_of(conn: &Connection, workspace_id: &str) -> (usize, Option<String>) {
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM meeting_recap_failed f JOIN meetings m ON m.id = f.meeting_id WHERE m.workspace_id = ?1",
+            params![workspace_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let reason: Option<String> = conn
+        .query_row(
+            "SELECT f.reason FROM meeting_recap_failed f JOIN meetings m ON m.id = f.meeting_id WHERE m.workspace_id = ?1 ORDER BY f.failed_at DESC LIMIT 1",
+            params![workspace_id],
+            |r| r.get(0),
+        )
+        .ok();
+    (n.max(0) as usize, reason)
+}
+
 pub fn put_card(conn: &Connection, c: &Card) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO meeting_cards(meeting_id, recap, origin, source_hash, tokens, updated_at)

@@ -130,6 +130,21 @@ mod tests {
         assert_contract!("workspace_material_unavailable", payload);
     }
 
+    /// `start_meeting` answers with the meeting as JSON text, plus `workspace_notice` when it was
+    /// filed somewhere other than asked (a meeting always starts).
+    #[test]
+    fn start_meeting_result_with_a_workspace_notice() {
+        let mut meeting = crate::db::meetings::create_meeting(&rusqlite::Connection::open_in_memory().map(|c| {
+            c.execute_batch("CREATE TABLE meetings (id TEXT PRIMARY KEY, title TEXT, start_time TEXT, end_time TEXT, duration_seconds INTEGER, transcript TEXT, ai_interactions TEXT, summary TEXT, config_snapshot TEXT, workspace_id TEXT)").unwrap();
+            c
+        }).unwrap(), "Weekly sync").unwrap();
+        meeting.id = "m1".into();
+        meeting.start_time = "2026-11-25T10:00:00+00:00".into();
+        let text = crate::commands::meeting_commands::meeting_response(&meeting, Some("That workspace is archived, so this meeting is in General.".into())).unwrap();
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_contract!("start_meeting_result", value);
+    }
+
     #[test]
     fn status_with_a_database_problem() {
         let status = WorkspacesStatus {
@@ -170,7 +185,7 @@ mod tests {
     // ---- every command and event of the new features has a fixture
 
     /// Command modules and source folders of the features built on this branch.
-    const NEW_COMMAND_MODULES: &[&str] = &["workspace_commands", "workspace_chat_commands", "db_recovery_commands"];
+    const NEW_COMMAND_MODULES: &[&str] = &["workspace_commands", "workspace_chat_commands", "db_recovery_commands", "live_commands"];
     const NEW_SOURCE_PATHS: &[&str] = &[
         "workspace/", "workspace_chat/", "workspace_search/", "workspace_memory/", "live_brief/", "live_common", "live_notes/",
         "live_runtime/", "ai_runs/", "store_guard", "commands/workspace_commands", "commands/workspace_chat_commands",

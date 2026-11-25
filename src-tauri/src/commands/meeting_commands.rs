@@ -762,7 +762,7 @@ fn create_meeting_filed(
 
 /// The JSON `start_meeting` answers with: the meeting, plus `workspace_notice` only when it
 /// was filed somewhere other than asked.
-fn meeting_response(meeting: &meetings::Meeting, notice: Option<String>) -> Result<String, String> {
+pub(crate) fn meeting_response(meeting: &meetings::Meeting, notice: Option<String>) -> Result<String, String> {
     let mut value = serde_json::to_value(meeting).map_err(|e| format!("Failed to serialize meeting: {}", e))?;
     if let (Some(text), Some(obj)) = (notice, value.as_object_mut()) {
         obj.insert("workspace_notice".to_string(), serde_json::Value::String(text));

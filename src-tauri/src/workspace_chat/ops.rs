@@ -84,7 +84,18 @@ pub fn index_status(conn: &Connection, hub: &ChatHub, workspace_id: &str, meetin
             |r| r.get(0),
         )
         .unwrap_or(0);
-    Ok(IndexStatus { workspace_id: workspace_id.into(), state: state.into(), done, total, passages, skipped, last_indexed_at: last, ai_recaps: ai_recaps.max(0) as usize })
+    let (failed, reason) = crate::workspace_search::cards::recap_failures_of(conn, workspace_id);
+    Ok(IndexStatus {
+        workspace_id: workspace_id.into(),
+        state: state.into(),
+        done,
+        total,
+        passages,
+        skipped,
+        last_indexed_at: last,
+        ai_recaps: ai_recaps.max(0) as usize,
+        ai_recaps_failed: RecapFailures { count: failed, reason },
+    })
 }
 
 /// The AI-written recap of a meeting (not the meeting's own summary), if there is one.
@@ -125,7 +136,7 @@ pub fn save_answer_as_document(
     if text.trim().is_empty() {
         return Err("There is nothing to save.".to_string());
     }
-    if sanitize_plain_text(text, DOCUMENT_CAP) != text {
+    if clean_document_text(text) != text {
         return Err(DOCUMENT_CHANGED.to_string());
     }
     let title = if title.trim().is_empty() { "Chat answer".to_string() } else { title.trim().to_string() };
@@ -213,7 +224,13 @@ fn one_pass(raw: &str, cap: usize) -> String {
 pub const DOCUMENT_CAP: usize = 100_000;
 
 pub const DOCUMENT_CHANGED: &str =
-    "That text has hidden characters, HTML, link targets or is too long, so it can't be saved as it is. Review the cleaned text and save it again.";
+    "That text has hidden characters or is too long, so it can't be saved as it is. Review the cleaned text and save it again.";
+
+/// A document keeps everything it says (code, `<T>`, links, HTML samples): only hidden characters go,
+/// and it is cut at `DOCUMENT_CAP`. It is wrapped as data whenever it is used.
+pub fn clean_document_text(raw: &str) -> String {
+    crate::prompt_data::strip_hidden(raw).chars().take(DOCUMENT_CAP).collect()
+}
 
 /// Plain text up to `cap` characters, applied until nothing changes, so the result is a fixed
 /// point (cleaning it again returns it as it is).
@@ -273,6 +290,22 @@ pub fn add_answer_to_instructions(conn: &Connection, message_id: i64, text: &str
 pub const MAX_RECAPS: usize = 5;
 /// Most characters of a transcript sent for a recap.
 const RECAP_INPUT_CHARS: usize = 24_000;
+/// Longest reason kept for a failed recap.
+const RECAP_REASON_CHARS: usize = 140;
+
+/// A long transcript is read from both ends, not only from the start: decisions come at the
+/// end. At most `cap` characters; the model is told that the middle was left out.
+fn head_and_tail(text: &str, cap: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= cap {
+        return text.to_string();
+    }
+    let half = cap / 2;
+    let head: String = chars[..half].iter().collect();
+    let tail: String = chars[chars.len() - half..].iter().collect();
+    let left_out = chars.len() - 2 * half;
+    format!("{head}\n[... {left_out} characters from the middle of the transcript are not shown ...]\n{tail}")
+}
 
 /// What one recap may be made from, read fresh each time it is asked: the workspace
 /// still exists, is not archived and still has "Prepare recaps with AI" on, the
@@ -297,9 +330,13 @@ fn recap_job(conn: &Connection, workspace_id: &str, meeting_id: &str, load_text:
     if card.origin == CardOrigin::Ai || card.origin == CardOrigin::Summary {
         return None;
     }
+    // a recap that failed for this very transcript is not tried again (no endless retries)
+    if crate::workspace_search::cards::recap_failed(conn, meeting_id, &card.source_hash) {
+        return None;
+    }
     let text = if load_text {
         let t = scope_adapter::indexed_text(conn, "transcript", meeting_id, None)?;
-        t.chars().take(RECAP_INPUT_CHARS).collect()
+        head_and_tail(&t, RECAP_INPUT_CHARS)
     } else {
         String::new()
     };
@@ -344,7 +381,19 @@ pub async fn recap_missing_for(deps: &ChatDeps, workspace_id: &str, cancel: Arc<
         );
         req.max_output = 400;
         req.cancel = cancel.clone();
-        let Ok(res) = deps.ai.run(req, None).await else { continue };
+        let res = match deps.ai.run(req, None).await {
+            Ok(r) => r,
+            Err(e) => {
+                // a cancel is not a failure; anything else is counted, once, with its reason
+                if !matches!(e, crate::ai_runs::AiRunError::Cancelled) && !cancel.is_cancelled() {
+                    if let Ok(conn) = deps.conn() {
+                        let reason: String = e.to_string().split_whitespace().collect::<Vec<_>>().join(" ").chars().take(RECAP_REASON_CHARS).collect();
+                        crate::workspace_search::cards::record_recap_failure(&conn, &id, &job.source_hash, &reason);
+                    }
+                }
+                continue;
+            }
+        };
         let recap = flatten(res.text.trim());
         if recap.trim().is_empty() || cancel.is_cancelled() || (deps.meeting_active)() {
             continue;
@@ -367,6 +416,7 @@ pub async fn recap_missing_for(deps: &ChatDeps, workspace_id: &str, cancel: Arc<
             |c| put_card(c, &card).map_err(|e| e.to_string()),
         );
         if written.is_ok() {
+            crate::workspace_search::cards::clear_recap_failure(&conn, &id);
             made += 1;
         }
     }
@@ -437,5 +487,20 @@ mod instruction_text_tests {
         for text in ["family \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467} heart \u{2764}\u{FE0F}", "\u{05E9}\u{05DC}\u{05D5}\u{05DD} and \u{0645}\u{0631}\u{062D}\u{0628}\u{0627}"] {
             assert_eq!(sanitize_instruction_text(text), text);
         }
+    }
+}
+
+#[cfg(test)]
+mod document_text_tests {
+    use super::*;
+
+    #[test]
+    fn a_saved_document_keeps_code_html_and_links_and_loses_only_hidden_characters() {
+        let sample = "fn first<T>(x: Vec<T>) -> Option<T> {\n    // <b>bold</b> <!-- note --> [docs](https://example.com/a \"t\")\n    x.into_iter().next()\n}\n`inline`, ```fence```, 10\u{b2}, 3\u{bd}";
+        assert_eq!(clean_document_text(sample), sample);
+        assert_eq!(clean_document_text("pay\u{202e}\u{200b} now <T>"), "pay now <T>");
+        assert_eq!(clean_document_text(&"x".repeat(DOCUMENT_CAP + 5)).chars().count(), DOCUMENT_CAP);
+        // instructions stay strict
+        assert_ne!(sanitize_instruction_text(sample), sample);
     }
 }

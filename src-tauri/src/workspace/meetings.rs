@@ -160,6 +160,15 @@ pub fn move_meeting_atomic(conn: &Connection, meeting_id: &str, workspace_id: &s
     tx.commit().map_err(|e| err("Couldn't move the meeting", e))
 }
 
+/// The scope id that lists the meetings filed in no workspace (their home was deleted or never existed).
+pub const UNFILED: &str = "unfiled";
+
+/// How many meetings are filed in no workspace.
+pub fn count_unfiled(conn: &Connection) -> Result<i64, String> {
+    conn.query_row("SELECT COUNT(*) FROM meetings WHERE workspace_id NOT IN (SELECT id FROM workspaces)", [], |r| r.get(0))
+        .map_err(|e| err("Couldn't count the meetings", e))
+}
+
 /// A page of the meetings filed in a workspace, newest first, with how many
 /// match in all. `query` matches the title, the summary and the transcript text.
 pub fn list_workspace_meetings(
@@ -175,8 +184,11 @@ pub fn list_workspace_meetings(
                     OR m.title LIKE ?2 ESCAPE '\\'
                     OR m.summary LIKE ?2 ESCAPE '\\'
                     OR EXISTS (SELECT 1 FROM transcript_segments ts WHERE ts.meeting_id = m.id AND ts.text LIKE ?2 ESCAPE '\\'))";
+    // `UNFILED`: the meetings whose home is no workspace that exists any more
+    let home_clause = if workspace_id == UNFILED { "(?1 IS NOT NULL AND m.workspace_id NOT IN (SELECT id FROM workspaces))" } else { "m.workspace_id = ?1" };
+    let filter = FILTER.replacen("m.workspace_id = ?1", home_clause, 1);
     let total: i64 = conn
-        .query_row(&format!("SELECT COUNT(*) FROM meetings m WHERE {FILTER}"), params![workspace_id, pattern], |row| row.get(0))
+        .query_row(&format!("SELECT COUNT(*) FROM meetings m WHERE {filter}"), params![workspace_id, pattern], |row| row.get(0))
         .map_err(|e| err("Couldn't list the meetings", e))?;
     let mut stmt = conn
         .prepare(&format!(
@@ -185,7 +197,7 @@ pub fn list_workspace_meetings(
                     CASE WHEN m.summary IS NOT NULL AND m.summary != '' THEN 1 ELSE 0 END,
                     m.audio_mode, m.ai_scenario, m.workspace_id,
                     {RECAP}
-             FROM meetings m WHERE {FILTER}
+             FROM meetings m WHERE {filter}
              ORDER BY m.start_time DESC
              LIMIT ?3 OFFSET ?4",
             RECAP = recap_column(conn)

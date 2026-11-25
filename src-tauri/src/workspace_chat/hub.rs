@@ -146,6 +146,8 @@ pub struct ChatHub {
     /// What each CLI chat's live session has been given so far (it keeps its
     /// earlier turns), so a revocation of any of it ends that session.
     session_prov: Mutex<HashMap<String, Provenance>>,
+    /// The session generation (plain, with sources) a chat's session had when it last received a turn.
+    session_gen: Mutex<HashMap<String, (Option<u64>, Option<u64>)>>,
     starter: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
@@ -243,16 +245,25 @@ impl ChatHub {
     }
 
     /// The session is about to receive something resting on `prov`.
-    pub fn hold_in_session(&self, chat_id: &str, prov: &Provenance) {
+    pub fn hold_in_session(&self, chat_id: &str, prov: &Provenance, generation: (Option<u64>, Option<u64>)) {
+        self.session_gen.lock().unwrap().insert(chat_id.to_string(), generation);
         self.session_prov.lock().unwrap().entry(chat_id.to_string()).or_default().merge(prov);
+    }
+
+    /// True only when the live session is the one that received the last turn: the same
+    /// generation now as then. After an idle restart or any change of session it is not.
+    pub fn session_is_current(&self, chat_id: &str, generation: (Option<u64>, Option<u64>)) -> bool {
+        self.session_gen.lock().unwrap().get(chat_id) == Some(&generation)
     }
 
     /// The session ended: it holds nothing any more.
     pub fn reset_session(&self, chat_id: &str) {
+        self.session_gen.lock().unwrap().remove(chat_id);
         self.session_prov.lock().unwrap().remove(chat_id);
     }
 
     pub fn forget_chat(&self, chat_id: &str) {
+        self.session_gen.lock().unwrap().remove(chat_id);
         self.session_prov.lock().unwrap().remove(chat_id);
         self.fingerprints.lock().unwrap().remove(chat_id);
     }

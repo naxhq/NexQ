@@ -63,6 +63,7 @@ pub fn build_deps(app: &AppHandle, state: &AppState) -> Result<Arc<ChatDeps>, St
     let (llm2, cli_settings) = (state.llm.clone(), state.cli_settings.clone());
     let app2 = app.clone();
     let recap_runs = Some(ai.clone());
+    let recap_openrouter = state.openrouter_cache.clone();
     Ok(Arc::new(ChatDeps {
         db_path: db_path(state)?,
         ai,
@@ -92,11 +93,21 @@ pub fn build_deps(app: &AppHandle, state: &AppState) -> Result<Arc<ChatDeps>, St
                     r.refresh_models(&p).await;
                 });
             }
+            let priced = if provider == "openrouter" {
+                recap_openrouter
+                    .lock()
+                    .ok()
+                    .and_then(|c| c.as_ref().map(|c| crate::live_runtime::cheapest::priced_from_openrouter(&c.models)))
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
             let c = cheapest(&CheapestInput {
                 provider: &provider,
                 active_model: &model,
                 available: &available,
                 cli_fast: fast.as_ref().map(|c| (c.fast_model.as_str(), c.fast_effort.as_str())),
+                priced: &priced,
             });
             Some(ModelSelection::new(&c.provider, &c.model, c.effort.as_deref()))
         }),

@@ -53,33 +53,10 @@ pub fn bucket_context(needed: u64, window: Option<u64>) -> u64 {
     }
 }
 
-/// A rough token count: chars/4, or chars/1.5 for text that is mostly CJK
-/// (which tokenizes far denser).
+/// A rough token count: the app's one estimate (`text_kit`): chars/4, CJK at
+/// chars/1.5. Live notes, the brief, chat context and these runs all use it.
 pub fn estimate_tokens(text: &str) -> u64 {
-    let (mut chars, mut cjk) = (0u64, 0u64);
-    for c in text.chars() {
-        chars += 1;
-        if is_cjk(c) {
-            cjk += 1;
-        }
-    }
-    if chars == 0 {
-        0
-    } else if cjk * 2 > chars {
-        (chars as f64 / 1.5).ceil() as u64
-    } else {
-        chars.div_ceil(4)
-    }
-}
-
-fn is_cjk(c: char) -> bool {
-    matches!(c as u32,
-        0x3040..=0x30FF   // kana
-        | 0x3400..=0x4DBF // CJK extension A
-        | 0x4E00..=0x9FFF // CJK unified
-        | 0xAC00..=0xD7AF // hangul
-        | 0xF900..=0xFAFF // compatibility ideographs
-    )
+    crate::text_kit::estimate_tokens(text) as u64
 }
 
 type Key = (String, String);
@@ -171,7 +148,8 @@ mod tests {
         let cjk = "会议记录".repeat(3); // 12 chars
         assert_eq!(estimate_tokens(&cjk), 8);
         let mixed = format!("{}{}", "会", "a".repeat(11));
-        assert_eq!(estimate_tokens(&mixed), 3, "mostly latin stays at chars/4");
+        assert_eq!(estimate_tokens(&mixed), crate::text_kit::estimate_tokens(&mixed) as u64, "the same estimate as everywhere");
+        assert_eq!(estimate_tokens(&mixed), 4);
     }
 
     #[test]

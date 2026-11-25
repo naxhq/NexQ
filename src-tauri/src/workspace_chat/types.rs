@@ -141,6 +141,9 @@ pub struct IndexStatus {
     /// Meetings of this workspace whose recap the AI wrote (not the meeting's own summary).
     #[serde(default)]
     pub ai_recaps: usize,
+    /// Recaps that failed (they are not tried again until the transcript changes or you rescan), with the latest reason.
+    #[serde(default)]
+    pub ai_recaps_failed: RecapFailures,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -159,4 +162,53 @@ pub struct MeetingRecap {
     pub text: String,
     pub model: Option<String>,
     pub created_at: i64,
+}
+
+/// Recaps the AI could not write, in short.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RecapFailures {
+    pub count: usize,
+    pub reason: Option<String>,
+}
+
+// ── the events of one answer: the emitting code builds these, the contract fixtures too ──
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatStartEvent {
+    pub chat_id: String,
+    pub request_id: String,
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatTokenEvent {
+    pub chat_id: String,
+    pub request_id: String,
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatContextEvent {
+    pub chat_id: String,
+    pub request_id: String,
+    pub report: ContextReport,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatEndEvent {
+    pub chat_id: String,
+    pub request_id: String,
+    pub message: WorkspaceMessage,
+    pub cancelled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatErrorEvent {
+    pub chat_id: String,
+    pub request_id: String,
+    pub error: String,
+    pub error_kind: String,
+    /// With `access_changed`: "deleted" or "moved".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_detail: Option<String>,
 }

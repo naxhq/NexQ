@@ -908,7 +908,7 @@ async fn a_provider_list_is_fetched_once_kept_and_read_without_fetching() {
     assert_eq!(r.api.list_calls.load(Ordering::SeqCst), 1);
     // What "Automatic" says: the label is the active model before the list, the small one after.
     use crate::live_runtime::cheapest::{cheapest, CheapestInput};
-    let label = |avail: &[String]| cheapest(&CheapestInput { provider: "openai", active_model: "gpt-5", available: avail, cli_fast: None }).label;
+    let label = |avail: &[String]| cheapest(&CheapestInput { provider: "openai", active_model: "gpt-5", available: avail, ..Default::default() }).label;
     assert_eq!(label(&[]), "OpenAI · gpt-5 (active model)");
     assert_eq!(label(&r.runs.known_models("openai").unwrap()), "OpenAI · gpt-5-nano (cheapest)", "the speech model is skipped");
 }

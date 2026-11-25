@@ -945,6 +945,12 @@ pub async fn list_workspace_meetings(
     with_reader(&state, |conn| meetings::list_workspace_meetings(conn, &id, query.as_deref(), limit, offset))
 }
 
+/// How many meetings are filed in no workspace (`list_workspace_meetings` with id "unfiled" lists them).
+#[command]
+pub async fn count_unfiled_meetings(state: State<'_, AppState>) -> Result<i64, String> {
+    with_reader(&state, meetings::count_unfiled)
+}
+
 #[command]
 pub async fn get_meeting_scope(meeting_id: String, state: State<'_, AppState>) -> Result<MeetingScope, String> {
     with_reader(&state, |conn| meetings::get_meeting_scope(conn, &meeting_id))
@@ -1244,7 +1250,7 @@ mod tests {
     /// Commands that only read.
     const READ_ONLY: &[&str] = &[
         "get_workspaces_status", "list_workspaces", "get_workspace", "list_library", "list_workspace_meetings",
-        "get_meeting_scope", "list_talking_points", "get_point_progress",
+        "get_meeting_scope", "count_unfiled_meetings", "list_talking_points", "get_point_progress",
         "get_meeting_point_edit", "list_memory", "get_library_file_path", "reveal_library_file",
     ];
 

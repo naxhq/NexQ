@@ -39,6 +39,7 @@ pub fn purge_meeting(conn: &Connection, meeting_id: &str) -> Result<Vec<PathBuf>
     run_if_table(conn, "meeting_briefs", "DELETE FROM meeting_briefs WHERE meeting_id = ?1", &[id])?;
     run_if_table(conn, "meeting_notes", "DELETE FROM meeting_notes WHERE meeting_id = ?1", &[id])?;
     run_if_table(conn, "meeting_cards", "DELETE FROM meeting_cards WHERE meeting_id = ?1", &[id])?;
+    run_if_table(conn, "meeting_recap_failed", "DELETE FROM meeting_recap_failed WHERE meeting_id = ?1", &[id])?;
     run_if_table(conn, "meeting_recap_off", "DELETE FROM meeting_recap_off WHERE meeting_id = ?1", &[id])?;
     run_if_table(conn, "workspace_meeting_prefs", "DELETE FROM workspace_meeting_prefs WHERE meeting_id = ?1", &[id])?;
     purge_search_rows(conn, "transcript", meeting_id)?;

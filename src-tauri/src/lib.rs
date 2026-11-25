@@ -944,6 +944,7 @@ pub fn run() {
             workspace_commands::add_workspace_text,
             workspace_commands::move_meeting,
             workspace_commands::list_workspace_meetings,
+            workspace_commands::count_unfiled_meetings,
             workspace_commands::get_meeting_scope,
             workspace_commands::set_meeting_scope,
             workspace_commands::list_talking_points,
