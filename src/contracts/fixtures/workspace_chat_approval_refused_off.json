@@ -1,0 +1,7 @@
+{
+  "chat_id": "c1",
+  "reason": "send_mail is turned off for this server. Turn it on in Settings > Personal Sources.",
+  "request_id": "ask-1",
+  "server": "m",
+  "tool": "send_mail"
+}

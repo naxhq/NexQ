@@ -3,6 +3,7 @@ import { ChevronRight } from "lucide-react";
 import type { SourceActivity, WorkspaceCitation, WorkspaceMessage } from "../../lib/types";
 import type { AnswerExtras, Turn } from "../../stores/workspaceChatStore";
 import { Button, buttonClasses } from "../../ui";
+import { useMeetingStore } from "../../stores/meetingStore";
 import { cn } from "../../lib/utils";
 import type { ModelChoice } from "./models";
 import { classifyChatError } from "./errors";
@@ -47,8 +48,18 @@ function Notices({ activity }: { activity: SourceActivity[] }) {
   return (
     <div className="mt-2 space-y-0.5">
       {notices.map((n) => (
-        <p key={n} className="ui-meta text-muted-foreground">
-          {n}
+        <p key={n} className="ui-meta flex flex-wrap items-baseline gap-x-2 text-muted-foreground">
+          <span>{n}</span>
+          {/* "... Turn it on in Settings > Personal Sources.": the way there is one click */}
+          {/Settings > Personal Sources/.test(n) && (
+            <button
+              type="button"
+              onClick={() => useMeetingStore.getState().openSettings("personal_sources")}
+              className="rounded font-medium text-foreground underline underline-offset-2 outline-none ui-focus ui-focus-sm"
+            >
+              Open Personal Sources
+            </button>
+          )}
         </p>
       ))}
     </div>

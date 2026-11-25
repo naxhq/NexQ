@@ -1765,7 +1765,7 @@ export interface NotCovered {
 }
 
 /** Why a run ended (a meeting that is over), from the backend. */
-export type EndedKind = "covered" | "limit" | "error" | "plan_limit" | "paused" | "manual" | "out_of_time" | "stopped" | "interrupted" | "other_meeting";
+export type EndedKind = "covered" | "limit" | "error" | "plan_limit" | "paused" | "manual" | "out_of_time" | "stopped" | "interrupted" | "other_meeting" | "nothing_to_note";
 export interface RunEnded {
   kind: EndedKind;
   detail: string | null;

@@ -922,3 +922,19 @@ describe("a refused tool, in the answer", () => {
     expect(await screen.findByText("CRM: send_mail was not run: its arguments are too long to show.")).toBeInTheDocument();
   });
 });
+
+describe("a tool that is turned off", () => {
+  it("says so in the answer and opens Personal Sources in settings", async () => {
+    setup();
+    const box = await typeQuestion("Q");
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(ipc.askWorkspace).toHaveBeenCalled());
+    const id = ipc.askWorkspace.mock.calls[0][2] as string;
+    const openSettings = vi.fn();
+    useMeetingStore.setState({ openSettings } as never);
+    emit("workspace_chat_approval_refused", { chat_id: "c1", request_id: id, server: "m", tool: "send_mail", reason: "send_mail is turned off for this server. Turn it on in Settings > Personal Sources." });
+    expect(await screen.findByText(/m: send_mail was not run: send_mail is turned off for this server/)).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Open Personal Sources" }));
+    expect(openSettings).toHaveBeenCalledWith("personal_sources");
+  });
+});

@@ -6,11 +6,12 @@ import { sampleDoc } from "../live-notes/fixtures";
 import stopped from "./fixtures/notetaker_state_finished_stopped.json";
 import interrupted from "./fixtures/notetaker_state_finished_interrupted.json";
 import otherMeeting from "./fixtures/notetaker_state_finished_other_meeting.json";
+import nothing from "./fixtures/notetaker_state_finished_nothing_to_note.json";
 
-const h = vi.hoisted(() => ({ state: null as unknown }));
+const h = vi.hoisted(() => ({ state: null as unknown, empty: false }));
 vi.mock("../lib/ipc", () => ({
   getNotetakerState: async () => h.state,
-  getMeetingNotes: async () => structuredClone(sampleDoc),
+  getMeetingNotes: async () => (h.empty ? null : structuredClone(sampleDoc)),
   getNotetakerSettings: async () => ({ enabled: false, scope: "meeting", provider: null, model: null, effort: null, update_mode: "automatic", detail: "standard", language: "meeting", cap: 120000, colors: true }),
   getAutomaticModel: async () => null,
   getLLMProviders: async () => [],
@@ -79,5 +80,42 @@ describe.each(CASES)("finished meeting: $name", ({ fixture, heading, sentence, n
     expect(screen.getByText(`Live notes: ${heading}`)).toBeInTheDocument();
     expect(screen.getByText(endedSentence(state.ended)!)).toBeInTheDocument();
     for (const wrong of never) expect(screen.queryByText(new RegExp(wrong))).toBeNull();
+  });
+});
+
+
+describe("finished meeting: nothing_to_note", () => {
+  const state = nothing as unknown as NotetakerState;
+
+  it("reads in the backend's own words", () => {
+    expect(endedWords(state)).toBe("Nothing to note");
+    expect(endedSentence(state.ended)).toBe("The notes read the whole call and found nothing to write down.");
+  });
+
+  it("the Notes tab says it once, in place of the empty state, with no box and no contradiction", async () => {
+    h.state = nothing;
+    h.empty = true;
+    render(<NotesTab meetingId="m1" title="Quiet" />);
+    expect(await screen.findByRole("heading", { name: "Nothing to note" })).toBeInTheDocument();
+    expect(screen.getByText("The notes read the whole call and found nothing to write down.")).toBeInTheDocument();
+    expect(screen.queryByText(/No notes for this meeting/)).toBeNull();
+    expect(screen.queryByText(/Turn on live notes/)).toBeNull();
+    expect(screen.queryByTestId("notes-tab-state")).toBeNull();
+    h.empty = false;
+  });
+
+  it("the ended panel says the same, not 'Nothing yet'", async () => {
+    h.state = nothing;
+    h.empty = true;
+    useMeetingStore.setState({ activeMeeting: { id: "m1", title: "t" } as never });
+    await useLiveNotesStore.getState().attach("m1");
+    await vi.waitFor(() => expect(useLiveNotesStore.getState().runs.m1).toBeDefined());
+    const { rerender } = render(<NotesPanel />);
+    act(() => useMeetingStore.setState({ activeMeeting: null as never }));
+    rerender(<NotesPanel />);
+    expect(screen.getByRole("heading", { name: "Nothing to note" })).toBeInTheDocument();
+    expect(screen.queryByText(/Nothing yet/)).toBeNull();
+    expect(screen.getAllByText("The notes read the whole call and found nothing to write down.")).toHaveLength(1);
+    h.empty = false;
   });
 });

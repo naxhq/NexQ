@@ -204,7 +204,7 @@ export function NotesPanel() {
         </div>
       )}
 
-      {ended && endedSentence(run?.ended) && (
+      {ended && endedSentence(run?.ended) && !(run?.ended?.kind === "nothing_to_note" && !hasBlocks) && (
         <div className="rs-notice" role="group" aria-label="How the notes ended">
           <div className="rs-notice-title">{endedWords(run)}</div>
           <p>{endedSentence(run?.ended)}</p>
@@ -243,7 +243,7 @@ export function NotesPanel() {
         </div>
       )}
 
-      {!enabled && settings && !hasBlocks ? (
+      {!enabled && !ended && settings && !hasBlocks ? (
         <div className="rs-empty">
           <h3>Live notes</h3>
           <p>Turns the conversation into a tidy page of topics, decisions, tasks and questions while you talk. It sends only the transcript to your chosen model, nothing from your workspace.</p>
@@ -264,6 +264,16 @@ export function NotesPanel() {
               </Button>
             </div>
           </div>
+        </div>
+      ) : !hasBlocks && ended && run?.ended?.kind === "nothing_to_note" ? (
+        <div className="rs-empty">
+          <h3>Nothing to note</h3>
+          <p>{endedSentence(run.ended)}</p>
+        </div>
+      ) : !hasBlocks && ended ? (
+        <div className="rs-empty">
+          <h3>No notes for this meeting</h3>
+          <p>No live notes were taken while it ran.</p>
         </div>
       ) : !hasBlocks ? (
         <div className="rs-empty">

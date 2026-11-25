@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useKeepInWindow } from "../ui/portal";
 import { createPortal } from "react-dom";
+import { readableOn, readingTextColor, useIsLight } from "../lib/themeText";
 
 const PALETTE = [
   { name: "White", value: "#e4e4e7" },
@@ -32,6 +33,9 @@ export function ColorPickerButton({ value, onChange, label }: ColorPickerButtonP
   useKeepInWindow(ref);
   const btnRef = useRef<HTMLButtonElement>(null);
   const [pos, setPos] = useState({ x: 0, y: 0 });
+  const isLight = useIsLight();
+  // The swatch shows the colour the text really gets in this theme (theme defaults follow the foreground).
+  const shown = readingTextColor(value) === value ? readableOn(value, isLight ? "light" : "dark", 3) : readingTextColor(value);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -59,8 +63,8 @@ export function ColorPickerButton({ value, onChange, label }: ColorPickerButtonP
         aria-label={label || "Pick color"}
       >
         <div
-          className="h-3.5 w-3.5 rounded border border-white/15"
-          style={{ backgroundColor: value }}
+          className="h-3.5 w-3.5 rounded border border-input"
+          style={{ backgroundColor: shown }}
         />
         <svg className="h-2 w-2 text-muted-foreground/35" viewBox="0 0 12 12" fill="none">
           <path d="M3 5L6 8L9 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />

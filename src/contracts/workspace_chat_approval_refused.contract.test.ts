@@ -82,3 +82,18 @@ describe("workspace_chat_approval_refused", () => {
     expect(S().sessions.c1.turn!.activity).toEqual([]);
   });
 });
+
+// A tool that is turned off for its server: the line says so and says where to turn it on.
+describe("workspace_chat_approval_refused_off", () => {
+  const off = loadFixture<{ chat_id: string; request_id: string; server: string; tool: string; reason: string }>("workspace_chat_approval_refused_off");
+
+  it("shows the reason in the answer, once, with the server and tool", async () => {
+    await startAsk(off.request_id);
+    h().approvalRefused(off as never);
+    h().approvalRefused(off as never);
+    const notices = S().sessions.c1.turn!.activity.filter((a) => a.kind === "notice");
+    expect(notices).toHaveLength(1);
+    expect(notices[0].label).toBe(`${off.server}: ${off.tool} was not run: ${off.reason}`);
+    expect(notices[0].label).toContain("Settings > Personal Sources");
+  });
+});

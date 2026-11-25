@@ -86,7 +86,7 @@ export function NotesTab({ meetingId, title, onJump }: NotesTabProps) {
         )}
       </div>
       <MovedOnlineLine moved={run?.moved_online} what="Notes" onDismiss={() => void store.getState().dismissMoved(meetingId)} />
-      {run && !(empty && run.status === "off") && (
+      {run && !(empty && run.status === "off") && !(empty && run.ended?.kind === "nothing_to_note") && (
         <div className="rs-notice" role="group" aria-label="State of the notes">
           <div className="rs-notice-title" data-testid="notes-tab-state">
             {live ? runWords("notes", run.status, run.status !== "off", { manual: settings?.update_mode === "manual" }).word : endedWords(run)}
@@ -124,6 +124,11 @@ export function NotesTab({ meetingId, title, onJump }: NotesTabProps) {
       )}
       {!loaded ? (
         <p className="rs-empty text-muted-foreground" role="status">Loading the notes</p>
+      ) : empty && run?.ended?.kind === "nothing_to_note" ? (
+        <div className="rs-empty">
+          <h3>Nothing to note</h3>
+          <p>{endedSentence(run.ended)}</p>
+        </div>
       ) : empty ? (
         <div className="rs-empty">
           <h3>No notes for this meeting</h3>

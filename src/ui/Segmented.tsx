@@ -62,7 +62,7 @@ export function Segmented<T extends string = string>({ value, onChange, options,
       role="radiogroup"
       aria-label={label}
       onKeyDown={onKey}
-      className={cn("inline-flex gap-0.5 rounded-lg border border-border bg-[hsl(var(--ui-field))] p-0.5", className)}
+      className={cn("inline-flex shrink-0 gap-0.5 rounded-lg border border-border bg-[hsl(var(--ui-field))] p-0.5", className)}
     >
       {options.map((o, i) => {
         const on = o.value === value;
@@ -80,7 +80,7 @@ export function Segmented<T extends string = string>({ value, onChange, options,
             tabIndex={i === at ? 0 : -1}
             onClick={() => onChange(o.value)}
             className={cn(
-              "ui-body ui-r-md inline-flex h-7 items-center justify-center rounded-md px-3 outline-none ui-focus transition-colors duration-150 disabled:opacity-45",
+              "ui-body ui-r-md inline-flex whitespace-nowrap h-7 items-center justify-center rounded-md px-3 outline-none ui-focus transition-colors duration-150 disabled:opacity-45",
               on ? "ui-raised font-medium text-foreground" : "text-muted-foreground hover:bg-[hsl(var(--ui-field-hover))] hover:text-foreground",
             )}
           >

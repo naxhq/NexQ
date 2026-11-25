@@ -26,7 +26,7 @@ export function useElementSize<T extends HTMLElement>() {
 }
 
 /** Below this height a transcript drops its text toolbar and meters; the lines win. */
-export const SHORT_TRANSCRIPT_PX = 220;
+export const SHORT_TRANSCRIPT_PX = 320;
 /** Below this height the assistant hides its text-size rows. */
 export const SHORT_ASSISTANT_PX = 260;
 /** A question card narrower than this puts its Assist button on its own line. */

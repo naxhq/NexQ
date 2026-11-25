@@ -35,6 +35,7 @@ export function ReaderControls({
       <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 px-2.5 pb-1.5 pt-1">
         <Segmented
           label="How the note moves"
+          className="[&_button]:px-2"
           value={reading.mode}
           onChange={onMode}
           options={[
