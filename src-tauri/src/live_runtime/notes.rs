@@ -210,7 +210,7 @@ pub fn spawn(p: NotesParams) -> Result<NotesHandle, String> {
         finished: Arc::new(AtomicBool::new(false)),
         dropped_lines: Arc::new(AtomicU64::new(0)),
         sent_tokens: Arc::new(AtomicU64::new(0)),
-        has_new: Arc::new(AtomicBool::new(false)),
+        has_new: Arc::new(AtomicBool::new(p.one_shot)),
     };
     let actor = Actor::new(p, swap, &handle);
     tokio::spawn(actor.run(rx));
@@ -235,7 +235,8 @@ struct Actor {
     done: bool,
     finishing: bool,
     /// Manual mode, meeting over: waits for one "Update now" for what was never sent.
-    ended_waiting: bool,
+    /// Manual mode, meeting over: nothing is run unasked, the end only marks what was never sent.
+    finish_manual: bool,
     user_stopped: bool,
     quitting: bool,
     interrupted: bool,
@@ -289,7 +290,7 @@ impl Actor {
             last_doc_emit: Instant::now() - Duration::from_secs(5),
             done: false,
             finishing: false,
-            ended_waiting: false,
+            finish_manual: false,
             user_stopped: false,
             quitting: false,
             interrupted: false,
@@ -307,27 +308,33 @@ impl Actor {
     /// The one state the UI shows (see `state`).
     fn snapshot(&self) -> RunSnapshot {
         let st = self.engine.status();
-        snapshot(&StateInput {
+        // the passes at the end (or the update of an ended meeting) are running until they are done, also between two passes
+        let closing = (self.finishing || self.one_shot) && !self.done;
+        let mut snap = snapshot(&StateInput {
             meeting_id: self.p.meeting_id.clone(),
             state: st.state,
-            in_flight: st.in_flight,
+            in_flight: st.in_flight || closing,
             tokens_used: st.tokens_used,
             total_tokens: self.engine.sent_tokens_total,
             cap: st.cap,
             last_error: st.last_error.clone(),
             error_code: self.engine.last_code(),
-            finished: self.done || self.ended_waiting,
+            finished: self.done,
             user_stopped: self.user_stopped,
             manual_mode: !self.auto(),
             started: st.tokens_used > 0 || st.pending_words > 0,
-            not_covered: if self.done || self.ended_waiting { self.engine.uncovered() } else { None },
-            ended: if self.done { self.engine.doc().ended.clone() } else if self.ended_waiting { Some(if self.engine.uncovered().is_some() { ("manual".to_string(), None) } else { ("covered".to_string(), None) }) } else { None },
+            not_covered: if self.done { self.engine.uncovered() } else { None },
+            ended: if self.done { self.engine.doc().ended.clone() } else { None },
             moved_online: self.swap.moved_online().map(|(from, to)| crate::live_runtime::state::MovedOnline { from, to }),
             next_in_ms: if self.auto() { self.engine.next_run_in_ms() } else { None },
             final_note: self.engine.final_note.clone(),
             stop_reason: None,
             model: self.swap.label(),
-        })
+        });
+        if closing {
+            snap.can.clear(); // nothing to press while it works
+        }
+        snap
     }
 
     /// Emits the state when it changed. `next_in_ms` is a deadline the UI counts
@@ -403,10 +410,9 @@ impl Actor {
                     self.finishing = true;
                     self.finish_deadline = Some(tokio::time::Instant::now() + self.p.final_timeout);
                 } else {
-                    // manual: nothing runs unasked; what was never sent stays one "Update now" away
-                    self.ended_waiting = true;
-                    let range = self.engine.pending_range().map(|(a, b)| format!(" Not covered: {} to {}", crate::live_common::fmt_clock(a), crate::live_common::fmt_clock(b))).unwrap_or_default();
-                    self.engine.final_note = Some(format!("Notes were on manual.{range}"));
+                    // manual: nothing runs unasked; the end only marks what was never sent, and
+                    // "Update notes" then works from the saved transcript like for any ended meeting
+                    self.finish_manual = true;
                 }
             }
             NotesCmd::Discard => {
@@ -416,13 +422,11 @@ impl Actor {
             }
             NotesCmd::Quit => {
                 self.swap.cancel();
-                if !self.ended_waiting {
-                    // what was never sent stays known: the range is saved with the notes
-                    self.engine.mark_uncovered();
-                    let st = self.engine.status();
-                    let _ = self.p.db.save_notes(&self.p.meeting_id, self.engine.doc(), "interrupted", st.tokens_used, st.cap);
-                    self.interrupted = true;
-                }
+                // what was never sent stays known: the range is saved with the notes
+                self.engine.mark_uncovered();
+                let st = self.engine.status();
+                let _ = self.p.db.save_notes(&self.p.meeting_id, self.engine.doc(), "interrupted", st.tokens_used, st.cap);
+                self.interrupted = true;
                 self.quitting = true;
             }
             NotesCmd::Reconfigure(s) => self.reconfigure(s),
@@ -524,7 +528,7 @@ impl Actor {
             self.closing_begun = Some(self.engine.begin_final(true));
         }
         if self.should_yield() {
-            self.conclude(Some(("paused", "Paused: another meeting started. Update notes again when it ends".into())));
+            self.conclude(Some(("other_meeting", "Another meeting started while the notes were being updated. Update notes again when it ends".into())));
             return true;
         }
         if self.finish_deadline.is_some_and(|d| tokio::time::Instant::now() >= d) {
@@ -540,7 +544,7 @@ impl Actor {
             return true;
         }
         if self.yielded {
-            self.conclude(Some(("paused", "Paused: another meeting started. Update notes again when it ends".into())));
+            self.conclude(Some(("other_meeting", "Another meeting started while the notes were being updated. Update notes again when it ends".into())));
             return true;
         }
         let failed = ran && self.engine.last_outcome().is_some_and(|o| !o.ok);
@@ -566,6 +570,11 @@ impl Actor {
             if self.quitting {
                 break;
             }
+            if self.finish_manual {
+                let _ = self.engine.finish_with(false).await;
+                self.done = true;
+                break;
+            }
             if self.finishing || self.one_shot {
                 if self.closing_step(&mut rx).await {
                     break;
@@ -577,13 +586,6 @@ impl Actor {
             self.engine.set_gate(!(self.p.busy)());
             self.maybe_run(&mut rx).await;
             if self.quitting {
-                break;
-            }
-            if self.ended_waiting && !self.engine.has_pending() {
-                // the one update after the meeting covered everything
-                self.engine.final_note = None;
-                let _ = self.engine.finish_with(false).await;
-                self.done = true;
                 break;
             }
             self.emit_state();
@@ -602,10 +604,6 @@ impl Actor {
             // a run that was in flight finished after the quit saved: save as interrupted once more
             let st = self.engine.status();
             let _ = self.p.db.save_notes(&self.p.meeting_id, self.engine.doc(), "interrupted", st.tokens_used, st.cap);
-        }
-        if self.ended_waiting && !self.done {
-            let _ = self.engine.finish_with(false).await;
-            self.done = true;
         }
         self.emit_state();
         self.flush_doc(true);

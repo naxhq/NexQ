@@ -9,7 +9,6 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 
 use futures::FutureExt;
-use serde_json::json;
 
 use super::errors::describe;
 use super::files::meeting_files;

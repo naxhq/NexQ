@@ -63,6 +63,7 @@ fn map_sqlite(e: &rusqlite::Error) -> ProblemKind {
 
 /// The header of an SQLite file says it is whole: the right magic, and the
 /// file at least as long as the page count it records.
+#[cfg(test)]
 fn header_problem(path: &Path, len: u64) -> Option<String> {
     header_check(path, len).err().map(|e| e.1)
 }

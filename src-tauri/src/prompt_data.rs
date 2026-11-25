@@ -281,10 +281,6 @@ fn component_name(original: &str) -> bool {
     first_upper && (original.chars().count() == 1 || original.chars().any(|c| c.is_ascii_lowercase()))
 }
 
-fn token_shape(word: &str) -> bool {
-    TAG_WORDS.contains(&word) || TAG_EXACT.contains(&word) || TAG_PREFIXES.iter().any(|p| word.starts_with(p))
-}
-
 /// The text as a reader would match it: look-alikes folded to ASCII, lower case. A copy for finding shapes, never for output.
 pub fn fold_match(text: &str) -> String {
     text.chars().map(looks_like).collect()
@@ -1134,7 +1130,7 @@ mod generics_and_speed_tests {
             let out = neutralise_text(text);
             assert!(!out.is_empty());
         }
-        assert!(started.elapsed() < std::time::Duration::from_secs(15), "{:?}", started.elapsed());
+        assert!(started.elapsed() < std::time::Duration::from_secs(3), "{:?}", started.elapsed());
     }
 }
 

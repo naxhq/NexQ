@@ -391,17 +391,20 @@ fn read_capped_line<R: BufRead>(reader: &mut R, max: usize) -> Result<Option<Str
 }
 
 /// Lines from any reader (tests; the deadline can't interrupt a blocking read).
+#[cfg(test)]
 struct BufLines<R: BufRead> {
     reader: R,
     max_line: usize,
 }
 
+#[cfg(test)]
 impl<R: BufRead> BufLines<R> {
     fn new(reader: R) -> Self {
         Self { reader, max_line: MAX_LINE }
     }
 }
 
+#[cfg(test)]
 impl<R: BufRead> LineSource for BufLines<R> {
     fn next_line(&mut self, _deadline: Instant) -> Result<Option<String>, HandshakeError> {
         read_capped_line(&mut self.reader, self.max_line)

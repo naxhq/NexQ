@@ -225,12 +225,6 @@ impl CustomClient {
         cancellable(params, request.send()).await
     }
 
-    /// "answered 401 Unauthorized (reason)" for a failed response.
-    async fn failure(resp: reqwest::Response) -> String {
-        let status = resp.status();
-        Self::failure_text(status, &resp.text().await.unwrap_or_default())
-    }
-
     fn failure_text(status: reqwest::StatusCode, body: &str) -> String {
         let detail = error_detail(body);
         if detail.is_empty() {

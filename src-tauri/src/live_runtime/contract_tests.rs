@@ -171,3 +171,30 @@ fn getter_documents_and_the_brief_sheet_event() {
     v["blocks"][0]["id"] = json!("b0");
     assert_contract!("get_meeting_notes", v);
 }
+
+/// The kinds a person can see when the notes did not cover everything, each with its own true detail.
+#[test]
+fn event_notetaker_state_finished_kinds() {
+    for (name, kind, detail) in [
+        ("notetaker_state_finished_stopped", "stopped", "The notes were stopped before the meeting ended"),
+        ("notetaker_state_finished_interrupted", "interrupted", "NexQ was closed before the notes caught up"),
+        ("notetaker_state_finished_other_meeting", "other_meeting", "Another meeting started while the notes were being updated. Update notes again when it ends"),
+    ] {
+        let s = RunSnapshot {
+            meeting_id: "m1".into(),
+            status: "finished",
+            reason: Some("Not covered: 02:00 to 40:00".into()),
+            error_kind: None,
+            can: vec!["update"],
+            tokens_used: 4_200,
+            total_tokens: 21_000,
+            cap: 120_000,
+            next_in_ms: None,
+            model: None,
+            not_covered: Some(NotCovered { from_ms: 120_000, to_ms: 2_400_000 }),
+            ended: Some(Ended { kind: kind.into(), detail: Some(detail.into()) }),
+            moved_online: None,
+        };
+        assert_contract!(name, s);
+    }
+}

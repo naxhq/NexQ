@@ -1999,6 +1999,17 @@ fn add_segment(h: &H, meeting: &str, id: &str, ms: i64) {
         .unwrap();
 }
 
+fn add_segment_text(h: &H, meeting: &str, id: &str, ms: i64, text: &str) {
+    h.conn
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO transcript_segments (id, meeting_id, text, speaker, timestamp_ms, is_final, created_at) VALUES (?1,?2,?3,'Them',?4,1,'t')",
+            rusqlite::params![id, meeting, text, ms],
+        )
+        .unwrap();
+}
+
 /// A meeting with one covered run (to 10 s), saved lines at 10 s, 50 s and 90 s, and two lines still unsent.
 async fn meeting_with_a_backlog(h: &H) {
     h.enable_notes();
@@ -2314,10 +2325,10 @@ async fn a_new_live_meeting_makes_the_update_give_way_at_once() {
     let m = seed_ended(&h, 300);
     first_pass_in_flight(&h, &m).await;
     h.start_meeting("another-live-meeting");
-    until("paused", || h.events.last_status("notetaker_state", &m).map(|v| v["ended"]["kind"] == "paused").unwrap_or(false)).await;
+    until("paused", || h.events.last_status("notetaker_state", &m).map(|v| v["ended"]["kind"] == "other_meeting").unwrap_or(false)).await;
     assert_eq!(h.fake.count(AiPurpose::Notes), 1, "no pass for the old meeting once the new one started");
     let st = h.events.last_status("notetaker_state", &m).unwrap();
-    assert!(can_of(&st).contains(&"update".to_string()) && st["reason"].as_str().unwrap_or("").contains("another meeting"), "{st}");
+    assert!(can_of(&st).contains(&"update".to_string()) && st["reason"].as_str().unwrap_or("").contains("nother meeting"), "{st}");
 }
 
 #[tokio::test]
@@ -2389,4 +2400,141 @@ async fn a_provider_that_never_answers_does_not_hold_the_actor() {
     assert!(t.elapsed() < Duration::from_secs(5), "held for {:?}", t.elapsed());
     let st = h2.rt.notetaker_state(&m2).await;
     assert!(!st["not_covered"].is_null(), "{st}");
+}
+
+// ---------------------------------------------------------------- ME round 4: true endings, manual mode, no "on" between passes
+
+/// A live meeting whose notes covered the first lines; more saved lines follow.
+async fn live_meeting_with_saved_lines(h: &H) {
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    say(h, "m1", 120, 10_000, 1_000).await;
+    until("the first run", || h.fake.count(AiPurpose::Notes) == 1).await;
+    for (i, ms) in [10_000, 50_000, 90_000].into_iter().enumerate() {
+        add_segment(h, "m1", &format!("s{i}"), ms);
+    }
+}
+
+async fn ended_kind_after(h: &H) -> Value {
+    h.rt.on_meeting_end("m1");
+    *h.live.lock().unwrap() = None;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let h2 = harness_on(h.conn.clone());
+    h2.rt.notetaker_state("m1").await
+}
+
+#[tokio::test]
+async fn stopping_the_notes_says_stopped_not_out_of_time() {
+    let h = harness();
+    live_meeting_with_saved_lines(&h).await;
+    h.rt.notetaker_stop("m1");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let st = ended_kind_after(&h).await;
+    assert_eq!(st["ended"]["kind"], "stopped", "{st}");
+    assert!(st["ended"]["detail"].as_str().unwrap_or("").contains("stopped"), "{st}");
+    assert!(!st["not_covered"].is_null(), "{st}");
+}
+
+#[tokio::test]
+async fn turning_the_notes_off_mid_meeting_says_stopped_too() {
+    let h = harness();
+    live_meeting_with_saved_lines(&h).await;
+    h.rt.patch_notetaker(&json!({"enabled": false})).unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let st = ended_kind_after(&h).await;
+    assert_eq!(st["ended"]["kind"], "stopped", "{st}");
+}
+
+#[tokio::test]
+async fn a_kill_says_interrupted_with_its_own_detail() {
+    let h = harness();
+    live_meeting_with_saved_lines(&h).await;
+    // no end, no shutdown: the app is gone
+    *h.live.lock().unwrap() = None;
+    let h2 = harness_on(h.conn.clone());
+    let st = h2.rt.notetaker_state("m1").await;
+    assert_eq!(st["ended"]["kind"], "interrupted", "{st}");
+    assert!(st["ended"]["detail"].as_str().unwrap_or("").contains("closed"), "{st}");
+}
+
+#[tokio::test]
+async fn giving_way_to_another_meeting_is_its_own_kind() {
+    let h = harness();
+    let m = seed_ended(&h, 300);
+    first_pass_in_flight(&h, &m).await;
+    h.start_meeting("another-live-meeting");
+    until("yielded", || h.events.last_status("notetaker_state", &m).map(|v| v["ended"]["kind"] == "other_meeting").unwrap_or(false)).await;
+    let st = h.events.last_status("notetaker_state", &m).unwrap();
+    assert!(st["ended"]["detail"].as_str().unwrap_or("").contains("Another meeting"), "{st}");
+}
+
+#[tokio::test]
+async fn manual_notes_end_with_the_meeting_and_update_takes_every_pass_in_one_press() {
+    let h = harness();
+    h.rt.patch_notetaker(&json!({"enabled": true, "update_mode": "manual"})).unwrap();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    // about 6,000 tokens of speech, none of it sent
+    for i in 0..300u64 {
+        let text = format!("line {i} about the annual pricing plan and the renewal terms for the next year");
+        add_segment_text(&h, "m1", &format!("s{i}"), 1_000 + i as i64 * 2_000, &text);
+        h.rt.feed("m1", "Them", &text, 1_000 + i * 2_000);
+    }
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    h.rt.on_meeting_end("m1");
+    *h.live.lock().unwrap() = None;
+    until("the actor is gone", || h.rt.inner.lock().unwrap().notes.get("m1").is_none()).await;
+    assert_eq!(h.fake.count(AiPurpose::Notes), 0, "nothing ran unasked");
+    let st = h.rt.notetaker_state("m1").await;
+    assert_eq!((st["ended"]["kind"].as_str(), can_of(&st).contains(&"update".to_string())), (Some("manual"), true), "{st}");
+    h.rt.notetaker_update_now("m1").unwrap();
+    until("covered", || h.events.last_status("notetaker_state", "m1").map(|v| v["ended"]["kind"] == "covered").unwrap_or(false)).await;
+    assert!(h.fake.count(AiPurpose::Notes) >= 2, "several passes, one press: {}", h.fake.count(AiPurpose::Notes));
+}
+
+#[tokio::test]
+async fn an_update_of_manual_notes_is_refused_at_the_limit_and_while_another_meeting_is_live() {
+    let h = harness();
+    h.rt.patch_notetaker(&json!({"enabled": true, "update_mode": "manual", "cap": 5_000})).unwrap();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    for i in 0..40u64 {
+        let text = format!("line {i} about the annual pricing plan and the renewal terms for the next year");
+        add_segment_text(&h, "m1", &format!("s{i}"), 1_000 + i as i64 * 2_000, &text);
+        h.rt.feed("m1", "Them", &text, 1_000 + i * 2_000);
+    }
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    h.rt.on_meeting_end("m1");
+    *h.live.lock().unwrap() = None;
+    until("the actor is gone", || h.rt.inner.lock().unwrap().notes.get("m1").is_none()).await;
+    // another meeting is live: refused with the reason, nothing runs
+    h.start_meeting("other");
+    let e = h.rt.notetaker_update_now("m1").unwrap_err();
+    assert!(e.contains("Another meeting is live"), "{e}");
+    *h.live.lock().unwrap() = None;
+    // at the limit: refused with Keep going in the message, not a silent no-op
+    h.rt.deps().db.save_notes("m1", &h.rt.deps().db.load_notes("m1").unwrap().doc, "done", 9_000, 5_000).unwrap();
+    let e = h.rt.notetaker_update_now("m1").unwrap_err();
+    assert!(e.contains("Keep going"), "{e}");
+    assert_eq!(h.fake.count(AiPurpose::Notes), 0);
+}
+
+#[tokio::test]
+async fn a_three_pass_update_reports_running_until_it_is_done() {
+    let h = harness();
+    let m = seed_ended(&h, 300);
+    *h.fake.delay.lock().unwrap() = Duration::from_millis(120);
+    let seen = h.events.of("notetaker_state").len();
+    h.rt.notetaker_update_now(&m).unwrap();
+    until("covered", || h.events.last_status("notetaker_state", &m).map(|v| v["ended"]["kind"] == "covered").unwrap_or(false)).await;
+    assert!(h.fake.count(AiPurpose::Notes) >= 3, "{}", h.fake.count(AiPurpose::Notes));
+    let all = h.events.of("notetaker_state");
+    let during: Vec<&Value> = all.iter().skip(seen).filter(|v| v["meeting_id"] == json!(m)).collect();
+    let (last, before) = during.split_last().unwrap();
+    assert_eq!(last["status"], "finished");
+    for v in before {
+        assert_eq!(v["status"], "running", "{v}");
+        assert!(can_of(v).is_empty(), "nothing to press while it works: {v}");
+    }
 }

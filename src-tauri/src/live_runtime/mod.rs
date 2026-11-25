@@ -270,7 +270,6 @@ impl LiveRuntimes {
     pub fn meeting_deleted(&self, meeting_id: &str) {
         self.deps.deleted.lock().unwrap().insert(meeting_id.to_string());
         // a memory run in flight for it is stopped too, not only checked between its calls
-        memory::cancel_runs_where(|meeting, _, _| meeting == meeting_id);
         memory::cancel_runs_of_meeting(meeting_id);
         let mut g = self.inner.lock().unwrap();
         if let Some(h) = g.notes.remove(meeting_id) {
@@ -534,11 +533,14 @@ impl LiveRuntimes {
         let ended_info = if !ended {
             None
         } else {
-            stored.as_ref().map(|s| match (not_covered, &s.doc.ended) {
-                (None, _) => ("covered".to_string(), None),
-                (Some(_), Some((k, d))) if k != "covered" => (k.clone(), d.clone()),
-                (Some(_), _) if over_cap => ("limit".to_string(), None),
-                (Some(_), _) => ("out_of_time".to_string(), Some("The app closed before the notes caught up".to_string())),
+            stored.as_ref().map(|s| match (not_covered, s.status.as_str(), &s.doc.ended) {
+                (None, _, _) => ("covered".to_string(), None),
+                // the person stopped them, or turned them off, during the meeting
+                (Some(_), "stopped", _) => ("stopped".to_string(), Some("The notes were stopped before the meeting ended".to_string())),
+                (Some(_), "done", Some((k, d))) if k != "covered" => (k.clone(), d.clone()),
+                (Some(_), "done", _) if over_cap => ("limit".to_string(), None),
+                // the app closed or crashed before the end pass could save how it went
+                (Some(_), _, _) => ("interrupted".to_string(), Some("NexQ was closed before the notes caught up".to_string())),
             })
         };
         let reason = if let Some((from, to)) = not_covered {

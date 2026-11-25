@@ -616,7 +616,7 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
         }
         let failed = outcome.as_ref().filter(|o| !o.ok).and_then(|o| o.error.clone()).filter(|e| e != "cancelled");
         self.doc.ended = Some(match forced {
-            Some((kind, _)) if self.doc.uncovered.is_some() => (kind.to_string(), None),
+            Some((kind, lead)) if self.doc.uncovered.is_some() => (kind.to_string(), Some(lead)),
             _ => self.ended_kind(run_final, failed),
         });
         self.done = true;
