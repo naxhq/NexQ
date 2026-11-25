@@ -531,6 +531,7 @@ impl LLMProvider for CustomClient {
             completion_tokens: token_count,
             total_tokens: token_count,
             latency_ms,
+            ..Default::default()
         };
 
         check_cancelled(&params)?;

@@ -79,7 +79,7 @@ fn owner_pid(file_name: &str) -> Option<u32> {
 }
 
 #[cfg(windows)]
-fn pid_alive(pid: u32) -> bool {
+pub(crate) fn pid_alive(pid: u32) -> bool {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{
         GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -98,7 +98,7 @@ fn pid_alive(pid: u32) -> bool {
 }
 
 #[cfg(not(windows))]
-fn pid_alive(_pid: u32) -> bool {
+pub(crate) fn pid_alive(_pid: u32) -> bool {
     false
 }
 

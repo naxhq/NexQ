@@ -355,6 +355,7 @@ impl LLMProvider for GeminiClient {
             completion_tokens,
             total_tokens: total,
             latency_ms,
+            ..Default::default()
         };
 
         if !grounding_sources.is_empty() {

@@ -11,8 +11,13 @@
 //! - Each session has a delta cursor so a request only sends transcript
 //!   segments the session has not seen yet; it resets when the session is
 //!   (re)started.
-//! - Past-meeting sessions close after 15 min without AI activity
-//!   (`reap_idle`, driven by `run_idle_reaper` every 60 s).
+//! - Past-meeting and Workspace-chat sessions close after 15 min without AI
+//!   activity (`reap_idle`, driven by `run_idle_reaper` every 60 s). Notes and
+//!   Brief sessions end with their meeting (`close_scope`); a long idle limit
+//!   only catches a meeting end that never arrived.
+//! - A session may carry its own kind, model and effort ([`SessionOverride`],
+//!   `ensure_with`): a chat can use Codex while the live provider is Claude.
+//!   Such a session is pinned to its kind, and a provider switch leaves it.
 //! - Every state transition is reported through a [`StatusSink`]
 //!   (`agent_session_status` in the app).
 //!
@@ -21,7 +26,7 @@
 
 use super::command::{SessionConfig, SourcesLaunch};
 use super::context::DeltaCursor;
-use super::protocol::{AgentErrorKind, ImageAttachment, TurnResult};
+use super::protocol::{AgentErrorKind, ImageAttachment, PlanLimit, TurnResult};
 use super::session::{failed_mcp_servers, AgentError, ClaudeSession, InitInfo};
 use super::settings::CliSettings;
 use super::CliAgentKind;
@@ -36,6 +41,13 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 /// Past-meeting sessions idle this long are closed.
 pub const PAST_IDLE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// Workspace-chat sessions idle this long are closed.
+pub const WORKSPACE_IDLE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// Notes and Brief sessions end with their meeting; one left idle this long
+/// (the meeting end never reached us) is closed anyway.
+pub const MEETING_AUX_IDLE_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
+/// A graceful close waits at most this long for turns in flight.
+pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 /// How often the idle reaper runs.
 pub const REAP_INTERVAL: Duration = Duration::from_secs(60);
 /// Tauri event carrying [`AgentSessionStatus`].
@@ -56,6 +68,12 @@ pub enum SessionScope {
     Past(String),
     /// Callers with no meeting (translation, knowledge-base test, wizard).
     Utility,
+    /// A workspace chat (by chat id). Reaped after [`WORKSPACE_IDLE_TIMEOUT`].
+    Workspace(String),
+    /// Live notes of a meeting (by meeting id). Ends with the meeting.
+    Notes(String),
+    /// The brief of a meeting (by meeting id). Ends with the meeting.
+    Brief(String),
 }
 
 impl SessionScope {
@@ -64,13 +82,26 @@ impl SessionScope {
             SessionScope::Live(_) => "live",
             SessionScope::Past(_) => "past",
             SessionScope::Utility => "utility",
+            SessionScope::Workspace(_) => "workspace",
+            SessionScope::Notes(_) => "notes",
+            SessionScope::Brief(_) => "brief",
         }
     }
 
-    fn meeting_id(&self) -> Option<String> {
+    pub(crate) fn meeting_id(&self) -> Option<String> {
         match self {
-            SessionScope::Live(id) | SessionScope::Past(id) => Some(id.clone()),
-            SessionScope::Utility => None,
+            SessionScope::Live(id) | SessionScope::Past(id) | SessionScope::Notes(id) | SessionScope::Brief(id) => {
+                Some(id.clone())
+            }
+            SessionScope::Utility | SessionScope::Workspace(_) => None,
+        }
+    }
+
+    /// The chat id of a Workspace scope.
+    pub fn chat_id(&self) -> Option<&str> {
+        match self {
+            SessionScope::Workspace(id) => Some(id),
+            _ => None,
         }
     }
 }
@@ -184,7 +215,21 @@ pub fn tier_for(mode: &str, scope: &SessionScope, cfg: &ClaudeCliConfig) -> Tier
         SessionScope::Live(_) if mode == "Recap" => Tier::Deep,
         SessionScope::Live(_) | SessionScope::Utility => Tier::Fast,
         SessionScope::Past(_) => Tier::Deep,
+        // Notes and the brief default to the cheapest tier; a chat to the better one.
+        SessionScope::Notes(_) | SessionScope::Brief(_) => Tier::Fast,
+        SessionScope::Workspace(_) => Tier::Deep,
     }
+}
+
+/// What one session is started with instead of the settings of the active
+/// provider: a kind of its own (the session is then pinned to it: switching
+/// the live provider leaves it alone), a model and an effort.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SessionOverride {
+    pub kind: Option<CliAgentKind>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub thinking: Option<bool>,
 }
 
 /// Cumulative token/cost/timing accounting for one scope (estimate from the
@@ -243,9 +288,12 @@ fn epoch_ms() -> u64 {
 /// Payload of the `agent_session_status` event.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentSessionStatus {
-    /// `"live"` | `"past"` | `"utility"`.
+    /// `"live"` | `"past"` | `"utility"` | `"workspace"` | `"notes"` | `"brief"`.
     pub scope: String,
     pub meeting_id: Option<String>,
+    /// The chat id of a `"workspace"` session.
+    #[serde(default)]
+    pub chat_id: Option<String>,
     /// `"fast"` | `"deep"`.
     pub tier: String,
     /// `"starting"` | `"ready"` | `"busy"` | `"error"` | `"closed"`.
@@ -321,6 +369,11 @@ pub trait SessionHandle: Send + Sync {
     fn init_info(&self) -> InitInfo {
         InitInfo::default()
     }
+    /// The plan-limit signal the CLI reported since this was last asked
+    /// (taking it clears it). `None` for a handle that has none.
+    fn take_plan_limit(&self) -> Option<PlanLimit> {
+        None
+    }
 }
 
 #[async_trait]
@@ -362,6 +415,10 @@ impl SessionHandle for ClaudeSession {
 
     fn init_info(&self) -> InitInfo {
         ClaudeSession::init_info(self)
+    }
+
+    fn take_plan_limit(&self) -> Option<PlanLimit> {
+        ClaudeSession::take_plan_limit(self)
     }
 }
 
@@ -430,6 +487,18 @@ struct Entry {
     /// What a with-sources session came up without (see
     /// [`AgentSessionStatus::sources_notice`]).
     sources_notice: Option<String>,
+    /// The override the session was started with (`None` follows the active
+    /// provider). A session with its own kind is not touched by a provider switch.
+    requested: Option<SessionOverride>,
+    /// A graceful close is waiting for the turns in flight: no new turn starts.
+    draining: bool,
+}
+
+impl Entry {
+    /// Started for a kind of its own, not the active one.
+    fn pinned(&self) -> bool {
+        self.requested.as_ref().is_some_and(|o| o.kind.is_some())
+    }
 }
 
 pub struct AgentSessionManager {
@@ -444,7 +513,15 @@ pub struct AgentSessionManager {
     cursors: Mutex<HashMap<SessionKey, Arc<AsyncMutex<DeltaCursor>>>>,
     usage: Mutex<HashMap<SessionScope, SessionUsage>>,
     shutting_down: AtomicBool,
+    /// Woken whenever a turn ends (a graceful close waits on it).
+    turn_ended: tokio::sync::Notify,
+    /// Called with the key of every session taken out of service (closed,
+    /// reaped, retired, replaced), e.g. to delete a chat's transcript folder.
+    on_closed: Mutex<Option<ClosedHook>>,
 }
+
+/// See `AgentSessionManager::set_closed_hook`.
+pub type ClosedHook = Arc<dyn Fn(&SessionKey) + Send + Sync>;
 
 impl AgentSessionManager {
     pub fn new(
@@ -461,6 +538,20 @@ impl AgentSessionManager {
             cursors: Mutex::new(HashMap::new()),
             usage: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
+            turn_ended: tokio::sync::Notify::new(),
+            on_closed: Mutex::new(None),
+        }
+    }
+
+    /// Run `hook` for every session that leaves service (any reason).
+    pub fn set_closed_hook(&self, hook: ClosedHook) {
+        *self.on_closed.lock().unwrap() = Some(hook);
+    }
+
+    fn notify_closed(&self, key: &SessionKey) {
+        let hook = self.on_closed.lock().unwrap().clone();
+        if let Some(hook) = hook {
+            hook(key);
         }
     }
 
@@ -477,17 +568,38 @@ impl AgentSessionManager {
         key: &SessionKey,
         init: SessionInit,
     ) -> Result<Arc<dyn SessionHandle>, AgentError> {
+        self.ensure_with(key, init, None).await
+    }
+
+    /// [`AgentSessionManager::ensure`] for a session with its own kind, model
+    /// and effort. A running session started with a different override is
+    /// replaced (the chat changed its model); one without an override follows
+    /// the active provider exactly as before.
+    pub async fn ensure_with(
+        &self,
+        key: &SessionKey,
+        init: SessionInit,
+        overrides: Option<SessionOverride>,
+    ) -> Result<Arc<dyn SessionHandle>, AgentError> {
+        let overrides = overrides.filter(|o| *o != SessionOverride::default());
+        let pinned_kind = overrides.as_ref().and_then(|o| o.kind);
         let lock = self.spawn_lock(key);
         let _spawning = lock.lock().await;
         if self.shutting_down.load(Ordering::SeqCst) {
             return Err(shut_down_error());
         }
 
-        let mut kind = self.settings.active();
+        let mut kind = pinned_kind.unwrap_or_else(|| self.settings.active());
         let stale = {
             let mut entries = self.entries.lock().unwrap();
             match entries.get_mut(key) {
-                Some(entry) if entry.kind == kind && entry.handle.is_alive() && !restart_after_error(key, entry) => {
+                Some(entry)
+                    if entry.kind == kind
+                        && entry.requested == overrides
+                        && !entry.draining
+                        && entry.handle.is_alive()
+                        && !restart_after_error(key, entry) =>
+                {
                     entry.last_used = Instant::now();
                     return Ok(entry.handle.clone());
                 }
@@ -507,9 +619,17 @@ impl AgentSessionManager {
             let (model, effort, thinking) = {
                 let cfg = self.settings.config(kind);
                 let (m, e) = cfg.model_for(key.tier);
+                let (m, e) = match &overrides {
+                    Some(o) => (o.model.as_deref().unwrap_or(m), o.effort.as_deref().unwrap_or(e)),
+                    None => (m, e),
+                };
                 let resolved = self.settings.resolve(kind, m, e);
                 // The thinking toggle is Claude's alone.
-                let thinking = kind.supports_thinking_toggle() && cfg.thinking_for(key.tier);
+                let wanted = overrides
+                    .as_ref()
+                    .and_then(|o| o.thinking)
+                    .unwrap_or_else(|| cfg.thinking_for(key.tier));
+                let thinking = kind.supports_thinking_toggle() && wanted;
                 (resolved.model, resolved.effort, thinking)
             };
             self.emit(key, SessionState::Starting, &model, None);
@@ -554,7 +674,7 @@ impl AgentSessionManager {
             // point runs `close_other_kinds`, which then finds the entry.
             let inserted = {
                 let mut entries = self.entries.lock().unwrap();
-                if self.settings.active() == kind {
+                if pinned_kind.is_some() || self.settings.active() == kind {
                     self.cursors.lock().unwrap().insert(
                         key.clone(),
                         Arc::new(AsyncMutex::new(DeltaCursor::default())),
@@ -570,6 +690,8 @@ impl AgentSessionManager {
                             in_flight: 0,
                             turns: 0,
                             sources_notice,
+                            requested: overrides.clone(),
+                            draining: false,
                         },
                     );
                     true
@@ -583,7 +705,7 @@ impl AgentSessionManager {
             }
             handle.close().await;
             self.emit(key, SessionState::Closed, &model, None);
-            kind = self.settings.active();
+            kind = pinned_kind.unwrap_or_else(|| self.settings.active());
             if attempts >= 3 {
                 return Err(AgentError::Crashed("the AI provider kept changing while a session started".into()));
             }
@@ -618,6 +740,9 @@ impl AgentSessionManager {
             let entry = entries.get_mut(key).ok_or_else(|| {
                 AgentError::Crashed("no CLI agent session is running for this request".into())
             })?;
+            if entry.draining {
+                return Err(AgentError::Crashed("this session is restarting; try again in a moment".into()));
+            }
             entry.in_flight += 1;
             entry.last_used = Instant::now();
             entry.state = SessionState::Busy;
@@ -704,6 +829,7 @@ impl AgentSessionManager {
                 _ => None,
             }
         };
+        self.turn_ended.notify_waiters();
         if let Some((state, error)) = transition {
             self.emit(key, state, &handle.model(), error);
         }
@@ -779,7 +905,11 @@ impl AgentSessionManager {
         let keys: Vec<SessionKey> = {
             let active = self.settings.active();
             let entries = self.entries.lock().unwrap();
-            entries.iter().filter(|(_, e)| e.kind != active).map(|(k, _)| k.clone()).collect()
+            entries
+                .iter()
+                .filter(|(_, e)| e.kind != active && !e.pinned())
+                .map(|(k, _)| k.clone())
+                .collect()
         };
         let closes = keys.into_iter().map(|key| async move {
             let lock = self.spawn_lock(&key);
@@ -788,7 +918,7 @@ impl AgentSessionManager {
                 let active = self.settings.active();
                 let mut entries = self.entries.lock().unwrap();
                 match entries.get(&key) {
-                    Some(e) if e.kind != active => {
+                    Some(e) if e.kind != active && !e.pinned() => {
                         self.cursors.lock().unwrap().remove(&key);
                         entries.remove(&key)
                     }
@@ -815,8 +945,75 @@ impl AgentSessionManager {
         futures::future::join_all(drained.iter().map(|(_, entry)| entry.handle.close())).await;
         for (key, entry) in &drained {
             self.emit(key, SessionState::Closed, &entry.handle.model(), None);
+            self.notify_closed(key);
         }
         self.usage.lock().unwrap().clear();
+    }
+
+    /// Close every tier of `scope` the gentle way: no new turn starts, the
+    /// turns in flight finish (at most `bound`, then they are cut), and only
+    /// then do the processes close. Usage is kept. For scope restarts (the
+    /// sources or the scope of a meeting changed) and chat deletion.
+    pub async fn close_scope_graceful(&self, scope: &SessionScope, bound: Duration) {
+        let mut keys = Vec::new();
+        for with_sources in [false, true] {
+            for tier in [Tier::Fast, Tier::Deep] {
+                keys.push(SessionKey { scope: scope.clone(), tier, with_sources });
+            }
+        }
+        futures::future::join_all(keys.iter().map(|key| self.close_key_graceful(key, bound))).await;
+    }
+
+    /// [`AgentSessionManager::close_scope_graceful`] for one key.
+    pub async fn close_key_graceful(&self, key: &SessionKey, bound: Duration) {
+        let lock = self.spawn_lock(key);
+        let _spawning = lock.lock().await;
+        let running = {
+            let mut entries = self.entries.lock().unwrap();
+            match entries.get_mut(key) {
+                Some(entry) => {
+                    entry.draining = true;
+                    true
+                }
+                None => false,
+            }
+        };
+        if !running {
+            return;
+        }
+        let deadline = tokio::time::Instant::now() + bound;
+        loop {
+            // Register before looking, so a turn ending in between is not missed.
+            let ended = self.turn_ended.notified();
+            tokio::pin!(ended);
+            ended.as_mut().enable();
+            let idle = self.entries.lock().unwrap().get(key).map_or(true, |e| e.in_flight == 0);
+            if idle {
+                break;
+            }
+            if tokio::time::timeout_at(deadline, ended).await.is_err() {
+                log::warn!("closing {:?} with a turn still in flight after {bound:?}", key.scope);
+                break;
+            }
+        }
+        self.close_key(key).await;
+    }
+
+    /// If `key`'s session has finished `max_turns` turns and none is in
+    /// flight, close it so the next `ensure` starts a fresh one (notes
+    /// sessions are renewed every 25 runs so history does not grow). Scope
+    /// usage is kept. True when it was recycled.
+    pub async fn recycle_after(&self, key: &SessionKey, max_turns: usize) -> bool {
+        if self.turns(key) < max_turns {
+            return false;
+        }
+        match self.retire_if_idle(key) {
+            Some(handle) => {
+                handle.close().await;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Close past-meeting sessions with no AI activity for 15 min (and no turn
@@ -874,6 +1071,7 @@ impl AgentSessionManager {
         };
         self.cursors.lock().unwrap().remove(key);
         self.emit(key, SessionState::Closed, &entry.handle.model(), None);
+        self.notify_closed(key);
         Some(entry.handle)
     }
 
@@ -923,6 +1121,7 @@ impl AgentSessionManager {
     async fn close_removed(&self, key: &SessionKey, entry: Entry) {
         entry.handle.close().await;
         self.emit(key, SessionState::Closed, &entry.handle.model(), None);
+        self.notify_closed(key);
     }
 
     fn status(
@@ -935,6 +1134,7 @@ impl AgentSessionManager {
         AgentSessionStatus {
             scope: key.scope.label().to_string(),
             meeting_id: key.scope.meeting_id(),
+            chat_id: key.scope.chat_id().map(str::to_string),
             tier: key.tier.label().to_string(),
             state: state.label().to_string(),
             model: model.to_string(),
@@ -1003,16 +1203,26 @@ pub async fn run_idle_reaper(manager: Arc<AgentSessionManager>) {
 /// long) is replaced on its next use: Utility requests are unrelated, so
 /// nothing is lost. Meeting sessions keep theirs; restarting them means
 /// replaying context, which the caller (Task 15) owns.
+///
+/// Notes and Brief sessions are replaced too: every run resends what it
+/// needs (the outline, the passages), and `ai_runs` replays a chat's history
+/// into a Workspace session when a fresh one starts.
 fn restart_after_error(key: &SessionKey, entry: &Entry) -> bool {
-    key.scope == SessionScope::Utility
-        && entry.state == SessionState::Error
+    matches!(
+        key.scope,
+        SessionScope::Utility | SessionScope::Workspace(_) | SessionScope::Notes(_) | SessionScope::Brief(_)
+    ) && entry.state == SessionState::Error
         && entry.in_flight == 0
 }
 
 fn is_stale(key: &SessionKey, entry: &Entry, now: Instant) -> bool {
-    matches!(key.scope, SessionScope::Past(_))
-        && entry.in_flight == 0
-        && now.saturating_duration_since(entry.last_used) >= PAST_IDLE_TIMEOUT
+    let limit = match key.scope {
+        SessionScope::Past(_) => PAST_IDLE_TIMEOUT,
+        SessionScope::Workspace(_) => WORKSPACE_IDLE_TIMEOUT,
+        SessionScope::Notes(_) | SessionScope::Brief(_) => MEETING_AUX_IDLE_TIMEOUT,
+        SessionScope::Live(_) | SessionScope::Utility => return false,
+    };
+    entry.in_flight == 0 && now.saturating_duration_since(entry.last_used) >= limit
 }
 
 /// Same session object (compares data pointers; vtable pointers may differ).
@@ -1428,6 +1638,7 @@ mod tests {
         let s = AgentSessionStatus {
             scope: "live".into(),
             meeting_id: Some("m1".into()),
+            chat_id: None,
             tier: "fast".into(),
             state: "ready".into(),
             model: "haiku".into(),
@@ -2015,5 +2226,297 @@ mod tests {
         assert!(futures::poll!(blocked.as_mut()).is_pending());
         assert!(mgr.retire_if_idle(&k).is_none());
         assert_eq!(mgr.snapshot().len(), 1);
+    }
+
+    // ---- per-session overrides, new scopes, graceful close ----
+
+    fn over(kind: Option<CliAgentKind>, model: &str, effort: &str) -> Option<SessionOverride> {
+        Some(SessionOverride {
+            kind,
+            model: Some(model).filter(|m| !m.is_empty()).map(str::to_string),
+            effort: Some(effort).filter(|e| !e.is_empty()).map(str::to_string),
+            thinking: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn a_session_with_its_own_kind_survives_a_provider_switch() {
+        let (mgr, spawner, _sink) = setup();
+        let chat = key(SessionScope::Workspace("c1".into()), Tier::Deep);
+        let live = key(SessionScope::Live("m".into()), Tier::Fast);
+        mgr.settings().set_active(CliAgentKind::Claude);
+        mgr.ensure(&live, init(&[])).await.unwrap();
+        mgr.ensure_with(&chat, init(&[]), over(Some(CliAgentKind::Codex), "gpt-x", "high")).await.unwrap();
+
+        mgr.settings().set_active(CliAgentKind::Antigravity);
+        assert_eq!(mgr.close_other_kinds().await, 1, "only the live Claude session follows the switch");
+        let scopes: Vec<_> = mgr.snapshot().iter().map(|s| s.scope.clone()).collect();
+        assert_eq!(scopes, vec!["workspace"]);
+
+        // The chat keeps its session, and still asks.
+        mgr.ensure_with(&chat, init(&[]), over(Some(CliAgentKind::Codex), "gpt-x", "high")).await.unwrap();
+        assert_eq!(spawner.calls.load(Ordering::SeqCst), 2);
+        let r = mgr.ask(&chat, "hi", no_delta(), Arc::new(CancelToken::new())).await.unwrap();
+        assert_eq!(r.text, "hi");
+        assert_eq!(mgr.settings().active(), CliAgentKind::Antigravity, "the active kind is untouched by the chat");
+    }
+
+    #[tokio::test]
+    async fn without_a_kind_override_a_session_still_follows_the_active_provider() {
+        let (mgr, _spawner, _sink) = setup();
+        let chat = key(SessionScope::Workspace("c1".into()), Tier::Deep);
+        // A model-only override pins nothing.
+        mgr.ensure_with(&chat, init(&[]), over(None, "opus", "")).await.unwrap();
+        mgr.settings().set_active(CliAgentKind::Codex);
+        assert_eq!(mgr.close_other_kinds().await, 1);
+    }
+
+    #[tokio::test]
+    async fn override_model_effort_and_thinking_reach_the_spawner_and_a_change_replaces_the_session() {
+        let (mgr, spawner, _sink) = setup();
+        let chat = key(SessionScope::Workspace("c1".into()), Tier::Deep);
+        let o = SessionOverride {
+            kind: Some(CliAgentKind::Claude),
+            model: Some("opus".into()),
+            effort: Some("high".into()),
+            thinking: Some(true),
+        };
+        let a = mgr.ensure_with(&chat, init(&[]), Some(o.clone())).await.unwrap();
+        let again = mgr.ensure_with(&chat, init(&[]), Some(o.clone())).await.unwrap();
+        assert!(same_session(&a, &again), "the same override reuses the session");
+        {
+            let spawned = spawner.spawned.lock().unwrap();
+            let cfg = &spawned[0].0;
+            assert_eq!((cfg.kind, cfg.model.as_str(), cfg.thinking), (CliAgentKind::Claude, "opus", true));
+        }
+        let o2 = SessionOverride { model: Some("sonnet".into()), ..o };
+        let b = mgr.ensure_with(&chat, init(&[]), Some(o2)).await.unwrap();
+        assert!(!same_session(&a, &b));
+        assert_eq!(spawner.calls.load(Ordering::SeqCst), 2);
+        assert!(spawner.spawned.lock().unwrap()[0].1.closed.load(Ordering::SeqCst), "the old one was closed");
+        // An empty override is no override.
+        let (mgr2, spawner2, _) = setup();
+        let k = key(SessionScope::Utility, Tier::Fast);
+        mgr2.ensure_with(&k, init(&[]), Some(SessionOverride::default())).await.unwrap();
+        mgr2.ensure(&k, init(&[])).await.unwrap();
+        assert_eq!(spawner2.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn the_new_scopes_have_labels_ids_and_default_tiers() {
+        let cfg = ClaudeCliConfig::default();
+        for (scope, label, meeting, chat) in [
+            (SessionScope::Workspace("c".into()), "workspace", None, Some("c")),
+            (SessionScope::Notes("m".into()), "notes", Some("m"), None),
+            (SessionScope::Brief("m".into()), "brief", Some("m"), None),
+        ] {
+            assert_eq!(scope.label(), label);
+            assert_eq!(scope.meeting_id().as_deref(), meeting);
+            assert_eq!(scope.chat_id(), chat);
+            let tier = tier_for("Assist", &scope, &cfg);
+            assert_eq!(tier, if label == "workspace" { Tier::Deep } else { Tier::Fast });
+        }
+    }
+
+    #[tokio::test]
+    async fn status_reports_the_chat_id_for_a_workspace_session() {
+        let (mgr, _s, sink) = setup();
+        mgr.ensure(&key(SessionScope::Workspace("chat-7".into()), Tier::Deep), init(&[])).await.unwrap();
+        let rows = sink.0.lock().unwrap();
+        let last = rows.last().unwrap();
+        assert_eq!(
+            (last.scope.as_str(), last.chat_id.as_deref(), last.meeting_id.as_deref()),
+            ("workspace", Some("chat-7"), None)
+        );
+        let old: AgentSessionStatus = serde_json::from_str(
+            r#"{"scope":"live","meeting_id":"m","tier":"fast","state":"ready","model":"h","detail":null,"usage":{}}"#,
+        )
+        .unwrap();
+        assert_eq!(old.chat_id, None);
+    }
+
+    #[tokio::test]
+    async fn workspace_sessions_are_reaped_at_fifteen_minutes_and_notes_much_later() {
+        let (mgr, _s, _sink) = setup();
+        let chat = key(SessionScope::Workspace("c".into()), Tier::Deep);
+        let notes = key(SessionScope::Notes("m".into()), Tier::Fast);
+        let brief = key(SessionScope::Brief("m".into()), Tier::Fast);
+        let live = key(SessionScope::Live("m".into()), Tier::Fast);
+        for k in [&chat, &notes, &brief, &live] {
+            mgr.ensure(k, init(&[])).await.unwrap();
+        }
+        let t0 = Instant::now();
+        mgr.reap_idle(t0 + Duration::from_secs(14 * 60)).await;
+        assert_eq!(mgr.snapshot().len(), 4);
+        mgr.reap_idle(t0 + Duration::from_secs(16 * 60)).await;
+        let left: Vec<_> = mgr.snapshot().iter().map(|s| s.scope.clone()).collect();
+        assert_eq!(left, vec!["live", "notes", "brief"], "the chat went; notes, brief and live stay");
+        mgr.reap_idle(t0 + Duration::from_secs(3 * 60 * 60)).await;
+        let left: Vec<_> = mgr.snapshot().iter().map(|s| s.scope.clone()).collect();
+        assert_eq!(left, vec!["live"], "a live meeting session is never reaped");
+    }
+
+    #[tokio::test]
+    async fn a_workspace_session_with_a_turn_in_flight_is_not_reaped() {
+        let (mgr, _s, _sink) = setup();
+        let chat = key(SessionScope::Workspace("c".into()), Tier::Deep);
+        mgr.ensure(&chat, init(&[])).await.unwrap();
+        let blocked = mgr.ask(&chat, "block", no_delta(), Arc::new(CancelToken::new()));
+        tokio::pin!(blocked);
+        assert!(futures::poll!(blocked.as_mut()).is_pending());
+        mgr.reap_idle(Instant::now() + Duration::from_secs(60 * 60)).await;
+        assert_eq!(mgr.snapshot().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn notes_and_brief_end_with_their_meeting_and_a_chat_with_its_scope() {
+        let (mgr, spawner, _sink) = setup();
+        for scope in [SessionScope::Notes("m".into()), SessionScope::Brief("m".into()), SessionScope::Workspace("c".into())] {
+            mgr.ensure(&key(scope, Tier::Fast), init(&[])).await.unwrap();
+        }
+        mgr.close_scope(&SessionScope::Notes("m".into())).await;
+        mgr.close_scope(&SessionScope::Brief("m".into())).await;
+        assert_eq!(mgr.snapshot().len(), 1);
+        mgr.close_scope(&SessionScope::Workspace("c".into())).await;
+        assert!(mgr.snapshot().is_empty());
+        assert!(spawner.spawned.lock().unwrap().iter().all(|(_, s)| s.closed.load(Ordering::SeqCst)));
+    }
+
+    #[tokio::test]
+    async fn a_graceful_close_lets_the_turn_in_flight_finish_then_closes_and_keeps_usage() {
+        let (mgr, spawner, sink) = setup();
+        let mgr = Arc::new(mgr);
+        let scope = SessionScope::Workspace("c".into());
+        let k = key(scope.clone(), Tier::Deep);
+        mgr.ensure(&k, init(&[])).await.unwrap();
+        let turn = tokio::spawn({
+            let (mgr, k) = (mgr.clone(), k.clone());
+            async move { mgr.ask(&k, "slow", no_delta(), Arc::new(CancelToken::new())).await }
+        });
+        tokio::time::sleep(Duration::from_millis(15)).await;
+        let started = Instant::now();
+        mgr.close_scope_graceful(&scope, DRAIN_TIMEOUT).await;
+        assert!(started.elapsed() >= Duration::from_millis(20), "it waited for the turn");
+        assert!(started.elapsed() < Duration::from_secs(3));
+        let done = turn.await.unwrap().expect("the turn in flight was delivered");
+        assert_eq!(done.text, "slow");
+        assert!(spawner.spawned.lock().unwrap()[0].1.closed.load(Ordering::SeqCst));
+        assert!(mgr.snapshot().is_empty());
+        assert_eq!(mgr.usage(&scope).requests, 1, "usage is kept (a restart is not an ending)");
+        assert_eq!(sink.states().last().map(String::as_str), Some("closed"));
+    }
+
+    #[tokio::test]
+    async fn a_graceful_close_is_bounded_when_a_turn_never_ends() {
+        let (mgr, spawner, _sink) = setup();
+        let mgr = Arc::new(mgr);
+        let k = key(SessionScope::Workspace("c".into()), Tier::Deep);
+        mgr.ensure(&k, init(&[])).await.unwrap();
+        let _stuck = tokio::spawn({
+            let (mgr, k) = (mgr.clone(), k.clone());
+            async move { mgr.ask(&k, "block", no_delta(), Arc::new(CancelToken::new())).await }
+        });
+        tokio::time::sleep(Duration::from_millis(15)).await;
+        let started = Instant::now();
+        mgr.close_key_graceful(&k, Duration::from_millis(120)).await;
+        let took = started.elapsed();
+        assert!(took >= Duration::from_millis(100) && took < Duration::from_secs(2), "{took:?}");
+        assert!(spawner.spawned.lock().unwrap()[0].1.closed.load(Ordering::SeqCst), "then it is killed");
+    }
+
+    #[tokio::test]
+    async fn a_draining_session_takes_no_new_turn_and_a_graceful_close_of_nothing_is_fine() {
+        let (mgr, _s, _sink) = setup();
+        let mgr = Arc::new(mgr);
+        let k = key(SessionScope::Workspace("c".into()), Tier::Deep);
+        mgr.close_key_graceful(&k, Duration::from_millis(10)).await;
+        mgr.ensure(&k, init(&[])).await.unwrap();
+        let slow = tokio::spawn({
+            let (mgr, k) = (mgr.clone(), k.clone());
+            async move { mgr.ask(&k, "slow", no_delta(), Arc::new(CancelToken::new())).await }
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let closing = tokio::spawn({
+            let (mgr, k) = (mgr.clone(), k.clone());
+            async move { mgr.close_key_graceful(&k, DRAIN_TIMEOUT).await }
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let late = mgr.ask(&k, "hello", no_delta(), Arc::new(CancelToken::new())).await;
+        assert!(matches!(late, Err(AgentError::Crashed(ref m)) if m.contains("restarting")), "{late:?}");
+        slow.await.unwrap().unwrap();
+        closing.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn recycle_after_n_turns_replaces_an_idle_session_and_keeps_usage() {
+        let (mgr, spawner, _sink) = setup();
+        let k = key(SessionScope::Notes("m".into()), Tier::Fast);
+        mgr.ensure(&k, init(&[])).await.unwrap();
+        assert!(!mgr.recycle_after(&k, 2).await, "no turns yet");
+        mgr.ask(&k, "a", no_delta(), Arc::new(CancelToken::new())).await.unwrap();
+        assert!(!mgr.recycle_after(&k, 2).await);
+        mgr.ask(&k, "b", no_delta(), Arc::new(CancelToken::new())).await.unwrap();
+        assert!(mgr.recycle_after(&k, 2).await);
+        assert!(spawner.spawned.lock().unwrap()[0].1.closed.load(Ordering::SeqCst));
+        assert_eq!(mgr.usage(&SessionScope::Notes("m".into())).requests, 2, "usage kept");
+        mgr.ensure(&k, init(&[])).await.unwrap();
+        assert_eq!(spawner.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(mgr.turns(&k), 0);
+    }
+
+    #[tokio::test]
+    async fn the_closed_hook_runs_for_every_way_a_session_leaves() {
+        let (mgr, _s, _sink) = setup();
+        let seen: Arc<Mutex<Vec<SessionKey>>> = Arc::default();
+        let target = seen.clone();
+        mgr.set_closed_hook(Arc::new(move |k: &SessionKey| target.lock().unwrap().push(k.clone())));
+        let a = key(SessionScope::Workspace("a".into()), Tier::Deep);
+        let b = key(SessionScope::Workspace("b".into()), Tier::Deep);
+        let c = key(SessionScope::Notes("m".into()), Tier::Fast);
+        for k in [&a, &b, &c] {
+            mgr.ensure(k, init(&[])).await.unwrap();
+        }
+        mgr.close_scope(&SessionScope::Workspace("a".into())).await; // explicit close
+        mgr.touch(&c);
+        mgr.reap_idle(Instant::now() + Duration::from_secs(16 * 60)).await; // idle reap of b (a is gone)
+        let retired = mgr.retire_if_idle(&c).unwrap(); // retire
+        retired.close().await;
+        assert_eq!(*seen.lock().unwrap(), vec![a, b, c]);
+    }
+
+    #[tokio::test]
+    async fn workspace_notes_and_brief_sessions_are_replaced_after_a_failed_turn() {
+        let (mgr, spawner, _sink) = setup();
+        for scope in [SessionScope::Workspace("c".into()), SessionScope::Notes("m".into()), SessionScope::Brief("m".into())] {
+            let k = key(scope, Tier::Fast);
+            mgr.ensure(&k, init(&[])).await.unwrap();
+            let _ = mgr.ask(&k, "fail:context too long", no_delta(), Arc::new(CancelToken::new())).await;
+            mgr.ensure(&k, init(&[])).await.unwrap();
+        }
+        assert_eq!(spawner.calls.load(Ordering::SeqCst), 6, "each was started again");
+        // A live session in error is kept (restarting it means replaying context).
+        let live = key(SessionScope::Live("m".into()), Tier::Fast);
+        mgr.ensure(&live, init(&[])).await.unwrap();
+        let _ = mgr.ask(&live, "fail:x", no_delta(), Arc::new(CancelToken::new())).await;
+        mgr.ensure(&live, init(&[])).await.unwrap();
+        assert_eq!(spawner.calls.load(Ordering::SeqCst), 7);
+    }
+
+    #[tokio::test]
+    async fn existing_sessions_keep_their_behaviour_without_overrides() {
+        // The same calls as before the overrides existed: reuse, restart on a dead
+        // process, and a kind switch replacing the session.
+        let (mgr, spawner, _sink) = setup();
+        let k = key(SessionScope::Past("m".into()), Tier::Deep);
+        let a = mgr.ensure(&k, init(&["ctx"])).await.unwrap();
+        let b = mgr.ensure(&k, init(&["ctx"])).await.unwrap();
+        assert!(same_session(&a, &b));
+        a.close().await;
+        let c = mgr.ensure(&k, init(&["ctx"])).await.unwrap();
+        assert!(!same_session(&a, &c));
+        mgr.settings().set_active(CliAgentKind::Codex);
+        let d = mgr.ensure(&k, init(&["ctx"])).await.unwrap();
+        assert!(!same_session(&c, &d));
+        assert_eq!(spawner.calls.load(Ordering::SeqCst), 3);
     }
 }

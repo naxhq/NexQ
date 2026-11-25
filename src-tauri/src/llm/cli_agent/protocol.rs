@@ -44,6 +44,35 @@ impl TurnResult {
     }
 }
 
+/// How close the user's subscription plan is to its usage limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PlanLimitLevel {
+    /// Past the CLI's warning threshold: requests still work.
+    Near,
+    /// The limit is reached: requests are refused until it resets.
+    Hit,
+}
+
+/// A plan-limit signal the CLI reported (Claude `rate_limit_event`, Codex
+/// `account/rateLimits/updated`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanLimit {
+    pub level: PlanLimitLevel,
+    /// When the window resets (Unix seconds).
+    pub resets_at: Option<u64>,
+    /// Which window (`five_hour`, `seven_day`, ...), as the CLI names it.
+    pub window: Option<String>,
+    /// Share of the window used (0..=100 for Codex, 0..=1 or a percent as Claude sends it).
+    pub used: Option<f64>,
+}
+
+impl PlanLimit {
+    /// The more serious of two signals (`Hit` beats `Near`; later wins a tie).
+    pub fn merge(self, newer: PlanLimit) -> PlanLimit {
+        if newer.level >= self.level { newer } else { self }
+    }
+}
+
 /// One tool call the model made (a block of an `assistant` line).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolUse {
@@ -89,6 +118,8 @@ pub enum AgentEvent {
     /// The model is thinking (extended thinking) before it answers.
     ThinkingDelta,
     TurnComplete(TurnResult),
+    /// A `rate_limit_event` whose status is a warning or a rejection.
+    RateLimit(PlanLimit),
     /// Any event NexQ does not act on (status, assistant, user, other deltas...).
     Other,
 }
@@ -157,6 +188,23 @@ pub fn parse_line(line: &str) -> Result<AgentEvent, String> {
                 })
                 .unwrap_or_default();
             Ok(if results.is_empty() { AgentEvent::Other } else { AgentEvent::ToolResults(results) })
+        }
+        // `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed|allowed_warning|rejected",
+        //   "resetsAt":<unix s>,"rateLimitType":"five_hour",...}}`; read from the
+        // CLI's own source strings, not from a live capture.
+        ("rate_limit_event", _) => {
+            let info = &v["rate_limit_info"];
+            let level = match info["status"].as_str() {
+                Some("allowed_warning") => PlanLimitLevel::Near,
+                Some("rejected") => PlanLimitLevel::Hit,
+                _ => return Ok(AgentEvent::Other),
+            };
+            Ok(AgentEvent::RateLimit(PlanLimit {
+                level,
+                resets_at: info["resetsAt"].as_u64(),
+                window: info["rateLimitType"].as_str().map(str::to_string),
+                used: info["utilization"].as_f64(),
+            }))
         }
         ("stream_event", _) => {
             let delta = &v["event"]["delta"];
@@ -665,5 +713,36 @@ pub(crate) mod tests {
         ] {
             assert_eq!(classify_error(text), AgentErrorKind::RateLimited, "{text}");
         }
+    }
+
+    #[test]
+    fn rate_limit_events_become_plan_limit_signals_only_when_they_warn_or_refuse() {
+        let line = |status: &str| {
+            format!(
+                r#"{{"type":"rate_limit_event","rate_limit_info":{{"status":"{status}","resetsAt":1900000000,"rateLimitType":"five_hour","utilization":0.91,"isUsingOverage":false}},"uuid":"u","session_id":"s"}}"#
+            )
+        };
+        assert_eq!(parse_line(&line("allowed")).unwrap(), AgentEvent::Other);
+        match parse_line(&line("allowed_warning")).unwrap() {
+            AgentEvent::RateLimit(l) => {
+                assert_eq!(l.level, PlanLimitLevel::Near);
+                assert_eq!(l.resets_at, Some(1_900_000_000));
+                assert_eq!(l.window.as_deref(), Some("five_hour"));
+                assert_eq!(l.used, Some(0.91));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(parse_line(&line("rejected")).unwrap(), AgentEvent::RateLimit(l) if l.level == PlanLimitLevel::Hit));
+        // Odd shapes never fail a turn.
+        assert_eq!(parse_line(r#"{"type":"rate_limit_event"}"#).unwrap(), AgentEvent::Other);
+    }
+
+    #[test]
+    fn the_worse_plan_limit_signal_wins() {
+        let near = PlanLimit { level: PlanLimitLevel::Near, resets_at: Some(1), window: None, used: None };
+        let hit = PlanLimit { level: PlanLimitLevel::Hit, resets_at: Some(2), window: None, used: None };
+        assert_eq!(near.clone().merge(hit.clone()), hit);
+        assert_eq!(hit.clone().merge(near.clone()), hit, "a later warning does not hide a hit");
+        assert_eq!(near.clone().merge(PlanLimit { resets_at: Some(3), ..near.clone() }).resets_at, Some(3));
     }
 }

@@ -575,7 +575,9 @@ pub(crate) async fn session_assist(state: &AppState, app: &AppHandle, req: Sessi
         SessionScope::Past(id) => {
             crate::commands::meeting_commands::past_session_record(state, id, key.with_sources)
         }
-        SessionScope::Utility => Err("Utility requests have no meeting session".to_string()),
+        SessionScope::Utility | SessionScope::Workspace(_) | SessionScope::Notes(_) | SessionScope::Brief(_) => {
+            Err("This request has no live or past meeting session".to_string())
+        }
     });
     match ready {
         Ok(true) => {}
@@ -1062,6 +1064,7 @@ pub async fn generate_assist(
                 cancel: Some(cancel_token.clone()),
                 thinking: Default::default(),
                 thinking_auto_off: false,
+                ..Default::default()
             },
             cancel: cancel_token.clone(),
             images: &images,
@@ -1240,6 +1243,7 @@ pub async fn generate_assist(
         thinking: Default::default(),
         // The background JSON tasks want no thinking unless the user chose otherwise.
         thinking_auto_off: matches!(mode.as_str(), "ActionItemsExtraction" | "BookmarkSuggestions"),
+        ..Default::default()
     };
 
     // When Gemini cache is active, skip RAG entirely — no Ollama embed needed.

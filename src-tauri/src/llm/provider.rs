@@ -43,6 +43,16 @@ pub struct GenerationParams {
     /// setting still wins.
     #[serde(default)]
     pub thinking_auto_off: bool,
+    /// Mark the stable system part for the provider's prompt cache. Only the
+    /// `ai_runs` service sets it (Anthropic `cache_control`); live answers
+    /// keep their exact old request body. Ignored by other providers.
+    #[serde(default)]
+    pub cache_system: bool,
+    /// The context window to ask for (Ollama `options.num_ctx`), so a long
+    /// prompt is not silently cut at the server's default. Only `ai_runs`
+    /// sets it. Ignored by other providers.
+    #[serde(default)]
+    pub num_ctx: Option<u64>,
 }
 
 impl Default for GenerationParams {
@@ -57,6 +67,8 @@ impl Default for GenerationParams {
             cancel: None,
             thinking: ThinkingSetting::Auto,
             thinking_auto_off: false,
+            cache_system: false,
+            num_ctx: None,
         }
     }
 }
@@ -278,12 +290,18 @@ pub struct ModelInfo {
     pub context_window: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CompletionStats {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub total_tokens: u64,
     pub latency_ms: u64,
+    /// Prompt tokens read from / written to the provider's prompt cache, when
+    /// it reports them (Anthropic). `prompt_tokens` stays the uncached part.
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    #[serde(default)]
+    pub cache_write_tokens: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -558,6 +576,7 @@ mod tests {
             completion_tokens: 7,
             total_tokens: prompt + 7,
             latency_ms: 1,
+            ..Default::default()
         };
         assert_eq!(StreamUsage::from_stats(&stats(0)), None);
         let real = StreamUsage::from_stats(&stats(12)).unwrap();

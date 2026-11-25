@@ -62,7 +62,17 @@ pub(crate) fn build_messages_body(
     });
 
     if let Some(system) = &system_content {
-        body["system"] = json!(system);
+        if params.cache_system {
+            // The stable part (instructions, context) is cached: a chat or a
+            // notes run that repeats it reads it back at a fraction of the price.
+            body["system"] = json!([{
+                "type": "text",
+                "text": system,
+                "cache_control": { "type": "ephemeral" }
+            }]);
+        } else {
+            body["system"] = json!(system);
+        }
     }
 
     let sent = with_thinking && thinking::apply_anthropic(&mut body, model, thinking);
@@ -306,6 +316,8 @@ impl LLMProvider for AnthropicClient {
         let mut token_count: u64 = 0;
         let mut input_tokens: u64 = 0;
         let mut output_tokens: u64 = 0;
+        let mut cache_read_tokens: u64 = 0;
+        let mut cache_write_tokens: u64 = 0;
 
         while let Some(chunk_result) = cancellable(&params, stream.next()).await? {
             check_cancelled(&params)?;
@@ -330,6 +342,14 @@ impl LLMProvider for AnthropicClient {
                                 if let Some(it) = usage.get("input_tokens").and_then(|v| v.as_u64()) {
                                     input_tokens = it;
                                 }
+                                cache_read_tokens = usage
+                                    .get("cache_read_input_tokens")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                cache_write_tokens = usage
+                                    .get("cache_creation_input_tokens")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
                             }
                         }
                         "content_block_delta" => {
@@ -398,6 +418,8 @@ impl LLMProvider for AnthropicClient {
             completion_tokens: output_tokens,
             total_tokens: total,
             latency_ms,
+            cache_read_tokens,
+            cache_write_tokens,
         };
 
         check_cancelled(&params)?;
@@ -484,5 +506,22 @@ mod thinking_tests {
         assert!(!sent);
         assert!(b.get("thinking").is_none());
         assert!(b.get("output_config").is_none());
+    }
+
+    #[test]
+    fn cache_system_marks_the_stable_system_block_for_the_prompt_cache() {
+        let messages = vec![
+            LLMMessage { role: "system".into(), content: "stable".into() },
+            LLMMessage { role: "user".into(), content: "hi".into() },
+        ];
+        let params = GenerationParams { cache_system: true, ..Default::default() };
+        let (b, _) = build_messages_body(&messages, "claude-sonnet-5-5", &params, ThinkingSetting::Auto, true);
+        assert_eq!(b["system"][0]["text"], "stable");
+        assert_eq!(b["system"][0]["type"], "text");
+        assert_eq!(b["system"][0]["cache_control"]["type"], "ephemeral");
+        // Live answers (the default) keep the exact old body: a plain string.
+        let (live, _) = build_messages_body(&messages, "claude-sonnet-5-5", &GenerationParams::default(), ThinkingSetting::Auto, true);
+        assert_eq!(live["system"], "stable");
+        assert!(!live.to_string().contains("cache_control"));
     }
 }

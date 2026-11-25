@@ -105,7 +105,11 @@ pub fn choose_route(
             None => Route::Stateless,
         },
         ClaudeHealth::Healthy => match scope {
-            SessionScope::Utility => Route::Stateless,
+            // Chats, notes and the brief run through `ai_runs`, never this route.
+            SessionScope::Utility
+            | SessionScope::Workspace(_)
+            | SessionScope::Notes(_)
+            | SessionScope::Brief(_) => Route::Stateless,
             SessionScope::Live(_) | SessionScope::Past(_) => {
                 let tier = tier_for(mode, scope, cfg);
                 Route::ClaudeSession(if with_sources {
@@ -984,6 +988,9 @@ pub fn session_key_label(key: &SessionKey) -> String {
         SessionScope::Live(id) => format!("live:{id}:{tier}{sources}"),
         SessionScope::Past(id) => format!("past:{id}:{tier}{sources}"),
         SessionScope::Utility => format!("utility:{tier}{sources}"),
+        SessionScope::Workspace(id) => format!("workspace:{id}:{tier}{sources}"),
+        SessionScope::Notes(id) => format!("notes:{id}:{tier}{sources}"),
+        SessionScope::Brief(id) => format!("brief:{id}:{tier}{sources}"),
     }
 }
 

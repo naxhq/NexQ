@@ -50,6 +50,10 @@ pub(crate) fn build_chat_body(
     if let Some(max_tok) = params.max_tokens {
         options.insert("num_predict".to_string(), json!(max_tok));
     }
+    // Only `ai_runs` asks for a window; live answers keep the server's own.
+    if let Some(num_ctx) = params.num_ctx {
+        options.insert("num_ctx".to_string(), json!(num_ctx));
+    }
     if !options.is_empty() {
         body["options"] = serde_json::Value::Object(options);
     }
@@ -290,6 +294,7 @@ impl LLMProvider for OllamaClient {
             completion_tokens,
             total_tokens: total,
             latency_ms,
+            ..Default::default()
         };
 
         check_cancelled(&params)?;
@@ -351,5 +356,20 @@ mod thinking_tests {
         assert_eq!(b["options"]["num_ctx"], 8192);
         assert_eq!(b["options"]["temperature"], 0.3, "options are merged, not replaced");
         assert_eq!(b["think"], true, "the user's JSON has the last word");
+    }
+
+    #[test]
+    fn num_ctx_is_sent_only_when_a_run_asks_for_it() {
+        let (live, _) = build_chat_body(&user(), "m", &GenerationParams::default(), ThinkingSetting::Auto, None, true);
+        assert!(live.get("options").is_none(), "live answers send no options of their own");
+        let params = GenerationParams { num_ctx: Some(16384), temperature: Some(0.1), ..Default::default() };
+        let (b, _) = build_chat_body(&user(), "m", &params, ThinkingSetting::Auto, None, true);
+        assert_eq!(b["options"]["num_ctx"], 16384);
+        assert_eq!(b["options"]["temperature"], 0.1);
+        // The user's own extra JSON still wins.
+        let extra: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(r#"{"options":{"num_ctx":4096}}"#).unwrap();
+        let (b, _) = build_chat_body(&user(), "m", &params, ThinkingSetting::Auto, Some(&extra), true);
+        assert_eq!(b["options"]["num_ctx"], 4096);
     }
 }

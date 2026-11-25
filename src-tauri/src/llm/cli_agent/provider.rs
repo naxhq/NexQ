@@ -183,6 +183,8 @@ fn stats_from(turn: &TurnResult, latency_ms: u64) -> CompletionStats {
         completion_tokens: turn.output_tokens,
         total_tokens: prompt_tokens + turn.output_tokens,
         latency_ms,
+        cache_read_tokens: turn.cache_read_tokens,
+        cache_write_tokens: turn.cache_write_tokens,
     }
 }
 

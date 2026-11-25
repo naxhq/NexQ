@@ -1,3 +1,4 @@
+pub mod ai_runs;
 pub mod audio;
 pub mod commands;
 pub mod context;
@@ -196,6 +197,13 @@ pub fn run() {
             let stale = sources::private_files::cleanup_leftovers(&sources::private_files::private_dir());
             if stale > 0 {
                 log::info!("Removed {stale} leftover private session file(s)");
+            }
+            // Chat transcript folders of a run that did not close cleanly.
+            let stale = llm::cli_agent::transcripts::TranscriptRoot::cleanup_leftovers(
+                llm::cli_agent::transcripts::global().root(),
+            );
+            if stale > 0 {
+                log::info!("Removed {stale} leftover chat transcript folder(s)");
             }
             let mut app_state = AppState::new();
 

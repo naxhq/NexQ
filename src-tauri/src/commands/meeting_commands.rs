@@ -338,7 +338,7 @@ fn retry_sources_key(app: &AppHandle, key: SessionKey) {
         SessionScope::Past(id) => {
             start_session_in_background(app, key, move |state| past_session_record(state, &id, true))
         }
-        SessionScope::Utility => {}
+        SessionScope::Utility | SessionScope::Workspace(_) | SessionScope::Notes(_) | SessionScope::Brief(_) => {}
     }
 }
 

@@ -62,6 +62,10 @@ pub async fn set_llm_provider(
 
     // Log the provider type only: the raw config JSON carries the API key / auth value.
     let provider_type = config.provider_type.clone();
+    // Which local server live answers use, so background AI runs on the same one yield.
+    if let Ok(pt) = ProviderType::from_str(&provider_type) {
+        crate::ai_runs::LiveGate::global().set_target(crate::ai_runs::LiveTarget::for_provider(&pt, config.base_url.as_deref()));
+    }
     router
         .set_provider(config)
         .map_err(|e| format!("Failed to set provider: {}", e))?;

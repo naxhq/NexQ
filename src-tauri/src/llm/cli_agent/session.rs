@@ -16,7 +16,7 @@ use super::command::{
     build_args, configure_session_command, configure_sources_env, sandbox_dir, SessionConfig,
 };
 use super::protocol::{
-    classify_error, parse_line, user_message, user_message_with_images, AgentErrorKind, AgentEvent,
+    classify_error, PlanLimit, parse_line, user_message, user_message_with_images, AgentErrorKind, AgentEvent,
     ImageAttachment, McpServerState, ToolResult, ToolUse, TurnResult,
 };
 use crate::llm::provider::CancelToken;
@@ -244,9 +244,19 @@ struct Shared {
     cost: Mutex<CostTracker>,
     /// The latest `system/init`.
     init: Mutex<InitInfo>,
+    /// The worst plan-limit signal since it was last taken.
+    plan_limit: Mutex<Option<PlanLimit>>,
 }
 
 impl Shared {
+    fn note_plan_limit(&self, limit: PlanLimit) {
+        let mut slot = self.plan_limit.lock().unwrap();
+        *slot = Some(match slot.take() {
+            Some(old) => old.merge(limit),
+            None => limit,
+        });
+    }
+
     /// Fill `result.cost_usd` with this turn's share of the process total.
     fn settle_cost(&self, mut result: TurnResult) -> TurnResult {
         result.cost_usd = self.cost.lock().unwrap().per_turn(result.total_cost_usd);
@@ -533,6 +543,11 @@ impl ClaudeSession {
     }
 
     /// The tools and MCP server states of the latest `system/init`.
+    /// The plan-limit signal reported since the last call (clears it).
+    pub fn take_plan_limit(&self) -> Option<PlanLimit> {
+        self.shared.plan_limit.lock().unwrap().take()
+    }
+
     pub fn init_info(&self) -> InitInfo {
         self.shared.init.lock().unwrap().clone()
     }
@@ -682,6 +697,7 @@ async fn drive_turn(
                     }
                 }
                 Ok(Some(AgentEvent::TurnComplete(result))) => break Ok(shared.settle_cost(result)),
+                Ok(Some(AgentEvent::RateLimit(limit))) => shared.note_plan_limit(limit),
                 Ok(Some(_)) => {}
                 Ok(None) => break Err(AgentError::Crashed(shared.crash_reason())),
                 Err(_) => {
@@ -766,6 +782,7 @@ fn start_process(
         exit_status: Mutex::new(None),
         cost: Mutex::new(CostTracker::default()),
         init: Mutex::new(InitInfo::default()),
+        plan_limit: Mutex::new(None),
     });
     let (stdin_tx, stdin_rx) = std_mpsc::channel::<String>();
     let (event_tx, event_rx) = mpsc::unbounded_channel();
@@ -947,6 +964,7 @@ mod tests {
             exit_status: Mutex::new(None),
             cost: Mutex::new(CostTracker::default()),
             init: Mutex::new(InitInfo::default()),
+            plan_limit: Mutex::new(None),
         };
         let first = shared.settle_cost(TurnResult { total_cost_usd: 0.0100, ..Default::default() });
         assert_eq!(first.cost_usd, 0.0100);
