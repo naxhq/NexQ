@@ -1,10 +1,13 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { Suspense, useState, useCallback, useEffect, useRef } from "react";
 import { formatShortcut } from "../lib/shortcutLabel";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useConfigStore } from "../stores/configStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { showToast } from "../stores/toastStore";
-import { MeetingDetails } from "./meeting-details";
+import { lazyNamed } from "../lib/lazyNamed";
+
+// Past meetings open in their own chunk.
+const MeetingDetails = lazyNamed(() => import("./meeting-details/MeetingDetailsContainer"), "MeetingDetails");
 import { MeetingSetupModal, type MeetingSetupChoice } from "./MeetingSetupModal";
 import { NEXQ_VERSION, NEXQ_DEVELOPER } from "../lib/version";
 import { ServiceStatusBar } from "../components/ServiceStatusBar";
@@ -199,7 +202,9 @@ export function LauncherView() {
 
         <div className="min-h-0 flex-1 overflow-hidden">
           {selectedMeetingId ? (
-            <MeetingDetails meetingId={selectedMeetingId} onBack={() => setSelectedMeetingId(null)} />
+            <Suspense fallback={null}>
+              <MeetingDetails meetingId={selectedMeetingId} onBack={() => setSelectedMeetingId(null)} />
+            </Suspense>
           ) : (
             <WorkspaceHome starting={isStarting} onStart={handleStartMeeting} onOpenMeeting={handleOpenMeeting} />
           )}

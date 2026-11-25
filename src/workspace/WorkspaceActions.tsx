@@ -1,11 +1,14 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
+import { Suspense, createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
 import type { MenuItemSpec } from "../ui";
 import { showToast } from "../stores/toastStore";
 import { GENERAL_ID, useWorkspaceStore, workspaceById } from "../stores/workspaceStore";
 import type { WorkspaceDetail, WorkspaceSummary } from "../lib/types";
-import { WorkspaceDialog } from "./WorkspaceDialog";
-import { DeleteWorkspaceDialog } from "./DeleteWorkspaceDialog";
-import { CloneDialog } from "./CloneDialog";
+import { lazyNamed } from "../lib/lazyNamed";
+
+// Dialogs are separate chunks, loaded when first asked for (and mounted only while open).
+const WorkspaceDialog = lazyNamed(() => import("./WorkspaceDialog"), "WorkspaceDialog");
+const DeleteWorkspaceDialog = lazyNamed(() => import("./DeleteWorkspaceDialog"), "DeleteWorkspaceDialog");
+const CloneDialog = lazyNamed(() => import("./CloneDialog"), "CloneDialog");
 import { moveInOrder } from "./order";
 
 export interface WorkspaceActions {
@@ -110,8 +113,10 @@ export function WorkspaceActionsProvider({ children }: { children: ReactNode }) 
   return (
     <Ctx.Provider value={actions}>
       {children}
+      <Suspense fallback={null}>
+      {editing !== null && (
       <WorkspaceDialog
-        open={editing !== null}
+        open
         workspace={editingWorkspace}
         detail={detail}
         onClose={(saved) => {
@@ -122,14 +127,18 @@ export function WorkspaceActionsProvider({ children }: { children: ReactNode }) 
           if (saved && wasNew) useWorkspaceStore.getState().openWorkspace(saved.id);
         }}
       />
-      <CloneDialog
-        workspace={cloning ? workspaces.find((w) => w.id === cloning) ?? null : null}
-        onClose={(created) => {
-          setCloning(null);
-          if (created) useWorkspaceStore.getState().openWorkspace(created.id);
-        }}
-      />
-      <DeleteWorkspaceDialog workspace={deleting ? workspaces.find((w) => w.id === deleting) ?? null : null} onClose={() => setDeleting(null)} />
+      )}
+      {cloning && (
+        <CloneDialog
+          workspace={workspaces.find((w) => w.id === cloning) ?? null}
+          onClose={(created) => {
+            setCloning(null);
+            if (created) useWorkspaceStore.getState().openWorkspace(created.id);
+          }}
+        />
+      )}
+      {deleting && <DeleteWorkspaceDialog workspace={workspaces.find((w) => w.id === deleting) ?? null} onClose={() => setDeleting(null)} />}
+      </Suspense>
     </Ctx.Provider>
   );
 }

@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState } from "react";
+import { Suspense, useEffect, useCallback, useState } from "react";
 import { useMeetingStore } from "./stores/meetingStore";
 import { useConfigStore } from "./stores/configStore";
 import { useAIActionsStore, watchSavedActionConfigs } from "./stores/aiActionsStore";
@@ -6,16 +6,23 @@ import { useSourcesStore } from "./stores/sourcesStore";
 import { useWorkspaceStore, watchWorkspaces } from "./stores/workspaceStore";
 import { watchWorkspaceChats } from "./stores/workspaceChatStore";
 import { useScenarioStore, watchSavedScenarios } from "./stores/scenarioStore";
-import { LauncherView } from "./launcher/LauncherView";
-import { OverlayView } from "./overlay/OverlayView";
-import { SettingsOverlay } from "./settings/SettingsOverlay";
-import { FirstRunWizard } from "./components/wizard/FirstRunWizard";
 import { ToastContainer } from "./components/Toast";
+import {
+  DemoBadge,
+  DemoPicker,
+  FirstRunWizard,
+  LauncherView,
+  OverlayResizeHandles,
+  OverlayView,
+  SelectionToolbar,
+  SettingsOverlay,
+  StarPrompt,
+  UpdateDialog,
+  preloadForWindow,
+} from "./lazyViews";
 import { showToast } from "./stores/toastStore";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { UpdateReadyToast } from "./components/UpdateToast";
-import { UpdateDialog } from "./components/UpdateDialog";
-import { StarPrompt } from "./components/StarPrompt";
 import { useTheme } from "./hooks/useTheme";
 import { useGlobalShortcut } from "./hooks/useGlobalShortcut";
 import { useTranslation } from "./hooks/useTranslation";
@@ -26,15 +33,11 @@ import { useAgentFallbackToast } from "./hooks/useAgentFallbackToast";
 import { refreshCliModelsOnStart } from "./stores/agentStore";
 import { useTranslationStore } from "./stores/translationStore";
 import { useWindowPlacement } from "./hooks/useWindowPlacement";
-import { OverlayResizeHandles } from "./overlay/OverlayResizeHandles";
-import { SelectionToolbar } from "./components/SelectionToolbar";
 import { ActiveMeetingProvider } from "./components/ActiveMeetingProvider";
 import { initMeetingSpeakers, resetMeetingScopedStores } from "./stores/resetMeeting";
 import { listen } from "@tauri-apps/api/event";
 import type { AppView, Meeting, AudioMode, AIScenario } from "./lib/types";
 import { useDemoShortcut } from "./demo/useDemoShortcut";
-import { DemoPicker } from "./demo/DemoPicker";
-import { DemoBadge } from "./demo/DemoBadge";
 import { useDemoStore } from "./demo/demoStore";
 import { SCREENSHOT_EVENT, leaveSettingsForAsk } from "./lib/screenCapture";
 import { SHOW_MEETING_OVERLAY_EVENT, showLauncherWindow, showMeetingOverlay, showOverlayWindow, waitForOverlayMeeting } from "./lib/windows";
@@ -43,9 +46,16 @@ import { logToFile } from "./lib/logger";
 import { emitOverlayMeetingReady, onAudioCaptureStatus, onAudioCaptureStopped, onCaptureWarning, onOverlayMeetingReady, onStartDetectedMeeting, onStealthModeChanged } from "./lib/events";
 import { createCaptureStatusHandler } from "./lib/captureStatus";
 
+// This window's views start loading as the script runs, before React has rendered anything.
+preloadForWindow();
+
+/** No spinner: while a view loads the window shows its own background, then the view. */
+const Quiet = ({ children }: { children: React.ReactNode }) => <Suspense fallback={null}>{children}</Suspense>;
+
 function App() {
   const currentView = useMeetingStore((s) => s.currentView);
   const isDemoActive = useDemoStore((s) => s.isDemoActive);
+  const pickerOpen = useDemoStore((s) => s.pickerOpen);
   const settingsOpen = useMeetingStore((s) => s.settingsOpen);
   const setSettingsOpen = useMeetingStore((s) => s.setSettingsOpen);
   const setCurrentView = useMeetingStore((s) => s.setCurrentView);
@@ -440,19 +450,25 @@ function App() {
             <ErrorBoundary fallbackMessage="Failed to load overlay">
               {/* key on the meeting id → remounts overlay UI per meeting so local
                   state (open panels, tabs, layout mode) does not carry over */}
-              <OverlayLayout key={activeMeetingId || "no-meeting"} />
+              <Quiet>
+                <OverlayLayout key={activeMeetingId || "no-meeting"} />
+              </Quiet>
             </ErrorBoundary>
           )}
           {(settingsOpen || currentView === "settings") && (
-            <SettingsOverlay isModal={currentView === "overlay"} />
+            <Quiet>
+              <SettingsOverlay isModal={currentView === "overlay"} />
+            </Quiet>
           )}
         </ErrorBoundary>
         <ActiveMeetingProvider isLauncherWindow={false} />
         <ToastContainer />
         {/* Settings -> About can open here too */}
-        <UpdateDialog />
-        {/* macOS + stealth only: resize the overlay without macOS's resize cursors */}
-        <OverlayResizeHandles />
+        <Quiet>
+          <UpdateDialog />
+          {/* macOS + stealth only: resize the overlay without macOS's resize cursors */}
+          <OverlayResizeHandles />
+        </Quiet>
       </div>
     );
   }
@@ -462,41 +478,61 @@ function App() {
       <ErrorBoundary fallbackMessage="NexQ encountered an error">
         {resolvedView === "overlay" && isDemoActive && (
           <ErrorBoundary fallbackMessage="Failed to load overlay">
-            <OverlayLayout key={activeMeetingId || "no-meeting"} />
+            <Quiet>
+              <OverlayLayout key={activeMeetingId || "no-meeting"} />
+            </Quiet>
           </ErrorBoundary>
         )}
         {(resolvedView === "launcher" || (resolvedView === "overlay" && !isDemoActive)) && (
           <ErrorBoundary fallbackMessage="Failed to load launcher">
-            <LauncherView />
+            <Quiet>
+              <LauncherView />
+            </Quiet>
           </ErrorBoundary>
         )}
         {resolvedView === "wizard" && (
           <ErrorBoundary fallbackMessage="Failed to load setup wizard">
-            <FirstRunWizard />
+            <Quiet>
+              <FirstRunWizard />
+            </Quiet>
           </ErrorBoundary>
         )}
         {resolvedView === "settings" && (
           <ErrorBoundary fallbackMessage="Failed to load settings">
-            <SettingsOverlay />
+            <Quiet>
+              <SettingsOverlay />
+            </Quiet>
           </ErrorBoundary>
         )}
-        {settingsOpen && resolvedView === "overlay" && <SettingsOverlay isModal />}
+        {settingsOpen && resolvedView === "overlay" && (
+          <Quiet>
+            <SettingsOverlay isModal />
+          </Quiet>
+        )}
       </ErrorBoundary>
       <ActiveMeetingProvider isLauncherWindow={isLauncherWindow} />
       <ToastContainer />
-      <SelectionToolbar />
+      <Quiet>
+        <SelectionToolbar />
+      </Quiet>
       {/* Call log panel is now integrated into the overlay flex layout above */}
 
       {/* One-time "update ready" notice (the footer pill stays) */}
       <UpdateReadyToast />
-      <UpdateDialog />
+      <Quiet>
+        <UpdateDialog />
 
-      {/* One-time "star NexQ" card after the fifth finished meeting (launcher only) */}
-      {windowLabel === "launcher" && <StarPrompt />}
+        {/* One-time "star NexQ" card after the fifth finished meeting (launcher only) */}
+        {windowLabel === "launcher" && <StarPrompt />}
 
-      {/* Demo mode — scenario picker modal + floating exit badge */}
-      <DemoPicker />
-      <DemoBadge />
+        {/* Demo mode: scenario picker modal + floating exit badge (loaded when asked for) */}
+        {(pickerOpen || isDemoActive) && (
+          <>
+            <DemoPicker />
+            <DemoBadge />
+          </>
+        )}
+      </Quiet>
     </div>
   );
 }

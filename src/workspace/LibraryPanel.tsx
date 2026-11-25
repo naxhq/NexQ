@@ -1,7 +1,6 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { ClipboardPaste, FolderPlus, Library as LibraryIcon, Plus, Plug2 } from "lucide-react";
 import { ConfirmDialog, Menu, buttonClass, type MenuItemSpec } from "../ui";
-import { AddMcpServerDialog } from "../sources/AddMcpServerDialog";
 import { FileUpload } from "../context/FileUpload";
 import {
   getIndexStatus,
@@ -19,12 +18,17 @@ import { useWorkspaceStore } from "../stores/workspaceStore";
 import type { WorkspaceItem } from "../lib/types";
 import { addFolderToWorkspace } from "./addMaterial";
 import { ContextMeter } from "./ContextMeter";
-import { FromLibraryDialog, PasteTextDialog } from "./LibraryDialogs";
+import { lazyNamed } from "../lib/lazyNamed";
 import { LibraryFooter } from "./LibraryFooter";
 import { LibraryRow } from "./LibraryRow";
 import { READING, itemTitle, sortItems, type IndexProgress } from "./libraryStatus";
 import { MemorySection, TalkingPointsSection } from "./slots";
 import { InstructionsBlock } from "./InstructionsBlock";
+
+// Dialogs load when first asked for.
+const AddMcpServerDialog = lazyNamed(() => import("../sources/AddMcpServerDialog"), "AddMcpServerDialog");
+const PasteTextDialog = lazyNamed(() => import("./LibraryDialogs"), "PasteTextDialog");
+const FromLibraryDialog = lazyNamed(() => import("./LibraryDialogs"), "FromLibraryDialog");
 
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -238,12 +242,14 @@ export function LibraryPanel({ workspaceId }: { workspaceId: string }) {
 
       <LibraryFooter workspaceId={workspaceId} hasFolders={items.some((i) => i.kind === "folder")} />
 
-      <PasteTextDialog workspaceId={workspaceId} open={dialog === "paste"} onClose={() => setDialog(null)} />
-      <FromLibraryDialog workspaceId={workspaceId} open={dialog === "library"} onClose={() => setDialog(null)} />
-      {dialog === "server" && (
-        // The server joins the library and this workspace together (the add carries the workspace).
-        <AddMcpServerDialog onClose={() => setDialog(null)} onAdded={() => void useWorkspaceStore.getState().refresh()} />
-      )}
+      <Suspense fallback={null}>
+        {dialog === "paste" && <PasteTextDialog workspaceId={workspaceId} open onClose={() => setDialog(null)} />}
+        {dialog === "library" && <FromLibraryDialog workspaceId={workspaceId} open onClose={() => setDialog(null)} />}
+        {dialog === "server" && (
+          // The server joins the library and this workspace together (the add carries the workspace).
+          <AddMcpServerDialog onClose={() => setDialog(null)} onAdded={() => void useWorkspaceStore.getState().refresh()} />
+        )}
+      </Suspense>
       <ConfirmDialog
         open={confirmLibraryRemove !== null}
         tone="danger"

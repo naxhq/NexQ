@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { FilePlus2, X } from "lucide-react";
 import { SlideOver } from "../ui";
 import { useTauriFileDrop, describeAdd } from "../context/FileUpload";
 import { showToast } from "../stores/toastStore";
 import { defaultWorkspaceOf, shouldShowGeneralNote, useWorkspaceStore, workspaceById } from "../stores/workspaceStore";
-import { AllWorkspaces } from "./AllWorkspaces";
+import { lazyNamed } from "../lib/lazyNamed";
+
+const AllWorkspaces = lazyNamed(() => import("./AllWorkspaces"), "AllWorkspaces");
 import { addFilesToWorkspace } from "./addMaterial";
 import {
   LIBRARY_DEFAULT,
@@ -144,7 +146,9 @@ export function WorkspaceHome({
 
         <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
           {view === "all" ? (
-            <AllWorkspaces onOpenMeeting={openMeetingFromAll} />
+            <Suspense fallback={null}>
+              <AllWorkspaces onOpenMeeting={openMeetingFromAll} />
+            </Suspense>
           ) : (
             <MiddlePane
               workspace={open}

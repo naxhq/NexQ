@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { CheckCircle2, FlaskConical, FolderSync, Loader2, TriangleAlert, Zap } from "lucide-react";
-import { TestSearchDialog } from "../context/TestSearchDialog";
+import { lazyNamed } from "../lib/lazyNamed";
+
+const TestSearchDialog = lazyNamed(() => import("../context/TestSearchDialog"), "TestSearchDialog");
 import { rescanWorkspace } from "../lib/ipc";
 import { useConfigStore } from "../stores/configStore";
 import { useContextStore } from "../stores/contextStore";
@@ -91,7 +93,11 @@ export function LibraryFooter({ workspaceId, hasFolders }: { workspaceId: string
           {rescanning ? "Scanning folders" : "Rescan folders"}
         </button>
       )}
-      <TestSearchDialog isOpen={testing} onClose={() => setTesting(false)} />
+      {testing && (
+        <Suspense fallback={null}>
+          <TestSearchDialog isOpen onClose={() => setTesting(false)} />
+        </Suspense>
+      )}
     </div>
   );
 }
