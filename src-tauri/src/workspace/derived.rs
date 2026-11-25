@@ -18,15 +18,41 @@ fn err(what: &str, e: impl std::fmt::Display) -> String {
     format!("{what}: {e}")
 }
 
-/// What each of `meetings` may use from, right now.
-pub fn snapshot(conn: &Connection, meetings: &[String]) -> Snapshot {
-    meetings
-        .iter()
-        .filter_map(|m| {
-            let scope = scope_for(conn, ScopeOwner::Meeting(m)).ok()?;
-            Some((m.clone(), scope.material_workspaces.into_iter().collect()))
-        })
-        .collect()
+fn meeting_exists(conn: &Connection, id: &str) -> Result<bool, String> {
+    conn.query_row("SELECT EXISTS(SELECT 1 FROM meetings WHERE id = ?1)", params![id], |r| r.get(0))
+        .map_err(|e| err("Couldn't read the meeting", e))
+}
+
+/// What each of `meetings` may use from, right now. A meeting that does not
+/// exist is left out; any other failure aborts, so a change never goes ahead
+/// without knowing what it takes away.
+pub fn snapshot(conn: &Connection, meetings: &[String]) -> Result<Snapshot, String> {
+    let mut out = Vec::new();
+    for m in meetings {
+        if !meeting_exists(conn, m)? {
+            continue;
+        }
+        let scope = scope_for(conn, ScopeOwner::Meeting(m))?;
+        out.push((m.clone(), scope.material_workspaces.into_iter().collect()));
+    }
+    Ok(out)
+}
+
+/// Drops the condensed summary of every chat of a workspace: it may quote
+/// material the workspace no longer has (the chat's own messages stay).
+pub fn clear_condensed(conn: &Connection, workspace_id: &str) -> Result<(), String> {
+    let exists: bool = conn
+        .query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workspace_chats')", [], |r| r.get(0))
+        .map_err(|e| err("Couldn't clean up the chats", e))?;
+    if !exists {
+        return Ok(());
+    }
+    conn.execute(
+        "UPDATE workspace_chats SET condensed = NULL, condensed_upto = NULL WHERE workspace_id = ?1",
+        params![workspace_id],
+    )
+    .map(|_| ())
+    .map_err(|e| err("Couldn't clean up the chats", e))
 }
 
 /// Meetings homed in `workspace_id` or borrowing it now.
@@ -46,8 +72,11 @@ pub fn meetings_involving(conn: &Connection, workspace_id: &str) -> Vec<String> 
 /// material that is no longer in its scope.
 pub fn prune_after(conn: &Connection, before: &Snapshot) -> Result<(), String> {
     for (meeting, was) in before {
-        // A meeting that is gone has nothing left to prune.
-        let Ok(scope) = scope_for(conn, ScopeOwner::Meeting(meeting)) else { continue };
+        // A meeting that is gone has nothing left to prune; any other failure aborts.
+        if !meeting_exists(conn, meeting)? {
+            continue;
+        }
+        let scope = scope_for(conn, ScopeOwner::Meeting(meeting))?;
         let now: BTreeSet<String> = scope.material_workspaces.iter().cloned().collect();
         let now_json = serde_json::to_string(&scope.material_workspaces).map_err(|e| e.to_string())?;
         let (m, n) = (meeting as &dyn ToSql, &now_json as &dyn ToSql);
@@ -55,6 +84,8 @@ pub fn prune_after(conn: &Connection, before: &Snapshot) -> Result<(), String> {
         if !was.is_subset(&now) {
             conn.execute("DELETE FROM meeting_briefs WHERE meeting_id = ?1", params![meeting])
                 .map_err(|e| err("Couldn't clear the brief", e))?;
+            // The home's chats may have condensed text that quotes what left.
+            clear_condensed(conn, &scope.home)?;
         }
         // This meeting's own versions and ticks of points that are not in scope any more.
         for table in ["talking_point_edits", "talking_point_progress"] {
@@ -79,7 +110,8 @@ pub fn material_lost(conn: &Connection, from: &[String], keep: &[String]) -> Vec
         let mut out = BTreeSet::new();
         if let Ok(mut stmt) = conn.prepare(
             "SELECT kind, ref_id FROM workspace_items WHERE workspace_id IN (SELECT value FROM json_each(?1))
-             UNION SELECT 'talking_point', id FROM talking_points WHERE workspace_id IN (SELECT value FROM json_each(?1))",
+             UNION SELECT 'talking_point', id FROM talking_points WHERE workspace_id IN (SELECT value FROM json_each(?1))
+             UNION SELECT 'memory', id FROM workspace_memory WHERE status = 'saved' AND workspace_id IN (SELECT value FROM json_each(?1))",
         ) {
             if let Ok(rows) = stmt.query_map(params![json], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
                 out.extend(rows.filter_map(Result::ok));
@@ -201,6 +233,44 @@ mod tests {
         mark(&conn, "m", "b_point");
         store::delete_workspace(&conn, &b, crate::workspace::types::DeleteMode::Move).unwrap();
         assert_eq!((count(&conn, "meeting_briefs"), count(&conn, "talking_point_edits")), (0, 0));
+    }
+
+    #[test]
+    fn material_lost_also_names_saved_memory_and_the_condensed_text_is_cleared() {
+        let conn = memory_db();
+        let a = new_ws(&conn, "A", true, false);
+        conn.execute("INSERT INTO workspace_memory (id, workspace_id, kind, status, created_at, updated_at) VALUES ('mem', 'general', 'fact', 'saved', 0, 0)", []).unwrap();
+        conn.execute("INSERT INTO workspace_memory (id, workspace_id, kind, status, created_at, updated_at) VALUES ('sug', 'general', 'fact', 'suggested', 0, 0)", []).unwrap();
+        let lost = material_lost(&conn, &["general".to_string()], &[a.clone()]);
+        assert_eq!(lost, vec![("memory".to_string(), "mem".to_string())], "saved only, never a suggestion");
+        conn.execute("INSERT INTO workspace_chats (id, workspace_id, condensed, condensed_upto, created_at, updated_at) VALUES ('c', ?1, 'quotes CANARY', 5, 0, 0)", params![a]).unwrap();
+        // Switching General off for A clears its chats' condensed text.
+        store::update_workspace(&conn, &a, WorkspacePatch { include_general: Some(false), ..Default::default() }).unwrap();
+        let (text, upto): (Option<String>, Option<i64>) = conn.query_row("SELECT condensed, condensed_upto FROM workspace_chats WHERE id = 'c'", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((text, upto), (None, None));
+    }
+
+    #[test]
+    fn a_failure_while_pruning_rolls_the_whole_change_back() {
+        let conn = memory_db();
+        let a = new_ws(&conn, "A", false, false);
+        let b = new_ws(&conn, "B", false, false);
+        seed(&conn, "m", &a);
+        set_meeting_scope(&conn, "m", &[b.clone()]).unwrap();
+        // Deleting the brief fails, as a disk error would.
+        conn.execute_batch("CREATE TRIGGER no_brief_delete BEFORE DELETE ON meeting_briefs BEGIN SELECT RAISE(ABORT, 'disk'); END;").unwrap();
+        assert!(set_meeting_scope(&conn, "m", &[]).is_err());
+        assert_eq!(crate::workspace::store::borrowed_of(&conn, "m").unwrap(), vec![b.clone()], "the borrow was not ended");
+        assert_eq!(count(&conn, "meeting_briefs"), 1);
+        // The same for a workspace switch: General stays on when the cleanup can't run.
+        let c = new_ws(&conn, "C", true, false);
+        seed(&conn, "n", &c);
+        point(&conn, "gp", "general");
+        mark(&conn, "n", "gp");
+        conn.execute_batch("DROP TRIGGER no_brief_delete; CREATE TRIGGER no_edit_delete BEFORE DELETE ON talking_point_edits BEGIN SELECT RAISE(ABORT, 'disk'); END;").unwrap();
+        assert!(store::update_workspace(&conn, &c, WorkspacePatch { include_general: Some(false), ..Default::default() }).is_err());
+        assert!(store::get_workspace(&conn, &c).unwrap().include_general, "the switch was rolled back");
+        assert_eq!((count(&conn, "meeting_briefs"), count(&conn, "talking_point_edits")), (2, 1));
     }
 
     #[test]

@@ -1758,18 +1758,18 @@ mod tests {
         let live = SessionScope::Live("m".into());
         let on = Some(SourceToggles { notes: true, tools: false });
         // Nothing enabled: never.
-        assert!(!request_with_sources(&state, "Assist", &live, on));
+        assert!(!request_with_sources_for(&state, "Assist", &live, on, || crate::workspace::runtime::ScopedContext::unrestricted()));
         state.personal_sources.write().unwrap().notes_folders =
             vec![NotesFolder { id: "f".into(), label: "V".into(), path: "D:/v".into(), enabled: true }];
-        assert!(request_with_sources(&state, "Assist", &live, on));
+        assert!(request_with_sources_for(&state, "Assist", &live, on, || crate::workspace::runtime::ScopedContext::unrestricted()));
         // Automatic answers (no `sources` param) and background modes: never.
-        assert!(!request_with_sources(&state, "Assist", &live, None));
-        assert!(!request_with_sources(&state, "MeetingSummary", &live, on));
+        assert!(!request_with_sources_for(&state, "Assist", &live, None, || crate::workspace::runtime::ScopedContext::unrestricted()));
+        assert!(!request_with_sources_for(&state, "MeetingSummary", &live, on, || crate::workspace::runtime::ScopedContext::unrestricted()));
         // Shorten follows the answer it works on, whatever the pills say now.
         let off = Some(SourceToggles::default());
-        assert!(!request_with_sources(&state, "Shorten", &live, off));
+        assert!(!request_with_sources_for(&state, "Shorten", &live, off, || crate::workspace::runtime::ScopedContext::unrestricted()));
         state.meeting_sessions.set_last_answer(&live, true);
-        assert!(request_with_sources(&state, "Shorten", &live, off));
+        assert!(request_with_sources_for(&state, "Shorten", &live, off, || crate::workspace::runtime::ScopedContext::unrestricted()));
         // ... and its note uses the current pills, all off when there are none.
         assert_eq!(
             routing::sources_note_body(None.unwrap_or_default()),

@@ -238,6 +238,14 @@ pub fn create_workspace(conn: &Connection, input: CreateWorkspaceInput) -> Resul
 /// Changes the given fields of a workspace. Becoming kept separate ends every
 /// borrow that involves it.
 pub fn update_workspace(conn: &Connection, id: &str, patch: WorkspacePatch) -> Result<Workspace, String> {
+    // The change and the cleanup of what it takes away are one transaction.
+    let tx = conn.unchecked_transaction().map_err(|e| db_err("Couldn't save the workspace", e))?;
+    let updated = update_workspace_in(&tx, id, patch)?;
+    tx.commit().map_err(|e| db_err("Couldn't save the workspace", e))?;
+    Ok(updated)
+}
+
+fn update_workspace_in(conn: &Connection, id: &str, patch: WorkspacePatch) -> Result<Workspace, String> {
     let mut ws = get_workspace(conn, id)?;
     if let Some(name) = patch.name {
         ws.name = clean_name(&name)?;
@@ -282,10 +290,12 @@ pub fn update_workspace(conn: &Connection, id: &str, patch: WorkspacePatch) -> R
     // separate: what the meetings involved derived from it must go too.
     let general_off = had_general && !include_general;
     let narrows = general_off || (keep_separate && !was_separate);
-    let before = narrows.then(|| {
+    let before = if narrows {
         let involved = super::derived::meetings_involving(conn, id);
-        super::derived::snapshot(conn, &involved)
-    });
+        Some(super::derived::snapshot(conn, &involved)?)
+    } else {
+        None
+    };
     conn.execute(
         "UPDATE workspaces SET name = ?2, icon = ?3, color = ?4, description = ?5, instructions = ?6,
             include_general = ?7, keep_separate = ?8, default_scenario = ?9, pinned = ?10, updated_at = ?11,
@@ -305,7 +315,9 @@ pub fn update_workspace(conn: &Connection, id: &str, patch: WorkspacePatch) -> R
         super::derived::prune_after(conn, &before)?;
     }
     if general_off {
-        // Its chats' citations of General's material say it is no longer used.
+        // Its chats' summaries may quote General's material, and their citations
+        // of it say it is no longer used.
+        super::derived::clear_condensed(conn, id)?;
         let lost = super::derived::material_lost(conn, &[GENERAL_ID.to_string()], &[id.to_string()]);
         crate::workspace_chat::store::redact_material_in_workspace(
             conn,
@@ -418,7 +430,7 @@ pub fn delete_workspace(conn: &Connection, id: &str, mode: DeleteMode) -> Result
     let mut report = Deleted { meetings: meeting_ids.len(), ..Deleted::default() };
     // Meetings of other workspaces that borrowed this one lose what came from it.
     let borrowers: Vec<String> = super::derived::meetings_involving(&tx, id).into_iter().filter(|m| !meeting_ids.contains(m)).collect();
-    let before = super::derived::snapshot(&tx, &borrowers);
+    let before = super::derived::snapshot(&tx, &borrowers)?;
     match mode {
         DeleteMode::Move => {
             for meeting_id in &meeting_ids {

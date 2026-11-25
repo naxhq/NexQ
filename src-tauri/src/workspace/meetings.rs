@@ -63,8 +63,9 @@ pub fn set_meeting_scope(conn: &Connection, meeting_id: &str, borrowed: &[String
     }
     let current = borrowed_of(conn, meeting_id)?;
     let now = now_ms();
-    let before = super::derived::snapshot(conn, &[meeting_id.to_string()]);
+    // The change and what it takes away go together or not at all.
     let tx = conn.unchecked_transaction().map_err(|e| err("Couldn't save the scope", e))?;
+    let before = super::derived::snapshot(&tx, &[meeting_id.to_string()])?;
     for id in current.iter().filter(|id| !wanted.contains(id)) {
         tx.execute(
             "UPDATE meeting_borrowed SET removed_at = ?3 WHERE meeting_id = ?1 AND workspace_id = ?2",
@@ -80,9 +81,9 @@ pub fn set_meeting_scope(conn: &Connection, meeting_id: &str, borrowed: &[String
         )
         .map_err(|e| err("Couldn't save the scope", e))?;
     }
-    tx.commit().map_err(|e| err("Couldn't save the scope", e))?;
     // What came from a workspace that is no longer borrowed goes with it.
-    super::derived::prune_after(conn, &before)?;
+    super::derived::prune_after(&tx, &before)?;
+    tx.commit().map_err(|e| err("Couldn't save the scope", e))?;
     get_meeting_scope(conn, meeting_id)
 }
 
@@ -114,7 +115,7 @@ pub fn move_meeting(conn: &Connection, meeting_id: &str, workspace_id: &str) -> 
     if old == workspace_id {
         return Ok(());
     }
-    let before = super::derived::snapshot(conn, &[meeting_id.to_string()]);
+    let before = super::derived::snapshot(conn, &[meeting_id.to_string()])?;
     set_home(conn, meeting_id, workspace_id)?;
     // A borrow that is now the home, or that the new home may not have, ends.
     for id in borrowed_of(conn, meeting_id)? {

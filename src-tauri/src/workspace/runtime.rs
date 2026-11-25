@@ -4,6 +4,7 @@
 
 use crate::llm::cli_agent::manager::SessionScope;
 use crate::sources::config::PersonalSourcesConfig;
+use crate::db::workspace_migrations::TablesState;
 use crate::state::AppState;
 
 use super::scope::{scope_for, scope_for_home, EffectiveScope, ScopeOwner};
@@ -36,23 +37,23 @@ enum Who<'a> {
     DefaultWorkspace,
 }
 
-/// What to do for a request, from whether workspaces are available and whether
-/// their tables exist.
+/// What to do for a request, from whether workspaces are available and what is
+/// known about their tables.
 #[derive(Debug, PartialEq)]
 pub(crate) enum Policy {
     /// Resolve the scope.
     Normal,
-    /// Workspaces were never set up: as before they existed.
+    /// The workspace tables are confirmed absent: as before workspaces existed.
     Unrestricted,
-    /// The tables exist but can't be used: no workspace material at all.
+    /// The tables exist or can't be told: no workspace material at all.
     FailClosed,
 }
 
-pub(crate) fn policy(available: bool, tables_exist: bool) -> Policy {
-    match (available, tables_exist) {
+pub(crate) fn policy(available: bool, tables: TablesState) -> Policy {
+    match (available, tables) {
         (true, _) => Policy::Normal,
-        (false, true) => Policy::FailClosed,
-        (false, false) => Policy::Unrestricted,
+        (false, TablesState::Absent) => Policy::Unrestricted,
+        (false, TablesState::Present | TablesState::Unknown) => Policy::FailClosed,
     }
 }
 
@@ -88,13 +89,14 @@ fn resolve(state: &AppState, who: Who<'_>) -> ScopedContext {
         Who::Meeting(id) => Some(*id),
         Who::DefaultWorkspace => None,
     };
-    match policy(super::available(), crate::db::workspace_migrations::workspaces_exist()) {
+    match policy(super::available(), crate::db::workspace_migrations::tables_state()) {
         Policy::Unrestricted => return ScopedContext::unrestricted(),
-        Policy::FailClosed => return fail_closed(state, meeting, "the workspace upgrade did not finish"),
+        Policy::FailClosed => return fail_closed(state, meeting, "the workspaces could not be set up or read"),
         Policy::Normal => {}
     }
+    // No database: nothing can be filed anywhere, so there is no material to use.
     let Some(db) = state.database.as_ref() else {
-        return ScopedContext::unrestricted();
+        return fail_closed(state, meeting, "there is no database");
     };
     let Ok(guard) = db.lock() else {
         return fail_closed(state, meeting, "the database is locked");
@@ -250,10 +252,21 @@ mod tests {
     }
 
     #[test]
-    fn unrestricted_only_when_the_workspace_tables_never_existed() {
-        assert_eq!(policy(true, true), Policy::Normal);
-        assert_eq!(policy(false, false), Policy::Unrestricted, "v9 never ran: as before workspaces");
-        assert_eq!(policy(false, true), Policy::FailClosed, "tables exist but unusable: nothing, never everything");
+    fn unrestricted_only_when_the_workspace_tables_are_confirmed_absent() {
+        for tables in [TablesState::Absent, TablesState::Present, TablesState::Unknown] {
+            assert_eq!(policy(true, tables), Policy::Normal);
+        }
+        assert_eq!(policy(false, TablesState::Absent), Policy::Unrestricted, "v9 never ran: as before workspaces");
+        assert_eq!(policy(false, TablesState::Present), Policy::FailClosed, "tables exist but unusable: nothing, never everything");
+        assert_eq!(policy(false, TablesState::Unknown), Policy::FailClosed, "a failed or missing look is not an absence");
+    }
+
+    #[test]
+    fn a_state_with_no_database_resolves_to_no_material() {
+        // The app still starts without a database; it just has no workspace material.
+        let state = AppState::new();
+        let ctx = for_meeting(&state, "m");
+        assert!(!ctx.scope.unrestricted && ctx.scope.document_ids.is_empty() && ctx.points.is_empty());
     }
 
     #[test]

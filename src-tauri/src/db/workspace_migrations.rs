@@ -39,7 +39,7 @@ const BACKUP_KEEP: Duration = Duration::from_secs(14 * 24 * 3600);
 const ERROR_KEY: &str = "workspace_migration_error";
 
 static AVAILABLE: AtomicBool = AtomicBool::new(false);
-static TABLES_EXIST: AtomicBool = AtomicBool::new(false);
+static TABLES_STATE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 static LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
 
 /// Whether the workspace tables are in place in this run.
@@ -47,18 +47,58 @@ pub fn available() -> bool {
     AVAILABLE.load(Ordering::SeqCst)
 }
 
-/// Whether the workspaces table is in the database, whatever happened to the
-/// last migration. When it is but workspaces are unavailable, nothing that
-/// depends on a scope may be treated as unrestricted.
-pub fn workspaces_exist() -> bool {
-    TABLES_EXIST.load(Ordering::SeqCst)
+/// Whether the workspaces table is known to be in the database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TablesState {
+    /// Not looked at yet, or the look failed: treated as "may exist".
+    Unknown,
+    /// The query worked and the table is not there: workspaces never ran.
+    Absent,
+    /// The table is there.
+    Present,
+}
+
+impl TablesState {
+    fn code(self) -> u8 {
+        match self {
+            TablesState::Unknown => 0,
+            TablesState::Absent => 1,
+            TablesState::Present => 2,
+        }
+    }
+
+    fn from_code(code: u8) -> Self {
+        match code {
+            1 => TablesState::Absent,
+            2 => TablesState::Present,
+            _ => TablesState::Unknown,
+        }
+    }
+}
+
+/// The state recorded by the last migration run (Unknown until one ran).
+pub fn tables_state() -> TablesState {
+    TablesState::from_code(TABLES_STATE.load(Ordering::SeqCst))
+}
+
+/// Looks for the workspaces table. A failing query is Unknown, never Absent.
+pub fn probe_tables(conn: &Connection) -> TablesState {
+    classify(conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'workspaces'", [], |r| r.get::<_, i64>(0)))
+}
+
+/// The state an answer to "how many workspaces tables?" means: only a
+/// successful zero is Absent.
+fn classify(answer: rusqlite::Result<i64>) -> TablesState {
+    match answer {
+        Ok(0) => TablesState::Absent,
+        Ok(_) => TablesState::Present,
+        Err(_) => TablesState::Unknown,
+    }
 }
 
 /// Whether the workspaces table exists in `conn`.
 pub fn tables_present(conn: &Connection) -> bool {
-    conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'workspaces'", [], |r| r.get::<_, i64>(0))
-        .map(|n| n > 0)
-        .unwrap_or(false)
+    probe_tables(conn) == TablesState::Present
 }
 
 /// Why the last migration failed, if it did.
@@ -71,7 +111,7 @@ pub fn last_error() -> Option<String> {
 pub fn run(conn: &Connection, db_path: Option<&Path>) -> Result<(), String> {
     let result = run_steps(conn, db_path, STEPS);
     AVAILABLE.store(result.is_ok(), Ordering::SeqCst);
-    TABLES_EXIST.store(tables_present(conn), Ordering::SeqCst);
+    TABLES_STATE.store(probe_tables(conn).code(), Ordering::SeqCst);
     if let Ok(mut slot) = LAST_ERROR.lock() {
         *slot = result.as_ref().err().cloned();
     }
@@ -549,6 +589,23 @@ mod tests {
             .collect();
         assert!(run_steps(&conn, Some(&path), &steps).is_err());
         assert!(tables_present(&conn));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_failing_look_is_unknown_never_absent() {
+        let dir = temp_dir("probe");
+        let (conn, _) = v8_database(&dir);
+        assert_eq!(probe_tables(&conn), TablesState::Absent, "the query worked and there is no table");
+        run_steps(&conn, None, STEPS).unwrap();
+        assert_eq!(probe_tables(&conn), TablesState::Present);
+        // A look that failed is Unknown, never Absent.
+        assert_eq!(classify(Err(rusqlite::Error::InvalidQuery)), TablesState::Unknown);
+        assert_eq!(classify(Ok(0)), TablesState::Absent);
+        assert_eq!(classify(Ok(1)), TablesState::Present);
+        assert_eq!(TablesState::from_code(TablesState::Unknown.code()), TablesState::Unknown);
+        assert_eq!(TablesState::from_code(TablesState::Absent.code()), TablesState::Absent);
+        assert_eq!(TablesState::from_code(TablesState::Present.code()), TablesState::Present);
         let _ = std::fs::remove_dir_all(dir);
     }
 
