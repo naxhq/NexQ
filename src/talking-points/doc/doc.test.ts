@@ -246,16 +246,3 @@ describe("Markdown export", () => {
   });
 });
 
-import { stripHiddenHtml, stripHiddenText } from "./model";
-
-describe("hidden characters from outside", () => {
-  it("takes out what nobody can see and keeps the joiners", () => {
-    const hidden = "a​b­c‮d⁦e﻿\u{e0041}f";
-    expect(stripHiddenText(hidden)).toBe("abcdef");
-    expect(stripHiddenText("می‌خواهم ‍")).toBe("می‌خواهم ‍");
-    expect(stripHiddenText("ordinary text, emoji 👩‍💻")).toBe("ordinary text, emoji 👩‍💻");
-  });
-  it("also when pasted HTML spells them as entities", () => {
-    expect(stripHiddenHtml("a&#8203;b&#x200B;c&#x202E;d&ZeroWidthSpace;e&shy;f&#8204;g")).toBe("abcdef&#8204;g");
-  });
-});

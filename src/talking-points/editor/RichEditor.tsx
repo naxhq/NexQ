@@ -19,11 +19,10 @@ import {
   sanitizeDoc,
   serializeDoc,
   speakingTime,
-  stripHiddenHtml,
-  stripHiddenText,
   type TpDoc,
 } from "../doc/model";
 import { markdownToDoc } from "../doc/markdown";
+import { outsideTextProps } from "./pasteFilter";
 import { cn } from "../../lib/utils";
 import "../talkingPoints.css";
 
@@ -48,12 +47,6 @@ export interface RichEditorProps {
   showCounts?: boolean;
   wpm?: number;
   handleRef?: Ref<RichEditorHandle>;
-}
-
-const MD_HINT = /^(#{1,3}\s|[-*+]\s|\d+[.)]\s)|\*\*[^*\n]+\*\*/m;
-
-function looksLikeMarkdown(text: string): boolean {
-  return text.includes("\n") ? MD_HINT.test(text) : /^(#{1,3}\s|[-*+]\s\S|\d+[.)]\s\S)/.test(text);
 }
 
 export default function RichEditor({
@@ -85,21 +78,8 @@ export default function RichEditor({
         spellcheck: "true",
         class: "tp-doc tp-prose outline-none",
       },
-      // text from outside loses what nobody can see (zero-width spaces, bidi overrides); joiners stay
-      transformPastedHTML: (html) => stripHiddenHtml(html),
-      transformPastedText: (text) => stripHiddenText(text),
-      handlePaste: (view, event) => {
-        // Plain text that is Markdown becomes formatted blocks; HTML goes through the schema.
-        const cd = event.clipboardData;
-        if (!cd || cd.types.includes("text/html")) return false;
-        const text = stripHiddenText(cd.getData("text/plain"));
-        if (!text || !looksLikeMarkdown(text)) return false;
-        const doc = markdownToDoc(text);
-        const { state } = view;
-        const node = state.schema.nodeFromJSON({ type: "doc", content: doc.content });
-        view.dispatch(state.tr.replaceSelection(node.slice(0, node.content.size, true)).scrollIntoView());
-        return true;
-      },
+      // text from outside (paste and drop) is cleaned by the one shared rule; typed text is untouched
+      ...outsideTextProps,
       handleDrop: () => false,
     },
     onUpdate: ({ editor: ed }) => {
