@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_SETUPS,
+  applyRect,
   areaOf,
+  planRestore,
+  rememberSetup,
+  sanitizeSetups,
+  setupKey,
+  type SetupEntry,
   defaultLauncherRect,
   pickArea,
   resolvePlacement,
@@ -148,5 +155,171 @@ describe("misc", () => {
     const m = { scaleFactor: 2, position: { x: 0, y: 0 }, size: { width: 100, height: 50 } };
     expect(areaOf(m)).toEqual({ x: 0, y: 0, w: 100, h: 50, scale: 2 });
     expect(areaOf({ ...m, workArea: { position: { x: 0, y: 0 }, size: { width: 90, height: 40 } } }).w).toBe(90);
+  });
+});
+
+// == Monitor setups: property tests with random monitors, scales and places ==
+
+function rng(seed: number) {
+  let s = seed >>> 0;
+  return () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 2 ** 32;
+  };
+}
+
+function randomSetup(r: () => number): WorkArea[] {
+  const n = 1 + Math.floor(r() * 3);
+  const scales = [1, 1.25, 1.5, 1.75, 2];
+  const out: WorkArea[] = [];
+  let x = Math.round((r() - 0.5) * 6000);
+  for (let i = 0; i < n; i++) {
+    const w = 1280 + Math.floor(r() * 2600);
+    const h = 720 + Math.floor(r() * 1500);
+    out.push({ x, y: Math.round((r() - 0.5) * 3000), w, h, scale: scales[Math.floor(r() * scales.length)] });
+    x += w;
+  }
+  return out;
+}
+
+const OPTS = { minW: 400, minH: 480 };
+const inside = (rect: { x: number; y: number; w: number; h: number }, a: WorkArea) =>
+  rect.x >= a.x && rect.y >= a.y && rect.x + rect.w <= a.x + a.w && rect.y + rect.h <= a.y + a.h;
+
+describe("planRestore (random monitor setups)", () => {
+  it("never puts a window off-screen, whatever was saved and whichever monitors are connected", () => {
+    const r = rng(7);
+    for (let i = 0; i < 400; i++) {
+      const before = randomSetup(r);
+      const now = randomSetup(r);
+      const on = before[Math.floor(r() * before.length)];
+      const saved = {
+        x: Math.round(on.x + r() * on.w),
+        y: Math.round(on.y + r() * on.h),
+        w: 400 + Math.floor(r() * 1600),
+        h: 480 + Math.floor(r() * 1000),
+        scale: on.scale,
+      };
+      const entries: SetupEntry[] = [{ key: setupKey(before), placement: saved, area: on, at: 1 }];
+      const plan = planRestore(entries, null, now, now[0], now[0], OPTS)!;
+      expect(plan).not.toBeNull();
+      expect(now.some((a) => inside(plan.rect, a))).toBe(true);
+    }
+  });
+
+  it("is idempotent: planning from the planned place gives the same place", () => {
+    const r = rng(11);
+    for (let i = 0; i < 300; i++) {
+      const areas = randomSetup(r);
+      const on = areas[Math.floor(r() * areas.length)];
+      const saved = { x: Math.round(on.x + r() * on.w), y: Math.round(on.y + r() * on.h), w: 500, h: 700, scale: on.scale };
+      const key = setupKey(areas);
+      const first = planRestore([{ key, placement: saved, area: on, at: 1 }], null, areas, areas[0], areas[0], OPTS)!;
+      const home = areas.find((a) => inside(first.rect, a))!;
+      const again = planRestore([{ key, placement: { ...first.rect, scale: home.scale }, area: on, at: 2 }], null, areas, areas[0], areas[0], OPTS)!;
+      expect(again.rect).toEqual(first.rect);
+    }
+  });
+
+  it("uses the own place of a setup it has seen, whatever the order of the monitors", () => {
+    const a = [{ x: 0, y: 0, w: 1920, h: 1040, scale: 1 }];
+    const b = [
+      { x: 0, y: 0, w: 1920, h: 1040, scale: 1 },
+      { x: 1920, y: 0, w: 2560, h: 1400, scale: 1.5 },
+    ];
+    const entries: SetupEntry[] = [
+      { key: setupKey(a), placement: { x: 40, y: 40, w: 800, h: 600, scale: 1 }, area: a[0], at: 2 },
+      { key: setupKey(b), placement: { x: 2500, y: 100, w: 1200, h: 900, scale: 1.5 }, area: b[1], at: 1 },
+    ];
+    expect(planRestore(entries, null, a, a[0], a[0], OPTS)!.rect).toMatchObject({ x: 40, y: 40, w: 800, h: 600 });
+    const swapped = [b[1], b[0]];
+    expect(setupKey(swapped)).toBe(setupKey(b));
+    expect(planRestore(entries, null, swapped, b[0], b[1], OPTS)!.rect).toMatchObject({ x: 2500, y: 100, w: 1200, h: 900 });
+  });
+
+  it("an unknown setup gets the same relative place on the primary, never outside it", () => {
+    const old = { x: 3840, y: 0, w: 3840, h: 2120, scale: 2 };
+    const entries: SetupEntry[] = [{ key: "old", placement: { x: 3840 + 1920, y: 1060, w: 1600, h: 1000, scale: 2 }, area: old, at: 1 }];
+    const laptop: WorkArea[] = [{ x: 0, y: 0, w: 1920, h: 1040, scale: 1.25 }];
+    const plan = planRestore(entries, null, laptop, laptop[0], laptop[0], OPTS)!;
+    expect(plan.known).toBe(false);
+    expect(inside(plan.rect, laptop[0])).toBe(true);
+    // Half way across the old monitor: well right of the left edge on this one.
+    expect(plan.rect.x).toBeGreaterThan(300);
+  });
+
+  it("works with negative coordinates (a monitor left of or above the primary)", () => {
+    const areas: WorkArea[] = [
+      { x: -2560, y: -400, w: 2560, h: 1400, scale: 1 },
+      { x: 0, y: 0, w: 1920, h: 1040, scale: 1 },
+    ];
+    const entries: SetupEntry[] = [{ key: setupKey(areas), placement: { x: -2000, y: -300, w: 900, h: 700, scale: 1 }, area: areas[0], at: 1 }];
+    expect(planRestore(entries, null, areas, areas[1], areas[1], OPTS)!.rect).toMatchObject({ x: -2000, y: -300 });
+  });
+
+  it("falls back to the old single placement, centred when its monitor is gone", () => {
+    const areas: WorkArea[] = [{ x: 0, y: 0, w: 1920, h: 1040, scale: 1 }];
+    const plan = planRestore([], { x: 5000, y: 100, w: 800, h: 600, scale: 1 }, areas, areas[0], areas[0], OPTS)!;
+    expect(inside(plan.rect, areas[0])).toBe(true);
+  });
+
+  it("returns nothing when nothing was saved or no monitor is known", () => {
+    expect(planRestore([], null, [{ x: 0, y: 0, w: 1920, h: 1040, scale: 1 }], null, null, OPTS)).toBeNull();
+    expect(planRestore([], { x: 0, y: 0, w: 800, h: 600, scale: 1 }, [], null, null, OPTS)).toBeNull();
+  });
+});
+
+describe("setups storage", () => {
+  const p = { x: 1, y: 2, w: 500, h: 700, scale: 1 };
+  it("keeps at most six setups, newest first, one per key", () => {
+    let list: SetupEntry[] = [];
+    for (let i = 0; i < 9; i++) list = rememberSetup(list, { key: `k${i}`, placement: p, area: null, at: i });
+    list = rememberSetup(list, { key: "k5", placement: { ...p, x: 9 }, area: null, at: 20 });
+    expect(list).toHaveLength(MAX_SETUPS);
+    expect(list[0].key).toBe("k5");
+    expect(list.filter((e) => e.key === "k5")).toHaveLength(1);
+  });
+
+  it("reads an old config (no setups) and garbage as empty, and drops bad entries", () => {
+    expect(sanitizeSetups(undefined)).toEqual([]);
+    expect(sanitizeSetups("x")).toEqual([]);
+    const good = { key: "k", placement: p, area: null, at: 1 };
+    expect(sanitizeSetups([good, { key: "", placement: p }, { key: "z", placement: { x: "a" } }, null, good])).toHaveLength(1);
+  });
+
+  it("keeps the maximised flag through the sanitizer", () => {
+    expect(sanitizePlacement({ ...p, maximized: true })).toMatchObject({ maximized: true });
+    expect(sanitizePlacement({ ...p, maximized: "yes" })).not.toHaveProperty("maximized");
+  });
+});
+
+describe("applyRect", () => {
+  it("sets position, then size, and stops when it reads back right", async () => {
+    const calls: string[] = [];
+    let pos = { x: 0, y: 0 };
+    let size = { w: 0, h: 0 };
+    const ok = await applyRect(
+      {
+        setPosition: async (x, y) => (calls.push("pos"), void (pos = { x, y })),
+        setSize: async (w, h) => (calls.push("size"), void (size = { w, h })),
+        outerPosition: async () => pos,
+        innerSize: async () => size,
+      },
+      { x: 10, y: 20, w: 500, h: 600 },
+    );
+    expect(ok).toBe(true);
+    expect(calls).toEqual(["pos", "size"]);
+  });
+
+  it("tries a second time only, when the first did not stick", async () => {
+    let n = 0;
+    const win = {
+      setPosition: async () => void n++,
+      setSize: async () => void n++,
+      outerPosition: async () => ({ x: 0, y: 0 }),
+      innerSize: async () => ({ w: 1, h: 1 }),
+    };
+    expect(await applyRect(win, { x: 10, y: 20, w: 500, h: 600 })).toBe(false);
+    expect(n).toBe(4);
   });
 });

@@ -52,7 +52,7 @@ Type a name in **Save this layout as...** and click **Save**. It appears under *
 
 Each stack of panels has a row of tabs. A panel can share a stack with others, as tabs.
 
-**With the mouse.** Every tab starts with a small handle of six dots. The tab you are on always shows it quietly; the others show it when you point at them. Point at a tab for a moment and a tip says **Drag to move** and **Right-click or Shift+F10 for options**. Press the tab and drag it. A small chip follows the pointer with the panel's name and, under it, what dropping here will do (for example **Right of Transcript**, **Above Assistant**, **Tab in Notes**, **Left edge of the window**, **Reorder**, or **No change here**). The highlighted area carries the same words. Before the pointer is over anything, thin dashed outlines show every area the panel can land on. For your first five drags a short note at the bottom says **Drop on a highlighted area to rearrange. Esc cancels.**; it moves to the top when the pointer is near the bottom. As you move over the window, a preview shows where it would land:
+**With the mouse.** Every tab starts with a small handle of six dots. The tab you are on always shows it quietly; the others show it when you point at them. Point at the dots for a moment, or move to a tab with the keyboard, and a tip says **Drag to move** and **Right-click or Shift+F10 for options** (it does not appear when you click a tab). Press the tab and drag it. A small chip follows the pointer with the panel's name and, under it, what dropping here will do (for example **Right of Transcript**, **Above Assistant**, **Tab in Notes**, **Left edge of the window**, **Reorder**, or **No change here**). The words describe what you will see in this window: in a small window a drop that would go beside a panel may be drawn below it, and then the chip adds **(stacked here)**; when there is no room to split at all it says the panels will share tabs. The highlighted area shows where; the chip says what. Before the pointer is over anything, thin dashed outlines show every area the panel can land on, and the chip says **Move over an outlined area**. For your first five drags a short note at the bottom says **Drop on a highlighted area to rearrange. Esc cancels.**; it moves to the top when the pointer is near the bottom. As you move over the window, a preview shows where it would land:
 
 - The left, right, top or bottom of another panel puts it beside, above or below that panel
 - The middle of another panel adds it as a tab there
@@ -90,10 +90,10 @@ With the keyboard, `Tab` to a separator and use the arrow keys (16 pixels at a t
 
 - Dragging, moving, resizing, choosing a layout and **Reset to Classic** do nothing
 - You can still show, hide and collapse panels
-- The tab handles turn into a small lock when you point at them (click it to unlock)
+- The tab handles turn into a small lock when you point at them. Clicking the lock opens the **Move** menu, which says the layout is locked and has **Unlock layout**
 - The **Move** menu still opens, and says "Layout is locked: panels can't move" with an **Unlock layout** item
 
-The first line of the **Layout** menu reminds you to drag panels by their dots. It says **Layout locked** while the lock is on. Click it again to unlock.
+The first line of the **Layout** menu reminds you to drag panels by their dots (it is left out while the layout is locked). The menu says **Layout locked** while the lock is on. Click it again to unlock.
 
 ## Small windows
 
@@ -103,7 +103,21 @@ The model and speech pickers in the footer of the meeting window open above it, 
 
 When the window is too small for the arrangement, NexQ doesn't squeeze panels until they are unreadable. It first lets a side-by-side pair stack on top of each other, and if that doesn't fit either, it merges the panels into one set of tabs. Your saved layout isn't changed, so making the window bigger brings it back. Classic is designed to look the same as before at 400, 500 and 900 pixels wide. While the panels are merged, dragging and moving are off.
 
-The meeting window opens at 500 by 700 pixels (smallest 400 by 480). It remembers its size and place, and moves back onto a connected screen if its monitor is gone.
+The meeting window opens at 500 by 700 pixels (smallest 400 by 480).
+
+### Where the windows come back
+
+NexQ remembers the size and place of the dashboard and the meeting window, and whether the dashboard was maximised (the size it had before is kept behind it). Starting a meeting, ending one, minimising, hiding to the tray, switching with `Ctrl+B` and restarting for an update all put them back where you left them.
+
+- **Each set of monitors has its own place.** Docked at your desk and undocked on the laptop are remembered separately (the last six setups). Unplugging a monitor never overwrites the place saved for the setup with it. Plug it back in and the windows go there again.
+- **A setup NexQ has not seen** gets the same relative place on your main screen, the same size, always inside the screen.
+- **Mixed screen scales** (for example 125% and 150%) are handled: a window comes back on the right monitor at the right size.
+- **While you drag a window**, NexQ never moves it. If the monitors change while you are working, the windows move to that setup's place a moment after you let go.
+- The place is saved a moment after you move or resize, and again when you close the window, quit, install an update or end a meeting.
+
+If a window ends up out of reach, use **Settings > General > Reset window positions**, or the tray menu item **Bring windows to this screen** (it uses the screen the mouse is on). Both put the dashboard and the meeting window back on that screen and forget the saved places.
+
+The layout of the panels (splits, sizes, tabs, collapsed strips, hidden panels, locked, saved layouts, transparency) is saved separately and is not changed by the window size: panel sizes are kept as shares of the window, so a small window never permanently squashes a layout you made in a big one.
 
 ## Readability
 

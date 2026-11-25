@@ -13,6 +13,8 @@ export interface WindowPlacement {
   w: number;
   h: number;
   scale: number;
+  /** Was maximised when last seen. x, y, w and h then stay the un-maximised place behind it. */
+  maximized?: boolean;
 }
 
 export interface Rect {
@@ -45,7 +47,9 @@ export function sanitizePlacement(v: unknown): WindowPlacement | null {
   if (!finite(p.x) || !finite(p.y) || !finite(p.w) || !finite(p.h) || !finite(p.scale)) return null;
   if (p.w < 100 || p.h < 100 || p.scale <= 0 || p.scale > 8) return null;
   if (Math.abs(p.x) > 100000 || Math.abs(p.y) > 100000 || p.w > 100000 || p.h > 100000) return null;
-  return { x: Math.round(p.x), y: Math.round(p.y), w: Math.round(p.w), h: Math.round(p.h), scale: p.scale };
+  const out: WindowPlacement = { x: Math.round(p.x), y: Math.round(p.y), w: Math.round(p.w), h: Math.round(p.h), scale: p.scale };
+  if (p.maximized === true) out.maximized = true;
+  return out;
 }
 
 /**
@@ -63,7 +67,7 @@ export function snapshotPlacement(
 
 export function samePlacement(a: WindowPlacement | null, b: WindowPlacement | null): boolean {
   if (!a || !b) return a === b;
-  return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h && a.scale === b.scale;
+  return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h && a.scale === b.scale && !!a.maximized === !!b.maximized;
 }
 
 function overlap(a: Rect, b: Rect): { w: number; h: number; area: number } {
@@ -161,4 +165,135 @@ export interface MonitorLike {
 export function areaOf(m: MonitorLike): WorkArea {
   const wa = m.workArea ?? { position: m.position, size: m.size };
   return { x: wa.position.x, y: wa.position.y, w: wa.size.width, h: wa.size.height, scale: m.scaleFactor || 1 };
+}
+
+// == Monitor setups ==
+
+/** How many monitor setups (docked, undocked, projector...) keep their own place per window. */
+export const MAX_SETUPS = 6;
+
+/** One remembered place, for one set of connected monitors. */
+export interface SetupEntry {
+  /** `setupKey` of the monitors that were connected. */
+  key: string;
+  placement: WindowPlacement;
+  /** The work area the window was on, so an unknown setup can get "the same relative place". */
+  area: WorkArea | null;
+  /** When it was saved (ms), newest first in the list. */
+  at: number;
+}
+
+/** A stable name for a set of monitors: work areas and scales, in a fixed order (plug order does not matter). */
+export function setupKey(areas: WorkArea[]): string {
+  return areas
+    .map((a) => `${Math.round(a.x)},${Math.round(a.y)},${Math.round(a.w)}x${Math.round(a.h)}@${Math.round(a.scale * 100) / 100}`)
+    .sort()
+    .join("|");
+}
+
+function sanitizeArea(v: unknown): WorkArea | null {
+  if (typeof v !== "object" || v === null) return null;
+  const a = v as Record<string, unknown>;
+  if (!finite(a.x) || !finite(a.y) || !finite(a.w) || !finite(a.h) || !finite(a.scale)) return null;
+  if (a.w < 100 || a.h < 100 || a.scale <= 0 || a.scale > 8) return null;
+  return { x: a.x, y: a.y, w: a.w, h: a.h, scale: a.scale };
+}
+
+/** What came back from disk: only well-formed entries, newest first, at most `MAX_SETUPS`. */
+export function sanitizeSetups(v: unknown): SetupEntry[] {
+  if (!Array.isArray(v)) return [];
+  const out: SetupEntry[] = [];
+  for (const raw of v) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const e = raw as Record<string, unknown>;
+    const placement = sanitizePlacement(e.placement);
+    if (typeof e.key !== "string" || !e.key || !placement) continue;
+    if (out.some((o) => o.key === e.key)) continue;
+    out.push({ key: e.key, placement, area: sanitizeArea(e.area), at: finite(e.at) ? e.at : 0 });
+  }
+  return out.sort((a, b) => b.at - a.at).slice(0, MAX_SETUPS);
+}
+
+/** The list with this entry first; an older entry for the same setup is replaced, the oldest setups drop off. */
+export function rememberSetup(entries: SetupEntry[], entry: SetupEntry): SetupEntry[] {
+  return [entry, ...entries.filter((e) => e.key !== entry.key)].slice(0, MAX_SETUPS);
+}
+
+export interface RestorePlan {
+  rect: Rect;
+  maximized: boolean;
+  /** True when this exact setup was seen before; false when the place is a best guess. */
+  known: boolean;
+}
+
+/**
+ * Where a window goes for the monitors connected now. Same setup as before: its own saved place.
+ * New setup: the newest saved place carried over (same relative spot on the primary monitor, same size
+ * in logical pixels), or the old single placement of v2.45 and earlier. Always inside a work area.
+ * Null when there is nothing saved (the window stays where it opened) or no monitor is known.
+ */
+export function planRestore(
+  entries: SetupEntry[],
+  legacy: WindowPlacement | null,
+  areas: WorkArea[],
+  primary: WorkArea | null,
+  current: WorkArea | null,
+  o: PlacementOptions,
+): RestorePlan | null {
+  if (areas.length === 0) return null;
+  const key = setupKey(areas);
+  const fallback = current ?? primary ?? areas[0];
+  const exact = entries.find((e) => e.key === key);
+  if (exact) {
+    const rect = resolvePlacement(exact.placement, areas, fallback, o);
+    return rect ? { rect, maximized: !!exact.placement.maximized, known: true } : null;
+  }
+  const newest = entries[0];
+  if (newest && newest.area) {
+    const home = primary ?? areas[0];
+    const p = newest.placement;
+    const fx = (p.x - newest.area.x) / newest.area.w;
+    const fy = (p.y - newest.area.y) / newest.area.h;
+    const lw = p.w / p.scale;
+    const lh = p.h / p.scale;
+    const guess: WindowPlacement = {
+      x: Math.round(home.x + clamp(fx, 0, 1) * home.w),
+      y: Math.round(home.y + clamp(fy, 0, 1) * home.h),
+      w: Math.round(lw * home.scale),
+      h: Math.round(lh * home.scale),
+      scale: home.scale,
+    };
+    const rect = resolvePlacement(guess, areas, home, o);
+    return rect ? { rect, maximized: !!p.maximized, known: false } : null;
+  }
+  const old = newest?.placement ?? legacy;
+  if (!old) return null;
+  const rect = resolvePlacement(old, areas, fallback, o);
+  return rect ? { rect, maximized: !!old.maximized, known: false } : null;
+}
+
+/** A window as far as moving it goes (the Tauri window, or a fake in tests). All physical pixels. */
+export interface MovableWindow {
+  setPosition(x: number, y: number): Promise<void>;
+  setSize(w: number, h: number): Promise<void>;
+  outerPosition(): Promise<{ x: number; y: number }>;
+  innerSize(): Promise<{ w: number; h: number }>;
+}
+
+const near = (a: number, b: number, tol: number) => Math.abs(a - b) <= tol;
+
+/**
+ * Put a window at `rect`: position first, then size, so a move to a monitor with another scale has
+ * already been rescaled (WM_DPICHANGED) before the size is set. Reads it back and corrects once.
+ * Returns whether it ended up where asked (a minimum size can legitimately differ).
+ */
+export async function applyRect(win: MovableWindow, rect: Rect, tolerance = 2): Promise<boolean> {
+  const attempt = async () => {
+    await win.setPosition(rect.x, rect.y);
+    await win.setSize(rect.w, rect.h);
+    const [pos, size] = await Promise.all([win.outerPosition(), win.innerSize()]);
+    return near(pos.x, rect.x, tolerance) && near(pos.y, rect.y, tolerance) && near(size.w, rect.w, tolerance) && near(size.h, rect.h, tolerance);
+  };
+  if (await attempt()) return true;
+  return attempt();
 }

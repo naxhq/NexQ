@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import {
   availableMonitors,
   currentMonitor,
@@ -6,113 +6,130 @@ import {
   primaryMonitor,
   PhysicalPosition,
   PhysicalSize,
+  type Monitor,
 } from "@tauri-apps/api/window";
 import { useConfigStore } from "../stores/configStore";
-import {
-  areaOf,
-  defaultLauncherRect,
-  resolvePlacement,
-  samePlacement,
-  snapshotPlacement,
-  type PlacementOptions,
-  type Rect,
-  type WindowPlacement,
-} from "../lib/windowPlacement";
+import { startPlacement, type PlacementController, type PlacementWindow } from "../lib/placementController";
+import type { MonitorLike, PlacementOptions } from "../lib/windowPlacement";
 
 /** Limits of each window (tauri.conf.json): the minimum size and the frame around the content. */
-const OPTIONS: Record<"launcher" | "overlay", PlacementOptions> = {
+export const PLACEMENT_OPTIONS: Record<"launcher" | "overlay", PlacementOptions> = {
   launcher: { minW: 700, minH: 500, chromeW: 16, chromeH: 40 },
   overlay: { minW: 400, minH: 480 },
 };
-
-const SAVE_DELAY_MS = 600;
 
 function isManaged(label: string): label is "launcher" | "overlay" {
   return label === "launcher" || label === "overlay";
 }
 
+export const toMonitorLike = (m: Monitor): MonitorLike => ({
+  scaleFactor: m.scaleFactor,
+  position: { x: m.position.x, y: m.position.y },
+  size: { width: m.size.width, height: m.size.height },
+  workArea: m.workArea
+    ? { position: { x: m.workArea.position.x, y: m.workArea.position.y }, size: { width: m.workArea.size.width, height: m.workArea.size.height } }
+    : undefined,
+});
+
+/** The current Tauri window, as the controller (and the reset command) move it. */
+export function tauriPlacementWindow(): PlacementWindow {
+  const win = getCurrentWindow();
+  return {
+    monitors: async () => (await availableMonitors()).map(toMonitorLike),
+    primary: async () => {
+      const m = await primaryMonitor();
+      return m ? toMonitorLike(m) : null;
+    },
+    current: async () => {
+      const m = await currentMonitor();
+      return m ? toMonitorLike(m) : null;
+    },
+    isVisible: () => win.isVisible(),
+    isMinimized: () => win.isMinimized(),
+    isMaximized: () => win.isMaximized(),
+    setPosition: (x, y) => win.setPosition(new PhysicalPosition(x, y)),
+    setSize: (w, h) => win.setSize(new PhysicalSize(w, h)),
+    outerPosition: async () => {
+      const p = await win.outerPosition();
+      return { x: p.x, y: p.y };
+    },
+    innerSize: async () => {
+      const s = await win.innerSize();
+      return { w: s.width, h: s.height };
+    },
+    scaleFactor: () => win.scaleFactor(),
+    maximize: () => win.maximize(),
+    show: () => win.show(),
+    onMoved: (cb) => win.onMoved(cb),
+    onResized: (cb) => win.onResized(cb),
+    onScaleChanged: (cb) => win.onScaleChanged(cb),
+  };
+}
+
+let active: PlacementController | null = null;
+/** Windows (by label) already put back in this page: demo mode ending must not move them again. */
+const restoredLabels = new Set<string>();
+
+/** Save the place now (before an update restarts the app, a quit, the end of a meeting). */
+export async function flushWindowPlacement(): Promise<void> {
+  await active?.flush().catch(() => {});
+}
+
 /**
- * Remember the window's size and place, and put it back after a restart.
- *
- * - Restores once, as soon as the config is loaded (the overlay is still hidden then),
- *   onto a connected monitor's work area. A window whose monitor is gone, or that was
- *   off-screen, is centred on the current one. The launcher's first ever size is
- *   min(1180x740, 92% of the work area).
- * - Saves (debounced) after a move or resize, only while the window is visible and neither
- *   minimised nor maximised. It never reads or writes anything but size and position, so it
- *   cannot change a hidden window's display affinity (that leaves a ghost frame).
- * - `paused` (demo mode) neither restores nor saves.
+ * Remember the window's size, place and maximised state per monitor setup, and put it back.
+ * The launcher starts hidden (tauri.conf.json) and is shown after the restore, so it never appears at
+ * the default size and then jumps; the overlay is restored while still hidden. Demo mode (`paused`)
+ * neither restores nor saves. Details: `startPlacement`.
  */
 export function useWindowPlacement(label: string, opts: { enabled?: boolean; paused?: boolean } = {}) {
   const { enabled = true, paused = false } = opts;
-  const restored = useRef(false);
 
   useEffect(() => {
     if (!enabled || paused || !isManaged(label)) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    const options = PLACEMENT_OPTIONS[label];
+    const setupsKey = label === "launcher" ? "launcherSetups" : "overlaySetups";
+    const legacyKey = label === "launcher" ? "launcherPlacement" : "overlayPlacement";
+    const controller = startPlacement({
+      label,
+      win: tauriPlacementWindow(),
+      options,
+      showAfterRestore: label === "launcher",
+      restoreFirst: !restoredLabels.has(label),
+      store: {
+        entries: () => useConfigStore.getState()[setupsKey],
+        legacy: () => useConfigStore.getState()[legacyKey],
+        save: (entries, latest) => useConfigStore.getState().setWindowSetups(label, entries, latest),
+      },
+    });
+    restoredLabels.add(label);
+    active = controller;
+    const flush = () => void controller.flush();
+    const onHidden = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("pagehide", flush);
+    window.addEventListener("blur", flush);
+    document.addEventListener("visibilitychange", onHidden);
     const unlisten: Array<() => void> = [];
-    const saved = useConfigStore.getState();
-    let last: WindowPlacement | null = label === "launcher" ? saved.launcherPlacement : saved.overlayPlacement;
-
-    const win = getCurrentWindow();
-    const o = OPTIONS[label];
-
-    const restore = async () => {
-      if (restored.current) return;
-      restored.current = true;
-      try {
-        const monitors = await availableMonitors();
-        const areas = monitors.map(areaOf);
-        const primary = await primaryMonitor().catch(() => null);
-        const current = (await currentMonitor().catch(() => null)) ?? primary;
-        const fallback = current ? areaOf(current) : areas[0] ?? null;
-        let rect: Rect | null = null;
-        if (last) {
-          rect = resolvePlacement(last, areas, fallback, o);
-        } else if (label === "launcher" && fallback) {
-          rect = defaultLauncherRect(fallback, o);
-        }
-        if (!rect || cancelled) return;
-        if ((await win.isMaximized().catch(() => false)) || (await win.isMinimized().catch(() => false))) return;
-        await win.setSize(new PhysicalSize(rect.w, rect.h));
-        await win.setPosition(new PhysicalPosition(rect.x, rect.y));
-      } catch (e) {
-        console.warn(`[placement] could not restore the ${label} window:`, e);
-      }
-    };
-
-    const save = async () => {
-      timer = undefined;
-      if (cancelled) return;
-      try {
-        if (!(await win.isVisible()) || (await win.isMinimized()) || (await win.isMaximized())) return;
-        const [pos, size, scale] = await Promise.all([win.outerPosition(), win.innerSize(), win.scaleFactor()]);
-        const next = snapshotPlacement({ x: pos.x, y: pos.y }, { w: size.width, h: size.height }, scale);
-        if (!next || samePlacement(next, last)) return;
-        last = next;
-        useConfigStore.getState().setWindowPlacement(label, next);
-      } catch {
-        /* a window being closed: nothing to save */
-      }
-    };
-    const schedule = () => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(save, SAVE_DELAY_MS);
-    };
-
-    (async () => {
-      await restore();
-      if (cancelled) return;
-      for (const sub of [win.onMoved(schedule), win.onResized(schedule)]) {
-        sub.then((fn) => (cancelled ? fn() : unlisten.push(fn))).catch(() => {});
-      }
-    })();
-
+    let gone = false;
+    import("@tauri-apps/api/event")
+      .then(({ listen }) => listen("nexq:meeting_ended", flush))
+      .then((fn) => (gone ? fn() : unlisten.push(fn)))
+      .catch(() => {});
     return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
+      gone = true;
+      flush();
+      controller.stop();
+      if (active === controller) active = null;
+      window.removeEventListener("pagehide", flush);
+      window.removeEventListener("blur", flush);
+      document.removeEventListener("visibilitychange", onHidden);
       unlisten.forEach((fn) => fn());
     };
   }, [label, enabled, paused]);
+}
+
+/** For tests: forget which windows were already put back in this page. */
+export function resetPlacementMemory(): void {
+  restoredLabels.clear();
 }
