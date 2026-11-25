@@ -73,6 +73,7 @@ Nothing runs on silence, and only one update runs at a time. If a live answer is
 | **Stopped early** | The last update ran out of time. |
 | **Stopped** | You stopped the notes, or turned them off, before the meeting ended. |
 | **Interrupted** | NexQ was closed before the notes were finished. |
+| **Nothing to note** | The notes read the whole call and found nothing to write down. (The notes page then says **Nothing to note** instead of being empty.) |
 | **Stopped for another meeting** | The notes stopped because another meeting started (while they were being updated). |
 
 **Not covered.** NexQ works out which part of the call never reached the notes from what was saved, so it is known whatever ended them (even if NexQ was closed in the middle). The panel and the tab say so, for example **Not covered: 2:00 to 40:00**.

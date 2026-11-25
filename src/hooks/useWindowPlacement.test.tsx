@@ -391,6 +391,23 @@ describe("useWindowPlacement", () => {
     expect(entries[0].placement).toMatchObject({ x: 640, y: 320 });
   });
 
+  it.each(["launcher", "overlay"] as const)("remembers a %s that is maximised before it was ever moved or saved", async (label) => {
+    renderHook(() => useWindowPlacement(label));
+    await settle();
+    await settle(1600);
+    // First start, nothing saved: the user maximises straight away.
+    win.maximized = true;
+    win.size = { width: 1920, height: 1040 };
+    win.pos = { x: 0, y: 0 };
+    win.handlers.resized.forEach((h) => h());
+    await settle(900);
+    const last = saved.mock.calls[saved.mock.calls.length - 1];
+    expect(last).toBeTruthy();
+    expect(last[2]).toMatchObject({ maximized: true });
+    // The normal place kept behind it is the one the window opened at, not the maximised rect.
+    expect(last[2].w).toBeLessThan(1920);
+  });
+
   it("maximises a hidden overlay only once it is shown", async () => {
     const m = world.monitors as FakeMonitor[];
     useConfigStore.setState({ overlaySetups: [{ key: setupKey(m.map((x) => areaOf(x as never))), placement: { x: 200, y: 100, w: 500, h: 700, scale: 1, maximized: true }, area: null, at: 1 }] });

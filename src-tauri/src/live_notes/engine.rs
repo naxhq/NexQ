@@ -616,12 +616,12 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
         }
         let failed = outcome.as_ref().filter(|o| !o.ok).and_then(|o| o.error.clone()).filter(|e| e != "cancelled");
         let kind = match forced {
-            Some((kind, lead)) if self.doc.uncovered.is_some() => (kind.to_string(), Some(lead)),
+            Some((kind, lead)) if self.doc.uncovered.is_some() => (kind.to_string(), Some(lead).filter(|l| !l.is_empty())),
             _ => self.ended_kind(run_final, failed),
         };
         // "covered" with nothing written says so honestly: the runs found nothing to note, or nothing was said
         self.doc.ended = if kind.0 == "covered" && self.doc.blocks.is_empty() {
-            self.doc.covered_to.map(|_| ("nothing_to_note".to_string(), Some("The notes read the whole call and found nothing to write down".to_string())))
+            self.doc.covered_to.map(|_| ("nothing_to_note".to_string(), None))
         } else {
             Some(kind)
         };

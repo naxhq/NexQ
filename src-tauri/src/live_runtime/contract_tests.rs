@@ -176,9 +176,9 @@ fn getter_documents_and_the_brief_sheet_event() {
 #[test]
 fn event_notetaker_state_finished_kinds() {
     for (name, kind, detail) in [
-        ("notetaker_state_finished_stopped", "stopped", "The notes were stopped before the meeting ended"),
-        ("notetaker_state_finished_interrupted", "interrupted", "NexQ was closed before the notes caught up"),
-        ("notetaker_state_finished_other_meeting", "other_meeting", "Another meeting started while the notes were being updated. Update notes again when it ends"),
+        ("notetaker_state_finished_stopped", "stopped", None),
+        ("notetaker_state_finished_interrupted", "interrupted", None),
+        ("notetaker_state_finished_other_meeting", "other_meeting", Some("Update notes again when it ends")),
     ] {
         let s = RunSnapshot {
             meeting_id: "m1".into(),
@@ -192,7 +192,7 @@ fn event_notetaker_state_finished_kinds() {
             next_in_ms: None,
             model: None,
             not_covered: Some(NotCovered { from_ms: 120_000, to_ms: 2_400_000 }),
-            ended: Some(Ended { kind: kind.into(), detail: Some(detail.into()) }),
+            ended: Some(Ended { kind: kind.into(), detail: detail.map(String::from) }),
             moved_online: None,
         };
         assert_contract!(name, s);
@@ -213,7 +213,7 @@ fn event_notetaker_state_finished_nothing_to_note() {
         next_in_ms: None,
         model: None,
         not_covered: None,
-        ended: Some(Ended { kind: "nothing_to_note".into(), detail: Some("The notes read the whole call and found nothing to write down".into()) }),
+        ended: Some(Ended { kind: "nothing_to_note".into(), detail: None }),
         moved_online: None,
     };
     assert_contract!("notetaker_state_finished_nothing_to_note", s);

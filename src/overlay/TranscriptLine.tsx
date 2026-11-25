@@ -301,6 +301,7 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
 
       {/* Text content + translation + bookmark note */}
       <div className="flex-1 min-w-0 relative">
+        <Tooltip content={`Confidence: ${Math.round(segment.confidence * 100)}%`} disabled={!isLowConfidence}>
         <span
           className={`leading-[1.65] ${
             segment.is_final
@@ -312,11 +313,6 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
               : ""
           }`}
           style={{ fontSize: `${transcriptFontSize}px`, color: segment.is_final ? readingTextColor(transcriptTextColor) : undefined }}
-          title={
-            isLowConfidence
-              ? `Confidence: ${Math.round(segment.confidence * 100)}%`
-              : undefined
-          }
         >
           {renderText()}
           {pendingTail && (
@@ -325,6 +321,7 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
             </span>
           )}
         </span>
+        </Tooltip>
 
         {/* Inline translation — visible below the original text */}
         {displayMode === "inline" && (

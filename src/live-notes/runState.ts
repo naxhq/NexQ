@@ -75,16 +75,16 @@ const ENDED_SENTENCE: Record<EndedKind, string> = {
   stopped: "You stopped the notes.",
   interrupted: "NexQ was closed before the notes were finished.",
   other_meeting: "The notes stopped because another meeting started.",
-  // The backend's detail says it ("The notes read the whole call and found nothing to write down").
-  nothing_to_note: "The notes read the whole call.",
+  nothing_to_note: "The notes read the whole call and found nothing to write down.",
 };
 
 /** One plain sentence for why the notes of a finished meeting ended as they did. */
 export function endedSentence(ended: RunEnded | null | undefined): string | null {
   if (!ended) return null;
-  if (ended.kind === "nothing_to_note") return ended.detail ? `${ended.detail}.` : "The notes read the whole call and found nothing to write down.";
   const base = ENDED_SENTENCE[ended.kind];
-  return ended.detail ? `${base} ${ended.detail}` : base;
+  // The backend's detail is only what the sentence cannot say (an error text, how to go on).
+  const detail = ended.detail?.trim();
+  return detail ? `${base} ${/[.!?]$/.test(detail) ? detail : `${detail}.`}` : base;
 }
 
 /** What became of the notes of a meeting that is over, in plain words. */

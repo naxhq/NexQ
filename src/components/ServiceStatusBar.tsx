@@ -478,68 +478,6 @@ const COLOR_MAP = {
   },
 } as const;
 
-// ── Service Chip (display-only, used for LLM) ──────────────────────
-
-function ServiceChip({
-  icon,
-  provider,
-  model,
-  active,
-  color,
-  tooltip,
-}: {
-  icon: React.ReactNode;
-  provider: string;
-  model: string;
-  active: boolean;
-  color: keyof typeof COLOR_MAP;
-  tooltip: string;
-}) {
-  const c = COLOR_MAP[color];
-
-  return (
-    <div
-      className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 transition-all duration-200 ${
-        active
-          ? `${c.bg} border ${c.border} shadow-sm ${c.glow}`
-          : "bg-secondary/30 border border-transparent"
-      }`}
-      title={tooltip}
-    >
-      {/* Status dot */}
-      <span className="relative flex h-2 w-2 shrink-0">
-        {active && (
-          <span className={`absolute inline-flex h-full w-full animate-pulse rounded-full ${c.dot} opacity-40`} />
-        )}
-        <span className={`relative inline-flex h-2 w-2 rounded-full transition-colors duration-200 ${
-          active ? c.dot : "bg-muted-foreground/30"
-        }`} />
-      </span>
-
-      {/* Icon */}
-      <span className={`shrink-0 transition-colors duration-200 ${active ? c.active : "text-muted-foreground/60"}`}>
-        {icon}
-      </span>
-
-      {/* Text */}
-      <div className="flex items-center gap-1 min-w-0">
-        <span className={`text-xs font-medium truncate max-w-[100px] transition-colors duration-200 ${
-          active ? "text-foreground/90" : "text-muted-foreground/70"
-        }`}>
-          {provider}
-        </span>
-        {model && (
-          <span className={`text-meta truncate max-w-[70px] transition-colors duration-200 ${
-            active ? "text-foreground/60" : "text-muted-foreground/60"
-          }`}>
-            {model}
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
-
 // ── STT Chip (interactive during recording) ─────────────────────────
 
 function STTChip({
@@ -578,7 +516,6 @@ function STTChip({
     <Root
       {...(interactive ? { type: "button" as const, "aria-haspopup": "dialog" as const, "aria-expanded": pickerOpen } : {})}
       aria-label={tooltip}
-      title={iconOnly ? tooltip : undefined}
       className={`flex min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-left transition-all duration-200 ui-focus ${hideModel ? "overflow-hidden" : ""} ${
         muted
           ? "bg-destructive/5 border border-destructive/10"

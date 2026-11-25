@@ -56,7 +56,17 @@ describe.each(CASES)("finished meeting: $name", ({ fixture, heading, sentence, n
   it("reads as its own words and sentence", () => {
     expect(endedWords(state)).toBe(heading);
     expect(endedSentence(state.ended)).toContain(sentence);
-    expect(endedSentence(state.ended)).toContain(state.ended!.detail!);
+    expect(endedSentence(state.ended)).toMatch(/[.!?]$/);
+  });
+
+  it("says the reason once: the detail adds something, and nothing repeats", () => {
+    const full = endedSentence(state.ended)!;
+    const words = (t: string) => t.toLowerCase().replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter(Boolean);
+    const quad = (w: string[]) => new Set(w.slice(0, Math.max(0, w.length - 3)).map((_, i) => w.slice(i, i + 4).join(" ")));
+    const base = quad(words(sentence));
+    const detail = state.ended!.detail;
+    if (detail) for (const q of quad(words(detail))) expect(base.has(q), `"${q}" is said twice`).toBe(false);
+    expect(full.split(/(?<=[.!?])\s+/).every((part) => /[.!?]$/.test(part))).toBe(true);
   });
 
   it("shows in the Notes tab with the range and Update notes", async () => {
@@ -90,6 +100,7 @@ describe("finished meeting: nothing_to_note", () => {
   it("reads in the backend's own words", () => {
     expect(endedWords(state)).toBe("Nothing to note");
     expect(endedSentence(state.ended)).toBe("The notes read the whole call and found nothing to write down.");
+    expect(state.ended!.detail).toBeNull();
   });
 
   it("the Notes tab says it once, in place of the empty state, with no box and no contradiction", async () => {

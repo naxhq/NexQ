@@ -81,6 +81,7 @@ With the keyboard, `Tab` to a separator and use the arrow keys (16 pixels at a t
 
 - **Hide.** Open the **Layout** menu and untick the panel under **Panels**, or choose **Hide ...** in its **Move** menu. Tick it again to bring it back.
 - **Collapse.** **Collapse to a strip** shrinks a panel to a thin bar. Click the bar to open it again. The header's view button does this for you: **Focus AI panel**, **Focus Transcript**, **Split view**.
+- **A short panel drops its extras.** A **Transcript** panel under about 320 pixels high hides the search box (until you type a search), the full You and Them meters and the display controls, and shows a slim meter line in its tab bar instead. An **Assistant** panel under about 260 pixels high hides the text size and colour controls. Make the panel taller to bring them back.
 - **A hidden panel, or one behind another tab, does no work.** The talking points reader, for example, stops scrolling and polling until you see it again.
 - **The assistant comes back by itself** when you use the Ask key, or when a screenshot is captured, even if you hid it or it is a tab behind another one.
 
@@ -106,7 +107,7 @@ The meeting window opens at 500 by 700 pixels (smallest 400 by 480).
 
 ### Where the windows come back
 
-NexQ remembers the size and place of the dashboard and the meeting window, and whether the dashboard was maximised (the size it had before is kept behind it). Starting a meeting, ending one, minimising, hiding to the tray, switching with `Ctrl+B` and restarting for an update all put them back where you left them.
+NexQ remembers the size and place of the dashboard and the meeting window, and whether the dashboard was maximised (the size it had before is kept behind it, and a dashboard that is still hidden is maximised again once it is shown). Starting a meeting, ending one, minimising, hiding to the tray, switching with `Ctrl+B` and restarting for an update all put them back where you left them.
 
 - **Each set of monitors has its own place** (told apart by the monitors and their scale, not by the taskbar: hiding the taskbar or showing a captions bar changes nothing). Docked at your desk and undocked on the laptop are remembered separately (the last six setups). Unplugging a monitor never overwrites the place saved for the setup with it. Plug it back in and the windows go there again.
 - **A setup NexQ has not seen** leaves a window where it is, and only brings it back inside a screen if it could no longer be reached. At app start it gets the same relative place on your main screen, the same size.

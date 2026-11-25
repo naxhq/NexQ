@@ -185,9 +185,11 @@ export function NotesPanel() {
                 Keep going
               </Button>
             )}
-            <Button size="sm"  onClick={() => void store.getState().stop()}>
-              Stop
-            </Button>
+            {!ended && (
+              <Button size="sm"  onClick={() => void store.getState().stop()}>
+                Stop
+              </Button>
+            )}
           </div>
         </div>
       )}

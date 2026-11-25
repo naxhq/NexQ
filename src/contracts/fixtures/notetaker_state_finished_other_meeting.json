@@ -4,7 +4,7 @@
   ],
   "cap": 120000,
   "ended": {
-    "detail": "Another meeting started while the notes were being updated. Update notes again when it ends",
+    "detail": "Update notes again when it ends",
     "kind": "other_meeting"
   },
   "error_kind": null,

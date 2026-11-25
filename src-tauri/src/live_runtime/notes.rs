@@ -234,7 +234,6 @@ struct Actor {
     last_doc_emit: Instant,
     done: bool,
     finishing: bool,
-    /// Manual mode, meeting over: waits for one "Update now" for what was never sent.
     /// Manual mode, meeting over: nothing is run unasked, the end only marks what was never sent.
     finish_manual: bool,
     user_stopped: bool,
@@ -528,7 +527,7 @@ impl Actor {
             self.closing_begun = Some(self.engine.begin_final(true));
         }
         if self.should_yield() {
-            self.conclude(Some(("other_meeting", "Another meeting started while the notes were being updated. Update notes again when it ends".into())));
+            self.conclude(Some(("other_meeting", "Update notes again when it ends".into())));
             return true;
         }
         if self.finish_deadline.is_some_and(|d| tokio::time::Instant::now() >= d) {
@@ -544,7 +543,7 @@ impl Actor {
             return true;
         }
         if self.yielded {
-            self.conclude(Some(("other_meeting", "Another meeting started while the notes were being updated. Update notes again when it ends".into())));
+            self.conclude(Some(("other_meeting", "Update notes again when it ends".into())));
             return true;
         }
         let failed = ran && self.engine.last_outcome().is_some_and(|o| !o.ok);
@@ -598,7 +597,7 @@ impl Actor {
         }
         if (self.finishing || self.one_shot) && !self.done && !self.interrupted && self.user_stopped {
             // the person stopped the notes during the passes at the end: what is left is marked, not lost
-            self.conclude(Some(("stopped", "The notes were stopped".into())));
+            self.conclude(Some(("stopped", String::new())));
         }
         if self.interrupted {
             // a run that was in flight finished after the quit saved: save as interrupted once more

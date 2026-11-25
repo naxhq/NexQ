@@ -151,6 +151,7 @@
   top: 0.55em;
   width: 0.62em;
   height: 0.62em;
+  opacity: 1;
   border-width: 1px;
 }
 .tp-read.tp-ticks p[data-list="bullet"] > .tp-tick > svg { width: 0.5em; height: 0.5em; }

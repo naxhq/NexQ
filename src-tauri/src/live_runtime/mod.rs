@@ -543,14 +543,14 @@ impl LiveRuntimes {
             None
         } else {
             stored.as_ref().map(|s| match (not_covered, s.status.as_str(), &s.doc.ended) {
-                (None, _, _) if nothing_written => ("nothing_to_note".to_string(), Some("The notes read the whole call and found nothing to write down".to_string())),
+                (None, _, _) if nothing_written => ("nothing_to_note".to_string(), None),
                 (None, _, _) => ("covered".to_string(), None),
                 // the person stopped them, or turned them off, during the meeting
-                (Some(_), "stopped", _) => ("stopped".to_string(), Some("The notes were stopped before the meeting ended".to_string())),
+                (Some(_), "stopped", _) => ("stopped".to_string(), None),
                 (Some(_), "done", Some((k, d))) if k != "covered" => (k.clone(), d.clone()),
                 (Some(_), "done", _) if over_cap => ("limit".to_string(), None),
                 // the app closed or crashed before the end pass could save how it went
-                (Some(_), _, _) => ("interrupted".to_string(), Some("NexQ was closed before the notes caught up".to_string())),
+                (Some(_), _, _) => ("interrupted".to_string(), None),
             })
         };
         let reason = if let Some((from, to)) = not_covered {

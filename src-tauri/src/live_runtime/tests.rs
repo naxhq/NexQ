@@ -2328,7 +2328,7 @@ async fn a_new_live_meeting_makes_the_update_give_way_at_once() {
     until("paused", || h.events.last_status("notetaker_state", &m).map(|v| v["ended"]["kind"] == "other_meeting").unwrap_or(false)).await;
     assert_eq!(h.fake.count(AiPurpose::Notes), 1, "no pass for the old meeting once the new one started");
     let st = h.events.last_status("notetaker_state", &m).unwrap();
-    assert!(can_of(&st).contains(&"update".to_string()) && st["reason"].as_str().unwrap_or("").contains("nother meeting"), "{st}");
+    assert!(can_of(&st).contains(&"update".to_string()) && st["reason"].as_str().unwrap_or("").contains("Update notes again"), "{st}");
 }
 
 #[tokio::test]
@@ -2432,7 +2432,7 @@ async fn stopping_the_notes_says_stopped_not_out_of_time() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     let st = ended_kind_after(&h).await;
     assert_eq!(st["ended"]["kind"], "stopped", "{st}");
-    assert!(st["ended"]["detail"].as_str().unwrap_or("").contains("stopped"), "{st}");
+    assert!(st["ended"]["detail"].is_null(), "the sentence for the kind says it; no repeated detail: {st}");
     assert!(!st["not_covered"].is_null(), "{st}");
 }
 
@@ -2455,7 +2455,7 @@ async fn a_kill_says_interrupted_with_its_own_detail() {
     let h2 = harness_on(h.conn.clone());
     let st = h2.rt.notetaker_state("m1").await;
     assert_eq!(st["ended"]["kind"], "interrupted", "{st}");
-    assert!(st["ended"]["detail"].as_str().unwrap_or("").contains("closed"), "{st}");
+    assert!(st["ended"]["detail"].is_null(), "the sentence for the kind says it; no repeated detail: {st}");
 }
 
 #[tokio::test]
@@ -2466,7 +2466,7 @@ async fn giving_way_to_another_meeting_is_its_own_kind() {
     h.start_meeting("another-live-meeting");
     until("yielded", || h.events.last_status("notetaker_state", &m).map(|v| v["ended"]["kind"] == "other_meeting").unwrap_or(false)).await;
     let st = h.events.last_status("notetaker_state", &m).unwrap();
-    assert!(st["ended"]["detail"].as_str().unwrap_or("").contains("Another meeting"), "{st}");
+    assert!(st["ended"]["detail"].as_str().unwrap_or("").contains("Update notes again"), "{st}");
 }
 
 #[tokio::test]

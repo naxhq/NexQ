@@ -138,7 +138,7 @@ Anything else asks. A card shows **The model wants to run** the tool on a server
 - **Allow once**, which runs that one call
 - **Deny**
 
-If you don't answer, the call is denied after **60 seconds** (the card says "No answer in 60 seconds, so it was denied."). There is no "always allow". A card belongs to the answer that asked: if no answer is being written when a tool asks (for example a stopped answer), the call is refused and nothing is asked. A refused call is named with the answer, for example "CRM: send_mail was not run: ..." with the reason. Values under names like `password` or `api_key` are hidden, and hidden characters are shown as `\u{...}`. If arguments were cut or hidden, the card says so, and **Deny** is the highlighted button.
+If you don't answer, the call is denied after **60 seconds** (the card says "No answer in 60 seconds, so it was denied."). There is no "always allow". A card belongs to the answer that asked: if no answer is being written when a tool asks (for example a stopped answer), the call is refused and nothing is asked. A refused call is named with the answer, for example "CRM: send_mail was not run: ..." with the reason. If the tool is switched off, the reason says so ("send_mail is turned off for this server. Turn it on in Settings > Personal Sources.") and **Open Personal Sources** next to it takes you there. Tools whose names suggest they change something start switched off. Values under names like `password` or `api_key` are hidden, and hidden characters are shown as `\u{...}`. If arguments were cut or hidden, the card says so, and **Deny** is the highlighted button.
 
 ## What leaves your PC
 

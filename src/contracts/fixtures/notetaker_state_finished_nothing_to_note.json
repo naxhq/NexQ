@@ -2,7 +2,7 @@
   "can": [],
   "cap": 120000,
   "ended": {
-    "detail": "The notes read the whole call and found nothing to write down",
+    "detail": null,
     "kind": "nothing_to_note"
   },
   "error_kind": null,

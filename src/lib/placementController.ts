@@ -98,12 +98,25 @@ export function startPlacement(c: ControllerOptions): PlacementController {
   let busyRestoring = false;
   let setupChanged = false;
   let pendingMaximize = false;
+  /** The last normal (not maximised) place seen: what to keep behind a maximised window with nothing saved yet. */
+  let lastNormal: WindowPlacement | null = null;
   const unlisten: Array<() => void> = [];
 
   const readAreas = async () => {
     const monitors = await win.monitors();
     return monitors.map(areaOf);
   };
+
+  async function captureNormal(): Promise<void> {
+    try {
+      if ((await win.isMaximized()) || (await win.isMinimized())) return;
+      const [pos, size, scale] = await Promise.all([win.outerPosition(), win.innerSize(), win.scaleFactor()]);
+      const snap = snapshotPlacement({ x: pos.x, y: pos.y }, { w: size.w, h: size.h }, scale);
+      if (snap) lastNormal = snap;
+    } catch {
+      /* nothing to keep */
+    }
+  }
 
   async function restore(): Promise<void> {
     if (busyRestoring) return;
@@ -126,6 +139,7 @@ export function startPlacement(c: ControllerOptions): PlacementController {
       if (await win.isMinimized().catch(() => false)) return;
       quietUntil = now() + 1500;
       await applyRect(win, plan.rect);
+      await captureNormal();
       // A hidden window is maximised only by its style (it then does not fill the work area), so wait until
       // it is on screen.
       if (plan.maximized) {
@@ -148,12 +162,14 @@ export function startPlacement(c: ControllerOptions): PlacementController {
       if (await win.isMaximized()) {
         const base = store.entries().find((e) => e.key === currentKey);
         // The place behind a maximised window stays as it was; only the state is remembered.
-        pending = base ? { placement: { ...base.placement, maximized: true } } : null;
+        const normal = base?.placement ?? lastNormal;
+        pending = normal ? { placement: { ...normal, maximized: true } } : null;
         return;
       }
       const [pos, size, scale] = await Promise.all([win.outerPosition(), win.innerSize(), win.scaleFactor()]);
       const snap = snapshotPlacement({ x: pos.x, y: pos.y }, { w: size.w, h: size.h }, scale);
       pending = snap ? { placement: snap } : null;
+      if (snap) lastNormal = snap;
     } catch {
       /* a window being closed: nothing to sample */
     }
@@ -237,6 +253,8 @@ export function startPlacement(c: ControllerOptions): PlacementController {
   const ready = (async () => {
     if (c.restoreFirst === false) currentKey = setupKey(await readAreas().catch(() => []));
     else await restore();
+    // Nothing was saved or restored (a fresh install, the overlay): the place it opened at is the normal one.
+    if (!lastNormal) await captureNormal();
     if (c.showAfterRestore && !stopped) {
       await win.show().catch(() => {});
       if (pendingMaximize) {
