@@ -55,7 +55,7 @@ export function LibraryRow({
   const renamed = !!item.label && item.label !== item.name;
 
   return (
-    <li ref={li} data-highlighted={highlighted ? "true" : undefined} className={cn("group rounded-lg px-2 py-2 transition-colors hover:bg-accent/50", highlighted && "bg-accent ring-2 ring-ring/60")}>
+    <li ref={li} data-rove-row data-highlighted={highlighted ? "true" : undefined} className={cn("group rounded-lg px-2 py-2 transition-colors hover:bg-accent/50", highlighted && "bg-accent ring-2 ring-ring/60")}>
       <div className="flex items-start gap-2">
         <Icon className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         <div className="min-w-0 flex-1">

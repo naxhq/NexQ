@@ -126,7 +126,7 @@ export function WorkspaceHome({
         </div>
       )}
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <aside style={{ width: railPx }} className="shrink-0 overflow-hidden bg-card/40" aria-label="Workspaces and meetings">
+        <aside id="region-rail" data-region tabIndex={-1} style={{ width: railPx }} className="shrink-0 overflow-hidden bg-card/40 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60" aria-label="Workspaces and meetings">
           <WorkspaceRail
             narrow={narrow}
             onOpenMeeting={onOpenMeeting}
@@ -140,7 +140,7 @@ export function WorkspaceHome({
         )}
         {narrow && <div className="w-px shrink-0 bg-border" aria-hidden="true" />}
 
-        <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
+        <main id="region-main" data-region tabIndex={-1} aria-label="Chat and meeting" className="min-h-0 min-w-0 flex-1 overflow-hidden outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60">
           {view === "unfiled" ? (
             <UnfiledMeetings onOpenMeeting={onOpenMeeting} />
           ) : view === "all" ? (
@@ -166,7 +166,7 @@ export function WorkspaceHome({
         {mode === "wide" && view === "home" && (
           <>
             <ResizeHandle label="Resize the library" value={libraryWidth} min={LIBRARY_MIN} max={LIBRARY_MAX} fallback={LIBRARY_DEFAULT} grow={-1} onChange={setLibraryWidth} />
-            <aside style={{ width: libraryWidth }} className="shrink-0 bg-card/40" aria-label="Library">
+            <aside id="region-library" data-region tabIndex={-1} style={{ width: libraryWidth }} className="shrink-0 bg-card/40 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60" aria-label="Library">
               <LibraryPanel workspaceId={open.id} />
             </aside>
           </>

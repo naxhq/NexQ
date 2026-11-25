@@ -1,4 +1,5 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
+import { useRovingRows } from "./roving";
 import { ClipboardPaste, FolderPlus, Library as LibraryIcon, Plus, Plug2 } from "lucide-react";
 import { ConfirmDialog, Menu, type MenuItemSpec, Button } from "../ui";
 import { FileUpload } from "../context/FileUpload";
@@ -39,6 +40,8 @@ const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
  * knowledge base actions. Removing a row removes it from this workspace only.
  */
 export function LibraryPanel({ workspaceId, inSheet = false }: { workspaceId: string; inSheet?: boolean }) {
+  const [listEl, setListEl] = useState<HTMLDivElement | null>(null);
+  useRovingRows(listEl);
   const detail = useWorkspaceStore((s) => s.details[workspaceId]);
   const revision = useWorkspaceStore((s) => s.revision);
   const loadDetail = useWorkspaceStore((s) => s.loadDetail);
@@ -162,7 +165,7 @@ export function LibraryPanel({ workspaceId, inSheet = false }: { workspaceId: st
         />
       </header>
 
-      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-3 pb-4 pt-2">
+      <div ref={setListEl} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-3 pb-4 pt-2">
         {unavailable && (
           <p className="ui-meta rounded-lg bg-accent px-3 py-2 text-foreground" role="note">
             Workspaces aren't available right now, so everything is in General and works as before.

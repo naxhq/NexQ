@@ -16,6 +16,7 @@ import { endMeetingFromThisWindow } from "../hooks/useUpdater";
 import { Dialog, Button } from "../ui";
 import { WorkspaceActionsProvider } from "../workspace/WorkspaceActions";
 import { WorkspaceHome } from "../workspace/WorkspaceHome";
+import { SkipLinks, useRegionKeys } from "../workspace/regions";
 import { DatabaseProblemScreen } from "../workspace/DatabaseProblemScreen";
 import { handleOpenRequest, type OpenRequest } from "../workspace/openRequest";
 import type { AudioMode, AIScenario } from "../lib/types";
@@ -161,6 +162,8 @@ export function LauncherView() {
     [activeMeeting, setSelectedMeetingId],
   );
 
+  useRegionKeys();
+
   const handleReturnToMeeting = useCallback(() => {
     showMeetingOverlay().catch(() => {});
   }, []);
@@ -168,6 +171,7 @@ export function LauncherView() {
   return (
     <WorkspaceActionsProvider>
       <div className="flex h-full flex-col bg-background">
+        <SkipLinks />
         <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-5 py-2.5">
           <div className="flex items-center gap-2.5">
             <img src="/nexq-icon.png" alt="NexQ" className="h-7 w-7 rounded-lg" />
@@ -216,7 +220,7 @@ export function LauncherView() {
           )}
         </div>
 
-        <footer className="flex items-center justify-between border-t border-border">
+        <footer id="region-footer" data-region tabIndex={-1} aria-label="Status" className="flex items-center justify-between border-t border-border outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60">
           <ServiceStatusBar />
           <div className="flex shrink-0 items-center gap-2 whitespace-nowrap pr-5 ui-meta text-muted-foreground">
             <span className="hidden min-[900px]:inline">&copy; {new Date().getFullYear()} {NEXQ_DEVELOPER}</span>

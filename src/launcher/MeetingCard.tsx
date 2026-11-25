@@ -144,6 +144,7 @@ export function MeetingCard({
       onClick={() => !isEditing && onSelect(meeting.id)}
       onKeyDown={handleCardKeyDown}
       role="button"
+      data-rove-row
       tabIndex={0}
       aria-label={`Meeting: ${meeting.title}, ${formatRelativeTime(meeting.start_time)}`}
       className={cn(

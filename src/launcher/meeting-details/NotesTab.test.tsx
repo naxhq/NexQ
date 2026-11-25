@@ -86,10 +86,10 @@ describe("NotesTab state of a finished meeting", () => {
     const { ns } = await import("../../live-notes/testing");
     const calls: string[] = [];
     useLiveNotesStore.setState({
-      runs: { m1: ns("finished", ["update", "start"], { not_covered: { from_ms: 120_000, to_ms: 2_400_000 }, reason: "Stopped at the limit you set." }) },
+      runs: { m1: ns("capped", ["update", "start"], { not_covered: { from_ms: 120_000, to_ms: 2_400_000 }, reason: "Stopped at the limit you set." }) },
       updateNow: (async (id?: string) => void calls.push(String(id))) as never,
     });
-    expect(await screen.findByTestId("notes-tab-state")).toHaveTextContent("Stopped early");
+    expect(await screen.findByTestId("notes-tab-state")).toHaveTextContent("Stopped at the limit");
     expect(screen.getByText("Not covered: 2:00 to 40:00")).toBeInTheDocument();
     expect(screen.getByText("Stopped at the limit you set.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Update notes" }));

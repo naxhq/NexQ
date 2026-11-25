@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
+import { useRovingRows } from "./roving";
 import { ListFilter, Search, X } from "lucide-react";
 import { Button, ConfirmDialog, IconButton, Menu, Segmented } from "../ui";
 import { RecentMeetings } from "../launcher/RecentMeetings";
@@ -30,6 +31,8 @@ export function MeetingList({
   query: string;
   onQueryChange: (q: string) => void;
 }) {
+  const [listEl, setListEl] = useState<HTMLDivElement | null>(null);
+  useRovingRows(listEl);
   const [scope, setScope] = useState<MeetingScopeChoice>("here");
   const [filter, setFilter] = useState<MeetingFilter>("all");
   const [confirmAll, setConfirmAll] = useState(false);
@@ -167,7 +170,7 @@ export function MeetingList({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3 pt-1">
+      <div ref={setListEl} className="min-h-0 flex-1 overflow-y-auto px-2 pb-3 pt-1">
         {error && !loading && (
           <p role="alert" className="ui-meta px-2 py-2 text-destructive">
             Couldn't load meetings: {error}

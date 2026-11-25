@@ -63,6 +63,20 @@ These work in the launcher (`Cmd` replaces `Ctrl` on macOS).
 
 In the [workspace chat](workspace-chat.md), `Enter` sends the question and `Shift+Enter` adds a line.
 
+### Moving around the dashboard
+
+Each list is one Tab stop, so you do not tab through every meeting or file to get past it. Tab lands on the row you used last.
+
+| Shortcut | Action |
+|----------|--------|
+| `Up` and `Down` | Previous or next row in the workspace list, the meeting list or the Library |
+| `Home` and `End` | First or last row |
+| `Enter` | Open the row |
+| `Right`, `Menu` key or `Shift+F10` | Move to the row's own actions (star, rename, move, delete, menu); `Right` again goes to the next one |
+| `Left` or `Escape` | Back to the row |
+| `F6` and `Shift+F6` | Next or previous area: workspaces and meetings, chat, Library, status bar |
+| `Tab` from the top of the page | Skip links: to workspaces and meetings, to chat, to the Library |
+
 ## Meeting Window Panels
 
 With a panel tab focused (see [Meeting window layout](meeting-layout.md)):

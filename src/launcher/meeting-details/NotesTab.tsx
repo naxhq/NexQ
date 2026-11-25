@@ -86,7 +86,7 @@ export function NotesTab({ meetingId, title, onJump }: NotesTabProps) {
         <div className="rs-notice" role="group" aria-label="State of the notes">
           <div className="rs-notice-title" data-testid="notes-tab-state">{endedWords(run)}</div>
           {notCoveredText(run.not_covered) && <p>{notCoveredText(run.not_covered)}</p>}
-          {run.reason && <p>{run.reason}</p>}
+          {run.reason && ["error", "capped", "paused"].includes(run.status) && <p>{run.reason}</p>}
           {(can(run, "update") || inFlight(run)) && (
             <div className="rs-notice-actions">
               <button type="button" className="rs-tool rs-tool-solid" disabled={inFlight(run)} onClick={() => void store.getState().updateNow(meetingId)}>

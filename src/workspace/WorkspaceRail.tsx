@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { useRovingRows } from "./roving";
 import { Archive, Inbox, LayoutList, MoreHorizontal, Pin, Plus, MessagesSquare } from "lucide-react";
 import { Menu, Tooltip, IconButton } from "../ui";
 import { VoiceprintMark } from "../voiceprint";
@@ -12,7 +13,7 @@ import { useUnfiledCount } from "./unfiled";
 function WorkspaceRow({ workspace, active, onOpen }: { workspace: WorkspaceSummary; active: boolean; onOpen: () => void }) {
   const actions = useWorkspaceActions();
   return (
-    <li className={cn("group relative", workspace.archived && "opacity-70")}>
+    <li data-rove-row className={cn("group relative", workspace.archived && "opacity-70")}>
       <button
         type="button"
         onClick={onOpen}
@@ -73,6 +74,8 @@ export function WorkspaceRail({
   const openWorkspace = useWorkspaceStore((s) => s.openWorkspace);
   const setView = useWorkspaceStore((s) => s.setView);
   const actions = useWorkspaceActions();
+  const [navEl, setNavEl] = useState<HTMLElement | null>(null);
+  useRovingRows(navEl);
 
   const rows = useMemo(() => railOrder(workspaces, showArchived), [workspaces, showArchived]);
   const unfiled = useUnfiledCount();
@@ -133,7 +136,7 @@ export function WorkspaceRail({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <nav aria-label="Workspaces" className="flex max-h-[34%] shrink-0 flex-col border-b border-border">
+      <nav ref={setNavEl} aria-label="Workspaces" className="flex max-h-[34%] shrink-0 flex-col border-b border-border">
         <div className="flex items-center justify-between px-4 pb-1 pt-3">
           <h2 className="ui-section text-foreground">Workspaces</h2>
           <div className="flex items-center gap-0.5">
@@ -162,6 +165,7 @@ export function WorkspaceRail({
           <div className="shrink-0 px-2 pb-1">
             <button
               type="button"
+              data-rove-row
               onClick={() => setView("unfiled")}
               aria-current={view === "unfiled" ? "page" : undefined}
               className={cn(
