@@ -228,7 +228,10 @@ export const useLiveBriefStore = create<LiveBriefState>((set, get) => {
         set({ error: "No meeting is running, so there is nothing to change." });
         return;
       }
-      set({ error: null, notice: null });
+      // Pressed while it is stopped or paused: say why at once; the backend may say more.
+      const run = get().run;
+      const stuck = run && ["error", "paused", "capped"].includes(run.status);
+      set({ error: null, notice: stuck ? `The brief is not running. ${run.reason ?? ""}`.trim() : null });
       try {
         await briefRefresh(id);
       } catch (e) {

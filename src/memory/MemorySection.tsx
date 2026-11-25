@@ -151,7 +151,7 @@ function SavedRow({ item }: { item: MemoryRow }) {
     <li className="group py-1.5">
       <div className="flex items-baseline justify-between gap-2">
         <p className="ui-body min-w-0 font-medium text-foreground">{item.title}</p>
-        <span className="flex shrink-0 items-center gap-1 opacity-60 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+        <span className="flex shrink-0 items-center gap-1">
           {mode === "forget" ? (
             <>
               <span className="ui-meta text-destructive">Forget it?</span>

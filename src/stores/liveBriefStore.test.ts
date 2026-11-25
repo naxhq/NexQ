@@ -161,6 +161,13 @@ describe("liveBriefStore", () => {
     expect(useLiveBriefStore.getState().error).toBe("No model is set up");
   });
 
+  it("Refresh while the brief is stopped says why at once", async () => {
+    await useLiveBriefStore.getState().attach("m1");
+    useLiveBriefStore.setState({ run: bs("error", ["update"], { reason: "Usage limit reached, resets at 5pm" }) });
+    await useLiveBriefStore.getState().refresh();
+    expect(useLiveBriefStore.getState().notice).toBe("The brief is not running. Usage limit reached, resets at 5pm");
+  });
+
   it("a refusal to refresh is a notice with the reason, not a failure", async () => {
     await useLiveBriefStore.getState().attach("m1");
     h.failOnly.add("refresh");

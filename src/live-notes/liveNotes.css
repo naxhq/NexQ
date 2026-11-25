@@ -57,7 +57,11 @@
   transition: background-color 150ms var(--ln-ease);
 }
 .rs-tool:hover:not(:disabled) { background: hsl(var(--muted)); }
-.rs-tool:disabled { opacity: 0.5; }
+/* Disabled stays legible (4.5:1): quieter colour and no strike, not a faded button. */
+.rs-tool:disabled { color: hsl(var(--muted-foreground)); cursor: default; }
+.rs-tool:disabled:hover { background: transparent; }
+/* The shortcut hint reads at full strength in both themes. */
+.rs-tool .ui-kbd { color: hsl(var(--foreground)); background: transparent; border-color: hsl(var(--control-edge)); }
 .rs-tool:focus-visible { box-shadow: 0 0 0 2px hsl(var(--background)), 0 0 0 4px hsl(var(--primary)); }
 .rs-tool-solid { background: hsl(var(--ui-field)); border: 1px solid hsl(var(--border)); }
 
@@ -170,7 +174,7 @@ button.ln-time:focus-visible { box-shadow: 0 0 0 2px hsl(var(--primary)); }
 .ln-more { opacity: 0; transition: opacity 120ms; }
 .ln-item:hover .ln-more, .ln-item:focus-within .ln-more, .ln-more[aria-expanded="true"] { opacity: 1; }
 
-/* Time of one line, in the margin, on demand. */
+/* Time of one line, in the margin; always shown, at 4.5:1 or better in both themes. */
 .ln-itime {
   position: absolute;
   left: calc(-1 * var(--ln-margin));
@@ -180,11 +184,9 @@ button.ln-time:focus-visible { box-shadow: 0 0 0 2px hsl(var(--primary)); }
   font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
   color: hsl(var(--muted-foreground));
-  opacity: 0;
   border-radius: 0.25rem;
   outline: none;
 }
-.ln-item:hover .ln-itime, .ln-item:focus-within .ln-itime { opacity: 1; }
 .ln-itime:hover { color: hsl(var(--foreground)); text-decoration: underline; text-underline-offset: 2px; }
 .ln-itime:focus-visible { box-shadow: 0 0 0 2px hsl(var(--primary)); }
 
