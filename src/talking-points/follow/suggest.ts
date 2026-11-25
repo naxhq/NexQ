@@ -14,9 +14,10 @@ export const SPOKEN_WORDS = 20;
 /** Words below this weight (generic function words) never count. */
 const MIN_W = 0.15;
 const SCORE_MIN = 0.5;
-const STABLE_MS = 1000;
+const STABLE_MS = 300; // the panel adds its own second before it shows a chip
 const GAP_MS = 4000;
 const DROP_MISSES = 3;
+const EXPIRE_MS = 8000;
 
 const CJK_CONTENT = /[\p{Script=Han}\p{Script=Katakana}\p{Script=Hangul}]/u;
 function isContent(w: string): boolean {
@@ -168,11 +169,13 @@ export class SuggestionScorer {
 export class SuggestionOffer {
   private cand: { block: number; since: number; score: number } | null = null;
   private misses = 0;
+  private lastAt = -Infinity;
   private shown: { block: number; score: number } | null = null;
   private lastShownAt = -Infinity;
   private dismissed = new Set<number>();
 
   observe(c: { block: number; score: number } | null, now: number): void {
+    this.lastAt = now;
     if (c && this.dismissed.has(c.block)) c = null;
     if (!c) {
       if (++this.misses >= DROP_MISSES) {
@@ -190,6 +193,8 @@ export class SuggestionOffer {
 
   /** Current offer (time based: also promotes a stable candidate between inputs). */
   current(now: number, lo: number, hi: number): { block: number; score: number } | null {
+    // nothing heard for a while (or the follower was reset around it): an old offer does not linger
+    if (this.cand && now - this.lastAt > EXPIRE_MS) this.clear();
     const c = this.cand;
     if (!c) return null;
     if (c.block >= lo && c.block <= hi) {
