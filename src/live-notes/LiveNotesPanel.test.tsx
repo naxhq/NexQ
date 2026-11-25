@@ -3,8 +3,10 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { NotetakerSettings, NotetakerState } from "../lib/types";
 import { sampleDoc } from "./fixtures";
+import { ns } from "./testing";
 
 vi.mock("../lib/ipc", () => ({
+  getAutomaticModel: async () => null,
   cliAgentStatus: async () => null,
   getApiKey: async () => null,
   getLLMProviders: async () => ["openai", "groq"],
@@ -34,7 +36,7 @@ function seed(opts: { settings?: Partial<NotetakerSettings>; run?: Partial<Notet
   useLiveNotesStore.setState({
     entries: { m1: { ...EMPTY_ENTRY, doc: opts.doc === false ? { version: 1, blocks: [] } : structuredClone(sampleDoc) } },
     settings: { ...DEFAULT_NOTETAKER_SETTINGS, enabled: true, ...opts.settings },
-    runs: opts.run === null ? {} : { m1: { meeting_id: "m1", status: "running", tokens_used: 42000, cap: 120000, ...opts.run } },
+    runs: opts.run === null ? {} : { m1: ns(opts.run?.status ?? "running", opts.run?.can, { tokens_used: 42000, ...opts.run }) },
     watchSettings: async () => () => {},
     error: opts.error ?? null,
     // The panel attaches on mount; the store's own attach is replaced so no IPC is needed.
@@ -43,6 +45,9 @@ function seed(opts: { settings?: Partial<NotetakerSettings>; run?: Partial<Notet
     keepGoing: spy("keep_going") as never,
     stop: spy("stop") as never,
     start: spy("start") as never,
+    tryAgain: spy("try_again") as never,
+    pause: spy("pause") as never,
+    resume: spy("resume") as never,
     turnOn: (async (scope: string) => void calls.push(`turn_on:${scope}`)) as never,
     patchSettings: (async (p: object) => void calls.push(`patch:${JSON.stringify(p)}`)) as never,
   });
@@ -55,17 +60,17 @@ beforeEach(() => {
 
 describe("statusWords", () => {
   const on = { ...DEFAULT_NOTETAKER_SETTINGS, enabled: true };
-  const run = (status: NotetakerState["status"]): NotetakerState => ({ meeting_id: "m", status, tokens_used: 0, cap: 1 });
+  const run = (status: NotetakerState["status"]): NotetakerState => ns(status);
   it("says the state in words", () => {
     expect(statusWords(run("running"), on).word).toBe("Taking notes");
-    expect(statusWords(run("idle"), on).word).toBe("Waiting for speech");
+    expect(statusWords(run("waiting"), on).word).toBe("Waiting for speech");
     expect(statusWords(null, on).word).toBe("Waiting for speech");
     expect(statusWords(run("paused"), on).word).toBe("Paused");
     expect(statusWords(run("capped"), on).word).toBe("Paused");
     expect(statusWords(run("error"), on).word).toBe("Stopped");
     expect(statusWords(run("finished"), on).word).toBe("Stopped");
     expect(statusWords(run("running"), { ...on, enabled: false }).word).toBe("Off");
-    expect(statusWords(run("idle"), { ...on, update_mode: "manual" }).word).toBe("Waiting for you");
+    expect(statusWords(run("waiting"), { ...on, update_mode: "manual" }).word).toBe("Waiting for you");
   });
 });
 
@@ -91,14 +96,14 @@ describe("NotesPanel", () => {
   });
 
   it("updates now from the button and from the N key, but not while a run is going", async () => {
-    seed({ run: { status: "idle" } });
+    seed({ run: { status: "waiting" } });
     render(<NotesPanel />);
     await userEvent.click(screen.getByRole("button", { name: /Update now/ }));
     act(() => void window.dispatchEvent(new Event(NOTES_UPDATE_EVENT)));
     expect(calls).toEqual(["update_now", "update_now"]);
 
     calls.length = 0;
-    act(() => useLiveNotesStore.setState({ runs: { m1: { meeting_id: "m1", status: "running", tokens_used: 1, cap: 10 } } }));
+    act(() => useLiveNotesStore.setState({ runs: { m1: ns("running") } }));
     expect(screen.getByRole("button", { name: /Update now/ })).toBeDisabled();
     act(() => void window.dispatchEvent(new Event(NOTES_UPDATE_EVENT)));
     expect(calls).toEqual([]);
@@ -110,20 +115,20 @@ describe("NotesPanel", () => {
     expect(screen.getByText("Live notes: Paused")).toBeInTheDocument();
     const prompt = screen.getByRole("group", { name: "Keep taking notes?" });
     expect(prompt).toHaveTextContent("120k tokens");
-    expect(screen.getByRole("button", { name: /Update now/ })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /Update now/ })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Keep going" }));
     await userEvent.click(screen.getByRole("button", { name: "Stop" }));
     expect(calls).toEqual(["keep_going", "stop"]);
   });
 
   it("explains a plan limit with a way to fix it", async () => {
-    seed({ run: { status: "paused", reason: "Your plan limit was reached until 4 pm." } });
+    seed({ run: { status: "paused", can: ["try_again"], reason: "Your plan limit was reached until 4 pm." } });
     render(<NotesPanel />);
     const alert = screen.getByRole("alert");
     expect(alert).toHaveTextContent("Notes paused");
     expect(alert).toHaveTextContent("Your plan limit was reached until 4 pm.");
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
-    expect(calls).toEqual(["start"]);
+    expect(calls).toEqual(["try_again"]);
     await userEvent.click(screen.getByRole("button", { name: "Change model" }));
     expect(await screen.findByRole("dialog", { name: "Live notes settings" })).toBeInTheDocument();
   });
@@ -151,7 +156,7 @@ describe("NotesPanel", () => {
   });
 
   it("shows an empty page with a hint before the first notes arrive", () => {
-    seed({ doc: false, run: { status: "idle" } });
+    seed({ doc: false, run: { status: "waiting" } });
     render(<NotesPanel />);
     expect(screen.getByRole("heading", { name: "Nothing yet" })).toBeInTheDocument();
   });

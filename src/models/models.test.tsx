@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 
 const h = vi.hoisted(() => ({ configs: [] as string[] }));
 vi.mock("../lib/ipc", () => ({
+  getAutomaticModel: async () => null,
   cliAgentStatus: async () => null,
   getApiKey: async () => "sk-test",
   listModels: async (config: string) => {

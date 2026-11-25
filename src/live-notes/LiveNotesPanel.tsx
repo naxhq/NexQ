@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Copy, MoreHorizontal, RefreshCw, Undo2 } from "lucide-react";
+import { Copy, MoreHorizontal, Pause, Play, RefreshCw, Undo2 } from "lucide-react";
 import { Dialog, Kbd, Menu, Segmented, type MenuItemSpec, Button } from "../ui";
 import { cn } from "../lib/utils";
 import type { NotetakerSettings, NotetakerState } from "../lib/types";
@@ -7,7 +7,10 @@ import { onNotesUpdateRequested } from "../lib/events";
 import { useMeetingStore } from "../stores/meetingStore";
 import { EMPTY_ENTRY, useLiveNotesStore } from "../stores/liveNotesStore";
 import { NotePage } from "./NotePage";
-import { RunStatusHeader, runWords } from "./RunStatusHeader";
+import { Countdown, RunStatusHeader } from "./RunStatusHeader";
+import { can, inFlight, modelLine, notCovered, runWords } from "./runState";
+import { useAutomaticModel } from "../models/useAutomaticModel";
+import { describeModel } from "../models/ModelField";
 import { NotesSettingsForm, formatTokens } from "./NotesSettingsForm";
 import { jumpToTranscript } from "./jump";
 import { docToMarkdown } from "./page";
@@ -27,6 +30,8 @@ export function NotesPanel() {
   const run = store((s) => s.runs[meetingId] ?? null);
   const settings = store((s) => s.settings);
   const error = store((s) => s.error);
+  const deadline = store((s) => s.deadlines[meetingId] ?? null);
+  const automatic = useAutomaticModel(store((s) => s.settings?.provider ?? null)).model;
   const [dialog, setDialog] = useState(false);
   const [scope, setScope] = useState<NotetakerSettings["scope"]>("meeting");
 
@@ -67,8 +72,8 @@ export function NotesPanel() {
     () =>
       onNotesUpdateRequested(() => {
         const s = store.getState();
-        const r = s.runs[meetingId]?.status;
-        if (s.settings?.enabled && r !== "running" && r !== "capped") void s.updateNow();
+        const r = s.runs[meetingId];
+        if (s.settings?.enabled && can(r, "update") && !inFlight(r)) void s.updateNow();
       }),
     [store, meetingId],
   );
@@ -90,15 +95,17 @@ export function NotesPanel() {
   }
 
   const { word, note: baseNote } = statusWords(run, settings);
-  const nextS = run?.status === "idle" && run.next_in_ms && run.next_in_ms > 0 ? Math.ceil(run.next_in_ms / 1000) : 0;
-  const note = baseNote ?? (nextS ? `next update in about ${nextS} s` : undefined);
+  const waiting = run?.status === "waiting" || run?.status === "on";
+  const note = baseNote ?? (deadline && waiting && settings?.update_mode !== "manual" ? <Countdown deadline={deadline} /> : undefined);
+  const busy = inFlight(run);
   const colors = settings?.colors ?? true;
   const hasBlocks = (doc?.blocks.length ?? 0) > 0;
   const enabled = !!settings?.enabled;
-  const capped = run?.status === "capped";
-  const failed = run?.status === "error" || (run?.status === "paused" && !!run.reason);
+  const capped = run?.status === "capped" || (can(run, "keep_going") && run?.status !== "off");
+  const failed = !capped && (run?.status === "error" || (run?.status === "paused" && !!run.reason));
+  const missed = enabled ? notCovered(run?.reason) : null;
   const used = run?.tokens_used ?? 0;
-  const cap = run?.cap ?? settings?.cap ?? 0;
+  const cap = run?.cap || settings?.cap || 0;
 
   const menu: MenuItemSpec[] = [
     { id: "copy", label: "Copy all as Markdown", disabled: !hasBlocks, onSelect: () => void copyText(docToMarkdown(doc), "Notes copied") },
@@ -109,22 +116,35 @@ export function NotesPanel() {
     },
     { id: "colors", label: "Colour people and places", checked: colors, onSelect: () => void store.getState().patchSettings({ colors: !colors }) },
     { id: "settings", label: "Model, detail and limit", separatorBefore: true, onSelect: () => setDialog(true) },
-    { id: "stop", label: "Stop notes for this meeting", danger: true, disabled: !enabled || run?.status === "finished", onSelect: () => void store.getState().stop() },
+    { id: "stop", label: "Stop notes for this meeting", danger: true, disabled: !enabled || run?.status === "finished" || run?.status === "off", onSelect: () => void store.getState().stop() },
   ];
 
   return (
     <div className="rs-root" data-testid="notes-panel">
       <RunStatusHeader title="Live notes" word={word} note={note}>
-        {enabled && (
-          <button
-            type="button"
-            className="rs-tool rs-tool-solid"
-            disabled={run?.status === "running" || capped || run?.status === "finished"}
-            onClick={() => void store.getState().updateNow()}
-          >
+        {enabled && (can(run, "update") || busy) && (
+          <button type="button" className="rs-tool rs-tool-solid" disabled={busy} onClick={() => void store.getState().updateNow()}>
             <RefreshCw className="h-3 w-3" aria-hidden />
             Update now
             <Kbd>N</Kbd>
+          </button>
+        )}
+        {enabled && can(run, "pause") && (
+          <button type="button" className="rs-tool" onClick={() => void store.getState().pause()}>
+            <Pause className="h-3 w-3" aria-hidden />
+            Pause
+          </button>
+        )}
+        {enabled && can(run, "resume") && (
+          <button type="button" className="rs-tool rs-tool-solid" onClick={() => void store.getState().resume()}>
+            <Play className="h-3 w-3" aria-hidden />
+            Resume
+          </button>
+        )}
+        {enabled && can(run, "start") && (
+          <button type="button" className="rs-tool rs-tool-solid" onClick={() => void store.getState().start()}>
+            <Play className="h-3 w-3" aria-hidden />
+            Start notes again
           </button>
         )}
         {hasBlocks && (
@@ -148,12 +168,14 @@ export function NotesPanel() {
         <div className="rs-notice" role="group" aria-labelledby="ln-cap-title">
           <div id="ln-cap-title" className="rs-notice-title">Keep taking notes?</div>
           <p>
-            The notes used {formatTokens(used)} tokens, the limit you set. Keep going adds {formatTokens(settings?.cap ?? cap)} more.
+            The notes used {formatTokens(used)} tokens, the limit you set. Keep going adds {formatTokens(cap)} more.
           </p>
           <div className="rs-notice-actions">
-            <Button variant="primary" size="sm"  onClick={() => void store.getState().keepGoing()}>
-              Keep going
-            </Button>
+            {can(run, "keep_going") && (
+              <Button variant="primary" size="sm" onClick={() => void store.getState().keepGoing()}>
+                Keep going
+              </Button>
+            )}
             <Button size="sm"  onClick={() => void store.getState().stop()}>
               Stop
             </Button>
@@ -167,8 +189,21 @@ export function NotesPanel() {
           <p>{run?.reason || "The model could not answer."}</p>
           <div className="rs-notice-actions">
             <button type="button" className="rs-tool rs-tool-solid" onClick={() => setDialog(true)}>Change model</button>
-            <button type="button" className="rs-tool" onClick={() => void store.getState().start()}>Try again</button>
+            {can(run, "try_again") && <button type="button" className="rs-tool" onClick={() => void store.getState().tryAgain()}>Try again</button>}
+            {can(run, "start") && !can(run, "try_again") && <button type="button" className="rs-tool" onClick={() => void store.getState().start()}>Start notes again</button>}
           </div>
+        </div>
+      )}
+
+      {missed && (
+        <div className="rs-notice" role="group" aria-labelledby="ln-missed-title">
+          <div id="ln-missed-title" className="rs-notice-title">Not covered: {missed}</div>
+          <p>That part of the call is not in the notes yet.</p>
+          {can(run, "update") && !busy && (
+            <div className="rs-notice-actions">
+              <button type="button" className="rs-tool rs-tool-solid" onClick={() => void store.getState().updateNow()}>Update notes</button>
+            </div>
+          )}
         </div>
       )}
 
@@ -186,6 +221,7 @@ export function NotesPanel() {
         <div className="rs-empty">
           <h3>Live notes</h3>
           <p>Turns the conversation into a tidy page of topics, decisions, tasks and questions while you talk. It sends only the transcript to your chosen model, nothing from your workspace.</p>
+          <p data-testid="notes-model-line">{modelLine({ provider: settings?.provider ?? null, label: describeModel({ provider: settings?.provider ?? null, model: settings?.model ?? null, effort: null }) }, automatic)}</p>
           <div className="mt-3 flex flex-col gap-2">
             <Segmented
               label="Turn on for"

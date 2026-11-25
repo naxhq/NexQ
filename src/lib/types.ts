@@ -90,6 +90,8 @@ export interface Meeting {
   ai_scenario?: AIScenario;
   /** Home workspace of the meeting ("general" when absent). */
   workspace_id?: string;
+  /** Only in the answer of `start_meeting`, when the meeting was filed somewhere other than asked. */
+  workspace_notice?: string;
   speakers?: SpeakerIdentity[];
   bookmarks?: MeetingBookmark[];
   topic_sections?: TopicSection[];
@@ -1515,6 +1517,8 @@ export interface SkippedFile {
   path: string;
   /** "too large", "secret-looking name", "hidden", "limit reached" ... */
   reason: string;
+  /** The Library folder it belongs to, when the backend says so (else matched by path). */
+  folder_id?: string | null;
 }
 
 export interface IndexStatus {
@@ -1544,6 +1548,12 @@ export type ContextLayer = "instructions" | "meetings" | "documents" | "folders"
 /** One item of the context: bar width is `tokens`, height is `relevance`. */
 export interface ContextBar {
   id: string;
+  /** What the item is: meeting, document, folder, talking_point, memory, instructions, conversation. Absent from reports saved by older versions. */
+  kind?: string;
+  /** The item's id (a meeting, document, folder, talking point or memory id). */
+  ref_id?: string;
+  /** For a file of a folder: its path inside the folder. */
+  sub_ref?: string | null;
   layer: ContextLayer;
   title: string;
   tokens: number;
@@ -1701,7 +1711,7 @@ export interface WorkspaceChatApprovalEvent extends WorkspaceChatEventBase {
 export interface WorkspaceChatApprovalClosedEvent {
   chat_id: string;
   approval_id: string;
-  reason: "answered" | "timeout" | "cancelled" | string;
+  reason: "answered" | "timed_out" | "cancelled" | string;
 }
 
 // -- Live notes ---------------------------------------------------------------------
@@ -1728,7 +1738,27 @@ export interface NoteDoc {
   blocks: NoteBlock[];
 }
 
-export type NotetakerStatus = "off" | "idle" | "running" | "paused" | "capped" | "error" | "finished";
+/** What a helper (notes, brief) is doing. */
+export type NotetakerStatus = "off" | "waiting" | "on" | "running" | "paused" | "capped" | "error" | "finished";
+
+/** What the person may do now; the panel's buttons come from this, never from token counts. */
+export type RunAction = "update" | "pause" | "resume" | "keep_going" | "try_again" | "start";
+
+/** Which model a run will use (the cheapest tier when nothing was chosen). */
+export interface RunModel {
+  provider: string;
+  model: string;
+  label: string;
+}
+
+/** What "Automatic" means for a provider: the cheapest good-enough model. `label` is what to show. */
+export interface AutomaticModel {
+  provider: string;
+  /** Empty: the provider's own fast tier (subscriptions). */
+  model: string;
+  effort: string | null;
+  label: string;
+}
 
 export interface NotetakerSettings {
   enabled: boolean;
@@ -1752,11 +1782,14 @@ export interface NotetakerState {
   status: NotetakerStatus;
   tokens_used: number;
   cap: number;
-  next_in_ms?: number | null;
-  /** All tokens the run has seen, when counted apart from `tokens_used`. */
-  total_tokens?: number | null;
-  /** Why it paused (plan limit, three failures ...). */
-  reason?: string | null;
+  next_in_ms: number | null;
+  /** All tokens the run has seen. */
+  total_tokens: number;
+  /** Why it paused or stopped (plan limit ...); the final pass adds "Not covered: mm:ss to mm:ss". */
+  reason: string | null;
+  error_kind: string | null;
+  can: RunAction[];
+  model: RunModel | null;
 }
 
 /** `notetaker_doc` */
@@ -1799,14 +1832,19 @@ export interface BriefSheet {
   generated_at: number;
 }
 
-export type BriefStatus = "off" | "idle" | "running" | "paused" | "capped" | "error";
+export type BriefStatus = NotetakerStatus;
 
 export interface BriefState {
   meeting_id: string;
   status: BriefStatus;
   tokens_used: number;
   cap: number;
-  reason?: string | null;
+  next_in_ms: number | null;
+  total_tokens: number;
+  reason: string | null;
+  error_kind: string | null;
+  can: RunAction[];
+  model: RunModel | null;
 }
 
 /** Which model writes the brief. Whether it runs is the workspace's own switch (`brief_enabled`). */
@@ -1901,6 +1939,11 @@ export interface StoreRecovery {
 // The database did not open (mirrors Rust `db::health`; `db` of `get_workspaces_status`)
 // ============================================================================
 
+/** `retry_open_database`: `ok` the file can be opened; `needs_restart` the running app cannot take it in without a restart. */
+export interface RetryOpenResult {
+  ok: boolean;
+  needs_restart: boolean;
+}
 export type DbProblemKind = "unreadable" | "newer" | "upgrade_failed" | "locked";
 
 /** A copy of the database NexQ opened read-only and checked before offering it. */
@@ -1912,6 +1955,18 @@ export interface DbBackup {
   bytes: number;
   /** null when the copy can't say. */
   meetings: number | null;
+}
+
+/** Damage the daily background check found in the open meetings file (`get_db_integrity`, event `db_integrity_problem`). */
+export interface DbIntegrityFinding {
+  message: string;
+  /** The first lines SQLite reported. */
+  details: string[];
+  /** Epoch ms of the check. */
+  checked_at: number;
+  /** The data folder, where the file and its copies are. */
+  folder: string;
+  copies: DbBackup[];
 }
 
 export interface DbProblem {

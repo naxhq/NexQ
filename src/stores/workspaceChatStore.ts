@@ -617,14 +617,24 @@ export const useWorkspaceChatStore = create<ChatState>((set, get) => {
         if (t && t.status !== "stopped" && t.status !== "failed") failTurn(chatId, requestId, asText(e));
         return false;
       }
-      // Resolved: the end event normally came first. If it didn't, ask the backend what it saved.
+      // The command can return before the answer exists. A turn only ends by its own request id
+      // (end, error, cancelled, access_changed), or when a re-read finds an answer to this very
+      // question written since it was asked. The last saved answer is never taken for it.
       const t = turnOf(chatId, requestId);
-      if (t && t.status !== "stopped" && t.status !== "failed" && t.status !== "stopping") {
+      if (t && t.status !== "stopped" && t.status !== "failed" && t.status !== "stopping" && t.status !== "removed") {
         try {
           const saved = await ipc.listWorkspaceMessages(chatId);
-          const last = saved[saved.length - 1];
           const still = turnOf(chatId, requestId);
-          if (still && last && last.role === "assistant" && last.created_at >= still.startedAt - 2000) finishOk(chatId, requestId, last);
+          if (still && Array.isArray(saved)) {
+            for (let i = saved.length - 1; i > 0; i--) {
+              const q = saved[i - 1];
+              const a = saved[i];
+              if (a.role === "assistant" && q.role === "user" && q.content.trim() === still.question && q.created_at >= still.startedAt) {
+                finishOk(chatId, requestId, a);
+                break;
+              }
+            }
+          }
         } catch {
           /* the end event will settle it */
         }
@@ -886,7 +896,7 @@ function internal(
       approvalTimers.delete(e.approval_id);
       const found = get().sessions[e.chat_id]?.turn?.approvals.find((a) => a.approvalId === e.approval_id);
       // A card we already answered keeps its own result.
-      if (found && (found.state === "pending" || found.state === "sending")) setApproval(set, found, e.reason === "timeout" ? "expired" : "closed", e.reason);
+      if (found && (found.state === "pending" || found.state === "sending")) setApproval(set, found, e.reason === "timed_out" ? "expired" : "closed", e.reason);
     },
     approval: (e) => {
       const t = h.turnOf(e.chat_id, e.request_id);

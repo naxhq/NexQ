@@ -3,6 +3,7 @@ import { Select } from "../ui";
 import { ModelPicker, PickerCaret } from "./ModelPicker";
 import { providerLabel } from "./labels";
 import { selectionLabel, useModelCatalog } from "./catalog";
+import { useAutomaticModel } from "./useAutomaticModel";
 
 export interface ModelValue {
   provider: string | null;
@@ -13,8 +14,8 @@ export interface ModelValue {
 const DEFAULT_EFFORT = "__default";
 
 /** The words for a choice: "Claude Sonnet", "Ollama llama3", or the automatic default. */
-export function describeModel(v: ModelValue): string {
-  if (!v.provider) return "Automatic: the cheapest model of your active provider";
+export function describeModel(v: ModelValue, automatic?: { label: string } | null): string {
+  if (!v.provider) return automatic ? `Automatic: ${automatic.label}` : "Automatic: the cheapest model";
   return v.model ? selectionLabel({ provider: v.provider, model: v.model }) : `${providerLabel(v.provider)}, cheapest model`;
 }
 
@@ -25,6 +26,7 @@ export function describeModel(v: ModelValue): string {
 export function ModelField({ value, onChange, label = "Model" }: { value: ModelValue; onChange: (next: ModelValue) => void; label?: string }) {
   const current = value.provider ? { provider: value.provider, model: value.model ?? "" } : null;
   const sections = useModelCatalog(true, current);
+  const automatic = useAutomaticModel(value.provider).model;
   const efforts = useMemo(() => {
     const m = sections.flatMap((s) => s.models).find((x) => current && x.provider === current.provider && x.model === current.model);
     return m?.efforts ?? [];
@@ -39,7 +41,7 @@ export function ModelField({ value, onChange, label = "Model" }: { value: ModelV
         onPick={(c) => onChange({ provider: c.provider, model: c.model || null, effort: null })}
         buttonClassName="ui-field ui-body inline-flex h-8 w-full items-center justify-between gap-2 rounded-lg px-3 text-left outline-none ui-focus"
       >
-        <span className="min-w-0 truncate">{describeModel(value)}</span>
+        <span className="min-w-0 truncate">{describeModel(value, automatic)}</span>
         <PickerCaret />
       </ModelPicker>
       {value.provider && (

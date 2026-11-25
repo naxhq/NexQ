@@ -8,10 +8,7 @@ const AUTOMATIC: ModelValue = { provider: null, model: null, effort: null };
 const asValue = (s: Partial<MemorySettings> | null | undefined): ModelValue =>
   s && typeof s === "object" ? { provider: s.provider ?? null, model: s.model ?? null, effort: s.effort ?? null } : AUTOMATIC;
 
-/**
- * Which AI proposes memory. Follows the other window. While the backend command
- * is missing or fails, it stays "the cheapest model automatically".
- */
+/** Which AI proposes memory. Follows the other window; a failure is said, not hidden. */
 export function useMemoryModel(): { value: ModelValue; change: (v: ModelValue) => Promise<void>; error: string | null } {
   const [value, setValue] = useState<ModelValue>(AUTOMATIC);
   const [error, setError] = useState<string | null>(null);
@@ -21,7 +18,7 @@ export function useMemoryModel(): { value: ModelValue; change: (v: ModelValue) =
     let off: (() => void) | undefined;
     getMemorySettings()
       .then((s) => !gone && setValue(asValue(s)))
-      .catch(() => {});
+      .catch(() => !gone && setError("Couldn't read the model for memory suggestions."));
     onMemorySettingsChanged((s) => setValue(asValue(s)))
       .then((u) => (gone ? u() : (off = u)))
       .catch(() => {});

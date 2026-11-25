@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { BriefSheet } from "../lib/types";
+import { bs } from "../live-notes/testing";
 
 const hits = vi.hoisted(() => ({ list: [] as unknown[] }));
 vi.mock("../lib/ipc", () => ({
+  getAutomaticModel: async () => null,
   cliAgentStatus: async () => null,
   getApiKey: async () => null,
   getLLMProviders: async () => [],
@@ -38,7 +40,7 @@ function seed(over: Record<string, unknown> = {}) {
     meetingId: "m1",
     sheet: sheet(),
     hidden: false,
-    run: { meeting_id: "m1", status: "idle", tokens_used: 1000, cap: 60000 },
+    run: bs("waiting", undefined, { tokens_used: 1000, cap: 60000 }),
     settings: { ...DEFAULT_BRIEF_SETTINGS },
     workspaceEnabled: true,
     error: null,
@@ -114,14 +116,14 @@ describe("BriefPanel", () => {
     expect(calls).toEqual(["refresh", "pause"]);
     unmount();
     calls.length = 0;
-    seed({ run: { meeting_id: "m1", status: "paused", tokens_used: 1, cap: 10 } });
+    seed({ run: bs("paused") });
     render(<BriefPanel />);
     await userEvent.click(screen.getByRole("button", { name: "Resume the brief" }));
     expect(calls).toEqual(["resume"]);
   });
 
   it("asks Keep the brief going? at its cap", async () => {
-    seed({ run: { meeting_id: "m1", status: "capped", tokens_used: 60000, cap: 60000 } });
+    seed({ run: bs("capped", undefined, { tokens_used: 60000, cap: 60000 }) });
     render(<BriefPanel />);
     expect(screen.getByRole("group", { name: "Keep the brief going?" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Keep going" }));
@@ -129,7 +131,7 @@ describe("BriefPanel", () => {
   });
 
   it("explains a pause with a way to fix it", () => {
-    seed({ run: { meeting_id: "m1", status: "paused", tokens_used: 1, cap: 10, reason: "The plan limit was reached." } });
+    seed({ run: bs("paused", ["try_again"], { reason: "The plan limit was reached." }) });
     render(<BriefPanel />);
     expect(screen.getByRole("alert")).toHaveTextContent("The plan limit was reached.");
     expect(screen.getByRole("button", { name: "Change model" })).toBeInTheDocument();
@@ -158,7 +160,7 @@ describe("briefStatusWords", () => {
   it("says the state in words", () => {
     expect(briefStatusWords(undefined, false)).toBe("Off");
     expect(briefStatusWords("running", true)).toBe("Checking the workspace");
-    expect(briefStatusWords("idle", true)).toBe("Waiting for speech");
+    expect(briefStatusWords("waiting", true)).toBe("Waiting for speech");
     expect(briefStatusWords("capped", true)).toBe("Paused");
     expect(briefStatusWords("error", true)).toBe("Stopped");
   });

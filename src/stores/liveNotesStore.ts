@@ -2,8 +2,11 @@ import { create } from "zustand";
 import type { NoteBlockType, NoteDoc, NoteEdit, NotetakerSettings, NotetakerState } from "../lib/types";
 import {
   getMeetingNotes,
+  getNotetakerState,
   getNotetakerSettings,
   notetakerContinue,
+  notetakerPause,
+  notetakerResume,
   notetakerStart,
   notetakerStop,
   notetakerUpdateNow,
@@ -28,7 +31,8 @@ export const DEFAULT_NOTETAKER_SETTINGS: NotetakerSettings = {
   update_mode: "automatic",
   detail: "standard",
   language: "meeting",
-  cap: 120000,
+  /** 0 until the backend says: it owns the default. */
+  cap: 0,
   colors: true,
 };
 
@@ -66,11 +70,15 @@ export function liveMeetingId(): string | null {
   return useMeetingStore.getState().activeMeeting?.id ?? null;
 }
 
+export const NO_LIVE_MEETING = "No meeting is running, so there is nothing to change.";
+
 interface LiveNotesState {
   /** Notes by meeting id (the live one and any past one open in meeting details). */
   entries: Record<string, NotesEntry>;
   /** Runs seen by event, by meeting id. */
   runs: Record<string, NotetakerState>;
+  /** When the next automatic update is due (ms epoch), from `next_in_ms` at the moment it arrived. */
+  deadlines: Record<string, number | null>;
   settings: NotetakerSettings | null;
   /** The last thing that failed, in words. */
   error: string | null;
@@ -87,6 +95,10 @@ interface LiveNotesState {
   stop: () => Promise<void>;
   start: () => Promise<void>;
   updateNow: () => Promise<void>;
+  /** Pause this meeting's notes (they can be resumed); `stop` ends them for the meeting. */
+  pause: () => Promise<void>;
+  resume: () => Promise<void>;
+  tryAgain: () => Promise<void>;
   keepGoing: () => Promise<void>;
   patchSettings: (patch: Partial<NotetakerSettings>) => Promise<void>;
 
@@ -158,6 +170,32 @@ export const useLiveNotesStore = create<LiveNotesState>((set, get) => {
 
   const fail = (e: unknown) => set({ error: describeError(e) });
 
+  const applyState = (s: NotetakerState) => {
+    set((cur) => ({
+      runs: { ...cur.runs, [s.meeting_id]: s },
+      deadlines: { ...cur.deadlines, [s.meeting_id]: typeof s.next_in_ms === "number" ? Date.now() + s.next_in_ms : null },
+    }));
+  };
+
+  /** The live meeting, or a said reason: a command never does nothing in silence. */
+  const needLive = (): string | null => {
+    const id = liveMeetingId();
+    if (!id) set({ error: NO_LIVE_MEETING });
+    return id;
+  };
+
+  /** Run a command on the live meeting and report what failed. */
+  const onLive = async (fn: (id: string) => Promise<unknown>) => {
+    const id = needLive();
+    if (!id) return;
+    set({ error: null });
+    try {
+      await fn(id);
+    } catch (e) {
+      fail(e);
+    }
+  };
+
   /** The settings as the backend has them now. */
   const reread = async () => {
     const s = cleanSettings(await getNotetakerSettings());
@@ -178,6 +216,7 @@ export const useLiveNotesStore = create<LiveNotesState>((set, get) => {
   return {
     entries: {},
     runs: {},
+    deadlines: {},
     settings: null,
     error: null,
 
@@ -186,12 +225,16 @@ export const useLiveNotesStore = create<LiveNotesState>((set, get) => {
       let alive = true;
       const [offState, offDoc] = await Promise.all([
         onNotetakerState((e) => {
-          if (alive && e.meeting_id === meetingId) set((s) => ({ runs: { ...s.runs, [meetingId]: e } }));
+          if (alive && e.meeting_id === meetingId) applyState(e);
         }),
         onNotetakerDoc((e) => {
           if (alive && e.meeting_id === meetingId) receiveDoc(meetingId, e.doc, e.version);
         }),
       ]);
+      // A reopened window shows the true state, not the last event it happened to hear.
+      void getNotetakerState(meetingId)
+        .then((s) => alive && applyState(s))
+        .catch((e) => alive && fail(e));
       try {
         const [doc, settings] = await Promise.all([getMeetingNotes(meetingId), getNotetakerSettings()]);
         if (alive) {
@@ -229,7 +272,7 @@ export const useLiveNotesStore = create<LiveNotesState>((set, get) => {
     reset: () => {
       for (const t of pruneTimers.values()) clearTimeout(t);
       pruneTimers.clear();
-      set({ entries: {}, runs: {}, error: null });
+      set({ entries: {}, runs: {}, deadlines: {}, error: null });
     },
 
     turnOn: async (scope) => {
@@ -249,35 +292,12 @@ export const useLiveNotesStore = create<LiveNotesState>((set, get) => {
       const ok = await stopEverything();
       if (!ok) set({ error: "Could not stop the notes. Try again." });
     },
-    start: async () => {
-      const live = liveMeetingId();
-      if (!live) return;
-      set({ error: null });
-      try {
-        await notetakerStart(live);
-      } catch (e) {
-        fail(e);
-      }
-    },
-    updateNow: async () => {
-      const live = liveMeetingId();
-      if (!live) return;
-      set({ error: null });
-      try {
-        await notetakerUpdateNow(live);
-      } catch (e) {
-        fail(e);
-      }
-    },
-    keepGoing: async () => {
-      const live = liveMeetingId();
-      if (!live) return;
-      try {
-        await notetakerContinue(live);
-      } catch (e) {
-        fail(e);
-      }
-    },
+    start: () => onLive((id) => notetakerStart(id)),
+    updateNow: () => onLive((id) => notetakerUpdateNow(id)),
+    pause: () => onLive((id) => notetakerPause(id)),
+    resume: () => onLive((id) => notetakerResume(id)),
+    tryAgain: () => onLive((id) => notetakerStart(id)),
+    keepGoing: () => onLive((id) => notetakerContinue(id)),
 
     patchSettings: async (patch) => {
       if (patch.enabled === false) {

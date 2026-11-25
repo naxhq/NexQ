@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { createMemory, deleteMemory, listMemory, resolveMemory, suggestMemory, updateMemory } from "../lib/ipc";
+import { createMemory, type MemoryCreate, deleteMemory, listMemory, resolveMemory, suggestMemory, updateMemory } from "../lib/ipc";
 import { onMemoryChanged } from "../lib/events";
 import type { MemoryItem, MemoryKind } from "../lib/types";
 
@@ -38,6 +38,23 @@ interface MemoryState {
 
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/**
+ * Exactly what `create_memory` takes (Rust `MemoryCreate`): every field of the struct is
+ * present, because `unsupported` has no default and a missing one is refused.
+ */
+export function newMemoryPayload(workspaceId: string, draft: { kind: MemoryItem["kind"]; title: string; text: string }): MemoryCreate {
+  return {
+    workspace_id: workspaceId,
+    kind: draft.kind,
+    title: draft.title.trim(),
+    text: draft.text.trim(),
+    source_meeting: null,
+    source_ms: null,
+    status: "saved",
+    unsupported: false,
+  };
+}
+
 export const useMemoryStore = create<MemoryState>((set, get) => ({
   byWorkspace: {},
   loadError: {},
@@ -56,7 +73,7 @@ export const useMemoryStore = create<MemoryState>((set, get) => ({
   },
 
   add: async (workspaceId, draft) => {
-    await createMemory({ workspace_id: workspaceId, kind: draft.kind, title: draft.title.trim(), text: draft.text.trim(), status: "saved" });
+    await createMemory(newMemoryPayload(workspaceId, draft));
     await get().load(workspaceId);
   },
 

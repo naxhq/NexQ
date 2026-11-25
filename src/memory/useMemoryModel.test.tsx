@@ -27,10 +27,10 @@ describe("useMemoryModel", () => {
     expect(result.current.value.model).toBe("llama3");
   });
 
-  it("stays on the cheapest model automatically while the command is missing", async () => {
+  it("says so when the choice cannot be read or saved, and keeps what it had", async () => {
     h.missing = true;
     const { result } = renderHook(() => useMemoryModel());
-    expect(result.current.value).toEqual({ provider: null, model: null, effort: null });
+    await waitFor(() => expect(result.current.error).toMatch(/Couldn't read/));
     await act(() => result.current.change({ provider: "ollama", model: "x", effort: null }));
     expect(result.current.value.provider).toBeNull();
     expect(result.current.error).toMatch(/Couldn't save/);

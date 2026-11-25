@@ -13,6 +13,8 @@ import { LIBRARY_DEFAULT, RAIL_DEFAULT } from "../workspace/layout";
 import type { DatabaseProblem } from "../workspace/databaseProblem";
 
 export const GENERAL_ID = "general";
+/** A meeting started with a workspace that could not be used has the home `unfiled:<meeting id>` (it names no workspace). */
+export const isUnfiledHome = (id: string | null | undefined): boolean => !!id && id.startsWith("unfiled:");
 
 /** Sent by whoever changes a running meeting's home or borrowed workspaces, so both windows follow. */
 export const MEETING_SCOPE_EVENT = "nexq:meeting_scope_changed";

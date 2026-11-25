@@ -2,10 +2,13 @@ import { create } from "zustand";
 import type { BriefSettings, BriefSheet, BriefState } from "../lib/types";
 import {
   briefContinue,
+  briefPause,
+  briefResume,
   briefRefresh,
   briefStart,
   briefStop,
   getBriefSettings,
+  getBriefState,
   getMeetingBrief,
   getWorkspace,
   setBriefSettings,
@@ -18,7 +21,8 @@ export const DEFAULT_BRIEF_SETTINGS: BriefSettings = {
   provider: null,
   model: null,
   effort: null,
-  cap: 60000,
+  /** 0 until the backend says: it owns the default. */
+  cap: 0,
 };
 
 /** A sheet from the engine with every list present, or null when it is not one. */
@@ -49,6 +53,8 @@ interface LiveBriefState {
   /** A topic change hid the old sheet and the new one is not here yet. */
   hidden: boolean;
   run: BriefState | null;
+  /** When the next model call is due (ms epoch), from `next_in_ms` at the moment it arrived. */
+  deadline: number | null;
   settings: BriefSettings | null;
   /** The meeting's home workspace, and whether the brief is on there (null = not known yet). */
   workspaceId: string | null;
@@ -63,6 +69,8 @@ interface LiveBriefState {
   turnOff: () => Promise<void>;
   pause: () => Promise<void>;
   resume: () => Promise<void>;
+  tryAgain: () => Promise<void>;
+  start: () => Promise<void>;
   refresh: () => Promise<void>;
   keepGoing: () => Promise<void>;
   patchSettings: (patch: Partial<BriefSettings>) => Promise<void>;
@@ -84,9 +92,17 @@ export const useLiveBriefStore = create<LiveBriefState>((set, get) => {
       set({ error: describeError(e) });
     }
   };
+  /** On the live meeting; with none, say so instead of doing nothing. */
   const onLive = (fn: (id: string) => Promise<void>) => () => {
     const id = liveMeetingId();
-    return id ? guard(() => fn(id)) : Promise.resolve();
+    if (!id) {
+      set({ error: "No meeting is running, so there is nothing to change." });
+      return Promise.resolve();
+    }
+    return guard(() => fn(id));
+  };
+  const applyState = (s: BriefState) => {
+    set({ run: s, deadline: typeof s.next_in_ms === "number" ? Date.now() + s.next_in_ms : null });
   };
 
   const rereadWorkspace = async (): Promise<boolean | null> => {
@@ -107,6 +123,7 @@ export const useLiveBriefStore = create<LiveBriefState>((set, get) => {
     sheet: null,
     hidden: false,
     run: null,
+    deadline: null,
     settings: null,
     workspaceId: null,
     workspaceEnabled: null,
@@ -121,7 +138,7 @@ export const useLiveBriefStore = create<LiveBriefState>((set, get) => {
       let alive = true;
       const [offState, offSheet] = await Promise.all([
         onBriefState((e) => {
-          if (alive && e.meeting_id === get().meetingId) set({ run: e });
+          if (alive && e.meeting_id === get().meetingId) applyState(e);
         }),
         onBriefSheet((e) => {
           if (!alive || e.meeting_id !== get().meetingId) return;
@@ -130,6 +147,9 @@ export const useLiveBriefStore = create<LiveBriefState>((set, get) => {
           else set((s) => ({ sheet: null, hidden: s.sheet !== null || s.hidden }));
         }),
       ]);
+      void getBriefState(meetingId)
+        .then((s) => alive && get().meetingId === meetingId && applyState(s))
+        .catch((e) => alive && set({ error: describeError(e) }));
       try {
         const [sheet, settings] = await Promise.all([getMeetingBrief(meetingId), getBriefSettings()]);
         if (alive && get().meetingId === meetingId) set((cur) => ({ sheet: cur.sheet ?? cleanSheet(sheet), settings: okSettings(settings) ?? cur.settings }));
@@ -158,7 +178,7 @@ export const useLiveBriefStore = create<LiveBriefState>((set, get) => {
         set({ error: describeError(e) });
       }
     },
-    reset: () => set({ meetingId: null, sheet: null, hidden: false, run: null, workspaceId: null, workspaceEnabled: null, error: null }),
+    reset: () => set({ meetingId: null, sheet: null, hidden: false, run: null, deadline: null, workspaceId: null, workspaceEnabled: null, error: null }),
 
     turnOn: async () => {
       const ws = get().workspaceId;
@@ -186,8 +206,16 @@ export const useLiveBriefStore = create<LiveBriefState>((set, get) => {
       if (truth === null && ws) set({ workspaceEnabled: null, error: "Could not confirm whether the brief is off. Check again before you rely on it." });
       else if (failed || truth) set({ error: "The brief may still be running. Try turning it off again." });
     },
-    pause: onLive((id) => briefStop(id)),
+    pause: onLive((id) => briefPause(id)),
     resume: onLive(async (id) => {
+      set({ error: null });
+      await briefResume(id);
+    }),
+    start: onLive(async (id) => {
+      set({ error: null });
+      await briefStart(id);
+    }),
+    tryAgain: onLive(async (id) => {
       set({ error: null });
       await briefStart(id);
     }),

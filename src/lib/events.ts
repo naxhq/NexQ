@@ -9,6 +9,7 @@ import type {
   WorkspaceChatActivityEvent, WorkspaceChatApprovalEvent, WorkspaceChatApprovalClosedEvent, WorkspaceChatApprovalRefusedEvent, WorkspaceChatContextEvent, WorkspaceChatEndEvent,
   WorkspaceChatErrorEvent, WorkspaceChatStartEvent, WorkspaceChatTokenEvent, WorkspaceIndexProgressEvent,
   WorkspacesChangedEvent,
+  DbIntegrityFinding,
 } from "./types";
 import type {
   AIScenario,
@@ -424,6 +425,9 @@ export function onAgentFallbackShown(handler: () => void): Promise<UnlistenFn> {
 
 export function onWorkspacesChanged(handler: (e: WorkspacesChangedEvent) => void): Promise<UnlistenFn> {
   return listen<WorkspacesChangedEvent>("workspaces_changed", (e) => handler(e.payload ?? {}));
+}
+export function onDbIntegrityProblem(handler: (e: DbIntegrityFinding) => void): Promise<UnlistenFn> {
+  return listen<DbIntegrityFinding>("db_integrity_problem", (e) => handler(e.payload));
 }
 export function onWorkspaceIndexProgress(handler: (e: WorkspaceIndexProgressEvent) => void): Promise<UnlistenFn> {
   return listen<WorkspaceIndexProgressEvent>("workspace_index_progress", (e) => handler(e.payload));

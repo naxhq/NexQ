@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { bs } from "../live-notes/testing";
 import type { BriefSheet, BriefSheetEvent, BriefState } from "../lib/types";
 
 const h = vi.hoisted(() => ({
@@ -18,6 +19,9 @@ vi.mock("../lib/ipc", () => {
     if (h.fail || h.failOnly.has(name)) throw h.fail ?? "failed";
   };
   return {
+    getBriefState: async () => {
+      throw new Error("no state");
+    },
     getMeetingBrief: async () => h.sheet,
     getBriefSettings: async () => ({ provider: null, model: null, effort: null, cap: 60000 }),
     setBriefSettings: async (patch: object) => {
@@ -35,6 +39,8 @@ vi.mock("../lib/ipc", () => {
     },
     briefStart: rec("start"),
     briefStop: rec("stop"),
+    briefPause: rec("pause"),
+    briefResume: rec("resume"),
     briefRefresh: rec("refresh"),
     briefContinue: rec("continue"),
   };
@@ -89,7 +95,7 @@ describe("liveBriefStore", () => {
   it("ignores another meeting's events", async () => {
     await useLiveBriefStore.getState().attach("m1");
     h.onSheet!({ meeting_id: "zzz", sheet: sheet("Nope") });
-    h.onState!({ meeting_id: "zzz", status: "running", tokens_used: 1, cap: 2 });
+    h.onState!(bs("running", [], { meeting_id: "zzz" }));
     expect(useLiveBriefStore.getState().sheet).toBeNull();
     expect(useLiveBriefStore.getState().run).toBeNull();
   });
@@ -101,7 +107,7 @@ describe("liveBriefStore", () => {
     await s.pause();
     await s.resume();
     await s.keepGoing();
-    expect(h.calls).toEqual(["refresh", "stop", "start", "continue"]);
+    expect(h.calls).toEqual(["refresh", "pause", "resume", "continue"]);
   });
 
   it("turning on is per workspace: saves it there, then starts the live meeting", async () => {

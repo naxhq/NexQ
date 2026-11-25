@@ -232,7 +232,7 @@ describe("tool approvals", () => {
     ipc.answerWorkspaceApproval.mockResolvedValue(undefined);
     await S().answerApproval(S().sessions.c1.turn!.approvals[1], false);
     h().approvalClosed({ chat_id: "c1", approval_id: "a1", reason: "answered" });
-    h().approvalClosed({ chat_id: "c1", approval_id: "a2", reason: "timeout" });
+    h().approvalClosed({ chat_id: "c1", approval_id: "a2", reason: "timed_out" });
     const [a1, a2] = S().sessions.c1.turn!.approvals;
     expect(a1).toMatchObject({ state: "closed", closedReason: "answered" });
     expect(a2.state).toBe("denied");

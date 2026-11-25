@@ -5,8 +5,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  BriefSettings, BriefSheet, ChatCapabilities, DbProblem, ItemPref, ChatItemPrefValue, ChatMeetingPref, DeleteWorkspaceMode, ContextReport, IndexStatus, LibraryItem, MeetingScope,
-  MemoryItem, MemorySettings, NoteDoc, NoteEdit, NotetakerSettings, Passage, PassageKind, PointProgress, PointSaid,
+  AutomaticModel, BriefSettings, BriefSheet, BriefState, NotetakerState, ChatCapabilities, DbIntegrityFinding, DbProblem, RetryOpenResult, ItemPref, ChatItemPrefValue, ChatMeetingPref, DeleteWorkspaceMode, ContextReport, IndexStatus, LibraryItem, MeetingScope,
+  MemoryItem, MemorySettings, NoteDoc, NoteEdit, NotetakerSettings, PointProgress, PointSaid,
   TalkingPoint, TalkingPointPatch, WorkspaceChat, WorkspaceChatPatch, WorkspaceDetail, WorkspaceInput, WorkspaceItemKind,
   WorkspaceMeetingPage, WorkspaceMessage, WorkspacePatch, WorkspaceSummary,
 } from "./types";
@@ -1056,6 +1056,14 @@ export async function openDataFolder(): Promise<void> {
 export async function restartApp(): Promise<void> {
   return invoke("restart_app");
 }
+/** Damage found by the daily background check of the open file, or null. */
+export async function getDbIntegrity(): Promise<DbIntegrityFinding | null> {
+  return invoke<DbIntegrityFinding | null>("get_db_integrity");
+}
+/** Locked file: look again. `needs_restart` means it opens now but only a restart can use it. */
+export async function retryOpenDatabase(): Promise<RetryOpenResult> {
+  return invoke<RetryOpenResult>("retry_open_database");
+}
 
 /**
  * Try the with-sources Claude session again now (from its error state). After
@@ -1183,14 +1191,6 @@ export async function addWorkspaceText(id: string, title: string, markdown: stri
 
 // == IPC: Workspace search and index ==
 
-export async function searchWorkspace(
-  id: string,
-  query: string,
-  kinds: PassageKind[] | null,
-  limit: number,
-): Promise<Passage[]> {
-  return invoke<Passage[]>("search_workspace", { id, query, kinds, limit });
-}
 export async function getIndexStatus(id: string): Promise<IndexStatus> {
   return invoke<IndexStatus>("get_index_status", { id });
 }
@@ -1244,7 +1244,11 @@ export async function getChatCapabilities(chatId: string): Promise<ChatCapabilit
 export async function previewChatContext(chatId: string, question?: string): Promise<ContextReport> {
   return invoke<ContextReport>("preview_chat_context", { chatId, question });
 }
-/** Resolves once the answer is saved; `deeper` re-asks with the deep budget ("Search deeper"). */
+/**
+ * Returns as soon as the request is accepted, not when the answer is saved: the answer comes as
+ * `workspace_chat_*` events carrying `requestId` (end, error, cancelled). `deeper` re-asks with
+ * the deep budget ("Search deeper").
+ */
 export async function askWorkspace(
   chatId: string,
   question: string,
@@ -1258,6 +1262,10 @@ export async function cancelWorkspaceRequest(requestId: string): Promise<void> {
 }
 export async function saveAnswerToLibrary(messageId: number, title: string): Promise<string> {
   return invoke<string>("save_answer_to_library", { messageId, title });
+}
+/** Appends a saved answer to the workspace's instructions; refuses it if something it used has left the workspace. */
+export async function addAnswerToInstructions(messageId: number): Promise<void> {
+  return invoke("add_answer_to_instructions", { messageId });
 }
 export async function answerWorkspaceApproval(approvalId: string, allow: boolean): Promise<void> {
   return invoke("answer_workspace_approval", { approvalId, allow });
@@ -1281,8 +1289,32 @@ export async function notetakerUpdateNow(meetingId: string): Promise<void> {
   return invoke("notetaker_update_now", { meetingId });
 }
 /** "Keep going": adds the same amount to the cap. */
+/** Pause the automatic runs (the meeting goes on). Rejects with the reason when it cannot. */
+export async function notetakerPause(meetingId: string): Promise<void> {
+  return invoke("notetaker_pause", { meetingId });
+}
+export async function notetakerResume(meetingId: string): Promise<void> {
+  return invoke("notetaker_resume", { meetingId });
+}
+export async function briefPause(meetingId: string): Promise<void> {
+  return invoke("brief_pause", { meetingId });
+}
+export async function briefResume(meetingId: string): Promise<void> {
+  return invoke("brief_resume", { meetingId });
+}
+/** What "Automatic" is for a provider (or the active one when null), to say before turning on. */
+export async function getAutomaticModel(provider: string | null = null): Promise<AutomaticModel | null> {
+  return invoke<AutomaticModel | null>("get_automatic_model", { provider });
+}
 export async function notetakerContinue(meetingId: string): Promise<void> {
   return invoke("notetaker_continue", { meetingId });
+}
+/** The run's true state now (a reopened window reads this, then follows the events). */
+export async function getNotetakerState(meetingId: string): Promise<NotetakerState> {
+  return invoke<NotetakerState>("get_notetaker_state", { meetingId });
+}
+export async function getBriefState(meetingId: string): Promise<BriefState> {
+  return invoke<BriefState>("get_brief_state", { meetingId });
 }
 export async function getNotetakerSettings(): Promise<NotetakerSettings> {
   return invoke<NotetakerSettings>("get_notetaker_settings");

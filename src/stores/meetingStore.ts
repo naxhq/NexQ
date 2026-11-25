@@ -16,7 +16,7 @@ import { useTranscriptStore } from "./transcriptStore";
 import { initMeetingSpeakers, resetMeetingScopedStores } from "./resetMeeting";
 import { showToast } from "./toastStore";
 import { pickScenario } from "../workspace/scenarioOrder";
-import { defaultWorkspaceOf, useWorkspaceStore, workspaceById } from "./workspaceStore";
+import { defaultWorkspaceOf, useWorkspaceStore, workspaceById, isUnfiledHome } from "./workspaceStore";
 
 /** Where a started meeting is filed and what else it may use (spec section 12). */
 export interface StartMeetingOptions {
@@ -188,14 +188,11 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         const resolvedMode: AudioMode = audioMode ?? get().audioMode;
         // An explicit pick beats the workspace's scenario, which beats the current/remembered one.
         const workspaces = useWorkspaceStore.getState().workspaces;
-        let home = options?.workspaceId ? workspaceById(workspaces, options.workspaceId) : defaultWorkspaceOf(workspaces);
-        // An archived workspace is never started in: say where it went instead.
-        if (home?.archived) {
-          const fallback = defaultWorkspaceOf(workspaces);
-          showToast(`${home.name} is archived, so the meeting is filed in ${fallback.name}`, "info");
-          home = fallback;
-          options = { ...options, workspaceId: fallback.id, borrowed: [] };
-        }
+        const asked = options?.workspaceId ? workspaceById(workspaces, options.workspaceId) : defaultWorkspaceOf(workspaces);
+        // A workspace asked for that is archived or gone is never swapped for another: the backend starts
+        // the meeting filed nowhere (no workspace material) and says so. Its scenario and borrows do not apply.
+        const home = asked && !asked.archived ? asked : undefined;
+        if (options?.workspaceId && !home) options = { ...options, borrowed: [] };
         let resolvedScenario: AIScenario = pickScenario({
           explicit: scenario,
           workspaceDefault: home?.default_scenario,
@@ -235,9 +232,15 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         // 1. Create meeting record in SQLite
         const meeting = await ipcStartMeeting(title, options?.workspaceId);
 
+        // 1-. A request the backend could not honour: the meeting runs filed nowhere, and the person is told how to file it.
+        if (options?.workspaceId && meeting.workspace_notice) {
+          showToast(meeting.workspace_notice, "warning");
+        }
+
         // 1a. "Also use": the borrowed workspaces. A refusal (keep separate) never blocks the meeting.
         let borrowed: string[] = [];
-        if (options?.borrowed && options.borrowed.length > 0) {
+        // A meeting filed nowhere borrows nothing until it is filed (the backend refuses it).
+        if (options?.borrowed && options.borrowed.length > 0 && !isUnfiledHome(meeting.workspace_id)) {
           try {
             const { setMeetingScope } = await import("../lib/ipc");
             const scope = await setMeetingScope(meeting.id, options.borrowed);

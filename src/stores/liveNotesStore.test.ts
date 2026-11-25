@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NoteDoc, NoteEdit, NotetakerDocEvent, NotetakerState } from "../lib/types";
 import { sampleDoc } from "../live-notes/fixtures";
+import { ns } from "../live-notes/testing";
 
 const h = vi.hoisted(() => ({
   docs: {} as Record<string, unknown>,
@@ -8,6 +9,7 @@ const h = vi.hoisted(() => ({
   calls: [] as Array<[string, unknown[]]>,
   fail: null as string | null,
   failOnly: new Set<string>(),
+  stateFor: {} as Record<string, unknown>,
   live: "live1" as string | null,
   onDoc: null as null | ((e: NotetakerDocEvent) => void),
   onState: null as null | ((e: NotetakerState) => void),
@@ -22,6 +24,10 @@ vi.mock("../lib/ipc", async () => {
     if (h.fail || h.failOnly.has(name)) throw h.fail ?? "failed";
   };
   return {
+    getNotetakerState: async (id: string) => {
+      if (h.stateFor[id]) return h.stateFor[id];
+      throw "no such command";
+    },
     getMeetingNotes: async (id: string) => h.docs[id] ?? null,
     getNotetakerSettings: async () => {
       if (h.failOnly.has("get_settings")) throw "offline";
@@ -33,6 +39,8 @@ vi.mock("../lib/ipc", async () => {
       h.settings = { ...h.settings, ...patch };
       return h.settings;
     },
+    notetakerPause: rec("pause"),
+    notetakerResume: rec("resume"),
     notetakerStart: rec("start"),
     notetakerStop: rec("stop"),
     notetakerUpdateNow: rec("update_now"),
@@ -72,7 +80,7 @@ import { FRESH_MS, useLiveNotesStore } from "./liveNotesStore";
 const S = () => useLiveNotesStore.getState();
 const entry = (id: string) => S().entries[id];
 const names = () => h.calls.map((c) => c[0]);
-const run = (over: Partial<NotetakerState> = {}): NotetakerState => ({ meeting_id: "live1", status: "running", tokens_used: 10, cap: 100, ...over });
+const run = (over: Partial<NotetakerState> = {}): NotetakerState => ns("running", [], { meeting_id: "live1", tokens_used: 10, cap: 100, ...over });
 
 beforeEach(() => {
   h.docs = { live1: structuredClone(sampleDoc), past1: structuredClone(sampleDoc) };
@@ -80,6 +88,7 @@ beforeEach(() => {
   h.saved.length = 0;
   h.fail = null;
   h.failOnly.clear();
+  h.stateFor = {};
   h.live = "live1";
   h.settings = { enabled: true, scope: "meeting", provider: "openai", model: "gpt-x", effort: null, update_mode: "automatic", detail: "standard", language: "meeting", cap: 120000, colors: true };
   S().reset();
@@ -166,6 +175,24 @@ describe("documents", () => {
   });
 });
 
+describe("a reopened window reads the true state", () => {
+  it("takes the getter's state and a deadline from next_in_ms, before any event", async () => {
+    h.stateFor.live1 = ns("paused", ["resume"], { meeting_id: "live1", tokens_used: 5, cap: 100, next_in_ms: 20_000 });
+    const before = Date.now();
+    await S().attach("live1");
+    await vi.waitFor(() => expect(S().runs.live1?.status).toBe("paused"));
+    expect(S().runs.live1.can).toEqual(["resume"]);
+    expect(S().deadlines.live1!).toBeGreaterThanOrEqual(before + 20_000);
+  });
+
+  it("says so when the state cannot be read, and still loads the notes", async () => {
+    await S().attach("live1");
+    await vi.waitFor(() => expect(S().error).toBe("no such command"));
+    expect(S().runs.live1).toBeUndefined();
+    expect(entry("live1").doc).not.toBeNull();
+  });
+});
+
 describe("run controls only ever touch the live meeting", () => {
   it("update now, start and keep going go to the live meeting even with a past one open", async () => {
     await S().attach("past1");
@@ -175,13 +202,23 @@ describe("run controls only ever touch the live meeting", () => {
     expect(h.calls.map((c) => [c[0], c[1][0]])).toEqual([["update_now", "live1"], ["start", "live1"], ["continue", "live1"]]);
   });
 
-  it("does nothing when no meeting is live", async () => {
+  it("with no live meeting, says so instead of doing nothing in silence", async () => {
     h.live = null;
     await S().attach("past1");
-    await S().updateNow();
-    await S().start();
+    for (const act of [S().updateNow, S().start, S().pause, S().resume, S().tryAgain, S().keepGoing]) {
+      S().clearError();
+      await act();
+      expect(S().error).toMatch(/No meeting is running/);
+    }
     await S().stop();
     expect(h.calls).toEqual([]);
+  });
+
+  it("pause stops the live run and resume and try again start it again", async () => {
+    await S().pause();
+    await S().resume();
+    await S().tryAgain();
+    expect(h.calls.map((c) => [c[0], c[1][0]])).toEqual([["pause", "live1"], ["resume", "live1"], ["start", "live1"]]);
   });
 
   it("turning on saves only what was chosen, then starts the live meeting", async () => {
