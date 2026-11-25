@@ -25,6 +25,8 @@ struct FakeState {
     cancel_seen: AtomicUsize,
     inflight: AtomicUsize,
     max_inflight: AtomicUsize,
+    /// A provider that never answers and ignores cancel.
+    ignore_cancel: AtomicBool,
     /// The provider the fake app has active ("" = not simulated, "none" = no usable provider).
     active: Mutex<String>,
     /// Which provider each call was made for.
@@ -64,9 +66,14 @@ impl LlmCall for FakeLlm {
         let out = if delay.is_zero() {
             Ok(())
         } else {
-            tokio::select! {
-                _ = tokio::time::sleep(delay) => Ok(()),
-                _ = self.cancel.cancelled() => { self.st.cancel_seen.fetch_add(1, Ordering::SeqCst); Err(LlmError::cancelled()) }
+            if self.st.ignore_cancel.load(Ordering::SeqCst) {
+                tokio::time::sleep(delay).await;
+                Ok(())
+            } else {
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => Ok(()),
+                    _ = self.cancel.cancelled() => { self.st.cancel_seen.fetch_add(1, Ordering::SeqCst); Err(LlmError::cancelled()) }
+                }
             }
         };
         self.st.inflight.fetch_sub(1, Ordering::SeqCst);
@@ -2339,4 +2346,47 @@ async fn the_limit_reached_between_passes_ends_the_update_as_limit() {
     let st = h.events.last_status("notetaker_state", &m).unwrap();
     assert_eq!(st["ended"]["kind"], "limit", "{st}");
     assert_eq!(h.fake.count(AiPurpose::Notes), 1, "no pass after the limit");
+}
+
+#[tokio::test]
+async fn stopping_after_a_provider_change_cancels_the_call_that_was_in_flight() {
+    let h = harness();
+    let m = seed_ended(&h, 300);
+    *h.fake.delay.lock().unwrap() = Duration::from_secs(30);
+    h.rt.notetaker_update_now(&m).unwrap();
+    until("a pass in flight", || h.fake.inflight.load(Ordering::SeqCst) == 1).await;
+    // the settings change swaps the slot while the original call is still running
+    h.rt.patch_notetaker(&json!({"provider": "openai", "model": "gpt-x"})).unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    h.rt.notetaker_stop(&m);
+    until("the ORIGINAL call was cancelled", || h.fake.cancel_seen.load(Ordering::SeqCst) == 1).await;
+    until("the actor is gone", || h.rt.inner.lock().unwrap().notes.get(m.as_str()).is_none()).await;
+    assert_eq!(h.fake.count(AiPurpose::Notes), 1);
+}
+
+#[tokio::test]
+async fn a_provider_that_never_answers_does_not_hold_the_actor() {
+    let h = harness();
+    let m = seed_ended(&h, 300);
+    h.fake.ignore_cancel.store(true, Ordering::SeqCst);
+    *h.fake.delay.lock().unwrap() = Duration::from_secs(600);
+    h.rt.notetaker_update_now(&m).unwrap();
+    until("a pass in flight", || h.fake.inflight.load(Ordering::SeqCst) == 1).await;
+    let t = std::time::Instant::now();
+    h.rt.meeting_deleted(&m);
+    until("the actor is gone", || h.rt.inner.lock().unwrap().notes.get(m.as_str()).is_none()).await;
+    assert!(t.elapsed() < Duration::from_secs(5), "held for {:?}", t.elapsed());
+    // the same for a stop
+    let h2 = harness();
+    let m2 = seed_ended(&h2, 300);
+    h2.fake.ignore_cancel.store(true, Ordering::SeqCst);
+    *h2.fake.delay.lock().unwrap() = Duration::from_secs(600);
+    h2.rt.notetaker_update_now(&m2).unwrap();
+    until("a pass in flight", || h2.fake.inflight.load(Ordering::SeqCst) == 1).await;
+    let t = std::time::Instant::now();
+    h2.rt.notetaker_stop(&m2);
+    until("the actor is gone", || h2.rt.inner.lock().unwrap().notes.get(m2.as_str()).is_none()).await;
+    assert!(t.elapsed() < Duration::from_secs(5), "held for {:?}", t.elapsed());
+    let st = h2.rt.notetaker_state(&m2).await;
+    assert!(!st["not_covered"].is_null(), "{st}");
 }

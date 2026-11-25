@@ -208,18 +208,27 @@ pub struct SwapLlm {
     /// The provider Automatic resolved to when last looked at, and a move from local to online not yet dismissed.
     provider_seen: Mutex<Option<String>>,
     moved: Mutex<Option<(String, String)>>,
+    /// The cancel tokens of the calls in flight: `cancel` fires them whatever slot has been swapped in since.
+    in_flight: Mutex<Vec<Arc<CancelToken>>>,
+    /// Bumped by every cancel; a call that is still not back `CANCEL_GRACE` later is dropped.
+    abort_epoch: AtomicU64,
+    abort_notify: tokio::sync::Notify,
 }
+
+/// How long a call may take to answer a cancel before it is dropped and counted as cancelled.
+pub const CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
 impl SwapLlm {
     pub fn new(factory: Arc<dyn LlmFactory>, purpose: AiPurpose, meeting_id: &str, selection: Selection) -> Result<Arc<SwapLlm>, String> {
         let slot = factory.make(purpose, meeting_id, &selection)?;
         let key = factory.resolved(&selection).unwrap_or_default();
         let seen = factory.provider_of(&selection);
-        Ok(Arc::new(SwapLlm { slot: Mutex::new(slot), factory, purpose, meeting_id: meeting_id.to_string(), selection: Mutex::new(selection), slot_key: Mutex::new(key), stop: Arc::new(CancelToken::new()), provider_seen: Mutex::new(seen), moved: Mutex::new(None) }))
+        Ok(Arc::new(SwapLlm { slot: Mutex::new(slot), factory, purpose, meeting_id: meeting_id.to_string(), selection: Mutex::new(selection), slot_key: Mutex::new(key), stop: Arc::new(CancelToken::new()), provider_seen: Mutex::new(seen), moved: Mutex::new(None), in_flight: Mutex::new(Vec::new()), abort_epoch: AtomicU64::new(0), abort_notify: tokio::sync::Notify::new() }))
     }
 
     /// Cancels what is running and makes a fresh slot for the next call.
     pub fn cancel_and_renew(&self) {
+        self.fire_in_flight();
         let mut g = self.slot.lock().unwrap();
         g.cancel.cancel();
         let sel = self.selection.lock().unwrap().clone();
@@ -280,6 +289,17 @@ impl SwapLlm {
 
     pub fn cancel(&self) {
         self.slot.lock().unwrap().cancel.cancel();
+        self.fire_in_flight();
+    }
+
+    /// Cancels every call in flight through its own token (a swapped slot has a new one) and starts
+    /// the grace period after which a call that ignores it is dropped.
+    fn fire_in_flight(&self) {
+        for t in self.in_flight.lock().unwrap().iter() {
+            t.cancel();
+        }
+        self.abort_epoch.fetch_add(1, Ordering::SeqCst);
+        self.abort_notify.notify_waiters();
     }
 
     /// The generation read before building the next request (None: read it at call time).
@@ -313,13 +333,34 @@ impl LlmCall for SwapLlm {
             }
             (g.llm.clone(), g.cancel.clone())
         };
-        tokio::select! {
+        // The call is held by its own token and by a hard bound: after a cancel it has CANCEL_GRACE to
+        // answer, then it is dropped and counted as cancelled (a provider that ignores cancel cannot hold the actor).
+        let epoch0 = self.abort_epoch.load(Ordering::SeqCst);
+        self.in_flight.lock().unwrap().push(cancel.clone());
+        let result = tokio::select! {
             r = llm.call(req) => r,
             _ = self.stop.cancelled() => {
                 cancel.cancel();
                 Err(LlmError::cancelled())
             }
-        }
+            _ = async {
+                loop {
+                    let notified = self.abort_notify.notified();
+                    tokio::pin!(notified);
+                    notified.as_mut().enable();
+                    if self.abort_epoch.load(Ordering::SeqCst) != epoch0 {
+                        break;
+                    }
+                    notified.await;
+                }
+                tokio::time::sleep(CANCEL_GRACE).await;
+            } => {
+                cancel.cancel();
+                Err(LlmError::cancelled())
+            }
+        };
+        self.in_flight.lock().unwrap().retain(|t| !Arc::ptr_eq(t, &cancel));
+        result
     }
 }
 

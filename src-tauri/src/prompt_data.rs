@@ -374,7 +374,12 @@ fn neutralise_text_with(text: &str, strict: bool) -> String {
                     let k = skip(j + 1);
                     let name = word_at(&look, k.min(n));
                     let original: String = content[k.min(n)..].iter().take(name.chars().count()).collect();
-                    let generic = component_name(&original) && !ROLE_WORDS.contains(&name.as_str()) && !TAG_EXACT.contains(&name.as_str()) && !TAG_PREFIXES.iter().any(|p| name.starts_with(p));
+                    // strict (unfenced text): a role, tool or wrapper name is escaped as a closer whatever its spelling; `</T>`, `</Foo>` stay
+                    let generic = component_name(&original)
+                        && !ROLE_WORDS.contains(&name.as_str())
+                        && !TAG_EXACT.contains(&name.as_str())
+                        && !TAG_PREFIXES.iter().any(|p| name.starts_with(p))
+                        && !(strict && TAG_WORDS.contains(&name.as_str()));
                     let ordinary = ORDINARY_CLOSERS.contains(&name.as_str()) || generic;
                     !ordinary && (!spaced || has_close)
                 } else {
@@ -1154,6 +1159,57 @@ mod spelling_tests {
         }
         for ok in ["</div>", "</span>", "</T>", "</Foo>", "a<b and c>d", "Vec<T>", "1 < 2"] {
             assert_eq!(neutralise_text_strict(ok), ok, "{ok}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod strict_symmetry_tests {
+    use super::*;
+
+    const NAMES: &[&str] = &["Invoke", "Message", "Result", "Transcript", "Tool", "Notes", "Conversation", "Parameter", "Function", "Document", "Summary", "Passages", "Link", "Meta"];
+
+    #[test]
+    fn strict_escapes_closers_of_role_tool_and_wrapper_names_in_every_spelling() {
+        for name in NAMES {
+            for spelling in [name.to_string(), name.to_lowercase(), name.to_uppercase()] {
+                for shape in [format!("</{spelling}>"), format!("</ {spelling}>"), format!("<  /{spelling}>")] {
+                    assert_ne!(neutralise_text_strict(&shape), shape, "strict {shape}");
+                }
+            }
+        }
+        // the fullwidth forms too (in either mode)
+        for shape in ["\u{ff1c}\u{ff0f}\u{ff29}nvoke\u{ff1e}", "\u{ff1c}\u{ff0f}\u{ff2d}essage\u{ff1e}"] {
+            let shape = shape.replace("\\u{ff1c}", "\u{ff1c}");
+            assert_ne!(neutralise_text_strict(&shape), shape, "strict {shape}");
+            assert_ne!(neutralise_text(&shape), shape, "{shape}");
+        }
+    }
+
+    #[test]
+    fn strict_still_lets_generic_and_ordinary_closers_stay() {
+        for ok in ["</T>", "</Foo>", "</MyComponent>", "</div>", "</span>", "</p>", "</table>"] {
+            assert_eq!(neutralise_text_strict(ok), ok, "{ok}");
+        }
+    }
+
+    #[test]
+    fn the_two_modes_differ_only_in_the_exemptions_for_pascal_case_words() {
+        // non-strict exempts PascalCase code; every other shape is escaped by both modes alike
+        for shape in [
+            "<system>", "<SYSTEM>", "x<system>", "<tool_call>", "</System>", "</tool_call>", "< system>", "</ system>", "<|im_start|>", "<start_of_turn>", "<bos>", "<!-- c -->",
+            "\u{ff1c}system\u{ff1e}", "<invoke name=\"x\">", "[INST]", "[[END x y]]", "</script>", "</s>",
+        ] {
+            assert_ne!(neutralise_text(shape), shape, "{shape}");
+            assert_eq!(neutralise_text(shape), neutralise_text_strict(shape), "modes differ on {shape}");
+        }
+        for shape in ["List<User>", "<Link>", "<Message>x</Message>", "</Link>", "</Message>", "</Result>", "map<user, string>"] {
+            assert_eq!(neutralise_text(shape), shape, "non-strict {shape}");
+            assert_ne!(neutralise_text_strict(shape), shape, "strict {shape}");
+        }
+        // and on ordinary text they never differ
+        for text in ["Vec<T>", "a<b", "<div>x</div>", "1 < 2", "if (a < b) { return c > d }", "</T>"] {
+            assert_eq!(neutralise_text(text), neutralise_text_strict(text), "{text}");
         }
     }
 }
