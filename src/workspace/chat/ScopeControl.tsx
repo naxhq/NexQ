@@ -53,15 +53,17 @@ export function ScopeBody({ workspaceId, chat, excluded, autoFocus = true }: Sco
     setState("loading");
     const timer = setTimeout(
       () => {
-        listWorkspaceMeetings(workspaceId, query.trim() || null, limit, 0).then(
-          (page) => {
+        void (async () => {
+          try {
+            const page = await listWorkspaceMeetings(workspaceId, query.trim() || null, limit, 0);
             if (mine !== seq.current) return;
-            setMeetings(page.meetings);
-            setTotal(page.total);
+            setMeetings(Array.isArray(page?.meetings) ? page.meetings : []);
+            setTotal(typeof page?.total === "number" ? page.total : 0);
             setState("idle");
-          },
-          () => mine === seq.current && setState("error"),
-        );
+          } catch {
+            if (mine === seq.current) setState("error");
+          }
+        })();
       },
       query ? 250 : 0,
     );

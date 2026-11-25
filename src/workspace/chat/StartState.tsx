@@ -7,11 +7,13 @@ import { COLUMN } from "./column";
 const clip = (s: string, n = 48) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
 
 /** Up to three questions made from what is really in the workspace; none when it is empty. */
-export function buildExamples(meetings: MeetingSummary[], memory: MemoryItem[]): string[] {
-  const saved = memory.filter((m) => m.status === "saved" && m.title.trim());
+export function buildExamples(meetingsIn: MeetingSummary[] | null | undefined, memoryIn: MemoryItem[] | null | undefined): string[] {
+  const meetings = Array.isArray(meetingsIn) ? meetingsIn : [];
+  const memory = Array.isArray(memoryIn) ? memoryIn : [];
+  const saved = memory.filter((m) => m && m.status === "saved" && typeof m.title === "string" && m.title.trim());
   const people = saved.filter((m) => m.kind === "person");
   const open = saved.filter((m) => m.kind === "open_item");
-  const titled = meetings.filter((m) => m.title.trim() && m.segment_count > 0);
+  const titled = meetings.filter((m) => m && typeof m.title === "string" && m.title.trim() && m.segment_count > 0);
   const out: string[] = [];
   const add = (q: string | undefined) => q && !out.includes(q) && out.length < 3 && out.push(q);
   if (titled[0]) add(`What did we decide in "${clip(titled[0].title.trim())}"?`);
@@ -23,17 +25,29 @@ export function buildExamples(meetings: MeetingSummary[], memory: MemoryItem[]):
   return out;
 }
 
+/** Always settles: a failed or odd answer from the backend just means no examples. */
+async function safe<T>(job: () => Promise<T>): Promise<T | null> {
+  try {
+    return await job();
+  } catch {
+    return null;
+  }
+}
+
 export function useExamples(workspaceId: string): string[] {
   const [examples, setExamples] = useState<string[]>([]);
   useEffect(() => {
     let alive = true;
     setExamples([]);
-    Promise.all([
-      listWorkspaceMeetings(workspaceId, null, 6, 0).then((p) => p.meetings, () => [] as MeetingSummary[]),
-      listMemory(workspaceId).catch(() => [] as MemoryItem[]),
-    ]).then(([meetings, memory]) => {
-      if (alive) setExamples(buildExamples(meetings, memory));
-    });
+    void (async () => {
+      const [page, memory] = await Promise.all([safe(() => listWorkspaceMeetings(workspaceId, null, 6, 0)), safe(() => listMemory(workspaceId))]);
+      if (!alive) return;
+      try {
+        setExamples(buildExamples(page?.meetings, memory));
+      } catch {
+        setExamples([]);
+      }
+    })();
     return () => {
       alive = false;
     };

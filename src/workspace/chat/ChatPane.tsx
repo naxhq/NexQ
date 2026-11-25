@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useWorkspaceChat, useChatPreview } from "../../hooks/useWorkspaceChat";
 import { useMeetingStore } from "../../stores/meetingStore";
 import { useWorkspaceStore } from "../../stores/workspaceStore";
@@ -30,6 +30,20 @@ const openProviderSettings = () => useMeetingStore.getState().openSettings("llm"
  */
 export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, className }: ChatPaneProps) {
   const store = useWorkspaceChatStore;
+  const root = useRef<HTMLDivElement | null>(null);
+  const [wide, setWide] = useState(true);
+  useEffect(() => {
+    const el = root.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const read = () => {
+      const w = el.getBoundingClientRect().width;
+      setWide(w === 0 || w >= 620);
+    };
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const view = useWorkspaceChat(workspaceId);
   const { chat, chatId, session } = view;
   const workspace = useWorkspaceStore((s) => s.workspaces.find((w) => w.id === workspaceId) ?? null);
@@ -46,7 +60,7 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
   const busyList = useMemo(() => (busyIds ? busyIds.split(",") : []), [busyIds]);
 
   useEffect(() => {
-    if (!detail) void useWorkspaceStore.getState().loadDetail(workspaceId);
+    if (!detail) Promise.resolve(useWorkspaceStore.getState().loadDetail(workspaceId)).catch(() => {});
   }, [workspaceId, detail]);
 
   const turn = session.turn;
@@ -139,7 +153,7 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
   const waitingForOther = meetingActive && view.anyBusy && !writing;
 
   return (
-    <div className={cn("flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background", className)} data-workspace-chat>
+    <div ref={root} className={cn("flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background", className)} data-workspace-chat>
       <ChatSwitcher workspaceId={workspaceId} chats={view.chats} chat={chat} busyIds={busyList} />
 
       {view.error && (
@@ -215,6 +229,7 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
           onOpenSettings={openProviderSettings}
           autoFocusKey={chatId ?? `new:${workspaceId}`}
           compact={!empty}
+          showEstimate={wide}
         />
       </div>
 

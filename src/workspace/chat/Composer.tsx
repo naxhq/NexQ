@@ -44,6 +44,8 @@ export interface ComposerProps {
   autoFocusKey: string;
   /** A chat with messages: one quiet row, so the answers keep the room. */
   compact: boolean;
+  /** false when the pane is narrower than 620 px. */
+  showEstimate: boolean;
 }
 
 function Notice({ children }: { children: ReactNode }) {
@@ -107,13 +109,16 @@ export function Composer(p: ComposerProps) {
     }
   };
 
-  const estimate = report
+  const estimateText = report
     ? `About ${formatTokens(report.used)} tokens of ${formatTokens(report.budget)}`
     : session.previewing
       ? "Estimating"
       : session.previewFailed
         ? "No estimate"
         : "";
+
+  // Narrow pane (under 620 px): the estimate steps aside.
+  const estimate = p.showEstimate ? estimateText : "";
 
   const action = p.writing ? (
     <button type="button" onClick={p.onStop} disabled={p.stopping} className={cn(buttonClass.base, buttonClass.quiet, "shrink-0 gap-1.5")}>
@@ -208,7 +213,7 @@ export function Composer(p: ComposerProps) {
             onEffort={p.onEffort}
             ensureChat={p.ensureChat}
           />
-          <span className="ui-meta hidden min-w-[7rem] shrink-0 pb-1 text-right tabular-nums text-muted-foreground min-[900px]:inline" aria-live="polite">
+          <span className="ui-meta min-w-[7rem] shrink-0 pb-1 text-right tabular-nums text-muted-foreground" aria-live="polite">
             {estimate}
           </span>
           {action}

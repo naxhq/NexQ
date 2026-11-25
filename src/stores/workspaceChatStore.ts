@@ -424,7 +424,7 @@ export const useWorkspaceChatStore = create<ChatState>((set, get) => {
       const chat = findChat(get().chats, chatId);
       if (!chat) return;
       const turn = get().sessions[chatId]?.turn;
-      if (isBusy(turn) && turn) void ipc.cancelWorkspaceRequest(turn.requestId).catch(() => {});
+      if (isBusy(turn) && turn) Promise.resolve().then(() => ipc.cancelWorkspaceRequest(turn.requestId)).catch(() => {});
       try {
         await ipc.deleteWorkspaceChat(chatId);
       } catch (e) {
