@@ -2892,3 +2892,22 @@ fn a_meeting_filed_in_no_workspace_is_listed_counted_and_refused_for_memory() {
     // it is not in any real workspace's list
     assert!(crate::workspace::meetings::list_workspace_meetings(&conn, &rig.ws, None, 50, 0).unwrap().meetings.iter().all(|m| m.id != "lost"));
 }
+
+#[tokio::test]
+async fn a_preempted_recap_is_not_a_failure_and_a_retry_forgets_the_real_ones() {
+    let rig = Rig::new();
+    rig.meeting("m1", "Planning", 5, &["We agreed the lynx programme budget.", "Owners were named."]);
+    rig.index();
+    crate::workspace::store::update_workspace(&rig.conn(), &rig.ws, crate::workspace::types::WorkspacePatch { recaps_with_ai: Some(true), ..Default::default() }).unwrap();
+    // cancelled by the model call itself (a preemption looks the same to the caller): not counted
+    rig.api.push(Step::Fail(|| LLMError::Cancelled));
+    assert_eq!(ops::recap_missing(&rig.deps, &rig.ws, Arc::new(CancelToken::new())).await, 0);
+    assert_eq!(ops::index_status(&rig.conn(), &rig.deps.hub, &rig.ws, false).unwrap().ai_recaps_failed.count, 0);
+    // a real failure is counted; "try again" (what retry_recaps does first) forgets it
+    rig.api.push(Step::Fail(|| LLMError::ProviderError("server error".into())));
+    ops::recap_missing(&rig.deps, &rig.ws, Arc::new(CancelToken::new())).await;
+    assert_eq!(ops::index_status(&rig.conn(), &rig.deps.hub, &rig.ws, false).unwrap().ai_recaps_failed.count, 1);
+    crate::workspace_search::cards::clear_recap_failures_of(&rig.conn(), &rig.ws);
+    rig.api.push(Step::Text("A recap.".into()));
+    assert_eq!(ops::recap_missing(&rig.deps, &rig.ws, Arc::new(CancelToken::new())).await, 1);
+}

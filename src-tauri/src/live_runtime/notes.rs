@@ -52,6 +52,8 @@ pub enum NotesCmd {
     Edit(NoteEdit, oneshot::Sender<Result<Value, String>>),
     Get(oneshot::Sender<Value>),
     State(oneshot::Sender<Value>),
+    /// The person saw the "moved online" line.
+    DismissMoved,
 }
 
 pub struct NotesHandle {
@@ -237,7 +239,6 @@ struct Actor {
     interrupted: bool,
     /// The update of an ended meeting: one run on the saved lines, then done.
     one_shot: bool,
-    ran: bool,
     /// Set when the meeting ended while a run was in flight: that run gets `final_timeout`, not forever.
     finish_deadline: Option<tokio::time::Instant>,
 }
@@ -249,7 +250,8 @@ impl Actor {
         let sink = Arc::new(ActorSink { dirty: dirty.clone() });
         let store = Arc::new(DbStore { db: p.db.clone(), meeting_id: p.meeting_id.clone(), discarded: discarded.clone() });
         let mut cfg = cfg_from(&p.settings);
-        cfg.final_timeout = p.final_timeout;
+        // the update of an ended meeting may take several passes: it is not held to the live end's bound
+        cfg.final_timeout = if p.one_shot { p.final_timeout.saturating_mul(30) } else { p.final_timeout };
         let mut engine = NotesEngine::new(swap.clone(), p.clock.clone(), cfg, sink, store);
         if let Some(r) = p.resume.take() {
             engine.resume_from(r.doc, r.tokens_used, r.cap);
@@ -261,7 +263,6 @@ impl Actor {
             for l in std::mem::take(&mut p.preload) {
                 engine.feed(l);
             }
-            engine.request_manual();
         }
         let settings = p.settings.clone();
         Self {
@@ -286,7 +287,6 @@ impl Actor {
             quitting: false,
             interrupted: false,
             one_shot,
-            ran: false,
             finish_deadline: None,
         }
     }
@@ -312,6 +312,8 @@ impl Actor {
             manual_mode: !self.auto(),
             started: st.tokens_used > 0 || st.pending_words > 0,
             not_covered: if self.done || self.ended_waiting { self.engine.uncovered() } else { None },
+            ended: if self.done { self.engine.doc().ended.clone() } else if self.ended_waiting { Some(if self.engine.uncovered().is_some() { ("manual".to_string(), None) } else { ("covered".to_string(), None) }) } else { None },
+            moved_online: self.swap.moved_online().map(|(from, to)| crate::live_runtime::state::MovedOnline { from, to }),
             next_in_ms: if self.auto() { self.engine.next_run_in_ms() } else { None },
             final_note: self.engine.final_note.clone(),
             stop_reason: None,
@@ -357,7 +359,10 @@ impl Actor {
     /// New settings for the next run (a run in flight finishes as it was).
     fn reconfigure(&mut self, s: NotetakerSettings) {
         self.engine.set_prompt(prompt_of(&s));
-        self.engine.set_cap(s.cap);
+        // a changed limit only: setting the same one again would reset Keep going's fresh allotment
+        if s.cap != self.settings.cap {
+            self.engine.set_cap(s.cap);
+        }
         if selection_of(&s) != selection_of(&self.settings) {
             if let Err(e) = self.swap.reselect(selection_of(&s)) {
                 log::warn!("live notes: the new model could not be set: {e}");
@@ -373,6 +378,7 @@ impl Actor {
                 self.engine.feed(l);
             }
             NotesCmd::Manual => self.engine.request_manual(),
+            NotesCmd::DismissMoved => self.swap.dismiss_moved(),
             NotesCmd::Pause => self.engine.pause(),
             NotesCmd::Resume => self.engine.resume(),
             NotesCmd::TryAgain => self.engine.retry(),
@@ -437,7 +443,6 @@ impl Actor {
         }
         let gen0 = (self.p.generation)(&self.p.meeting_id, false);
         self.swap.set_expected(Some(gen0));
-        self.ran = true;
         let Some(prep) = self.engine.prepare(reason) else {
             // the trigger believed there were words but the engine holds none: forget the request so it cannot stick
             self.engine.resync();
@@ -479,20 +484,10 @@ impl Actor {
         }
     }
 
-    fn swap_in_flight(&self) -> bool {
-        self.engine.status().in_flight
-    }
-
-    /// The update of an ended meeting is done (or failed): finish the notes again and say what is left.
+    /// The update of an ended meeting: passes over the saved lines like the end of a meeting does,
+    /// until nothing is left, the limit is reached or a run fails.
     async fn finish_one_shot(&mut self) {
-        let err = self.engine.status().last_error.clone();
-        let _ = self.engine.finish_with(false).await;
-        if let Some((from, to)) = self.engine.doc().uncovered {
-            let why = err.map(|e| format!("The update did not finish: {e}. ")).unwrap_or_default();
-            self.engine.final_note = Some(format!("{why}Not covered: {} to {}", crate::live_common::fmt_clock(from), crate::live_common::fmt_clock(to)));
-        } else {
-            self.engine.final_note = None;
-        }
+        let _ = self.engine.finish_with(true).await;
         self.done = true;
     }
 
@@ -516,13 +511,13 @@ impl Actor {
                 self.done = true;
                 break;
             }
+            if self.one_shot {
+                self.finish_one_shot().await;
+                break;
+            }
             self.engine.set_gate(!(self.p.busy)());
             self.maybe_run(&mut rx).await;
             if self.quitting {
-                break;
-            }
-            if self.one_shot && self.ran && !self.swap_in_flight() {
-                self.finish_one_shot().await;
                 break;
             }
             if self.ended_waiting && !self.engine.has_pending() {

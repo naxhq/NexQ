@@ -52,6 +52,16 @@ pub trait LlmFactory: Send + Sync {
     fn resolved(&self, _selection: &Selection) -> Result<String, String> {
         Ok(String::new())
     }
+
+    /// The provider a selection resolves to right now (None: unknown).
+    fn provider_of(&self, _selection: &Selection) -> Option<String> {
+        None
+    }
+}
+
+/// Models that run on this computer: Automatic moving from one of these to anything else is shown to the person.
+pub fn is_local_provider(provider: &str) -> bool {
+    matches!(provider, "ollama" | "lmstudio")
 }
 
 pub fn map_error(e: AiRunError) -> LlmError {
@@ -166,6 +176,10 @@ impl LlmFactory for AiRunsFactory {
         (self.resolver)(provider)
     }
 
+    fn provider_of(&self, sel: &Selection) -> Option<String> {
+        self.selection_of(sel).ok().map(|s| s.provider)
+    }
+
     fn resolved(&self, sel: &Selection) -> Result<String, String> {
         let s = self.selection_of(sel)?;
         Ok(format!("{}|{}|{}", s.provider, s.model, s.effort.as_deref().unwrap_or("")))
@@ -191,13 +205,17 @@ pub struct SwapLlm {
     slot_key: Mutex<String>,
     /// Stops this engine for good (a memory run whose consent ended): fires whatever call is in flight.
     stop: Arc<CancelToken>,
+    /// The provider Automatic resolved to when last looked at, and a move from local to online not yet dismissed.
+    provider_seen: Mutex<Option<String>>,
+    moved: Mutex<Option<(String, String)>>,
 }
 
 impl SwapLlm {
     pub fn new(factory: Arc<dyn LlmFactory>, purpose: AiPurpose, meeting_id: &str, selection: Selection) -> Result<Arc<SwapLlm>, String> {
         let slot = factory.make(purpose, meeting_id, &selection)?;
         let key = factory.resolved(&selection).unwrap_or_default();
-        Ok(Arc::new(SwapLlm { slot: Mutex::new(slot), factory, purpose, meeting_id: meeting_id.to_string(), selection: Mutex::new(selection), slot_key: Mutex::new(key), stop: Arc::new(CancelToken::new()) }))
+        let seen = factory.provider_of(&selection);
+        Ok(Arc::new(SwapLlm { slot: Mutex::new(slot), factory, purpose, meeting_id: meeting_id.to_string(), selection: Mutex::new(selection), slot_key: Mutex::new(key), stop: Arc::new(CancelToken::new()), provider_seen: Mutex::new(seen), moved: Mutex::new(None) }))
     }
 
     /// Cancels what is running and makes a fresh slot for the next call.
@@ -223,6 +241,33 @@ impl SwapLlm {
     /// Registered by runs that can be cancelled from outside; it outlives the slot swaps.
     pub fn stop_token(&self) -> Arc<CancelToken> {
         self.stop.clone()
+    }
+
+    /// Automatic (no provider named) that moved from a local model to an online provider since it was
+    /// last dismissed. Looked at whenever the state is built, so it shows before the next run.
+    pub fn moved_online(&self) -> Option<(String, String)> {
+        let sel = self.selection.lock().unwrap().clone();
+        if sel.provider.as_deref().is_some_and(|p| !p.is_empty()) {
+            return None;
+        }
+        if let Some(now) = self.factory.provider_of(&sel) {
+            let mut seen = self.provider_seen.lock().unwrap();
+            match seen.as_ref() {
+                Some(prev) if *prev != now => {
+                    let mut moved = self.moved.lock().unwrap();
+                    *moved = if is_local_provider(prev) && !is_local_provider(&now) { Some((prev.clone(), now.clone())) } else { None };
+                    *seen = Some(now);
+                }
+                None => *seen = Some(now),
+                _ => {}
+            }
+        }
+        self.moved.lock().unwrap().clone()
+    }
+
+    /// The person saw it: the line goes away until the next move.
+    pub fn dismiss_moved(&self) {
+        *self.moved.lock().unwrap() = None;
     }
 
     pub fn selection(&self) -> Selection {

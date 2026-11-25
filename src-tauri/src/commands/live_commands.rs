@@ -105,6 +105,19 @@ pub async fn brief_refresh(meeting_id: String) -> Result<(), String> {
     rt()?.brief_refresh(&meeting_id)
 }
 
+/// The person saw "Automatic moved to an online model": the line goes away.
+#[command]
+pub async fn notetaker_dismiss_moved(meeting_id: String) -> Result<(), String> {
+    rt()?.dismiss_moved_online(&meeting_id, false);
+    Ok(())
+}
+
+#[command]
+pub async fn brief_dismiss_moved(meeting_id: String) -> Result<(), String> {
+    rt()?.dismiss_moved_online(&meeting_id, true);
+    Ok(())
+}
+
 #[command]
 pub async fn brief_pause(meeting_id: String) -> Result<(), String> {
     rt()?.brief_pause(&meeting_id)

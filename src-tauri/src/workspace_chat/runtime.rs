@@ -221,6 +221,16 @@ pub fn recaps_after_meeting(app: &AppHandle, state: &AppState, meeting_id: &str)
     }
 }
 
+/// "Try again": forget the failed recaps of any workspace and run them the way opening does.
+pub fn retry_recaps(app: &AppHandle, state: &AppState, workspace_id: &str) {
+    if let Ok(conn) = db_path(state).and_then(|p| crate::db::open_writer(&p).map_err(|e| e.to_string())) {
+        crate::workspace_search::cards::clear_recap_failures_of(&conn, workspace_id);
+    }
+    if !state.meeting_active.load(Ordering::SeqCst) {
+        spawn_recaps(app, state, workspace_id.to_string(), Duration::ZERO, None);
+    }
+}
+
 /// A workspace was opened (library or chat): up to `MAX_RECAPS` missing recaps, once per opening.
 pub fn workspace_opened(app: &AppHandle, state: &AppState, workspace_id: &str) {
     let hub = &state.workspace_chat;

@@ -16,12 +16,20 @@ use crate::state::AppState;
 /// Detect the CLI, its version and login state (no model call). For
 /// Antigravity the login check also lists the models, which fill its catalog.
 #[command]
-pub async fn cli_agent_status(kind: CliAgentKind, state: State<'_, AppState>) -> Result<CliAgentStatus, String> {
-    cli_agent_status_impl(kind, &state).await
+pub async fn cli_agent_status(kind: CliAgentKind, refresh: Option<bool>, state: State<'_, AppState>) -> Result<CliAgentStatus, String> {
+    cli_agent_status_force(kind, refresh.unwrap_or(false), &state).await
 }
 
 pub(crate) async fn cli_agent_status_impl(kind: CliAgentKind, state: &AppState) -> Result<CliAgentStatus, String> {
-    let (status, models) = status::cli_agent_status(kind).await;
+    cli_agent_status_force(kind, false, state).await
+}
+
+/// A status younger than a minute is reused unless `force` (an explicit "check again").
+async fn cli_agent_status_force(kind: CliAgentKind, force: bool, state: &AppState) -> Result<CliAgentStatus, String> {
+    if force {
+        status::forget_statuses();
+    }
+    let (status, models) = status::cli_agent_status_cached(kind, force).await;
     if let Some(models) = models.filter(|m| !m.is_empty()) {
         state.cli_settings.catalog(kind).set(models);
     }
@@ -126,6 +134,8 @@ pub async fn set_cli_agent_config(
 pub(crate) fn set_cli_agent_config_impl(kind: CliAgentKind, config: ClaudeCliConfig, state: &AppState) -> Result<(), String> {
     validate_config(kind, &config)?;
     state.cli_settings.set_config(kind, config);
+    // a changed path or setting can change what the status says
+    status::forget_statuses();
     Ok(())
 }
 
@@ -159,6 +169,8 @@ pub fn login_launch(kind: CliAgentKind, bin: Option<&Path>) -> (Option<PathBuf>,
 /// nothing from it; credentials stay between the user and the CLI.
 #[command]
 pub async fn open_cli_login_terminal(kind: CliAgentKind) -> Result<(), String> {
+    // the account is about to change: the next status is a fresh one
+    status::forget_statuses();
     let bin = tokio::task::spawn_blocking(move || status::find_binary(kind).map(|(p, _)| p))
         .await
         .ok()

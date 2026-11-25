@@ -33,6 +33,7 @@ pub const STEPS: &[Step] = &[
     Step { version: 14, name: "brief", run: v14_brief },
     Step { version: 15, name: "memory", run: v15_memory },
     Step { version: 16, name: "chat_provenance", run: crate::workspace_chat::migrate::migrate_provenance },
+    Step { version: 17, name: "recap_state", run: crate::workspace_search::migrate::migrate_recap_state },
 ];
 
 const BACKUP_NAME: &str = "nexq-before-workspaces.db";
@@ -498,6 +499,29 @@ mod tests {
     }
 
     #[test]
+    fn a_v16_database_gets_the_recap_tables_and_keeps_its_recaps() {
+        let dir = temp_dir("v16");
+        let (conn, path) = v8_database(&dir);
+        let upto16: Vec<Step> = STEPS.iter().filter(|s| s.version <= 16).map(|s| Step { version: s.version, name: s.name, run: s.run }).collect();
+        run_steps(&conn, Some(&path), &upto16).unwrap();
+        assert_eq!(count(&conn, "PRAGMA user_version"), 16);
+        assert!(!table_exists(&conn, "meeting_recap_failed") && !table_exists(&conn, "meeting_recap_off"));
+        conn.execute("INSERT INTO meeting_cards (meeting_id, recap, origin) VALUES ('m1', 'An AI recap', 'ai')", []).unwrap();
+        run_steps(&conn, Some(&path), STEPS).unwrap();
+        assert_eq!(count(&conn, "PRAGMA user_version"), 17);
+        for table in ["meeting_recap_failed", "meeting_recap_off"] {
+            assert!(table_exists(&conn, table), "{table} missing");
+        }
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM meeting_cards WHERE meeting_id = 'm1' AND origin = 'ai'"), 1, "the recap is kept");
+        // and they work: a failure is recorded and read back through the real functions
+        crate::workspace_search::cards::record_recap_failure(&conn, "m1", "h", "boom");
+        assert!(crate::workspace_search::cards::recap_failed(&conn, "m1", "h"));
+        crate::workspace_search::cards::decline_recap(&conn, "m1").unwrap();
+        assert!(crate::workspace_search::cards::recap_declined(&conn, "m1"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn upgrades_a_v8_database_and_keeps_everything() {
         let dir = temp_dir("up");
         let (conn, path) = v8_database(&dir);
@@ -506,7 +530,10 @@ mod tests {
         for table in ["workspaces", "workspace_items", "meeting_borrowed", "talking_points", "meeting_briefs", "workspace_memory", "meeting_notes"] {
             assert!(table_exists(&conn, table), "{table} missing");
         }
-        assert_eq!(count(&conn, "PRAGMA user_version"), 16);
+        assert_eq!(count(&conn, "PRAGMA user_version"), 17);
+        for table in ["meeting_recap_off", "meeting_recap_failed"] {
+            assert!(table_exists(&conn, table), "{table} missing");
+        }
         // General is the default and holds every existing document.
         assert_eq!(count(&conn, "SELECT COUNT(*) FROM workspaces WHERE id = 'general' AND is_default = 1"), 1);
         assert_eq!(count(&conn, "SELECT COUNT(*) FROM workspace_items WHERE workspace_id = 'general' AND kind = 'document'"), 2);

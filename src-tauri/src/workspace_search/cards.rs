@@ -324,7 +324,6 @@ pub fn recap_declined(conn: &Connection, meeting_id: &str) -> bool {
 /// Delete the AI recap of a meeting and remember not to write another. The card goes
 /// back to the plain extract the next indexing pass builds.
 pub fn decline_recap(conn: &Connection, meeting_id: &str) -> rusqlite::Result<()> {
-    conn.execute_batch("CREATE TABLE IF NOT EXISTS meeting_recap_off (meeting_id TEXT PRIMARY KEY NOT NULL)")?;
     conn.execute("INSERT OR IGNORE INTO meeting_recap_off(meeting_id) VALUES (?1)", params![meeting_id])?;
     conn.execute("DELETE FROM meeting_cards WHERE meeting_id = ?1 AND origin = 'ai'", params![meeting_id])?;
     Ok(())
@@ -333,10 +332,6 @@ pub fn decline_recap(conn: &Connection, meeting_id: &str) -> rusqlite::Result<()
 /// A recap that could not be written, remembered with the transcript it failed for: the
 /// same meeting is not tried again until its transcript changes or the user rescans.
 pub fn record_recap_failure(conn: &Connection, meeting_id: &str, source_hash: &str, reason: &str) {
-    let _ = conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS meeting_recap_failed (
-            meeting_id TEXT PRIMARY KEY NOT NULL, source_hash TEXT NOT NULL, reason TEXT NOT NULL, failed_at INTEGER NOT NULL)",
-    );
     let _ = conn.execute(
         "INSERT INTO meeting_recap_failed(meeting_id, source_hash, reason, failed_at) VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(meeting_id) DO UPDATE SET source_hash = excluded.source_hash, reason = excluded.reason, failed_at = excluded.failed_at",

@@ -89,6 +89,9 @@ pub(crate) fn live_session_record(
         .and_then(|c| c.lock().ok())
         .map(|c| (c.get_assembled_context_for(&scoped), c.document_rules_for(&scoped)))
         .unwrap_or_default();
+    // Excerpts from local search can arrive in any turn (documents added later, the meeting's own
+    // transcript): every live session says once, with the same words, that fenced blocks are data.
+    let document_rules = if document_rules.is_empty() { crate::context::excerpt_rules(&scoped.scope) } else { document_rules };
     let (mut preload, rag_mode) = routing::document_preload(&documents);
     let mut sent = HashMap::new();
     if tier == Tier::Deep {

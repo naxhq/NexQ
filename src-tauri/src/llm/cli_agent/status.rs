@@ -153,6 +153,75 @@ async fn version_of(program: &std::path::Path, prefix_args: &[String]) -> Option
     ok.then(|| parse_version(&stdout)).flatten()
 }
 
+/// How long a healthy probed status is reused before the CLI is asked again.
+pub const STATUS_REUSE: std::time::Duration = std::time::Duration::from_secs(60);
+/// How long a not-installed, logged-out or failed status is reused: the user is
+/// probably fixing it right now.
+pub const STATUS_REUSE_FAILED: std::time::Duration = std::time::Duration::from_secs(10);
+
+static STATUS_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Drop every remembered status (login opened, path or settings changed, a
+/// fresh check asked for): the next call asks the CLI. A probe that was already
+/// running does not put its older answer back.
+pub fn forget_statuses() {
+    STATUS_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    for kind in [CliAgentKind::Claude, CliAgentKind::Codex, CliAgentKind::Antigravity] {
+        if let Ok(mut g) = status_slot(kind).1.lock() {
+            *g = None;
+        }
+    }
+}
+
+fn reuse_for(status: &CliAgentStatus) -> std::time::Duration {
+    let healthy = status.installed && status.version.is_some() && status.auth.as_ref().is_some_and(|a| a.logged_in);
+    if healthy { STATUS_REUSE } else { STATUS_REUSE_FAILED }
+}
+
+type Probed = (CliAgentStatus, Option<Vec<ClaudeModelInfo>>);
+
+fn status_slot(kind: CliAgentKind) -> &'static (tokio::sync::Mutex<()>, std::sync::Mutex<Option<(std::time::Instant, Probed)>>) {
+    use std::sync::OnceLock;
+    static SLOTS: OnceLock<Vec<(tokio::sync::Mutex<()>, std::sync::Mutex<Option<(std::time::Instant, Probed)>>)>> = OnceLock::new();
+    let slots = SLOTS.get_or_init(|| (0..3).map(|_| (tokio::sync::Mutex::new(()), std::sync::Mutex::new(None))).collect());
+    &slots[match kind {
+        CliAgentKind::Claude => 0,
+        CliAgentKind::Codex => 1,
+        CliAgentKind::Antigravity => 2,
+    }]
+}
+
+/// `cli_agent_status`, but a result younger than [`STATUS_REUSE`] is reused
+/// (unless `force`), and callers that arrive while a probe runs wait for it
+/// instead of starting their own: opening a picker never starts a process per
+/// provider per call.
+pub async fn cli_agent_status_cached(kind: CliAgentKind, force: bool) -> Probed {
+    let (gate, last) = status_slot(kind);
+    let fresh = |last: &std::sync::Mutex<Option<(std::time::Instant, Probed)>>| {
+        last.lock().ok().and_then(|g| g.as_ref().filter(|(at, p)| at.elapsed() < reuse_for(&p.0)).map(|(_, p)| p.clone()))
+    };
+    if !force {
+        if let Some(p) = fresh(last) {
+            return p;
+        }
+    }
+    let _turn = gate.lock().await;
+    // a probe that finished while this call waited counts, unless a fresh check was asked for
+    if !force {
+        if let Some(p) = fresh(last) {
+            return p;
+        }
+    }
+    let generation = STATUS_GENERATION.load(std::sync::atomic::Ordering::SeqCst);
+    let probed = cli_agent_status(kind).await;
+    if generation == STATUS_GENERATION.load(std::sync::atomic::Ordering::SeqCst) {
+        if let Ok(mut g) = last.lock() {
+            *g = Some((std::time::Instant::now(), probed.clone()));
+        }
+    }
+    probed
+}
+
 /// Detect the binary, its version and the login (no model call). The probes
 /// run independently, so one failing keeps the other's answer. For Antigravity
 /// the login probe also lists the models, which are returned for the caller's
@@ -307,6 +376,23 @@ pub async fn probe_kind(kind: CliAgentKind) -> Result<(), AgentErrorKind> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn failed_statuses_are_remembered_for_less_time_and_forgetting_clears_them() {
+        let bad = CliAgentStatus::not_installed(CliAgentKind::Codex, false);
+        assert_eq!(reuse_for(&bad), STATUS_REUSE_FAILED);
+        assert!(STATUS_REUSE_FAILED <= std::time::Duration::from_secs(10));
+        let mut good = CliAgentStatus::not_installed(CliAgentKind::Codex, false);
+        good.installed = true;
+        good.version = Some("1.0.0".into());
+        good.auth = Some(ClaudeAuthStatus { logged_in: true, auth_method: "x".into(), subscription_type: None, email: None, login: Default::default() });
+        assert_eq!(reuse_for(&good), STATUS_REUSE);
+        good.auth.as_mut().unwrap().logged_in = false;
+        assert_eq!(reuse_for(&good), STATUS_REUSE_FAILED);
+        *status_slot(CliAgentKind::Codex).1.lock().unwrap() = Some((std::time::Instant::now(), (bad, None)));
+        forget_statuses();
+        assert!(status_slot(CliAgentKind::Codex).1.lock().unwrap().is_none());
+    }
+
     use super::*;
 
     #[test]

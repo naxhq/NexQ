@@ -6,7 +6,7 @@
 use super::notes::{doc_to_contract, NoteEdit};
 use super::settings::{merge, BriefSettings, MemorySettings, NotetakerSettings};
 use super::brief::sheet_to_contract;
-use super::state::{ModelLabel, NotCovered, RunSnapshot};
+use super::state::{Ended, ModelLabel, MovedOnline, NotCovered, RunSnapshot};
 use crate::assert_contract;
 use crate::contract::read;
 use serde_json::{json, Value};
@@ -29,6 +29,8 @@ fn event_notetaker_state() {
         next_in_ms: Some(30_000),
         model: model(),
         not_covered: None,
+        ended: None,
+        moved_online: Some(MovedOnline { from: "ollama".into(), to: "openai".into() }),
     };
     assert_contract!("notetaker_state", s);
 }
@@ -48,6 +50,8 @@ fn event_notetaker_state_finished_with_a_range_not_covered() {
         next_in_ms: None,
         model: model(),
         not_covered: Some(NotCovered { from_ms: 120_000, to_ms: 2_400_000 }),
+        ended: Some(Ended { kind: "out_of_time".into(), detail: None }),
+        moved_online: None,
     };
     assert_contract!("notetaker_state_finished", s);
 }
@@ -66,6 +70,8 @@ fn event_brief_state() {
         next_in_ms: None,
         model: None,
         not_covered: None,
+        ended: None,
+        moved_online: None,
     };
     assert_contract!("brief_state", s);
 }
@@ -80,7 +86,7 @@ fn every_state_the_ui_can_get_is_in_the_contract_vocabulary() {
         for c in v["can"].as_array().unwrap() {
             assert!(can.contains(&c.as_str().unwrap()), "{name}: {c}");
         }
-        for key in ["meeting_id", "status", "reason", "error_kind", "can", "tokens_used", "total_tokens", "cap", "next_in_ms", "model", "not_covered"] {
+        for key in ["meeting_id", "status", "reason", "error_kind", "can", "tokens_used", "total_tokens", "cap", "next_in_ms", "model", "not_covered", "ended", "moved_online"] {
             assert!(v.get(key).is_some(), "{name} has `{key}`");
         }
     }
@@ -133,7 +139,7 @@ fn command_inputs_fit_their_types() {
         assert_eq!(e["edit"]["op"], op, "{name}");
         let _: NoteEdit = serde_json::from_value(e["edit"].clone()).unwrap_or_else(|err| panic!("{name}: edit does not fit: {err}"));
     }
-    for name in ["get_notetaker_state", "get_brief_state", "notetaker_pause", "notetaker_resume", "brief_pause", "brief_resume"] {
+    for name in ["get_notetaker_state", "get_brief_state", "notetaker_pause", "notetaker_resume", "brief_pause", "brief_resume", "notetaker_dismiss_moved", "brief_dismiss_moved"] {
         assert_eq!(read(name)["meetingId"], "m1", "{name}");
     }
     assert_eq!(read("get_automatic_model")["provider"], Value::Null);

@@ -102,6 +102,11 @@ pub struct ContextManager {
     resources: Vec<ContextResource>,
     cache: ResourceCache,
     custom_instructions: String,
+    /// The fenced form of each document, kept so an answer does not wrap the
+    /// whole library again: id -> (what it was built from, the block).
+    wrapped: std::sync::Mutex<std::collections::HashMap<String, (String, String)>>,
+    /// The last capped text of the scope's documents, with what it was made from.
+    capped: std::sync::Mutex<Option<(String, Option<String>)>>,
 }
 
 impl ContextManager {
@@ -119,6 +124,8 @@ impl ContextManager {
             resources: Vec::new(),
             cache: ResourceCache::new(),
             custom_instructions: String::new(),
+            wrapped: Default::default(),
+            capped: Default::default(),
         }
     }
 
@@ -385,24 +392,39 @@ impl ContextManager {
     /// The code is fixed by the scope, so the bytes are the same every turn.
     fn document_sections(&self, scope: &EffectiveScope) -> Vec<String> {
         let nonce = document_nonce(scope);
-        self.document_blocks(scope)
-            .iter()
-            .map(|b| crate::prompt_data::wrap_block(&nonce, b.label, &b.attrs, &b.text))
-            .collect()
+        let mut parts = Vec::new();
+        for (resource, text) in self.scoped_documents(scope) {
+            let attrs = format!(" {} \"{}\"", resource.file_type, resource.name.replace('"', " "));
+            let built_from = format!("{nonce}|{}|{}|{attrs}", resource.loaded_at, text.len());
+            if let Ok(kept) = self.wrapped.lock() {
+                if let Some((from, block)) = kept.get(&resource.id) {
+                    if *from == built_from {
+                        parts.push(block.clone());
+                        continue;
+                    }
+                }
+            }
+            let block = crate::prompt_data::wrap_block(&nonce, "doc", &attrs, text);
+            if let Ok(mut kept) = self.wrapped.lock() {
+                kept.insert(resource.id.clone(), (built_from, block.clone()));
+            }
+            parts.push(block);
+        }
+        parts
+    }
+
+    /// The documents of the scope that have text, and that text, unwrapped.
+    fn scoped_documents<'a>(&'a self, scope: &'a EffectiveScope) -> impl Iterator<Item = (&'a ContextResource, &'a str)> + 'a {
+        self.resources.iter().filter(|r| scope.allows_document(&r.id)).filter_map(|r| {
+            self.cache.get(&r.id).filter(|c| !c.text.is_empty()).map(|c| (r, c.text.as_str()))
+        })
     }
 
     /// The raw (unwrapped) documents the scope allows.
-    fn document_blocks(&self, scope: &EffectiveScope) -> Vec<RawBlock> {
-        let mut parts = Vec::new();
-        for resource in self.resources.iter().filter(|r| scope.allows_document(&r.id)) {
-            if let Some(cached) = self.cache.get(&resource.id) {
-                if !cached.text.is_empty() {
-                    let attrs = format!(" {} \"{}\"", resource.file_type, resource.name.replace('"', " "));
-                    parts.push(RawBlock { label: "doc", attrs, text: cached.text.clone() });
-                }
-            }
-        }
-        parts
+    fn document_blocks<'a>(&'a self, scope: &'a EffectiveScope) -> Vec<RawBlock<'a>> {
+        self.scoped_documents(scope)
+            .map(|(r, text)| RawBlock { label: "doc", attrs: format!(" {} \"{}\"", r.file_type, r.name.replace('"', " ")), text })
+            .collect()
     }
 
     /// The scope's talking points and documents as fenced blocks of at most
@@ -417,12 +439,32 @@ impl ContextManager {
         if blocks.is_empty() {
             return None;
         }
+        // the same documents under the same cap give the same text: kept, so an answer does not redo the cut and the wrap
+        let key = format!(
+            "{nonce}|{max_chars}|{}",
+            blocks.iter().map(|b| format!("{}{}{}", b.attrs, b.text.len(), b.text.chars().take(64).collect::<String>())).collect::<Vec<_>>().join("#")
+        );
+        if let Ok(kept) = self.capped.lock() {
+            if let Some((k, v)) = kept.as_ref() {
+                if *k == key {
+                    return v.clone();
+                }
+            }
+        }
+        let result = self.fit_blocks(&nonce, &blocks, max_chars);
+        if let Ok(mut kept) = self.capped.lock() {
+            *kept = Some((key, result.clone()));
+        }
+        result
+    }
+
+    fn fit_blocks(&self, nonce: &str, blocks: &[RawBlock], max_chars: usize) -> Option<String> {
         let mut out: Vec<String> = Vec::new();
         let mut used = 0usize;
-        for b in &blocks {
+        for b in blocks {
             let sep = usize::from(!out.is_empty());
             let room = max_chars.saturating_sub(used + sep);
-            let Some(block) = fit_block(&nonce, b, room) else { break };
+            let Some(block) = fit_block(nonce, b, room) else { break };
             used += sep + block.chars().count();
             out.push(block);
         }
@@ -435,12 +477,10 @@ impl ContextManager {
     /// The sentence for the system prompt that goes with the document blocks
     /// of this scope; empty when there are none.
     pub fn document_rules_for(&self, ctx: &ScopedContext) -> String {
-        if self.document_sections(&ctx.scope).is_empty() && ctx.points.is_empty() {
+        if ctx.points.is_empty() && self.scoped_documents(&ctx.scope).next().is_none() {
             return String::new();
         }
-        let mut rules = crate::prompt_data::rules(&document_nonce(&ctx.scope));
-        rules.push_str(" Context documents arrive as such blocks; you may quote or summarise them and cite them by name.");
-        rules
+        excerpt_rules(&ctx.scope)
     }
 
     /// Custom instructions, then the workspace's instructions, then the
@@ -493,6 +533,15 @@ impl ContextManager {
             })
             .collect();
 
+        // the fences of the excerpts a search brings in (the default number of them)
+        let mut budget_resources = budget_resources;
+        if !budget_resources.is_empty() {
+            budget_resources.push(BudgetResource {
+                name: "excerpt fences".to_string(),
+                file_type: "txt".to_string(),
+                token_count: crate::rag::config::RagConfig::default().top_k * FENCE_OVERHEAD_TOKENS,
+            });
+        }
         token_counter::compute_budget(
             &budget_resources,
             &self.custom_instructions,
@@ -511,14 +560,22 @@ pub fn document_nonce(scope: &EffectiveScope) -> String {
     crate::workspace_search::store::sha_hex(format!("nexq-documents-{salt}-{}", scope.fingerprint()).as_bytes())[..12].to_string()
 }
 
+/// The system-prompt sentence for fenced documents, talking points and
+/// retrieved excerpts of this scope.
+pub fn excerpt_rules(scope: &EffectiveScope) -> String {
+    let mut rules = crate::prompt_data::rules(&document_nonce(scope));
+    rules.push_str(" Context documents and excerpts arrive as such blocks; you may quote or summarise them and cite them by name or Source number.");
+    rules
+}
+
 /// Tokens a fenced block adds around a document or talking point (opener, closer, name).
 const FENCE_OVERHEAD_TOKENS: usize = 24;
 
 /// A document or talking point before it is wrapped.
-struct RawBlock {
+struct RawBlock<'a> {
     label: &'static str,
     attrs: String,
-    text: String,
+    text: &'a str,
 }
 
 const SHORTENED: &str = "[… shortened: the rest of this text is left out]";
@@ -527,18 +584,21 @@ const SHORTENED: &str = "[… shortened: the rest of this text is left out]";
 /// characters; None when even an empty block does not fit.
 fn fit_block(nonce: &str, b: &RawBlock, room: usize) -> Option<String> {
     let wrap = |text: &str| crate::prompt_data::wrap_block(nonce, b.label, &b.attrs, text);
-    let full = wrap(&b.text);
-    if full.chars().count() <= room {
-        return Some(full);
+    // A text longer than the room is cut before anything is done to it: a
+    // library of megabytes is never wrapped to be thrown away.
+    if b.text.chars().nth(room).is_none() {
+        let full = wrap(b.text);
+        if full.chars().count() <= room {
+            return Some(full);
+        }
     }
     let shell = wrap(SHORTENED).chars().count();
     if shell > room {
         return None;
     }
-    let chars: Vec<char> = b.text.chars().collect();
-    let mut keep = (room - shell).min(chars.len());
+    let mut keep = room - shell;
     loop {
-        let head: String = chars[..keep].iter().collect();
+        let head: String = b.text.chars().take(keep).collect();
         let block = wrap(&format!("{}\n{SHORTENED}", head.trim_end()));
         if block.chars().count() <= room {
             return Some(block);
@@ -550,12 +610,12 @@ fn fit_block(nonce: &str, b: &RawBlock, room: usize) -> Option<String> {
     }
 }
 
-fn point_blocks(ctx: &ScopedContext) -> Vec<RawBlock> {
+fn point_blocks(ctx: &ScopedContext) -> Vec<RawBlock<'_>> {
     ctx.points
         .iter()
         .map(|p| {
             let title = if p.title.trim().is_empty() { "Talking point" } else { p.title.trim() };
-            RawBlock { label: "point", attrs: format!(" \"{}\"", title.replace('"', " ")), text: p.text.trim().to_string() }
+            RawBlock { label: "point", attrs: format!(" \"{}\"", title.replace('"', " ")), text: p.text.trim() }
         })
         .collect()
 }
@@ -577,6 +637,8 @@ mod tests {
             resources: Vec::new(),
             cache: ResourceCache::new(),
             custom_instructions: "CANARY_CUSTOM".to_string(),
+            wrapped: Default::default(),
+            capped: Default::default(),
         };
         for (id, text) in docs {
             let r = ContextResource {
@@ -673,6 +735,48 @@ mod tests {
         assert!(saw_short);
         assert_eq!(m.get_resources_context_capped_for(&ctx, full.chars().count()).as_deref(), Some(full.as_str()));
         assert_eq!(m.get_resources_context_capped_for(&scoped(&[], "", &[]), 100), None);
+    }
+
+    #[test]
+    fn a_big_library_costs_little_per_answer_after_the_first() {
+        big_library_p95(std::time::Duration::from_millis(100));
+    }
+
+    /// The strict figure, for a quiet machine: `cargo test --lib -- --ignored big_library`.
+    #[test]
+    #[ignore]
+    fn big_library_benchmark_p95_under_10_ms() {
+        big_library_p95(std::time::Duration::from_millis(10));
+    }
+
+    fn big_library_p95(limit: std::time::Duration) {
+        let prose = "The quarterly plan covers hiring, budget and the launch date. ".repeat(33_000); // about 2 MB
+        let attrs: String = (0..3_000).map(|i| format!("data-k{i}=\"v{i}\" ")).collect();
+        let html = format!("<div {attrs}>{}</div>", "x".repeat(60_000)); // one line, about 300 KB
+        let html = html.repeat(1);
+        let m = manager_with(&[("a", &prose), ("b", &html), ("c", "small note")]);
+        let ctx = scoped(&["a", "b", "c"], "", &[]);
+        // the first answer fills the wrapped copies; the ones after are measured
+        let first = m.get_assembled_context_for(&ctx);
+        assert!(first.contains("[[DATA doc "));
+        let mut times = Vec::new();
+        for _ in 0..40 {
+            let t = std::time::Instant::now();
+            let rules = m.document_rules_for(&ctx);
+            let capped = m.get_resources_context_capped_for(&ctx, 32_000).unwrap();
+            let again = m.get_assembled_context_for(&ctx);
+            times.push(t.elapsed());
+            assert!(!rules.is_empty() && capped.chars().count() <= 32_000 && again == first);
+        }
+        times.sort();
+        let p95 = times[(times.len() * 95 / 100).min(times.len() - 1)];
+        eprintln!("per-answer p95 = {p95:?}, max = {:?}", times.last().unwrap());
+        assert!(p95 < limit, "p95 {p95:?}");
+        // the capped text of a library that is mostly one huge line is also cut before wrapping
+        let t = std::time::Instant::now();
+        let m2 = manager_with(&[("b", &html)]);
+        let _ = m2.get_resources_context_capped_for(&scoped(&["b"], "", &[]), 32_000).unwrap();
+        eprintln!("cold capped html = {:?}", t.elapsed());
     }
 
     #[test]

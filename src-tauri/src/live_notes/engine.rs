@@ -438,6 +438,30 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
         self.doc.uncovered = merged;
     }
 
+    /// How the notes ended, as data: `covered`, `limit`, `error`, `plan_limit`, `paused`, `manual`,
+    /// `out_of_time` or `stopped`, with the error text when there is one.
+    fn ended_kind(&self, run_final: bool, failed: Option<String>) -> (String, Option<String>) {
+        if self.doc.uncovered.is_none() {
+            return ("covered".into(), None);
+        }
+        if !run_final {
+            return ("manual".into(), None);
+        }
+        if let Some(e) = failed {
+            if !matches!(self.trigger.guard.state, RunState::CapReached | RunState::Paused(PauseReason::PlanLimit)) {
+                return ("error".into(), Some(e));
+            }
+        }
+        match self.trigger.guard.state {
+            RunState::CapReached => ("limit".into(), None),
+            RunState::Paused(PauseReason::PlanLimit) => ("plan_limit".into(), self.last_error.clone()),
+            RunState::Paused(PauseReason::Failures) => ("error".into(), self.last_error.clone()),
+            RunState::Paused(PauseReason::User) => ("paused".into(), None),
+            RunState::Stopped => ("stopped".into(), None),
+            RunState::Running => ("out_of_time".into(), None),
+        }
+    }
+
     /// What the notes do not cover: unsent speech, else the range saved with the notes.
     pub fn uncovered(&self) -> Option<(u64, u64)> {
         self.pending_range().or(self.doc.uncovered)
@@ -547,12 +571,25 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
         self.mark_uncovered();
         if let Some((from, to)) = self.doc.uncovered {
             let range = format!("{} to {}", fmt_clock(from), fmt_clock(to));
-            let lead = if !run_final { "Notes were on manual".to_string() } else { why.take().unwrap_or_else(|| "The end of the meeting came first".to_string()) };
+            let lead = if !run_final {
+                "Notes were on manual".to_string()
+            } else {
+                why.take().unwrap_or_else(|| match self.trigger.guard.state {
+                    RunState::CapReached => "The token limit was reached".to_string(),
+                    RunState::Paused(PauseReason::User) => "The notes were paused".to_string(),
+                    RunState::Stopped => "The notes were stopped".to_string(),
+                    RunState::Paused(PauseReason::Failures) => self.last_error.clone().map(|e| format!("The notes stopped after errors: {e}")).unwrap_or_else(|| "The notes stopped after errors".to_string()),
+                    RunState::Paused(PauseReason::PlanLimit) => "The plan's usage limit was reached".to_string(),
+                    RunState::Running => outcome.as_ref().filter(|o| !o.ok).and_then(|o| o.error.clone()).filter(|e| e != "cancelled").map(|e| format!("The last pass failed: {e}")).unwrap_or_else(|| "The end of the meeting came first".to_string()),
+                })
+            };
             why = Some(format!("{lead}. Not covered: {range}"));
         }
         if why.is_some() {
             self.final_note = why;
         }
+        let failed = outcome.as_ref().filter(|o| !o.ok).and_then(|o| o.error.clone()).filter(|e| e != "cancelled");
+        self.doc.ended = Some(self.ended_kind(run_final, failed));
         self.done = true;
         self.trigger.stop();
         self.save("done");

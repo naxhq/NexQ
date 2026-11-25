@@ -103,6 +103,5 @@ pub fn build(app: &AppHandle, state: &AppState) -> Option<Arc<LiveRuntimes>> {
         scope_check: Duration::from_secs(2),
         final_timeout: Duration::from_secs(20),
     };
-    let _ = Mutex::new(());
     Some(LiveRuntimes::new(deps))
 }

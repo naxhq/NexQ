@@ -384,8 +384,8 @@ pub async fn recap_missing_for(deps: &ChatDeps, workspace_id: &str, cancel: Arc<
         let res = match deps.ai.run(req, None).await {
             Ok(r) => r,
             Err(e) => {
-                // a cancel is not a failure; anything else is counted, once, with its reason
-                if !matches!(e, crate::ai_runs::AiRunError::Cancelled) && !cancel.is_cancelled() {
+                // a cancel or a preemption by something more urgent is not a failure; anything else is counted, once, with its reason
+                if !matches!(e, crate::ai_runs::AiRunError::Cancelled | crate::ai_runs::AiRunError::Preempted) && !cancel.is_cancelled() {
                     if let Ok(conn) = deps.conn() {
                         let reason: String = e.to_string().split_whitespace().collect::<Vec<_>>().join(" ").chars().take(RECAP_REASON_CHARS).collect();
                         crate::workspace_search::cards::record_recap_failure(&conn, &id, &job.source_hash, &reason);

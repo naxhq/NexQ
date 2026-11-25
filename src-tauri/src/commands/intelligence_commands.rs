@@ -260,7 +260,7 @@ async fn retrieve_rag(
         out.filtered = top_k - merged.len();
     }
     if !merged.is_empty() {
-        out.context_text = rag::prompt_builder::build_rag_context(&merged, "");
+        out.context_text = rag::prompt_builder::build_fenced_rag_context(&merged, &crate::context::document_nonce(scope));
     }
     Ok(out)
 }
@@ -1278,6 +1278,7 @@ pub async fn generate_assist(
     // toggle is the user's intent. If they enabled RAG for this action and have
     // indexed files, we should search. (config.enabled defaults to false and is
     // inconsistently set, while Test Knowledge Base ignores it entirely.)
+    let mut rag_rules_sent = false;
     let mut rag = if include_rag && active_cache_name.is_none() {
         // RAG query sources (priority: custom_question > effective_question > transcript)
         // custom_question is what the user typed (Ask mode) or the clicked question (Assist mode)
@@ -1299,6 +1300,7 @@ pub async fn generate_assist(
             let rules = state.context.as_ref().and_then(|c| c.lock().ok()).map(|c| c.document_rules_for(&scoped)).unwrap_or_default();
             if !rules.is_empty() {
                 system_prompt = format!("{system_prompt}\n\n{rules}");
+                rag_rules_sent = true;
             }
         }
     }
@@ -1306,6 +1308,7 @@ pub async fn generate_assist(
     // The brief sheet and the small core memory ride along as fenced data, only
     // for a live answer (never a past meeting's, a summary, action items or
     // translation), and never waited for.
+    let rag_chunks_any = !rag.chunks.is_empty();
     let mut context_text = rag.context_text;
     if past_meeting_id.is_none() {
         let live_id = state.live_meeting.lock().ok().and_then(|m| m.as_ref().map(|m| m.id.clone()));
@@ -1318,6 +1321,10 @@ pub async fn generate_assist(
         }
     }
     let include_context = !context_text.is_empty();
+    // retrieved excerpts are fenced data: the system prompt says so (once)
+    if !rag_rules_sent && rag_chunks_any {
+        system_prompt = format!("{system_prompt}\n\n{}", crate::context::excerpt_rules(&scoped.scope));
+    }
 
     // Run the generation asynchronously
     let mode_clone = mode.clone();

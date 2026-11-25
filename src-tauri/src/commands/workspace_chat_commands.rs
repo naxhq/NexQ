@@ -50,6 +50,14 @@ pub async fn rescan_workspace(id: String, state: State<'_, AppState>, app: AppHa
     Ok(())
 }
 
+/// "Try again" for the recaps that failed: any workspace, the way opening it does (never in a meeting).
+#[command]
+pub async fn retry_recaps(workspace_id: String, state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+    with_conn(&state, |conn| wstore::get_workspace(conn, &workspace_id).map(|_| ()))?;
+    runtime::retry_recaps(&app, &state, &workspace_id);
+    Ok(())
+}
+
 /// The recap the AI wrote for a meeting, or null.
 #[command]
 pub async fn get_meeting_recap(meeting_id: String, state: State<'_, AppState>) -> Result<Option<MeetingRecap>, String> {

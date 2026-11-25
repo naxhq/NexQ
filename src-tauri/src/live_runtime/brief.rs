@@ -38,6 +38,8 @@ pub enum BriefCmd {
     Discard,
     Get(oneshot::Sender<Value>),
     State(oneshot::Sender<Value>),
+    /// The person saw the "moved online" line.
+    DismissMoved,
 }
 
 /// What live answers and the scope-change path reach without asking the actor.
@@ -233,6 +235,8 @@ impl Actor {
             manual_mode: false,
             started: st.tokens_used > 0 || self.engine.has_sheet(),
             not_covered: None,
+            ended: None,
+            moved_online: self.swap.moved_online().map(|(from, to)| crate::live_runtime::state::MovedOnline { from, to }),
             next_in_ms: None,
             final_note: None,
             stop_reason: self.stop_reason.clone(),
@@ -301,8 +305,13 @@ impl Actor {
             BriefCmd::Pause => self.engine.pause(),
             BriefCmd::Resume => self.engine.resume(),
             BriefCmd::TryAgain => self.engine.retry(),
+            BriefCmd::DismissMoved => self.swap.dismiss_moved(),
             BriefCmd::Reconfigure(s) => {
-                self.engine.set_cap(s.cap);
+                // a changed limit only: the same one again would reset Keep going's fresh allotment
+                if s.cap != self.p.settings.cap {
+                    self.engine.set_cap(s.cap);
+                }
+                self.p.settings = s.clone();
                 let sel = Selection { provider: s.provider.clone(), model: s.model.clone(), effort: s.effort.clone() };
                 if sel != self.swap.selection() {
                     if let Err(e) = self.swap.reselect(sel) {

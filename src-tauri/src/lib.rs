@@ -618,6 +618,11 @@ pub fn run() {
                     "copy_transcript" => {
                         let _ = _app.emit("tray_copy", "transcript");
                     }
+                    "bring_windows" => {
+                        // The launcher window moves both windows to the screen the mouse is on.
+                        let _ = _app.emit("tray_bring_windows", ());
+                        show_for_second_launch(&app_handle);
+                    }
                     "settings" => {
                         let _ = _app.emit("tray_open_settings", ());
                         show_launcher(&app_handle);
@@ -688,6 +693,24 @@ pub fn run() {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
                         hide_all(&close_app);
+                    }
+                });
+            }
+
+            // -- The launcher starts hidden and the frontend shows it once its saved place is back (no jump from
+            //    the default size). If that never happens (a slow or failed load), show it after a few seconds. --
+            {
+                let safety_app = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(4000));
+                    let overlay_up = safety_app
+                        .get_webview_window("overlay")
+                        .and_then(|o| o.is_visible().ok())
+                        .unwrap_or(false);
+                    if let Some(launcher) = safety_app.get_webview_window("launcher") {
+                        if !overlay_up && !launcher.is_visible().unwrap_or(true) {
+                            let _ = launcher.show();
+                        }
                     }
                 });
             }
@@ -921,6 +944,8 @@ pub fn run() {
             live_commands::get_brief_state,
             live_commands::get_automatic_model,
             live_commands::brief_pause,
+            live_commands::notetaker_dismiss_moved,
+            live_commands::brief_dismiss_moved,
             live_commands::brief_resume,
             live_commands::set_memory_settings,
             live_commands::suggest_memory,
@@ -962,6 +987,7 @@ pub fn run() {
             workspace_commands::update_memory,
             workspace_chat_commands::get_index_status,
             workspace_chat_commands::get_meeting_recap,
+            workspace_chat_commands::retry_recaps,
             workspace_chat_commands::delete_meeting_recap,
             workspace_chat_commands::rescan_workspace,
             workspace_chat_commands::list_workspace_chats,

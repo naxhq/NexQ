@@ -294,6 +294,137 @@ mod tests {
         assert!(missing.is_empty(), "no fixture in src/contracts/fixtures for:\n  {}\nAdd <name>.json (assert_contract! or by hand), or list it as pending with its owner.", missing.join("\n  "));
     }
 
+    // ---- a fixture carries exactly the arguments of its command
+
+    /// Fixtures named like a command that hold its RESULT (checked by the webview test, not here).
+    const RESULT_NAMED_AS_COMMAND: &[&str] = &["get_meeting_brief", "get_meeting_notes"];
+    /// Command fixtures that are variants of one command.
+    const VARIANT_OF: &[(&str, &str)] = &[
+        ("ask_workspace_deeper", "ask_workspace"),
+        ("set_chat_item_pref_exclude", "set_chat_item_pref"),
+        ("create_memory_by_hand", "create_memory"),
+    ];
+    /// Arguments a command takes that a fixture may leave out although they are not `Option`
+    /// in Rust (the webview wrapper has a default): (command, argument). Empty on purpose.
+    const OPTIONAL_ARGS: &[(&str, &str)] = &[];
+
+    fn camel(snake: &str) -> String {
+        let mut out = String::new();
+        let mut up = false;
+        for c in snake.chars() {
+            if c == '_' {
+                up = true;
+            } else if up {
+                out.extend(c.to_uppercase());
+                up = false;
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    /// `#[command]` functions of one source file: name -> (camelCase argument, optional).
+    /// State, AppHandle and window arguments are not the webview's.
+    fn command_args(text: &str) -> std::collections::BTreeMap<String, Vec<(String, bool)>> {
+        let text = text.split("#[cfg(test)]").next().unwrap_or("");
+        let mut out = std::collections::BTreeMap::new();
+        for (at, _) in text.match_indices("#[command]") {
+            let rest = &text[at..];
+            let Some(f) = rest.find("fn ") else { continue };
+            let after = &rest[f + 3..];
+            let Some(open) = after.find('(') else { continue };
+            let name = after[..open].trim().to_string();
+            // the parameter list: up to the closing parenthesis that matches the first one
+            let (mut depth, mut end) = (0i32, open);
+            for (i, c) in after[open..].char_indices() {
+                if c == '(' {
+                    depth += 1;
+                } else if c == ')' {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = open + i;
+                        break;
+                    }
+                }
+            }
+            let sig = &after[open + 1..end];
+            let (mut parts, mut cur, mut d) = (vec![], String::new(), 0i32);
+            let mut prev = ' ';
+            for c in sig.chars() {
+                match c {
+                    '<' | '(' | '[' => d += 1,
+                    '>' if prev != '-' => d -= 1,
+                    ')' | ']' => d -= 1,
+                    _ => {}
+                }
+                if c == ',' && d == 0 {
+                    parts.push(std::mem::take(&mut cur));
+                } else {
+                    cur.push(c);
+                }
+                prev = c;
+            }
+            parts.push(cur);
+            let args = parts
+                .iter()
+                .filter_map(|p| p.split_once(':'))
+                .filter(|(_, ty)| !["State<", "AppHandle", "Window", "WebviewWindow"].iter().any(|s| ty.contains(s)))
+                .map(|(n, ty)| (camel(n.trim().trim_start_matches("mut ")), ty.trim().starts_with("Option<")))
+                .collect();
+            out.insert(name, args);
+        }
+        out
+    }
+
+    #[test]
+    fn a_command_fixture_has_exactly_the_arguments_of_its_command() {
+        let mut all = std::collections::BTreeMap::new();
+        for f in ["workspace_commands", "workspace_chat_commands", "db_recovery_commands", "live_commands", "meeting_commands"] {
+            let text = std::fs::read_to_string(src_dir().join("commands").join(format!("{f}.rs"))).unwrap();
+            for (k, v) in command_args(&text) {
+                all.insert(k, v);
+            }
+        }
+        let mut checked = 0;
+        let mut problems = vec![];
+        for (module, command) in registered_commands() {
+            let new_feature = NEW_COMMAND_MODULES.contains(&module.as_str()) || (module == "meeting_commands" && command == "start_meeting");
+            if !new_feature || RESULT_NAMED_AS_COMMAND.contains(&command.as_str()) {
+                continue;
+            }
+            let Some(args) = all.get(&command) else { continue };
+            let names: Vec<&str> = std::iter::once(command.as_str()).chain(VARIANT_OF.iter().filter(|(_, c)| *c == command).map(|(v, _)| *v)).collect();
+            for fixture in names {
+                if !has_fixture(fixture) {
+                    continue;
+                }
+                let value = read(fixture);
+                let keys: Vec<String> = value.as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default();
+                checked += 1;
+                for (arg, optional) in args {
+                    let allowed_absent = *optional || OPTIONAL_ARGS.iter().any(|(c, a)| *c == command && a == arg);
+                    if !keys.contains(arg) && !allowed_absent {
+                        problems.push(format!("{fixture}: the command needs `{arg}` and the fixture does not have it"));
+                    }
+                }
+                for k in &keys {
+                    if !args.iter().any(|(a, _)| a == k) {
+                        problems.push(format!("{fixture}: `{k}` is not an argument of `{command}`"));
+                    }
+                }
+            }
+        }
+        assert!(checked > 60, "only {checked} command fixtures were compared: the scan is broken");
+        assert!(problems.is_empty(), "fixture arguments differ from the Rust commands:\n  {}", problems.join("\n  "));
+    }
+
+    #[test]
+    fn the_signature_reader_sees_camel_case_and_optional_arguments() {
+        let args = command_args("#[command]\npub async fn start_meeting(title: Option<String>, workspace_id: Option<String>, state: State<'_, AppState>, app: AppHandle) -> Result<String, String> { }");
+        assert_eq!(args["start_meeting"], vec![("title".to_string(), true), ("workspaceId".to_string(), true)]);
+    }
+
     #[test]
     fn pending_lists_do_not_hide_finished_work() {
         for name in PENDING_COMMANDS.iter().chain(PENDING_EVENTS.iter()) {

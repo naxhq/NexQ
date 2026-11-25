@@ -1416,7 +1416,7 @@ mod tests {
         "set_notetaker_settings", "get_meeting_notes", "save_meeting_notes_edit", "get_meeting_brief", "brief_start",
         "brief_stop", "brief_refresh", "brief_continue", "get_brief_settings", "set_brief_settings",
         "get_memory_settings", "set_memory_settings", "suggest_memory", "notetaker_pause", "notetaker_resume",
-        "get_notetaker_state", "get_brief_state", "get_automatic_model", "brief_pause", "brief_resume",
+        "get_notetaker_state", "get_brief_state", "get_automatic_model", "brief_pause", "brief_resume", "notetaker_dismiss_moved", "brief_dismiss_moved",
     ];
 
     #[test]
@@ -1490,6 +1490,7 @@ mod tests {
         ("sources_commands", "set_personal_sources", Must),
         ("workspace_chat_commands", "get_index_status", Read),
         ("workspace_chat_commands", "get_meeting_recap", Read),
+        ("workspace_chat_commands", "retry_recaps", Exempt("re-runs recaps of material already in scope")),
         ("workspace_chat_commands", "delete_meeting_recap", Exempt("a recap is derived text, not access to anything")),
         ("workspace_chat_commands", "rescan_workspace", Exempt("re-indexes what is already in scope")),
         ("workspace_chat_commands", "list_workspace_chats", Read),

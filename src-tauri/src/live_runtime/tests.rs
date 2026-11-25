@@ -86,6 +86,15 @@ impl LlmCall for FakeLlm {
 struct FakeFactory(Arc<FakeState>);
 
 impl LlmFactory for FakeFactory {
+    fn provider_of(&self, _sel: &Selection) -> Option<String> {
+        let a = self.0.active.lock().unwrap().clone();
+        if a.is_empty() || a == "none" {
+            None
+        } else {
+            Some(a)
+        }
+    }
+
     fn resolved(&self, _sel: &Selection) -> Result<String, String> {
         let a = self.0.active.lock().unwrap().clone();
         if a == "none" {
@@ -2081,4 +2090,135 @@ async fn a_run_still_in_flight_when_the_meeting_ends_is_bounded_by_the_final_tim
     let st = h.events.last_status("notetaker_state", "m1").unwrap();
     assert_eq!(st["not_covered"]["from_ms"], 10_000, "{st}");
     assert!(can_of(&st).contains(&"update".to_string()), "{st}");
+}
+
+// ---------------------------------------------------------------- ME round 3: how the notes ended, keep going after the end, moved online
+
+fn big_usage(h: &H, n: usize) {
+    for _ in 0..n {
+        h.fake.push(Ok(LlmReply { text: r#"{"ops":[]}"#.into(), input_tokens: Some(20_000), cached_input_tokens: Some(0), output_tokens: Some(300) }));
+    }
+}
+
+#[tokio::test]
+async fn the_notes_say_how_they_ended_as_data() {
+    // covered
+    let h = harness();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    say(&h, "m1", 120, 10_000, 1_000).await;
+    until("a run", || h.fake.count(AiPurpose::Notes) == 1).await;
+    let live = h.rt.notetaker_state("m1").await;
+    assert!(live["ended"].is_null(), "a running meeting is not finished: {live}");
+    h.rt.on_meeting_end("m1");
+    *h.live.lock().unwrap() = None;
+    until("finished", || status_of(&h, "notetaker_state", "m1") == "finished").await;
+    let st = h.events.last_status("notetaker_state", "m1").unwrap();
+    assert_eq!(st["ended"]["kind"], "covered", "{st}");
+    // a meeting that never had notes says so
+    let ws = { let c = h.conn.lock().unwrap(); new_ws(&c, "NoNotes", false, false) };
+    let none = make_meeting(&h, &ws);
+    let st = h.rt.notetaker_state(&none).await;
+    assert_eq!(st["status"], "off", "{st}");
+    assert!(st["ended"].is_null() && st["not_covered"].is_null(), "{st}");
+    assert!(can_of(&st).is_empty(), "{st}");
+    assert!(st["reason"].as_str().unwrap_or("").contains("No live notes"), "{st}");
+}
+
+#[tokio::test]
+async fn stopping_at_the_limit_is_saved_as_limit_and_keep_going_after_the_end_covers_the_rest() {
+    let h = harness();
+    h.rt.patch_notetaker(&json!({"enabled": true, "cap": 2_000})).unwrap();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    big_usage(&h, 1);
+    say(&h, "m1", 120, 10_000, 1_000).await;
+    until("capped", || status_of(&h, "notetaker_state", "m1") == "capped").await;
+    for (i, ms) in [10_000, 50_000, 90_000].into_iter().enumerate() {
+        add_segment(&h, "m1", &format!("s{i}"), ms);
+    }
+    h.rt.feed("m1", "Them", "more talk about the renewal and the annual pricing plan today", 50_000);
+    h.rt.feed("m1", "Them", "and the closing remarks about the budget owner for next year", 90_000);
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    h.rt.on_meeting_end("m1");
+    *h.live.lock().unwrap() = None;
+    until("finished", || status_of(&h, "notetaker_state", "m1") == "finished").await;
+    let st = h.events.last_status("notetaker_state", "m1").unwrap();
+    assert_eq!(st["ended"]["kind"], "limit", "{st}");
+    assert!(st["reason"].as_str().unwrap_or("").contains("limit"), "the reason must not blame the end of the meeting: {st}");
+    // reopened with a fresh runtime whose limit is the same small one: still over, so Keep going is offered
+    let h2 = harness_on(h.conn.clone());
+    h2.rt.patch_notetaker(&json!({"enabled": true, "cap": 2_000})).unwrap();
+    let st = h2.rt.notetaker_state("m1").await;
+    assert_eq!(st["ended"]["kind"], "limit", "{st}");
+    assert!(can_of(&st).contains(&"keep_going".to_string()) && can_of(&st).contains(&"update".to_string()), "{st}");
+    let e = h2.rt.notetaker_update_now("m1").unwrap_err();
+    assert!(e.contains("Keep going"), "{e}");
+    assert_eq!(h2.fake.count(AiPurpose::Notes), 0);
+    // one press raises the limit and covers everything left
+    h2.rt.notetaker_continue("m1").unwrap();
+    until("the update ran", || h2.fake.count(AiPurpose::Notes) >= 1).await;
+    until("covered", || h2.events.last_status("notetaker_state", "m1").map(|v| v["status"] == "finished" && v["ended"]["kind"] == "covered").unwrap_or(false)).await;
+    let h3 = harness_on(h.conn.clone());
+    let st = h3.rt.notetaker_state("m1").await;
+    assert!(st["not_covered"].is_null() && st["ended"]["kind"] == "covered", "{st}");
+}
+
+#[tokio::test]
+async fn a_failed_final_pass_is_saved_as_an_error_with_its_text() {
+    let h = harness();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    say(&h, "m1", 120, 10_000, 1_000).await;
+    until("a run", || h.fake.count(AiPurpose::Notes) == 1).await;
+    for _ in 0..3 {
+        h.fake.push(Err(LlmError::failed("The provider said no")));
+    }
+    h.rt.feed("m1", "Them", "late words about the quarterly numbers and the hiring plan", 50_000);
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    h.rt.on_meeting_end("m1");
+    *h.live.lock().unwrap() = None;
+    until("finished", || status_of(&h, "notetaker_state", "m1") == "finished").await;
+    let st = h.events.last_status("notetaker_state", "m1").unwrap();
+    assert_eq!(st["ended"]["kind"], "error", "{st}");
+    assert!(st["ended"]["detail"].as_str().unwrap_or("").contains("The provider said no"), "{st}");
+}
+
+#[tokio::test]
+async fn automatic_moving_from_a_local_model_to_an_online_one_is_reported_until_dismissed() {
+    let h = harness();
+    *h.fake.active.lock().unwrap() = "ollama".into();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    assert!(h.rt.notetaker_state("m1").await["moved_online"].is_null());
+    *h.fake.active.lock().unwrap() = "openai".into();
+    let st = h.rt.notetaker_state("m1").await;
+    assert_eq!((st["moved_online"]["from"].as_str(), st["moved_online"]["to"].as_str()), (Some("ollama"), Some("openai")), "{st}");
+    h.rt.dismiss_moved_online("m1", false);
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert!(h.rt.notetaker_state("m1").await["moved_online"].is_null());
+    // online to online, or a pinned provider, never says it
+    *h.fake.active.lock().unwrap() = "groq".into();
+    assert!(h.rt.notetaker_state("m1").await["moved_online"].is_null());
+}
+
+#[tokio::test]
+async fn an_unrelated_settings_patch_does_not_reset_keep_goings_fresh_allotment() {
+    let h = harness();
+    h.rt.patch_notetaker(&json!({"enabled": true, "cap": 2_000})).unwrap();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    big_usage(&h, 1);
+    say(&h, "m1", 120, 10_000, 1_000).await;
+    until("capped", || status_of(&h, "notetaker_state", "m1") == "capped").await;
+    h.rt.notetaker_continue("m1").unwrap();
+    until("raised", || h.events.last_status("notetaker_state", "m1").map(|v| v["cap"].as_u64().unwrap_or(0) > 20_000).unwrap_or(false)).await;
+    let raised = h.rt.notetaker_state("m1").await["cap"].as_u64().unwrap();
+    h.rt.patch_notetaker(&json!({"colors": false})).unwrap();
+    h.rt.notetaker_start("m1").unwrap(); // Try again also sends the settings
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(h.rt.notetaker_state("m1").await["cap"].as_u64().unwrap(), raised, "the limit was reset to the setting");
 }

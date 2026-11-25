@@ -100,11 +100,14 @@ pub struct NoteDoc {
     /// without anything having been saved at the end, which part of the transcript the notes miss.
     #[serde(default)]
     pub covered_to: Option<u64>,
+    /// How the notes ended (`kind`, `detail`), saved when the meeting's last pass is over.
+    #[serde(default)]
+    pub ended: Option<(String, Option<String>)>,
 }
 
 impl Default for NoteDoc {
     fn default() -> Self {
-        Self { version: DOC_VERSION, blocks: Vec::new(), next_id: 1, uncovered: None, started_at: None, covered_to: None }
+        Self { version: DOC_VERSION, blocks: Vec::new(), next_id: 1, uncovered: None, started_at: None, covered_to: None, ended: None }
     }
 }
 

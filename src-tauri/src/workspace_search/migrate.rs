@@ -86,6 +86,20 @@ pub fn migrate_conn(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     conn.execute_batch(SCHEMA)
 }
 
+/// v17: what the AI recaps remember: the meetings whose recap the user deleted, and the
+/// ones that failed (with the transcript they failed for). They used to be made on first use.
+pub fn migrate_recap_state(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS meeting_recap_off (meeting_id TEXT PRIMARY KEY NOT NULL);
+         CREATE TABLE IF NOT EXISTS meeting_recap_failed (
+            meeting_id TEXT PRIMARY KEY NOT NULL,
+            source_hash TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            failed_at INTEGER NOT NULL
+         );",
+    )
+}
+
 /// Creates every v10 object. Safe to run again.
 pub fn migrate_search(tx: &Transaction) -> rusqlite::Result<()> {
     tx.execute_batch(SCHEMA)

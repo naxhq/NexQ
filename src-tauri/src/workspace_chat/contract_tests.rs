@@ -253,10 +253,11 @@ fn command_arguments() {
     assert_contract!("count_unfiled_meetings", json!({}));
     // the meetings filed in no workspace: the same list command with the scope id "unfiled"
     assert_contract!("list_workspace_meetings_unfiled", json!({ "id": "unfiled", "query": null, "limit": 50, "offset": 0 }));
+    assert_contract!("retry_recaps", json!({ "workspaceId": "w1" }));
     assert_contract!("get_meeting_recap", json!({ "meetingId": "m1" }));
     assert_contract!("delete_meeting_recap", json!({ "meetingId": "m1" }));
     assert_contract!("cancel_workspace_request", json!({ "requestId": "ask-1" }));
-    assert_contract!("save_answer_to_library", json!({ "messageId": 5, "title": "Budget decision" }));
+    assert_contract!("save_answer_to_library", json!({ "messageId": 5, "title": "Budget decision", "text": "We agreed to cap the budget at 40k." }));
 }
 
 #[test]
