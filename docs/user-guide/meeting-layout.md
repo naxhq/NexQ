@@ -108,8 +108,8 @@ The meeting window opens at 500 by 700 pixels (smallest 400 by 480).
 
 NexQ remembers the size and place of the dashboard and the meeting window, and whether the dashboard was maximised (the size it had before is kept behind it). Starting a meeting, ending one, minimising, hiding to the tray, switching with `Ctrl+B` and restarting for an update all put them back where you left them.
 
-- **Each set of monitors has its own place.** Docked at your desk and undocked on the laptop are remembered separately (the last six setups). Unplugging a monitor never overwrites the place saved for the setup with it. Plug it back in and the windows go there again.
-- **A setup NexQ has not seen** gets the same relative place on your main screen, the same size, always inside the screen.
+- **Each set of monitors has its own place** (told apart by the monitors and their scale, not by the taskbar: hiding the taskbar or showing a captions bar changes nothing). Docked at your desk and undocked on the laptop are remembered separately (the last six setups). Unplugging a monitor never overwrites the place saved for the setup with it. Plug it back in and the windows go there again.
+- **A setup NexQ has not seen** leaves a window where it is, and only brings it back inside a screen if it could no longer be reached. At app start it gets the same relative place on your main screen, the same size.
 - **Mixed screen scales** (for example 125% and 150%) are handled: a window comes back on the right monitor at the right size.
 - **While you drag a window**, NexQ never moves it. If the monitors change while you are working, the windows move to that setup's place a moment after you let go.
 - The place is saved a moment after you move or resize, and again when you close the window, quit, install an update or end a meeting.
@@ -120,7 +120,7 @@ The layout of the panels (splits, sizes, tabs, collapsed strips, hidden panels, 
 
 ## Readability
 
-The meeting window is see-through, and what is behind it is unknown (a white page, a black one, a busy photo). At every transparency step NexQ keeps the window's own text at 4.5 to 1 contrast and its icons at 3 to 1 against the worst background it could sit on. It first makes the muted colours a step stronger, and only if that is not enough adds a backing behind the header and the footer. At full opacity nothing changes. Panels with text to read (Transcript, Assistant, Live notes, Brief, Talking points and AI Call Log) also keep a backing behind the text. Together with the window, it stays at least about 85 percent opaque. The default transcript and answer colours follow the theme, so they read in the light theme too.
+The meeting window is see-through, and what is behind it is unknown (a white page, a black one, a busy photo). At every transparency step NexQ keeps the window's own text and icons (the header, the footer, badges and labels) readable against the worst background they could sit on. It first makes the muted colours a step stronger, and only if that is not enough adds a backing behind the header and the footer. At full opacity nothing changes. Panels with text to read (Transcript, Assistant, Live notes, Brief, Talking points and AI Call Log) also keep a backing behind the text. Together with the window, it stays at least about 85 percent opaque. The default transcript and answer colours follow the theme, so they read in the light theme too.
 
 ## Tips
 

@@ -90,7 +90,7 @@ NexQ uses an LLM to generate AI assistance during meetings. The easiest local op
 4. **Press Space** during the meeting to trigger AI Assist on the current conversation
 5. **Press Ctrl+M** again to end the meeting
 
-The meeting is saved automatically with full transcript, AI interactions, and summary.
+The meeting is saved automatically with full transcript, AI interactions, and summary. Open it from the list to read it. The **AI** menu in the meeting details has **Generate summary** (**Regenerate summary** when there is one), **Extract action items** and **Suggest bookmarks**. They are dimmed until the meeting has a transcript.
 
 In meeting details, **Words** counts each Chinese character and Japanese kana individually, since those languages don't put spaces between words. Other text, including Korean, is counted by whitespace-separated words. Punctuation alone is not counted. **Pace** and the header's speaker percentages use the same counts.
 

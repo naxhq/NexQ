@@ -58,7 +58,7 @@ With **Updates** on **Automatic** (the default), NexQ updates the notes:
 
 Nothing runs on silence, and only one update runs at a time. If a live answer is being written, the notes wait.
 
-**Manual** (or **Update only when I ask** in the **...** menu) never runs unasked, and that includes the end of the meeting.
+**Manual** (or **Update only when I ask** in the **...** menu) never runs unasked, and that includes the end of the meeting. The end only marks what was never sent (the notes then say **Not updated automatically**), and **Update notes** and **Keep going** work from the saved transcript like for any other finished meeting, in one press.
 
 **How the notes ended.** When the meeting is over, the panel and the **Notes** tab of the meeting say how the notes ended, with a heading and one sentence:
 
@@ -71,11 +71,13 @@ Nothing runs on silence, and only one update runs at a time. If a live answer is
 | **Paused** | The notes were paused when the meeting ended. |
 | **Not updated automatically** | The notes were on manual, so they were not updated by themselves. |
 | **Stopped early** | The last update ran out of time. |
-| **Stopped** | You stopped the notes. |
+| **Stopped** | You stopped the notes, or turned them off, before the meeting ended. |
+| **Interrupted** | NexQ was closed before the notes were finished. |
+| **Stopped for another meeting** | The notes stopped because another meeting started (while they were being updated). |
 
 **Not covered.** NexQ works out which part of the call never reached the notes from what was saved, so it is known whatever ended them (even if NexQ was closed in the middle). The panel and the tab say so, for example **Not covered: 2:00 to 40:00**.
 
-**Update notes** covers it. One press makes as many updates over the saved transcript as it takes, until everything is covered, the limit is reached or an update fails (at most about 10 minutes in all). If the notes ended at the limit, **Keep going** raises the limit by the amount in your settings and then covers the rest in the same press. These two buttons also show up after the meeting, in the **Notes** tab. It says why it can't run when that is so: another meeting is live (it never competes with a live meeting, and an update stops at once when a new meeting starts), there are no notes, nothing new to add, the limit was reached, or the saved transcript has nothing in that part (the **Not updated** notice). Deleting the meeting, or stopping the notes, stops an update that is running. At the end of a live meeting, after three failures NexQ makes one last bounded try, unless the cause can't change by trying (no key) or it is a plan limit.
+**Update notes** covers it. One press makes as many updates over the saved transcript as it takes, until everything is covered, the limit is reached or an update fails (at most about 10 minutes in all). If the notes ended at the limit, **Keep going** raises the limit by the amount in your settings and then covers the rest in the same press. These two buttons also show up after the meeting, in the **Notes** tab. While the update works, between its passes too, the state stays **Taking notes** and no button is offered. It says why it can't run when that is so: another meeting is live (it never competes with a live meeting: it is refused while another meeting is live, and an update that is running stops at once when a new meeting starts, saying **Stopped for another meeting**), there are no notes, nothing new to add, the limit was reached, or the saved transcript has nothing in that part (the **Not updated** notice). Deleting the meeting, or stopping the notes, stops an update that is running. At the end of a live meeting, after three failures NexQ makes one last bounded try, unless the cause can't change by trying (no key) or it is a plan limit.
 
 The panel tells you what it is doing, in words:
 

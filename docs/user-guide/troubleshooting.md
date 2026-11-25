@@ -278,9 +278,9 @@ The panel says why when it is unavailable: an in-person meeting, a muted microph
 
 1. **Verify a meeting is active.** The overlay only appears during an active meeting. Press `Ctrl+M` to start a meeting first.
 2. Press `Ctrl+B` to toggle the overlay window
-3. The overlay may be positioned off-screen. Try moving it by checking the taskbar for the "NexQ Overlay" entry
+3. The overlay may be out of reach, for example after you unplugged a monitor. Use **Settings > General > Reset window positions**, or the tray menu item **Bring windows to this screen**. Both put the dashboard and the meeting window back on one screen ([details](meeting-layout.md#where-the-windows-come-back))
 4. Check Windows taskbar for a second NexQ window entry -- the overlay might be minimized
-5. Restart NexQ -- the overlay resets to position (50, 50) on startup
+5. Restart NexQ. The overlay comes back where it was saved for the monitors you have now, inside a screen. If it doesn't, use the reset in step 3
 
 ### Overlay Not Staying on Top
 

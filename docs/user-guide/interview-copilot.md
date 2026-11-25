@@ -87,7 +87,7 @@ For the fastest automatic answers, transcribe the interviewer with Cartesia or D
 2. **Review the full transcript** in the Launcher -- every word from both sides is saved
 3. Check the **AI Call Log** sidebar for all AI suggestions that were generated during the session
 4. **Export or copy** the transcript for your notes or follow-up preparation
-5. The meeting summary includes key discussion points, questions asked, and action items
+5. The meeting summary includes key discussion points, questions asked, and action items. If something is missing, the **AI** menu in the meeting details can **Generate summary**, **Extract action items** or **Suggest bookmarks**
 
 ## Tips
 
