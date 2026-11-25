@@ -91,6 +91,9 @@ pub(crate) struct Touch {
     workspaces: Vec<String>,
     chats_of: Vec<String>,
     meetings: Vec<String>,
+    /// The change takes access away whatever the views say (an opt-out): every
+    /// dependent restarts at once.
+    revoke: bool,
 }
 
 impl Touch {
@@ -119,6 +122,13 @@ impl Touch {
         self.workspaces.extend(other.workspaces);
         self.chats_of.extend(other.chats_of);
         self.meetings.extend(other.meetings);
+        self.revoke |= other.revoke;
+        self
+    }
+
+    /// Marks the change as taking access away, as a backstop over the views.
+    pub fn revoking(mut self) -> Self {
+        self.revoke = true;
         self
     }
 }
@@ -235,6 +245,7 @@ impl Target {
 pub(crate) struct Pending {
     deps: Dependents,
     views: BTreeMap<Target, ViewState>,
+    forced: bool,
 }
 
 /// What each of `deps` may use now: present, gone (it does not exist) or
@@ -266,7 +277,7 @@ pub(crate) fn begin_change(state: &AppState, touched: &dyn Fn(&Connection) -> To
     let touch = with_conn(state, |conn| Ok(touched(conn))).unwrap_or_default();
     let deps = dependents_for(state, &touch);
     let views = views_of(state, &deps);
-    Pending { deps, views }
+    Pending { deps, views, forced: touch.revoke }
 }
 
 /// What to do with one dependent once a change is done.
@@ -311,6 +322,7 @@ pub(crate) fn decisions(
 /// Second half: reads the dependents again, decides and restarts.
 pub(crate) fn finish_change(state: &AppState, app: &AppHandle, touched: &dyn Fn(&Connection) -> Touch, before: Pending, ok: bool) {
     let touch = with_conn(state, |conn| Ok(touched(conn))).unwrap_or_default();
+    let forced = before.forced || touch.revoke;
     let mut deps = dependents_for(state, &touch);
     deps.merge(before.deps);
     // The live brief and the core memory follow every change at once, grant or
@@ -322,7 +334,8 @@ pub(crate) fn finish_change(state: &AppState, app: &AppHandle, touched: &dyn Fn(
         }
     }
     let after = views_of(state, &deps);
-    for (target, d) in decisions(&before.views, &after, ok) {
+    // A change declared as taking access away is one, whatever the views show.
+    for (target, d) in decisions(&before.views, &after, ok && !forced) {
         match d {
             Decision::Restart(kind) => apply_restart(app, target, kind),
             Decision::Close => close_gone(app, &target),
@@ -374,24 +387,29 @@ pub(crate) fn apply_restart(app: &AppHandle, target: Target, kind: Kind) {
                     restarts.restarted(&key, Instant::now());
                 }
                 restart::Action::Later(wait) => {
-                    if !restarts.mark_pending(&key) {
-                        return; // a restart already waits and covers this one
+                    // One waiter per meeting or chat. A request that joins it keeps
+                    // the strictest gap (an edit shortens a grant's wait and wakes
+                    // the waiter); a revocation restarts at once and cancels it.
+                    if !restarts.mark_pending(&key, gap) {
+                        return;
                     }
                     let app = app.clone();
                     tauri::async_runtime::spawn(async move {
+                        let wake = restarts.waker(&key);
                         let mut wait = wait;
                         loop {
-                            tokio::time::sleep(wait).await;
-                            if !restarts.is_pending(&key) {
-                                break; // a revocation restarted it meanwhile
+                            tokio::select! {
+                                _ = tokio::time::sleep(wait) => {}
+                                _ = wake.notified() => {}
                             }
-                            match restarts.decide_gap(&key, Instant::now(), answering(&target), gap) {
-                                restart::Action::Now => {
+                            match restarts.step(&key, Instant::now(), answering(&target)) {
+                                restart::Step::Cancelled => break,
+                                restart::Step::Restart => {
                                     restart_now(&app, &target);
                                     restarts.restarted(&key, Instant::now());
                                     break;
                                 }
-                                restart::Action::Later(next) => wait = next,
+                                restart::Step::Sleep(next) => wait = next,
                             }
                         }
                     });
@@ -471,6 +489,14 @@ pub(crate) fn workspace_patch_matters(current: &Workspace, patch: &WorkspacePatc
     patch.instructions.as_ref().is_some_and(|v| *v != current.instructions)
         || patch.include_general.is_some_and(|v| v != current.include_general)
         || patch.keep_separate.is_some_and(|v| v != current.keep_separate)
+}
+
+/// What an item patch touches: nothing for a label or pin; the workspace for an
+/// index opt-in change; and an opt-out (`index_opt_in: false`) is declared as a
+/// revocation, so it restarts at once even if the views looked the same.
+pub(crate) fn item_touch(workspace_id: &str, patch: &ItemPatch) -> Touch {
+    let touch = Touch::ws_if(item_patch_matters(patch), workspace_id);
+    if patch.index_opt_in == Some(false) { touch.revoking() } else { touch }
 }
 
 /// Whether an item patch changes what answers can use: the folder index opt-in.
@@ -676,8 +702,8 @@ pub async fn update_workspace_item(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
-    let matters = item_patch_matters(&patch);
-    change_and_restart(&state, &app, |_| Touch::ws_if(matters, &id), || {
+    let touch = item_touch(&id, &patch);
+    change_and_restart(&state, &app, |_| touch.clone(), || {
         with_conn(&state, |conn| store::update_item(conn, &id, kind, &ref_id, patch))
     })?;
     crate::workspace_chat::runtime::folder_opt_out_check(&state, kind == ItemKind::Folder, &ref_id);
@@ -1276,6 +1302,23 @@ mod tests {
             assert!(found.iter().any(|f| f == name), "{name} is listed but is not a command");
             assert!(lib.contains(&format!("live_commands::{name},")), "{name} is not registered in lib.rs");
         }
+    }
+
+    #[test]
+    fn an_index_opt_out_is_declared_a_revocation_and_a_label_or_pin_touches_nothing() {
+        let off = item_touch("w", &ItemPatch { index_opt_in: Some(false), ..Default::default() });
+        assert!(off.revoke && off.workspaces == vec!["w".to_string()]);
+        let on = item_touch("w", &ItemPatch { index_opt_in: Some(true), ..Default::default() });
+        assert!(!on.revoke && on.workspaces == vec!["w".to_string()]);
+        assert_eq!(item_touch("w", &ItemPatch { pinned: Some(true), label: Some(None), ..Default::default() }), Touch::none());
+        // The declaration survives combining and forces every dependent to revoke
+        // even where the views are identical (so the kind would be Grant or Edit).
+        assert!(Touch::ws("a").also(off.clone()).revoke);
+        let same: BTreeMap<Target, ViewState> = [(Target::Meeting("m".into()), ViewState::Present(view(&["document:d"], &[])))].into();
+        let forced = off.revoke;
+        let kind = |ok: bool| decisions(&same, &same, ok)[0].1;
+        assert_eq!(kind(true), Decision::Restart(Kind::Grant));
+        assert_eq!(decisions(&same, &same, true && !forced)[0].1, Decision::Restart(Kind::Revoke));
     }
 
     #[test]

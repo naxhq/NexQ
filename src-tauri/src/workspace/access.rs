@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use std::hash::{Hash, Hasher};
 
@@ -67,43 +67,60 @@ fn h64(parts: &[&str]) -> u64 {
     h.finish()
 }
 
+fn read_err(what: &str, e: impl std::fmt::Display) -> String {
+    format!("Couldn't read {what}: {e}")
+}
+
+/// One optional text from a query: no row is `None`; a failing read is an error.
+fn optional_text(conn: &Connection, sql: &str, args: impl rusqlite::Params, what: &str) -> Result<Option<String>, String> {
+    conn.query_row(sql, args, |r| r.get::<_, Option<String>>(0)).optional().map(Option::flatten).map_err(|e| read_err(what, e))
+}
+
 /// Content hashes of what the scope's prompts carry (see `AccessView::hashes`).
-fn content_hashes(conn: &Connection, scope: &EffectiveScope, folders: &[String], meeting_id: Option<&str>) -> BTreeMap<String, u64> {
+/// A read that fails is an error (the view is then unreadable); a row that is
+/// not there hashes as empty.
+fn content_hashes(conn: &Connection, scope: &EffectiveScope, folders: &[String], meeting_id: Option<&str>) -> Result<BTreeMap<String, u64>, String> {
     let mut out = BTreeMap::new();
     if !scope.instructions.trim().is_empty() {
         out.insert("instructions".to_string(), h64(&[&scope.instructions]));
     }
     for id in &scope.talking_point_ids {
-        let text: String = conn.query_row("SELECT plain_text FROM talking_points WHERE id = ?1", params![id], |r| r.get(0)).unwrap_or_default();
-        let edit: String = meeting_id
-            .and_then(|m| conn.query_row("SELECT doc_json FROM talking_point_edits WHERE meeting_id = ?1 AND point_id = ?2", params![m, id], |r| r.get(0)).ok())
-            .unwrap_or_default();
+        let text = optional_text(conn, "SELECT plain_text FROM talking_points WHERE id = ?1", params![id], "a talking point")?.unwrap_or_default();
+        let edit = match meeting_id {
+            Some(m) => optional_text(
+                conn,
+                "SELECT doc_json FROM talking_point_edits WHERE meeting_id = ?1 AND point_id = ?2",
+                params![m, id],
+                "a meeting's talking point",
+            )?
+            .unwrap_or_default(),
+            None => String::new(),
+        };
         out.insert(format!("tp:{id}"), h64(&[&text, &edit]));
     }
     for id in &scope.document_ids {
         // the cached text version: when it was loaded and what it was called
-        let v: String = conn
-            .query_row("SELECT loaded_at || '|' || name FROM context_resources WHERE id = ?1", params![id], |r| r.get(0))
-            .unwrap_or_default();
+        let v = optional_text(conn, "SELECT loaded_at || '|' || name FROM context_resources WHERE id = ?1", params![id], "a document")?.unwrap_or_default();
         out.insert(format!("doc:{id}"), h64(&[&v]));
     }
-    for m in memory::saved_for_scope(conn, scope).unwrap_or_default() {
+    for m in memory::saved_for_scope(conn, scope)? {
         out.insert(format!("mem:{}", m.id), h64(&[&m.kind, &m.title, &m.text]));
     }
     for id in folders {
-        let v: String = conn
-            .prepare("SELECT group_concat(sub_ref || ':' || content_hash || ':' || status) FROM search_sources WHERE kind = 'folder' AND ref_id = ?1")
-            .and_then(|mut s| s.query_row(params![id], |r| r.get::<_, Option<String>>(0)))
-            .ok()
-            .flatten()
-            .unwrap_or_default();
+        let v = optional_text(
+            conn,
+            "SELECT group_concat(sub_ref || ':' || content_hash || ':' || status) FROM search_sources WHERE kind = 'folder' AND ref_id = ?1",
+            params![id],
+            "a folder's index",
+        )?
+        .unwrap_or_default();
         out.insert(format!("folder-index:{id}"), h64(&[&v]));
     }
-    out
+    Ok(out)
 }
 
-fn view_from(conn: &Connection, scope: &EffectiveScope, folders: Vec<String>, meetings: BTreeSet<String>, fingerprint: String, meeting_id: Option<&str>) -> AccessView {
-    let hashes = content_hashes(conn, scope, &folders, meeting_id);
+fn view_from(conn: &Connection, scope: &EffectiveScope, folders: Vec<String>, meetings: BTreeSet<String>, fingerprint: String, meeting_id: Option<&str>) -> Result<AccessView, String> {
+    let hashes = content_hashes(conn, scope, &folders, meeting_id)?;
     let mut items = BTreeSet::new();
     for (kind, ids) in [
         ("document", &scope.document_ids),
@@ -113,16 +130,16 @@ fn view_from(conn: &Connection, scope: &EffectiveScope, folders: Vec<String>, me
     ] {
         items.extend(ids.iter().map(|id| format!("{kind}:{id}")));
     }
-    AccessView {
+    Ok(AccessView {
         material: scope.material_workspaces.iter().cloned().collect(),
         items,
-        memory: memory::saved_for_scope(conn, scope).map(|m| m.into_iter().map(|i| i.id).collect()).unwrap_or_default(),
+        memory: memory::saved_for_scope(conn, scope)?.into_iter().map(|i| i.id).collect(),
         opted_folders: folders.into_iter().collect(),
         fingerprint,
         meetings,
         instructions: !scope.instructions.trim().is_empty(),
         hashes,
-    }
+    })
 }
 
 /// What `meeting_id` may use now: present, gone, or unreadable.
@@ -133,7 +150,7 @@ pub fn read_meeting_view(conn: &Connection, meeting_id: &str) -> ViewState {
         Ok(true) => {}
     }
     let Ok(scope) = scope_for(conn, ScopeOwner::Meeting(meeting_id)) else { return ViewState::Unreadable };
-    let parts = live_parts_from(conn, &scope, meeting_id);
+    let Ok(parts) = live_parts_from(conn, &scope, meeting_id) else { return ViewState::Unreadable };
     let meetings: BTreeSet<String> = match conn
         .prepare("SELECT id FROM meetings WHERE workspace_id = ?1")
         .and_then(|mut s| s.query_map([&scope.home], |r| r.get::<_, String>(0)).and_then(|r| r.collect::<Result<Vec<_>, _>>()))
@@ -141,7 +158,10 @@ pub fn read_meeting_view(conn: &Connection, meeting_id: &str) -> ViewState {
         Ok(ids) => ids.into_iter().filter(|m| m != meeting_id && !parts.excluded_meetings.contains(m)).collect(),
         Err(_) => return ViewState::Unreadable,
     };
-    ViewState::Present(view_from(conn, &scope, parts.folder_ids.clone(), meetings, parts.fingerprint, Some(meeting_id)))
+    match view_from(conn, &scope, parts.folder_ids.clone(), meetings, parts.fingerprint, Some(meeting_id)) {
+        Ok(view) => ViewState::Present(view),
+        Err(_) => ViewState::Unreadable,
+    }
 }
 
 /// What the chat `chat_id` may use now: its workspace's scope after the chat's
@@ -154,7 +174,10 @@ pub fn read_chat_view(conn: &Connection, chat_id: &str) -> ViewState {
     };
     let Ok(cs) = crate::workspace_chat::scope_adapter::chat_scope(conn, &chat) else { return ViewState::Unreadable };
     let meetings: BTreeSet<String> = cs.meetings.iter().map(|m| m.id.clone()).collect();
-    ViewState::Present(view_from(conn, &cs.eff, cs.folder_ids.clone(), meetings, String::new(), None))
+    match view_from(conn, &cs.eff, cs.folder_ids.clone(), meetings, String::new(), None) {
+        Ok(view) => ViewState::Present(view),
+        Err(_) => ViewState::Unreadable,
+    }
 }
 
 /// What `meeting_id` may use now (None when it does not exist or can't be read).
@@ -204,8 +227,8 @@ pub struct LiveParts {
     pub brief_enabled: bool,
 }
 
-fn core_memory(conn: &Connection, scope: &EffectiveScope) -> String {
-    let mut items = memory::saved_for_scope(conn, scope).unwrap_or_default();
+fn core_memory(conn: &Connection, scope: &EffectiveScope) -> Result<String, String> {
+    let mut items = memory::saved_for_scope(conn, scope)?;
     items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     let mut out = String::new();
     let mut used = 0u32;
@@ -219,22 +242,26 @@ fn core_memory(conn: &Connection, scope: &EffectiveScope) -> String {
         used += t;
         out.push_str(&line);
     }
-    out.trim_end().to_string()
+    Ok(out.trim_end().to_string())
 }
 
-pub fn live_parts_from(conn: &Connection, scope: &EffectiveScope, meeting_id: &str) -> LiveParts {
-    let brief_enabled = super::store::get_workspace(conn, &scope.home).map(|w| w.brief_default).unwrap_or(false);
-    let mut folders = crate::workspace_chat::scope_adapter::opted_in_folders(conn, scope).unwrap_or_default();
+/// The live parts of a scope. Any read that fails is an error: nothing here
+/// falls back to "empty", which would look like a smaller scope.
+pub fn live_parts_from(conn: &Connection, scope: &EffectiveScope, meeting_id: &str) -> Result<LiveParts, String> {
+    let brief_enabled = super::store::get_workspace(conn, &scope.home)?.brief_default;
+    let mut folders = crate::workspace_chat::scope_adapter::opted_in_folders(conn, scope)?;
     folders.sort();
     let mut excluded = vec![meeting_id.to_string()];
-    if let Ok(mut stmt) = conn.prepare("SELECT meeting_id FROM workspace_meeting_prefs WHERE workspace_id = ?1 AND chat_id = '' AND included = 0") {
-        if let Ok(rows) = stmt.query_map(params![scope.home], |r| r.get::<_, String>(0)) {
-            excluded.extend(rows.filter_map(Result::ok));
-        }
+    let mut stmt = conn
+        .prepare("SELECT meeting_id FROM workspace_meeting_prefs WHERE workspace_id = ?1 AND chat_id = '' AND included = 0")
+        .map_err(|e| read_err("the meeting choices", e))?;
+    let rows = stmt.query_map(params![scope.home], |r| r.get::<_, String>(0)).map_err(|e| read_err("the meeting choices", e))?;
+    for row in rows {
+        excluded.push(row.map_err(|e| read_err("the meeting choices", e))?);
     }
     excluded.sort();
     excluded.dedup();
-    let memory_text = core_memory(conn, scope);
+    let memory_text = core_memory(conn, scope)?;
     let mut docs = scope.document_ids.clone();
     docs.sort();
     let mut points = scope.talking_point_ids.clone();
@@ -247,7 +274,7 @@ pub fn live_parts_from(conn: &Connection, scope: &EffectiveScope, meeting_id: &s
     }
     let mut h = std::collections::hash_map::DefaultHasher::new();
     parts.hash(&mut h);
-    LiveParts {
+    Ok(LiveParts {
         fingerprint: format!("{}:{:x}", scope.home, h.finish()),
         home: scope.home.clone(),
         document_ids: docs,
@@ -256,7 +283,7 @@ pub fn live_parts_from(conn: &Connection, scope: &EffectiveScope, meeting_id: &s
         excluded_meetings: excluded,
         memory_text,
         brief_enabled,
-    }
+    })
 }
 
 /// The live parts of a meeting (None when workspaces cannot say: unrestricted or unknown).
@@ -265,7 +292,14 @@ pub fn live_parts(conn: &Connection, meeting_id: &str) -> Option<LiveParts> {
     if scope.unrestricted {
         return None;
     }
-    Some(live_parts_from(conn, &scope, meeting_id))
+    match live_parts_from(conn, &scope, meeting_id) {
+        Ok(parts) => Some(parts),
+        Err(e) => {
+            // "Can't say" is not "nothing": the caller treats None as unknown.
+            log::warn!("Couldn't read the live scope of {meeting_id}: {e}");
+            None
+        }
+    }
 }
 
 /// The kind of a change from what one dependent could use before and after.
@@ -301,6 +335,29 @@ mod tests {
         let before = view_of_meeting(conn, id).unwrap();
         change();
         kind_of(&before, &view_of_meeting(conn, id).unwrap())
+    }
+
+    #[test]
+    fn a_read_that_fails_makes_the_view_unreadable_but_a_missing_row_does_not() {
+        let conn = memory_db();
+        let a = new_ws(&conn, "A", false, false);
+        meeting(&conn, "m", &a);
+        // A document filed in the workspace with no row in the library: nothing to hash, still readable.
+        file(&conn, &a, "document", "ghost");
+        match read_meeting_view(&conn, "m") {
+            ViewState::Present(v) => assert!(v.items.contains("document:ghost") && v.hashes.contains_key("doc:ghost")),
+            other => panic!("{other:?}"),
+        }
+        // A context note whose own-version table can't be read: unreadable, never "no edit".
+        conn.execute("INSERT INTO talking_points (id, workspace_id, title, in_context, created_at, updated_at) VALUES ('p', ?1, 't', 1, 0, 0)", params![a]).unwrap();
+        conn.execute_batch("DROP TABLE talking_point_edits").unwrap();
+        assert_eq!(read_meeting_view(&conn, "m"), ViewState::Unreadable);
+        assert!(view_of_meeting(&conn, "m").is_none());
+        // And the live parts say "can't tell", not "empty".
+        assert!(live_parts(&conn, "m").is_some(), "live parts do not read the edits table");
+        conn.execute_batch("DROP TABLE workspace_meeting_prefs").unwrap();
+        assert!(live_parts(&conn, "m").is_none());
+        assert!(live_parts_from(&conn, &scope_for(&conn, ScopeOwner::Meeting("m")).unwrap(), "m").is_err());
     }
 
     #[test]
