@@ -113,6 +113,12 @@ export function ReadingSettingsPopover({ reading, onChange, onClose, saidItNote 
         label="Tick what I have said"
         description={saidItNote ?? "Lines settle back as you say them. Click a tick to change it."}
       />
+      <Switch
+        checked={reading.suggest}
+        onChange={(suggest) => onChange({ suggest })}
+        label="Suggest where I am"
+        description="When you wander to another point, offer a jump instead of moving on its own."
+      />
     </div>
   );
 }

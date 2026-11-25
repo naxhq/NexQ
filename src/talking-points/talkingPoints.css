@@ -118,3 +118,9 @@
   .tp-read [data-block-id], .tp-tick { transition: none; }
   .tp-resume { animation: none; }
 }
+
+/* "Go to" offer: at the edge nearest the target, never on the reading line (a third down) */
+.tp-suggest { position: absolute; left: 50%; transform: translateX(-50%); animation: tp-chip-in 200ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.tp-suggest-top { top: 0.5rem; }
+.tp-suggest-bottom { bottom: 3.25rem; }
+@media (prefers-reduced-motion: reduce) { .tp-suggest { animation: none; } }

@@ -142,6 +142,7 @@ export function PointsPanel() {
     progressRef,
     reading,
     availability,
+    suggest: reading.suggest,
     savedSaid: note ? progress[note.id] : null,
     onSaidChange: (said) => note && meetingId && store.getState().setProgress(meetingId, note.id, said),
     reducedMotion: reduced,
@@ -179,6 +180,10 @@ export function PointsPanel() {
         if (p.playing) p.pause();
         else p.play();
       } else p.noteUserIntent();
+    } else if (k === "Enter" && p.suggestion) {
+      e.preventDefault();
+      e.stopPropagation();
+      p.goToSuggestion();
     } else if (k === "Enter" && reading.saidIt && p.currentBlockId) {
       e.preventDefault();
       e.stopPropagation();
@@ -413,9 +418,26 @@ export function PointsPanel() {
             </div>
           </div>
           <span id="tp-reader-help" className="sr-only">
-            Enter ticks the current line. Plus and minus change the text size. Space plays or pauses auto-scroll.
+            Enter ticks the current line, or goes to the suggested point. Plus and minus change the text size. Space plays or pauses auto-scroll.
           </span>
           <span aria-hidden className="tp-focus-mark" style={{ top: `calc(${FOCUS_RATIO * 100}% - 1px)` }} />
+          <div aria-live="polite" className="sr-only">
+            {p.suggestion ? `Go to: ${p.suggestion.text}` : ""}
+          </div>
+          {p.suggestion && (
+            <button
+              type="button"
+              tabIndex={-1}
+              onClick={p.goToSuggestion}
+              className={cn(
+                buttonClass.base,
+                "tp-suggest max-w-[calc(100%-1.5rem)] border border-border bg-popover/95 text-popover-foreground shadow-md backdrop-blur-sm hover:bg-accent",
+                p.suggestion.edge === "top" ? "tp-suggest-top" : "tp-suggest-bottom",
+              )}
+            >
+              <span className="truncate">Go to: {p.suggestion.text}</span>
+            </button>
+          )}
           {p.yielding && reading.mode !== "manual" && (
             <button
               type="button"

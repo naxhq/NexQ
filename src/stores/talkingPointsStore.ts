@@ -45,6 +45,8 @@ export interface ReadingSettings {
   mode: ScrollKind;
   /** "Said it" ticking (local, switchable). */
   saidIt: boolean;
+  /** Offer "Go to" when you stray to another point. */
+  suggest: boolean;
 }
 
 export const READING_LIMITS = {
@@ -53,7 +55,7 @@ export const READING_LIMITS = {
   wpm: { min: 60, max: 260, step: 10 },
 } as const;
 
-export const DEFAULT_READING: ReadingSettings = { fontSize: 26, lineSpacing: 1.5, wpm: 140, mode: "manual", saidIt: true };
+export const DEFAULT_READING: ReadingSettings = { fontSize: 26, lineSpacing: 1.5, wpm: 140, mode: "manual", saidIt: true, suggest: true };
 
 const PREFS_KEY = "nexq-talking-points-v1";
 const AUTOSAVE_MS = 800;
@@ -85,6 +87,7 @@ export function loadPrefs(): Prefs {
       wpm: clampNum(r.wpm, L.wpm.min, L.wpm.max, DEFAULT_READING.wpm),
       mode: r.mode === "auto" || r.mode === "voice" || r.mode === "manual" ? r.mode : "manual",
       saidIt: r.saidIt !== false,
+      suggest: r.suggest !== false,
     };
     if (p.lastNote && typeof p.lastNote === "object") {
       for (const [k, v] of Object.entries(p.lastNote)) if (typeof v === "string") base.lastNote[k] = v;

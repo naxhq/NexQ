@@ -26,6 +26,27 @@ import { marksToSaid, VoiceBridge, type FollowAvailability } from "./voice";
 import type { PointSaid } from "../../lib/types";
 
 export const FOCUS_RATIO = 0.33;
+/** A suggestion must hold this long before it is shown, and goes after this long. */
+export const SUGGEST_AFTER_MS = 1000;
+export const SUGGEST_EXPIRE_MS = 12_000;
+
+/** What the prompter needs from a follower (the real one, or a fake in tests). */
+export interface FollowerLike {
+  onInterim(text: string, segId: string): unknown;
+  onFinal(text: string, segId: string): unknown;
+  snapshot(): { position: number; confidence: number; state: FollowState; suggestion?: { blockId: string; confidence: number } | null };
+  seek(token: number): void;
+  reset(): void;
+  setIndex(index: NoteIndex): void;
+}
+
+export interface GoToSuggestion {
+  blockId: string;
+  /** First words of that block. */
+  text: string;
+  /** Where it is relative to the reading line: the chip sits at that edge. */
+  edge: "top" | "bottom";
+}
 
 export interface PrompterOptions {
   doc: TpDoc | null;
@@ -42,6 +63,10 @@ export interface PrompterOptions {
   onSaidChange?: (said: PointSaid[]) => void;
   reducedMotion?: boolean;
   clock?: () => number;
+  /** Offer "Go to" when you stray to another point (reading setting `suggest`). */
+  suggest?: boolean;
+  /** Replaces the real follower (tests). */
+  follower?: FollowerLike;
 }
 
 export interface PrompterState {
@@ -65,6 +90,10 @@ export interface PrompterState {
   followPosition: number;
   /** Scroll to the start. */
   restart: () => void;
+  /** A quiet offer to jump to the point you seem to be on. */
+  suggestion: GoToSuggestion | null;
+  goToSuggestion: () => void;
+  dismissSuggestion: () => void;
 }
 
 function stateOf(
@@ -93,11 +122,11 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     [reduced],
   );
 
-  const follower = useRef<VoiceFollower | null>(null);
+  const follower = useRef<FollowerLike | null>(null);
   const said = useRef<SaidTracker | null>(null);
   const ctrl = useRef<ScrollController>(null as unknown as ScrollController);
   if (!ctrl.current) ctrl.current = mkCtrl();
-  if (!follower.current) follower.current = new VoiceFollower(index, { clock });
+  if (!follower.current) follower.current = opts.follower ?? new VoiceFollower(index, { clock });
   if (!said.current) said.current = new SaidTracker(index, { clock });
   const bridge = useRef<VoiceBridge>(new VoiceBridge([]));
 
@@ -108,6 +137,9 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
   const [playing, setPlaying] = useState(false);
   const [curBlock, setCurBlock] = useState(0);
   const [followPosition, setFollowPosition] = useState(0);
+  const rawSuggest = useRef<{ blockId: string; since: number } | null>(null);
+  const dismissed = useRef<string | null>(null);
+  const [suggestBlock, setSuggestBlock] = useState<string | null>(null);
 
   const optsRef = useRef(opts);
   optsRef.current = opts;
@@ -222,6 +254,15 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     const snap = f.snapshot();
     setFollowState((prev) => (prev === snap.state ? prev : snap.state));
     setFollowPosition(snap.position);
+    const sg = snap.state === "unsure" ? snap.suggestion : null;
+    if (!sg || !optsRef.current.suggest) {
+      rawSuggest.current = null;
+      dismissed.current = null;
+      setSuggestBlock(null);
+    } else if (rawSuggest.current?.blockId !== sg.blockId) {
+      rawSuggest.current = { blockId: sg.blockId, since: clock() };
+      setSuggestBlock(null);
+    }
     ctrl.current.setVoice(snap.position, snap.state);
     if (snap.state === "following") voiceTarget.current = snap.position;
     const marks = said.current!.marks();
@@ -254,6 +295,20 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
       if (tick) clearInterval(tick);
     };
   }, [wantVoice, wantSaid, publishVoiceState, noteKey]);
+
+  // a suggestion shows once it has held for a second, and goes after twelve
+  useEffect(() => {
+    if (!wantVoice) return;
+    const t = setInterval(() => {
+      const r = rawSuggest.current;
+      if (!r || dismissed.current === r.blockId) return setSuggestBlock((b) => (b === null ? b : null));
+      const age = clock() - r.since;
+      const show = age >= SUGGEST_AFTER_MS && age < SUGGEST_EXPIRE_MS;
+      setSuggestBlock((b) => (show ? (b === r.blockId ? b : r.blockId) : b === null ? b : null));
+    }, 250);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wantVoice]);
 
   // -- scroll mode and the frame loop ---------------------------------------------------------
 
@@ -415,6 +470,24 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     updateCurrent(0);
   }, [scrollRef, updateCurrent]);
 
+  const goToSuggestion = useCallback(() => {
+    const id = rawSuggest.current?.blockId;
+    const bi = indexRef.current.blocks.findIndex((b) => b.id === id);
+    if (bi < 0) return;
+    const tok = indexRef.current.blocks[bi].first;
+    follower.current!.seek(tok);
+    voiceTarget.current = tok;
+    ctrl.current.setVoice(tok, "following");
+    rawSuggest.current = null;
+    setSuggestBlock(null);
+    updateCurrent(tok);
+    resume();
+  }, [updateCurrent, resume]);
+  const dismissSuggestion = useCallback(() => {
+    dismissed.current = rawSuggest.current?.blockId ?? null;
+    setSuggestBlock(null);
+  }, []);
+
   const toggleSaid = useCallback(
     (blockId: string) => {
       said.current!.toggle(blockId);
@@ -464,6 +537,14 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     };
   }, [blocks, curBlock, followPosition, followState, wantVoice, index, contentRef]);
 
+  const suggestion = useMemo<GoToSuggestion | null>(() => {
+    if (!suggestBlock || !wantVoice || followState !== "unsure") return null;
+    const i = blocks.findIndex((b) => b.id === suggestBlock);
+    if (i < 0) return null;
+    const text = blocks[i].text.trim().split(/\s+/).slice(0, 6).join(" ") || "next point";
+    return { blockId: suggestBlock, text, edge: i < curBlock ? "top" : "bottom" };
+  }, [suggestBlock, wantVoice, followState, blocks, curBlock]);
+
   const leftToSay = useMemo(() => (said.current ? said.current.leftToSay() : 0), [rev, blocks, index]);
 
   return {
@@ -483,5 +564,8 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     noteUserIntent,
     followPosition,
     restart,
+    suggestion,
+    goToSuggestion,
+    dismissSuggestion,
   };
 }
