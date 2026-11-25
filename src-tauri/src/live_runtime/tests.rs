@@ -1969,3 +1969,96 @@ async fn a_failing_brief_search_is_the_reason_the_brief_shows() {
     }
     assert!(reason.contains("could not search"), "{reason}");
 }
+
+// ---------------------------------------------------------------- QA round 5: the range not covered is never lost
+
+fn add_segment(h: &H, meeting: &str, id: &str, ms: i64) {
+    h.conn
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO transcript_segments (id, meeting_id, text, speaker, timestamp_ms, is_final, created_at) VALUES (?1,?2,'a saved line about pricing','Them',?3,1,'t')",
+            rusqlite::params![id, meeting, ms],
+        )
+        .unwrap();
+}
+
+/// A meeting with one covered run (to 10 s), saved lines at 10 s, 50 s and 90 s, and two lines still unsent.
+async fn meeting_with_a_backlog(h: &H) {
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    say(h, "m1", 120, 10_000, 1_000).await;
+    until("the first run", || h.fake.count(AiPurpose::Notes) == 1).await;
+    for (i, ms) in [10_000, 50_000, 90_000].into_iter().enumerate() {
+        add_segment(h, "m1", &format!("s{i}"), ms);
+    }
+    *h.fake.delay.lock().unwrap() = Duration::from_millis(900);
+    for ms in [50_000u64, 90_000] {
+        h.rt.feed("m1", "Them", "more talk about the renewal and the annual pricing plan today", ms);
+    }
+    tokio::time::sleep(Duration::from_millis(40)).await;
+}
+
+#[tokio::test]
+async fn a_final_pass_that_ran_out_of_time_is_still_reported_after_reopening_with_a_fresh_runtime() {
+    let h = harness();
+    meeting_with_a_backlog(&h).await;
+    h.rt.on_meeting_end("m1");
+    *h.live.lock().unwrap() = None;
+    until("finished", || status_of(&h, "notetaker_state", "m1") == "finished").await;
+    let st = h.events.last_status("notetaker_state", "m1").unwrap();
+    assert_eq!((st["not_covered"]["from_ms"].as_u64(), st["not_covered"]["to_ms"].as_u64()), (Some(50_000), Some(90_000)), "{st}");
+    // reopened later: a new runtime on the same database, the notes switch off ("this meeting" ended with it)
+    let h2 = harness_on(h.conn.clone());
+    let st = h2.rt.notetaker_state("m1").await;
+    assert_eq!(st["status"], "finished", "{st}");
+    assert_eq!((st["not_covered"]["from_ms"].as_u64(), st["not_covered"]["to_ms"].as_u64()), (Some(50_000), Some(90_000)), "{st}");
+    assert!(can_of(&st).contains(&"update".to_string()), "{st}");
+    // and "Update notes" works from there, on the saved transcript
+    *h2.fake.delay.lock().unwrap() = Duration::ZERO;
+    h2.rt.notetaker_update_now("m1").unwrap();
+    until("the update", || h2.fake.count(AiPurpose::Notes) == 1).await;
+    until("covered", || h2.events.last_status("notetaker_state", "m1").map(|v| v["status"] == "finished" && v["not_covered"].is_null()).unwrap_or(false)).await;
+    let h3 = harness_on(h.conn.clone());
+    assert!(h3.rt.notetaker_state("m1").await["not_covered"].is_null());
+}
+
+#[tokio::test]
+async fn quitting_during_the_final_pass_loses_nothing() {
+    let h = harness();
+    meeting_with_a_backlog(&h).await;
+    h.rt.on_meeting_end("m1");
+    *h.live.lock().unwrap() = None;
+    h.rt.shutdown(Duration::from_millis(80)).await; // the app closes while the pass is running
+    let h2 = harness_on(h.conn.clone());
+    let st = h2.rt.notetaker_state("m1").await;
+    assert_eq!(st["status"], "finished", "{st}");
+    assert_eq!((st["not_covered"]["from_ms"].as_u64(), st["not_covered"]["to_ms"].as_u64()), (Some(50_000), Some(90_000)), "{st}");
+}
+
+#[tokio::test]
+async fn a_crash_mid_meeting_is_marked_from_the_transcript_on_the_next_start() {
+    let h = harness();
+    meeting_with_a_backlog(&h).await;
+    // kill -9: nothing at all runs after this point; the row still says it was running
+    let status: String = h.conn.lock().unwrap().query_row("SELECT status FROM meeting_notes WHERE meeting_id = 'm1'", [], |r| r.get(0)).unwrap();
+    assert_eq!(status, "running");
+    let h2 = harness_on(h.conn.clone()); // starts again: the running row becomes "interrupted"
+    *h2.live.lock().unwrap() = None;
+    let st = h2.rt.notetaker_state("m1").await;
+    assert_eq!(st["status"], "finished", "{st}");
+    assert_eq!((st["not_covered"]["from_ms"].as_u64(), st["not_covered"]["to_ms"].as_u64()), (Some(50_000), Some(90_000)), "{st}");
+}
+
+#[test]
+fn coverage_is_the_last_line_folded_in_against_the_transcript() {
+    let mut d = crate::live_notes::doc::NoteDoc::new();
+    assert_eq!(d.uncovered_in(&[1_000, 2_000]), None, "notes that never began cover nothing and miss nothing");
+    d.started_at = Some(5_000);
+    d.covered_to = Some(20_000);
+    assert_eq!(d.uncovered_in(&[1_000, 5_000, 20_000]), None, "before the notes began and covered");
+    assert_eq!(d.uncovered_in(&[1_000, 5_000, 20_000, 30_000, 45_000]), Some((30_000, 45_000)));
+    d.covered_to = None;
+    assert_eq!(d.uncovered_in(&[1_000, 5_000, 6_000]), Some((5_000, 6_000)));
+}

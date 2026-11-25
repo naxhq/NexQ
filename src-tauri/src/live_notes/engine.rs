@@ -205,6 +205,9 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
     /// A finished transcript line (never partial text).
     pub fn feed(&mut self, line: TranscriptLine) {
         self.trigger.on_line(self.clock.now_ms(), &line.text);
+        if self.doc.started_at.is_none() {
+            self.doc.started_at = Some(line.ms);
+        }
         let units = speech_units_x2(&line.text) as usize;
         if units > 0 {
             self.pending_words += units / 2;
@@ -349,6 +352,7 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
                 } else {
                     let ctx = ReduceCtx { range_start_ms: p.from_ms, range_end_ms: p.to_ms };
                     let report = apply_ops(&mut self.doc, parsed.ops, ctx, &self.cfg.reduce);
+                    self.doc.covered_to = Some(self.doc.covered_to.map_or(p.to_ms, |c| c.max(p.to_ms)));
                     let cap = self.trigger.end_ok(counted);
                     self.last_error = None;
                     self.sink.doc(&self.doc, &report);

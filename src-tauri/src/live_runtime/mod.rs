@@ -383,6 +383,16 @@ impl LiveRuntimes {
     /// "Update notes" for a meeting that is over: one run on the saved transcript for the part the
     /// notes never covered. The token cap applies, it is refused while another meeting is live
     /// (it never competes with a live meeting) and says why when it cannot run.
+    /// What the notes of an ended meeting never covered, from the saved coverage and the saved transcript.
+    fn ended_uncovered(&self, meeting_id: &str, stored: &crate::live_notes::StoredNotes) -> Option<(u64, u64)> {
+        if stored.doc.started_at.is_none() {
+            return stored.doc.uncovered;
+        }
+        let (lines, _) = self.deps.db.meeting_lines(meeting_id);
+        let times: Vec<u64> = lines.iter().map(|l| l.ms).collect();
+        stored.doc.uncovered_in(&times)
+    }
+
     fn update_ended(&self, meeting_id: &str) -> Result<(), String> {
         if let Some(live) = (self.deps.live_meeting)() {
             if live != meeting_id {
@@ -394,7 +404,7 @@ impl LiveRuntimes {
         let Some(stored) = self.deps.db.load_notes(meeting_id) else {
             return Err("There are no notes for this meeting".into());
         };
-        let Some((from, to)) = stored.doc.uncovered else {
+        let Some((from, to)) = self.ended_uncovered(meeting_id, &stored) else {
             return Err("Nothing new to add since the last update".into());
         };
         if stored.cap > 0 && stored.tokens_used >= stored.cap {
@@ -486,8 +496,15 @@ impl LiveRuntimes {
         }
         let settings = self.notetaker_settings();
         let stored = self.deps.db.load_notes(meeting_id);
-        let (status, used, cap) = stored.as_ref().map(|s| (Some(s.status.clone()), s.tokens_used, s.cap)).unwrap_or((None, 0, settings.cap));
-        let not_covered = stored.as_ref().filter(|s| s.status == "done").and_then(|s| s.doc.uncovered);
+        let (mut status, used, cap) = stored.as_ref().map(|s| (Some(s.status.clone()), s.tokens_used, s.cap)).unwrap_or((None, 0, settings.cap));
+        // An ended meeting with nothing running: whatever the switch says and however the notes ended
+        // (done, interrupted by a crash or a quit mid-pass), the part of the transcript no run
+        // folded in is worked out now from what was saved.
+        let ended = (self.deps.live_meeting)().as_deref() != Some(meeting_id);
+        let not_covered = if ended { stored.as_ref().and_then(|s| self.ended_uncovered(meeting_id, s)) } else { None };
+        if ended && stored.is_some() {
+            status = Some("done".to_string());
+        }
         let reason = if let Some((from, to)) = not_covered {
             Some(format!("Not covered: {} to {}", crate::live_common::fmt_clock(from), crate::live_common::fmt_clock(to)))
         } else if !settings.enabled {

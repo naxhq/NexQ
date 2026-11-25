@@ -93,17 +93,39 @@ pub struct NoteDoc {
     /// so it survives the end of the meeting and a restart.
     #[serde(default)]
     pub uncovered: Option<(u64, u64)>,
+    /// The first line the notes were given (ms since the meeting started).
+    #[serde(default)]
+    pub started_at: Option<u64>,
+    /// The last line a run folded into the notes. With `started_at` this says, at any time and
+    /// without anything having been saved at the end, which part of the transcript the notes miss.
+    #[serde(default)]
+    pub covered_to: Option<u64>,
 }
 
 impl Default for NoteDoc {
     fn default() -> Self {
-        Self { version: DOC_VERSION, blocks: Vec::new(), next_id: 1, uncovered: None }
+        Self { version: DOC_VERSION, blocks: Vec::new(), next_id: 1, uncovered: None, started_at: None, covered_to: None }
     }
 }
 
 impl NoteDoc {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The stretch of a finished transcript (`line_times`: ms of its final lines) that the notes
+    /// never covered: lines from where the notes began that no run folded in. Falls back to the
+    /// range saved at the end for notes that predate the coverage fields.
+    pub fn uncovered_in(&self, line_times: &[u64]) -> Option<(u64, u64)> {
+        let Some(start) = self.started_at else { return self.uncovered };
+        let missed = line_times.iter().copied().filter(|t| *t >= start && self.covered_to.map_or(true, |c| *t > c));
+        let (mut lo, mut hi, mut any) = (u64::MAX, 0u64, false);
+        for t in missed {
+            lo = lo.min(t);
+            hi = hi.max(t);
+            any = true;
+        }
+        any.then_some((lo, hi))
     }
 
     pub fn get(&self, id: &str) -> Option<&Block> {
