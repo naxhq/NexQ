@@ -168,6 +168,9 @@ pub struct AppState {
     /// A with-sources session that just failed to start: answers skip it for
     /// a while instead of waiting on it again.
     pub sources_cooldown: Arc<crate::llm::cli_agent::routing::SourcesCooldown>,
+    /// The one service chat, notes, brief, recap and memory calls go through
+    /// (set in `setup`, once the session manager exists).
+    pub ai_runs: Option<Arc<crate::ai_runs::AiRuns>>,
 }
 
 /// The meeting between `start_meeting` and `end_meeting`.
@@ -230,6 +233,7 @@ impl AppState {
             sources_applied: Arc::new(Mutex::new((PersonalSourcesConfig::default(), 0))),
             sources_cooldown: Arc::new(Default::default()),
             pending_servers: Arc::new(Mutex::new(Vec::new())),
+            ai_runs: None,
         }
     }
 }

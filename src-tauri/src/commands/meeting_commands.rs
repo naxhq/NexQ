@@ -406,6 +406,11 @@ pub(crate) fn restart_meeting_sessions(app: &AppHandle, meeting_id: &str) {
     let is_live = live_meeting_is(&state, meeting_id);
     state.meeting_sessions.remove_scope(&live_scope);
     state.meeting_sessions.remove_scope(&past_scope);
+    // The old sessions leave their keys at once; a request that comes next
+    // starts a new session under the new record and never queues behind the
+    // old ones, which only finish the turn they are in and close.
+    state.agent_sessions.detach_scope(&live_scope);
+    state.agent_sessions.detach_scope(&past_scope);
     let rewarm = is_live && routing::cli_agent_is_active(&state);
     let with_sources = rewarm
         && runtime::sources_for(&state, &runtime::for_meeting(&state, meeting_id).scope)
@@ -414,17 +419,18 @@ pub(crate) fn restart_meeting_sessions(app: &AppHandle, meeting_id: &str) {
     let sessions = state.agent_sessions.clone();
     let app = app.clone();
     let id = meeting_id.to_string();
-    tauri::async_runtime::spawn(async move {
-        sessions.close_scope(&live_scope).await;
-        sessions.close_scope(&past_scope).await;
-        if rewarm {
-            let key = SessionKey::plain(SessionScope::Live(id.clone()), Tier::Fast);
-            start_session_in_background(&app, key, |state| live_session_record(state, Tier::Fast, &[], false));
-            if with_sources {
-                let key = SessionKey::sources(SessionScope::Live(id), Tier::Fast);
-                start_session_in_background(&app, key, |state| live_session_record(state, Tier::Fast, &[], true));
-            }
+    if rewarm {
+        let key = SessionKey::plain(SessionScope::Live(id.clone()), Tier::Fast);
+        start_session_in_background(&app, key, |state| live_session_record(state, Tier::Fast, &[], false));
+        if with_sources {
+            let key = SessionKey::sources(SessionScope::Live(id), Tier::Fast);
+            start_session_in_background(&app, key, |state| live_session_record(state, Tier::Fast, &[], true));
         }
+    }
+    tauri::async_runtime::spawn(async move {
+        let bound = crate::llm::cli_agent::manager::DRAIN_TIMEOUT;
+        sessions.close_retired_graceful(&live_scope, bound).await;
+        sessions.close_retired_graceful(&past_scope, bound).await;
     });
 }
 
@@ -602,6 +608,11 @@ pub async fn end_meeting(
         }
     }
     close_scope_in_background(&state, SessionScope::Live(meeting_id.clone()));
+    // Its notes and brief sessions end after the turn they are in.
+    if let Some(ai) = state.ai_runs.clone() {
+        let id = meeting_id.clone();
+        tauri::async_runtime::spawn(async move { ai.close_meeting(&id).await });
+    }
 
     let db_arc = state
         .database

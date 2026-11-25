@@ -447,6 +447,8 @@ pub struct AiRuns {
     cli: Arc<AgentSessionManager>,
     gate: Arc<LiveGate>,
     configs: Arc<dyn ConfigSource>,
+    /// The app's endpoint hints (None for a service built from parts).
+    hints: Option<Arc<CredentialConfigs>>,
     windows: ModelWindows,
     defer_limit: Duration,
     /// The window last asked of each local model: only grows, so the server
@@ -470,12 +472,19 @@ impl AiRuns {
                 }
             }
         }));
-        Self::with_parts(
-            Arc::new(LiveBackend::new(app)),
-            cli,
-            LiveGate::global(),
-            Arc::new(CredentialConfigs::new(credentials)),
-        )
+        let configs = Arc::new(CredentialConfigs::new(credentials));
+        let mut runs = Self::with_parts(Arc::new(LiveBackend::new(app)), cli, LiveGate::global(), configs.clone());
+        runs.hints = Some(configs);
+        runs
+    }
+
+    /// Remember a provider's endpoint and auth settings (a custom or remote
+    /// Ollama address) for runs on that provider. Call it whenever the app
+    /// learns them; keys are never kept here.
+    pub fn set_hint(&self, config: ProviderConfig) {
+        if let Some(hints) = &self.hints {
+            hints.set_hint(config);
+        }
     }
 
     pub fn with_parts(
@@ -489,6 +498,7 @@ impl AiRuns {
             cli,
             gate,
             configs,
+            hints: None,
             windows: ModelWindows::new(),
             defer_limit: DEFER_LIMIT,
             ollama_ctx: Mutex::new(HashMap::new()),

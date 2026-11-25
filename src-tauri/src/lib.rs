@@ -360,6 +360,12 @@ pub fn run() {
             tauri::async_runtime::spawn(llm::cli_agent::manager::run_idle_reaper(
                 app_state.agent_sessions.clone(),
             ));
+            // The AI run service shares that manager (and closes a chat's transcript folder with its session).
+            app_state.ai_runs = Some(Arc::new(ai_runs::AiRuns::new(
+                app.handle().clone(),
+                app_state.agent_sessions.clone(),
+                app_state.credentials.clone(),
+            )));
             // Re-probe an unavailable CLI agent every 60 s (no model call).
             tauri::async_runtime::spawn(llm::cli_agent::routing::run_health_probe(
                 app.handle().clone(),
@@ -783,6 +789,7 @@ pub fn run() {
             workspace_commands::update_workspace_item,
             workspace_commands::remove_workspace_item,
             workspace_commands::list_library,
+            workspace_commands::remove_library_item,
             workspace_commands::add_workspace_text,
             workspace_commands::move_meeting,
             workspace_commands::list_workspace_meetings,

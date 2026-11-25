@@ -225,6 +225,22 @@ pub async fn remove_workspace_item(
     Ok(())
 }
 
+/// The user removed a folder or server (after the new config was saved with
+/// `set_personal_sources`): it leaves every workspace. Documents leave through
+/// `remove_context_file`. Refused while the item is still in the saved sources.
+#[command]
+pub async fn remove_library_item(
+    kind: ItemKind,
+    ref_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let cfg = state.personal_sources.read().map(|c| c.clone()).unwrap_or_default();
+    with_conn(&state, |conn| sources_seed::remove_item_everywhere(conn, &cfg, kind, &ref_id))?;
+    emit_changed(&app, None);
+    Ok(())
+}
+
 #[command]
 pub async fn list_library(state: State<'_, AppState>) -> Result<Vec<LibraryItem>, String> {
     let members = with_conn(&state, store::memberships)?;

@@ -66,6 +66,11 @@ pub async fn set_llm_provider(
     if let Ok(pt) = ProviderType::from_str(&provider_type) {
         crate::ai_runs::LiveGate::global().set_target(crate::ai_runs::LiveTarget::for_provider(&pt, config.base_url.as_deref()));
     }
+    // Background AI runs find this provider's endpoint (a custom or remote
+    // Ollama address) here; the key is never kept.
+    if let Some(ai) = state.ai_runs.as_ref() {
+        ai.set_hint(config.clone());
+    }
     router
         .set_provider(config)
         .map_err(|e| format!("Failed to set provider: {}", e))?;

@@ -201,6 +201,88 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// Makes `link` a directory link to `target`: a symlink on unix, a junction
+    /// on Windows (no privilege needed). False when the system refused.
+    fn link_dir(link: &Path, target: &Path) -> bool {
+        #[cfg(windows)]
+        {
+            std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
+    }
+
+    #[test]
+    fn a_junction_or_symlink_that_leads_outside_is_refused() {
+        let root = dir("links");
+        let recordings = root.join("recordings");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&recordings).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let secret = outside.join("secret.txt");
+        std::fs::write(&secret, b"x").unwrap();
+        let link = recordings.join("sneaky");
+        assert!(link_dir(&link, &outside), "the test needs to make a directory link");
+        // The database says the recording is "inside" the folder, through the link.
+        let through = link.join("secret.txt");
+        assert!(through.exists());
+        let n = delete_files_inside(&recordings, &[through, link.clone()]);
+        assert_eq!(n, 0);
+        assert!(secret.exists(), "the file outside the folder must survive");
+        assert!(outside.exists());
+        // The recordings folder itself being a link to elsewhere deletes nothing there either.
+        let elsewhere = root.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let precious = elsewhere.join("m.ogg");
+        std::fs::write(&precious, b"x").unwrap();
+        let fake_dir = root.join("fake_recordings");
+        assert!(link_dir(&fake_dir, &elsewhere));
+        // A real file inside a folder that resolves to its own target is "inside" it;
+        // what matters is a path outside the resolved folder is refused.
+        let unrelated = outside.join("secret.txt");
+        assert_eq!(delete_files_inside(&fake_dir, &[unrelated]), 0);
+        assert!(secret.exists());
+        // Remove the links first so cleanup never follows them.
+        #[cfg(windows)]
+        {
+            let _ = std::fs::remove_dir(&link);
+            let _ = std::fs::remove_dir(&fake_dir);
+        }
+        #[cfg(unix)]
+        {
+            let _ = std::fs::remove_file(&link);
+            let _ = std::fs::remove_file(&fake_dir);
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_file_symlink_to_outside_is_refused_where_the_system_allows_making_one() {
+        let root = dir("filelink");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        let outside = root.join("precious.txt");
+        std::fs::write(&outside, b"x").unwrap();
+        let link = recordings.join("m.ogg");
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(&outside, &link).is_ok();
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&outside, &link).is_ok();
+        if made {
+            assert_eq!(delete_files_inside(&recordings, &[link]), 0);
+            assert!(outside.exists());
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn purging_a_meeting_removes_everything_it_owns() {
         let conn = memory_db();

@@ -510,6 +510,10 @@ pub struct AgentSessionManager {
     entries: Mutex<HashMap<SessionKey, Entry>>,
     /// Serializes spawning per key so concurrent `ensure`s start one session.
     spawn_locks: Mutex<HashMap<SessionKey, Arc<AsyncMutex<()>>>>,
+    /// Sessions taken out of their key by [`AgentSessionManager::detach_scope`]
+    /// while a turn of theirs is still running. A new session may already
+    /// hold the key; these only finish their turns and are then closed.
+    retiring: Mutex<Vec<(SessionKey, Entry)>>,
     cursors: Mutex<HashMap<SessionKey, Arc<AsyncMutex<DeltaCursor>>>>,
     usage: Mutex<HashMap<SessionScope, SessionUsage>>,
     shutting_down: AtomicBool,
@@ -535,6 +539,7 @@ impl AgentSessionManager {
             settings,
             entries: Mutex::new(HashMap::new()),
             spawn_locks: Mutex::new(HashMap::new()),
+            retiring: Mutex::new(Vec::new()),
             cursors: Mutex::new(HashMap::new()),
             usage: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
@@ -829,6 +834,13 @@ impl AgentSessionManager {
                 _ => None,
             }
         };
+        if transition.is_none() {
+            // A turn of a session that was detached for a restart.
+            let mut retiring = self.retiring.lock().unwrap();
+            if let Some((_, entry)) = retiring.iter_mut().find(|(k, e)| k == key && same_session(&e.handle, handle)) {
+                entry.in_flight = entry.in_flight.saturating_sub(1);
+            }
+        }
         self.turn_ended.notify_waiters();
         if let Some((state, error)) = transition {
             self.emit(key, state, &handle.model(), error);
@@ -940,7 +952,8 @@ impl AgentSessionManager {
     /// soon as they come up, and no new session starts afterwards.
     pub async fn close_all(&self) {
         self.shutting_down.store(true, Ordering::SeqCst);
-        let drained: Vec<(SessionKey, Entry)> = self.entries.lock().unwrap().drain().collect();
+        let mut drained: Vec<(SessionKey, Entry)> = self.entries.lock().unwrap().drain().collect();
+        drained.extend(self.retiring.lock().unwrap().drain(..));
         self.cursors.lock().unwrap().clear();
         futures::future::join_all(drained.iter().map(|(_, entry)| entry.handle.close())).await;
         for (key, entry) in &drained {
@@ -962,6 +975,63 @@ impl AgentSessionManager {
             }
         }
         futures::future::join_all(keys.iter().map(|key| self.close_key_graceful(key, bound))).await;
+    }
+
+    /// Takes every session of `scope` out of service at once, without waiting
+    /// for anything: a request that arrives next finds no session for its key
+    /// and starts a new one under the new record, never queued behind the old
+    /// one's turns (no spawn lock is taken). A turn still running on an old
+    /// session finishes there; close those with
+    /// [`AgentSessionManager::close_retired_graceful`]. Returns how many sessions
+    /// were detached.
+    pub fn detach_scope(&self, scope: &SessionScope) -> usize {
+        let mut moved: Vec<(SessionKey, Entry)> = Vec::new();
+        {
+            let mut entries = self.entries.lock().unwrap();
+            let keys: Vec<SessionKey> = entries.keys().filter(|k| &k.scope == scope).cloned().collect();
+            for key in keys {
+                if let Some(mut entry) = entries.remove(&key) {
+                    entry.draining = true;
+                    moved.push((key, entry));
+                }
+            }
+        }
+        {
+            let mut cursors = self.cursors.lock().unwrap();
+            for (key, _) in &moved {
+                cursors.remove(key);
+            }
+        }
+        let count = moved.len();
+        self.retiring.lock().unwrap().extend(moved);
+        count
+    }
+
+    /// Closes the sessions [`AgentSessionManager::detach_scope`] took out for
+    /// `scope`: after their turns in flight finish (at most `bound`, then they
+    /// are cut). A session that took the key since is not touched.
+    pub async fn close_retired_graceful(&self, scope: &SessionScope, bound: Duration) {
+        let deadline = tokio::time::Instant::now() + bound;
+        loop {
+            let ended = self.turn_ended.notified();
+            tokio::pin!(ended);
+            ended.as_mut().enable();
+            let idle = self.retiring.lock().unwrap().iter().filter(|(k, _)| &k.scope == scope).all(|(_, e)| e.in_flight == 0);
+            if idle {
+                break;
+            }
+            if tokio::time::timeout_at(deadline, ended).await.is_err() {
+                log::warn!("closing retired sessions of {:?} with a turn still in flight after {bound:?}", scope);
+                break;
+            }
+        }
+        let taken: Vec<(SessionKey, Entry)> = {
+            let mut retiring = self.retiring.lock().unwrap();
+            let (mine, rest): (Vec<_>, Vec<_>) = retiring.drain(..).partition(|(k, _)| &k.scope == scope);
+            *retiring = rest;
+            mine
+        };
+        futures::future::join_all(taken.iter().map(|(_, entry)| entry.handle.close())).await;
     }
 
     /// [`AgentSessionManager::close_scope_graceful`] for one key.
@@ -2445,6 +2515,69 @@ mod tests {
         assert!(matches!(late, Err(AgentError::Crashed(ref m)) if m.contains("restarting")), "{late:?}");
         slow.await.unwrap().unwrap();
         closing.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_detached_scope_gives_a_new_session_at_once_while_the_old_turn_finishes_and_is_then_closed() {
+        let (mgr, spawner, _sink) = setup();
+        let mgr = Arc::new(mgr);
+        let scope = SessionScope::Live("m".into());
+        let k = key(scope.clone(), Tier::Fast);
+        mgr.ensure(&k, init(&[])).await.unwrap();
+        // A turn that never ends on the old session.
+        let stuck = tokio::spawn({
+            let (mgr, k) = (mgr.clone(), k.clone());
+            async move { mgr.ask(&k, "block", no_delta(), Arc::new(CancelToken::new())).await }
+        });
+        tokio::time::sleep(Duration::from_millis(15)).await;
+        assert_eq!(mgr.detach_scope(&scope), 1);
+        // The drain is waiting (it holds nothing a new ask needs) ...
+        let drain = tokio::spawn({
+            let (mgr, scope) = (mgr.clone(), scope.clone());
+            async move { mgr.close_retired_graceful(&scope, Duration::from_millis(400)).await }
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        // ... and a live ask arriving now gets a new session without waiting for it.
+        let started = Instant::now();
+        mgr.ensure(&k, init(&["new documents"])).await.unwrap();
+        let answer = mgr.ask(&k, "hello", no_delta(), Arc::new(CancelToken::new())).await.unwrap();
+        assert_eq!(answer.text, "hello");
+        assert!(started.elapsed() < Duration::from_millis(150), "not queued behind the drain: {:?}", started.elapsed());
+        let spawned = spawner.spawned.lock().unwrap();
+        assert_eq!(spawned.len(), 2);
+        assert!(!spawned[1].1.closed.load(Ordering::SeqCst), "the new session is untouched");
+        assert!(spawned[1].1.appended.lock().unwrap().iter().any(|m| m == "new documents"));
+        drop(spawned);
+        // The old turn is cut at the bound and only the old session closes.
+        drain.await.unwrap();
+        let spawned = spawner.spawned.lock().unwrap();
+        assert!(spawned[0].1.closed.load(Ordering::SeqCst));
+        assert!(!spawned[1].1.closed.load(Ordering::SeqCst));
+        drop(spawned);
+        stuck.abort();
+        assert_eq!(mgr.snapshot().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_detached_session_closes_right_after_its_turn_when_that_ends_before_the_bound() {
+        let (mgr, spawner, _sink) = setup();
+        let mgr = Arc::new(mgr);
+        let scope = SessionScope::Live("m".into());
+        let k = key(scope.clone(), Tier::Fast);
+        mgr.ensure(&k, init(&[])).await.unwrap();
+        let turn = tokio::spawn({
+            let (mgr, k) = (mgr.clone(), k.clone());
+            async move { mgr.ask(&k, "slow", no_delta(), Arc::new(CancelToken::new())).await }
+        });
+        tokio::time::sleep(Duration::from_millis(15)).await;
+        mgr.detach_scope(&scope);
+        let started = Instant::now();
+        mgr.close_retired_graceful(&scope, DRAIN_TIMEOUT).await;
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(turn.await.unwrap().unwrap().text, "slow", "the turn in flight was delivered");
+        assert!(spawner.spawned.lock().unwrap()[0].1.closed.load(Ordering::SeqCst));
+        // Nothing is left to detach or close.
+        assert_eq!(mgr.detach_scope(&scope), 0);
     }
 
     #[tokio::test]

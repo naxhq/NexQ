@@ -870,12 +870,13 @@ fn validate_sources(cfg: &PersonalSourcesConfig) -> Result<(), String> {
 #[command]
 pub fn set_personal_sources(
     config: PersonalSourcesConfig,
+    workspace_id: Option<String>,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
     validate_sources(&config)?;
-    // Folders and servers new to the workspaces are seeded into General once;
-    // ones removed leave their workspaces.
+    // Folders and servers are seeded into General once (the first push after the
+    // upgrade). A push never removes a membership.
     if crate::workspace::available() {
         if let Some(db) = state.database.as_ref() {
             if let Ok(db) = db.lock() {
@@ -892,6 +893,17 @@ pub fn set_personal_sources(
             .map_err(|_| "Couldn't save your sources".to_string())?;
         std::mem::replace(&mut *slot, config.clone())
     };
+    // Added from Settings by the user, who named the workspace to put what is
+    // new in (the open one, else the default). A startup push names none.
+    if let (Some(ws), true) = (workspace_id.as_deref().filter(|w| !w.is_empty()), crate::workspace::available()) {
+        if let Some(db) = state.database.as_ref() {
+            if let Ok(db) = db.lock() {
+                if let Err(e) = crate::workspace::sources_seed::file_new_items(db.connection(), &old, &config, ws) {
+                    log::warn!("Couldn't file the new sources in the workspace: {e}");
+                }
+            }
+        }
+    }
     let store = SystemSecrets::new();
     let pending: Vec<McpServer> = state
         .pending_servers
