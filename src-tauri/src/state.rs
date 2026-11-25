@@ -122,6 +122,10 @@ pub struct AppState {
     /// Active Gemini context cache for the current meeting session.
     /// Set when the user creates a cache; cleared on delete or meeting end.
     pub gemini_cache: Arc<Mutex<Option<CachedContent>>>,
+    /// The scope fingerprint the Gemini cache was built from. The cache is
+    /// used only by a request whose scope has the same fingerprint, so a cache
+    /// built from one workspace's documents never answers for another.
+    pub gemini_cache_scope: Arc<Mutex<Option<String>>>,
     /// Downloaded update waiting to be installed (on Restart or on quit).
     pub pending_update: Arc<Mutex<Option<PendingUpdate>>>,
     /// True while `download_update` is running; prevents parallel downloads.
@@ -206,6 +210,7 @@ impl AppState {
             openrouter_cache: Arc::new(Mutex::new(None)),
             tray_manager: Arc::new(Mutex::new(None)),
             gemini_cache: Arc::new(Mutex::new(None)),
+            gemini_cache_scope: Arc::new(Mutex::new(None)),
             pending_update: Arc::new(Mutex::new(None)),
             update_downloading: Arc::new(AtomicBool::new(false)),
             meeting_active: Arc::new(AtomicBool::new(false)),

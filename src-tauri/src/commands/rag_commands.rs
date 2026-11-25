@@ -183,7 +183,7 @@ pub async fn test_rag_search(
         (mgr.config().clone(), mgr.embedder_url(), mgr.embedding_model())
     };
 
-    let results = RagManager::search_async(db_arc, &query, &config, &embedder_url, &model).await?;
+    let results = RagManager::search_async(db_arc, &query, &config, &embedder_url, &model, None).await?;
 
     serde_json::to_string(&results)
         .map_err(|e| format!("Failed to serialize search results: {}", e))
@@ -302,7 +302,7 @@ pub async fn test_rag_answer(
         (mgr.config().clone(), mgr.embedder_url(), mgr.embedding_model())
     };
 
-    let chunks = RagManager::search_async(db_arc, &query, &config, &embedder_url, &emb_model).await?;
+    let chunks = RagManager::search_async(db_arc, &query, &config, &embedder_url, &emb_model, None).await?;
 
     if chunks.is_empty() {
         return Err("No relevant chunks found in the knowledge base".to_string());

@@ -151,6 +151,7 @@ async fn retrieve_rag(
     question_text: Option<String>,
     transcript_excerpt: String,
     top_k: usize,
+    scope: &crate::workspace::EffectiveScope,
 ) -> Result<RagRetrieval, String> {
     let mut out = RagRetrieval::default();
 
@@ -178,18 +179,26 @@ async fn retrieve_rag(
         return Ok(out);
     };
 
-    let (mut config, embedder_url, embedding_model) = {
+    let (mut config, embedder_url, embedding_model, transcript_file) = {
         let rag_guard = rag_arc.lock().map_err(|e| e.to_string())?;
-        (rag_guard.config().clone(), rag_guard.embedder_url(), rag_guard.embedding_model())
+        let transcript_file = rag_guard.transcript_file_id();
+        (rag_guard.config().clone(), rag_guard.embedder_url(), rag_guard.embedding_model(), transcript_file)
     };
     config.top_k = top_k;
+    // Only the scope's documents (and this meeting's own live transcript) may
+    // be searched; the filter applies before the best chunks are taken.
+    let files: Option<Vec<String>> = scope.document_filter().map(|mut files| {
+        files.extend(transcript_file);
+        files
+    });
+    let files = files.as_deref();
 
     let mut all_chunks: Vec<rag::search::ScoredChunk> = Vec::new();
 
     // Search 1: question only (clean semantic match)
     if let Some(ref q) = question_text {
         out.query = Some(q.clone());
-        match rag::RagManager::search_async(db_arc, q, &config, &embedder_url, &embedding_model).await {
+        match rag::RagManager::search_async(db_arc, q, &config, &embedder_url, &embedding_model, files).await {
             Ok(chunks) => all_chunks.extend(chunks),
             Err(e) => log::warn!("RAG search (question-only) failed: {}", e),
         }
@@ -201,14 +210,14 @@ async fn retrieve_rag(
         if out.query.is_none() {
             out.query = Some(combined.clone());
         }
-        match rag::RagManager::search_async(db_arc, &combined, &config, &embedder_url, &embedding_model).await {
+        match rag::RagManager::search_async(db_arc, &combined, &config, &embedder_url, &embedding_model, files).await {
             Ok(chunks) => all_chunks.extend(chunks),
             Err(e) => log::warn!("RAG search (combined) failed: {}", e),
         }
     } else if !has_question && has_transcript {
         // No question at all — search with transcript only as last resort
         out.query = Some(transcript_excerpt.clone());
-        match rag::RagManager::search_async(db_arc, &transcript_excerpt, &config, &embedder_url, &embedding_model).await {
+        match rag::RagManager::search_async(db_arc, &transcript_excerpt, &config, &embedder_url, &embedding_model, files).await {
             Ok(chunks) => all_chunks.extend(chunks),
             Err(e) => log::warn!("RAG search (transcript-only) failed: {}", e),
         }
@@ -253,8 +262,8 @@ const DOC_FALLBACK_CHARS: usize = 32_000;
 
 /// The attached documents' text, capped at [`DOC_FALLBACK_CHARS`]; None when
 /// nothing is attached.
-fn attached_documents_fallback(state: &AppState) -> Option<String> {
-    let text = state.context.as_ref()?.lock().ok()?.get_resources_context();
+fn attached_documents_fallback(state: &AppState, scoped: &crate::workspace::runtime::ScopedContext) -> Option<String> {
+    let text = state.context.as_ref()?.lock().ok()?.get_resources_context_for(scoped);
     cap_document_text(&text, DOC_FALLBACK_CHARS)
 }
 
@@ -327,8 +336,13 @@ pub(crate) fn request_with_sources(
     toggles: Option<SourceToggles>,
 ) -> bool {
     let last = state.meeting_sessions.last_answer_with_sources(scope);
-    routing::wants_sources(mode, toggles, last)
-        && state.personal_sources.read().map(|c| c.has_enabled()).unwrap_or(false)
+    routing::wants_sources(mode, toggles, last) && scope_has_sources(state, scope)
+}
+
+/// Whether anything is enabled that the scope of `scope`'s meeting may use.
+pub(crate) fn scope_has_sources(state: &AppState, scope: &SessionScope) -> bool {
+    let scoped = crate::workspace::runtime::for_session_scope(state, scope);
+    crate::workspace::runtime::sources_for(state, &scoped.scope).map(|c| c.has_enabled()).unwrap_or(false)
 }
 
 /// The chips of tool calls still running, by tool use id: a call leaves its
@@ -590,7 +604,7 @@ pub(crate) async fn session_assist(state: &AppState, app: &AppHandle, req: Sessi
             .map(|s| format!("{}: {}", s.speaker, s.text))
             .collect::<Vec<_>>()
             .join("\n");
-        match retrieve_rag(state, question_text, tail_chars(&recent, 500), req.rag_top_k).await {
+        match retrieve_rag(state, question_text, tail_chars(&recent, 500), req.rag_top_k, &crate::workspace::runtime::for_session_scope(state, &key.scope).scope).await {
             Ok(found) => rag = found,
             Err(e) => log::warn!("RAG retrieval for the Claude session failed: {e}"),
         }
@@ -992,6 +1006,12 @@ pub async fn generate_assist(
 
     // ── Route: warm Claude session, fallback provider, or stateless ──
     let (scope, epoch) = request_scope(&state, past_meeting_id.as_deref());
+    // What this request may use: its own meeting's scope (a past meeting's for
+    // its summary and chat), never another workspace's material.
+    let scoped = crate::workspace::runtime::for_request(&state, past_meeting_id.as_deref());
+    // The workspace's instructions follow the custom ones.
+    let composed_instructions =
+        crate::workspace::runtime::instructions_with_workspace(&composed_instructions, &scoped.scope);
     // Only an answer the user asked for, with a pill on, may use sources (no
     // `sources` at all means automatic: Auto-Answer, summaries, background tasks).
     let with_sources = request_with_sources(&state, &mode, &scope, sources);
@@ -1192,11 +1212,17 @@ pub async fn generate_assist(
     };
 
     // Check for active Gemini context cache — only applies when Gemini is the provider
+    // and only for a request whose scope is the one the cache was built from.
     let active_cache_name = if provider_type == Some(ProviderType::Gemini) {
-        state.gemini_cache
-            .lock()
-            .ok()
-            .and_then(|slot| slot.as_ref().map(|c| c.name.clone()))
+        let built_for = state.gemini_cache_scope.lock().ok().and_then(|s| s.clone());
+        if built_for.as_deref() == Some(scoped.scope.fingerprint().as_str()) {
+            state.gemini_cache
+                .lock()
+                .ok()
+                .and_then(|slot| slot.as_ref().map(|c| c.name.clone()))
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -1230,14 +1256,14 @@ pub async fn generate_assist(
             .filter(|q| !q.is_empty())
             .map(|q| q.to_string())
             .or_else(|| effective_question.as_ref().map(|q| q.text.clone()));
-        retrieve_rag(&state, question_text, tail_chars(&transcript_text, 500), rag_top_k).await?
+        retrieve_rag(&state, question_text, tail_chars(&transcript_text, 500), rag_top_k, &scoped.scope).await?
     } else {
         RagRetrieval::default()
     };
     // Nothing retrieved (no index yet, Ollama unreachable, or no match): include
     // the attached documents directly so the AI still has the meeting context.
     if include_rag && active_cache_name.is_none() && rag.context_text.is_empty() {
-        if let Some(docs) = attached_documents_fallback(&state) {
+        if let Some(docs) = attached_documents_fallback(&state, &scoped) {
             rag.context_text = docs;
         }
     }

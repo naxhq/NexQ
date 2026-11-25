@@ -16,6 +16,8 @@ use crate::llm::cli_agent::protocol::AgentErrorKind;
 use crate::llm::cli_agent::routing::{self, SessionRecord, PRELOAD_MESSAGE_CHARS};
 use crate::sources::launch::build_sources_launch;
 use crate::state::{AppState, LiveMeeting};
+use crate::workspace::runtime;
+use crate::workspace::EffectiveScope;
 
 /// Global custom instructions (AI Actions settings).
 fn custom_instructions(state: &AppState) -> String {
@@ -27,22 +29,25 @@ fn custom_instructions(state: &AppState) -> String {
         .unwrap_or_default()
 }
 
-/// The launch of a with-sources session from the saved sources and secrets:
-/// `Ok(None)` when nothing usable is enabled, `Err` when something was enabled
-/// but every source was left out.
-pub(crate) fn current_sources_launch(state: &AppState) -> Result<Option<SourcesLaunch>, String> {
-    let cfg = state
-        .personal_sources
-        .read()
-        .map_err(|_| "Couldn't read your sources".to_string())?
-        .clone();
+/// The launch of a with-sources session from the saved sources and secrets,
+/// cut down to what `scope` may use: `Ok(None)` when nothing usable is
+/// enabled, `Err` when something was enabled but every source was left out.
+pub(crate) fn current_sources_launch(
+    state: &AppState,
+    scope: &EffectiveScope,
+) -> Result<Option<SourcesLaunch>, String> {
+    let cfg = runtime::sources_for(state, scope)?;
     build_sources_launch(&cfg, &crate::commands::sources_commands::saved_secret)
 }
 
 /// `record` as a with-sources session starts it: the sources launch, and the
 /// system prompt followed by what each source is.
-fn with_sources_record(state: &AppState, mut record: SessionRecord) -> Result<SessionRecord, String> {
-    let launch = current_sources_launch(state)?.ok_or_else(|| "No personal sources are enabled".to_string())?;
+fn with_sources_record(
+    state: &AppState,
+    mut record: SessionRecord,
+    scope: &EffectiveScope,
+) -> Result<SessionRecord, String> {
+    let launch = current_sources_launch(state, scope)?.ok_or_else(|| "No personal sources are enabled".to_string())?;
     record.system_prompt = format!("{}\n\n{}", record.system_prompt, launch.system_prompt_addition);
     record.sources = Some(launch);
     Ok(record)
@@ -65,11 +70,14 @@ pub(crate) fn live_session_record(
         .read()
         .map(|s| (s.system_prompt.clone(), s.speaker_context.clone()))
         .unwrap_or_default();
+    // The running meeting's own scope: its workspace, what it borrows, and
+    // General when its workspace includes it.
+    let scoped = runtime::for_live_or_default(state);
     let documents = state
         .context
         .as_ref()
         .and_then(|c| c.lock().ok())
-        .map(|c| c.get_assembled_context())
+        .map(|c| c.get_assembled_context_for(&scoped))
         .unwrap_or_default();
     let (mut preload, rag_mode) = routing::document_preload(&documents);
     let mut sent = HashMap::new();
@@ -81,7 +89,7 @@ pub(crate) fn live_session_record(
         system_prompt: routing::live_system_prompt(
             &scenario_prompt,
             &speaker_context,
-            &custom_instructions(state),
+            &runtime::instructions_with_workspace(&custom_instructions(state), &scoped.scope),
         ),
         preload,
         sent,
@@ -89,7 +97,7 @@ pub(crate) fn live_session_record(
         ..SessionRecord::default()
     };
     if with_sources {
-        with_sources_record(state, record)
+        with_sources_record(state, record, &scoped.scope)
     } else {
         Ok(record)
     }
@@ -152,13 +160,18 @@ pub(crate) fn past_session_record(
         true,
     );
     preload.extend(chat_history_preload(&context.chat));
+    // The past meeting's own scope, not whatever is running now.
+    let scoped = runtime::for_meeting(state, meeting_id);
     let record = SessionRecord {
-        system_prompt: routing::past_system_prompt(&custom_instructions(state)),
+        system_prompt: routing::past_system_prompt(&runtime::instructions_with_workspace(
+            &custom_instructions(state),
+            &scoped.scope,
+        )),
         preload,
         ..SessionRecord::default()
     };
     if with_sources {
-        with_sources_record(state, record)
+        with_sources_record(state, record, &scoped.scope)
     } else {
         Ok(record)
     }
@@ -360,9 +373,11 @@ pub(crate) fn restart_sources_sessions(app: &AppHandle) {
         state.meeting_sessions.clear_sources(scope);
     }
     let live = state.live_meeting.lock().ok().and_then(|m| m.as_ref().map(|m| m.id.clone()));
-    let rewarm = live.filter(|_| {
+    let rewarm = live.filter(|id| {
         routing::cli_agent_is_active(&state)
-            && state.personal_sources.read().map(|c| c.has_enabled()).unwrap_or(false)
+            && runtime::sources_for(&state, &runtime::for_meeting(&state, id).scope)
+                .map(|c| c.has_enabled())
+                .unwrap_or(false)
     });
     let sessions = state.agent_sessions.clone();
     let app = app.clone();
@@ -375,6 +390,46 @@ pub(crate) fn restart_sources_sessions(app: &AppHandle) {
             start_session_in_background(&app, key, |state| live_session_record(state, Tier::Fast, &[], true));
         }
     });
+}
+
+/// The scope of a meeting changed (a borrowed workspace added or removed, a
+/// new home, or its material or instructions edited): forget and close its
+/// sessions, which hold the old documents and sources, and warm the running
+/// meeting's Fast ones again with the new scope. Like a sources restart:
+/// in the background, requests in flight finish or restart on their own, and
+/// other meetings' sessions are untouched.
+pub(crate) fn restart_meeting_sessions(app: &AppHandle, meeting_id: &str) {
+    let state = app.state::<AppState>();
+    state.sources_cooldown.clear();
+    let live_scope = SessionScope::Live(meeting_id.to_string());
+    let past_scope = SessionScope::Past(meeting_id.to_string());
+    let is_live = live_meeting_is(&state, meeting_id);
+    state.meeting_sessions.remove_scope(&live_scope);
+    state.meeting_sessions.remove_scope(&past_scope);
+    let rewarm = is_live && routing::cli_agent_is_active(&state);
+    let with_sources = rewarm
+        && runtime::sources_for(&state, &runtime::for_meeting(&state, meeting_id).scope)
+            .map(|c| c.has_enabled())
+            .unwrap_or(false);
+    let sessions = state.agent_sessions.clone();
+    let app = app.clone();
+    let id = meeting_id.to_string();
+    tauri::async_runtime::spawn(async move {
+        sessions.close_scope(&live_scope).await;
+        sessions.close_scope(&past_scope).await;
+        if rewarm {
+            let key = SessionKey::plain(SessionScope::Live(id.clone()), Tier::Fast);
+            start_session_in_background(&app, key, |state| live_session_record(state, Tier::Fast, &[], false));
+            if with_sources {
+                let key = SessionKey::sources(SessionScope::Live(id), Tier::Fast);
+                start_session_in_background(&app, key, |state| live_session_record(state, Tier::Fast, &[], true));
+            }
+        }
+    });
+}
+
+fn live_meeting_is(state: &AppState, meeting_id: &str) -> bool {
+    state.live_meeting.lock().ok().map_or(false, |m| m.as_ref().map_or(false, |m| m.id == meeting_id))
 }
 
 /// Forget and close every session of `scope` without blocking the caller
@@ -454,6 +509,7 @@ pub async fn save_meeting_ai_interactions(
 #[command]
 pub async fn start_meeting(
     title: Option<String>,
+    workspace_id: Option<String>,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<String, String> {
@@ -473,8 +529,15 @@ pub async fn start_meeting(
         )
     });
 
-    let meeting = meetings::create_meeting(db.connection(), &title)
+    let mut meeting = meetings::create_meeting(db.connection(), &title)
         .map_err(|e| format!("Failed to create meeting: {}", e))?;
+    // File it in the requested workspace; an unknown or archived one means the
+    // default workspace.
+    if crate::workspace::available() {
+        let home = crate::workspace::store::resolve_home(db.connection(), workspace_id.as_deref());
+        crate::workspace::meetings::set_home(db.connection(), &meeting.id, &home)?;
+        meeting.workspace_id = home;
+    }
     state.meeting_active.store(true, Ordering::SeqCst);
 
     // Clear per-meeting state so the new meeting starts fresh.
@@ -513,7 +576,8 @@ pub async fn start_meeting(
         });
         // The with-sources Fast session warms beside it, so the first answer
         // with a pill on finds it ready. Deep ones start on first use.
-        let has_sources = state.personal_sources.read().map(|c| c.has_enabled()).unwrap_or(false);
+        let scope = runtime::for_meeting(&state, &meeting.id).scope;
+        let has_sources = runtime::sources_for(&state, &scope).map(|c| c.has_enabled()).unwrap_or(false);
         if has_sources {
             let key = SessionKey::sources(SessionScope::Live(meeting.id.clone()), Tier::Fast);
             start_session_in_background(&app, key, |state| {
@@ -694,12 +758,26 @@ pub async fn delete_meeting(
         .as_ref()
         .ok_or_else(|| "Database not initialized".to_string())?;
 
-    let db = db
-        .lock()
-        .map_err(|e| format!("Failed to lock database: {}", e))?;
-
-    meetings::delete_meeting(db.connection(), &meeting_id)
-        .map_err(|e| format!("Failed to delete meeting: {}", e))
+    // Everything about the meeting goes in one step: rows of every table
+    // (cached translations, notes, brief, search passages, borrowed ...).
+    let files = {
+        let db = db
+            .lock()
+            .map_err(|e| format!("Failed to lock database: {}", e))?;
+        let tx = db
+            .connection()
+            .unchecked_transaction()
+            .map_err(|e| format!("Failed to delete meeting: {}", e))?;
+        let files = crate::workspace::purge::purge_meeting(&tx, &meeting_id)?;
+        tx.commit().map_err(|e| format!("Failed to delete meeting: {}", e))?;
+        files
+    };
+    // Then the recording and waveform, only if they are in NexQ's recordings folder.
+    if let Some(dir) = crate::workspace::purge::recordings_dir() {
+        crate::workspace::purge::delete_files_inside(&dir, &files);
+    }
+    close_scope_in_background(&state, SessionScope::Past(meeting_id));
+    Ok(())
 }
 
 #[command]

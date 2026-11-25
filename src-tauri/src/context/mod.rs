@@ -10,6 +10,8 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use resource_cache::{CachedResource, ResourceCache};
+use crate::workspace::runtime::ScopedContext;
+use crate::workspace::EffectiveScope;
 use token_counter::{count_tokens, BudgetResource, TokenBudget};
 
 /// A loaded context resource (mirrors the TS ContextResource type).
@@ -23,6 +25,26 @@ pub struct ContextResource {
     pub token_count: usize,
     pub preview: String,
     pub loaded_at: String,
+    /// `ready`, `loading` (its text is being read in the background after a
+    /// start) or `missing` (the file can't be read; the row stays).
+    pub status: String,
+}
+
+/// Status of a document whose text is available.
+pub const STATUS_READY: &str = "ready";
+/// Status of a document whose text is still being read.
+pub const STATUS_LOADING: &str = "loading";
+/// Status of a document that can't be read.
+pub const STATUS_MISSING: &str = "missing";
+
+/// Reads a document's text from its copied file.
+pub fn extract_text(file_type: &str, file_path: &str) -> Result<String, String> {
+    match file_type {
+        "pdf" => pdf_extractor::extract_text_from_pdf(file_path),
+        "txt" | "md" => file_loader::load_text_file(file_path),
+        "docx" => crate::rag::file_processor::extract_docx_text(file_path),
+        _ => Ok(String::new()),
+    }
 }
 
 /// Loads, caches, and serves context text from files.
@@ -169,6 +191,7 @@ impl ContextManager {
             token_count,
             preview,
             loaded_at: loaded_at.clone(),
+            status: STATUS_READY.to_string(),
         };
 
         // Cache the extracted text
@@ -193,42 +216,86 @@ impl ContextManager {
         Ok(resource)
     }
 
-    /// Restore a previously-persisted resource from stored metadata.
-    ///
-    /// Re-extracts the text from the copied file in the context directory so
-    /// the in-memory cache is rebuilt after a restart. Skips silently if the
-    /// file is no longer on disk (returns Err so the caller can clean up DB).
-    pub fn restore_resource(&mut self, resource: ContextResource) -> Result<(), String> {
-        let path = Path::new(&resource.file_path);
-        if !path.exists() {
-            return Err(format!("Context file missing from disk: {}", resource.file_path));
+    /// Restore a previously-persisted resource from stored metadata, without
+    /// reading its file: `text` is what was saved when it was first read.
+    /// With no saved text the resource comes back `loading`, and the caller
+    /// reads the file off the main thread and calls [`Self::finish_extraction`].
+    /// Restoring twice changes nothing.
+    pub fn restore_resource(&mut self, mut resource: ContextResource, text: Option<String>) {
+        if self.resources.iter().any(|r| r.id == resource.id) {
+            return;
         }
+        match text {
+            Some(text) => {
+                let token_count = count_tokens(&text);
+                self.cache.insert(
+                    resource.id.clone(),
+                    CachedResource { text, token_count, loaded_at: resource.loaded_at.clone() },
+                );
+                resource.status = STATUS_READY.to_string();
+            }
+            None => resource.status = STATUS_LOADING.to_string(),
+        }
+        self.resources.push(resource);
+    }
 
-        // Re-extract text (needed for context-stuffing mode and token budget)
-        let text = match resource.file_type.as_str() {
-            "pdf" => pdf_extractor::extract_text_from_pdf(&resource.file_path)?,
-            "txt" | "md" => file_loader::load_text_file(&resource.file_path)?,
-            "docx" => crate::rag::file_processor::extract_docx_text(&resource.file_path)?,
-            _ => String::new(),
-        };
+    /// A resource restored with no saved text could not be read: it stays,
+    /// shown as missing.
+    pub fn mark_missing(&mut self, resource_id: &str) {
+        if let Some(r) = self.resources.iter_mut().find(|r| r.id == resource_id) {
+            r.status = STATUS_MISSING.to_string();
+        }
+        self.cache.remove(resource_id);
+    }
 
+    /// The text of a `loading` resource has been read.
+    pub fn finish_extraction(&mut self, resource_id: &str, text: String) {
         let token_count = count_tokens(&text);
+        let Some(r) = self.resources.iter_mut().find(|r| r.id == resource_id) else {
+            return;
+        };
+        r.status = STATUS_READY.to_string();
+        r.token_count = token_count;
+        let loaded_at = r.loaded_at.clone();
+        self.cache.insert(resource_id.to_string(), CachedResource { text, token_count, loaded_at });
+    }
 
-        self.cache.insert(
-            resource.id.clone(),
-            CachedResource {
-                text,
-                token_count,
-                loaded_at: resource.loaded_at.clone(),
-            },
-        );
+    /// Adds a Markdown document made from text (an answer saved to the
+    /// library): written to the context folder like any loaded file.
+    pub fn add_text(&mut self, title: &str, markdown: &str) -> Result<ContextResource, String> {
+        let stem: String = title
+            .trim()
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' { c } else { '_' })
+            .take(80)
+            .collect();
+        let stem = if stem.trim().is_empty() { "Note".to_string() } else { stem.trim().to_string() };
+        let resource_id = Uuid::new_v4().to_string();
+        let file_name = format!("{stem}.md");
+        let dest_path = self.context_dir.join(format!("{resource_id}_{file_name}"));
+        fs::write(&dest_path, markdown).map_err(|e| format!("Couldn't save the note: {e}"))?;
+        let token_count = count_tokens(markdown);
+        let preview: String = markdown.chars().take(100).collect();
+        let loaded_at = chrono::Utc::now().to_rfc3339();
+        let resource = ContextResource {
+            id: resource_id.clone(),
+            name: file_name,
+            file_type: "md".to_string(),
+            file_path: dest_path.to_string_lossy().to_string(),
+            size_bytes: markdown.len() as u64,
+            token_count,
+            preview,
+            loaded_at: loaded_at.clone(),
+            status: STATUS_READY.to_string(),
+        };
+        self.cache.insert(resource_id, CachedResource { text: markdown.to_string(), token_count, loaded_at });
+        self.resources.push(resource.clone());
+        Ok(resource)
+    }
 
-        // Guard against duplicate restore (idempotent)
-        if !self.resources.iter().any(|r| r.id == resource.id) {
-            self.resources.push(resource);
-        }
-
-        Ok(())
+    /// The cached text of a resource.
+    pub fn cached_text(&self, resource_id: &str) -> Option<String> {
+        self.cache.get(resource_id).map(|c| c.text.clone())
     }
 
     /// Remove a context resource by its ID.
@@ -308,6 +375,42 @@ impl ContextManager {
         parts.join("\n")
     }
 
+    fn document_sections(&self, scope: &EffectiveScope) -> Vec<String> {
+        let mut parts = Vec::new();
+        for resource in self.resources.iter().filter(|r| scope.allows_document(&r.id)) {
+            if let Some(cached) = self.cache.get(&resource.id) {
+                if !cached.text.is_empty() {
+                    parts.push(format!("## {} ({})\n{}\n", resource.name, resource.file_type, cached.text));
+                }
+            }
+        }
+        parts
+    }
+
+    /// Custom instructions, then the workspace's instructions, then the
+    /// talking points marked as context, then the documents the scope allows.
+    /// Nothing of a document outside the scope is in it.
+    pub fn get_assembled_context_for(&self, ctx: &ScopedContext) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if !self.custom_instructions.is_empty() {
+            parts.push(format!("## Custom Instructions\n{}\n", self.custom_instructions));
+        }
+        if !ctx.scope.instructions.trim().is_empty() {
+            parts.push(format!("## Workspace Instructions\n{}\n", ctx.scope.instructions.trim()));
+        }
+        parts.extend(points_sections(ctx));
+        parts.extend(self.document_sections(&ctx.scope));
+        parts.join("\n")
+    }
+
+    /// The scope's documents and context talking points, without instructions
+    /// (the stateless fallback when retrieval finds nothing).
+    pub fn get_resources_context_for(&self, ctx: &ScopedContext) -> String {
+        let mut parts = points_sections(ctx);
+        parts.extend(self.document_sections(&ctx.scope));
+        parts.join("\n")
+    }
+
     /// Set custom instructions text.
     pub fn set_custom_instructions(&mut self, text: &str) {
         self.custom_instructions = text.to_string();
@@ -340,5 +443,123 @@ impl ContextManager {
             transcript_tokens,
             model_context_window,
         )
+    }
+}
+
+/// The talking points marked as context, as prompt sections.
+fn points_sections(ctx: &ScopedContext) -> Vec<String> {
+    ctx.points
+        .iter()
+        .map(|p| {
+            let title = if p.title.trim().is_empty() { "Talking point" } else { p.title.trim() };
+            format!("## Talking point: {}\n{}\n", title, p.text.trim())
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace::talking_points::PointText;
+
+    fn manager_with(docs: &[(&str, &str)]) -> ContextManager {
+        let mut m = ContextManager {
+            context_dir: std::env::temp_dir(),
+            resources: Vec::new(),
+            cache: ResourceCache::new(),
+            custom_instructions: "CANARY_CUSTOM".to_string(),
+        };
+        for (id, text) in docs {
+            let r = ContextResource {
+                id: (*id).into(),
+                name: format!("{id}.txt"),
+                file_type: "txt".into(),
+                file_path: String::new(),
+                size_bytes: 0,
+                token_count: 0,
+                preview: String::new(),
+                loaded_at: String::new(),
+                status: STATUS_READY.into(),
+            };
+            m.restore_resource(r, Some((*text).to_string()));
+        }
+        m
+    }
+
+    fn scoped(ids: &[&str], instructions: &str, points: &[(&str, &str)]) -> ScopedContext {
+        ScopedContext {
+            scope: EffectiveScope {
+                home: "a".into(),
+                document_ids: ids.iter().map(|s| s.to_string()).collect(),
+                instructions: instructions.into(),
+                ..Default::default()
+            },
+            points: points.iter().map(|(t, x)| PointText { title: t.to_string(), text: x.to_string() }).collect(),
+        }
+    }
+
+    #[test]
+    fn assembled_context_holds_only_the_scopes_documents_in_order() {
+        let m = manager_with(&[("a", "CANARY_DOC_A"), ("b", "CANARY_DOC_B"), ("c", "CANARY_DOC_C")]);
+        let text = m.get_assembled_context_for(&scoped(&["a", "c"], "CANARY_WS_RULES", &[("Opening", "CANARY_POINT")]));
+        assert!(text.contains("CANARY_DOC_A") && text.contains("CANARY_DOC_C"));
+        assert!(!text.contains("CANARY_DOC_B"));
+        // Custom instructions come first, then the workspace's, then points, then documents.
+        let at = |needle: &str| text.find(needle).unwrap();
+        assert!(at("CANARY_CUSTOM") < at("CANARY_WS_RULES"));
+        assert!(at("CANARY_WS_RULES") < at("CANARY_POINT"));
+        assert!(at("CANARY_POINT") < at("CANARY_DOC_A"));
+    }
+
+    #[test]
+    fn the_resources_context_has_no_instructions_and_nothing_outside_the_scope() {
+        let m = manager_with(&[("a", "CANARY_DOC_A"), ("b", "CANARY_DOC_B")]);
+        let text = m.get_resources_context_for(&scoped(&["b"], "CANARY_WS_RULES", &[]));
+        assert!(text.contains("CANARY_DOC_B"));
+        assert!(!text.contains("CANARY_DOC_A") && !text.contains("CANARY_WS_RULES") && !text.contains("CANARY_CUSTOM"));
+        // An empty scope yields nothing at all.
+        assert_eq!(m.get_resources_context_for(&scoped(&[], "", &[])), "");
+        // Unrestricted (workspaces unavailable) is today's behaviour.
+        let all = m.get_resources_context_for(&ScopedContext::unrestricted());
+        assert!(all.contains("CANARY_DOC_A") && all.contains("CANARY_DOC_B"));
+    }
+
+    #[test]
+    fn a_restored_document_without_saved_text_is_loading_then_ready_or_missing() {
+        let mut m = manager_with(&[]);
+        let res = |id: &str| ContextResource {
+            id: id.into(),
+            name: id.into(),
+            file_type: "txt".into(),
+            file_path: String::new(),
+            size_bytes: 0,
+            token_count: 0,
+            preview: String::new(),
+            loaded_at: String::new(),
+            status: String::new(),
+        };
+        m.restore_resource(res("one"), None);
+        m.restore_resource(res("two"), None);
+        assert!(m.list_resources().iter().all(|r| r.status == STATUS_LOADING));
+        assert_eq!(m.get_resources_context_for(&ScopedContext::unrestricted()), "");
+        m.finish_extraction("one", "CANARY_LATE_TEXT".into());
+        m.mark_missing("two");
+        let by_id = |id: &str| m.list_resources().into_iter().find(|r| r.id == id).unwrap();
+        assert_eq!(by_id("one").status, STATUS_READY);
+        assert_eq!(by_id("two").status, STATUS_MISSING);
+        assert!(m.get_resources_context_for(&ScopedContext::unrestricted()).contains("CANARY_LATE_TEXT"));
+        // The row stays and restoring again changes nothing.
+        m.restore_resource(res("two"), Some("x".into()));
+        assert_eq!(m.list_resources().len(), 2);
+    }
+
+    #[test]
+    fn text_added_as_a_document_is_cached_and_scoped_like_any_other() {
+        let mut m = manager_with(&[]);
+        let r = m.add_text("Q3 plan / draft", "# Plan\nCANARY_SAVED_ANSWER").unwrap();
+        assert!(r.name.ends_with(".md") && !r.name.contains('/'));
+        assert!(m.get_assembled_context_for(&scoped(&[&r.id], "", &[])).contains("CANARY_SAVED_ANSWER"));
+        assert!(!m.get_assembled_context_for(&scoped(&[], "", &[])).contains("CANARY_SAVED_ANSWER"));
+        let _ = fs::remove_file(&r.file_path);
     }
 }

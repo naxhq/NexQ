@@ -16,6 +16,7 @@ pub mod state;
 pub mod stt;
 pub mod translation;
 pub mod tray;
+pub mod workspace;
 
 use state::AppState;
 use std::sync::{Arc, Mutex};
@@ -67,6 +68,8 @@ use commands::updater_commands;
 // == MODULE COMMANDS: claude cli ==
 use commands::claude_cli_commands;
 use commands::cli_agent_commands;
+// == MODULE COMMANDS: workspaces ==
+use commands::workspace_commands;
 
 /// Show the launcher window and hide the overlay window.
 pub(crate) fn show_launcher(app: &tauri::AppHandle) {
@@ -116,6 +119,39 @@ fn hide_all(app: &tauri::AppHandle) {
     }
     if let Some(overlay) = app.get_webview_window("overlay") {
         let _ = overlay.hide();
+    }
+}
+
+/// Reads the text of documents that were saved before the text was kept, one
+/// by one off the main thread. The text is saved so the next start reads
+/// nothing; a file that can't be read leaves its row, shown as missing.
+fn read_documents_in_background(
+    docs: Vec<context::ContextResource>,
+    db_arc: Arc<Mutex<db::DatabaseManager>>,
+    ctx_arc: Arc<Mutex<context::ContextManager>>,
+) {
+    for doc in docs {
+        let read = context::extract_text(&doc.file_type, &doc.file_path);
+        match read {
+            Ok(text) => {
+                let tokens = context::token_counter::count_tokens(&text) as i64;
+                if let Ok(db) = db_arc.lock() {
+                    let _ = workspace::documents::store_text(db.connection(), &doc.id, &text, tokens);
+                }
+                if let Ok(mut ctx) = ctx_arc.lock() {
+                    ctx.finish_extraction(&doc.id, text);
+                }
+            }
+            Err(e) => {
+                log::warn!("Context document {} can't be read, marking it missing: {}", doc.name, e);
+                if let Ok(db) = db_arc.lock() {
+                    let _ = workspace::documents::mark_missing(db.connection(), &doc.id, &e);
+                }
+                if let Ok(mut ctx) = ctx_arc.lock() {
+                    ctx.mark_missing(&doc.id);
+                }
+            }
+        }
     }
 }
 
@@ -203,22 +239,21 @@ pub fn run() {
             // -- Restore persisted context resources from DB --
             // Load stored metadata first (while holding DB lock), then restore into
             // ContextManager (different lock), then clean up any stale DB entries.
+            // Documents come back from the text saved in the database, so startup
+            // reads no file. A document with no saved text (from before this) is
+            // read once in the background; one that can't be read stays, as
+            // "missing".
             if let (Some(db_arc), Some(ctx_arc)) = (&app_state.database, &app_state.context) {
-                let stored = {
-                    match db_arc.lock() {
-                        Ok(db_guard) => {
-                            db::context::list_context_resources(db_guard.connection())
-                                .unwrap_or_default()
-                        }
-                        Err(_) => Vec::new(),
-                    }
+                let (stored, saved) = match db_arc.lock() {
+                    Ok(db_guard) => (
+                        db::context::list_context_resources(db_guard.connection()).unwrap_or_default(),
+                        workspace::documents::saved_texts(db_guard.connection()).unwrap_or_default(),
+                    ),
+                    Err(_) => (Vec::new(), Default::default()),
                 };
-
-                let mut missing_ids: Vec<String> = Vec::new();
-
+                let mut to_read: Vec<context::ContextResource> = Vec::new();
                 if let Ok(mut ctx) = ctx_arc.lock() {
                     for db_res in stored {
-                        let id = db_res.id.clone();
                         let res = context::ContextResource {
                             id: db_res.id,
                             name: db_res.name,
@@ -228,30 +263,26 @@ pub fn run() {
                             token_count: db_res.token_count as usize,
                             preview: db_res.preview,
                             loaded_at: db_res.loaded_at,
+                            status: context::STATUS_READY.to_string(),
                         };
-                        match ctx.restore_resource(res) {
-                            Ok(()) => {}
-                            Err(e) => {
-                                log::warn!("Context resource {} no longer on disk, removing: {}", id, e);
-                                missing_ids.push(id);
+                        match saved.get(&res.id) {
+                            Some(t) if t.status == "ready" => ctx.restore_resource(res, Some(t.text.clone())),
+                            Some(_) => {
+                                let id = res.id.clone();
+                                ctx.restore_resource(res, None);
+                                ctx.mark_missing(&id);
+                            }
+                            None => {
+                                to_read.push(res.clone());
+                                ctx.restore_resource(res, None);
                             }
                         }
                     }
-                    log::info!(
-                        "Restored {} context resource(s) from DB",
-                        ctx.list_resources().len()
-                    );
+                    log::info!("Restored {} context resource(s) from DB", ctx.list_resources().len());
                 }
-
-                // Clean up DB entries whose files have been deleted outside the app
-                if !missing_ids.is_empty() {
-                    if let Ok(db_guard) = db_arc.lock() {
-                        for id in &missing_ids {
-                            let _ = db::context::delete_context_resource(db_guard.connection(), id);
-                            let _ = db::rag::delete_chunks_by_file(db_guard.connection(), id);
-                        }
-                        log::info!("Cleaned up {} stale context resource(s)", missing_ids.len());
-                    }
+                if !to_read.is_empty() {
+                    let (db_arc, ctx_arc) = (db_arc.clone(), ctx_arc.clone());
+                    std::thread::spawn(move || read_documents_in_background(to_read, db_arc, ctx_arc));
                 }
             }
 
@@ -730,6 +761,38 @@ pub fn run() {
             sources_commands::discard_pending_mcp_servers,
             sources_commands::delete_mcp_secrets,
             sources_commands::open_source_file,
+            workspace_commands::get_workspaces_status,
+            workspace_commands::list_workspaces,
+            workspace_commands::get_workspace,
+            workspace_commands::create_workspace,
+            workspace_commands::update_workspace,
+            workspace_commands::clone_workspace,
+            workspace_commands::archive_workspace,
+            workspace_commands::delete_workspace,
+            workspace_commands::set_default_workspace,
+            workspace_commands::reorder_workspaces,
+            workspace_commands::add_workspace_item,
+            workspace_commands::update_workspace_item,
+            workspace_commands::remove_workspace_item,
+            workspace_commands::list_library,
+            workspace_commands::add_workspace_text,
+            workspace_commands::move_meeting,
+            workspace_commands::list_workspace_meetings,
+            workspace_commands::get_meeting_scope,
+            workspace_commands::set_meeting_scope,
+            workspace_commands::list_talking_points,
+            workspace_commands::save_talking_point,
+            workspace_commands::delete_talking_point,
+            workspace_commands::copy_talking_point,
+            workspace_commands::reorder_talking_points,
+            workspace_commands::get_point_progress,
+            workspace_commands::save_point_progress,
+            workspace_commands::get_meeting_point_edit,
+            workspace_commands::save_meeting_point_edit,
+            workspace_commands::list_memory,
+            workspace_commands::save_memory,
+            workspace_commands::delete_memory,
+            workspace_commands::resolve_memory,
             sources_commands::set_personal_sources,
             claude_cli_commands::open_claude_login_terminal,
         ])

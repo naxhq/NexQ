@@ -15,7 +15,10 @@ pub async fn create_gemini_context_cache(
     system_prompt: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    // Get assembled context text
+    // The documents of the running meeting's scope (the default workspace's
+    // when none runs). The cache answers only requests with the same scope.
+    let scoped = crate::workspace::runtime::for_live_or_default(&state);
+    let scope_fingerprint = scoped.scope.fingerprint();
     let context_text = {
         let ctx = state
             .context
@@ -23,7 +26,7 @@ pub async fn create_gemini_context_cache(
             .ok_or("Context manager not initialized")?
             .lock()
             .map_err(|e| format!("Context lock failed: {}", e))?;
-        ctx.get_assembled_context()
+        ctx.get_assembled_context_for(&scoped)
     };
 
     if context_text.trim().is_empty() {
@@ -85,6 +88,9 @@ pub async fn create_gemini_context_cache(
             .map_err(|e| format!("Cache state lock failed: {}", e))?;
         *cache_slot = Some(cached.clone());
     }
+    if let Ok(mut scope_slot) = state.gemini_cache_scope.lock() {
+        *scope_slot = Some(scope_fingerprint);
+    }
 
     serde_json::to_string(&cached).map_err(|e| format!("Serialize failed: {}", e))
 }
@@ -133,6 +139,9 @@ pub async fn delete_gemini_context_cache(
             .lock()
             .map_err(|e| format!("Cache state lock failed: {}", e))?;
         *slot = None;
+    }
+    if let Ok(mut scope_slot) = state.gemini_cache_scope.lock() {
+        *scope_slot = None;
     }
 
     log::info!("Gemini context cache deleted: {}", name);

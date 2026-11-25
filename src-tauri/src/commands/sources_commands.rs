@@ -874,6 +874,17 @@ pub fn set_personal_sources(
     app: AppHandle,
 ) -> Result<(), String> {
     validate_sources(&config)?;
+    // Folders and servers new to the workspaces are seeded into General once;
+    // ones removed leave their workspaces.
+    if crate::workspace::available() {
+        if let Some(db) = state.database.as_ref() {
+            if let Ok(db) = db.lock() {
+                if let Err(e) = crate::workspace::sources_seed::sync_with_config(db.connection(), &config) {
+                    log::warn!("Couldn't update the workspaces for the new sources: {e}");
+                }
+            }
+        }
+    }
     let old = {
         let mut slot = state
             .personal_sources
