@@ -16,7 +16,7 @@ export function EmptyState({ title, body, action, mark, className }: EmptyStateP
   return (
     <div className={cn("mx-auto flex max-w-[24rem] flex-col items-center px-6 py-10 text-center", className)}>
       {mark && <div className="mb-4 text-muted-foreground">{mark}</div>}
-      <h3 className="ui-section text-[0.9375rem]">{title}</h3>
+      <h3 className="ui-dialog-title">{title}</h3>
       {body && <p className="ui-body mt-1.5 text-muted-foreground">{body}</p>}
       {action && <div className="mt-4">{action}</div>}
     </div>

@@ -69,13 +69,13 @@ export function ColorSwatches({ value, onChange, allowNone = true, label = "Work
             onClick={() => onChange(c.id)}
             style={c.id ? { backgroundColor: `hsl(var(--hue-${c.id}))` } : undefined}
             className={cn(
-              "flex h-6 w-6 items-center justify-center rounded-full outline-none transition-transform duration-150 [transition-timing-function:var(--ui-ease)] focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-              !c.id && "border border-dashed border-muted-foreground/60",
-              on && "ring-2 ring-foreground/70 ring-offset-2 ring-offset-background",
+              "ui-focus-pill flex h-6 w-6 items-center justify-center rounded-full outline-none ui-focus transition-shadow duration-150",
+              !c.id && "border border-[hsl(var(--control-edge))]",
+              on && "shadow-[0_0_0_2px_hsl(var(--background)),0_0_0_4px_hsl(var(--foreground)/0.75)]",
             )}
           >
             {on && c.id && <Check className="h-3.5 w-3.5 text-background" aria-hidden strokeWidth={3} />}
-            {!c.id && <span className="h-px w-3 rotate-[-45deg] bg-muted-foreground" aria-hidden />}
+            {!c.id && <span className="h-px w-3.5 rotate-[-45deg] bg-[hsl(var(--control-edge))]" aria-hidden />}
           </button>
         );
       })}

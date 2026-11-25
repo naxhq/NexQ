@@ -666,19 +666,57 @@ select option {
   }
 }
 
-@layer utilities {
-  /* Type scale: page title 22/600, section 13/600, body 13.5/1.55, meta 11.5. */
-  .ui-title { font-size: 1.375rem; line-height: 1.25; font-weight: 600; letter-spacing: -0.012em; }
-  .ui-section { font-size: 0.8125rem; line-height: 1.4; font-weight: 600; }
-  .ui-body { font-size: 0.84375rem; line-height: 1.55; }
-  .ui-meta { font-size: 0.71875rem; line-height: 1.4; }
-  .ui-measure { max-width: 72ch; }
-  .ui-kbd {
-    font-family: inherit;
-    font-size: 0.71875rem;
-    line-height: 1;
-    font-weight: 500;
-  }
+/* Type scale: page title 22/600, section 13/600, body 13.5/1.55, meta 11.5.
+   Plain classes (not in @layer utilities): always emitted, and later than
+   Tailwind utilities, so they win over any text-* class on the same element. */
+.ui-title { font-size: 1.375rem; line-height: 1.25; font-weight: 600; letter-spacing: -0.012em; }
+.ui-section { font-size: 0.8125rem; line-height: 1.4; font-weight: 600; }
+.ui-dialog-title { font-size: 0.9375rem; line-height: 1.35; font-weight: 600; }
+.ui-body { font-size: 0.84375rem; line-height: 1.55; }
+.ui-meta { font-size: 0.71875rem; line-height: 1.4; }
+.ui-measure { max-width: 72ch; }
+.ui-kbd { font-family: inherit; font-size: 0.71875rem; line-height: 1; font-weight: 500; }
+
+/* Control surfaces: one step above the page, one more for the chosen item.
+   --control-edge reaches 3:1 on the page and card backgrounds (WCAG 1.4.11). */
+:root {
+  --control-edge: 215 16% 47%;
+  --ui-field: 210 30% 97%;
+  --ui-field-hover: 210 30% 93%;
+  --ui-raised: 0 0% 100%;
+}
+.dark {
+  --control-edge: 215 14% 52%;
+  --ui-field: 222 30% 11%;
+  --ui-field-hover: 222 28% 15%;
+  --ui-raised: 222 26% 22%;
+}
+.ui-field {
+  background: hsl(var(--ui-field));
+  border: 1px solid hsl(var(--border));
+  transition: background-color 150ms var(--ui-ease), border-color 150ms var(--ui-ease);
+}
+.ui-field:hover:not(:disabled) { background: hsl(var(--ui-field-hover)); }
+.ui-field[aria-expanded="true"] { border-color: hsl(var(--control-edge)); }
+.ui-raised { background: hsl(var(--ui-raised)); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28), inset 0 0 0 1px hsl(var(--border)); }
+
+/* One precise focus ring for every control. The global :focus-visible rule
+   squares corners to 6px, so each control says its own radius via --ui-r. */
+.ui-focus:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+  border-radius: var(--ui-r, 8px);
+}
+.ui-focus-pill { --ui-r: 9999px; }
+.ui-focus-sm { --ui-r: 4px; }
+
+/* "Silence": the same 2px rhythm as the strokes, at minimum height, on the centre line. */
+.ui-dots {
+  background-image: repeating-linear-gradient(90deg, currentColor 0 2px, transparent 2px 4px);
+  background-size: 100% 2px;
+  background-position: 0 50%;
+  background-repeat: no-repeat;
+  color: hsl(var(--muted-foreground) / 0.45);
 }
 
 @keyframes ui-pop-in {
@@ -706,4 +744,13 @@ select option {
 .ui-wave-bar {
   transform-origin: center;
   transition: transform 280ms var(--ui-ease), opacity 200ms var(--ui-ease);
+}
+
+/* Off switch: a track you can see (field surface + 3:1 edge) with an edge-coloured knob. */
+.ui-field-off {
+  background: hsl(var(--ui-field));
+  box-shadow: inset 0 0 0 1px hsl(var(--control-edge));
+}
+.ui-wave-rect {
+  transition: y 280ms var(--ui-ease), height 280ms var(--ui-ease);
 }

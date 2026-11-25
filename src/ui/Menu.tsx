@@ -196,7 +196,7 @@ export function Menu({ items, label, renderTrigger, align = "start", className }
                   onMouseMove={() => !it.disabled && setActive(i)}
                   onClick={() => choose(i)}
                   className={cn(
-                    "ui-body flex cursor-default select-none items-center gap-2 rounded-lg px-2.5 py-1.5 outline-none",
+                    "ui-body flex cursor-default select-none items-center gap-2 rounded-lg px-2.5 py-1.5 outline-none ui-focus",
                     i === active && "bg-accent",
                     it.danger && "text-destructive",
                     it.disabled && "opacity-45",

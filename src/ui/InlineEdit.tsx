@@ -85,7 +85,7 @@ export function InlineEdit({
           }
         }}
         className={cn(
-          "max-w-full truncate rounded-md px-1 py-0.5 text-left outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60",
+          "max-w-full truncate rounded-md px-1 py-0.5 text-left outline-none ui-focus transition-colors duration-150 hover:bg-accent",
           !value && "text-muted-foreground",
           className,
         )}
@@ -126,7 +126,7 @@ export function InlineEdit({
           if (!finish(true, false)) finish(false, false);
         }}
         className={cn(
-          "min-w-[6ch] rounded-md border border-border bg-background px-1 py-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+          "min-w-[6ch] rounded-md border border-border bg-background px-1 py-0.5 outline-none ui-focus",
           className,
         )}
       />

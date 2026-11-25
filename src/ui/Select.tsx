@@ -173,7 +173,7 @@ export function Select({
           }
         }}
         className={cn(
-          "ui-body inline-flex h-8 min-w-[9rem] items-center justify-between gap-2 rounded-lg border border-border bg-transparent px-2.5 text-left outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-50",
+          "ui-body inline-flex h-8 min-w-[9rem] items-center justify-between gap-2 rounded-lg ui-field px-2.5 text-left outline-none ui-focus disabled:opacity-50",
           className,
         )}
       >
@@ -206,7 +206,7 @@ export function Select({
                 }}
                 onKeyDown={onKey}
                 placeholder="Filter"
-                className="ui-body mb-1 h-8 w-full rounded-lg border border-border bg-transparent px-2.5 outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+                className="ui-body mb-1 h-8 w-full rounded-lg border border-border bg-transparent px-2.5 outline-none ui-focus placeholder:text-muted-foreground"
               />
             )}
             <div
@@ -219,7 +219,7 @@ export function Select({
               tabIndex={filterable ? -1 : 0}
               aria-activedescendant={filterable ? undefined : activeId}
               onKeyDown={filterable ? undefined : onKey}
-              className="max-h-64 overflow-y-auto outline-none"
+              className="max-h-64 overflow-y-auto outline-none ui-focus"
             >
               {shown.length === 0 && <div className="ui-meta px-2.5 py-2 text-muted-foreground">{emptyText}</div>}
               {shown.map((o, i) => (

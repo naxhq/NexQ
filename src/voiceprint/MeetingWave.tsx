@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { cn } from "../lib/utils";
 import { hueColor } from "../ui/hues";
 import { TooltipBubble } from "../ui/Tooltip";
@@ -18,10 +18,15 @@ export interface MeetingWaveProps {
   onOpen: (id: string) => void;
   /** Workspace hue id for the bars. */
   hue?: string | null;
-  /** Height in px. */
+  /** Height of the bars in px. */
   height?: number;
   className?: string;
 }
+
+/** A 4 px bar and 3 px of air; the button is the whole 7 px so there is no dead space. */
+const PITCH = 7;
+const BAR = 4;
+const MIN_SHARE = 0.22;
 
 function formatDuration(s: number | null): string {
   if (!s || s <= 0) return "length unknown";
@@ -37,20 +42,68 @@ function formatDate(d: string): string {
   return Number.isNaN(t.getTime()) ? d : t.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
+/** Bar height share: square root of length so a long call does not flatten the rest, with a clear floor. */
+export function meetingBarShare(seconds: number | null, longest: number): number {
+  if (!seconds || seconds <= 0 || longest <= 0) return MIN_SHARE;
+  return MIN_SHARE + (1 - MIN_SHARE) * Math.sqrt(Math.min(1, seconds / longest));
+}
+
+/** Month labels: at the first meeting of each month, skipping any that would touch the one before. */
+export function monthTicks(dates: string[], minGapBars = 8): Array<{ index: number; label: string }> {
+  const out: Array<{ index: number; label: string }> = [];
+  let lastKey = "";
+  let lastIndex = -Infinity;
+  dates.forEach((d, i) => {
+    const t = new Date(d);
+    if (Number.isNaN(t.getTime())) return;
+    const key = `${t.getFullYear()}-${t.getMonth()}`;
+    if (key === lastKey) return;
+    lastKey = key;
+    if (i - lastIndex < minGapBars) return;
+    const month = t.toLocaleDateString(undefined, { month: "short" });
+    out.push({ index: i, label: t.getMonth() === 0 || out.length === 0 ? `${month} ${t.getFullYear()}` : month });
+    lastIndex = i;
+  });
+  return out;
+}
+
 /**
- * The workspace header: one bar per meeting, oldest to newest, height = how long
- * it ran. Click or Enter opens it; the label shows on hover and focus.
+ * The workspace header: one 4 px bar per meeting, oldest to newest, left to
+ * right, height = how long it ran. The line of dots after the last bar is the
+ * recording still to come. Click or Enter opens a meeting; the label shows on
+ * hover and focus. Long histories scroll, starting at the newest.
  */
-export function MeetingWave({ meetings, onOpen, hue = null, height = 28, className }: MeetingWaveProps) {
+export function MeetingWave({ meetings, onOpen, hue = null, height = 32, className }: MeetingWaveProps) {
   const ordered = useMemo(
     () => [...meetings].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
     [meetings],
   );
-  const longest = useMemo(() => Math.max(1, ...ordered.map((m) => m.duration_seconds ?? 0)), [ordered]);
+  const longest = useMemo(() => Math.max(0, ...ordered.map((m) => m.duration_seconds ?? 0)), [ordered]);
+  const ticks = useMemo(() => monthTicks(ordered.map((m) => m.date)), [ordered]);
   const [focusIdx, setFocusIdx] = useState(Math.max(ordered.length - 1, 0));
   const [tip, setTip] = useState<{ id: string; anchor: Anchor } | null>(null);
+  const [fade, setFade] = useState({ left: false, right: false });
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
+  const scroller = useRef<HTMLDivElement | null>(null);
   const at = Math.min(focusIdx, Math.max(ordered.length - 1, 0));
+
+  const measure = () => {
+    const el = scroller.current;
+    if (!el) return;
+    setFade({ left: el.scrollLeft > 1, right: el.scrollLeft + el.clientWidth < el.scrollWidth - 1 });
+  };
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+    measure();
+  }, [ordered.length]);
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const focusAt = (i: number) => {
     const j = Math.max(0, Math.min(i, ordered.length - 1));
@@ -76,48 +129,80 @@ export function MeetingWave({ meetings, onOpen, hue = null, height = 28, classNa
   };
 
   const tipMeeting = tip ? ordered.find((m) => m.id === tip.id) : undefined;
+  const color = hueColor(hue);
 
   if (ordered.length === 0) {
-    return <div aria-hidden className={cn("h-px w-full bg-muted-foreground/40", className)} />;
+    return <div aria-hidden className={cn("ui-dots", className)} style={{ height }} />;
   }
+
+  const mask =
+    fade.left || fade.right
+      ? `linear-gradient(90deg, ${fade.left ? "transparent, #000 24px" : "#000, #000 0"}, ${fade.right ? "#000 calc(100% - 24px), transparent" : "#000 100%, #000 100%"})`
+      : undefined;
 
   return (
     <div
-      role="group"
-      aria-label={`${ordered.length} meetings, oldest to newest. Use the left and right arrow keys.`}
-      onKeyDown={onKey}
-      className={cn("flex w-full items-center gap-[2px] overflow-x-auto", className)}
-      style={{ height }}
+      ref={scroller}
+      onScroll={measure}
+      className={cn("w-full overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden", className)}
+      style={{ WebkitMaskImage: mask, maskImage: mask }}
     >
-      {ordered.map((m, i) => {
-        const h = 0.14 + 0.86 * ((m.duration_seconds ?? 0) / longest);
-        return (
-          <button
-            key={m.id}
-            ref={(el) => {
-              refs.current[i] = el;
-            }}
-            type="button"
-            tabIndex={i === at ? 0 : -1}
-            aria-label={`${m.title}, ${formatDate(m.date)}, ${formatDuration(m.duration_seconds)}`}
-            onClick={() => onOpen(m.id)}
-            onFocus={(e) => {
-              setFocusIdx(i);
-              setTip({ id: m.id, anchor: anchorOf(e.currentTarget) });
-            }}
-            onBlur={() => setTip((t) => (t?.id === m.id ? null : t))}
-            onMouseEnter={(e) => setTip({ id: m.id, anchor: anchorOf(e.currentTarget) })}
-            onMouseLeave={() => setTip((t) => (t?.id === m.id ? null : t))}
-            className="group flex h-full min-w-[4px] max-w-[10px] flex-1 cursor-pointer items-center rounded-[2px] outline-none focus-visible:ring-2 focus-visible:ring-ring/80"
+      <div className="flex min-w-full items-start">
+        <div className="shrink-0">
+          <div
+            role="group"
+            aria-label={`${ordered.length} meetings, oldest to newest. Use the left and right arrow keys.`}
+            onKeyDown={onKey}
+            className="flex"
+            style={{ height }}
           >
-            <span
-              aria-hidden
-              className="ui-wave-bar block w-full rounded-[2px] opacity-80 group-hover:opacity-100 group-focus-visible:opacity-100"
-              style={{ height: "100%", background: hueColor(hue), transform: `scaleY(${h})` }}
-            />
-          </button>
-        );
-      })}
+            {ordered.map((m, i) => (
+              <button
+                key={m.id}
+                ref={(el) => {
+                  refs.current[i] = el;
+                }}
+                type="button"
+                tabIndex={i === at ? 0 : -1}
+                aria-label={`${m.title}, ${formatDate(m.date)}, ${formatDuration(m.duration_seconds)}`}
+                onClick={() => onOpen(m.id)}
+                onFocus={(e) => {
+                  setFocusIdx(i);
+                  setTip({ id: m.id, anchor: anchorOf(e.currentTarget) });
+                }}
+                onBlur={() => setTip((t) => (t?.id === m.id ? null : t))}
+                onMouseEnter={(e) => setTip({ id: m.id, anchor: anchorOf(e.currentTarget) })}
+                onMouseLeave={() => setTip((t) => (t?.id === m.id ? null : t))}
+                className="group ui-focus-sm flex h-full cursor-pointer items-center justify-center outline-none ui-focus"
+                style={{ width: PITCH }}
+              >
+                <span
+                  aria-hidden
+                  className="ui-wave-bar block rounded-full opacity-75 group-hover:opacity-100 group-focus-visible:opacity-100"
+                  style={{
+                    width: BAR,
+                    height: "100%",
+                    background: color,
+                    transform: `scaleY(${meetingBarShare(m.duration_seconds, longest)})`,
+                  }}
+                />
+              </button>
+            ))}
+          </div>
+          <div aria-hidden className="relative h-4" style={{ width: ordered.length * PITCH }}>
+            {ticks.map((t) => (
+              <span
+                key={t.index}
+                className="ui-meta absolute top-1 whitespace-nowrap text-muted-foreground/80"
+                style={{ left: t.index * PITCH + (PITCH - BAR) / 2 }}
+              >
+                {t.label}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div aria-hidden className="ui-dots ml-2 min-w-0 flex-1" style={{ height }} />
+      </div>
       {tip && tipMeeting && (
         <TooltipBubble anchor={tip.anchor}>
           <span className="block font-medium">{tipMeeting.title}</span>

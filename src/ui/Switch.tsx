@@ -31,15 +31,15 @@ export function Switch({ checked, onChange, label, description, disabled, classN
         disabled={disabled}
         onClick={() => onChange(!checked)}
         className={cn(
-          "relative mt-0.5 h-[1.125rem] w-8 shrink-0 rounded-full outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-50",
-          checked ? "bg-primary" : "bg-muted",
+          "ui-focus-pill relative mt-0.5 h-[1.125rem] w-8 shrink-0 rounded-full outline-none ui-focus transition-colors duration-200 disabled:opacity-50",
+          checked ? "bg-primary" : "ui-field-off",
         )}
       >
         <span
           aria-hidden
           className={cn(
-            "absolute left-0.5 top-0.5 h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform duration-200 [transition-timing-function:var(--ui-ease)]",
-            checked && "translate-x-[0.875rem]",
+            "absolute left-0.5 top-0.5 h-3.5 w-3.5 rounded-full transition-[transform,background-color] duration-200 [transition-timing-function:var(--ui-ease)]",
+            checked ? "translate-x-[0.875rem] bg-white" : "bg-[hsl(var(--control-edge))]",
           )}
         />
       </button>

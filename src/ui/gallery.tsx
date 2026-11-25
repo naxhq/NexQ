@@ -128,6 +128,8 @@ export default function UiGallery() {
 
       <Block title="Meeting wave">
         <MeetingWave meetings={MEETINGS} hue="violet" onOpen={(id) => setName(id)} />
+        <p className="ui-meta mb-1 mt-5 text-muted-foreground">Three meetings</p>
+        <MeetingWave meetings={MEETINGS.slice(1, 4)} hue="teal" onOpen={(id) => setName(id)} />
       </Block>
 
       <Block title="Controls">

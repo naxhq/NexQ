@@ -4,8 +4,12 @@ import type { ContextBar, ContextLayer } from "../lib/types";
 import {
   CONTEXT_LAYERS,
   CONTEXT_LAYER_NAMES,
+  STROKE,
+  STROKE_GAP,
   formatTokens,
+  layerColor,
   layoutContextBars,
+  strokeHeights,
   type WaveSegment,
 } from "./contextLayout";
 
@@ -108,7 +112,7 @@ export function ContextWave({ bars, window: modelWindow, budget, onSelect, heigh
           type="button"
           aria-pressed={asList}
           onClick={() => setAsList((v) => !v)}
-          className="ui-meta rounded-md px-1.5 py-0.5 text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring/60"
+          className="ui-meta rounded-md px-1.5 py-0.5 text-muted-foreground underline-offset-2 outline-none ui-focus hover:text-foreground hover:underline"
         >
           {asList ? "View as graph" : "View as list"}
         </button>
@@ -125,54 +129,68 @@ export function ContextWave({ bars, window: modelWindow, budget, onSelect, heigh
             className="relative w-full"
             style={{ height }}
           >
-            {/* Room left: a flat line, silence between phrases. */}
-            <div
-              aria-hidden
-              className="absolute bottom-1/2 h-px bg-muted-foreground/40"
-              style={{ left: `${(free ? free.x : 1) * 100}%`, width: `${(free ? free.w : 0) * 100}%` }}
-            />
+            {/* Room left: the same rhythm at minimum height, on the centre line. */}
+            {free ? (
+              <div
+                aria-hidden
+                className="ui-dots absolute h-[2px]"
+                style={{ left: free.x, width: free.w, top: height / 2 - 1 }}
+              />
+            ) : null}
             {segments.length === 0 && (
-              <div aria-hidden className="absolute inset-x-0 top-1/2 h-px bg-muted-foreground/40" />
+              <div aria-hidden className="ui-dots absolute inset-x-0 h-[2px]" style={{ top: height / 2 - 1 }} />
             )}
-            {segments.map((seg, i) => (
-              <button
-                key={seg.id}
-                ref={(el) => {
-                  items.current[i] = el;
-                }}
-                type="button"
-                tabIndex={i === at ? 0 : -1}
-                aria-label={describe(seg)}
-                onClick={() => select(seg.layer, seg.members)}
-                onFocus={() => {
-                  setFocusIdx(i);
-                  setHovered(seg.id);
-                }}
-                onBlur={() => setHovered((h) => (h === seg.id ? null : h))}
-                onMouseEnter={() => setHovered(seg.id)}
-                onMouseLeave={() => setHovered((h) => (h === seg.id ? null : h))}
-                className="group absolute top-0 h-full cursor-pointer rounded-[3px] outline-none focus-visible:ring-2 focus-visible:ring-ring/80"
-                style={{
-                  left: `${seg.x * 100}%`,
-                  width: `max(calc(${seg.w * 100}% - 1px), 2px)`,
-                }}
-              >
-                <span
-                  aria-hidden
-                  className="ui-wave-bar absolute inset-0 rounded-[3px] opacity-85 group-hover:opacity-100 group-focus-visible:opacity-100"
-                  style={{
-                    background: `hsl(var(--layer-${seg.layer}))`,
-                    transform: `scaleY(${0.12 + 0.88 * Math.max(0, Math.min(1, seg.relevance))})`,
+            {segments.map((seg, i) => {
+              const heights = strokeHeights(seg.id, seg.w, seg.relevance);
+              const dim = hovered !== null && hovered !== seg.id;
+              return (
+                <button
+                  key={seg.id}
+                  ref={(el) => {
+                    items.current[i] = el;
                   }}
-                />
-                {seg.pinned && (
-                  <span
+                  type="button"
+                  tabIndex={i === at ? 0 : -1}
+                  aria-label={describe(seg)}
+                  onClick={() => select(seg.layer, seg.members)}
+                  onFocus={() => {
+                    setFocusIdx(i);
+                    setHovered(seg.id);
+                  }}
+                  onBlur={() => setHovered((h) => (h === seg.id ? null : h))}
+                  onMouseEnter={() => setHovered(seg.id)}
+                  onMouseLeave={() => setHovered((h) => (h === seg.id ? null : h))}
+                  className="ui-focus-sm absolute top-0 h-full cursor-pointer outline-none ui-focus"
+                  style={{ left: seg.x, width: Math.max(seg.w, STROKE) }}
+                >
+                  <svg
                     aria-hidden
-                    className="absolute left-1/2 top-0 h-1 w-1 -translate-x-1/2 rounded-full bg-foreground"
-                  />
-                )}
-              </button>
-            ))}
+                    width={Math.max(seg.w, STROKE)}
+                    height={height}
+                    className="block overflow-visible"
+                    style={{ opacity: dim ? 0.3 : hovered === seg.id ? 1 : 0.88, transition: "opacity 160ms var(--ui-ease)" }}
+                  >
+                    {heights.map((h, k) => {
+                      const hh = Math.max(3, Math.round(h * (height - 8)));
+                      return (
+                        <rect
+                          key={k}
+                          x={k * (STROKE + STROKE_GAP)}
+                          width={STROKE}
+                          rx={1}
+                          fill={layerColor(seg.layer)}
+                          className="ui-wave-rect"
+                          style={{ y: (height - hh) / 2, height: hh }}
+                        />
+                      );
+                    })}
+                  </svg>
+                  {seg.pinned && seg.count === 1 && (
+                    <span aria-hidden className="absolute left-1/2 top-0 h-1 w-1 -translate-x-1/2 rounded-full bg-foreground" />
+                  )}
+                </button>
+              );
+            })}
           </div>
 
           <p role="status" aria-live="polite" className="ui-meta mt-1.5 min-h-[1.1rem] text-muted-foreground">
@@ -186,12 +204,12 @@ export function ContextWave({ bars, window: modelWindow, budget, onSelect, heigh
                   type="button"
                   disabled={l.count === 0}
                   onClick={() => select(l.layer, bars.filter((b) => b.layer === l.layer && b.included))}
-                  className="ui-meta inline-flex items-center gap-1.5 rounded-md px-1 py-0.5 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-50 disabled:hover:bg-transparent"
+                  className="ui-meta inline-flex items-center gap-1.5 rounded-md px-1 py-0.5 outline-none ui-focus hover:bg-accent disabled:opacity-50 disabled:hover:bg-transparent"
                 >
                   <span
                     aria-hidden
                     className="h-2 w-2 rounded-[2px]"
-                    style={{ background: `hsl(var(--layer-${l.layer}))` }}
+                    style={{ background: layerColor(l.layer) }}
                   />
                   <span>{CONTEXT_LAYER_NAMES[l.layer]}</span>
                   <span className="text-muted-foreground">{l.count === 0 ? "none" : formatTokens(l.tokens)}</span>
@@ -232,7 +250,7 @@ function ContextList({ bars, onSelect }: { bars: ContextBar[]; onSelect: (layer:
                 <button
                   type="button"
                   onClick={() => onSelect(b.layer, [b])}
-                  className="max-w-full truncate rounded-md text-left outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/60"
+                  className="max-w-full truncate rounded-md text-left outline-none ui-focus hover:underline"
                 >
                   {b.title}
                 </button>

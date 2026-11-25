@@ -11,11 +11,18 @@ export const CONTEXT_LAYER_NAMES: Record<ContextLayer, string> = {
   conversation: "Conversation",
 };
 
+/** Pixels between two items, and between two layers. */
+export const ITEM_GAP = 4;
+export const LAYER_GAP = 8;
+/** One stroke and the space after it. */
+export const STROKE = 2;
+export const STROKE_GAP = 2;
+
 export interface WaveSegment {
   id: string;
   layer: ContextLayer;
   title: string;
-  /** Fractions of the axis, 0..1. */
+  /** Position and width in px inside a wave `widthPx` wide. */
   x: number;
   w: number;
   tokens: number;
@@ -36,7 +43,7 @@ export interface LayerSpan {
 export interface WaveLayout {
   segments: WaveSegment[];
   layers: LayerSpan[];
-  /** The flat line: room left in the budget. Null when the budget is used up. */
+  /** Room left in the budget, drawn as dots on the centre line. Null when it is used up. */
   free: { x: number; w: number; tokens: number } | null;
   axis: number;
   used: number;
@@ -44,76 +51,105 @@ export interface WaveLayout {
   cut: ContextBar[];
 }
 
+interface Group {
+  layer: ContextLayer;
+  members: ContextBar[];
+}
+
+/** Fold bars thinner than `minPx` into neighbours of the same layer. */
+function group(included: ContextBar[], pxPerToken: number, minPx: number): Group[] {
+  const out: Group[] = [];
+  for (const layer of CONTEXT_LAYERS) {
+    const mine = included.filter((b) => b.layer === layer);
+    let pending: ContextBar[] = [];
+    const sum = (l: ContextBar[]) => l.reduce((n, b) => n + b.tokens, 0);
+    const flush = (atEnd: boolean) => {
+      if (pending.length === 0) return;
+      const prev = out[out.length - 1];
+      if (atEnd && sum(pending) * pxPerToken < minPx && prev && prev.layer === layer) {
+        prev.members = [...prev.members, ...pending];
+      } else {
+        out.push({ layer, members: pending });
+      }
+      pending = [];
+    };
+    for (const b of mine) {
+      if (b.tokens * pxPerToken >= minPx) {
+        flush(false);
+        out.push({ layer, members: [b] });
+      } else {
+        pending.push(b);
+        if (sum(pending) * pxPerToken >= minPx) flush(false);
+      }
+    }
+    flush(true);
+  }
+  return out;
+}
+
+function gapsOf(groups: Group[]): number {
+  let total = 0;
+  groups.forEach((g, i) => {
+    if (i > 0) total += groups[i - 1].layer === g.layer ? ITEM_GAP : LAYER_GAP;
+  });
+  return total;
+}
+
 /**
- * One bar per included item, width = tokens, in layer order. Bars that would be
- * thinner than `minBarPx` are folded with their neighbours of the same layer, so
- * 400 items never become 400 slivers. Pure, so it can be tested without a DOM.
+ * One run per item in layer order: width follows the item's tokens, with 4 px
+ * between items and 8 px between layers taken out of the width first. Runs that
+ * would be thinner than `minBarPx` (three strokes) fold into their neighbours,
+ * so 400 items stay legible. Pure, so it can be tested without a DOM.
  */
 export function layoutContextBars(
   bars: readonly ContextBar[],
   opts: { budget: number; widthPx: number; minBarPx?: number },
 ): WaveLayout {
-  const minBarPx = opts.minBarPx ?? 3;
+  const minBarPx = opts.minBarPx ?? 6;
+  const W = Math.max(opts.widthPx, 1);
   const included = bars.filter((b) => b.included && b.tokens > 0);
   const cut = bars.filter((b) => !b.included);
   const used = included.reduce((n, b) => n + b.tokens, 0);
   const axis = Math.max(opts.budget, used, 1);
-  const pxPerToken = Math.max(opts.widthPx, 1) / axis;
 
   const layers: LayerSpan[] = CONTEXT_LAYERS.map((layer) => {
     const mine = included.filter((b) => b.layer === layer);
     return { layer, tokens: mine.reduce((n, b) => n + b.tokens, 0), count: mine.length };
   });
 
-  const segments: WaveSegment[] = [];
-  let cursor = 0;
-  for (const layer of CONTEXT_LAYERS) {
-    const mine = included.filter((b) => b.layer === layer);
-    let pending: ContextBar[] = [];
-    let pendingStart = cursor;
-    const push = (members: ContextBar[], x: number) => {
-      const tokens = members.reduce((n, b) => n + b.tokens, 0);
-      segments.push({
-        id: members.length === 1 ? members[0].id : `group:${layer}:${members[0].id}`,
-        layer,
-        title: members.length === 1 ? members[0].title : `${members.length} smaller items`,
-        x: x / axis,
-        w: tokens / axis,
-        tokens,
-        relevance: Math.max(...members.map((b) => b.relevance)),
-        pinned: members.some((b) => b.pinned),
-        count: members.length,
-        members,
-      });
-    };
-    const flush = (atEnd: boolean) => {
-      if (pending.length === 0) return;
-      const tokens = pending.reduce((n, b) => n + b.tokens, 0);
-      const prev = segments[segments.length - 1];
-      if (atEnd && tokens * pxPerToken < minBarPx && prev && prev.layer === layer) {
-        // A leftover sliver at the end of a layer joins the bar before it.
-        segments.pop();
-        push([...prev.members, ...pending], prev.x * axis);
-      } else {
-        push(pending, pendingStart);
-      }
-      pending = [];
-    };
-    for (const b of mine) {
-      if (b.tokens * pxPerToken >= minBarPx) {
-        flush(false);
-        push([b], cursor);
-      } else {
-        if (pending.length === 0) pendingStart = cursor;
-        pending.push(b);
-      }
-      cursor += b.tokens;
-      if (pending.length > 0 && pending.reduce((n, p) => n + p.tokens, 0) * pxPerToken >= minBarPx) flush(false);
-    }
-    flush(true);
+  // Gaps shrink the room for tokens, and fewer groups mean fewer gaps: settle it in a few passes.
+  let ppt = W / axis;
+  let groups = group(included, ppt, minBarPx);
+  for (let i = 0; i < 4; i++) {
+    const next = Math.max(W - gapsOf(groups), 1) / axis;
+    if (Math.abs(next - ppt) < 1e-9) break;
+    ppt = next;
+    groups = group(included, ppt, minBarPx);
   }
 
-  const free = used < axis ? { x: used / axis, w: (axis - used) / axis, tokens: axis - used } : null;
+  const segments: WaveSegment[] = [];
+  let x = 0;
+  groups.forEach((g, i) => {
+    if (i > 0) x += groups[i - 1].layer === g.layer ? ITEM_GAP : LAYER_GAP;
+    const tokens = g.members.reduce((n, b) => n + b.tokens, 0);
+    const w = tokens * ppt;
+    segments.push({
+      id: g.members.length === 1 ? g.members[0].id : `group:${g.layer}:${g.members[0].id}`,
+      layer: g.layer,
+      title: g.members.length === 1 ? g.members[0].title : `${g.members.length} smaller items`,
+      x,
+      w,
+      tokens,
+      relevance: Math.max(...g.members.map((b) => b.relevance)),
+      pinned: g.members.some((b) => b.pinned),
+      count: g.members.length,
+      members: g.members,
+    });
+    x += w;
+  });
+
+  const start = segments.length > 0 ? x + LAYER_GAP : 0;
+  const free = used < axis && W - start > STROKE ? { x: start, w: W - start, tokens: axis - used } : null;
   return { segments, layers, free, axis, used, cut };
 }
 
@@ -122,4 +158,36 @@ export function formatTokens(n: number): string {
   if (n < 1000) return String(Math.round(n));
   const k = n / 1000;
   return `${k >= 100 ? Math.round(k) : Math.round(k * 10) / 10}k`;
+}
+
+/** The colour of a layer. Instructions are a quiet neutral, never pure white. */
+export function layerColor(layer: ContextLayer): string {
+  return layer === "instructions" ? "hsl(var(--foreground) / 0.7)" : `hsl(var(--layer-${layer}))`;
+}
+
+/**
+ * Stroke heights (0..1) for a run `w` px wide: a deterministic phrase from the
+ * item's id, tapering at both ends, scaled by relevance. At least one stroke.
+ */
+export function strokeHeights(id: string, w: number, relevance: number): number[] {
+  const n = Math.max(1, Math.floor((w + STROKE_GAP) / (STROKE + STROKE_GAP)));
+  let seed = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) {
+    seed ^= id.charCodeAt(i);
+    seed = Math.imul(seed, 0x01000193);
+  }
+  const random = () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const amp = 0.2 + 0.8 * Math.max(0, Math.min(1, relevance));
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const swell = n === 1 ? 1 : Math.pow(Math.sin((Math.PI * (i + 0.5)) / n), 0.6);
+    const grain = 0.4 + 0.6 * random();
+    out.push(Math.max(0.1, amp * swell * grain));
+  }
+  return out;
 }

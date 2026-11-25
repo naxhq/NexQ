@@ -67,7 +67,7 @@ export function ModalLayer({
           }}
           className={cn(
             animation,
-            "flex flex-col border border-border bg-popover text-popover-foreground shadow-[0_24px_64px_-24px_rgba(0,0,0,0.65)] outline-none",
+            "flex flex-col border border-border bg-popover text-popover-foreground shadow-[0_24px_64px_-24px_rgba(0,0,0,0.65)] outline-none ui-focus",
             placement === "center" ? "max-h-full w-full rounded-2xl" : "h-full w-[min(26rem,100%)]",
             placement === "right" && "rounded-l-2xl border-r-0",
             placement === "left" && "rounded-r-2xl border-l-0",
@@ -75,7 +75,7 @@ export function ModalLayer({
           )}
         >
           <div className="px-5 pb-1 pt-5">
-            <h2 id={titleId} className="ui-section text-[0.9375rem]">
+            <h2 id={titleId} className="ui-dialog-title">
               {title}
             </h2>
             {description && (
@@ -104,8 +104,8 @@ export function Dialog({ size = "md", ...rest }: DialogProps) {
 }
 
 export const buttonClass = {
-  base: "ui-body inline-flex h-8 items-center justify-center rounded-lg px-3.5 font-medium outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-50",
-  quiet: "text-foreground hover:bg-accent",
+  base: "ui-body inline-flex h-8 items-center justify-center rounded-lg px-3.5 font-medium outline-none ui-focus transition-colors duration-150 disabled:opacity-50",
+  quiet: "ui-field text-foreground",
   primary: "bg-primary text-primary-foreground hover:bg-primary/90",
   danger: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
 };
