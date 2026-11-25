@@ -210,7 +210,7 @@ impl LLMProvider for OpenAICompatClient {
                     if is_cancelled(params) {
                         return LLMError::Cancelled;
                     }
-                    emit_error(app_handle, params, &e.to_string());
+                    emit_error(app_handle, params, &super::provider::error_text(&e));
                     LLMError::HttpError(e)
                 })
             }
@@ -237,7 +237,7 @@ impl LLMProvider for OpenAICompatClient {
                 if is_cancelled(&params) {
                     return LLMError::Cancelled;
                 }
-                emit_error(&app_handle, &params, &e.to_string());
+                emit_error(&app_handle, &params, &super::provider::error_text(&e));
                 LLMError::HttpError(e)
             })?;
 

@@ -75,7 +75,7 @@ struct LanguageItem {
 // ── Helper ────────────────────────────────────────────────────────────────────
 
 fn map_reqwest_err(e: reqwest::Error) -> TranslationError {
-    TranslationError::Http(e.to_string())
+    TranslationError::Http(crate::llm::provider::error_text(&e))
 }
 
 // ── Trait implementation ──────────────────────────────────────────────────────
@@ -104,7 +104,7 @@ impl TranslationProvider for GoogleTranslator {
         let resp = self
             .client
             .post(BASE_URL)
-            .query(&[("key", &self.api_key)])
+            .header("x-goog-api-key", &self.api_key)
             .json(&body)
             .send()
             .await
@@ -151,7 +151,7 @@ impl TranslationProvider for GoogleTranslator {
         let resp = self
             .client
             .post(BASE_URL)
-            .query(&[("key", &self.api_key)])
+            .header("x-goog-api-key", &self.api_key)
             .json(&body)
             .send()
             .await
@@ -181,7 +181,7 @@ impl TranslationProvider for GoogleTranslator {
         let resp = self
             .client
             .post(format!("{}/detect", BASE_URL))
-            .query(&[("key", &self.api_key)])
+            .header("x-goog-api-key", &self.api_key)
             .json(&body)
             .send()
             .await
@@ -215,7 +215,8 @@ impl TranslationProvider for GoogleTranslator {
         let resp = self
             .client
             .get(format!("{}/languages", BASE_URL))
-            .query(&[("key", self.api_key.as_str()), ("target", "en")])
+            .header("x-goog-api-key", &self.api_key)
+            .query(&[("target", "en")])
             .send()
             .await
             .map_err(map_reqwest_err)?;

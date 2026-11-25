@@ -60,8 +60,8 @@ impl GeminiCacheClient {
         ttl_secs: u64,
     ) -> Result<CachedContent, String> {
         let url = format!(
-            "{}/v1beta/cachedContents?key={}",
-            self.base_url, self.api_key
+            "{}/v1beta/cachedContents",
+            self.base_url
         );
 
         // Ensure model has the "models/" prefix
@@ -96,12 +96,13 @@ impl GeminiCacheClient {
         let response = self
             .client
             .post(&url)
+            .header("x-goog-api-key", &self.api_key)
             .header("Content-Type", "application/json")
             .json(&body)
             .timeout(Duration::from_secs(60))
             .send()
             .await
-            .map_err(|e| format!("Gemini cache create request failed: {}", e))?;
+            .map_err(|e| format!("Gemini cache create request failed: {}", crate::llm::provider::error_text(&e)))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -128,17 +129,18 @@ impl GeminiCacheClient {
     /// Delete a cached content entry by its full resource name.
     pub async fn delete(&self, name: &str) -> Result<(), String> {
         let url = format!(
-            "{}/v1beta/{}?key={}",
-            self.base_url, name, self.api_key
+            "{}/v1beta/{}",
+            self.base_url, name
         );
 
         let response = self
             .client
             .delete(&url)
+            .header("x-goog-api-key", &self.api_key)
             .timeout(Duration::from_secs(30))
             .send()
             .await
-            .map_err(|e| format!("Gemini cache delete request failed: {}", e))?;
+            .map_err(|e| format!("Gemini cache delete request failed: {}", crate::llm::provider::error_text(&e)))?;
 
         if !response.status().is_success() && response.status().as_u16() != 404 {
             let status = response.status();

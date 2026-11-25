@@ -276,7 +276,7 @@ fn map_llm_error(e: LLMError, provider: &str, size: Size) -> AiRunError {
         LLMError::AuthError(message) => AiRunError::NoKey { provider: provider.to_string(), message },
         LLMError::NotConfigured(message) => AiRunError::Unavailable { message },
         LLMError::ConnectionFailed(message) => AiRunError::Unavailable { message },
-        LLMError::HttpError(e) => AiRunError::Unavailable { message: e.to_string() },
+        LLMError::HttpError(e) => AiRunError::Unavailable { message: crate::llm::provider::error_text(&e) },
         other => classify_failure(other.to_string(), provider, size),
     }
 }

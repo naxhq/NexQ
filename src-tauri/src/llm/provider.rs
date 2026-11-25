@@ -310,9 +310,26 @@ pub struct LLMMessage {
     pub content: String,
 }
 
+/// The text of a transport error with its URL taken out. reqwest puts the
+/// request URL in the message, and a URL can carry a key (`?key=`) or a
+/// private host; this text goes to the UI and the log.
+pub fn error_text(e: &reqwest::Error) -> String {
+    let text = e.to_string();
+    match e.url() {
+        Some(url) => {
+            let mut hidden = url.clone();
+            hidden.set_query(None);
+            let _ = hidden.set_password(None);
+            let _ = hidden.set_username("");
+            text.replace(url.as_str(), "[url hidden]").replace(hidden.as_str(), "[url hidden]")
+        }
+        None => text,
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum LLMError {
-    #[error("HTTP request failed: {0}")]
+    #[error("HTTP request failed: {}", error_text(.0))]
     HttpError(#[from] reqwest::Error),
 
     #[error("JSON parse error: {0}")]
@@ -669,5 +686,17 @@ mod tests {
         };
         assert_eq!(cancellable(&params, async { 7 }).await.unwrap(), 7);
         assert_eq!(cancellable(&GenerationParams::default(), async { 8 }).await.unwrap(), 8);
+    }
+
+    #[tokio::test]
+    async fn transport_error_text_never_carries_the_url_or_a_key_in_it() {
+        let err = reqwest::Client::new()
+            .get("http://127.0.0.1:1/v1beta/models?key=SECRETKEY123")
+            .send()
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("SECRETKEY123"), "reqwest itself would leak it");
+        assert!(!error_text(&err).contains("SECRETKEY123"));
+        assert!(!LLMError::from(err).to_string().contains("SECRETKEY123"));
     }
 }
