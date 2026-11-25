@@ -2,6 +2,7 @@
 import { buildNoteIndex, NoteBlock, NoteIndex } from "./tokenize";
 import { VoiceFollower, FollowState } from "./follower";
 import { SaidTracker } from "./said";
+import { EXTRA_NOTES } from "./fixtures2";
 
 export type Lang = "en" | "es" | "de" | "ja";
 
@@ -134,11 +135,17 @@ export interface Step {
   truth: number | "hold";
   /** 1-based blocks that count as said by this step. */
   said?: number[];
+  /** Off-script talk that borrows words from the note: must not move the place or tick anything. */
+  off?: boolean;
+  /** Going back to an earlier point in different words: should re-lock or stay not following. */
+  back?: boolean;
 }
 
 export interface Scenario {
   name: string;
   lang: Lang;
+  /** Key into EXTRA_NOTES (zh, ko, en2); `lang` then only picks how speech is cut into units. */
+  note?: string;
   steps: Step[];
 }
 
@@ -157,6 +164,11 @@ export interface ScenarioResult {
   expectedSaid: Set<string>;
   ticked: Set<string>;
   backJumps: number;
+  group: string;
+  /** Per off-script step: true when nothing moved and nothing was ticked. */
+  offSafe: boolean[];
+  /** Per back-reference step: true when re-locked within tolerance. */
+  relocked: boolean[];
 }
 
 export function wordsOf(step: string, lang: Lang): string[] {
@@ -186,7 +198,7 @@ export function speak(
 }
 
 export function runScenario(sc: Scenario, seed = 1): ScenarioResult {
-  const blocks = NOTES[sc.lang];
+  const blocks = sc.note ? EXTRA_NOTES[sc.note] : NOTES[sc.lang];
   const index: NoteIndex = buildNoteIndex(blocks);
   const tol = 8 * index.scale;
   let t = 1_000_000;
@@ -208,6 +220,8 @@ export function runScenario(sc: Scenario, seed = 1): ScenarioResult {
   let prevTruth = 0;
   let prevPos = 0;
   let backJumps = 0;
+  const offSafe: boolean[] = [];
+  const relocked: boolean[] = [];
   sc.steps.forEach((s, i) => {
     const truth = s.truth === "hold" ? prevTruth : index.blocks[s.truth - 1].end;
     for (const b of s.said ?? []) expected.add(blocks[b - 1].id);
@@ -216,6 +230,7 @@ export function runScenario(sc: Scenario, seed = 1): ScenarioResult {
       return;
     }
     const text = s.wer ? corrupt(s.say, s.wer, seed * 1000 + i, sc.lang) : s.say;
+    const tickedBefore = tracker.saidBlockIds().length;
     speak(text, sc.lang, `${sc.name}-${i}`, sink, () => (t += 700));
     t += 1500;
     const snap = follower.snapshot();
@@ -228,6 +243,8 @@ export function runScenario(sc: Scenario, seed = 1): ScenarioResult {
       acceptable: strict || snap.state !== "following",
       confidentWrong: !strict && snap.state === "following",
     });
+    if (s.off) offSafe.push(Math.abs(snap.position - prevPos) <= tol && tracker.saidBlockIds().length === tickedBefore);
+    if (s.back) relocked.push(strict);
     if (snap.position < prevPos - tol) backJumps++;
     prevPos = snap.position;
     prevTruth = truth;
@@ -238,5 +255,8 @@ export function runScenario(sc: Scenario, seed = 1): ScenarioResult {
     expectedSaid: expected,
     ticked: new Set(tracker.saidBlockIds()),
     backJumps,
+    group: sc.note ?? sc.lang,
+    offSafe,
+    relocked,
   };
 }

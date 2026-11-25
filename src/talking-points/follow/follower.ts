@@ -8,7 +8,7 @@
  * moves (jump ahead, back reference) need strong distinctive-word evidence that
  * persists across further spoken words; small forward moves are immediate.
  */
-import { NoteIndex } from "./tokenize";
+import { NoteIndex, isMonth } from "./tokenize";
 import { VocabMatcher, MATCH_MIN } from "./similarity";
 import { SpokenStream } from "./stream";
 
@@ -26,14 +26,16 @@ export interface FollowerOptions {
   clock?: () => number;
   /** Silence after which the state reads "paused". */
   pauseMs?: number;
+  /** Test hook: sees every alignment. */
+  debug?: (d: { words: string[]; p: number; near: unknown; pos: number }) => void;
 }
 
 // Scoring (weights are 0.05..1, distinctive words ~0.5..1).
 const GS = 0.12; // skip a spoken word (filler, digression)
-const GN = 0.05; // skip a note word (paraphrase, shorter delivery)
+const GN = 0.08; // skip a note word (paraphrase, shorter delivery)
 const SUB = 0.08; // aligned but different word
 const MEANINGFUL = 0.25;
-const BACK_WORDS = 30;
+const BACK_WORDS = 45;
 const FWD_WORDS = 90;
 const JUMP_WORDS = 30;
 const TAIL_WORDS = 12;
@@ -62,18 +64,24 @@ export class VoiceFollower {
   private baseState: FollowState = "unsure";
   private since = 10;
   private lastAdded = 0;
+  private lastFar = 0;
+  /** A candidate rejected for a contradicting number stays rejected while its words are still in the tail. */
+  private blocked: { e: number; until: number } | null = null;
   private lastInputAt = -Infinity;
   private pending: { e: number; added: number; miss: number } | null = null;
   private bufH = new Float32Array(0);
   private bufG = new Float32Array(0);
   private bufK = new Int16Array(0);
   private bufL = new Int16Array(0);
+  private bufE = new Int32Array(0);
   private tailLen: number;
+  private debug?: FollowerOptions["debug"];
 
   constructor(private index: NoteIndex, opts: FollowerOptions = {}) {
     this.matcher = new VocabMatcher(index.vocab, index.vocabIdx);
     this.clock = opts.clock ?? (() => Date.now());
     this.pauseMs = opts.pauseMs ?? 3500;
+    this.debug = opts.debug;
     this.tailLen = Math.round(TAIL_WORDS * index.scale);
   }
 
@@ -111,7 +119,8 @@ export class VoiceFollower {
     this.conf = 0;
     this.pending = null;
     this.lastInputAt = -Infinity;
-    this.lastAdded = 0;
+    this.lastAdded = this.stream.added;
+    this.lastFar = this.stream.added;
   }
 
   snapshot(): FollowSnapshot {
@@ -148,31 +157,49 @@ export class VoiceFollower {
     let ev: Cand | null = near;
     let proposed = false;
 
+    this.debug?.({ words, p, near, pos: this.pos });
+    let nearConflict = !!near && near.k > 0 && this.conflicts(words, near.e);
     if (near && near.k > 0) {
+      if (nearConflict) this.blocked = { e: near.e, until: this.stream.added + this.tailLen };
+      else if (this.blocked && this.stream.added < this.blocked.until && Math.abs(near.e - this.blocked.e) <= 10 * sc && near.e !== p) nearConflict = true;
+    }
+    if (near && near.k > 0 && !nearConflict) {
       const dd = (near.e - p) / sc;
       if (dd >= -4 && dd <= 0.001) {
         // consistent with where we are (repeat, same place): hold
-      } else if (dd > 0 && dd <= JUMP_WORDS) {
+      } else if (dd > 0 && dd <= 8) {
         if (near.g >= 0.55 && near.f >= 0.4) this.moveTo(near.e);
+      } else if (dd > 8 && dd <= JUMP_WORDS) {
+        // further than a natural continuation: needs two distinctive matches, in order
+        if (near.g >= 0.9 && near.k >= 2 && near.f >= 0.5) this.moveTo(near.e);
       } else if (dd > JUMP_WORDS) {
-        if (near.g >= 1.2 && near.k >= 2 && near.f >= 0.8) proposed = this.propose(near);
-      } else if (near.g >= 1.5 && near.k >= 3 && near.f >= 0.8) {
-        proposed = this.propose(near);
+        if (near.g >= 1.2 && near.k >= 2 && near.f >= 0.8) proposed = this.propose(near, words);
+      } else if (near.g >= 1.2 && near.k >= 2 && near.f >= 0.6) {
+        // back reference: being lost is fine, being confidently wrong is not, so it must persist
+        proposed = this.propose(near, words);
       }
     }
 
-    if (!near || near.g < 1.5) {
+    if ((!near || near.g < 1.5) && this.stream.added >= this.lastFar + 2) {
+      this.lastFar = this.stream.added;
       const far = this.farCandidate(rows, words, p);
-      if (far && far.g >= 2.0 && far.k >= 3 && far.g > (near ? near.g : 0) + 0.8) {
-        if (this.propose(far)) proposed = true;
-        if (Math.abs(this.pos - far.e) < 1) ev = far;
+      if (far && !this.conflicts(words, far.e)) {
+        const back = far.e < p;
+        const lost = this.since > 16;
+        const need = back ? { g: 1.3, k: 2 } : lost ? { g: 1.6, k: 2 } : { g: 2.0, k: 3 };
+        if (far.g >= need.g && far.k >= need.k && far.g > (near ? near.g : 0) + 0.6) {
+          if (this.propose(far, words)) proposed = true;
+          if (Math.abs(this.pos - far.e) < 1) ev = far;
+        }
       }
     }
     if (!proposed && this.pending && ++this.pending.miss > 3) this.pending = null;
 
     // evidence / state
     const added = this.stream.added;
-    const strong = !!ev && ev.l > 0 && (ev.g >= 0.8 || (ev.k >= 2 && ev.g >= 0.5));
+    // evidence that points somewhere we have not moved to (pending, conflicting) is not evidence of where we are
+    const pointsElsewhere = !!ev && ev === near && Math.abs(ev.e - this.pos) > 8 * sc;
+    const strong = !!ev && !pointsElsewhere && !(ev === near && nearConflict) && ev.l > 0 && (ev.g >= 0.8 || (ev.k >= 2 && ev.g >= 0.5));
     if (strong && ev) this.since = m - ev.l;
     else this.since += Math.max(0, added - this.lastAdded);
     this.lastAdded = added;
@@ -181,12 +208,31 @@ export class VoiceFollower {
     this.conf = Math.max(0, Math.min(1, g / 2.5)) * Math.max(0, Math.min(1, 1 - this.since / 16));
   }
 
+  /** A recently spoken number that the note region around `e` does not contain (e.g. "thirty" vs a bullet about 20). */
+  private conflicts(words: string[], e: number): boolean {
+    const { index } = this;
+    const W = Math.round((2 * words.length + 8) * index.scale);
+    const lo = Math.max(0, e - W);
+    const hi = Math.min(index.tokens.length, e + 3);
+    const set = new Set<number>();
+    for (let i = lo; i < hi; i++) if (index.vocabNum[index.ids[i]]) set.add(index.ids[i]);
+    if (set.size === 0) return false;
+    for (let k = 0; k < words.length; k++) {
+      const w = words[k];
+      const value = isMonth(w) || (/^[0-9]/.test(w) && (w.length >= 2 || words[k - 1] === "quarter"));
+      if (!value) continue;
+      const id = index.vocabIdx.get(w);
+      if (id === undefined || !set.has(id)) return true;
+    }
+    return false;
+  }
+
   private moveTo(e: number): void {
     this.pos = e;
   }
 
   /** Large moves must persist while at least two more words arrive. */
-  private propose(c: Cand): boolean {
+  private propose(c: Cand, words: string[]): boolean {
     const sc = this.index.scale;
     const added = this.stream.added;
     if (c.g >= 3.5) {
@@ -197,7 +243,8 @@ export class VoiceFollower {
     const pend = this.pending;
     if (pend && Math.abs(pend.e - c.e) <= 25 * sc) {
       pend.miss = 0;
-      if (added >= pend.added + 2) {
+      const need = c.e < this.pos ? 3 : 5;
+      if (added >= pend.added + need && !this.conflicts(words, c.e)) {
         this.pos = c.e;
         this.pending = null;
       } else {
@@ -247,7 +294,7 @@ export class VoiceFollower {
         best = b;
       }
     }
-    if (best < 0 || bestV < 1.5) return null;
+    if (best < 0 || bestV < 1.0) return null;
     const centre = (best + 1) * bucket;
     const lo = Math.max(0, centre - Math.round(50 * sc));
     const hi = Math.min(index.tokens.length, centre + Math.round(50 * sc));
@@ -265,11 +312,13 @@ export class VoiceFollower {
       this.bufG = new Float32Array(size);
       this.bufK = new Int16Array(size);
       this.bufL = new Int16Array(size);
+      this.bufE = new Int32Array(size);
     }
     const H = this.bufH;
     const G = this.bufG;
     const K = this.bufK;
     const L = this.bufL;
+    const E = this.bufE;
     const ids = this.index.ids;
     const weights = this.index.weights;
     for (let j = 0; j <= n; j++) {
@@ -277,6 +326,7 @@ export class VoiceFollower {
       G[j] = 0;
       K[j] = 0;
       L[j] = 0;
+      E[j] = 0;
     }
     for (let i = 1; i <= m; i++) {
       const base = i * W;
@@ -285,6 +335,7 @@ export class VoiceFollower {
       G[base] = G[pb];
       K[base] = K[pb];
       L[base] = L[pb];
+      E[base] = E[pb];
       const dense = rows[i - 1];
       for (let j = 1; j <= n; j++) {
         const d = pb + j - 1;
@@ -293,22 +344,28 @@ export class VoiceFollower {
         let g: number;
         let k: number;
         let l: number;
+        let en: number;
         if (s >= MATCH_MIN) {
           const gain = s * weights[lo + j - 1];
           h = H[d] + gain;
-          g = G[d] + gain;
           if (gain >= MEANINGFUL) {
+            // only distinctive matches count as evidence; generic words never add up to it
+            g = G[d] + gain;
             k = K[d] + 1;
             l = i;
+            en = lo + j;
           } else {
+            g = G[d];
             k = K[d];
             l = L[d];
+            en = E[d];
           }
         } else {
           h = H[d] - SUB;
           g = G[d];
           k = K[d];
           l = L[d];
+          en = E[d];
         }
         const u = pb + j;
         const hu = H[u] - GS;
@@ -317,6 +374,7 @@ export class VoiceFollower {
           g = G[u];
           k = K[u];
           l = L[u];
+          en = E[u];
         }
         const lf = base + j - 1;
         const hl = H[lf] - GN;
@@ -325,12 +383,14 @@ export class VoiceFollower {
           g = G[lf];
           k = K[lf];
           l = L[lf];
+          en = E[lf];
         }
         const c = base + j;
         H[c] = h;
         G[c] = g;
         K[c] = k;
         L[c] = l;
+        E[c] = en;
       }
     }
     const sc = this.index.scale;
@@ -339,9 +399,9 @@ export class VoiceFollower {
     for (let j = 1; j <= n; j++) {
       const c = last + j;
       if (K[c] === 0) continue;
-      const e = lo + j;
+      const e = E[c];
       const dd = (e - p) / sc;
-      const prior = dd > 6 ? 0.04 * (dd - 6) : dd < -4 ? 0.05 * (-4 - dd) : 0;
+      const prior = dd > 6 ? 0.04 * (dd - 6) : dd < -4 ? Math.min(0.9, 0.02 * (-4 - dd)) : 0;
       const f = H[c] - prior;
       if (!best || f > best.f) best = { e, f, g: G[c], k: K[c], l: L[c] };
     }
