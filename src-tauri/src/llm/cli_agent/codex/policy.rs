@@ -102,6 +102,24 @@ fn decide_mcp(server: &str, message: &str, meta: &Value, policy: &CodexPolicy) -
     }
 }
 
+/// The tool names a tool approval names: `_meta.tool_name` / `tool` and the
+/// quoted name in the message. NOT `tool_title`: a display title the server may
+/// choose is never the identity of a call. These only cross-check the item that
+/// is actually running (see `session.rs`, `bind`).
+pub fn named_tools(message: &str, meta: &Value) -> Vec<String> {
+    let mut names: Vec<String> = ["tool_name", "tool"]
+        .iter()
+        .filter_map(|k| meta.get(*k).and_then(Value::as_str).map(str::to_string))
+        .collect();
+    names.extend(quoted(message));
+    names
+}
+
+/// Is this elicitation a tool approval (`_meta.codex_approval_kind`)?
+pub fn is_tool_approval(meta: &Value) -> bool {
+    meta.get("codex_approval_kind").and_then(Value::as_str) == Some("mcp_tool_call")
+}
+
 /// The `"..."` substrings of `text`.
 fn quoted(text: &str) -> Vec<String> {
     text.split('"').skip(1).step_by(2).map(str::to_string).filter(|s| !s.is_empty()).collect()
@@ -239,9 +257,10 @@ mod tests {
     fn the_arguments_of_a_held_call_come_from_the_elicitations_meta() {
         use crate::llm::cli_agent::codex::protocol::tool_params;
         let direct = json!({"codex_approval_kind": "mcp_tool_call", "tool_params": {"to": "a@b.c"}});
-        assert_eq!(tool_params(&direct), json!({"to": "a@b.c"}));
+        assert_eq!(tool_params(&direct), Some(json!({"to": "a@b.c"})));
         let listed = json!({"tool_params_display": [{"name": "to", "value": "a@b.c", "display_name": "To"}, {"name": "n", "value": 3}]});
-        assert_eq!(tool_params(&listed), json!({"to": "a@b.c", "n": 3}));
-        assert_eq!(tool_params(&json!({})), json!({}));
+        assert_eq!(tool_params(&listed), Some(json!({"to": "a@b.c", "n": 3})));
+        assert_eq!(tool_params(&json!({})), None, "no visible arguments: the call is refused, not asked");
+        assert_eq!(tool_params(&json!({"tool_params": null, "tool_params_display": "x"})), None);
     }
 }

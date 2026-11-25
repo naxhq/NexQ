@@ -492,6 +492,9 @@ struct Entry {
     requested: Option<SessionOverride>,
     /// A graceful close is waiting for the turns in flight: no new turn starts.
     draining: bool,
+    /// The approvals the session was started with (the chat's rules at spawn).
+    /// A session whose chat has other rules now is replaced, never reused.
+    spawned_approvals: Option<super::approval::ChatApprovals>,
 }
 
 impl Entry {
@@ -681,6 +684,14 @@ impl AgentSessionManager {
     ) -> Result<Arc<dyn SessionHandle>, AgentError> {
         let overrides = overrides.filter(|o| *o != SessionOverride::default());
         let pinned_kind = overrides.as_ref().and_then(|o| o.kind);
+        // A chat's with-sources session needs its approval rules: without them it
+        // cannot tell a tool that asks from one that runs, so it does not start.
+        let approvals = if key.with_sources { self.approvals_for(&key.scope) } else { None };
+        if key.with_sources && matches!(key.scope, SessionScope::Workspace(_)) && approvals.is_none() {
+            return Err(AgentError::Spawn(
+                "This chat has no tool approval rules yet, so its tools and folders were not started.".into(),
+            ));
+        }
         let lock = self.spawn_lock(key);
         let _spawning = lock.lock().await;
         if self.shutting_down.load(Ordering::SeqCst) {
@@ -697,6 +708,7 @@ impl AgentSessionManager {
                 Some(entry)
                     if entry.kind == kind
                         && entry.requested == overrides
+                        && entry.spawned_approvals == approvals
                         && !entry.draining
                         && entry.handle.is_alive()
                         && !restart_after_error(key, entry) =>
@@ -741,7 +753,7 @@ impl AgentSessionManager {
                 system_prompt: init.system_prompt.clone(),
                 thinking,
                 sources: if key.with_sources { init.sources.clone() } else { None },
-                approvals: if key.with_sources { self.approvals_for(&key.scope) } else { None },
+                approvals: approvals.clone(),
             };
             let handle = match self.spawner.spawn(cfg).await {
                 Ok(handle) => handle,
@@ -800,6 +812,7 @@ impl AgentSessionManager {
                             sources_notice,
                             requested: overrides.clone(),
                             draining: false,
+                            spawned_approvals: approvals.clone(),
                         },
                     );
                     true
@@ -3003,5 +3016,64 @@ mod tests {
         let d = mgr.ensure(&k, init(&["ctx"])).await.unwrap();
         assert!(!same_session(&c, &d));
         assert_eq!(spawner.calls.load(Ordering::SeqCst), 3);
+    }
+
+    mod approvals_at_spawn {
+        use super::super::*;
+        use super::{init, key, setup};
+        use crate::llm::cli_agent::approval::{ApprovalPolicy, ChatApprovals, WorkspaceApprovals};
+        use crate::sources::config::{McpServer, McpTool};
+
+        fn approvals(chat: &str, read_only: Option<bool>) -> ChatApprovals {
+            let policy = ApprovalPolicy::from_servers(
+                &[McpServer {
+                    key: "m".into(),
+                    tools: vec![McpTool {
+                        name: "t".into(),
+                        full_name: "mcp__m__t".into(),
+                        allowed: true,
+                        read_only_hint: read_only,
+                        destructive_hint: None,
+                    }],
+                    ..Default::default()
+                }],
+                vec![],
+            );
+            ChatApprovals { can_ask: true, chat_id: chat.into(), broker: Arc::new(WorkspaceApprovals::new()), policy: Arc::new(policy) }
+        }
+
+        fn sources_init() -> SessionInit {
+            SessionInit { sources: Some(SourcesLaunch::default()), ..init(&[]) }
+        }
+
+        #[tokio::test]
+        async fn a_chat_with_sources_does_not_start_without_its_approval_rules() {
+            let (mgr, spawner, _) = setup();
+            let k = SessionKey::sources(SessionScope::Workspace("c".into()), Tier::Deep);
+            let err = mgr.ensure(&k, sources_init()).await.err().expect("refused");
+            assert!(err.to_string().contains("approval"), "{err}");
+            assert_eq!(spawner.calls.load(Ordering::SeqCst), 0);
+            // Other scopes with sources, and chats without sources, are untouched.
+            mgr.ensure(&SessionKey::sources(SessionScope::Live("m".into()), Tier::Fast), sources_init()).await.unwrap();
+            mgr.ensure(&key(SessionScope::Workspace("c".into()), Tier::Deep), init(&[])).await.unwrap();
+        }
+
+        #[tokio::test]
+        async fn a_session_is_replaced_when_the_chats_rules_changed_since_it_started() {
+            let (mgr, spawner, _) = setup();
+            let k = SessionKey::sources(SessionScope::Workspace("c".into()), Tier::Deep);
+            mgr.set_chat_approvals(approvals("c", Some(true)));
+            let a = mgr.ensure(&k, sources_init()).await.unwrap();
+            let again = mgr.ensure(&k, sources_init()).await.unwrap();
+            assert!(same_session(&a, &again), "same rules: reused");
+            // A refreshed Check says the tool is no longer read-only: the old session must not be reused.
+            mgr.set_chat_approvals(approvals("c", Some(false)));
+            let b = mgr.ensure(&k, sources_init()).await.unwrap();
+            assert!(!same_session(&a, &b));
+            assert_eq!(spawner.calls.load(Ordering::SeqCst), 2);
+            assert!(spawner.spawned.lock().unwrap()[0].1.closed.load(Ordering::SeqCst));
+            // The approvals reach the spawner, only for this chat's with-sources session.
+            assert!(spawner.spawned.lock().unwrap()[1].0.approvals.is_some());
+        }
     }
 }

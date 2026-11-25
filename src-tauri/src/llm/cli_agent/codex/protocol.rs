@@ -513,19 +513,20 @@ fn parse_server_request(method: &str, p: &Value) -> ServerRequest {
 /// names were found in the codex binary's strings and are only partly
 /// confirmed by the app-server JSON schema, which types `_meta` loosely.
 /// `tool_params` is preferred; the display list is the fallback.
-pub fn tool_params(meta: &Value) -> Value {
+///
+/// `None` when the request carries neither: a call whose arguments cannot be
+/// shown is refused, never asked.
+pub fn tool_params(meta: &Value) -> Option<Value> {
     if let Some(params) = meta.get("tool_params").filter(|p| !p.is_null()) {
-        return params.clone();
+        return Some(params.clone());
     }
-    match meta.get("tool_params_display").and_then(Value::as_array) {
-        Some(items) => Value::Object(
-            items
-                .iter()
-                .filter_map(|i| Some((i.get("name")?.as_str()?.to_string(), i.get("value").cloned().unwrap_or(Value::Null))))
-                .collect(),
-        ),
-        None => Value::Object(Default::default()),
-    }
+    let items = meta.get("tool_params_display").and_then(Value::as_array)?;
+    Some(Value::Object(
+        items
+            .iter()
+            .filter_map(|i| Some((i.get("name")?.as_str()?.to_string(), i.get("value").cloned().unwrap_or(Value::Null))))
+            .collect(),
+    ))
 }
 
 /// What NexQ answers a [`ServerRequest`] with.

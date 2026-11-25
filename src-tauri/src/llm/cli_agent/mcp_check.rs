@@ -72,6 +72,17 @@ pub async fn list_server_tools(
     server: &McpServer,
     secret: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Vec<String>, String> {
+    list_server_tools_with_hints(server, secret).await.map(|(names, _)| names)
+}
+
+/// [`list_server_tools`] with the server's own hints (`readOnlyHint`,
+/// `destructiveHint`) for tools it listed. The hints come from NexQ's own
+/// handshake, so a Check through the CLI runs one too; if that fails the
+/// hints are simply empty (every tool then asks).
+pub async fn list_server_tools_with_hints(
+    server: &McpServer,
+    secret: &(dyn Fn(&str) -> Option<String> + Sync),
+) -> Result<mcp_handshake::Listed, String> {
     let launch = check_launch(server, secret)?;
     // A Claude that is too old counts as no Claude here: the Check is about the
     // server, so NexQ's own client answers (Settings says Claude needs an update).
@@ -103,17 +114,31 @@ pub async fn list_server_tools(
             }
         }
         // No Claude: NexQ's own MCP client asks the server.
-        None => mcp_handshake::list_tools(server, secret).await,
+        None => {
+            return match mcp_handshake::list_tools_with_hints(server, secret).await {
+                Ok(listed) => Ok(listed),
+                Err(message) => Err(match diagnose_start(server, secret).await {
+                    Some(cause) => format!("{message} {cause}"),
+                    None => message,
+                }),
+            };
+        }
     };
     match failure {
         Ok(tools) => {
             // The CLI reports names only; the server's own tools/list carries
             // the read-only and destructive hints workspace chat needs. Best
-            // effort: without them a tool simply asks before it runs.
-            if bin_was_used {
-                let _ = tokio::time::timeout(CHECK_INIT_TIMEOUT, mcp_handshake::list_tools(server, secret)).await;
-            }
-            Ok(tools)
+            // effort: without them a tool simply asks before it runs. Hints
+            // count only for tools the CLI listed too.
+            let hints = if bin_was_used {
+                match tokio::time::timeout(CHECK_INIT_TIMEOUT, mcp_handshake::list_tools_with_hints(server, secret)).await {
+                    Ok(Ok((_, hints))) => hints.into_iter().filter(|(name, _)| tools.contains(name)).collect(),
+                    _ => Default::default(),
+                }
+            } else {
+                Default::default()
+            };
+            Ok((tools, hints))
         }
         // The CLI says only "failed", so start the server alone and look.
         Err(message) => Err(match diagnose_start(server, secret).await {

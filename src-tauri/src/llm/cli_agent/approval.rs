@@ -1,5 +1,49 @@
 //! Per-call tool approval for workspace chat (purpose Chat only).
 //!
+//! # Threat model
+//!
+//! **Assets.** What a tool can do for the user's accounts and data (send mail,
+//! write notes, call APIs), the user's files outside the chat's folders, and
+//! the user's secrets in tool arguments.
+//!
+//! **Attacker.** Anything that reaches the model or the CLI without the user
+//! typing it: tool output, meeting transcripts and documents, the model's own
+//! text, and MCP server metadata (tool names, titles, descriptions,
+//! `annotations`, the text of an approval request). It can ask for any tool
+//! call and can word a request to look harmless. It cannot click.
+//!
+//! **Guarantees** (each has a test, in `approval/tests.rs` unless noted):
+//! 1. *Only the user approves.* A call that must ask runs only after
+//!    `answer_workspace_approval(approval_id, true)` for its own, unguessable,
+//!    still-open question. Nothing in a stream, a transcript or a tool result
+//!    reaches the broker. Unknown, repeated, late and cancelled ids change
+//!    nothing.
+//! 2. *Default is deny.* Unknown tools, odd names (case, padding, aliases), a
+//!    missing or repeated request id, unreadable parameters, a tool changed
+//!    since it was listed, a request that cannot be matched to the call that is
+//!    running, and anything asked while a turn is stopping or the session is
+//!    closing, are refused. Shell, edit and web tools never run.
+//! 3. *What runs is what was shown.* The arguments of the question are the
+//!    call's own (Claude `updatedInput` is the asked `input`; Codex uses the
+//!    started call's arguments; ACP `rawInput`). They are shown in full, or the
+//!    call is refused when they exceed 100 KB.
+//! 4. *Nothing is disguised.* Bidirectional overrides, zero-width and other
+//!    invisible characters are written out as `\u{XXXX}`. Only short values
+//!    under known secret key names are hidden, and visibly so.
+//! 5. *No standing grants.* There is no "always allow": every call is decided
+//!    alone, and ACP is only ever answered `allow_once`.
+//! 6. *Server claims never widen anything.* `readOnlyHint` /
+//!    `destructiveHint` can only let a tool the user already allowed run
+//!    without a question (with a read-like name), never allow a tool the user
+//!    did not allow. They are read fresh by each check, forgotten when the
+//!    server's command, arguments, URL or environment changes, and a missing
+//!    hint means ask.
+//! 7. *Closing leaves nothing open.* A cancel, a stopped turn, a closed or
+//!    reaped session, a deleted chat and app exit refuse every open and queued
+//!    question; an answer to a question whose turn has ended is ignored.
+//! 8. *A CLI that cannot ask never runs a tool that would ask*; this is
+//!    enforced when the session is launched, not only by the caller.
+//!
 //! Live, notes, brief and past-meeting sessions never ask: they run exactly as
 //! before (`--permission-prompts none`, fixed allow lists). Only a session of
 //! `SessionScope::Workspace` that was given a [`ChatApprovals`] can ask.
@@ -47,8 +91,13 @@ pub const APPROVAL_TIMEOUT: Duration = Duration::from_secs(60);
 pub const APPROVAL_EVENT: &str = "workspace_chat_approval";
 /// Event telling the UI a question is over (answered, timed out, cancelled).
 pub const APPROVAL_CLOSED_EVENT: &str = "workspace_chat_approval_closed";
-/// The shown arguments are cut at this many characters.
-pub const MAX_ARGS_CHARS: usize = 4000;
+/// Event for a call refused without a question (its arguments are too long to show).
+pub const APPROVAL_REFUSED_EVENT: &str = "workspace_chat_approval_refused";
+/// Arguments longer than this are not shown, so the call is refused instead.
+pub const MAX_ARGS_BYTES: usize = 100 * 1024;
+/// What replaces the value under a key that looks like a secret.
+/// What every hidden value starts with; the rest says its type and size.
+pub const HIDDEN: &str = "[hidden: looks like a key";
 
 // ---------------------------------------------------------------------------
 // Policy
@@ -229,7 +278,7 @@ impl ApprovalPolicy {
     pub fn verdict_for_name(&self, name: &str, input: &Value) -> ToolVerdict {
         match split_tool(name, &self.server_keys()) {
             Some((server, tool)) => self.mcp(&server, &tool),
-            None if name.starts_with("mcp") => ToolVerdict::Deny("an unknown tool"),
+            None if name.to_lowercase().starts_with("mcp") => ToolVerdict::Deny("an unknown tool"),
             None => builtin_verdict(name, input, &self.scope_dirs),
         }
     }
@@ -278,6 +327,18 @@ impl ApprovalPolicy {
     }
 }
 
+/// The sources a session of `approvals` launches with. A chat that cannot ask
+/// has its asking tools removed from allowed and added to disallowed here, in
+/// the one place every CLI's launch goes through, so a caller that forgot
+/// `adjust_launch` still cannot run a tool that would need a question.
+pub fn launch_sources(sources: Option<&SourcesLaunch>, approvals: Option<&ChatApprovals>) -> Option<SourcesLaunch> {
+    let mut launch = sources.cloned()?;
+    if let Some(a) = approvals.filter(|a| !a.can_ask) {
+        a.policy.adjust_launch(&mut launch, &ApprovalSupport::Unsupported("this CLI cannot ask".into()));
+    }
+    Some(launch)
+}
+
 /// Can this CLI ask the user per call?
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApprovalSupport {
@@ -286,9 +347,12 @@ pub enum ApprovalSupport {
     Unsupported(String),
 }
 
-/// The Claude version `--permission-prompts host` with `can_use_tool` requests
-/// was checked on (its `--help` lists it; see `protocol.rs` for the messages).
-pub const CLAUDE_ASK_MIN_VERSION: super::detect::ClaudeVersion = (2, 1, 330);
+/// The oldest Claude version shown to carry `--permission-prompts host` and the
+/// `can_use_tool` / `control_response` / `control_cancel_request` strings: the
+/// installed 2.1.328, 2.1.329 and 2.1.330 binaries all do (string search of the
+/// binaries; not run). Versions between NexQ's minimum (2.1.259) and 2.1.328
+/// were not available to look at, so they stay unsupported.
+pub const CLAUDE_ASK_MIN_VERSION: super::detect::ClaudeVersion = (2, 1, 328);
 
 /// Claude's support for `version` (the detected one, if any).
 pub fn claude_support_for_version(version: Option<super::detect::ClaudeVersion>) -> ApprovalSupport {
@@ -323,36 +387,109 @@ pub fn approval_support(kind: CliAgentKind) -> ApprovalSupport {
 // Showing the arguments
 // ---------------------------------------------------------------------------
 
-/// Does a key name look like it holds a secret?
+/// Is this key one of the known names of a secret? Only these are hidden:
+/// `password`, `secret`, `credential(s)`, `authorization`, `auth`, `bearer`,
+/// `cookie`, `apikey`, `X-Api-Key`, `private_key`, `access_token`,
+/// `refreshToken`... A word like `max_tokens` or `author` is shown.
 pub fn is_secret_key(key: &str) -> bool {
-    let k = key.to_lowercase();
-    ["password", "passwd", "secret", "token", "apikey", "api_key", "api-key", "authorization", "auth", "cookie", "credential", "bearer", "private_key", "privatekey", "session"]
+    let words = name_words(key);
+    let has = |w: &str| words.iter().any(|x| x == w);
+    const NOT_SECRET_TOKEN: [&str; 10] = ["max", "min", "total", "num", "count", "input", "output", "prompt", "completion", "limit"];
+    let secret_token = has("token") && !NOT_SECRET_TOKEN.iter().any(|n| has(n));
+    let secret_key = has("apikey")
+        || words.windows(2).any(|w| w[1] == "key" && ["api", "secret", "private", "access", "auth", "subscription"].contains(&w[0].as_str()));
+    ["password", "passwd", "secret", "credential", "credentials", "authorization", "auth", "bearer", "cookie"]
         .iter()
-        .any(|s| k.contains(s))
+        .any(|w| has(w))
+        || secret_token
+        || secret_key
 }
 
-fn redact(value: &Value) -> Value {
+/// A hidden value is only ever a short scalar: that is what a secret is. A long
+/// string, an object or an array under a secret-looking key is shown (its own
+/// keys are checked in turn), so nothing sizeable is hidden from the user.
+const MAX_HIDDEN_CHARS: usize = 256;
+
+fn hidden_scalar(value: &Value) -> Option<String> {
+    match value {
+        Value::String(s) if s.chars().count() <= MAX_HIDDEN_CHARS => {
+            Some(format!("{HIDDEN}, string, {} chars]", s.chars().count()))
+        }
+        Value::Number(_) => Some(format!("{HIDDEN}, number]")),
+        Value::Bool(_) => Some(format!("{HIDDEN}, boolean]")),
+        _ => None,
+    }
+}
+
+fn redact(value: &Value, hid: &mut bool) -> Value {
     match value {
         Value::Object(map) => Value::Object(
             map.iter()
-                .map(|(k, v)| (k.clone(), if is_secret_key(k) { Value::String("[hidden]".into()) } else { redact(v) }))
+                .map(|(k, v)| {
+                    if is_secret_key(k) {
+                        if let Some(h) = hidden_scalar(v) {
+                            *hid = true;
+                            return (k.clone(), Value::String(h));
+                        }
+                    }
+                    (k.clone(), redact(v, hid))
+                })
                 .collect(),
         ),
-        Value::Array(items) => Value::Array(items.iter().map(redact).collect()),
+        Value::Array(items) => Value::Array(items.iter().map(|i| redact(i, hid)).collect()),
         other => other.clone(),
     }
 }
 
-/// Pretty JSON of `args` for the card: values under secret-looking keys hidden,
-/// cut at [`MAX_ARGS_CHARS`]. The bool says whether it was cut. This is only a
-/// rendering: what runs is the untouched `args`.
-pub fn display_args(args: &Value) -> (String, bool) {
-    let text = serde_json::to_string_pretty(&redact(args)).unwrap_or_default();
-    if text.chars().count() <= MAX_ARGS_CHARS {
-        return (text, false);
+/// Characters that can disguise text: bidirectional overrides and isolates,
+/// zero-width and invisible formatting characters.
+fn is_disguising(c: char) -> bool {
+    matches!(c as u32,
+        0x0000..=0x0008 | 0x000B..=0x001F | 0x007F..=0x009F       // control characters (tab and newline stay)
+        | 0x00AD | 0x034F | 0x061C | 0x115F | 0x1160 | 0x17B4 | 0x17B5 | 0x180E
+        | 0x200B..=0x200F | 0x2028 | 0x2029 | 0x202A..=0x202E | 0x2060..=0x206F
+        | 0x3164 | 0xFE00..=0xFE0F | 0xFEFF | 0xFFA0 | 0xFFF9..=0xFFFB
+        | 0xE0000..=0xE007F | 0xE0100..=0xE01EF)
+}
+
+/// `text` with every disguising character written out as `\u{XXXX}`.
+pub fn escape_invisible(text: &str) -> String {
+    text.chars()
+        .map(|c| if is_disguising(c) { format!("\\u{{{:04X}}}", c as u32) } else { c.to_string() })
+        .collect()
+}
+
+/// The card's rendering of a call's arguments.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Shown {
+    pub text: String,
+    /// Some short value was replaced by a [`HIDDEN`] marker.
+    pub redacted: bool,
+}
+
+impl std::fmt::Display for Shown {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
     }
-    let cut: String = text.chars().take(MAX_ARGS_CHARS).collect();
-    (format!("{cut}\n…"), true)
+}
+
+impl std::ops::Deref for Shown {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.text
+    }
+}
+
+/// The whole of `args` as pretty JSON for the card: short values under known
+/// secret key names replaced by a [`HIDDEN`] marker (with their type and
+/// length), invisible and control characters escaped, nothing else changed or
+/// cut. `None` when it is longer than [`MAX_ARGS_BYTES`]: a call the user
+/// cannot read in full is refused, not shown in part. This is only a
+/// rendering: what runs is the untouched `args`.
+pub fn display_args(args: &Value) -> Option<Shown> {
+    let mut redacted = false;
+    let text = serde_json::to_string_pretty(&redact(args, &mut redacted)).unwrap_or_default();
+    (text.len() <= MAX_ARGS_BYTES).then(|| Shown { text: escape_invisible(&text), redacted })
 }
 
 // ---------------------------------------------------------------------------
@@ -380,9 +517,12 @@ pub struct ApprovalEvent {
     pub approval_id: String,
     pub server: String,
     pub tool: String,
-    /// Pretty JSON, secrets hidden by key name, size-capped.
+    /// Pretty JSON of the whole call; short values under known secret key
+    /// names are replaced by a visible marker.
     pub args: String,
-    /// `args` was cut: the call has more than is shown.
+    /// Some value in `args` was replaced by such a marker.
+    pub redacted: bool,
+    /// Always false: arguments are shown in full, or the call is refused.
     pub truncated: bool,
 }
 
@@ -392,6 +532,8 @@ pub enum ApprovalNotice {
     Request(ApprovalEvent),
     /// The question is over: `answered`, `timed_out`, `cancelled`.
     Closed { chat_id: String, approval_id: String, reason: &'static str },
+    /// A call refused without asking, with the reason to show.
+    Refused { chat_id: String, request_id: String, server: String, tool: String, reason: String },
 }
 
 pub type ApprovalEmitter = Arc<dyn Fn(ApprovalNotice) + Send + Sync>;
@@ -459,6 +601,12 @@ impl WorkspaceApprovals {
             ApprovalNotice::Request(ev) => {
                 let _ = app.emit(APPROVAL_EVENT, ev);
             }
+            ApprovalNotice::Refused { chat_id, request_id, server, tool, reason } => {
+                let _ = app.emit(
+                    APPROVAL_REFUSED_EVENT,
+                    serde_json::json!({ "chat_id": chat_id, "request_id": request_id, "server": server, "tool": tool, "reason": reason }),
+                );
+            }
             ApprovalNotice::Closed { chat_id, approval_id, reason } => {
                 let _ = app.emit(
                     APPROVAL_CLOSED_EVENT,
@@ -520,6 +668,21 @@ impl ApprovalBroker for WorkspaceApprovals {
         if self.emitter.lock().unwrap().is_none() {
             return false;
         }
+        // What the user cannot read in full they are not asked to approve.
+        let Some(args) = display_args(&req.args) else {
+            self.notify(ApprovalNotice::Refused {
+                chat_id: req.chat_id.clone(),
+                request_id: req.request_id.clone(),
+                server: req.server.clone(),
+                tool: req.tool.clone(),
+                reason: format!(
+                    "{} was refused: its arguments are longer than {} KB, too long to show before it runs.",
+                    req.tool,
+                    MAX_ARGS_BYTES / 1024
+                ),
+            });
+            return false;
+        };
         let (epoch, lock) = {
             let mut st = self.state.lock().unwrap();
             if st.shut_down {
@@ -552,7 +715,8 @@ impl ApprovalBroker for WorkspaceApprovals {
             );
             (approval_id, rx)
         };
-        let (args, truncated) = display_args(&req.args);
+        let (args, redacted) = (args.text, args.redacted);
+        let truncated = false;
         self.notify(ApprovalNotice::Request(ApprovalEvent {
             chat_id: req.chat_id.clone(),
             request_id: req.request_id.clone(),
@@ -560,6 +724,7 @@ impl ApprovalBroker for WorkspaceApprovals {
             server: req.server.clone(),
             tool: req.tool.clone(),
             args,
+            redacted,
             truncated,
         }));
         let (allowed, reason) = match tokio::time::timeout(self.timeout, rx).await {

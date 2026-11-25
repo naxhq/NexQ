@@ -20,7 +20,7 @@
 
 use super::launch::{build_args, configure_command, discover_user_mcp_servers, CodexLaunch};
 use super::policy::{self, decide, CodexPolicy, Verdict};
-use crate::llm::cli_agent::approval::ApprovalRequest;
+use crate::llm::cli_agent::approval::{ApprovalRequest, ChatApprovals};
 use super::protocol::{
     self, Account, Incoming, Item, Notification, RpcError, ServerRequest, ThreadStart, TurnStatus, Usage,
 };
@@ -85,6 +85,12 @@ struct Shared {
     mcp: Mutex<Vec<McpServerState>>,
     /// The thread's cumulative token usage when the last turn ended.
     usage_baseline: Mutex<Usage>,
+    /// A workspace chat that can ask (None everywhere else).
+    ask: Option<ChatApprovals>,
+    /// Set while a turn is interrupted or the session closes: nothing new is asked.
+    refuse_asks: AtomicBool,
+    /// The MCP tool calls the running turn has started, for binding a question to one.
+    started: Mutex<Vec<StartedTool>>,
     /// The worst plan-limit signal since it was last taken.
     plan_limit: Mutex<Option<crate::llm::cli_agent::protocol::PlanLimit>>,
     /// Which MCP tools may run: the allowlist `item_breach` checks every item against.
@@ -93,7 +99,45 @@ struct Shared {
     expected_servers: Vec<String>,
 }
 
+/// The oldest started call of `server` whose real tool is among `named` and
+/// that no question is bound to yet; it is marked bound.
+fn bind_in(started: &mut [StartedTool], server: &str, named: &[String]) -> Option<StartedTool> {
+    let item = started.iter_mut().find(|t| !t.bound && t.server == server && named.contains(&t.tool))?;
+    item.bound = true;
+    Some(item.clone())
+}
+
+/// One `item/started` MCP tool call: its real tool and arguments.
+#[derive(Debug, Clone)]
+struct StartedTool {
+    item_id: String,
+    server: String,
+    tool: String,
+    args: Value,
+    /// A question was already bound to it.
+    bound: bool,
+}
+
 impl Shared {
+    /// Refuse every open question of this chat and any asked until the next
+    /// turn (cancel, interrupt, close, drop).
+    fn deny_asks(&self) {
+        self.refuse_asks.store(true, Ordering::SeqCst);
+        if let Some(a) = &self.ask {
+            a.broker.deny_chat(&a.chat_id);
+        }
+    }
+
+    fn may_ask(&self) -> bool {
+        !self.refuse_asks.load(Ordering::SeqCst) && !self.closed.load(Ordering::SeqCst) && self.alive.load(Ordering::SeqCst)
+    }
+
+    /// Bind a question of `server` naming `named` to a started call of that
+    /// server whose tool is among those names, not yet bound to another question.
+    fn bind(&self, server: &str, named: &[String]) -> Option<StartedTool> {
+        bind_in(&mut self.started.lock().unwrap(), server, named)
+    }
+
     fn send_line(&self, line: String) -> bool {
         match self.stdin_tx.lock().unwrap().as_ref() {
             Some(tx) => tx.send(line).is_ok(),
@@ -411,7 +455,10 @@ impl CodexSession {
         loop {
             tokio::select! {
                 biased;
-                _ = cancel.cancelled() => return Err(AgentError::Cancelled),
+                _ = cancel.cancelled() => {
+                    self.shared.deny_asks();
+                    return Err(AgentError::Cancelled);
+                }
                 msg = rx.recv() => match msg {
                     Some(TurnMsg::Thinking) => {
                         if !quiet {
@@ -449,6 +496,7 @@ impl CodexSession {
     /// it started. Idempotent.
     pub async fn close(&self) {
         self.shared.closed.store(true, Ordering::SeqCst);
+        self.shared.deny_asks();
         self.shared.stdin_tx.lock().unwrap().take();
         let deadline = Instant::now() + CLOSE_GRACE;
         loop {
@@ -520,6 +568,7 @@ impl CodexSession {
 impl Drop for CodexSession {
     fn drop(&mut self) {
         self.shared.closed.store(true, Ordering::SeqCst);
+        self.shared.deny_asks();
         self.shared.stdin_tx.lock().unwrap().take();
         self.shared.kill_tree();
         self.shared.alive.store(false, Ordering::SeqCst);
@@ -645,6 +694,9 @@ async fn run_turn(
             .ok_or_else(|| AgentError::Cli(AgentErrorKind::Other, "Codex answered turn/start without a turn".into()))?,
     };
 
+    // A new turn: questions may be asked again, and no call has started yet.
+    shared.refuse_asks.store(false, Ordering::SeqCst);
+    shared.started.lock().unwrap().clear();
     let mut interrupted = false;
     let mut drain_deadline: Option<tokio::time::Instant> = None;
     // Interim ("commentary") messages are the model narrating its tool use:
@@ -657,6 +709,8 @@ async fn run_turn(
     let mut last_error: Option<protocol::TurnError> = None;
 
     let interrupt = |shared: &Shared, interrupted: &mut bool| {
+        // An interrupted turn leaves no question open and asks no new one.
+        shared.deny_asks();
         if !*interrupted {
             *interrupted = true;
             // Nobody waits for the response; the reader drops what has no taker.
@@ -739,6 +793,13 @@ async fn run_turn(
                         }
                         Item::McpToolCall { id, server, tool, arguments, .. } => {
                             open_tools.insert(id.clone());
+                            shared.started.lock().unwrap().push(StartedTool {
+                                item_id: id.clone(),
+                                server: server.clone(),
+                                tool: tool.clone(),
+                                args: arguments.clone(),
+                                bound: false,
+                            });
                             let _ = tx.send(TurnMsg::Tool(ToolUse {
                                 id,
                                 name: format!("mcp__{server}__{tool}"),
@@ -755,6 +816,7 @@ async fn run_turn(
                         }
                         Item::McpToolCall { id, status, .. } if open_tools.remove(&id) =>
                         {
+                            shared.started.lock().unwrap().retain(|t| t.item_id != id);
                             let _ = tx.send(TurnMsg::ToolDone(ToolResult {
                                 tool_use_id: id,
                                 is_error: status != "completed",
@@ -849,6 +911,9 @@ fn start_process(launch: &CodexLaunch, args: &[String], approvals: Arc<Approvals
         pending: Mutex::new(HashMap::new()),
         mcp: Mutex::new(Vec::new()),
         usage_baseline: Mutex::new(Usage::default()),
+        ask: approvals.ask.clone(),
+        refuse_asks: AtomicBool::new(false),
+        started: Mutex::new(Vec::new()),
         plan_limit: Mutex::new(None),
         policy: approvals.policy.clone(),
         expected_servers: launch.server_keys(),
@@ -920,20 +985,18 @@ fn start_process(launch: &CodexLaunch, args: &[String], approvals: Arc<Approvals
                 Some(Incoming::Request { id, request }) => {
                     let verdict = decide(&request, &approvals.policy);
                     log::info!("codex asked ({}): {}", request_name(&request), verdict_name(&verdict));
-                    match (&verdict, &approvals.ask, &request) {
-                        // Held: the JSON-RPC id stays open until the user answers (or 60 s pass).
-                        (Verdict::Ask { tool }, Some(ask), ServerRequest::McpElicitation { server, meta, .. }) => {
-                            let q = ApprovalRequest {
-                                chat_id: ask.chat_id.clone(),
-                                request_id: id.to_string(),
-                                server: server.clone(),
-                                tool: tool.clone(),
-                                args: protocol::tool_params(meta),
-                            };
-                            let (broker, shared, request, id) =
-                                (ask.broker.clone(), out_shared.clone(), request.clone(), id.clone());
+                    match (&approvals.ask, &request) {
+                        // A workspace chat: every tool approval is decided from the call that
+                        // is actually running (its real tool and arguments), never from the
+                        // request's own words. The JSON-RPC id stays open meanwhile.
+                        (Some(ask), ServerRequest::McpElicitation { server, message, meta })
+                            if policy::is_tool_approval(meta) =>
+                        {
+                            let (ask, shared, request, id) = (ask.clone(), out_shared.clone(), request.clone(), id.clone());
+                            let (server, named) = (server.clone(), policy::named_tools(message, meta));
+                            let rules = approvals.policy.clone();
                             approvals.rt.spawn(async move {
-                                let allow = broker.ask(q).await;
+                                let allow = decide_bound(&shared, &ask, &rules, &server, &named).await;
                                 let reply = protocol::reply_for(&request, allow);
                                 shared.send_line(protocol::reply_line(&id, &reply));
                             });
@@ -960,6 +1023,48 @@ fn start_process(launch: &CodexLaunch, args: &[String], approvals: Arc<Approvals
     )?;
 
     Ok((shared, event_rx))
+}
+
+/// How long a question waits for the call it is about to appear as started.
+const BIND_WAIT: Duration = Duration::from_secs(5);
+
+/// Decide one tool approval of a chat from the started call it belongs to:
+/// ask the user for a tool that asks (with the call's real arguments), allow a
+/// tool that runs by itself, refuse the rest, anything it cannot bind, and
+/// anything once the turn is interrupted or the session is closing.
+async fn decide_bound(shared: &Arc<Shared>, ask: &ChatApprovals, rules: &CodexPolicy, server: &str, named: &[String]) -> bool {
+    let waited = tokio::time::Instant::now();
+    let call = loop {
+        if !shared.may_ask() {
+            return false;
+        }
+        if let Some(call) = shared.bind(server, named) {
+            break call;
+        }
+        if waited.elapsed() >= BIND_WAIT {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(40)).await;
+    };
+    let allowed = policy::tool_allowed(&rules.allowed_tools, &call.server, &call.tool);
+    let asks = policy::tool_allowed(&rules.ask_tools, &call.server, &call.tool);
+    if !allowed {
+        return false;
+    }
+    if !asks {
+        return shared.may_ask();
+    }
+    let answer = ask
+        .broker
+        .ask(ApprovalRequest {
+            chat_id: ask.chat_id.clone(),
+            request_id: call.item_id.clone(),
+            server: call.server.clone(),
+            tool: call.tool.clone(),
+            args: call.args.clone(),
+        })
+        .await;
+    answer && shared.may_ask()
 }
 
 /// The verdict, for the log (never the request's content).
@@ -1139,5 +1244,50 @@ mod tests {
     fn default_timeouts_are_longer_than_claudes_for_thinking() {
         let t = default_timeouts();
         assert!(t.inactivity >= SessionTimeouts::default().inactivity);
+    }
+
+    mod binding {
+        use super::super::*;
+        use serde_json::json;
+
+        fn started(id: &str, server: &str, tool: &str, args: Value) -> StartedTool {
+            StartedTool { item_id: id.into(), server: server.into(), tool: tool.into(), args, bound: false }
+        }
+
+        #[test]
+        fn a_question_binds_to_the_call_that_is_running_and_only_once() {
+            let mut calls = vec![
+                started("i1", "mira", "kb_search", json!({"q": "x"})),
+                started("i2", "mira", "send_mail", json!({"to": "a@b.c"})),
+            ];
+            let named = vec!["send_mail".to_string()];
+            let bound = bind_in(&mut calls, "mira", &named).unwrap();
+            // The real call and its real arguments, whatever the question's own text said.
+            assert_eq!((bound.item_id.as_str(), bound.args.clone()), ("i2", json!({"to": "a@b.c"})));
+            assert!(bind_in(&mut calls, "mira", &named).is_none(), "a repeated question finds nothing left");
+        }
+
+        #[test]
+        fn a_question_that_names_another_tool_or_server_binds_to_nothing() {
+            let mut calls = vec![started("i1", "mira", "send_mail", json!({}))];
+            for (server, named) in [
+                ("other", vec!["send_mail".to_string()]),
+                ("mira", vec!["kb_search".to_string()]),     // says the harmless one
+                ("mira", vec!["SEND_MAIL".to_string()]),
+                ("mira", vec![]),
+                ("", vec!["send_mail".to_string()]),
+            ] {
+                assert!(bind_in(&mut calls, server, &named).is_none(), "{server:?} {named:?}");
+            }
+            assert!(!calls[0].bound);
+        }
+
+        #[test]
+        fn the_title_is_never_a_name_and_an_interrupted_turn_asks_nothing() {
+            use crate::llm::cli_agent::codex::policy::named_tools;
+            let meta = json!({"codex_approval_kind": "mcp_tool_call", "tool_title": "kb_search", "tool_name": "send_mail"});
+            let names = named_tools("Allow the mira MCP server to run tool \"send_mail\"?", &meta);
+            assert!(names.contains(&"send_mail".to_string()) && !names.contains(&"kb_search".to_string()));
+        }
     }
 }

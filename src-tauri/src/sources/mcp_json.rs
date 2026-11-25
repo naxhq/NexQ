@@ -222,15 +222,16 @@ pub fn merge_checked_tools(
             .find(|t| t.name == name)
             .map(|t| t.allowed)
             .unwrap_or_else(|| tool_allowed_by_default(name));
-        // New hints win; a check that could not read them keeps what was saved.
-        let before = old.iter().find(|t| t.name == name);
-        let hint = hints.get(full);
+        // Hints are exactly what this check read. A check that could not read
+        // them (the server did not say, or the read failed) leaves both unknown:
+        // an old "read-only" is never carried over (the tool may have changed).
+        let hint = hints.get(full).copied().unwrap_or_default();
         merged.push(McpTool {
             name: name.to_string(),
             full_name: full.clone(),
             allowed,
-            read_only_hint: hint.map(|h| h.read_only).unwrap_or_else(|| before.and_then(|t| t.read_only_hint)),
-            destructive_hint: hint.map(|h| h.destructive).unwrap_or_else(|| before.and_then(|t| t.destructive_hint)),
+            read_only_hint: hint.read_only,
+            destructive_hint: hint.destructive,
         });
     }
     merged
@@ -441,5 +442,27 @@ mod tests {
     fn credential_ids() {
         assert_eq!(credential_id("a", "API_KEY"), "mcp:a:API_KEY");
         assert_eq!(header_credential_id("a", "Authorization"), "mcp:a:header:Authorization");
+    }
+
+    #[test]
+    fn a_check_keeps_only_the_hints_it_read_and_never_an_old_read_only() {
+        use std::collections::HashMap;
+        let old = vec![McpTool {
+            name: "kb".into(),
+            full_name: "mcp__m__kb".into(),
+            allowed: true,
+            read_only_hint: Some(true),
+            destructive_hint: Some(false),
+        }];
+        let found = vec!["mcp__m__kb".to_string(), "mcp__m__new".to_string()];
+        // The check read nothing: both unknown, the user's switch kept.
+        let blind = merge_checked_tools(&old, &found, "m", &HashMap::new());
+        assert_eq!((blind[0].read_only_hint, blind[0].destructive_hint, blind[0].allowed), (None, None, true));
+        // The check read hints: exactly those.
+        let mut read = HashMap::new();
+        read.insert("mcp__m__kb".to_string(), ToolHints { read_only: Some(false), destructive: Some(true) });
+        let seen = merge_checked_tools(&old, &found, "m", &read);
+        assert_eq!((seen[0].read_only_hint, seen[0].destructive_hint), (Some(false), Some(true)));
+        assert_eq!((seen[1].read_only_hint, seen[1].destructive_hint), (None, None));
     }
 }

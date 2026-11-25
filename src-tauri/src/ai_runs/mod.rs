@@ -838,6 +838,8 @@ impl AiRuns {
     /// flight (at most 10 s) and its transcript folder goes.
     pub async fn close_chat(&self, chat_id: &str) {
         let scope = SessionScope::Workspace(chat_id.to_string());
+        // Any open question is refused and the chat's approval rules forgotten.
+        self.cli.clear_chat_approvals(chat_id);
         self.cli
             .close_scope_graceful(&scope, crate::llm::cli_agent::manager::DRAIN_TIMEOUT)
             .await;

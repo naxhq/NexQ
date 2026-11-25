@@ -196,63 +196,80 @@ fn tool_name(key: &str, tool: &str) -> String {
     format!("mcp__{key}__{clean}")
 }
 
-/// `annotations.readOnlyHint` / `destructiveHint` of the tools of the servers
-/// seen by a handshake, by full name. A handshake overwrites its server's
-/// entries; a Check reads them back with [`hints_of_server`] (the Claude path
-/// of a Check lists names only, so it runs a handshake too, see `mcp_check`).
-fn hint_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, ToolHints>> {
-    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, ToolHints>>> =
-        std::sync::OnceLock::new();
-    CACHE.get_or_init(Default::default)
+/// One handshake's answer: the tool names (`mcp__<key>__<tool>`) and what the
+/// server said about each (`annotations.readOnlyHint` / `destructiveHint`).
+/// The hints travel with the list they came from: there is no cache.
+pub type Listed = (Vec<String>, std::collections::HashMap<String, ToolHints>);
+
+/// The stricter of two statements about one tool: read-only only when both
+/// say so, destructive when either does, unknown stays unknown.
+pub fn stricter(a: ToolHints, b: ToolHints) -> ToolHints {
+    let read_only = match (a.read_only, b.read_only) {
+        (Some(true), Some(true)) => Some(true),
+        (Some(false), _) | (_, Some(false)) => Some(false),
+        _ => None,
+    };
+    let destructive = match (a.destructive, b.destructive) {
+        (Some(true), _) | (_, Some(true)) => Some(true),
+        (Some(false), Some(false)) => Some(false),
+        _ => None,
+    };
+    ToolHints { read_only, destructive }
 }
 
-fn record_hints(result: &Value, key: &str) {
-    let Some(tools) = result.get("tools").and_then(Value::as_array) else { return };
-    let mut cache = hint_cache().lock().unwrap();
-    for t in tools {
-        let Some(name) = t.get("name").and_then(Value::as_str) else { continue };
-        let ann = t.get("annotations");
-        let flag = |k: &str| ann.and_then(|a| a.get(k)).and_then(Value::as_bool);
-        cache.insert(
-            tool_name(key, name),
-            ToolHints { read_only: flag("readOnlyHint"), destructive: flag("destructiveHint") },
-        );
-    }
-}
-
-/// The hints the last handshake with server `key` saw.
-pub fn hints_of_server(key: &str) -> std::collections::HashMap<String, ToolHints> {
-    let prefix = format!("mcp__{key}__");
-    hint_cache()
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|(name, _)| name.starts_with(&prefix))
-        .map(|(n, h)| (n.clone(), *h))
-        .collect()
-}
-
-/// The tools of one `tools/list` result (full names; a name over
-/// [`MAX_TOOL_NAME`] characters is left out) and the cursor of the next page.
-fn tools_page(result: &Value, key: &str) -> Result<(Vec<String>, Option<String>), HandshakeError> {
-    record_hints(result, key);
+/// The tools of one `tools/list` result with their hints (full names; a name
+/// over [`MAX_TOOL_NAME`] characters is left out and only the first
+/// [`MAX_TOOLS`] are kept: nothing is recorded for a tool that is not listed)
+/// and the cursor of the next page. A name that appears twice keeps the
+/// stricter hints.
+fn tools_page_hinted(
+    result: &Value,
+    key: &str,
+) -> Result<(Vec<String>, std::collections::HashMap<String, ToolHints>, Option<String>), HandshakeError> {
     let tools = result
         .get("tools")
         .and_then(Value::as_array)
         .ok_or_else(|| HandshakeError::Protocol("the tool list is missing".to_string()))?;
-    let names = tools
-        .iter()
-        .filter_map(|t| t.get("name").and_then(Value::as_str))
-        .filter(|name| name.chars().count() <= MAX_TOOL_NAME)
-        .take(MAX_TOOLS)
-        .map(|name| tool_name(key, name))
-        .collect();
+    let mut names = Vec::new();
+    let mut hints: std::collections::HashMap<String, ToolHints> = Default::default();
+    for t in tools {
+        let Some(name) = t.get("name").and_then(Value::as_str) else { continue };
+        if name.chars().count() > MAX_TOOL_NAME || names.len() >= MAX_TOOLS {
+            continue;
+        }
+        let full = tool_name(key, name);
+        let ann = t.get("annotations");
+        let flag = |k: &str| ann.and_then(|a| a.get(k)).and_then(Value::as_bool);
+        let seen = ToolHints { read_only: flag("readOnlyHint"), destructive: flag("destructiveHint") };
+        let merged = match hints.get(&full) {
+            Some(before) => stricter(*before, seen),
+            None => seen,
+        };
+        hints.insert(full.clone(), merged);
+        names.push(full);
+    }
     let next = result
         .get("nextCursor")
         .and_then(Value::as_str)
         .filter(|c| !c.is_empty())
         .map(str::to_string);
-    Ok((names, next))
+    Ok((names, hints, next))
+}
+
+/// [`tools_page_hinted`] without the hints.
+fn tools_page(result: &Value, key: &str) -> Result<(Vec<String>, Option<String>), HandshakeError> {
+    tools_page_hinted(result, key).map(|(names, _, next)| (names, next))
+}
+
+/// Fold one page's hints into the list's, keeping the stricter on a collision.
+fn add_hints(all: &mut std::collections::HashMap<String, ToolHints>, page: std::collections::HashMap<String, ToolHints>) {
+    for (name, h) in page {
+        let merged = match all.get(&name) {
+            Some(before) => stricter(*before, h),
+            None => h,
+        };
+        all.insert(name, merged);
+    }
 }
 
 /// Add a page to `tools`; true when [`MAX_TOOLS`] is reached and paging stops.
@@ -468,6 +485,7 @@ fn stdio_request(
 }
 
 /// The whole handshake over a line source and a writer; the tool list of `key`.
+#[cfg(test)]
 fn stdio_handshake(
     src: &mut impl LineSource,
     out: &mut impl Write,
@@ -477,6 +495,7 @@ fn stdio_handshake(
     stdio_handshake_within(src, out, key, deadline, MAX_BYTES)
 }
 
+#[cfg(test)]
 fn stdio_handshake_within(
     src: &mut impl LineSource,
     out: &mut impl Write,
@@ -484,16 +503,28 @@ fn stdio_handshake_within(
     deadline: Instant,
     max_bytes: usize,
 ) -> Result<Vec<String>, HandshakeError> {
+    stdio_handshake_hinted(src, out, key, deadline, max_bytes).map(|(names, _)| names)
+}
+
+fn stdio_handshake_hinted(
+    src: &mut impl LineSource,
+    out: &mut impl Write,
+    key: &str,
+    deadline: Instant,
+    max_bytes: usize,
+) -> Result<Listed, HandshakeError> {
     let mut budget = Budget::new(max_bytes);
     stdio_request(src, out, &initialize_request(1), 1, deadline, &mut budget)?;
     send_line(out, &initialized_notification())?;
     let mut tools = Vec::new();
+    let mut hints = Default::default();
     let mut cursor: Option<String> = None;
     for page in 0..MAX_PAGES {
         let id = 2 + page as u64;
         let result =
             stdio_request(src, out, &tools_list_request(id, cursor.as_deref()), id, deadline, &mut budget)?;
-        let (names, next) = tools_page(&result, key)?;
+        let (names, page_hints, next) = tools_page_hinted(&result, key)?;
+        add_hints(&mut hints, page_hints);
         if add_tools(&mut tools, names) {
             break;
         }
@@ -502,7 +533,14 @@ fn stdio_handshake_within(
             None => break,
         }
     }
-    Ok(tools)
+    Ok(finish_listed(tools, hints))
+}
+
+/// Only what is listed keeps its hints.
+fn finish_listed(tools: Vec<String>, mut hints: std::collections::HashMap<String, ToolHints>) -> Listed {
+    let listed: std::collections::HashSet<&String> = tools.iter().collect();
+    hints.retain(|name, _| listed.contains(name));
+    (tools, hints)
 }
 
 /// Start the command like a session would (same folder, environment, shims and
@@ -515,7 +553,7 @@ fn stdio_check(
     env: &[(String, String)],
     key: &str,
     limit: Duration,
-) -> Result<Vec<String>, HandshakeError> {
+) -> Result<Listed, HandshakeError> {
     let deadline = Instant::now() + limit;
     let path = env.iter().find(|(k, _)| k.eq_ignore_ascii_case("PATH")).map(|(_, v)| std::ffi::OsString::from(v));
     let mut cmd = Command::new(resolve_command(command, path.as_deref()));
@@ -553,7 +591,7 @@ fn stdio_check(
     let (done_tx, done_rx) = mpsc::channel();
     let key = key.to_string();
     std::thread::spawn(move || {
-        let result = stdio_handshake(&mut ChannelLines(rx), &mut stdin, &key, deadline);
+        let result = stdio_handshake_hinted(&mut ChannelLines(rx), &mut stdin, &key, deadline, MAX_BYTES);
         drop(stdin);
         let _ = done_tx.send(result);
     });
@@ -652,11 +690,20 @@ async fn http_post(
     Err(protocol("the stream ended without an answer"))
 }
 
+#[cfg(test)]
 async fn http_handshake(
     url: &str,
     headers: &[(String, String)],
     key: &str,
 ) -> Result<Vec<String>, HandshakeError> {
+    http_handshake_hinted(url, headers, key).await.map(|(names, _)| names)
+}
+
+async fn http_handshake_hinted(
+    url: &str,
+    headers: &[(String, String)],
+    key: &str,
+) -> Result<Listed, HandshakeError> {
     // No redirects: the headers (saved secrets) go only to the URL that was saved.
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(15))
@@ -667,6 +714,7 @@ async fn http_handshake(
     let (_, session) = http_post(&client, url, headers, None, &initialize_request(1), Some(1), &mut budget).await?;
     http_post(&client, url, headers, session.as_deref(), &initialized_notification(), None, &mut budget).await?;
     let mut tools = Vec::new();
+    let mut hints = Default::default();
     let mut cursor: Option<String> = None;
     let mut outcome = Ok(());
     for page in 0..MAX_PAGES {
@@ -674,12 +722,13 @@ async fn http_handshake(
         let message = tools_list_request(id, cursor.as_deref());
         let step = http_post(&client, url, headers, session.as_deref(), &message, Some(id), &mut budget).await;
         let result = match step {
-            Ok((Some(result), _)) => tools_page(&result, key),
+            Ok((Some(result), _)) => tools_page_hinted(&result, key),
             Ok((None, _)) => Err(HandshakeError::Protocol("no answer to the request".to_string())),
             Err(e) => Err(e),
         };
         match result {
-            Ok((names, next)) => {
+            Ok((names, page_hints, next)) => {
+                add_hints(&mut hints, page_hints);
                 if add_tools(&mut tools, names) {
                     break;
                 }
@@ -702,7 +751,7 @@ async fn http_handshake(
         }
         let _ = req.send().await;
     }
-    outcome.map(|_| tools)
+    outcome.map(|_| finish_listed(tools, hints))
 }
 
 // ---- entry point ------------------------------------------------------------
@@ -714,6 +763,15 @@ pub async fn list_tools(
     server: &McpServer,
     secret: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Vec<String>, String> {
+    list_tools_with_hints(server, secret).await.map(|(names, _)| names)
+}
+
+/// [`list_tools`] with what the server said about each tool (read from this
+/// handshake's own answer).
+pub async fn list_tools_with_hints(
+    server: &McpServer,
+    secret: &(dyn Fn(&str) -> Option<String> + Sync),
+) -> Result<Listed, String> {
     let limit = Duration::from_millis(CHECK_MCP_TIMEOUT_MS as u64);
     let missing = |what: &str| format!("{}: the saved value for {what} is missing", server.label);
     let mut secrets: Vec<String> = Vec::new();
@@ -743,7 +801,7 @@ pub async fn list_tools(
                 secrets.extend(secret_variants(&value));
                 headers.push((name.clone(), value));
             }
-            match tokio::time::timeout(limit, http_handshake(url, &headers, &server.key)).await {
+            match tokio::time::timeout(limit, http_handshake_hinted(url, &headers, &server.key)).await {
                 Ok(result) => result,
                 Err(_) => Err(HandshakeError::Timeout),
             }
@@ -1184,5 +1242,34 @@ mod tests {
         };
         let err = list_tools(&server, &|_| Some("Bearer top-secret".into())).await.unwrap_err();
         assert!(!err.contains("top-secret"), "{err}");
+    }
+
+    #[test]
+    fn hints_travel_with_their_own_list_keep_the_stricter_on_a_collision_and_only_for_listed_tools() {
+        let page = json!({ "tools": [
+            { "name": "a", "annotations": { "readOnlyHint": true, "destructiveHint": false } },
+            { "name": "dup", "annotations": { "readOnlyHint": true } },
+            { "name": "dup", "annotations": { "readOnlyHint": false } },
+            { "name": "dup2", "annotations": { "readOnlyHint": true, "destructiveHint": false } },
+            { "name": "dup2", "annotations": { "readOnlyHint": true, "destructiveHint": true } },
+            { "name": "silent" },
+        ] });
+        let (names, hints, _) = tools_page_hinted(&page, "k").unwrap();
+        assert_eq!(names.len(), 6);
+        let get = |n: &str| hints.get(&format!("mcp__k__{n}")).copied().unwrap();
+        assert_eq!((get("a").read_only, get("a").destructive), (Some(true), Some(false)));
+        assert_eq!(get("dup").read_only, Some(false), "one says not read-only: not read-only");
+        assert_eq!(get("dup2").destructive, Some(true), "one says destructive: destructive");
+        assert_eq!((get("silent").read_only, get("silent").destructive), (None, None));
+        // Over-long names and everything past the cap are not recorded at all.
+        let long = "x".repeat(MAX_TOOL_NAME + 1);
+        let many: Vec<Value> = (0..MAX_TOOLS + 5).map(|i| json!({ "name": format!("t{i}"), "annotations": { "readOnlyHint": true } })).collect();
+        let (names, hints, _) = tools_page_hinted(&json!({ "tools": [{ "name": long, "annotations": { "readOnlyHint": true } }] }), "k").unwrap();
+        assert!(names.is_empty() && hints.is_empty());
+        let (names, hints, _) = tools_page_hinted(&json!({ "tools": many }), "k").unwrap();
+        assert_eq!((names.len(), hints.len()), (MAX_TOOLS, MAX_TOOLS));
+        // Two handshakes of the same key never see each other's hints (no cache).
+        let (_, other, _) = tools_page_hinted(&json!({ "tools": [{ "name": "a" }] }), "k").unwrap();
+        assert_eq!(other["mcp__k__a"].read_only, None);
     }
 }

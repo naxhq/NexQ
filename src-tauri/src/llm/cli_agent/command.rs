@@ -112,7 +112,9 @@ pub fn build_args(
     mcp_config_file: Option<&Path>,
 ) -> Vec<String> {
     let s = |x: &str| x.to_string();
-    let sources = cfg.sources.as_ref();
+    // A chat that cannot ask has its asking tools switched off right here.
+    let effective = super::approval::launch_sources(cfg.sources.as_ref(), cfg.approvals.as_ref());
+    let sources = effective.as_ref();
     let mut args = vec![
         s("-p"),
         s("--input-format"),

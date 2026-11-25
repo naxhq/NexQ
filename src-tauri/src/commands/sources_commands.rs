@@ -14,7 +14,7 @@
 //! environment). Change any of those and the secrets must be typed again.
 
 use crate::credentials::CredentialManager;
-use crate::llm::cli_agent::mcp_check::list_server_tools;
+use crate::llm::cli_agent::mcp_check::list_server_tools_with_hints;
 use crate::sources::config::{
     is_valid_tool_full_name, EnvVar, McpCheckStatus, McpServer, McpTransport, PersonalSourcesConfig,
 };
@@ -630,7 +630,16 @@ fn build_form_server(
         // checked (again) first, then switched on.
         enabled: old.is_some_and(|o| o.enabled) && !changed,
         env,
-        tools: old.map(|o| o.tools.clone()).unwrap_or_default(),
+        tools: old
+            .map(|o| {
+                let mut tools = o.tools.clone();
+                // Hints belong to what the server was: after a move they are unknown again.
+                if changed {
+                    crate::sources::config::clear_tool_hints(&mut tools);
+                }
+                tools
+            })
+            .unwrap_or_default(),
         last_check: None,
         needs_sign_in: false,
     };
@@ -693,16 +702,11 @@ pub fn save_mcp_server_form(
 /// `server` after a check: the tool list merged (earlier switches kept, new
 /// tools take the read-only default, vanished ones dropped) and a fresh
 /// status. A failed check keeps the tools and says why.
-fn apply_check(server: &McpServer, found: Result<Vec<String>, String>, now_ms: u64) -> McpServer {
+fn apply_check(server: &McpServer, found: Result<crate::llm::cli_agent::mcp_handshake::Listed, String>, now_ms: u64) -> McpServer {
     let mut out = server.clone();
     match found {
-        Ok(full_names) => {
-            out.tools = merge_checked_tools(
-                &server.tools,
-                &full_names,
-                &server.key,
-                &crate::llm::cli_agent::mcp_handshake::hints_of_server(&server.key),
-            );
+        Ok((full_names, hints)) => {
+            out.tools = merge_checked_tools(&server.tools, &full_names, &server.key, &hints);
             out.last_check = Some(McpCheckStatus {
                 ok: true,
                 tool_count: out.tools.len(),
@@ -791,7 +795,7 @@ pub async fn check_mcp_server(
     let store = SystemSecrets::new();
     let plan = plan_check(saved.as_ref(), draft.as_ref(), &saved_keys(&state), &|id| store.get(id).is_some())?;
     let secret = |id: &str| check_secret(&plan, &store, id);
-    let found = list_server_tools(&plan.server, &secret).await;
+    let found = list_server_tools_with_hints(&plan.server, &secret).await;
     Ok(apply_check(&plan.server, found, now_ms()))
 }
 
@@ -865,6 +869,18 @@ fn validate_sources(cfg: &PersonalSourcesConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// A server that now starts something else than the saved one with its id loses
+/// its tools' hints: they described the old one.
+fn forget_stale_hints(saved: &PersonalSourcesConfig, incoming: &mut PersonalSourcesConfig) {
+    for server in &mut incoming.mcp_servers {
+        if let Some(before) = saved.mcp_servers.iter().find(|s| s.id == server.id) {
+            if before.target_differs(server) {
+                crate::sources::config::clear_tool_hints(&mut server.tools);
+            }
+        }
+    }
+}
+
 /// Give the backend the sources the user set up. Call it at startup and after
 /// every change (the webview owns the saved copy). It becomes the saved
 /// config every other command looks servers up in. Saved secrets of a server
@@ -887,12 +903,16 @@ pub fn set_personal_sources(
 }
 
 fn set_personal_sources_now(
-    config: PersonalSourcesConfig,
+    mut config: PersonalSourcesConfig,
     filing: Option<crate::workspace::sources_seed::Filing>,
     state: &AppState,
     app: &AppHandle,
 ) -> Result<(), String> {
     validate_sources(&config)?;
+    // A server whose target changed loses its saved read-only hints.
+    if let Ok(saved) = state.personal_sources.read() {
+        forget_stale_hints(&saved, &mut config);
+    }
     // A filing names the workspace and the ids the user just added. An unknown
     // or archived workspace refuses the push before anything is saved.
     if let (Some(filing), true) = (filing.as_ref(), crate::workspace::available()) {
@@ -1237,7 +1257,7 @@ mod tests {
             tools: vec![McpTool { name: "kb_search".into(), full_name: "mcp__m__kb_search".into(), allowed: false, ..Default::default() }],
             ..Default::default()
         };
-        let ok = apply_check(&server, Ok(vec!["mcp__m__kb_search".into(), "mcp__m__delete_note".into()]), 7);
+        let ok = apply_check(&server, Ok((vec!["mcp__m__kb_search".into(), "mcp__m__delete_note".into()], Default::default())), 7);
         assert_eq!(ok.tools.len(), 2);
         assert!(!ok.tools[0].allowed, "an earlier switch is kept");
         assert!(!ok.tools[1].allowed, "a write-looking new tool starts off");
@@ -1607,5 +1627,30 @@ mod tests {
         }
         assert!(saved_server(&state, "p0").is_none());
         assert!(saved_server(&state, &format!("p{}", PENDING_SERVERS_MAX + 4)).is_some());
+    }
+
+    #[test]
+    fn a_server_that_starts_something_else_loses_its_tool_hints() {
+        let hinted = |args: &[&str]| McpServer {
+            id: "s".into(),
+            key: "m".into(),
+            transport: McpTransport::Stdio { command: "node".into(), args: args.iter().map(|a| a.to_string()).collect() },
+            tools: vec![McpTool {
+                name: "kb".into(),
+                full_name: "mcp__m__kb".into(),
+                allowed: true,
+                read_only_hint: Some(true),
+                destructive_hint: Some(false),
+            }],
+            ..Default::default()
+        };
+        let saved = PersonalSourcesConfig { mcp_servers: vec![hinted(&["a.js"])], ..Default::default() };
+        let mut same = PersonalSourcesConfig { mcp_servers: vec![hinted(&["a.js"])], ..Default::default() };
+        forget_stale_hints(&saved, &mut same);
+        assert_eq!(same.mcp_servers[0].tools[0].read_only_hint, Some(true));
+        let mut moved = PersonalSourcesConfig { mcp_servers: vec![hinted(&["evil.js"])], ..Default::default() };
+        forget_stale_hints(&saved, &mut moved);
+        assert_eq!((moved.mcp_servers[0].tools[0].read_only_hint, moved.mcp_servers[0].tools[0].destructive_hint), (None, None));
+        assert!(moved.mcp_servers[0].tools[0].allowed, "the user's switch stays");
     }
 }

@@ -306,6 +306,8 @@ struct ClaudeAsk {
     stdin: Mutex<Option<std_mpsc::Sender<String>>>,
     /// Questions being asked: while any is open the turn is not "silent".
     open: AtomicUsize,
+    /// Their `request_id`s: a repeated id is refused, never asked twice.
+    open_ids: Mutex<std::collections::HashSet<String>>,
 }
 
 impl ClaudeAsk {
@@ -324,10 +326,16 @@ impl ClaudeAsk {
     /// Answer one question in the background: the user may take a while, and
     /// the turn keeps reading the CLI's output meanwhile.
     fn answer(self: &Arc<Self>, q: PermissionAsk) {
+        if q.request_id.is_empty() || !self.open_ids.lock().unwrap().insert(q.request_id.clone()) {
+            // No id, or one already open: the answer could not be told apart.
+            self.send(permission_deny(&q.request_id, "The user did not allow this tool call."));
+            return;
+        }
         self.open.fetch_add(1, Ordering::SeqCst);
         let me = self.clone();
         tokio::spawn(async move {
             let allow = me.approvals.decide(&q.request_id, &q.tool_name, &q.input).await;
+            me.open_ids.lock().unwrap().remove(&q.request_id);
             me.send(if allow {
                 permission_allow(&q.request_id, &q.input)
             } else {
@@ -426,7 +434,7 @@ impl ClaudeSession {
         };
 
         let ask = cfg.approvals.clone().filter(|a| a.can_ask && cfg.sources.is_some()).map(|approvals| {
-            Arc::new(ClaudeAsk { approvals, stdin: Mutex::new(Some(stdin_tx.clone())), open: AtomicUsize::new(0) })
+            Arc::new(ClaudeAsk { approvals, stdin: Mutex::new(Some(stdin_tx.clone())), open: AtomicUsize::new(0), open_ids: Mutex::default() })
         });
         let session = ClaudeSession {
             model: cfg.model,
@@ -762,7 +770,12 @@ async fn drive_turn(
                 // host` is its alone); for everyone else this event does not occur.
                 Ok(Some(AgentEvent::PermissionRequest(q))) => {
                     if let Some(ask) = &ask {
-                        ask.answer(q);
+                        // A cancelled or closing turn asks nothing new: refused at once.
+                        if drain_deadline.is_some() || tx.is_closed() {
+                            ask.send(permission_deny(&q.request_id, "The turn was stopped."));
+                        } else {
+                            ask.answer(q);
+                        }
                     }
                 }
                 Ok(Some(AgentEvent::PermissionCancelled(id))) => {
@@ -1195,6 +1208,7 @@ mod tests {
                 approvals: ChatApprovals { can_ask: true, chat_id: "c1".into(), broker: broker.clone(), policy: Arc::new(policy()) },
                 stdin: Mutex::new(Some(tx)),
                 open: AtomicUsize::new(0),
+                open_ids: Mutex::default(),
             });
             (ask, rx, broker, ids)
         }
@@ -1259,6 +1273,61 @@ mod tests {
             assert!(ask.stdin.lock().unwrap().is_none());
             let _ = ApprovalRequest { chat_id: String::new(), request_id: String::new(), server: String::new(), tool: String::new(), args: json!(null) };
             let _ = broker.pending("c1");
+        }
+
+        #[tokio::test]
+        async fn a_stopped_turn_refuses_every_question_at_once_and_asks_nobody() {
+            let (ask, rx, _broker, ids) = harness();
+            let shared = Arc::new(Shared {
+                child: Mutex::new(None),
+                alive: AtomicBool::new(true),
+                closed: AtomicBool::new(false),
+                stderr_tail: Mutex::new(VecDeque::new()),
+                stderr_done: AtomicBool::new(true),
+                exit_status: Mutex::new(None),
+                cost: Mutex::new(CostTracker::default()),
+                init: Mutex::new(InitInfo::default()),
+                plan_limit: Mutex::new(None),
+            });
+            let (etx, erx) = mpsc::unbounded_channel();
+            let events = Arc::new(AsyncMutex::new(erx)).lock_owned().await;
+            // The receiver of the turn is already gone: this is a cancelled turn draining.
+            let (ttx, trx) = mpsc::unbounded_channel();
+            drop(trx);
+            etx.send(AgentEvent::PermissionRequest(question("q1", "mcp__mira__send_mail", json!({"to": "a"})))).unwrap();
+            etx.send(AgentEvent::PermissionRequest(question("q2", "mcp__mira__kb_search", json!({})))).unwrap();
+            etx.send(AgentEvent::TurnComplete(TurnResult::default())).unwrap();
+            let timeouts = SessionTimeouts { inactivity: Duration::from_secs(5), drain: Duration::from_secs(5), ..SessionTimeouts::default() };
+            drive_turn(events, ttx, shared, timeouts, Some(ask.clone())).await;
+            for id in ["q1", "q2"] {
+                let reply = line(&rx).await;
+                assert_eq!(reply["response"]["request_id"], id);
+                assert_eq!(reply["response"]["response"]["behavior"], "deny", "{id}: even the read-only tool");
+            }
+            assert!(ids.lock().unwrap().is_empty(), "nobody was asked");
+            assert_eq!(ask.open.load(Ordering::SeqCst), 0);
+        }
+
+        #[tokio::test]
+        async fn a_repeated_or_missing_request_id_is_refused_never_asked_twice() {
+            let (ask, rx, broker, ids) = harness();
+            ask.answer(question("dup", "mcp__mira__send_mail", json!({})));
+            for _ in 0..200 {
+                if !ids.lock().unwrap().is_empty() { break; }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            // The same id again while the first is open: refused at once.
+            ask.answer(question("dup", "mcp__mira__send_mail", json!({})));
+            let reply = line(&rx).await;
+            assert_eq!(reply["response"]["response"]["behavior"], "deny");
+            assert_eq!(ids.lock().unwrap().len(), 1, "only one question reached the user");
+            ask.answer(question("", "mcp__mira__kb_search", json!({})));
+            assert_eq!(line(&rx).await["response"]["response"]["behavior"], "deny", "no id: refused even for a read-only tool");
+            // Once answered the id is free again.
+            broker.answer(&ids.lock().unwrap()[0].clone(), false);
+            assert_eq!(line(&rx).await["response"]["response"]["behavior"], "deny");
+            ask.answer(question("dup", "mcp__mira__kb_search", json!({})));
+            assert_eq!(line(&rx).await["response"]["response"]["behavior"], "allow");
         }
     }
 }

@@ -26,6 +26,15 @@ pub struct NotesFolder {
     pub enabled: bool,
 }
 
+/// Forget what a server said about its tools (they came from what it was
+/// before the change).
+pub fn clear_tool_hints(tools: &mut [McpTool]) {
+    for t in tools {
+        t.read_only_hint = None;
+        t.destructive_hint = None;
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct McpServer {
@@ -40,6 +49,19 @@ pub struct McpServer {
     pub tools: Vec<McpTool>,
     pub last_check: Option<McpCheckStatus>,
     pub needs_sign_in: bool,
+}
+
+impl McpServer {
+    /// Does `other` start something else: another command, arguments, URL or
+    /// plain environment? (Secret values are not compared: they are not here.)
+    pub fn target_differs(&self, other: &McpServer) -> bool {
+        let plain = |s: &McpServer| -> Vec<(String, Option<String>)> {
+            let mut v: Vec<_> = s.env.iter().map(|e| (e.name.clone(), e.value.clone())).collect();
+            v.sort();
+            v
+        };
+        self.transport != other.transport || plain(self) != plain(other)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

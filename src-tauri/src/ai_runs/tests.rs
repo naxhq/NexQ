@@ -804,6 +804,12 @@ async fn a_cli_failure_never_falls_back_to_an_api_provider() {
 async fn a_chat_session_gets_its_transcript_folder_launch() {
     let r = rig();
     let key = SessionKey::sources(SessionScope::Workspace("c9".into()), Tier::Deep);
+    r.cli.set_chat_approvals(crate::llm::cli_agent::approval::ChatApprovals {
+        can_ask: true,
+        chat_id: "c9".into(),
+        broker: Arc::new(crate::llm::cli_agent::approval::WorkspaceApprovals::new()),
+        policy: Arc::new(Default::default()),
+    });
     let launch = SourcesLaunch { add_dirs: vec!["/tmp/x".into()], ..Default::default() };
     let mut request = cli_req("claude_cli", "sonnet", None, &key, "q");
     request.sources = Some(launch.clone());

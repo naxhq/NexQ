@@ -213,7 +213,31 @@ impl Outcome {
 
 /// Is the call allowed by `policy` (ignoring which options the agent offered)?
 pub fn is_allowed(req: &PermissionRequest, policy: &PermissionPolicy) -> bool {
-    policy.mcp_allowed(&req.tool_name)
+    // A tool that must ask is never allowed by the static rules: only a held
+    // request the user answered can allow it (see `outcome_for_answer`).
+    policy.mcp_allowed(&req.tool_name) && policy.needs_ask(&req.tool_name).is_none()
+}
+
+/// What to do with a permission request when a chat can ask.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HoldKind {
+    /// Keep the id open and ask the user about `(server, tool)`.
+    Held { server: String, tool: String },
+    /// A tool that asks, but the request cannot be asked about (no call id, or
+    /// the chat's rules deny it): reply with a rejection at once.
+    Refuse,
+    /// Not a tool that asks: the static rules decide.
+    NotMine,
+}
+
+/// Classify `req` for a chat whose own rules are `chat` (pure).
+pub fn hold_kind(policy: &PermissionPolicy, chat: &crate::llm::cli_agent::approval::ApprovalPolicy, req: &PermissionRequest) -> HoldKind {
+    use crate::llm::cli_agent::approval::ToolVerdict;
+    let Some((server, tool)) = policy.needs_ask(&req.tool_name) else { return HoldKind::NotMine };
+    if req.tool_call_id.is_empty() || !matches!(chat.mcp(&server, &tool), ToolVerdict::Ask) {
+        return HoldKind::Refuse;
+    }
+    HoldKind::Held { server, tool }
 }
 
 /// Allow with `allow_once` (never `allow_always`: that would make the agent
