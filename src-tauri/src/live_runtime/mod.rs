@@ -333,6 +333,8 @@ impl LiveRuntimes {
             on_exit,
             tick: self.deps.tick,
             final_timeout: self.deps.final_timeout,
+            preload: Vec::new(),
+            one_shot: false,
         })?;
         self.inner.lock().unwrap().notes.insert(meeting_id.to_string(), handle);
         Ok(())
@@ -356,6 +358,10 @@ impl LiveRuntimes {
     /// started) it starts one when it may, or says why it cannot.
     pub fn notetaker_update_now(&self, meeting_id: &str) -> Result<(), String> {
         if !self.notes_alive(meeting_id) {
+            if (self.deps.live_meeting)().as_deref() != Some(meeting_id) {
+                // the meeting is over: update from the saved transcript
+                return self.update_ended(meeting_id);
+            }
             self.notetaker_start(meeting_id)?;
         }
         // any new words are enough, however few; with none it says so instead of doing nothing
@@ -371,6 +377,67 @@ impl LiveRuntimes {
             return Err("Nothing new to add since the last update".into());
         }
         self.notes_cmd(meeting_id, NotesCmd::Manual);
+        Ok(())
+    }
+
+    /// "Update notes" for a meeting that is over: one run on the saved transcript for the part the
+    /// notes never covered. The token cap applies, it is refused while another meeting is live
+    /// (it never competes with a live meeting) and says why when it cannot run.
+    fn update_ended(&self, meeting_id: &str) -> Result<(), String> {
+        if let Some(live) = (self.deps.live_meeting)() {
+            if live != meeting_id {
+                return Err("Another meeting is live right now. Update these notes after it ends".into());
+            }
+        }
+        // asked for by the person on notes that exist: it does not need the live switch ("this meeting" turns it off at the end)
+        let settings = self.notetaker_settings();
+        let Some(stored) = self.deps.db.load_notes(meeting_id) else {
+            return Err("There are no notes for this meeting".into());
+        };
+        let Some((from, to)) = stored.doc.uncovered else {
+            return Err("Nothing new to add since the last update".into());
+        };
+        if stored.cap > 0 && stored.tokens_used >= stored.cap {
+            return Err("The token cap for this meeting was reached. Raise it in the settings or keep going first".into());
+        }
+        let (lines, _) = self.deps.db.meeting_lines(meeting_id);
+        let preload: Vec<TranscriptLine> = lines
+            .into_iter()
+            .filter(|l| l.ms >= from && l.ms <= to)
+            .map(|l| TranscriptLine { ms: l.ms, speaker: l.speaker, text: l.text })
+            .collect();
+        if preload.is_empty() {
+            return Err("The saved transcript has nothing in the part that was not covered".into());
+        }
+        let inner = self.inner.clone();
+        let close = self.deps.close_sessions.clone();
+        let on_exit: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |id: &str| {
+            let mut g = inner.lock().unwrap();
+            if g.notes.get(id).map(|h| h.finished.load(Ordering::SeqCst)).unwrap_or(false) {
+                g.notes.remove(id);
+            }
+            if !g.notes.contains_key(id) && !g.briefs.contains_key(id) {
+                drop(g);
+                close(id.to_string());
+            }
+        });
+        let handle = notes::spawn(NotesParams {
+            meeting_id: meeting_id.to_string(),
+            settings,
+            resume: Some(stored),
+            db: self.deps.db.clone(),
+            emitter: self.guarded_emitter(),
+            factory: self.deps.factory.clone(),
+            clock: self.deps.clock.clone(),
+            busy: self.deps.busy.clone(),
+            generation: self.deps.generation.clone(),
+            on_exit,
+            tick: self.deps.tick,
+            final_timeout: self.deps.final_timeout,
+            preload,
+            one_shot: true,
+        })?;
+        self.inner.lock().unwrap().notes.insert(meeting_id.to_string(), handle);
         Ok(())
     }
 
@@ -419,10 +486,17 @@ impl LiveRuntimes {
         }
         let settings = self.notetaker_settings();
         let stored = self.deps.db.load_notes(meeting_id);
-        let reason = if !settings.enabled { Some("Live notes are turned off".to_string()) } else { None };
         let (status, used, cap) = stored.as_ref().map(|s| (Some(s.status.clone()), s.tokens_used, s.cap)).unwrap_or((None, 0, settings.cap));
+        let not_covered = stored.as_ref().filter(|s| s.status == "done").and_then(|s| s.doc.uncovered);
+        let reason = if let Some((from, to)) = not_covered {
+            Some(format!("Not covered: {} to {}", crate::live_common::fmt_clock(from), crate::live_common::fmt_clock(to)))
+        } else if !settings.enabled {
+            Some("Live notes are turned off".to_string())
+        } else {
+            None
+        };
         let model = self.model_label(&notes::selection_of(&settings));
-        serde_json::to_value(state::idle_snapshot(meeting_id, status.as_deref(), used, cap.max(1), reason, model)).unwrap_or(Value::Null)
+        serde_json::to_value(state::idle_snapshot(meeting_id, status.as_deref(), used, cap.max(1), reason, model, not_covered)).unwrap_or(Value::Null)
     }
 
     /// The saved notes (live or not) in the contract's shape.
@@ -579,7 +653,7 @@ impl LiveRuntimes {
         };
         let (status, used, cap) = stored.as_ref().map(|s| (Some(s.status.clone()), s.tokens_used, s.cap)).unwrap_or((None, 0, settings.cap));
         let model = self.model_label(&llm::Selection { provider: settings.provider.clone(), model: settings.model.clone(), effort: settings.effort.clone() });
-        serde_json::to_value(state::idle_snapshot(meeting_id, status.as_deref(), used, cap.max(1), reason, model)).unwrap_or(Value::Null)
+        serde_json::to_value(state::idle_snapshot(meeting_id, status.as_deref(), used, cap.max(1), reason, model, None)).unwrap_or(Value::Null)
     }
 
     /// What "Automatic" means for a provider (None = the active one): the model and

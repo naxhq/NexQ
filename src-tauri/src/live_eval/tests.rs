@@ -57,6 +57,7 @@ fn guarded_doc() -> NoteDoc {
     NoteDoc {
         version: 1,
         next_id: 8,
+        uncovered: None,
         blocks: vec![
             b("b4", BlockKind::Topic, None, "Old topic", 0, false, false),
             b("b5", BlockKind::Bullet, Some("b4"), "Old topic child", 1, false, false),

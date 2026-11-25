@@ -45,6 +45,13 @@ pub trait LlmFactory: Send + Sync {
     fn label(&self, _selection: &Selection) -> Option<ModelLabel> {
         None
     }
+
+    /// What the NEXT run would use, resolved now (the active provider and the model lists
+    /// as they are at this moment), or why nothing can run. A run whose answer differs from
+    /// the slot's gets a fresh slot first; a pinned model resolves to itself.
+    fn resolved(&self, _selection: &Selection) -> Result<String, String> {
+        Ok(String::new())
+    }
 }
 
 pub fn map_error(e: AiRunError) -> LlmError {
@@ -159,6 +166,11 @@ impl LlmFactory for AiRunsFactory {
         (self.resolver)(provider)
     }
 
+    fn resolved(&self, sel: &Selection) -> Result<String, String> {
+        let s = self.selection_of(sel)?;
+        Ok(format!("{}|{}|{}", s.provider, s.model, s.effort.as_deref().unwrap_or("")))
+    }
+
     fn label(&self, sel: &Selection) -> Option<ModelLabel> {
         let s = self.selection_of(sel).ok()?;
         let named = sel.model.as_deref().is_some_and(|m| !m.is_empty()) && sel.provider.as_deref().is_some_and(|p| !p.is_empty());
@@ -175,12 +187,17 @@ pub struct SwapLlm {
     purpose: AiPurpose,
     meeting_id: String,
     selection: Mutex<Selection>,
+    /// What the slot was made for (`LlmFactory::resolved`): compared before every call.
+    slot_key: Mutex<String>,
+    /// Stops this engine for good (a memory run whose consent ended): fires whatever call is in flight.
+    stop: Arc<CancelToken>,
 }
 
 impl SwapLlm {
     pub fn new(factory: Arc<dyn LlmFactory>, purpose: AiPurpose, meeting_id: &str, selection: Selection) -> Result<Arc<SwapLlm>, String> {
         let slot = factory.make(purpose, meeting_id, &selection)?;
-        Ok(Arc::new(SwapLlm { slot: Mutex::new(slot), factory, purpose, meeting_id: meeting_id.to_string(), selection: Mutex::new(selection) }))
+        let key = factory.resolved(&selection).unwrap_or_default();
+        Ok(Arc::new(SwapLlm { slot: Mutex::new(slot), factory, purpose, meeting_id: meeting_id.to_string(), selection: Mutex::new(selection), slot_key: Mutex::new(key), stop: Arc::new(CancelToken::new()) }))
     }
 
     /// Cancels what is running and makes a fresh slot for the next call.
@@ -190,15 +207,22 @@ impl SwapLlm {
         let sel = self.selection.lock().unwrap().clone();
         if let Ok(s) = self.factory.make(self.purpose, &self.meeting_id, &sel) {
             *g = s;
+            *self.slot_key.lock().unwrap() = self.factory.resolved(&sel).unwrap_or_default();
         }
     }
 
     /// A new model for the next call. A call in flight finishes on the old one.
     pub fn reselect(&self, selection: Selection) -> Result<(), String> {
         let slot = self.factory.make(self.purpose, &self.meeting_id, &selection)?;
+        *self.slot_key.lock().unwrap() = self.factory.resolved(&selection).unwrap_or_default();
         *self.selection.lock().unwrap() = selection;
         *self.slot.lock().unwrap() = slot;
         Ok(())
+    }
+
+    /// Registered by runs that can be cancelled from outside; it outlives the slot swaps.
+    pub fn stop_token(&self) -> Arc<CancelToken> {
+        self.stop.clone()
     }
 
     pub fn selection(&self) -> Selection {
@@ -222,14 +246,35 @@ impl SwapLlm {
 #[async_trait]
 impl LlmCall for SwapLlm {
     async fn call(&self, req: &LlmRequest) -> Result<LlmReply, LlmError> {
-        let (llm, cancel) = {
-            let g = self.slot.lock().unwrap();
-            (g.llm.clone(), g.cancel.clone())
-        };
-        if cancel.is_cancelled() {
+        if self.stop.is_cancelled() || self.slot.lock().unwrap().cancel.is_cancelled() {
             return Err(LlmError::cancelled());
         }
-        llm.call(req).await
+        // The provider and model are resolved before EVERY run: a changed active provider or a
+        // model list that landed since the last run applies now, also after errors. A pinned
+        // model resolves to itself. Nothing usable means this run stops with the reason, never a fallback.
+        let sel = self.selection.lock().unwrap().clone();
+        let key = self.factory.resolved(&sel).map_err(|message| LlmError { kind: LlmErrorKind::Failed, message, code: "no_provider" })?;
+        let (llm, cancel) = {
+            let mut g = self.slot.lock().unwrap();
+            let mut k = self.slot_key.lock().unwrap();
+            if *k != key {
+                let fresh = self
+                    .factory
+                    .make(self.purpose, &self.meeting_id, &sel)
+                    .map_err(|message| LlmError { kind: LlmErrorKind::Failed, message, code: "no_provider" })?;
+                fresh.expected.store(g.expected.load(Ordering::SeqCst), Ordering::SeqCst);
+                *g = fresh;
+                *k = key;
+            }
+            (g.llm.clone(), g.cancel.clone())
+        };
+        tokio::select! {
+            r = llm.call(req) => r,
+            _ = self.stop.cancelled() => {
+                cancel.cancel();
+                Err(LlmError::cancelled())
+            }
+        }
     }
 }
 

@@ -223,12 +223,19 @@ impl LiveDb {
 
     /// The local search the brief uses (no tool calls), over exactly `scope.search`.
     pub fn search(&self, scope: &LiveScope, query: &str, max: usize) -> Vec<Passage> {
+        self.search_checked(scope, query, max).unwrap_or_default()
+    }
+
+    /// The same search, saying why it failed (the brief shows that as its reason).
+    pub fn search_checked(&self, scope: &LiveScope, query: &str, max: usize) -> Result<Vec<Passage>, String> {
         if query.trim().is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let kinds = [PassageKind::Transcript, PassageKind::Document, PassageKind::Folder, PassageKind::TalkingPoint];
-        self.read(|c| wsearch::search::search(c, &scope.search, query, &kinds, max).unwrap_or_default())
-            .unwrap_or_default()
+        let found = self
+            .read(|c| wsearch::search::search(c, &scope.search, query, &kinds, max).map_err(|e| e.to_string()))
+            .ok_or_else(|| "the database is busy".to_string())??;
+        Ok(found
             .into_iter()
             .map(|p| Passage {
                 id: format!("{}:{}#{}", p.kind, p.ref_id, p.id),
@@ -236,13 +243,21 @@ impl LiveDb {
                 text: p.text,
                 start_ms: p.start_ms.and_then(|m| u64::try_from(m).ok()),
             })
-            .collect()
+            .collect())
     }
 
     // ---- memory
 
     pub fn meeting_home(&self, meeting_id: &str) -> Option<String> {
         self.read(|c| c.query_row("SELECT workspace_id FROM meetings WHERE id = ?1", params![meeting_id], |r| r.get::<_, String>(0)).ok()).flatten()
+    }
+
+    /// The meeting is filed in a workspace that exists.
+    pub fn meeting_is_filed(&self, meeting_id: &str) -> bool {
+        self.read(|c| {
+            c.query_row("SELECT 1 FROM meetings m JOIN workspaces w ON w.id = m.workspace_id WHERE m.id = ?1", params![meeting_id], |_| Ok(())).is_ok()
+        })
+        .unwrap_or(false)
     }
 
     pub fn suggest_flag(&self, workspace_id: &str) -> bool {

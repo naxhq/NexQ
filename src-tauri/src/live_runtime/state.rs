@@ -20,6 +20,13 @@ pub struct ModelLabel {
     pub label: String,
 }
 
+/// A stretch of the meeting the notes never covered (ms since the meeting started).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NotCovered {
+    pub from_ms: u64,
+    pub to_ms: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RunSnapshot {
     pub meeting_id: String,
@@ -32,6 +39,8 @@ pub struct RunSnapshot {
     pub cap: u64,
     pub next_in_ms: Option<u64>,
     pub model: Option<ModelLabel>,
+    /// Set once the notes are finished and part of the meeting was never covered.
+    pub not_covered: Option<NotCovered>,
 }
 
 pub struct StateInput {
@@ -49,8 +58,8 @@ pub struct StateInput {
     pub manual_mode: bool,
     /// A run happened or words are waiting: it is past "waiting".
     pub started: bool,
-    /// Something was said that the notes do not cover yet.
-    pub uncovered: bool,
+    /// Speech (ms since the start) the finished notes do not cover.
+    pub not_covered: Option<(u64, u64)>,
     pub next_in_ms: Option<u64>,
     pub final_note: Option<String>,
     pub stop_reason: Option<String>,
@@ -67,7 +76,7 @@ fn kind_of(code: &str, plan_limit: bool) -> Option<String> {
 pub fn snapshot(i: &StateInput) -> RunSnapshot {
     let mut error_kind = None;
     let (status, reason, can): (&'static str, Option<String>, Vec<&'static str>) = if i.finished {
-        ("finished", i.final_note.clone(), if i.uncovered { vec!["update"] } else { vec![] })
+        ("finished", i.final_note.clone(), if i.not_covered.is_some() { vec!["update"] } else { vec![] })
     } else if i.user_stopped || i.state == RunState::Stopped {
         ("off", i.stop_reason.clone(), vec!["start"])
     } else {
@@ -114,17 +123,19 @@ pub fn snapshot(i: &StateInput) -> RunSnapshot {
         cap: i.cap,
         next_in_ms,
         model: i.model.clone(),
+        not_covered: if status == "finished" { i.not_covered.map(|(from_ms, to_ms)| NotCovered { from_ms, to_ms }) } else { None },
     }
 }
 
 /// The state of a feature that has no actor (never started, stopped, or after a restart).
-pub fn idle_snapshot(meeting_id: &str, stored_status: Option<&str>, tokens_used: u64, cap: u64, reason: Option<String>, model: Option<ModelLabel>) -> RunSnapshot {
+pub fn idle_snapshot(meeting_id: &str, stored_status: Option<&str>, tokens_used: u64, cap: u64, reason: Option<String>, model: Option<ModelLabel>, not_covered: Option<(u64, u64)>) -> RunSnapshot {
     let (status, can): (&'static str, Vec<&'static str>) = match stored_status {
+        Some("done") if not_covered.is_some() => ("finished", vec!["update"]),
         Some("done") => ("finished", vec![]),
         Some("cap_reached") => ("capped", vec!["keep_going"]),
         _ => ("off", vec!["start"]),
     };
-    RunSnapshot { meeting_id: meeting_id.to_string(), status, reason, error_kind: None, can, tokens_used, total_tokens: 0, cap, next_in_ms: None, model }
+    RunSnapshot { meeting_id: meeting_id.to_string(), status, reason, error_kind: None, can, tokens_used, total_tokens: 0, cap, next_in_ms: None, model, not_covered: if status == "finished" { not_covered.map(|(from_ms, to_ms)| NotCovered { from_ms, to_ms }) } else { None } }
 }
 
 #[cfg(test)]
@@ -145,7 +156,7 @@ mod tests {
             user_stopped: false,
             manual_mode: false,
             started: false,
-            uncovered: false,
+            not_covered: None,
             next_in_ms: Some(12_000),
             final_note: None,
             stop_reason: None,
@@ -197,7 +208,7 @@ mod tests {
         assert_eq!((s.status, s.can.contains(&"update"), s.next_in_ms), ("on", true, Some(12_000)));
         assert!(s.reason.unwrap().contains("Update now"));
         i.finished = true;
-        i.uncovered = true;
+        i.not_covered = Some((60_000, 120_000));
         i.final_note = Some("Notes were on manual. Not covered: 02:00 to 40:00".into());
         let s = snapshot(&i);
         assert_eq!((s.status, s.can), ("finished", vec!["update"]));
@@ -205,8 +216,10 @@ mod tests {
 
     #[test]
     fn idle_states() {
-        assert_eq!(idle_snapshot("m", None, 0, 100, None, None).can, vec!["start"]);
-        assert_eq!(idle_snapshot("m", Some("done"), 5, 100, None, None).status, "finished");
-        assert_eq!(idle_snapshot("m", Some("cap_reached"), 100, 100, None, None).can, vec!["keep_going"]);
+        assert_eq!(idle_snapshot("m", None, 0, 100, None, None, None).can, vec!["start"]);
+        assert_eq!(idle_snapshot("m", Some("done"), 5, 100, None, None, None).status, "finished");
+        assert_eq!(idle_snapshot("m", Some("cap_reached"), 100, 100, None, None, None).can, vec!["keep_going"]);
+        let s = idle_snapshot("m", Some("done"), 5, 100, None, None, Some((60_000, 90_000)));
+        assert_eq!((s.status, s.can, s.not_covered.map(|n| (n.from_ms, n.to_ms))), ("finished", vec!["update"], Some((60_000, 90_000))));
     }
 }

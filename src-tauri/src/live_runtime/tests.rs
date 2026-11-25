@@ -25,6 +25,10 @@ struct FakeState {
     cancel_seen: AtomicUsize,
     inflight: AtomicUsize,
     max_inflight: AtomicUsize,
+    /// The provider the fake app has active ("" = not simulated, "none" = no usable provider).
+    active: Mutex<String>,
+    /// Which provider each call was made for.
+    providers: Mutex<Vec<String>>,
 }
 
 impl FakeState {
@@ -44,11 +48,15 @@ struct FakeLlm {
     purpose: AiPurpose,
     meeting: String,
     cancel: Arc<CancelToken>,
+    provider: String,
 }
 
 #[async_trait]
 impl LlmCall for FakeLlm {
     async fn call(&self, req: &LlmRequest) -> Result<LlmReply, LlmError> {
+        if !self.provider.is_empty() {
+            self.st.providers.lock().unwrap().push(self.provider.clone());
+        }
         self.st.calls.lock().unwrap().push((self.purpose, self.meeting.clone(), req.clone()));
         let now = self.st.inflight.fetch_add(1, Ordering::SeqCst) + 1;
         self.st.max_inflight.fetch_max(now, Ordering::SeqCst);
@@ -78,9 +86,27 @@ impl LlmCall for FakeLlm {
 struct FakeFactory(Arc<FakeState>);
 
 impl LlmFactory for FakeFactory {
+    fn resolved(&self, _sel: &Selection) -> Result<String, String> {
+        let a = self.0.active.lock().unwrap().clone();
+        if a == "none" {
+            Err("No AI provider is set up".to_string())
+        } else {
+            Ok(a)
+        }
+    }
+
+    fn label(&self, _sel: &Selection) -> Option<super::state::ModelLabel> {
+        let a = self.0.active.lock().unwrap().clone();
+        if a.is_empty() || a == "none" {
+            return None;
+        }
+        Some(super::state::ModelLabel { label: format!("{a} model"), provider: a, model: "model".into() })
+    }
+
     fn make(&self, purpose: AiPurpose, meeting_id: &str, _sel: &Selection) -> Result<LlmSlot, String> {
         let cancel = Arc::new(CancelToken::new());
-        Ok(LlmSlot { llm: Arc::new(FakeLlm { st: self.0.clone(), purpose, meeting: meeting_id.to_string(), cancel: cancel.clone() }), cancel, expected: Arc::new(std::sync::atomic::AtomicU64::new(super::llm::NO_GENERATION)) })
+        let provider = self.0.active.lock().unwrap().clone();
+        Ok(LlmSlot { llm: Arc::new(FakeLlm { st: self.0.clone(), purpose, meeting: meeting_id.to_string(), cancel: cancel.clone(), provider }), cancel, expected: Arc::new(std::sync::atomic::AtomicU64::new(super::llm::NO_GENERATION)) })
     }
 }
 
@@ -1633,6 +1659,22 @@ async fn turning_the_switch_off_cancels_only_automatic_runs() {
     assert_eq!(h.fake.count(AiPurpose::Memory), 1);
 }
 
+#[tokio::test]
+async fn suggesting_for_a_meeting_filed_in_no_workspace_is_refused_before_any_call() {
+    let h = harness();
+    let ws = { let c = h.conn.lock().unwrap(); new_ws(&c, "Home", false, false) };
+    let m = make_meeting(&h, &ws);
+    talk(&h, &m);
+    { let c = h.conn.lock().unwrap(); c.execute("UPDATE meetings SET workspace_id = 'gone-ws' WHERE id = ?1", [&m]).unwrap(); }
+    for cap in [None, Some(100_000)] {
+        let e = super::memory::suggest(h.rt.deps(), &ws, &m, cap).await.unwrap_err();
+        assert!(e.contains("not filed"), "{e}");
+        let e = super::memory::suggest(h.rt.deps(), "gone-ws", &m, cap).await.unwrap_err();
+        assert!(e.contains("not filed"), "{e}");
+    }
+    assert_eq!(h.fake.count(AiPurpose::Memory), 0, "nothing was sent");
+}
+
 #[test]
 fn the_webview_payload_for_a_new_memory_item_deserialises() {
     let c: crate::workspace::types::MemoryCreate =
@@ -1788,4 +1830,142 @@ async fn starting_the_brief_again_wakes_a_paused_actor() {
     until("paused", || status_of(&h, "brief_state", &m) == "paused").await;
     h.rt.brief_start(&m).unwrap();
     until("running again", || status_of(&h, "brief_state", &m) != "paused").await;
+}
+
+// ---------------------------------------------------------------- ME round 2: G2 uncovered range, G3 per-run model, G7 search errors
+
+fn providers(h: &H) -> Vec<String> {
+    h.fake.providers.lock().unwrap().clone()
+}
+
+#[tokio::test]
+async fn the_provider_is_resolved_before_every_run_a_then_b_and_never_falls_back() {
+    let h = harness();
+    *h.fake.active.lock().unwrap() = "A".into();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    say(&h, "m1", 120, 10_000, 1_000).await;
+    until("first run", || h.fake.count(AiPurpose::Notes) == 1).await;
+    assert_eq!(providers(&h), vec!["A"]);
+    assert_eq!(h.rt.notetaker_state("m1").await["model"]["provider"], "A");
+    // the active provider changes between runs: the next run and the label are B, nothing more goes to A
+    *h.fake.active.lock().unwrap() = "B".into();
+    assert_eq!(h.rt.notetaker_state("m1").await["model"]["provider"], "B", "the label is what the next run will use");
+    say(&h, "m1", 120, 70_000, 61_000).await;
+    until("second run", || h.fake.count(AiPurpose::Notes) == 2).await;
+    assert_eq!(providers(&h), vec!["A", "B"]);
+    // nothing usable: the run stops with the reason, no call is made, nothing falls back to A or B
+    *h.fake.active.lock().unwrap() = "none".into();
+    say(&h, "m1", 120, 130_000, 121_000).await;
+    until("a failed run", || h.events.last_status("notetaker_state", "m1").map(|v| v["reason"].as_str().unwrap_or("").contains("No AI provider")).unwrap_or(false)).await;
+    assert_eq!(providers(&h), vec!["A", "B"], "no call went to any provider");
+    // the provider comes back, also after the error: the next run uses it
+    *h.fake.active.lock().unwrap() = "C".into();
+    h.rt.notetaker_resume("m1").unwrap();
+    h.clock.set(300_000);
+    until("a run on C", || providers(&h).last().map(String::as_str) == Some("C")).await;
+}
+
+#[tokio::test]
+async fn memory_chunks_follow_the_provider_too_and_the_brief_label_is_the_next_runs() {
+    let h = harness();
+    *h.fake.active.lock().unwrap() = "A".into();
+    let ws = { let c = h.conn.lock().unwrap(); new_ws(&c, "Prov", false, false) };
+    let m = make_meeting(&h, &ws);
+    {
+        let c = h.conn.lock().unwrap();
+        c.execute(
+            "INSERT INTO transcript_segments (id, meeting_id, text, speaker, timestamp_ms, is_final, created_at) VALUES ('s1',?1,'Acme pays 12 dollars per seat today','Them',10000,1,'t')",
+            [&m],
+        )
+        .unwrap();
+    }
+    super::memory::suggest(h.rt.deps(), &ws, &m, None).await.unwrap();
+    *h.fake.active.lock().unwrap() = "B".into();
+    super::memory::suggest(h.rt.deps(), &ws, &m, None).await.unwrap();
+    assert_eq!(providers(&h), vec!["A", "B"]);
+    *h.fake.active.lock().unwrap() = "none".into();
+    let e = super::memory::suggest(h.rt.deps(), &ws, &m, None).await.unwrap_err();
+    assert!(e.contains("No AI provider"), "{e}");
+    assert_eq!(providers(&h).len(), 2);
+}
+
+#[tokio::test]
+async fn the_range_not_covered_is_saved_survives_the_end_and_is_updated_from_the_saved_transcript() {
+    let h = harness();
+    let ws = { let c = h.conn.lock().unwrap(); new_ws(&c, "Unc", false, false) };
+    let m = make_meeting(&h, &ws);
+    {
+        let c = h.conn.lock().unwrap();
+        for i in 0..40u64 {
+            c.execute(
+                "INSERT INTO transcript_segments (id, meeting_id, text, speaker, timestamp_ms, is_final, created_at) VALUES (?1,?2,?3,'Them',?4,1,'t')",
+                rusqlite::params![format!("s{i}"), m, format!("line {i} about the annual pricing plan and the renewal terms"), (i * 5_000) as i64],
+            )
+            .unwrap();
+        }
+    }
+    h.rt.patch_notetaker(&json!({"enabled": true, "update_mode": "manual"})).unwrap();
+    h.start_meeting(&m);
+    h.rt.notetaker_start(&m).unwrap();
+    for i in 0..40u64 {
+        h.rt.feed(&m, "Them", &format!("line {i} about the annual pricing plan and the renewal terms"), i * 5_000);
+    }
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    h.rt.on_meeting_end(&m);
+    *h.live.lock().unwrap() = None;
+    until("finished", || status_of(&h, "notetaker_state", &m) == "finished").await;
+    // the app closes with the notes waiting on manual: what was never covered is saved with them
+    h.rt.shutdown(Duration::from_secs(2)).await;
+    until("the actor is gone", || h.rt.inner.lock().unwrap().notes.get(m.as_str()).is_none()).await;
+    // saved with the notes: the getter of the ended meeting carries it as data
+    let st = h.rt.notetaker_state(&m).await;
+    assert_eq!(st["status"], "finished", "{st}");
+    assert_eq!(st["not_covered"]["from_ms"], 0, "{st}");
+    assert_eq!(st["not_covered"]["to_ms"], 195_000, "{st}");
+    assert!(can_of(&st).contains(&"update".to_string()), "{st}");
+    // refused with a reason while another meeting is live
+    let other = make_meeting(&h, &ws);
+    h.start_meeting(&other);
+    let e = h.rt.notetaker_update_now(&m).unwrap_err();
+    assert!(e.contains("Another meeting is live"), "{e}");
+    assert_eq!(h.fake.count(AiPurpose::Notes), 0);
+    *h.live.lock().unwrap() = None;
+    // now it runs on the saved transcript, for the uncovered part
+    h.rt.notetaker_update_now(&m).unwrap();
+    until("the update ran", || h.fake.count(AiPurpose::Notes) == 1).await;
+    let p = &h.fake.prompts(AiPurpose::Notes)[0];
+    assert!(p.contains("line 0 about") && p.contains("line 39 about"), "the saved transcript was sent");
+    until("finished again", || {
+        let st = h.events.last_status("notetaker_state", &m);
+        st.map(|v| v["status"] == "finished" && v["not_covered"].is_null()).unwrap_or(false)
+    })
+    .await;
+    let st = h.rt.notetaker_state(&m).await;
+    assert!(st["not_covered"].is_null(), "{st}");
+    assert!(h.rt.notetaker_update_now(&m).unwrap_err().contains("Nothing new"));
+}
+
+#[tokio::test]
+async fn a_failing_brief_search_is_the_reason_the_brief_shows() {
+    let h = harness();
+    let ws = brief_workspace(&h);
+    let m = make_meeting(&h, &ws);
+    h.start_meeting(&m);
+    h.rt.brief_start(&m).unwrap();
+    {
+        let c = h.conn.lock().unwrap();
+        let _ = c.execute_batch("DROP TABLE search_fts; DROP TABLE search_fts_tri;");
+    }
+    publish_a_sheet(&h, &m);
+    let mut reason = String::new();
+    for _ in 0..300 {
+        reason = h.rt.brief_state(&m).await["reason"].as_str().unwrap_or("").to_string();
+        if reason.contains("could not search") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(reason.contains("could not search"), "{reason}");
 }

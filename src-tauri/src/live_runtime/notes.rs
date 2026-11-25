@@ -82,6 +82,10 @@ pub struct NotesParams {
     pub on_exit: Arc<dyn Fn(&str) + Send + Sync>,
     pub tick: Duration,
     pub final_timeout: Duration,
+    /// An update of an ENDED meeting: these saved lines (the uncovered part) are sent in one
+    /// run, then the notes are finished again. Empty for a live meeting.
+    pub preload: Vec<TranscriptLine>,
+    pub one_shot: bool,
 }
 
 // ---------------------------------------------------------------- contract shapes
@@ -231,6 +235,9 @@ struct Actor {
     user_stopped: bool,
     quitting: bool,
     interrupted: bool,
+    /// The update of an ended meeting: one run on the saved lines, then done.
+    one_shot: bool,
+    ran: bool,
 }
 
 impl Actor {
@@ -244,6 +251,15 @@ impl Actor {
         let mut engine = NotesEngine::new(swap.clone(), p.clock.clone(), cfg, sink, store);
         if let Some(r) = p.resume.take() {
             engine.resume_from(r.doc, r.tokens_used, r.cap);
+        }
+        let one_shot = p.one_shot;
+        if one_shot {
+            // the range is taken up again by this run; what it leaves is marked again at the end
+            engine.doc_mut().uncovered = None;
+            for l in std::mem::take(&mut p.preload) {
+                engine.feed(l);
+            }
+            engine.request_manual();
         }
         let settings = p.settings.clone();
         Self {
@@ -267,6 +283,8 @@ impl Actor {
             user_stopped: false,
             quitting: false,
             interrupted: false,
+            one_shot,
+            ran: false,
         }
     }
 
@@ -290,7 +308,7 @@ impl Actor {
             user_stopped: self.user_stopped,
             manual_mode: !self.auto(),
             started: st.tokens_used > 0 || st.pending_words > 0,
-            uncovered: self.engine.has_pending(),
+            not_covered: if self.done || self.ended_waiting { self.engine.uncovered() } else { None },
             next_in_ms: if self.auto() { self.engine.next_run_in_ms() } else { None },
             final_note: self.engine.final_note.clone(),
             stop_reason: None,
@@ -380,6 +398,8 @@ impl Actor {
             NotesCmd::Quit => {
                 self.swap.cancel();
                 if !self.ended_waiting {
+                    // what was never sent stays known: the range is saved with the notes
+                    self.engine.mark_uncovered();
                     let st = self.engine.status();
                     let _ = self.p.db.save_notes(&self.p.meeting_id, self.engine.doc(), "interrupted", st.tokens_used, st.cap);
                     self.interrupted = true;
@@ -413,6 +433,7 @@ impl Actor {
         }
         let gen0 = (self.p.generation)(&self.p.meeting_id, false);
         self.swap.set_expected(Some(gen0));
+        self.ran = true;
         let Some(prep) = self.engine.prepare(reason) else {
             // the trigger believed there were words but the engine holds none: forget the request so it cannot stick
             self.engine.resync();
@@ -441,6 +462,23 @@ impl Actor {
         }
     }
 
+    fn swap_in_flight(&self) -> bool {
+        self.engine.status().in_flight
+    }
+
+    /// The update of an ended meeting is done (or failed): finish the notes again and say what is left.
+    async fn finish_one_shot(&mut self) {
+        let err = self.engine.status().last_error.clone();
+        let _ = self.engine.finish_with(false).await;
+        if let Some((from, to)) = self.engine.doc().uncovered {
+            let why = err.map(|e| format!("The update did not finish: {e}. ")).unwrap_or_default();
+            self.engine.final_note = Some(format!("{why}Not covered: {} to {}", crate::live_common::fmt_clock(from), crate::live_common::fmt_clock(to)));
+        } else {
+            self.engine.final_note = None;
+        }
+        self.done = true;
+    }
+
     async fn run(mut self, mut rx: mpsc::UnboundedReceiver<NotesCmd>) {
         self.emit_state();
         let mut ticker = tokio::time::interval(self.p.tick);
@@ -464,6 +502,10 @@ impl Actor {
             self.engine.set_gate(!(self.p.busy)());
             self.maybe_run(&mut rx).await;
             if self.quitting {
+                break;
+            }
+            if self.one_shot && self.ran && !self.swap_in_flight() {
+                self.finish_one_shot().await;
                 break;
             }
             if self.ended_waiting && !self.engine.has_pending() {

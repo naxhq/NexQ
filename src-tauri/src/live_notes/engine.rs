@@ -425,6 +425,20 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
     }
 
     /// The time range of the lines that were not sent yet, if any.
+    /// Saves what is still unsent as the notes' uncovered range (joined with one saved earlier).
+    pub fn mark_uncovered(&mut self) {
+        let merged = match (self.doc.uncovered, self.pending_range()) {
+            (Some((a, b)), Some((c, d))) => Some((a.min(c), b.max(d))),
+            (a, b) => a.or(b),
+        };
+        self.doc.uncovered = merged;
+    }
+
+    /// What the notes do not cover: unsent speech, else the range saved with the notes.
+    pub fn uncovered(&self) -> Option<(u64, u64)> {
+        self.pending_range().or(self.doc.uncovered)
+    }
+
     pub fn pending_range(&self) -> Option<(u64, u64)> {
         Some((self.pending.first()?.ms, self.pending.last()?.ms))
     }
@@ -526,7 +540,8 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
             });
         }
         let _ = passes;
-        if let Some((from, to)) = self.pending_range() {
+        self.mark_uncovered();
+        if let Some((from, to)) = self.doc.uncovered {
             let range = format!("{} to {}", fmt_clock(from), fmt_clock(to));
             let lead = if !run_final { "Notes were on manual".to_string() } else { why.take().unwrap_or_else(|| "The end of the meeting came first".to_string()) };
             why = Some(format!("{lead}. Not covered: {range}"));

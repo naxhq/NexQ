@@ -89,11 +89,15 @@ pub struct NoteDoc {
     /// Next numeric id; ids are never reused, even after the user deletes.
     #[serde(default)]
     pub next_id: u32,
+    /// Speech (ms since the meeting started) the notes never covered: saved with the notes,
+    /// so it survives the end of the meeting and a restart.
+    #[serde(default)]
+    pub uncovered: Option<(u64, u64)>,
 }
 
 impl Default for NoteDoc {
     fn default() -> Self {
-        Self { version: DOC_VERSION, blocks: Vec::new(), next_id: 1 }
+        Self { version: DOC_VERSION, blocks: Vec::new(), next_id: 1, uncovered: None }
     }
 }
 

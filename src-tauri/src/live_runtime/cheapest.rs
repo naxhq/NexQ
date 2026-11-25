@@ -5,7 +5,13 @@
 //! * subscriptions (Claude, Antigravity, Codex): the CLI's own fast tier;
 //! * API providers: the first small model of a per-provider table that the
 //!   provider's available model list contains, else the active model;
+//! * OpenRouter, whose list carries prices: the lowest-priced text chat model
+//!   of the table that has room for the job (see [`PricedModel`]);
 //! * local servers and custom endpoints: the active model.
+//!
+//! "Cheapest" is only said when it is true: the table's first (cheapest) model
+//! for a provider, or the lowest price among every model OpenRouter lists for
+//! the job. Anything else is a "small model". Every label comes from here.
 
 use serde::Serialize;
 
@@ -19,6 +25,49 @@ pub struct CheapestChoice {
     pub label: String,
 }
 
+/// One OpenRouter model with what its list says about price and fit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PricedModel {
+    pub id: String,
+    /// Dollars per prompt token and per completion token (only compared, never shown).
+    pub prompt: f64,
+    pub completion: f64,
+    pub context: u64,
+    /// Text in, text out: not an image, speech or embedding model.
+    pub text_chat: bool,
+    /// A free tier (`:free`, or priced at zero).
+    pub free: bool,
+}
+
+/// A job needs at least this much room (a transcript outline plus its answer).
+pub const MIN_CONTEXT: u64 = 32_000;
+
+/// What the job costs on a model: notes, the brief, memory and recaps read much
+/// more than they write, so the prompt price weighs four times the completion's.
+pub fn job_cost(m: &PricedModel) -> f64 {
+    0.8 * m.prompt + 0.2 * m.completion
+}
+
+/// The priced view of OpenRouter's own model list.
+pub fn priced_from_openrouter(models: &[crate::llm::openrouter_models::OpenRouterModel]) -> Vec<PricedModel> {
+    models
+        .iter()
+        .map(|m| {
+            let text_in = m.input_modalities.is_empty() || m.input_modalities.iter().any(|x| x == "text");
+            let text_out = if m.output_modalities.is_empty() { m.modality.contains("->text") } else { m.output_modalities.iter().all(|x| x == "text") };
+            PricedModel {
+                id: m.id.clone(),
+                prompt: m.pricing.prompt,
+                completion: m.pricing.completion,
+                context: m.context_length.unwrap_or(0),
+                text_chat: text_in && text_out,
+                free: m.is_free || m.id.ends_with(":free") || (m.pricing.prompt <= 0.0 && m.pricing.completion <= 0.0),
+            }
+        })
+        .collect()
+}
+
+#[derive(Default)]
 pub struct CheapestInput<'a> {
     pub provider: &'a str,
     pub active_model: &'a str,
@@ -26,6 +75,42 @@ pub struct CheapestInput<'a> {
     pub available: &'a [String],
     /// A subscription's fast tier: (model, effort), when the provider is one.
     pub cli_fast: Option<(&'a str, &'a str)>,
+    /// OpenRouter's models with their prices, when known (empty otherwise).
+    pub priced: &'a [PricedModel],
+}
+
+/// The label of a model picked from a list.
+fn picked_label(name: &str, model: &str, cheapest: bool) -> String {
+    format!("{name} · {model} ({})", if cheapest { "cheapest" } else { "small model" })
+}
+
+/// The label when the active model is used.
+fn active_label(name: &str, active: &str) -> String {
+    if active.is_empty() { format!("{name} · active model") } else { format!("{name} · {active} (active model)") }
+}
+
+/// OpenRouter by price: among text chat models with room for the job (free
+/// ones only when the active model is free), the table's small models, lowest
+/// job cost first. Called "cheapest" only when nothing eligible costs less.
+fn openrouter_pick(i: &CheapestInput<'_>, name: &str) -> Option<CheapestChoice> {
+    let active_free = i.priced.iter().find(|m| m.id == i.active_model).map(|m| m.free).unwrap_or_else(|| i.active_model.ends_with(":free"));
+    let eligible: Vec<&PricedModel> = i
+        .priced
+        .iter()
+        .filter(|m| m.text_chat && m.context >= MIN_CONTEXT && is_chat_model(&m.id) && (active_free || !m.free))
+        .collect();
+    let lowest = eligible.iter().map(|m| job_cost(m)).fold(f64::INFINITY, f64::min);
+    let table = small_models("openrouter");
+    let pick = eligible
+        .iter()
+        .filter(|m| table.iter().any(|p| m.id.to_lowercase().contains(p)))
+        .min_by(|a, b| job_cost(a).total_cmp(&job_cost(b)).then_with(|| b.id.cmp(&a.id)))?;
+    Some(CheapestChoice {
+        provider: i.provider.to_string(),
+        model: pick.id.clone(),
+        effort: None,
+        label: picked_label(name, &pick.id, job_cost(pick) <= lowest),
+    })
 }
 
 /// Ids that are not chat models, whatever else their name says (a speech, image,
@@ -81,17 +166,24 @@ pub fn cheapest(i: &CheapestInput<'_>) -> CheapestChoice {
             label: format!("{name} · {shown}"),
         };
     }
+    if i.provider == "openrouter" && !i.priced.is_empty() {
+        if let Some(choice) = openrouter_pick(i, name) {
+            return choice;
+        }
+    }
     let table = small_models(i.provider);
     if !table.is_empty() && !i.available.is_empty() {
-        for pref in table {
+        for (index, pref) in table.iter().enumerate() {
             // newest of the matches: the greatest name
             if let Some(m) = i.available.iter().filter(|a| is_chat_model(a) && a.to_lowercase().contains(pref)).max() {
-                return CheapestChoice { provider: i.provider.to_string(), model: m.clone(), effort: None, label: format!("{name} · {m} (cheapest)") };
+                // the table's first entry is its cheapest; OpenRouter without prices cannot say
+                let cheapest = index == 0 && i.provider != "openrouter";
+                return CheapestChoice { provider: i.provider.to_string(), model: m.clone(), effort: None, label: picked_label(name, m, cheapest) };
             }
         }
     }
     let active = i.active_model.to_string();
-    let label = if active.is_empty() { format!("{name} · active model") } else { format!("{name} · {active} (active model)") };
+    let label = active_label(name, &active);
     CheapestChoice { provider: i.provider.to_string(), model: active, effort: None, label }
 }
 
@@ -110,14 +202,15 @@ mod tests {
 
     fn pick(provider: &str, active: &str, available: &[&str]) -> CheapestChoice {
         let av: Vec<String> = available.iter().map(|s| s.to_string()).collect();
-        cheapest(&CheapestInput { provider, active_model: active, available: &av, cli_fast: None })
+        cheapest(&CheapestInput { provider, active_model: active, available: &av, ..Default::default() })
     }
 
     #[test]
     fn api_providers_take_the_first_small_model_the_provider_really_has() {
         let c = pick("openai", "gpt-5", &["gpt-5", "gpt-5-mini", "gpt-4o-mini", "o3"]);
         assert_eq!(c.model, "gpt-5-mini", "nano is not offered, mini is");
-        assert!(c.label.contains("cheapest") && c.label.starts_with("OpenAI"));
+        assert!(c.label.contains("small model") && !c.label.contains("cheapest"), "mini is not the table's cheapest: {}", c.label);
+        assert!(c.label.starts_with("OpenAI"));
         assert_eq!(pick("openai", "gpt-5", &["gpt-5-nano", "gpt-5-mini"]).model, "gpt-5-nano");
         assert_eq!(pick("anthropic", "claude-sonnet-4", &["claude-sonnet-4", "claude-haiku-4-5"]).model, "claude-haiku-4-5");
         assert_eq!(pick("gemini", "gemini-2.5-pro", &["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]).model, "gemini-2.5-flash-lite");
@@ -144,6 +237,8 @@ mod tests {
         assert_eq!(pick("openrouter", "openai/gpt-5", &["openai/gpt-5", "anthropic/claude-haiku-4.5", "google/gemini-2.5-flash"]).model, "anthropic/claude-haiku-4.5");
         let c = pick("gemini", "gemini-2.5-pro", &["gemini-2.5-pro", "gemini-2.5-flash-lite"]);
         assert_eq!(c.label, "Google Gemini · gemini-2.5-flash-lite (cheapest)");
+        // flash is a small model, not the cheapest the table knows
+        assert_eq!(pick("gemini", "gemini-2.5-pro", &["gemini-2.5-pro", "gemini-2.5-flash"]).label, "Google Gemini · gemini-2.5-flash (small model)");
     }
 
     #[test]
@@ -159,10 +254,94 @@ mod tests {
 
     #[test]
     fn subscriptions_use_their_fast_tier() {
-        let c = cheapest(&CheapestInput { provider: "claude_cli", active_model: "sonnet", available: &[], cli_fast: Some(("haiku", "low")) });
+        let c = cheapest(&CheapestInput { provider: "claude_cli", active_model: "sonnet", cli_fast: Some(("haiku", "low")), ..Default::default() });
         assert_eq!((c.model.as_str(), c.effort.as_deref(), c.label.as_str()), ("", Some("low"), "Claude (subscription) · haiku, fast tier"));
-        let c = cheapest(&CheapestInput { provider: "codex_cli", active_model: "", available: &[], cli_fast: Some(("", "low")) });
+        let c = cheapest(&CheapestInput { provider: "codex_cli", cli_fast: Some(("", "low")), ..Default::default() });
         assert_eq!(c.label, "Codex (subscription) · fast tier");
+    }
+
+    fn priced(id: &str, prompt: f64, completion: f64, context: u64) -> PricedModel {
+        PricedModel { id: id.into(), prompt, completion, context, text_chat: true, free: false }
+    }
+
+    fn router(active: &str, list: &[PricedModel]) -> CheapestChoice {
+        cheapest(&CheapestInput { provider: "openrouter", active_model: active, priced: list, ..Default::default() })
+    }
+
+    #[test]
+    fn openrouter_picks_by_listed_price_and_says_cheapest_only_when_it_is() {
+        // haiku and nano are both on the table; nano is cheaper for a job that mostly reads.
+        let list = vec![
+            priced("anthropic/claude-haiku-4.5", 0.000001, 0.000005, 200_000),
+            priced("openai/gpt-5-nano", 0.00000005, 0.0000004, 400_000),
+            priced("openai/gpt-5", 0.00000125, 0.00001, 400_000),
+        ];
+        let c = router("openai/gpt-5", &list);
+        assert_eq!((c.model.as_str(), c.label.as_str()), ("openai/gpt-5-nano", "OpenRouter · openai/gpt-5-nano (cheapest)"));
+        // A cheaper model that is not on the table exists: the pick is small, not cheapest.
+        let mut with_tiny = list.clone();
+        with_tiny.push(priced("acme/tiny-1b-chat", 0.00000001, 0.00000002, 64_000));
+        let c = router("openai/gpt-5", &with_tiny);
+        assert_eq!((c.model.as_str(), c.label.as_str()), ("openai/gpt-5-nano", "OpenRouter · openai/gpt-5-nano (small model)"));
+        // The prompt price weighs more than the completion's: a cheap-to-read, dear-to-write model can still win.
+        // A is cheaper to read (the job's weight) though four times dearer to write; a plain average would say B.
+        let reader = vec![priced("a/mini-reader", 0.0000001, 0.0000004, 100_000), priced("b/mini-writer", 0.0000002, 0.0000001, 100_000)];
+        assert_eq!(router("x", &reader).model, "a/mini-reader");
+    }
+
+    #[test]
+    fn openrouter_skips_free_tiers_small_windows_and_models_that_are_not_text_chat() {
+        let mut free = priced("meta/llama-8b-mini:free", 0.0, 0.0, 128_000);
+        free.free = true;
+        let mut image = priced("acme/mini-image", 0.00000001, 0.00000001, 128_000);
+        image.text_chat = false;
+        let list = vec![
+            free.clone(),
+            image,
+            priced("acme/mini-short", 0.00000001, 0.00000001, 8_000),
+            priced("google/gemini-2.5-flash", 0.0000003, 0.0000025, 1_000_000),
+        ];
+        let c = router("openai/gpt-5", &list);
+        assert_eq!(c.model, "google/gemini-2.5-flash");
+        assert!(c.label.ends_with("(cheapest)"), "the only paid text chat model with room: {}", c.label);
+        // With a cheaper eligible model off the table, the pick is only a small model.
+        let mut more = list.clone();
+        more.push(priced("acme/chat-3b", 0.00000002, 0.00000002, 64_000));
+        assert!(router("openai/gpt-5", &more).label.ends_with("(small model)"));
+        // Free is fine when the user's own active model is a free one.
+        let c = router("meta/llama-8b-mini:free", &list);
+        assert_eq!(c.model, "meta/llama-8b-mini:free");
+        // Nothing eligible on the table: the active model, said so.
+        let none = router("openai/gpt-5", &[priced("openai/gpt-5", 0.00000125, 0.00001, 400_000)]);
+        assert_eq!((none.model.as_str(), none.label.as_str()), ("openai/gpt-5", "OpenRouter · openai/gpt-5 (active model)"));
+    }
+
+    #[test]
+    fn openrouter_without_prices_never_claims_cheapest() {
+        let av: Vec<String> = ["anthropic/claude-haiku-4.5", "openai/gpt-5"].iter().map(|s| s.to_string()).collect();
+        let c = cheapest(&CheapestInput { provider: "openrouter", active_model: "openai/gpt-5", available: &av, ..Default::default() });
+        assert_eq!(c.label, "OpenRouter · anthropic/claude-haiku-4.5 (small model)");
+    }
+
+    #[test]
+    fn the_priced_view_of_openrouters_own_list() {
+        use crate::llm::openrouter_models::{OpenRouterModel, OpenRouterPricing};
+        let base = |id: &str, ins: &[&str], outs: &[&str], prompt: f64| OpenRouterModel {
+            id: id.into(), name: id.into(), provider_name: String::new(), description: String::new(), created: 0,
+            context_length: Some(100_000), max_completion_tokens: None,
+            pricing: OpenRouterPricing { prompt, completion: prompt, image: None, cache_read: None, cache_write: None },
+            is_free: false, modality: String::new(),
+            input_modalities: ins.iter().map(|s| s.to_string()).collect(), output_modalities: outs.iter().map(|s| s.to_string()).collect(),
+            tokenizer: String::new(), supports_tools: false, supports_reasoning: false, supports_web_search: false,
+        };
+        let v = priced_from_openrouter(&[
+            base("a/chat", &["text", "image"], &["text"], 0.000001),
+            base("b/image-gen", &["text"], &["image"], 0.000001),
+            base("c/free:free", &["text"], &["text"], 0.0),
+        ]);
+        assert!(v[0].text_chat && !v[0].free);
+        assert!(!v[1].text_chat);
+        assert!(v[2].free);
     }
 
     #[test]

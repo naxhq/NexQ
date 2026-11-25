@@ -143,6 +143,10 @@ pub async fn suggest(deps: &Deps, workspace_id: &str, meeting_id: &str, cap: Opt
     if (deps.live_meeting)().as_deref() == Some(meeting_id) {
         return Err("Memory is suggested after the meeting ends".into());
     }
+    // A meeting filed in no workspace has nowhere for memory to go: refused before any call.
+    if !deps.db.meeting_is_filed(meeting_id) {
+        return Err("This meeting is not filed in a workspace. File it in one first, then ask for suggestions.".into());
+    }
     // The workspace asked about must be the meeting's home, now and again when saving.
     if deps.db.meeting_home(meeting_id).as_deref() != Some(workspace_id) {
         return Err("This meeting does not belong to that workspace".into());
@@ -161,8 +165,10 @@ pub async fn suggest(deps: &Deps, workspace_id: &str, meeting_id: &str, cap: Opt
     let settings: crate::live_runtime::settings::MemorySettings =
         deps.db.kv_get(crate::live_runtime::settings::MEMORY_KEY).and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
     let selection = Selection { provider: settings.provider.clone(), model: settings.model.clone(), effort: settings.effort.clone() };
-    let slot = deps.factory.make(AiPurpose::Memory, meeting_id, &selection)?;
-    let _registered = register_run(meeting_id, workspace_id, automatic, slot.cancel.clone());
+    // resolved again before every chunk: a provider or model that changed applies to the next call
+    let slot = crate::live_runtime::llm::SwapLlm::new(deps.factory.clone(), AiPurpose::Memory, meeting_id, selection)?;
+    let stop = slot.stop_token();
+    let _registered = register_run(meeting_id, workspace_id, automatic, stop.clone());
     let mut proposals: Vec<Proposal> = Vec::new();
     let mut last_err: Option<String> = None;
     let mut ok_calls = 0;
@@ -178,7 +184,7 @@ pub async fn suggest(deps: &Deps, workspace_id: &str, meeting_id: &str, cap: Opt
         sent += chunk_tokens;
         // Every run needs the meeting to still exist and still be filed here; only a run
         // nobody asked for also needs the workspace's switch.
-        if slot.cancel.is_cancelled()
+        if stop.is_cancelled()
             || (automatic && !deps.db.suggest_flag(workspace_id))
             || deps.db.meeting_home(meeting_id).as_deref() != Some(workspace_id)
             || deps.deleted.lock().unwrap().contains(meeting_id)
@@ -193,15 +199,21 @@ pub async fn suggest(deps: &Deps, workspace_id: &str, meeting_id: &str, cap: Opt
             saved: saved.clone(),
             language: OutputLanguage::Meeting,
         };
-        match suggest_memory(&*slot.llm, &input, &MemoryConfig::default()).await {
+        match suggest_memory(&*slot, &input, &MemoryConfig::default()).await {
             Ok(o) => {
                 ok_calls += 1;
                 proposals.extend(o.suggestions.proposals);
             }
-            Err(e) => last_err = Some(e.message),
+            Err(e) => {
+                let stop = e.code == "no_provider";
+                last_err = Some(e.message);
+                if stop {
+                    break;
+                }
+            }
         }
     }
-    if slot.cancel.is_cancelled() {
+    if stop.is_cancelled() {
         return Ok(Vec::new()); // cancelled because consent ended: the result is dropped
     }
     if ok_calls == 0 {

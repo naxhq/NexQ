@@ -6,7 +6,7 @@
 use super::notes::{doc_to_contract, NoteEdit};
 use super::settings::{merge, BriefSettings, MemorySettings, NotetakerSettings};
 use super::brief::sheet_to_contract;
-use super::state::{ModelLabel, RunSnapshot};
+use super::state::{ModelLabel, NotCovered, RunSnapshot};
 use crate::assert_contract;
 use crate::contract::read;
 use serde_json::{json, Value};
@@ -28,8 +28,28 @@ fn event_notetaker_state() {
         cap: 120_000,
         next_in_ms: Some(30_000),
         model: model(),
+        not_covered: None,
     };
     assert_contract!("notetaker_state", s);
+}
+
+/// The finished notes carry the stretch they never covered as data (not only in the reason text).
+#[test]
+fn event_notetaker_state_finished_with_a_range_not_covered() {
+    let s = RunSnapshot {
+        meeting_id: "m1".into(),
+        status: "finished",
+        reason: Some("Not covered: 02:00 to 40:00".into()),
+        error_kind: None,
+        can: vec!["update"],
+        tokens_used: 4_200,
+        total_tokens: 21_000,
+        cap: 120_000,
+        next_in_ms: None,
+        model: model(),
+        not_covered: Some(NotCovered { from_ms: 120_000, to_ms: 2_400_000 }),
+    };
+    assert_contract!("notetaker_state_finished", s);
 }
 
 #[test]
@@ -45,6 +65,7 @@ fn event_brief_state() {
         cap: 120_000,
         next_in_ms: None,
         model: None,
+        not_covered: None,
     };
     assert_contract!("brief_state", s);
 }
@@ -53,13 +74,13 @@ fn event_brief_state() {
 fn every_state_the_ui_can_get_is_in_the_contract_vocabulary() {
     let statuses = ["off", "waiting", "on", "running", "paused", "capped", "error", "finished"];
     let can = ["update", "pause", "resume", "keep_going", "try_again", "start"];
-    for name in ["notetaker_state", "brief_state"] {
+    for name in ["notetaker_state", "notetaker_state_finished", "brief_state"] {
         let v = read(name);
         assert!(statuses.contains(&v["status"].as_str().unwrap()), "{name}");
         for c in v["can"].as_array().unwrap() {
             assert!(can.contains(&c.as_str().unwrap()), "{name}: {c}");
         }
-        for key in ["meeting_id", "status", "reason", "error_kind", "can", "tokens_used", "total_tokens", "cap", "next_in_ms", "model"] {
+        for key in ["meeting_id", "status", "reason", "error_kind", "can", "tokens_used", "total_tokens", "cap", "next_in_ms", "model", "not_covered"] {
             assert!(v.get(key).is_some(), "{name} has `{key}`");
         }
     }
@@ -105,10 +126,12 @@ fn command_inputs_fit_their_types() {
     let merged: MemorySettings = merge(&MemorySettings::default(), &p["patch"]).expect("the memory patch is accepted");
     assert_eq!(merged.provider.as_deref(), Some("openai"));
 
-    let e = read("save_meeting_notes_edit");
-    assert!(e["meetingId"].is_string());
-    for key in ["update", "add", "delete"] {
-        let _: NoteEdit = serde_json::from_value(e[key].clone()).unwrap_or_else(|err| panic!("edit `{key}` does not fit: {err}"));
+    // One fixture per op, each the exact arguments of one call: { meetingId, edit }.
+    for (name, op) in [("save_meeting_notes_edit", "update"), ("save_meeting_notes_edit_add", "add"), ("save_meeting_notes_edit_delete", "delete")] {
+        let e = read(name);
+        assert!(e["meetingId"].is_string(), "{name}");
+        assert_eq!(e["edit"]["op"], op, "{name}");
+        let _: NoteEdit = serde_json::from_value(e["edit"].clone()).unwrap_or_else(|err| panic!("{name}: edit does not fit: {err}"));
     }
     for name in ["get_notetaker_state", "get_brief_state", "notetaker_pause", "notetaker_resume", "brief_pause", "brief_resume"] {
         assert_eq!(read(name)["meetingId"], "m1", "{name}");

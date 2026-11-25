@@ -69,11 +69,17 @@ pub fn build(app: &AppHandle, state: &AppState) -> Option<Arc<LiveRuntimes>> {
         }
         let kind = crate::llm::ProviderType::from_str(&provider).ok().and_then(|p| p.cli_agent_kind());
         let fast = kind.map(|k| cli_settings.config(k));
+        let priced = if provider == "openrouter" {
+            openrouter.lock().ok().and_then(|c| c.as_ref().map(|c| crate::live_runtime::cheapest::priced_from_openrouter(&c.models))).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         Some(cheapest(&CheapestInput {
             provider: &provider,
             active_model: &active_model,
             available: &available,
             cli_fast: fast.as_ref().map(|c| (c.fast_model.as_str(), c.fast_effort.as_str())),
+            priced: &priced,
         }))
     });
     let factory = Arc::new(AiRunsFactory { runs: runs.clone(), resolver });
