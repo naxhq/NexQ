@@ -196,6 +196,58 @@ For a practical check, start a test meeting, speak on each configured side, veri
 5. **Close other resource-intensive applications.** Local LLMs compete with other apps for CPU/RAM.
 6. **Automatic answers start 1.5 seconds after the question?** That's the quiet wait for engines that can end a line mid-sentence. Transcribe the other party with Cartesia or Deepgram Flux (Settings > STT Providers): both say when the speaker has finished, so Auto-Answer starts at once. With Flux, quiet time counts toward Deepgram usage, since NexQ streams silence to it; muted time doesn't.
 
+## Workspaces, Chat and Live Helpers
+
+### "Workspaces aren't available right now"
+
+**Problem**: A note in the Library and at the top of the workspace says workspaces aren't available, and everything is in General.
+
+**What happened**: The upgrade that adds workspaces didn't finish. It is all or nothing, so nothing was changed and NexQ works as it did before.
+
+**Solution**:
+
+1. Restart NexQ. It tries the upgrade again.
+2. If the note stays, copy your log (**Settings > About > Diagnostics > Copy recent log**) and [report it](https://github.com/naxhq/NexQ/issues/new?template=bug_report.yml).
+3. Don't delete `nexq-before-workspaces.db` in the app data folder. It is a copy of your data from before the upgrade, kept for 14 days.
+
+### A Document or Folder Shows "Missing"
+
+The file or folder moved or was deleted. Click **Remove** on its row, or put it back where it was. If it is a folder or tool, check **Settings > Personal Sources**: after a [settings reset](#settings-restored-or-reset) the list there may need to be filled again.
+
+### A Folder Shows "Needs your OK to search its text"
+
+NexQ doesn't search a folder until you allow it. Turn on **Search its text** under the folder. See [Workspaces](workspaces.md#folder-text-search).
+
+### Workspace Chat Doesn't Find Something
+
+- Check the answer's sources, and open **Context** to see what the answer saw.
+- If it says "N things didn't fit", click **Search deeper**.
+- A meeting you left out of the chat, a document you removed from the workspace, and anything in another workspace are not used. See [What is shared between workspaces](workspaces.md#what-is-shared-between-workspaces).
+- A folder is only searched after **Search its text** is on. Files over 2 MB, hidden files and files with names like `.env` or containing `secret` or `password` are skipped.
+- Very recent meetings are searched as soon as they are indexed. Indexing waits while a meeting is running, so a meeting you just finished may take a moment.
+
+### Workspace Chat Says a Tool Is Off
+
+Codex and Antigravity can't ask before a tool that changes something yet, so those tools are off in chat. With Claude, update the Claude command-line tool to version 2.1.328 or newer. API and local models can't use tools at all. See [Workspace chat](workspace-chat.md#tool-approval).
+
+### "A live answer took priority"
+
+A meeting is running, and its live answer needed the same local server (Ollama, LM Studio or a local custom server) as your chat answer. Click **Try again** when the live answer is done, or use another provider for the chat.
+
+### The Meeting Window Lost a Panel
+
+Open **Layout** in the meeting window and tick the panel under **Panels**. A hidden panel is not lost. **Reset to Classic** brings back the default arrangement. If **Layout locked** is on, unlock it first. See [Meeting window layout](meeting-layout.md).
+
+### Follow My Voice Is Unavailable or Loses the Place
+
+The panel says why when it is unavailable: an in-person meeting, a muted microphone, or no speech engine for your side. If it loses your place, scroll to where you are and it picks up again. See the [honest limits](talking-points.md#honest-limits).
+
+### Live Notes or the Brief Paused
+
+- **Keep taking notes?** or **Keep the brief going?** means the limit was reached. Choose **Keep going** or **Stop**. See [Live notes and the brief](live-notes-and-brief.md#cost-and-the-limit).
+- **Notes paused** or **Notes stopped** with a reason means the model couldn't answer: a missing key, a plan limit or a server that isn't running. Click **Change model** or **Try again**.
+- The brief says **The brief is turned off** or **The brief is off in this workspace** when it is off for the workspace. Turn it on in the Brief panel.
+
 ## Overlay Issues
 
 ### Overlay Not Showing
@@ -241,7 +293,7 @@ For a practical check, start a test meeting, speak on each configured side, veri
 
 - Long meetings accumulate transcript segments in memory. This is expected behavior
 - End and restart meetings periodically for very long sessions (4+ hours)
-- Close context documents you no longer need from the Context Intelligence panel
+- Remove documents you no longer need from the Library of your workspaces
 - If using local RAG, the embedding index consumes memory proportional to document size
 
 ## Data and Storage
@@ -257,10 +309,31 @@ NexQ stores all data in the app data directory:
 On macOS: `~/Library/Application Support/com.nexq.app/`
 
 This includes:
-- SQLite database (meetings, transcripts, AI interactions)
+- SQLite database `nexq.db` (workspaces, meetings, transcripts, chats, notes, AI interactions)
+- `nexq-before-workspaces.db`, a safety copy made once when you first upgraded to workspaces. It is deleted after 14 days ([details](workspaces.md#what-happens-when-you-upgrade))
+- Settings files: `config.json`, `nexq-settings.json` and `translation-config.json`, each with a `.bak` copy
 - Downloaded STT models (`models/` subdirectory)
 - Audio recordings (if recording is enabled)
 - RAG index and embeddings
+
+### Settings Restored or Reset
+
+**Problem**: After starting NexQ, a notice says **Settings restored** or **Some settings were reset**.
+
+**What happened**: NexQ checks its settings files each time it starts. If a file can't be read (for example the PC lost power while it was being written), NexQ never silently replaces it with defaults.
+
+- It moves the damaged file aside as `config.json.corrupt-` followed by a number (the same for the other two files). The newest three are kept.
+- If it has a good copy (`config.json.bak`, refreshed from a valid file at start and about every 10 minutes), it puts that back. The notice says **Settings restored** and "NexQ put back the last good copy". You may lose changes from the last few minutes.
+- If there is no good copy, that file starts from the defaults. The notice says **Some settings were reset**, and tells you which settings: your settings (`config.json`), your update preferences or your translation settings. You may see the first-run setup again.
+
+The notice names the damaged file and stays until you close it.
+
+**Solution**:
+
+- If settings were restored, check that the provider, speech engine and hotkeys are what you expect.
+- If they were reset, set up your provider and speech engine again. API keys are kept in the Windows Credential Manager, not in these files, so they are not lost.
+- Your notes folders and tools may show as **Missing** in a workspace's Library until you add them again. Their place in your workspaces is kept.
+- Keep the `.corrupt-` file until you are sure nothing is missing. If a problem repeats, [report it](https://github.com/naxhq/NexQ/issues/new?template=bug_report.yml) with your log.
 
 ### API Keys
 
@@ -305,4 +378,6 @@ If your issue is not covered here, these guides may help:
 - [Audio Setup Guide](audio-setup.md) -- Detailed audio device configuration and troubleshooting
 - [AI Providers Guide](ai-providers.md) -- Provider setup, comparison, and configuration
 - [Using Context Intelligence (RAG)](rag-context.md) -- Document loading and indexing issues
+- [Workspaces](workspaces.md) -- Workspaces, the Library and the upgrade
+- [Workspace Chat](workspace-chat.md) -- Questions across meetings and files
 - [Getting Started](getting-started.md) -- Initial setup walkthrough

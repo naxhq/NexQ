@@ -130,6 +130,18 @@ NexQ supports 9 LLM providers. The LLM powers all AI features: Assist, What to S
 
 **Use Anthropic (Claude)** if you prefer nuanced, well-reasoned responses, especially for complex or sensitive topics.
 
+### Choosing a model for chat, notes and the brief
+
+Live answers use the provider you set above. Three newer features can use a different one, so a slow, careful model for questions doesn't have to answer live:
+
+- **[Workspace chat](workspace-chat.md)** has a **Model** picker in each chat. A new chat starts on your active provider and model (on your **Deep** model if the provider is a subscription).
+- **[Live notes and the brief](live-notes-and-brief.md)** have their own **Model** in **Settings > Live Notes and Brief**. The default, **Automatic**, is the cheapest model of your active provider.
+- **[Memory suggestions](talking-points.md#memory)** have their own model too, also **Automatic** by default.
+
+None of them switches to another provider if yours fails. They say what failed and let you choose. A live answer always goes first: on a local server (Ollama, LM Studio or a local custom server) it can stop a chat answer or hold back notes that use the same server.
+
+Only the subscription providers (Claude, Codex, Antigravity) can read folders and use tools in a chat. Claude asks before a tool that could change something (version 2.1.328 or newer); Codex and Antigravity can't ask yet, so those tools are off for them. API and local models answer from the passages NexQ finds and can't use tools.
+
 ## Local vs Cloud Tradeoffs
 
 | Factor | Local (Ollama, Whisper, LM Studio) | Cloud (OpenAI, Deepgram, Groq) |

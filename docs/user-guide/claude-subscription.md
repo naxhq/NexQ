@@ -70,7 +70,7 @@ Hovering the Claude chip in the footer shows the models, the number of requests 
 
 ## Personal sources
 
-Let the AI look things up in your own notes and tools while it answers you. Open **Settings > Personal Sources**, or use the Personal sources section on the launcher's main screen. Both are the same list. Personal sources work only with **Claude (subscription)**; with another provider they stay saved and are not used.
+Let the AI look things up in your own notes and tools while it answers you. Open **Settings > Personal Sources**, or add them from the **Library** of a [workspace](workspaces.md). Both use the same list. A meeting or a [workspace chat](workspace-chat.md) only uses the folders and tools that belong to its workspace (plus General, and workspaces you chose to also use for a meeting), and a folder or tool switched off in Settings stays off everywhere. Personal sources work only with **Claude (subscription)**; with another provider they stay saved and are not used.
 
 - **Notes folders.** Add a folder of `.md` files, such as an Obsidian vault. The AI can search and read it but never change it. A folder that holds your whole user folder, your Claude sign-in files or NexQ's own private files is refused.
 - **Tools (MCP servers).** Choose **Add server**, paste the `mcpServers` JSON from the server's README (or fill in a form, or import a server from Claude Code). NexQ checks the new server right away and shows its tools, so you can look before switching it on. Each tool has its own switch; tools whose names suggest they change something (add, send, edit, delete) start off.

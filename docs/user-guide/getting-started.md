@@ -30,7 +30,7 @@ The installer uses NSIS and installs per-user (no admin rights required). The de
 
 After installation, NexQ starts automatically. You will see:
 
-- **Launcher window** (900x650) -- the main dashboard for managing meetings, settings, and history
+- **Launcher window** -- your workspaces: meetings, a chat across them, the files the AI can use, and settings. It opens at 1180x740 (smaller on a small screen) and remembers its size and place. See [Workspaces](workspaces.md)
 - **System tray icon** -- NexQ lives in your taskbar tray; closing the window hides it to tray rather than quitting. Click the icon to bring NexQ back
 
 ## Quick Setup
@@ -83,7 +83,7 @@ NexQ uses an LLM to generate AI assistance during meetings. The easiest local op
 ## Start Your First Meeting
 
 1. **Select audio devices** -- In the launcher, choose your microphone (for "You") and system audio output (for "Them" / remote participants)
-2. **Press Start Meeting** or use the keyboard shortcut `Ctrl+M`
+2. **Press Start meeting**, or use the keyboard shortcut `Ctrl+M`. The button opens a small dialog where you confirm the audio mode, the workspace and the scenario. `Ctrl+M` starts at once in your default workspace
 3. The **overlay window** appears (always-on-top, 500x700) showing:
    - Live transcript with speaker labels (You / Them)
    - AI assist panel with contextual suggestions
@@ -94,12 +94,21 @@ The meeting is saved automatically with full transcript, AI interactions, and su
 
 In meeting details, **Words** counts each Chinese character and Japanese kana individually, since those languages don't put spaces between words. Other text, including Korean, is counted by whitespace-separated words. Punctuation alone is not counted. **Pace** and the header's speaker percentages use the same counts.
 
+## Add Your Own Files
+
+To give the AI your resume, notes or course material, open the workspace you will use (you start with **General**) and click **Add** in the **Library** on the right. Add files, a folder or a tool, or paste text. After a few meetings you can ask questions across them in the workspace chat. See [Workspaces](workspaces.md) and [Workspace chat](workspace-chat.md).
+
 ## Next Steps
 
 - [Interview Copilot Guide](interview-copilot.md) -- Use NexQ as your real-time interview assistant
 - [Lecture Assistant Guide](lecture-assistant.md) -- Transcribe and study from lectures
 - [Audio Setup Guide](audio-setup.md) -- Detailed audio device configuration and troubleshooting
 - [AI Providers Guide](ai-providers.md) -- Compare all STT and LLM providers to find the best fit
+- [Workspaces](workspaces.md) -- Keep the meetings, chats and files of each job, client or course apart
+- [Workspace Chat](workspace-chat.md) -- Ask questions across a workspace's meetings and files
+- [Meeting Window Layout](meeting-layout.md) -- Choose and arrange the panels
+- [Talking Points](talking-points.md) -- Notes you read during a call, with voice-following
+- [Live Notes and the Brief](live-notes-and-brief.md) -- Notes written for you while you talk
 - [Using Context Intelligence (RAG)](rag-context.md) -- Load documents for AI-enhanced responses
 - [Configuration Guide](configuration.md) -- Full provider setup and configuration options
 - [Keyboard Shortcuts](keyboard-shortcuts.md) -- Full shortcuts reference
