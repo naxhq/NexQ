@@ -434,3 +434,56 @@ describe("backend words", () => {
     expect(S().sessions.c1.capabilities).toBeNull();
   });
 });
+
+describe("access changed", () => {
+  const revoke = (reqId: string, chat_id = "c1") => h().error({ chat_id, request_id: reqId, error: "moved", error_kind: "access_changed" as never });
+
+  it("removes the partial answer, even tokens still waiting to be shown, and keeps the question", async () => {
+    const { reqId } = await startAsk("c1", "What did Dana say?");
+    h().activity({ chat_id: "c1", request_id: reqId, activity: { kind: "tool", label: "Read secret.md", chip: null } });
+    h().token({ chat_id: "c1", request_id: reqId, token: "Dana said the secret" });
+    revoke(reqId);
+    const t = S().sessions.c1.turn!;
+    expect(t).toMatchObject({ status: "removed", text: "", question: "What did Dana say?", activity: [], report: null });
+    await new Promise((r) => setTimeout(r, 60));
+    expect(S().sessions.c1.turn!.text).toBe("");
+  });
+
+  it("ignores tokens, notes and an end that arrive after it", async () => {
+    const { reqId } = await startAsk();
+    revoke(reqId);
+    h().token({ chat_id: "c1", request_id: reqId, token: "late" });
+    h().activity({ chat_id: "c1", request_id: reqId, activity: { kind: "tool", label: "late", chip: null } });
+    h().context({ chat_id: "c1", request_id: reqId, report: report() });
+    h().end({ chat_id: "c1", request_id: reqId, cancelled: false, message: answer(7, "c1", "late answer") });
+    await new Promise((r) => setTimeout(r, 60));
+    const s = S().sessions.c1;
+    expect(s.turn).toMatchObject({ status: "removed", text: "", activity: [], report: null });
+    expect(s.messages).toHaveLength(0);
+  });
+
+  it("takes back an answer that had already ended", async () => {
+    const { reqId, release, done } = await startAsk("c1", "Q?");
+    h().end({ chat_id: "c1", request_id: reqId, cancelled: false, message: answer(9, "c1", "Saved text") });
+    release();
+    await done;
+    expect(S().sessions.c1.messages).toHaveLength(2);
+    ipc.listWorkspaceMessages.mockResolvedValue([]);
+    revoke(reqId);
+    const s = S().sessions.c1;
+    expect(s.messages).toHaveLength(0);
+    expect(s.extras[9]).toBeUndefined();
+    expect(s.turn).toMatchObject({ status: "removed", question: "Q?", text: "" });
+  });
+
+  it("works for a chat that is not open, and Ask again keeps the question", async () => {
+    useWorkspaceChatStore.setState({ activeChat: { w1: "c1" } });
+    const { reqId } = await startAsk("c2", "Other chat question");
+    revoke(reqId, "c2");
+    expect(S().sessions.c2.turn).toMatchObject({ status: "removed", question: "Other chat question" });
+    expect(S().sessions.c1?.turn ?? null).toBeNull();
+    expect(await S().ask("c2", S().sessions.c2.turn!.question)).toBe(true);
+    expect(ipc.askWorkspace).toHaveBeenCalledTimes(2);
+    expect(S().sessions.c2.turn?.status).toBe("waiting");
+  });
+});

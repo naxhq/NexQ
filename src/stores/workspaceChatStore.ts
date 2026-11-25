@@ -54,7 +54,7 @@ export interface Approval {
   closedReason?: string;
 }
 
-export type TurnStatus = "waiting" | "streaming" | "stopping" | "stopped" | "failed";
+export type TurnStatus = "waiting" | "streaming" | "stopping" | "stopped" | "failed" | "removed";
 
 /** The answer being written (or the one that stopped or failed), before it is saved. */
 export interface Turn {
@@ -168,6 +168,8 @@ const tokenBuffers = new Map<string, string>();
 const flushTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const approvalTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const stopTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** Answers that finished here, so a late access_changed can still take them back. */
+const finished = new Map<string, { chatId: string; messageId: number; question: string; deeper: boolean }>();
 const loadSeq = new Map<string, number>();
 const previewSeq = new Map<string, number>();
 const chatsSeq = new Map<string, number>();
@@ -263,7 +265,8 @@ export const useWorkspaceChatStore = create<ChatState>((set, get) => {
   };
   const patchTurn = (chatId: string, requestId: string, fn: (t: Turn) => Partial<Turn>) => {
     if (!turnOf(chatId, requestId)) return;
-    patchSession(set, chatId, (s) => (s.turn && s.turn.requestId === requestId ? { turn: { ...s.turn, ...fn(s.turn) } } : {}));
+    // A removed answer takes nothing more: late tokens, notes or reports of it are dropped.
+    patchSession(set, chatId, (s) => (s.turn && s.turn.requestId === requestId && s.turn.status !== "removed" ? { turn: { ...s.turn, ...fn(s.turn) } } : {}));
   };
 
   const flushTokens = (chatId: string, requestId: string) => {
@@ -321,6 +324,7 @@ export const useWorkspaceChatStore = create<ChatState>((set, get) => {
       created_at: turn.startedAt,
     };
     knownEmpty.delete(chatId);
+    finished.set(requestId, { chatId, messageId: message.id, question: turn.question, deeper: turn.deeper });
     patchSession(set, chatId, (s) => ({
       turn: null,
       messages: [...s.messages.filter((m) => m.id !== message.id), temp, message],
@@ -332,6 +336,55 @@ export const useWorkspaceChatStore = create<ChatState>((set, get) => {
       .find((c) => c.id === chatId);
     if (chat && DEFAULT_TITLE.test(chat.title.trim()) && !turn.deeper) void get().renameChat(chatId, titleFrom(turn.question));
     void reconcile(chatId, message.id);
+  };
+
+  /**
+   * Something the answer used left the workspace: nothing of it may stay. The text, the sources
+   * it named, its tool cards and the saved message (if it had already ended) are all dropped;
+   * only the question is kept, so it can be asked again.
+   */
+  const revokeAnswer = (chatId: string, requestId: string) => {
+    const timer = flushTimers.get(requestId);
+    if (timer) clearTimeout(timer);
+    flushTimers.delete(requestId);
+    tokenBuffers.delete(requestId);
+    const stop = stopTimers.get(requestId);
+    if (stop) clearTimeout(stop);
+    stopTimers.delete(requestId);
+    const live = turnOf(chatId, requestId);
+    if (live) {
+      settleApprovals(live.approvals);
+      patchTurn(chatId, requestId, () => ({ status: "removed", text: "", activity: [], report: null, approvals: [], error: null, errorKind: null, model: null }));
+      return;
+    }
+    const done = finished.get(requestId);
+    if (!done || done.chatId !== chatId) return;
+    finished.delete(requestId);
+    patchSession(set, chatId, (s) => {
+      const at = s.messages.findIndex((m) => m.id === done.messageId);
+      const questionAt = at > 0 && s.messages[at - 1].role === "user" ? at - 1 : -1;
+      const { [done.messageId]: _gone, ...extras } = s.extras;
+      return {
+        messages: s.messages.filter((_, i) => i !== at && i !== questionAt),
+        extras,
+        turn: {
+          requestId,
+          question: done.question,
+          deeper: done.deeper,
+          text: "",
+          model: null,
+          status: "removed",
+          activity: [],
+          report: null,
+          approvals: [],
+          error: null,
+          errorKind: null,
+          startedAt: Date.now(),
+        },
+      };
+    });
+    // The saved copy is gone on the backend too; reload so nothing of it reappears.
+    void reconcile(chatId);
   };
 
   const failTurn = (chatId: string, requestId: string, error: string, kind: WorkspaceChatErrorKind | null = null) => {
@@ -706,7 +759,7 @@ export const useWorkspaceChatStore = create<ChatState>((set, get) => {
     },
 
     // Used by the event handlers below.
-    ...(internal(set, get, { turnOf, patchTurn, flushTokens, finishOk, failTurn }) as object),
+    ...(internal(set, get, { turnOf, patchTurn, flushTokens, finishOk, failTurn, revokeAnswer }) as object),
   } as ChatState;
 });
 
@@ -779,6 +832,7 @@ function internal(
     flushTokens: (chatId: string, requestId: string) => void;
     finishOk: (chatId: string, requestId: string, message: WorkspaceMessage) => void;
     failTurn: (chatId: string, requestId: string, error: string, kind?: WorkspaceChatErrorKind | null) => void;
+    revokeAnswer: (chatId: string, requestId: string) => void;
   },
 ) {
   handlers = {
@@ -799,7 +853,7 @@ function internal(
     context: (e) => h.patchTurn(e.chat_id, e.request_id, () => ({ report: e.report })),
     end: (e) => {
       const t = h.turnOf(e.chat_id, e.request_id);
-      if (!t) return;
+      if (!t || t.status === "removed") return;
       h.flushTokens(e.chat_id, e.request_id);
       const stopTimer = stopTimers.get(e.request_id);
       if (stopTimer) clearTimeout(stopTimer);
@@ -815,7 +869,10 @@ function internal(
       }
       h.finishOk(e.chat_id, e.request_id, e.message);
     },
-    error: (e) => h.failTurn(e.chat_id, e.request_id, e.error, e.error_kind ?? null),
+    error: (e) => {
+      if (e.error_kind === "access_changed") return h.revokeAnswer(e.chat_id, e.request_id);
+      h.failTurn(e.chat_id, e.request_id, e.error, e.error_kind ?? null);
+    },
     approvalRefused: (e) => {
       const turn = get().sessions[e.chat_id]?.turn;
       if (!turn || (e.request_id && turn.requestId !== e.request_id)) return;
@@ -920,6 +977,7 @@ export function resetWorkspaceChatForTests() {
     m.clear();
   }
   tokenBuffers.clear();
+  finished.clear();
   loadSeq.clear();
   previewSeq.clear();
   chatsSeq.clear();

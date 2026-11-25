@@ -12,6 +12,7 @@ use serde_json::json;
 
 use super::errors::describe;
 use super::files::meeting_files;
+use super::guard::{AccessGuard, Used};
 use super::hub::{ChatHub, Permit, ToolContext, ToolPolicy};
 use super::scope_adapter::{self, ChatScope};
 use super::store::{self, ChatRow};
@@ -193,10 +194,17 @@ pub fn build(
         }
         Err(e) => return Err(e),
     };
+    let mut extra_notices: Vec<String> = extra_notices.to_vec();
     let depth_name = if deeper { "deep".to_string() } else { row.chat.depth.clone() };
     let depth = Depth::parse(&depth_name);
     let scope = scope_adapter::chat_scope(&conn, &row)?;
     let sizes = scope_adapter::indexed_sizes(&conn, &scope.search)?;
+    let (indexed, total) = scope_adapter::meeting_backlog(&conn, &scope.meetings);
+    if indexed < total {
+        extra_notices.push(format!(
+            "Still indexing: {indexed} of {total} meetings are searchable, so older meetings may be missing from this answer."
+        ));
+    }
 
     let meetings: Vec<MeetingEntry> = scope
         .meetings
@@ -303,7 +311,7 @@ pub fn build(
         )
         .as_bytes(),
     );
-    let report = report_of(&plan, &depth_name, estimate, extra_notices);
+    let report = report_of(&plan, &depth_name, estimate, &extra_notices);
     Ok(Assembled { plan, selection, chat: row, scope, system, user_text, history, report, fingerprint, cards: sizes.cards })
 }
 
@@ -489,6 +497,8 @@ pub async fn close_chat(deps: &ChatDeps, chat_id: &str) {
 // ── asking ───────────────────────────────────────────────────────────────────
 
 enum Outcome {
+    /// Something the answer used was taken away while it ran: stopped, nothing saved.
+    Revoked,
     Answered(WorkspaceMessage),
     Cancelled(String),
     Failed(String, &'static str),
@@ -552,6 +562,10 @@ async fn run_ask(deps: Arc<ChatDeps>, permit: Permit, chat_id: String, question:
             };
             deps.emit("workspace_chat_end", base(json!({ "message": placeholder, "cancelled": true })));
         }
+        Ok(Outcome::Revoked) => {
+            deps.tools.on_cancel(&chat_id);
+            deps.emit("workspace_chat_error", base(json!({ "error": super::guard::STOPPED, "error_kind": "access_changed" })))
+        }
         Ok(Outcome::Failed(message, kind)) => deps.emit("workspace_chat_error", base(json!({ "error": message, "error_kind": kind }))),
         Err(_) => deps.emit(
             "workspace_chat_error",
@@ -597,7 +611,8 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
     // At most two tries: the second only when the workspace changed while the
     // first was starting its session (the context is then built again).
     let mut attempt = 0;
-    let (a, result) = loop {
+    let mut started = false;
+    let (a, result, guard) = loop {
         attempt += 1;
         // the generation is read BEFORE the context is built
         let (gen_plain, gen_sources) = if cli {
@@ -612,9 +627,18 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
             Ok(a) => a,
             Err(e) => return fail(e),
         };
+        // From here on, what this answer was built from is watched.
+        let guard = match deps.conn() {
+            Ok(c) => Arc::new(AccessGuard::new(c, chat_id, Used::of_plan(&a.plan))),
+            Err(e) => return fail(e),
+        };
         // a session built from something that changed starts again
         if cli && deps.hub.fingerprint_changed(chat_id, &a.fingerprint) {
+            // the session ends, which moves the generation: read it and build again
+            // from there (this is not one of the two tries)
             close_chat_session(deps, chat_id).await;
+            attempt -= 1;
+            continue;
         }
         let mut req = AiRunRequest::new(AiPurpose::Chat, a.selection.clone(), &a.system, &a.user_text);
         let mut messages = a.history.clone();
@@ -641,13 +665,29 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
             capability_notes.push("This model can't use tools (MCP servers). It answers from the retrieved text only.".into());
         }
         a.report.notices.extend(capability_notes);
-        if attempt == 1 {
+        // Last look before anything is sent or shown: a revocation since the
+        // context was built means building it again (once), then stopping.
+        if !guard.ok() {
+            close_chat_session(deps, chat_id).await;
+            if attempt == 1 {
+                continue;
+            }
+            return Outcome::Revoked;
+        }
+        if !started {
+            started = true;
             deps.emit("workspace_chat_start", json!({ "chat_id": chat_id, "request_id": request_id, "model": a.selection.model }));
         }
         deps.emit("workspace_chat_context", json!({ "chat_id": chat_id, "request_id": request_id, "report": a.report }));
         let sink: crate::llm::provider::TokenSink = {
             let (deps, partial, chat, request) = (deps.clone(), partial.clone(), chat_id.to_string(), request_id.to_string());
+            let (guard, cancel) = (guard.clone(), permit.cancel.clone());
             Arc::new(move |token: &str| {
+                // every token is checked: nothing is shown after a revocation
+                if !guard.ok() {
+                    cancel.cancel();
+                    return;
+                }
                 partial.lock().unwrap().push_str(token);
                 deps.emit("workspace_chat_token", json!({ "chat_id": chat, "request_id": request, "token": token }));
             })
@@ -656,8 +696,13 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
         if attempt == 1 && matches!(&result, Err(e) if scope_changed(e)) && !permit.cancel.is_cancelled() {
             continue;
         }
-        break (a, result);
+        break (a, result, guard);
     };
+    // Revoked while it ran (or while the last token arrived): nothing is shown or saved.
+    if guard.revoked() || (result.is_ok() && !guard.ok()) {
+        close_chat_session(deps, chat_id).await;
+        return Outcome::Revoked;
+    }
     match result {
         Ok(res) => {
             if permit.cancel.is_cancelled() {
@@ -684,6 +729,11 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
                 })
                 .collect();
             let model = if res.model.is_empty() { a.selection.model.clone() } else { res.model.clone() };
+            // the last look, right before it is written
+            if !guard.ok() {
+                close_chat_session(deps, chat_id).await;
+                return Outcome::Revoked;
+            }
             let saved = deps.conn().and_then(|conn| {
                 store::save_answer(
                     &conn,

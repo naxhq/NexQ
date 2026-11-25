@@ -7,6 +7,7 @@
 pub mod approval;
 pub mod engine;
 pub mod errors;
+pub mod guard;
 pub mod files;
 pub mod hub;
 pub mod migrate;

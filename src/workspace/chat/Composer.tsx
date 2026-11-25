@@ -9,6 +9,8 @@ import { cn } from "../../lib/utils";
 import { COLUMN } from "./column";
 import { DEPTHS } from "./depths";
 import { CapabilityNotes } from "./CapabilityNotes";
+import { ReportNotices } from "./ReportNotices";
+import { IndexingNote } from "../IndexingNote";
 import { ModelPicker, PickerCaret } from "./ModelPicker";
 import { OptionsMenu } from "./OptionsMenu";
 import { ScopeControl } from "./ScopeControl";
@@ -216,6 +218,8 @@ export function Composer(p: ComposerProps) {
       {!caps && cap === "passages" && p.hasLibrary && (
         <Notice>{providerLabel(selection.provider)} can't open folders or use tools. It answers from the passages found in your meetings and documents.</Notice>
       )}
+      <ReportNotices notices={report?.notices} className="space-y-0.5" />
+      {!(report?.notices ?? []).some((n) => /^still indexing/i.test(n)) && <IndexingNote workspaceId={p.workspaceId} />}
       {smallWindow && report && <Notice>This model's window is small ({report.window.toLocaleString()} tokens), so answers see less of your material.</Notice>}
     </div>
   );

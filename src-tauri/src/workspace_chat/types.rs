@@ -125,6 +125,23 @@ pub struct IndexStatus {
     pub last_indexed_at: Option<i64>,
 }
 
+/// What a search result page says about the index it searched.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IndexingNote {
+    /// Meetings of the workspace the index holds.
+    pub done: usize,
+    pub total: usize,
+    /// "Still indexing: 120 of 300 meetings are searchable ..." for the UI to show.
+    pub note: String,
+}
+
+/// `search_workspace_page`: the hits and, while the index is catching up, a note.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SearchPage {
+    pub passages: Vec<crate::workspace_search::Passage>,
+    pub indexing: Option<IndexingNote>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IndexProgressEvent {
     pub workspace_id: String,

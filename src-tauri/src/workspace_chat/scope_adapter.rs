@@ -188,6 +188,26 @@ pub fn indexed_text(conn: &Connection, kind: &str, ref_id: &str, sub_ref: Option
     }
 }
 
+/// How many of these meetings the index already holds, and how many there
+/// are: `(indexed, total)`. A meeting counts as indexed once the indexer has
+/// recorded it (also when it has no text or could not be read).
+pub fn meeting_backlog(conn: &Connection, meetings: &[HomeMeeting]) -> (usize, usize) {
+    let total = meetings.len();
+    if total == 0 {
+        return (0, 0);
+    }
+    let ids = serde_json::to_string(&meetings.iter().map(|m| m.id.as_str()).collect::<Vec<_>>()).unwrap_or_else(|_| "[]".into());
+    let indexed: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM search_sources WHERE kind = 'transcript' AND sub_ref = ''
+             AND status IN ('ok', 'error') AND ref_id IN (SELECT value FROM json_each(?1))",
+            params![ids],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    ((indexed as usize).min(total), total)
+}
+
 /// Ids of the meetings in `scope` that are indexed (for the fingerprint).
 pub fn meeting_signature(conn: &Connection, ids: &[String]) -> String {
     let mut set: Vec<&String> = ids.iter().collect();

@@ -9,6 +9,7 @@ import { classifyChatError } from "./errors";
 import { citationKindName, citationWhere } from "./citations";
 import { Prose, type OpenCitation } from "./Prose";
 import { ApprovalCard } from "./ApprovalCard";
+import { ReportNotices } from "./ReportNotices";
 import { AnswerActions } from "./AnswerActions";
 import { ModelPicker, PickerCaret } from "./ModelPicker";
 import { formatTokens } from "../../voiceprint";
@@ -170,6 +171,7 @@ export const SavedTurn = memo(function SavedTurn({
             </ul>
           )}
           <SourcesDisclosure citations={answer.citations} activity={extras?.activity ?? []} onOpen={ctx.onOpenCitation} />
+          <ReportNotices notices={answer.context?.notices} />
           {missed > 0 && (
             <p className="ui-meta mt-2 text-muted-foreground">
               {missed} {missed === 1 ? "thing" : "things"} didn't fit.{" "}
@@ -265,17 +267,23 @@ export function LiveTurn({ turn, ctx, onDismiss }: { turn: Turn; ctx: TurnContex
         </ul>
       )}
       <Notices activity={turn.activity} />
+      <ReportNotices notices={turn.report?.notices} />
       {turn.status === "failed" && turn.error !== null && <ErrorBlock error={turn.error} turn={turn} ctx={ctx} />}
-      {turn.status !== "failed" && (
+      {turn.status === "removed" && (
+        <p role="status" className="ui-body mt-2 text-muted-foreground">
+          Something this answer used was moved out of this workspace, so it was stopped.
+        </p>
+      )}
+      {turn.status !== "failed" && turn.status !== "removed" && (
         <p role="status" className="ui-meta mt-2 flex min-h-[1.1rem] items-center gap-2 text-muted-foreground">
           {active && <span aria-hidden="true" className="inline-block h-3.5 w-0.5 bg-foreground/70 motion-safe:animate-pulse" />}
           <span>{status}</span>
           {turn.model && active && <span className="text-muted-foreground/80">{turn.model}</span>}
         </p>
       )}
-      {(turn.status === "stopped" || turn.status === "failed") && (
+      {(turn.status === "stopped" || turn.status === "failed" || turn.status === "removed") && (
         <div className="-ml-2 mt-1 flex gap-1">
-          {turn.status === "stopped" && (
+          {(turn.status === "stopped" || turn.status === "removed") && (
             <Button variant="ghost" size="sm" onClick={() => ctx.onAsk(turn.question, { deeper: turn.deeper })} className="ui-meta">
               Ask again
             </Button>

@@ -38,6 +38,9 @@ enum Step {
     Fail(fn() -> LLMError),
     UntilCancelled,
     Panic,
+    /// Streams `tokens`, runs `hook` after the first `after` of them (0 = before the
+    /// first, tokens.len() = after the last), then goes on and finishes.
+    Hooked { tokens: Vec<&'static str>, after: usize, hook: Arc<dyn Fn() + Send + Sync> },
 }
 
 struct FakeApi {
@@ -93,6 +96,21 @@ impl ApiBackend for FakeApi {
                 Err(LLMError::Cancelled)
             }
             Step::Panic => panic!("the network layer crashed"),
+            Step::Hooked { tokens, after, hook } => {
+                for (i, t) in tokens.iter().enumerate() {
+                    if i == after {
+                        hook();
+                    }
+                    if let Some(s) = &sink {
+                        s(t);
+                    }
+                    tokio::task::yield_now().await;
+                }
+                if after >= tokens.len() {
+                    hook();
+                }
+                Ok(CompletionStats { prompt_tokens: 50, completion_tokens: 5, total_tokens: 55, ..Default::default() })
+            }
         }
     }
 
@@ -1237,4 +1255,297 @@ async fn a_passage_at_zero_milliseconds_keeps_its_time_in_the_ladder_too() {
     assert!(of_m07.len() >= 2, "{of_m07:?}");
     assert!(of_m07.iter().any(|c| c["start_ms"] == 0), "the passage at 0 ms keeps its time: {of_m07:?}");
     assert!(of_m07.iter().any(|c| c["start_ms"].is_null()), "the recap card has no time");
+}
+
+// ── revocation while an answer runs ───────────────────────────────────────────
+
+#[derive(Clone, Copy, Debug)]
+enum Revoke {
+    MoveMeeting,
+    DeleteMeeting,
+    UnfileDocument,
+    DeleteDocument,
+}
+
+const MEETING_CANARY: &str = "CANARYMEET";
+const DOC_CANARY: &str = "CANARYDOC";
+
+fn canary_of(what: Revoke) -> &'static str {
+    match what {
+        Revoke::MoveMeeting | Revoke::DeleteMeeting => MEETING_CANARY,
+        Revoke::UnfileDocument | Revoke::DeleteDocument => DOC_CANARY,
+    }
+}
+
+impl Rig {
+    /// A workspace with one meeting and one document that both mention the
+    /// secret and that the answer will use.
+    fn with_secrets(&self) {
+        self.meeting("m-secret", "Secret meeting", 9, &["CANARYMEET Kestrel budget is huge", "more CANARYMEET words"]);
+        self.meeting("m1", "Kestrel planning", 5, &budget_lines());
+        let conn = self.conn();
+        let res = crate::context::ContextResource {
+            id: "d-secret".into(), name: "secret.txt".into(), file_type: "txt".into(), file_path: "x".into(), size_bytes: 3,
+            token_count: 2, preview: "p".into(), loaded_at: "now".into(), status: "ready".into(),
+        };
+        crate::workspace::documents::add_document(&conn, &res, "CANARYDOC Kestrel budget handbook", Some(&self.ws)).unwrap();
+        drop(conn);
+        self.index();
+    }
+
+    /// The change, made through a connection of its own the way a command would.
+    fn revoker(&self, what: Revoke) -> Arc<dyn Fn() + Send + Sync> {
+        let (path, ws) = (self.deps.db_path.clone(), self.ws.clone());
+        Arc::new(move || {
+            let conn = crate::db::open_writer(&path).unwrap();
+            match what {
+                Revoke::MoveMeeting => {
+                    let other = new_ws(&conn, &format!("Elsewhere {}", uuid::Uuid::new_v4()), false, false);
+                    crate::workspace::meetings::move_meeting_atomic(&conn, "m-secret", &other).unwrap();
+                }
+                Revoke::DeleteMeeting => {
+                    let tx = conn.unchecked_transaction().unwrap();
+                    crate::workspace::purge::purge_meeting(&tx, "m-secret").unwrap();
+                    tx.commit().unwrap();
+                }
+                Revoke::UnfileDocument => {
+                    crate::workspace::store::remove_item(&conn, &ws, crate::workspace::types::ItemKind::Document, "d-secret").unwrap();
+                }
+                Revoke::DeleteDocument => crate::workspace::documents::remove_document(&conn, "d-secret").unwrap(),
+            }
+        })
+    }
+
+    fn tokens_shown(&self) -> Vec<String> {
+        self.events_named("workspace_chat_token").iter().map(|e| e["token"].as_str().unwrap().to_string()).collect()
+    }
+}
+
+const ALL: [Revoke; 4] = [Revoke::MoveMeeting, Revoke::DeleteMeeting, Revoke::UnfileDocument, Revoke::DeleteDocument];
+
+#[tokio::test]
+async fn a_revocation_mid_stream_stops_the_answer_and_nothing_after_it_is_shown_or_saved() {
+    for what in ALL {
+        let rig = Rig::new();
+        rig.with_secrets();
+        let chat = rig.chat();
+        // the prompt really carries the secret (otherwise finishing would be right)
+        rig.api.push(Step::Hooked {
+            tokens: vec!["The ", "budget ", "is ", "5k ", "[S1] ", "and ", "more ", "words."],
+            after: 3,
+            hook: rig.revoker(what),
+        });
+        rig.ask(&chat, "What is the Kestrel budget?").await;
+        assert!(rig.api.sent(0).contains(canary_of(what)), "{what:?}: the revoked material was part of the prompt");
+        let errors = rig.events_named("workspace_chat_error");
+        assert_eq!(errors.len(), 1, "{what:?}: {errors:?}");
+        assert_eq!(errors[0]["error_kind"], "access_changed", "{what:?}");
+        assert!(rig.events_named("workspace_chat_end").is_empty(), "{what:?}: no answer is delivered");
+        assert_eq!(rig.tokens_shown(), vec!["The ", "budget ", "is "], "{what:?}: nothing after the change is shown");
+        assert!(store::list_messages(&rig.conn(), &chat).unwrap().is_empty(), "{what:?}: nothing is saved");
+        assert_eq!(rig.deps.hub.running(), 0);
+        // and the next question is answered without the revoked material
+        rig.api.push(Step::Text("Fine [S1].".into()));
+        rig.ask(&chat, "What is the Kestrel budget now?").await;
+        assert!(!rig.api.sent(1).contains(canary_of(what)), "{what:?}: the next prompt has none of it");
+        let saved = store::list_messages(&rig.conn(), &chat).unwrap();
+        assert_eq!(saved.len(), 2);
+        let gone = if matches!(what, Revoke::MoveMeeting | Revoke::DeleteMeeting) { "m-secret" } else { "d-secret" };
+        assert!(saved[1].citations.iter().all(|c| c.ref_id != gone), "{what:?}: the revoked source is not cited");
+    }
+}
+
+#[tokio::test]
+async fn a_revocation_after_the_last_token_but_before_the_save_saves_nothing() {
+    for what in ALL {
+        let rig = Rig::new();
+        rig.with_secrets();
+        let chat = rig.chat();
+        let tokens = vec!["Done ", "[S1] ", "[S2] ", "[S3]."];
+        rig.api.push(Step::Hooked { after: tokens.len(), tokens, hook: rig.revoker(what) });
+        rig.ask(&chat, "What is the Kestrel budget?").await;
+        assert!(rig.api.sent(0).contains(canary_of(what)));
+        assert_eq!(rig.events_named("workspace_chat_error")[0]["error_kind"], "access_changed", "{what:?}");
+        assert!(rig.events_named("workspace_chat_end").is_empty(), "{what:?}");
+        assert!(store::list_messages(&rig.conn(), &chat).unwrap().is_empty(), "{what:?}: nothing saved, nothing cited");
+        let raw: i64 = rig.conn().query_row("SELECT COUNT(*) FROM workspace_messages", [], |r| r.get(0)).unwrap();
+        assert_eq!(raw, 0);
+    }
+}
+
+#[tokio::test]
+async fn a_revocation_before_the_first_token_stops_it_before_anything_is_shown() {
+    for what in ALL {
+        let rig = Rig::new();
+        rig.with_secrets();
+        let chat = rig.chat();
+        rig.api.push(Step::Hooked { tokens: vec!["Hello ", "there."], after: 0, hook: rig.revoker(what) });
+        rig.ask(&chat, "What is the Kestrel budget?").await;
+        assert_eq!(rig.events_named("workspace_chat_error")[0]["error_kind"], "access_changed", "{what:?}");
+        assert!(rig.tokens_shown().is_empty(), "{what:?}: not one token was shown");
+        assert!(store::list_messages(&rig.conn(), &chat).unwrap().is_empty());
+    }
+}
+
+/// Runs the change from inside the launch of a CLI chat: after the context was
+/// built and before the prompt is sent.
+struct RevokeAtLaunch {
+    inner: ApprovalToolPolicy,
+    hook: Arc<dyn Fn() + Send + Sync>,
+    fired: AtomicBool,
+}
+
+impl ToolPolicy for RevokeAtLaunch {
+    fn adjust_launch(&self, ctx: &ToolContext, launch: &mut crate::llm::cli_agent::command::SourcesLaunch) {
+        if !self.fired.swap(true, Ordering::SeqCst) {
+            (self.hook)();
+        }
+        self.inner.adjust_launch(ctx, launch);
+    }
+    fn before_run(&self, ctx: &ToolContext) {
+        self.inner.before_run(ctx);
+    }
+}
+
+#[tokio::test]
+async fn a_revocation_before_the_prompt_is_sent_builds_the_context_again_without_it() {
+    for what in [Revoke::MoveMeeting, Revoke::DeleteMeeting] {
+        let hook_cell: Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>> = Arc::default();
+        let cell = hook_cell.clone();
+        let rig = Rig::with_tools(Some(Box::new(move |cli| {
+            let inner = ApprovalToolPolicy::new(cli, Arc::new(WorkspaceApprovals::new()), Arc::default(), Arc::new(|_| ApprovalSupport::Supported));
+            struct Late(Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>);
+            impl Late {
+                fn call(&self) {
+                    if let Some(h) = self.0.lock().unwrap().clone() {
+                        h();
+                    }
+                }
+            }
+            let late = Arc::new(Late(cell));
+            let l2 = late.clone();
+            Arc::new(RevokeAtLaunch { inner, hook: Arc::new(move || l2.call()), fired: AtomicBool::new(false) })
+        })));
+        rig.with_secrets();
+        *hook_cell.lock().unwrap() = Some(rig.revoker(what));
+        *rig.selection.lock().unwrap() = ModelSelection::new("claude_cli", "", None);
+        let chat = store::create_chat(&rig.conn(), &rig.ws, Some("claude_cli"), None, None).unwrap().id;
+        rig.ask(&chat, "What is the Kestrel budget?").await;
+        assert!(rig.events_named("workspace_chat_error").is_empty(), "{what:?}: {:?}", rig.events_named("workspace_chat_error"));
+        // the prompt that was sent is the second one, built after the change
+        let spawned = rig.spawner.spawned.lock().unwrap();
+        let asked: Vec<String> = spawned.iter().flat_map(|(_, s)| s.asked.lock().unwrap().clone()).collect();
+        assert_eq!(asked.len(), 1, "{what:?}: one prompt was sent");
+        assert!(!asked[0].contains(MEETING_CANARY), "{what:?}: the revoked meeting is not in it");
+        assert!(spawned.iter().all(|(c, _)| !c.system_prompt.contains(MEETING_CANARY)));
+        drop(spawned);
+        // nor in the transcripts folder the session may read
+        if let Some(dir) = rig.deps.transcripts.dir_for(&chat) {
+            for e in std::fs::read_dir(dir).unwrap() {
+                let text = std::fs::read_to_string(e.unwrap().path()).unwrap();
+                assert!(!text.contains(MEETING_CANARY), "{what:?}: the folder still holds the revoked meeting");
+            }
+        }
+        let saved = store::list_messages(&rig.conn(), &chat).unwrap();
+        assert_eq!(saved.len(), 2);
+        assert!(saved[1].citations.iter().all(|c| c.ref_id != "m-secret"));
+        assert_eq!(rig.events_named("workspace_chat_start").len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn a_meeting_that_was_not_part_of_the_prompt_does_not_stop_the_answer() {
+    let rig = Rig::new();
+    rig.with_secrets();
+    // an unrelated meeting of the workspace that is not among this answer's material: excluded for the chat
+    rig.meeting("m-other", "Other talk", 12, &["Lunch plans only"]);
+    rig.index();
+    let chat = rig.chat();
+    store::set_item_pref(&rig.conn(), &chat, "meeting", "m-other", Some("exclude")).unwrap();
+    let path = rig.deps.db_path.clone();
+    let hook: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        let conn = crate::db::open_writer(&path).unwrap();
+        let other = new_ws(&conn, "Elsewhere", false, false);
+        crate::workspace::meetings::move_meeting_atomic(&conn, "m-other", &other).unwrap();
+    });
+    rig.api.push(Step::Hooked { tokens: vec!["All ", "good ", "[S1]."], after: 1, hook });
+    rig.ask(&chat, "What is the Kestrel budget?").await;
+    assert!(!rig.api.sent(0).contains("Lunch plans"), "it was never in the prompt");
+    assert!(rig.events_named("workspace_chat_error").is_empty());
+    assert_eq!(rig.events_named("workspace_chat_end")[0]["cancelled"], false);
+    assert_eq!(store::list_messages(&rig.conn(), &chat).unwrap().len(), 2);
+}
+
+// ── the index backlog ─────────────────────────────────────────────────────────
+
+fn backlog_rig(n: u32) -> Rig {
+    let rig = Rig::new();
+    for i in 0..n {
+        rig.meeting(&format!("m{i:03}"), &format!("Meeting {i}"), 1 + i % 28, &[&format!("Topic {i} about the lynx programme.")]);
+    }
+    // spread the dates so "newest first" is a real order
+    rig.conn().execute("UPDATE meetings SET start_time = printf('2026-%02d-%02dT10:00:00Z', 1 + (CAST(substr(id, 2) AS INTEGER) / 28) % 12, 1 + CAST(substr(id, 2) AS INTEGER) % 28)", []).unwrap();
+    rig
+}
+
+#[tokio::test]
+async fn an_upgraded_database_reports_indexing_from_the_first_moment_until_the_backlog_is_done() {
+    let rig = backlog_rig(300);
+    // before the indexer exists at all
+    let reader = ops::reader(&rig.deps.db_path).unwrap();
+    let st = ops::index_status(&reader, &rig.deps.hub, &rig.ws, false).unwrap();
+    assert_eq!((st.state.as_str(), st.done, st.total), ("indexing", 0, 300));
+    let st = ops::index_status(&reader, &rig.deps.hub, &rig.ws, true).unwrap();
+    assert_eq!(st.state, "paused", "a running meeting holds it, and it says so");
+    // searching says it is still indexing
+    let page = ops::search_workspace_page(&reader, &rig.ws, "lynx programme", None, 5).unwrap();
+    assert!(page.passages.is_empty());
+    let note = page.indexing.expect("a note while the backlog exists");
+    assert_eq!((note.done, note.total), (0, 300));
+    assert!(note.note.contains("0 of 300") && note.note.contains("newest"), "{}", note.note);
+    // newest first: stop after 40 meetings and look at which ones are in
+    let ctl = RunControl::idle();
+    let c2 = ctl.clone();
+    let ticks = std::cell::Cell::new(0);
+    let mut conn = rig.conn();
+    let prov = super::provider::WorkspaceIndexProvider { db_path: rig.deps.db_path.clone(), sources: rig.sources.clone() };
+    let r = run_pass(&mut conn, &prov, &ctl, &|_| {
+        ticks.set(ticks.get() + 1);
+        if ticks.get() == 40 {
+            c2.cancel();
+        }
+    });
+    assert!(r.cancelled);
+    let st = ops::index_status(&reader, &rig.deps.hub, &rig.ws, false).unwrap();
+    assert_eq!((st.state.as_str(), st.done, st.total), ("indexing", 40, 300));
+    let indexed: Vec<String> = conn
+        .prepare("SELECT ref_id FROM search_sources WHERE kind = 'transcript'")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    let newest: Vec<String> = conn
+        .prepare("SELECT id FROM meetings ORDER BY start_time DESC, id LIMIT 40")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    let mut a = indexed.clone();
+    a.sort();
+    let mut b = newest.clone();
+    b.sort();
+    assert_eq!(a, b, "the 40 newest meetings were indexed first");
+    // a question meanwhile says so
+    let chat = rig.chat();
+    rig.ask(&chat, "What about the lynx programme?").await;
+    let notices = rig.events_named("workspace_chat_end")[0]["message"]["context"]["notices"].to_string();
+    assert!(notices.contains("Still indexing: 40 of 300"), "{notices}");
+    // done: idle, no note
+    ctl.reset_cancel();
+    run_pass(&mut conn, &prov, &ctl, &|_| {});
+    let st = ops::index_status(&reader, &rig.deps.hub, &rig.ws, false).unwrap();
+    assert_eq!(st.state, "idle");
+    assert!(ops::search_workspace_page(&reader, &rig.ws, "lynx programme", None, 5).unwrap().indexing.is_none());
 }

@@ -25,12 +25,36 @@ pub async fn search_workspace(
     ops::search_workspace(&conn, &id, &query, kinds, limit.unwrap_or(10))
 }
 
+/// Search with a note while the index is still catching up.
+#[command]
+pub async fn search_workspace_page(
+    id: String,
+    query: String,
+    kinds: Option<Vec<String>>,
+    limit: Option<usize>,
+    state: State<'_, AppState>,
+) -> Result<SearchPage, String> {
+    let path = with_conn(&state, |c| Ok(c.path().map(std::path::PathBuf::from)))?
+        .ok_or_else(|| "Database not initialized".to_string())?;
+    let conn = ops::reader(&path)?;
+    let page = ops::search_workspace_page(&conn, &id, &query, kinds, limit.unwrap_or(10))?;
+    if page.indexing.is_some() {
+        runtime::material_changed(&state.workspace_chat); // starts the indexer now if it is not running
+    }
+    Ok(page)
+}
+
 #[command]
 pub async fn get_index_status(id: String, state: State<'_, AppState>) -> Result<IndexStatus, String> {
     let active = state.meeting_active.load(std::sync::atomic::Ordering::SeqCst);
     let hub = state.workspace_chat.clone();
     hub.set_open_workspace(Some(id.clone()));
-    with_conn(&state, |conn| ops::index_status(conn, &hub, &id, active))
+    let status = with_conn(&state, |conn| ops::index_status(conn, &hub, &id, active))?;
+    // a backlog with no indexer yet (just after an upgrade): start it now, not after the start delay
+    if status.state == "indexing" && hub.indexer().is_none() {
+        runtime::material_changed(&hub);
+    }
+    Ok(status)
 }
 
 /// Scan this workspace's material again now, and (when the workspace turned
@@ -83,8 +107,14 @@ pub async fn create_workspace_chat(workspace_id: String, state: State<'_, AppSta
 }
 
 #[command]
-pub async fn update_workspace_chat(id: String, patch: WorkspaceChatPatch, state: State<'_, AppState>) -> Result<WorkspaceChat, String> {
-    with_conn(&state, |conn| store::update_chat(conn, &id, patch))
+pub async fn update_workspace_chat(id: String, patch: WorkspaceChatPatch, state: State<'_, AppState>, app: AppHandle) -> Result<WorkspaceChat, String> {
+    // Only "include meetings" changes what the chat may use; a title, a model or
+    // a depth never touches its session.
+    let ws = with_conn(&state, |conn| Ok(store::get_chat(conn, &id)?.map(|c| c.chat.workspace_id))).unwrap_or(None).unwrap_or_default();
+    let matters = patch.include_meetings.is_some();
+    change_and_restart(&state, &app, |_| if matters { Touch::chats(&ws) } else { Touch::none() }, || {
+        with_conn(&state, |conn| store::update_chat(conn, &id, patch))
+    })
 }
 
 #[command]
@@ -110,8 +140,11 @@ pub async fn set_chat_meeting_included(
     // Taking a meeting out of a chat takes effect for its next request and
     // drops its CLI session (and its transcripts folder) at once, like any
     // other change of access.
+    // The workspace-wide choice (no chat) also decides which meetings the live
+    // brief and answers of that workspace may read: meetings and chats both.
     let ws = workspace_id.clone();
-    change_and_restart(&state, &app, |_| Touch::chats(&ws), || {
+    let workspace_wide = chat_id.is_none();
+    change_and_restart(&state, &app, |_| if workspace_wide { Touch::ws(&ws) } else { Touch::chats(&ws) }, || {
         with_conn(&state, |conn| store::set_meeting_included(conn, &workspace_id, chat_id.as_deref(), &meeting_id, included))
     })
 }

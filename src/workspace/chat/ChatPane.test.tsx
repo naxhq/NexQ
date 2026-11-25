@@ -605,3 +605,36 @@ describe("composer structure", () => {
     expect(box.style.height).toBe("24px");
   });
 });
+
+describe("access changed and notices", () => {
+  it("shows a calm note and Ask again, and nothing of the answer", async () => {
+    setup();
+    const box = await typeQuestion("What did Dana say?");
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(ipc.askWorkspace).toHaveBeenCalled());
+    const id = ipc.askWorkspace.mock.calls[0][2] as string;
+    emit("workspace_chat_token", { chat_id: "c1", request_id: id, token: "Secret partial text" });
+    await screen.findByText("Secret partial text");
+    emit("workspace_chat_error", { chat_id: "c1", request_id: id, error: "moved", error_kind: "access_changed" });
+    expect(await screen.findByText("Something this answer used was moved out of this workspace, so it was stopped.")).toBeInTheDocument();
+    expect(screen.queryByText(/Secret partial text/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save to library" })).toBeNull();
+    expect(screen.getByText("What did Dana say?")).toBeInTheDocument();
+    ipc.askWorkspace.mockClear();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Ask again" }));
+    await waitFor(() => expect(ipc.askWorkspace).toHaveBeenCalledWith("c1", "What did Dana say?", expect.any(String), false));
+  });
+
+  it("keeps an indexing note with the answer, next to Search deeper, and before asking", async () => {
+    const r = { ...report, estimate: false, omitted: 2, notices: ["Still indexing 312 of 540 files"], bars: [] };
+    ipc.previewChatContext.mockResolvedValue({ ...report, notices: ["Still indexing 312 of 540 files"] });
+    setup({ chats: [chat("c1")], messages: [message(1, "user", "Q1"), message(2, "assistant", "A1", { context: r as never })] });
+    expect(await screen.findAllByText("Still indexing 312 of 540 files")).not.toHaveLength(0);
+    expect(await screen.findByText(/2 things didn't fit/)).toBeInTheDocument();
+    // with the answer, and in the composer's notes before asking
+    await waitFor(() => expect(screen.getAllByText("Still indexing 312 of 540 files").length).toBeGreaterThanOrEqual(2));
+    await userEvent.setup().click(screen.getByRole("button", { name: "Search deeper" }));
+    expect(screen.getAllByText("Still indexing 312 of 540 files").length).toBeGreaterThanOrEqual(1);
+  });
+});

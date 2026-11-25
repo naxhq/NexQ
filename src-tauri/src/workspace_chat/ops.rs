@@ -32,6 +32,28 @@ pub fn search_workspace(
     search::search(conn, &scope, query, &kinds, limit.clamp(1, MAX_RESULTS))
 }
 
+/// The note for a workspace whose meetings are not all indexed yet.
+pub fn indexing_note(conn: &Connection, workspace_id: &str) -> Result<Option<IndexingNote>, String> {
+    let meetings = scope_adapter::home_meetings(conn, workspace_id)?;
+    let (done, total) = scope_adapter::meeting_backlog(conn, &meetings);
+    Ok((done < total).then(|| IndexingNote {
+        done,
+        total,
+        note: format!("Still indexing: {done} of {total} meetings are searchable. The newest come first, so older ones may be missing for now."),
+    }))
+}
+
+/// Search with what the index knows about itself: hits plus the note.
+pub fn search_workspace_page(
+    conn: &Connection,
+    workspace_id: &str,
+    query: &str,
+    kinds: Option<Vec<String>>,
+    limit: usize,
+) -> Result<SearchPage, String> {
+    Ok(SearchPage { passages: search_workspace(conn, workspace_id, query, kinds, limit)?, indexing: indexing_note(conn, workspace_id)? })
+}
+
 /// What the library page shows about the index of a workspace.
 pub fn index_status(conn: &Connection, hub: &ChatHub, workspace_id: &str, meeting_active: bool) -> Result<IndexStatus, String> {
     let scope = scope_adapter::workspace_search_scope(conn, workspace_id)?;
@@ -58,14 +80,22 @@ pub fn index_status(conn: &Connection, hub: &ChatHub, workspace_id: &str, meetin
         }
     }
     let last: Option<i64> = conn.query_row("SELECT MAX(indexed_at) FROM search_sources", [], |r| r.get(0)).unwrap_or(None);
+    // The backlog is read from the database, so it shows from the first moment
+    // (also before the indexer thread has started) and until it is done.
+    let meetings_all = scope_adapter::home_meetings(conn, workspace_id)?;
+    let (m_done, m_total) = scope_adapter::meeting_backlog(conn, &meetings_all);
     let p = hub.progress();
-    let busy = p.total > 0 && p.done < p.total;
+    let (done, total, busy) = if m_done < m_total {
+        (m_done, m_total, true)
+    } else {
+        (p.done, p.total, p.total > 0 && p.done < p.total)
+    };
     let state = match (busy, meeting_active) {
         (true, true) => "paused",
         (true, false) => "indexing",
         _ => "idle",
     };
-    Ok(IndexStatus { workspace_id: workspace_id.into(), state: state.into(), done: p.done, total: p.total, passages, skipped, last_indexed_at: last })
+    Ok(IndexStatus { workspace_id: workspace_id.into(), state: state.into(), done, total, passages, skipped, last_indexed_at: last })
 }
 
 // ── answers into the library and the instructions ───────────────────────────
