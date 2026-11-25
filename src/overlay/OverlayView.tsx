@@ -78,7 +78,6 @@ let lastDockMeeting: string | null = null;
 // ════════════════════════════════════════════════════════════════
 export function OverlayView() {
   const activeMeeting = useMeetingStore((s) => s.activeMeeting);
-  const elapsedMs = useMeetingStore((s) => s.elapsedMs);
   const recordingEnabled = useConfigStore((s) => s.recordingEnabled);
   const audioMode = useMeetingStore((s) => s.audioMode);
   const endMeetingFlow = useMeetingStore((s) => s.endMeetingFlow);
@@ -396,9 +395,7 @@ export function OverlayView() {
             {scenarioName}
           </span>
           {meetingId && <MeetingWorkspaceChip meetingId={meetingId} />}
-          <span className="text-xs text-muted-foreground/60 tabular-nums font-medium">
-            {elapsedMs > 0 ? formatDuration(elapsedMs) : "00:00"}
-          </span>
+          <ElapsedClock />
         </div>
 
         <div className="flex flex-wrap items-center justify-end gap-1">
@@ -532,6 +529,19 @@ export function OverlayView() {
         <ServiceStatusBar compact />
       </div>
     </div>
+  );
+}
+
+/**
+ * The meeting clock: the one thing that ticks every second. It subscribes to the
+ * elapsed time itself, so only this text node updates (the window does not re-render).
+ */
+function ElapsedClock() {
+  const elapsedMs = useMeetingStore((s) => s.elapsedMs);
+  return (
+    <span className="text-xs text-muted-foreground/60 tabular-nums font-medium">
+      {elapsedMs > 0 ? formatDuration(elapsedMs) : "00:00"}
+    </span>
   );
 }
 

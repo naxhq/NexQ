@@ -49,8 +49,12 @@ export function DockLayer({ geo, panels, panelIds, lastRects, hiddenOrInactive }
               style={rectStyle(rect)}
               ref={(el) => {
                 if (!el) return;
-                if (hiddenOrInactive(p)) el.setAttribute("inert", "");
-                else el.removeAttribute("inert");
+                // Only touch the DOM when it changes (a no-op write still queues a mutation and style work).
+                const off = hiddenOrInactive(p);
+                if (off !== el.hasAttribute("inert")) {
+                  if (off) el.setAttribute("inert", "");
+                  else el.removeAttribute("inert");
+                }
               }}
             >
               {panels[p].node}

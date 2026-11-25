@@ -70,6 +70,10 @@ interface MeetingState {
 
   // Launcher detail view (past meeting selected for viewing)
   selectedMeetingId: string | null;
+  /** A moment of the selected meeting to open on (from a citation); `nonce` makes asking twice work. */
+  selectedMeetingMoment: { ms: number; nonce: number } | null;
+  /** Open a past meeting, on the Transcript at `ms` (0 included) when given. */
+  openMeetingAt: (id: string, ms?: number | null) => void;
 
   // Actions
   setCurrentView: (view: AppView) => void;
@@ -125,6 +129,9 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   overlayHidden: false,
   overlayMeetingId: null,
   selectedMeetingId: null,
+  selectedMeetingMoment: null,
+  openMeetingAt: (id, ms) =>
+    set({ selectedMeetingId: id, selectedMeetingMoment: typeof ms === "number" && ms >= 0 ? { ms, nonce: Date.now() + Math.random() } : null }),
   meetingStarting: false,
 
   setOverlayMeetingId: (id) => set({ overlayMeetingId: id }),
@@ -161,7 +168,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     const next = !useMeetingStore.getState().overlayHidden;
     set({ overlayHidden: next });
   },
-  setSelectedMeetingId: (id) => set({ selectedMeetingId: id }),
+  setSelectedMeetingId: (id) => set({ selectedMeetingId: id, selectedMeetingMoment: null }),
 
   startMeetingFlow: async (title?: string, audioMode?: AudioMode, scenario?: AIScenario, options?: StartMeetingOptions) => {
     startingFlows += 1;

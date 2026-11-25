@@ -20,6 +20,7 @@ import {
 } from "../follow";
 import { docBlocks, type TpDoc } from "../doc/model";
 import type { BlockState } from "../reader/DocView";
+import { useShown } from "../../overlay/useShown";
 import { useJumpOffers } from "./useJumpOffers";
 import { useNoteMeasure } from "./useNoteMeasure";
 import { useSpokenHighlight } from "./useSpokenHighlight";
@@ -157,6 +158,9 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     layoutKey: [index, reading.fontSize, reading.lineSpacing],
   });
 
+  // A hidden panel or background tab does no work: no frame loop, no polling.
+  const shown = useShown(scrollRef);
+
   // -- the user's voice --------------------------------------------------------------------
 
   const publishVoiceState = useCallback(() => {
@@ -192,12 +196,12 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
       if (bridge.current.push(s.segments) > 0) publishVoiceState();
     });
     // "paused" is the absence of speech: nothing arrives, so look again now and then
-    const tick = wantVoice ? setInterval(publishVoiceState, 700) : null;
+    const tick = wantVoice && shown ? setInterval(publishVoiceState, 700) : null;
     return () => {
       unsub();
       if (tick) clearInterval(tick);
     };
-  }, [wantVoice, wantSaid, publishVoiceState, noteKey]);
+  }, [wantVoice, wantSaid, publishVoiceState, noteKey, shown]);
 
   // -- scroll mode and the frame loop ---------------------------------------------------------
 
@@ -233,6 +237,19 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
   );
 
   useEffect(() => {
+    // The mode is kept in step even when no frames run (a stopped loop must still switch the controller off).
+    const syncMode = (el: HTMLElement | null) => {
+      const want = effRef.current;
+      if (modeRef.current === want) return;
+      modeRef.current = want;
+      ctrl.current.setMode(want);
+      if (want === "wpm" && el) ctrl.current.setWpmPosition(ctrl.current.tokenAtScroll(el.scrollTop));
+    };
+    // Frames only run while something moves the note (auto or voice mode) AND the panel is on screen.
+    if (effMode === "off" || !shown) {
+      syncMode(scrollRef.current);
+      return;
+    }
     let raf = 0;
     let stopped = false;
     const frame = () => {
@@ -241,18 +258,13 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
       const el = scrollRef.current;
       if (!el) return;
       const c = ctrl.current;
-      const want = effRef.current;
-      if (modeRef.current !== want) {
-        modeRef.current = want;
-        c.setMode(want);
-        if (want === "wpm") c.setWpmPosition(c.tokenAtScroll(el.scrollTop));
-      }
-      if (want === "off") return;
+      syncMode(el);
       const top = c.update();
       if (!c.isYielding() && Math.abs(el.scrollTop - top) >= 0.5) {
         el.scrollTop = top;
         lastSet.current = el.scrollTop;
       }
+      const want = effRef.current;
       if (want === "wpm" || (want === "voice" && followStateRef.current !== "following")) {
         updateCurrent(c.tokenAtScroll(el.scrollTop));
       }
@@ -270,7 +282,7 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
       stopped = true;
       cancelAnimationFrame(raf);
     };
-  }, [scrollRef, progressRef, updateCurrent]);
+  }, [scrollRef, progressRef, updateCurrent, effMode, shown]);
 
   const followStateRef = useRef<FollowState | "off">("off");
   followStateRef.current = followState;

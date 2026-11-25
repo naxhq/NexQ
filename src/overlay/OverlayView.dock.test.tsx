@@ -220,6 +220,58 @@ describe("the meeting window's dock", () => {
   });
 });
 
+describe("idle cost (a meeting open, nothing happening)", () => {
+  it("runs no frame loop, no sub-second interval and no running animation of its own", async () => {
+    vi.useFakeTimers();
+    const raf = vi.spyOn(window, "requestAnimationFrame");
+    const intervals: number[] = [];
+    const realSet = window.setInterval.bind(window);
+    const spy = vi.spyOn(window, "setInterval").mockImplementation(((cb: TimerHandler, ms?: number, ...a: unknown[]) => {
+      intervals.push(ms ?? 0);
+      return realSet(cb as () => void, ms, ...a);
+    }) as typeof window.setInterval);
+    try {
+      renderOverlay();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      raf.mockClear();
+      intervals.length = 0;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+      expect(raf).not.toHaveBeenCalled();
+      expect(intervals.filter((ms) => ms < 1000)).toEqual([]);
+    } finally {
+      spy.mockRestore();
+      raf.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-renders no panel for the clock: a second passing touches only the clock text", async () => {
+    vi.useFakeTimers();
+    try {
+      renderOverlay();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      const dock = screen.getByRole("group", { name: "Meeting panels" });
+      const seen: string[] = [];
+      const mo = new MutationObserver((l) => l.forEach((m) => seen.push(m.type + ":" + (m.attributeName ?? ""))));
+      mo.observe(dock, { subtree: true, childList: true, attributes: true, characterData: true });
+      await act(async () => {
+        useMeetingStore.setState({ elapsedMs: 5000 });
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      mo.disconnect();
+      expect(seen.filter((x) => x.includes("inert"))).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("short areas", () => {
   it("a short transcript drops its toolbar and shows slim meters in the tab bar", () => {
     const h = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight")!;
