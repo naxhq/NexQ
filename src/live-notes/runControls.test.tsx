@@ -236,6 +236,17 @@ describe("brief panel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(calls).toEqual(["try_again"]);
   });
+
+  it("offers only the actions the backend allows", async () => {
+    brief(run("on", ["update", "pause"], { tokens_used: 999_999 }));
+    const { unmount } = render(<BriefPanel />);
+    expect(screen.queryByRole("button", { name: "Resume the brief" })).toBeNull();
+    unmount();
+    brief(run("paused", ["resume"]));
+    render(<BriefPanel />);
+    await userEvent.click(screen.getByRole("button", { name: "Brief options" }));
+    expect(screen.queryByRole("menuitem", { name: "Pause the brief" })).toBeNull();
+  });
 });
 
 describe("after Stop, at the end, and when the limit changes", () => {

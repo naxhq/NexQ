@@ -310,6 +310,27 @@ mod tests {
     }
 
     #[test]
+    fn moving_a_meeting_out_cuts_what_the_old_workspace_kept_of_it_and_its_chat_summaries() {
+        let conn = memory_db();
+        let a = new_ws(&conn, "A", false, false);
+        let b = new_ws(&conn, "B", false, false);
+        meeting(&conn, "m", &a);
+        conn.execute(
+            "INSERT INTO workspace_memory (id, workspace_id, kind, title, text, source_meeting, source_ms, status, created_at, updated_at, unsupported)
+             VALUES ('i1', ?1, 'fact', 't', 'x', 'm', 5, 'saved', 1, 1, 0)",
+            params![a],
+        )
+        .unwrap();
+        let chat = crate::workspace_chat::store::create_chat(&conn, &a, None, None, None).unwrap();
+        conn.execute("UPDATE workspace_chats SET condensed = 'may quote the meeting', condensed_upto = 3 WHERE id = ?1", params![chat.id]).unwrap();
+        move_meeting_atomic(&conn, "m", &b).unwrap();
+        let source: Option<String> = conn.query_row("SELECT source_meeting FROM workspace_memory WHERE id = 'i1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(source, None, "the memory item keeps its text but no longer points at the meeting");
+        let summary: Option<String> = conn.query_row("SELECT condensed FROM workspace_chats WHERE id = ?1", params![chat.id], |r| r.get(0)).unwrap();
+        assert_eq!(summary, None, "the old workspace's chat summaries may quote the meeting and are dropped");
+    }
+
+    #[test]
     fn listing_filters_by_workspace_and_searches_title_summary_and_transcript() {
         let conn = memory_db();
         let a = new_ws(&conn, "A", false, false);

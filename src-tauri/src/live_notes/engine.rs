@@ -814,6 +814,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_final_pass_goes_on_until_nothing_is_left_so_the_tail_is_not_lost() {
+        let (mut e, _clock, _s, _st) = engine(vec![]);
+        for i in 0..400u64 {
+            e.feed(line(i * 1000, &words(20)));
+        }
+        let out = e.finish().await.expect("final pass");
+        assert!(out.ok);
+        assert!(e.llm.requests.lock().unwrap().len() > 1, "a backlog bigger than one piece needs more than one run");
+        assert_eq!(e.status().pending_words, 0, "everything was sent");
+        assert!(e.final_note.is_none(), "{:?}: nothing is left uncovered", e.final_note);
+    }
+
+    #[tokio::test]
     async fn gate_blocks_until_live_answer_ends() {
         let (mut e, clock, _s, _st) = engine(vec![reply(OPS1)]);
         e.feed(line(0, &words(150)));

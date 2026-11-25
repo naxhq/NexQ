@@ -198,6 +198,13 @@ impl SessionHandle for FakeSession {
                 Some(PlanLimit { level: PlanLimitLevel::Hit, resets_at: Some(1_900_000_000), window: None, used: None });
             return Err(AgentError::Cli(AgentErrorKind::RateLimited, "You've hit your usage limit".into()));
         }
+        if prompt == "tools" {
+            on_delta(&crate::llm::cli_agent::session::encode_activity(&crate::llm::cli_agent::protocol::ToolUse {
+                id: "t1".into(),
+                name: "Read".into(),
+                input: serde_json::json!({"file_path": "plan.md"}),
+            }));
+        }
         if prompt == "errresult" {
             return Ok(TurnResult { text: "5-hour usage limit reached".into(), is_error: true, ..Default::default() });
         }
@@ -961,4 +968,18 @@ async fn an_old_list_is_fetched_again() {
     assert!(runs.models_due("anthropic"));
     assert!(runs.refresh_models("anthropic").await);
     assert_eq!(api.list_calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn a_chats_tool_calls_reach_its_activity_emitter() {
+    let r = rig();
+    let seen: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+    let sink = seen.clone();
+    r.runs.set_chat_activity(Arc::new(move |chat, line| sink.lock().unwrap().push((chat.to_string(), line.label))));
+    let key = chat_key("c1");
+    r.runs.run(cli_req("claude_cli", "sonnet", None, &key, "tools"), None).await.unwrap();
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1, "one tool call, one activity line: {seen:?}");
+    assert_eq!(seen[0].0, "c1");
+    assert!(!seen[0].1.is_empty());
 }

@@ -1358,6 +1358,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn when_filing_in_the_asked_workspace_fails_the_meeting_starts_unfiled_never_in_general() {
+        use crate::workspace::test_support::{memory_db, new_ws};
+        let conn = memory_db();
+        let ws = new_ws(&conn, "Sales", false, false);
+        // Filing in any workspace fails; an unfiled home still works.
+        conn.execute_batch(
+            "CREATE TRIGGER refuse_filing BEFORE UPDATE OF workspace_id ON meetings
+             WHEN NEW.workspace_id NOT LIKE 'unfiled:%' BEGIN SELECT RAISE(ABORT, 'no'); END;",
+        )
+        .unwrap();
+        let (m, notice) = create_meeting_filed(&conn, "A", Some(&ws), true).unwrap();
+        assert!(crate::workspace::types::is_unfiled(&m.workspace_id), "not General: {}", m.workspace_id);
+        assert!(notice.unwrap().contains("not filed in a workspace"));
+    }
+
+    #[test]
     fn past_transcript_labels_remote_speaker_tags() {
         let transcript = serde_json::json!([
             {"id": "a", "text": "Hi", "speaker": "User", "speaker_id": "you", "timestamp_ms": 1_000, "is_final": true},

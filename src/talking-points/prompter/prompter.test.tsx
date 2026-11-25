@@ -279,3 +279,45 @@ describe("usePrompter with scripted speech", () => {
   });
 });
 
+
+describe("usePrompter frames", () => {
+  it("starts its frame loop when its dock panel is shown, not while it is hidden", async () => {
+    const waiting = new Map<number, FrameRequestCallback>();
+    let next = 1;
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      waiting.set(next, cb);
+      return next++;
+    });
+    const cancel = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => void waiting.delete(id));
+    const host = document.createElement("div");
+    host.setAttribute("data-dock-panel", "points");
+    host.setAttribute("data-visible", "false");
+    const scroll = document.createElement("div");
+    host.appendChild(scroll);
+    document.body.appendChild(host);
+    const doc = docFromText("one two three four");
+    const scrollRef = { current: scroll };
+    renderHook(() =>
+      usePrompter({
+        doc,
+        noteKey: "n3",
+        scrollRef,
+        contentRef: { current: null },
+        reading: { ...DEFAULT_READING, mode: "auto" },
+        availability: { ok: true },
+      }),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const hidden = waiting.size; // frames of other parts of the note panel, if any
+    await act(async () => {
+      host.setAttribute("data-visible", "true");
+      await Promise.resolve();
+    });
+    expect(waiting.size, "showing the panel starts the prompter's frame loop, and only then").toBe(hidden + 1);
+    host.remove();
+    raf.mockRestore();
+    cancel.mockRestore();
+  });
+});

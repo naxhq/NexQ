@@ -229,3 +229,27 @@ pub fn unique(v: Vec<String>) -> Vec<String> {
     let mut seen = HashSet::new();
     v.into_iter().filter(|x| seen.insert(x.clone())).collect()
 }
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+    use crate::workspace::test_support::*;
+
+    #[test]
+    fn a_workspaces_chat_sees_the_meetings_filed_in_it_and_not_those_that_only_borrow_its_material() {
+        let conn = memory_db();
+        let a = new_ws(&conn, "A", false, false);
+        let b = new_ws(&conn, "B", false, false);
+        for (id, home) in [("m1", &a), ("m2", &b)] {
+            conn.execute(
+                "INSERT INTO meetings (id, title, start_time, workspace_id) VALUES (?1, ?1, '2026-01-01T00:00:00Z', ?2)",
+                params![id, home],
+            )
+            .unwrap();
+        }
+        crate::workspace::meetings::set_meeting_scope(&conn, "m2", &[a.clone()]).unwrap();
+        let ids = |ws: &str| home_meetings(&conn, ws).unwrap().into_iter().map(|m| m.id).collect::<Vec<_>>();
+        assert_eq!(ids(&a), vec!["m1".to_string()], "B's meeting uses A's material but is not part of A");
+        assert_eq!(ids(&b), vec!["m2".to_string()]);
+    }
+}

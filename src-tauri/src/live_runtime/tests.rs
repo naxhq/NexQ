@@ -1651,3 +1651,46 @@ async fn very_large_reported_usage_never_ends_notes_with_an_unexplained_failure(
         }
     }
 }
+
+#[tokio::test]
+async fn the_brief_is_running_only_while_its_call_is_in_flight_and_names_its_meeting() {
+    let h = harness();
+    let (_ws, m) = brief_with_sheet(&h).await;
+    // The sheet is out, so the call that made it is over: whatever it cost, the brief is not "running".
+    let mut st = h.rt.brief_state(&m).await;
+    for _ in 0..200 {
+        if st["status"] != "running" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        st = h.rt.brief_state(&m).await;
+    }
+    assert_ne!(st["status"], "running", "{st}");
+    assert!(st["tokens_used"].as_u64().unwrap_or(0) > 0, "the call spent tokens: {st}");
+    assert!(can_of(&st).contains(&"pause".to_string()), "{st}");
+    // Every sheet event says which meeting it is for.
+    for e in h.events.of("brief_sheet") {
+        assert_eq!(e["meeting_id"], m.as_str(), "{e}");
+    }
+}
+
+#[tokio::test]
+async fn pausing_the_brief_pauses_it_and_resume_runs_it_again() {
+    let h = harness();
+    let (_ws, m) = brief_with_sheet(&h).await;
+    h.rt.brief_pause(&m).unwrap();
+    until("paused", || status_of(&h, "brief_state", &m) == "paused").await;
+    assert!(can_of(&h.rt.brief_state(&m).await).contains(&"resume".to_string()));
+    h.rt.brief_resume(&m).unwrap();
+    until("running again", || status_of(&h, "brief_state", &m) != "paused").await;
+}
+
+#[tokio::test]
+async fn starting_the_brief_again_wakes_a_paused_actor() {
+    let h = harness();
+    let (_ws, m) = brief_with_sheet(&h).await;
+    h.rt.brief_pause(&m).unwrap();
+    until("paused", || status_of(&h, "brief_state", &m) == "paused").await;
+    h.rt.brief_start(&m).unwrap();
+    until("running again", || status_of(&h, "brief_state", &m) != "paused").await;
+}

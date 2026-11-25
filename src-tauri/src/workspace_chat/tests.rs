@@ -2521,3 +2521,19 @@ async fn a_recap_can_be_read_listed_and_deleted_and_is_not_written_again() {
     assert_eq!(ops::recap_missing(&rig.deps, &rig.ws, Arc::new(CancelToken::new())).await, 0);
     assert!(ops::meeting_recap(&rig.conn(), "m1").unwrap().is_none());
 }
+
+#[tokio::test]
+async fn every_streamed_token_names_its_chat_and_its_request() {
+    let rig = Rig::new();
+    rig.meeting("m1", "Kestrel planning", 5, &budget_lines());
+    rig.index();
+    let chat = rig.chat();
+    let rid = rig.ask(&chat, "What is the Kestrel budget?").await;
+    let tokens = rig.events_named("workspace_chat_token");
+    assert!(tokens.len() >= 3);
+    for t in &tokens {
+        assert_eq!(t["request_id"], rid.as_str(), "{t}");
+        assert_eq!(t["chat_id"], chat.as_str(), "{t}");
+        assert!(t["token"].is_string(), "{t}");
+    }
+}

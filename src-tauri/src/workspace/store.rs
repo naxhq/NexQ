@@ -619,6 +619,18 @@ mod tests {
     }
 
     #[test]
+    fn instructions_are_stored_without_hidden_characters_when_created_and_when_changed() {
+        let conn = memory_db();
+        let made = create_workspace(&conn, CreateWorkspaceInput { name: "A".into(), instructions: "Be brief\u{202e}\u{200b}.".into(), ..Default::default() }).unwrap();
+        assert_eq!(made.instructions, "Be brief.");
+        let persian = "\u{0645}\u{0646}\u{200c}\u{0645}\u{0627}";
+        let patch = WorkspacePatch { instructions: Some(format!("Reply in Persian\u{202e}\u{200b}: {persian}")), ..Default::default() };
+        let changed = update_workspace(&conn, &made.id, patch).unwrap();
+        assert_eq!(changed.instructions, format!("Reply in Persian: {persian}"), "hidden characters out, real writing kept");
+        assert_eq!(get_workspace(&conn, &made.id).unwrap().instructions, changed.instructions);
+    }
+
+    #[test]
     fn general_is_seeded_the_default_and_listed_with_counts() {
         let conn = memory_db();
         file(&conn, "general", "document", "d1");
