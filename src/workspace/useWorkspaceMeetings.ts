@@ -22,7 +22,7 @@ export interface WorkspaceMeetings {
  * them. Reloads when workspaces change, a meeting ends, or one is moved or
  * renamed. Late answers of an older request are dropped.
  */
-export function useWorkspaceMeetings(workspaceId: string, query: string, scope: MeetingScopeChoice): WorkspaceMeetings {
+export function useWorkspaceMeetings(workspaceId: string, query: string, scope: MeetingScopeChoice, pageSize: number = PAGE): WorkspaceMeetings {
   const revision = useWorkspaceStore((s) => s.revision);
   const unavailable = useWorkspaceStore((s) => s.unavailable);
   const recent = useMeetingStore((s) => s.recentMeetings);
@@ -32,12 +32,12 @@ export function useWorkspaceMeetings(workspaceId: string, query: string, scope: 
     loading: true,
     error: null,
   });
-  const [limit, setLimit] = useState(PAGE);
+  const [limit, setLimit] = useState(pageSize);
   const seq = useRef(0);
   const q = query.trim();
 
   // A new place or a new search starts at the first page.
-  useEffect(() => setLimit(PAGE), [workspaceId, q, scope]);
+  useEffect(() => setLimit(pageSize), [workspaceId, q, scope, pageSize]);
 
   useEffect(() => {
     const mine = ++seq.current;
@@ -68,7 +68,7 @@ export function useWorkspaceMeetings(workspaceId: string, query: string, scope: 
     return () => clearTimeout(timer);
   }, [workspaceId, q, scope, limit, revision, recent, unavailable]);
 
-  const loadMore = useCallback(() => setLimit((l) => l + PAGE), []);
+  const loadMore = useCallback(() => setLimit((l) => l + pageSize), [pageSize]);
   return {
     ...state,
     loadMore,

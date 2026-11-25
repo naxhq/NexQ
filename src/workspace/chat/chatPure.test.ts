@@ -187,3 +187,39 @@ describe("small helpers", () => {
     expect(scopeSummary(true, 3)).toBe("Meetings, 3 left out");
   });
 });
+
+import { vi } from "vitest";
+import { displayTitle, REMOVED_ITEM } from "./titles";
+import { openBar } from "./ContextPanel";
+
+describe("names, never ids", () => {
+  it.each([
+    ["", "x"],
+    ["   ", "x"],
+    ["abc123", "abc123"],
+    ["3f2b8c1e-9d4a-4c1b-8a55-0f1e2d3c4b5a", undefined],
+    ["0123456789abcdef0123", undefined],
+    ["document:d_8f21c3aa", undefined],
+  ])("%j is shown as Removed item", (title, id) => {
+    expect(displayTitle(title, id)).toBe(REMOVED_ITEM);
+  });
+  it("keeps a real name", () => {
+    expect(displayTitle("Weekly sync", "m1")).toBe("Weekly sync");
+    expect(displayTitle(null)).toBe(REMOVED_ITEM);
+  });
+});
+
+describe("opening a context item by its kind", () => {
+  const openers = () => ({ onOpenMeeting: vi.fn(), onOpenItem: vi.fn() });
+  it("meeting at its moment, document, folder file and talking point each open as themselves", () => {
+    const o = openers();
+    openBar(o, "meeting", "m1", "120000");
+    expect(o.onOpenMeeting).toHaveBeenCalledWith("m1", 120000);
+    openBar(o, "document", "d1", null);
+    expect(o.onOpenItem).toHaveBeenLastCalledWith("document", "d1", null);
+    openBar(o, "folder", "f1", "notes/a.md");
+    expect(o.onOpenItem).toHaveBeenLastCalledWith("folder", "f1", "notes/a.md");
+    openBar(o, "talking_point", "t1", null);
+    expect(o.onOpenItem).toHaveBeenLastCalledWith("talking_point", "t1", null);
+  });
+});

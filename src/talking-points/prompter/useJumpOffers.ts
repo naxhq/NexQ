@@ -31,6 +31,8 @@ export interface JumpEnv {
   wantVoice: boolean;
   followState: FollowState | "off";
   suggestEnabled: boolean;
+  /** The panel is on screen; a hidden one does no polling. */
+  shown?: boolean;
   clock: () => number;
 }
 
@@ -94,7 +96,7 @@ export function useJumpOffers(env: JumpEnv) {
 
   // a suggestion shows once it has held for a second, and goes after twelve
   useEffect(() => {
-    if (!wantVoice) return;
+    if (!wantVoice || env.shown === false) return;
     const t = setInterval(() => {
       const r = rawSuggest.current;
       if (!r || dismissed.current === r.blockId) return setSuggestBlock((b) => (b === null ? b : null));
@@ -104,7 +106,7 @@ export function useJumpOffers(env: JumpEnv) {
     }, 250);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wantVoice]);
+  }, [wantVoice, env.shown]);
 
   const jumpTo = useCallback(
     (tok: number) => {

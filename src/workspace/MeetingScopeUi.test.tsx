@@ -95,4 +95,24 @@ describe("MeetingWorkspaceChip", () => {
     await waitFor(() => expect(b.called("move_meeting")[0]?.args).toMatchObject({ meetingId: "m1", workspaceId: "docs" }));
     await waitFor(() => expect(useMeetingStore.getState().activeMeeting?.workspace_id).toBe("docs"));
   });
+
+  it("a meeting filed nowhere says so, offers only the filing choices, and files through the ordinary move", async () => {
+    useMeetingStore.setState({ activeMeeting: { id: "m1", title: "Live", workspace_id: "unfiled:m1" } as never, activeBorrowed: [] });
+    let moved = false;
+    const b = mockBackend({
+      move_meeting: () => {
+        moved = true;
+        return null;
+      },
+      get_meeting_scope: () => scope(moved ? "docs" : "unfiled:m1", []),
+      list_meetings: "[]",
+      list_workspaces: LIST,
+    });
+    render(<MeetingWorkspaceChip meetingId="m1" />);
+    await userEvent.click(screen.getByRole("button", { name: /Workspace: No workspace/ }));
+    expect(screen.queryByRole("menuitemcheckbox", { name: /Also use/ })).toBeNull();
+    await userEvent.click(screen.getByRole("menuitemcheckbox", { name: /File in Docs/ }));
+    await waitFor(() => expect(b.called("move_meeting")[0]?.args).toMatchObject({ meetingId: "m1", workspaceId: "docs" }));
+    await waitFor(() => expect(useMeetingStore.getState().activeMeeting?.workspace_id).toBe("docs"));
+  });
 });

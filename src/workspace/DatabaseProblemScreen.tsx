@@ -3,13 +3,16 @@ import { Button, ConfirmDialog } from "../ui";
 import { formatFileSize } from "../lib/utils";
 import { openUpdateDialog } from "../hooks/useUpdater";
 import { useWorkspaceStore } from "../stores/workspaceStore";
+import { showToast } from "../stores/toastStore";
 import {
   PROBLEM_COPY,
   copyDate,
   fileNameOf,
   openDataFolder,
+  isMissingCommand,
   restartApp,
   restoreDatabaseCopy,
+  retryOpenDatabase,
   startWithNewDatabase,
   type DatabaseBackup,
   type DatabaseProblem,
@@ -75,11 +78,34 @@ export function DatabaseProblemScreen({ problem }: { problem: DatabaseProblem })
     }
   };
 
+  // Locked: ask the backend to open the file again, then look. Without that command, a restart does the same.
   const recheck = async () => {
-    setPhase({ kind: "working", what: "Checking" });
+    setPhase({ kind: "working", what: "Opening your meetings again" });
+    let found: Awaited<ReturnType<typeof retryOpenDatabase>>;
+    try {
+      found = await retryOpenDatabase();
+    } catch (e) {
+      if (isMissingCommand(e)) {
+        await run("Restarting", restartApp, { kind: "idle" });
+        return;
+      }
+      setPhase({ kind: "error", text: messageOf(e) });
+      return;
+    }
+    // It opens now, but the running app cannot take it in: say so and offer the restart.
+    if (found?.ok && found.needs_restart) {
+      setPhase({ kind: "restart", what: "Your meetings can be opened now." });
+      return;
+    }
+    if (found && !found.ok) {
+      setPhase({ kind: "still" });
+      return;
+    }
     await refresh();
     // Cleared: the home takes this screen's place. Still there: say so.
-    if (useWorkspaceStore.getState().database) setPhase({ kind: "still" });
+    const now = useWorkspaceStore.getState().database;
+    if (now) setPhase({ kind: "still" });
+    else showToast("Your meetings are open again", "success");
   };
 
   const openFolder = () => void run("Opening", openDataFolder, { kind: "idle" });
@@ -87,7 +113,7 @@ export function DatabaseProblemScreen({ problem }: { problem: DatabaseProblem })
   if (phase.kind === "restart") {
     return (
       <Shell>
-        <h1 ref={heading} tabIndex={-1} className="ui-title text-foreground outline-none">
+        <h1 ref={heading} tabIndex={-1} style={{ outline: "none" }} className="ui-title text-foreground">
           NexQ needs to restart
         </h1>
         <p role="status" className="ui-body ui-measure mt-2 text-muted-foreground">
@@ -104,7 +130,7 @@ export function DatabaseProblemScreen({ problem }: { problem: DatabaseProblem })
 
   return (
     <Shell>
-      <h1 ref={heading} tabIndex={-1} className="ui-title text-foreground outline-none">
+      <h1 ref={heading} tabIndex={-1} style={{ outline: "none" }} className="ui-title text-foreground">
         {copy.title}
       </h1>
       <p className="ui-body ui-measure mt-2 text-foreground">{copy.what}</p>
@@ -129,7 +155,7 @@ export function DatabaseProblemScreen({ problem }: { problem: DatabaseProblem })
             </h2>
             {problem.backups.length > 0 ? (
               <ul className="mt-1 divide-y divide-border border-y border-border" aria-label="Copies of your meetings">
-                {problem.backups.map((b) => (
+                {[...problem.backups].sort((x, y) => copyDate(y.created_at).getTime() - copyDate(x.created_at).getTime()).map((b) => (
                   <BackupRow
                     key={b.name}
                     backup={b}

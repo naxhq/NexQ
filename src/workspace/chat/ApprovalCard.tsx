@@ -45,7 +45,7 @@ const RESULT: Partial<Record<Approval["state"], string>> = {
 
 const CLOSED: Record<string, string> = {
   answered: "Answered somewhere else.",
-  timeout: `No answer in ${APPROVAL_SECONDS} seconds, so it was denied.`,
+  timed_out: `No answer in ${APPROVAL_SECONDS} seconds, so it was denied.`,
   cancelled: "The answer was stopped, so this was not run.",
 };
 

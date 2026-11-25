@@ -1,7 +1,17 @@
-import type { DbBackup, DbProblem, DbProblemKind } from "../lib/types";
+import { invoke } from "@tauri-apps/api/core";
+import type { DbBackup, DbProblem, DbProblemKind, RetryOpenResult } from "../lib/types";
 
 // The recovery calls and types of this screen, in one place.
 export { openDataFolder, restartApp, restoreDatabaseCopy, startWithNewDatabase } from "../lib/ipc";
+/**
+ * Looks at the file again (the locked case). `{ ok, needs_restart }`: the file opens now but only a restart can use it, or it is still in use.
+ * Rejects as "not found" where this build has no such command; `null` from an older build that only reopens.
+ */
+export const retryOpenDatabase = (): Promise<RetryOpenResult | null> => invoke("retry_open_database");
+
+/** True when a rejection says the command does not exist in this build. */
+export const isMissingCommand = (e: unknown): boolean => /not found|unknown command|not registered|no such command|did not find/i.test(e instanceof Error ? e.message : String(e));
+
 export type DatabaseProblemKind = DbProblemKind;
 export type DatabaseBackup = DbBackup;
 export type DatabaseProblem = DbProblem;

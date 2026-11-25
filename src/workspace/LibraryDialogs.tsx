@@ -4,6 +4,7 @@ import { addWorkspaceItem, listLibrary } from "../lib/ipc";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import type { LibraryItem, SkippedFile } from "../lib/types";
 import { addPastedText } from "./addMaterial";
+import { readableName } from "./libraryStatus";
 import { fieldClass, hintClass, labelClass } from "./styles";
 
 /** Paste text: it becomes a Markdown document in this workspace. */
@@ -78,11 +79,19 @@ export function PasteTextDialog({ workspaceId, open, onClose }: { workspaceId: s
   );
 }
 
+/** "Acme, Biology": the names of the workspaces that use it, never their ids. */
+export function usedIn(ids: string[], workspaces: Array<{ id: string; name: string }>): string {
+  const names = ids.map((id) => workspaces.find((w) => w.id === id)?.name).filter((n): n is string => !!n);
+  if (names.length === 0) return "another workspace";
+  return names.length <= 3 ? names.join(", ") : `${names.slice(0, 3).join(", ")} and ${names.length - 3} more`;
+}
+
 const KIND_WORD = { document: "Document", folder: "Folder", server: "Tool" } as const;
 
 /** "Add from library": things already in the library that this workspace doesn't use yet. */
 export function FromLibraryDialog({ workspaceId, open, onClose }: { workspaceId: string; open: boolean; onClose: () => void }) {
   const refresh = useWorkspaceStore((s) => s.refresh);
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
   const [items, setItems] = useState<LibraryItem[] | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -162,10 +171,10 @@ export function FromLibraryDialog({ workspaceId, open, onClose }: { workspaceId:
                     className="mt-1 h-3.5 w-3.5 accent-[hsl(var(--primary))]"
                   />
                   <span className="min-w-0">
-                    <span className="ui-body block truncate font-medium text-foreground">{i.name}</span>
+                    <span className="ui-body block truncate font-medium text-foreground">{readableName(i.kind, i.ref_id, i.name)}</span>
                     <span className={`${hintClass} block`}>
                       {KIND_WORD[i.kind]}
-                      {i.unfiled ? ", not in any workspace" : `, used in ${i.workspace_ids.length} ${i.workspace_ids.length === 1 ? "workspace" : "workspaces"}`}
+                      {i.unfiled ? ", not in any workspace" : `, used in ${usedIn(i.workspace_ids, workspaces)}`}
                     </span>
                   </span>
                 </label>

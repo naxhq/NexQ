@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Dialog, ColorSwatches, Select, Switch, Button } from "../ui";
 import { VoiceprintMark } from "../voiceprint";
 import { useMeetingScenarios } from "../stores/scenarioStore";
+import { useConfigStore } from "../stores/configStore";
 import { GENERAL_ID, useWorkspaceStore } from "../stores/workspaceStore";
 import type { AIScenario, WorkspaceDetail, WorkspaceSummary } from "../lib/types";
 import { fieldClass, hintClass, labelClass } from "./styles";
@@ -15,6 +16,7 @@ export interface WorkspaceFormValues {
   keep_separate: boolean;
   default_scenario: AIScenario | null;
   makeDefault: boolean;
+  recaps_with_ai: boolean;
 }
 
 /** How many things General holds, said once, for the "Also use General" line. */
@@ -25,6 +27,11 @@ export function generalCounts(general: Pick<WorkspaceSummary, "item_count"> | un
 }
 
 const NO_SCENARIO = "__none";
+
+/** What the recaps switch sends and where a recap shows, in plain words. */
+export function recapsDescription(model: string): string {
+  return `Off by default. After each meeting here, one AI call to ${model} reads its transcript and writes a short recap. The transcript is sent to that model. Recaps are what chat reads first when it looks across many meetings, and they show as meeting bars in the context estimate.`;
+}
 
 /**
  * One calm dialog for a new workspace or the settings of an existing one.
@@ -42,6 +49,8 @@ export function WorkspaceDialog({
   onClose: (saved?: WorkspaceDetail) => void;
 }) {
   const unavailable = useWorkspaceStore((s) => s.unavailable);
+  const llmProvider = useConfigStore((s) => s.llmProvider);
+  const llmModel = useConfigStore((s) => s.llmModel);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const create = useWorkspaceStore((s) => s.create);
   const update = useWorkspaceStore((s) => s.update);
@@ -64,6 +73,7 @@ export function WorkspaceDialog({
       keep_separate: workspace?.keep_separate ?? false,
       default_scenario: workspace?.default_scenario ?? null,
       makeDefault: workspace?.is_default ?? false,
+      recaps_with_ai: false,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [workspace?.id],
@@ -89,6 +99,7 @@ export function WorkspaceDialog({
   // The instructions arrive with the detail: they fill in unless the person already typed.
   useEffect(() => {
     if (open && matching && !instructionsTouched.current) setV((cur) => ({ ...cur, instructions: matching.instructions }));
+    if (open && matching) setV((cur) => ({ ...cur, recaps_with_ai: matching.recaps_with_ai }));
   }, [open, matching]);
 
   const set = <K extends keyof WorkspaceFormValues>(key: K, value: WorkspaceFormValues[K]) => setV((cur) => ({ ...cur, [key]: value }));
@@ -121,7 +132,9 @@ export function WorkspaceDialog({
       };
       // Instructions are only sent once the matching detail is in: never an empty field that was just not loaded yet.
       const withInstructions = editing && !matching ? patch : { ...patch, instructions: v.instructions };
-      const saved = editing ? await update(workspace.id, withInstructions) : await create({ ...withInstructions, id: draftId });
+      // Recaps are a separate switch of the detail: sent only once it is loaded (a new workspace starts with it off).
+      const withRecaps = editing && matching ? { ...withInstructions, recaps_with_ai: v.recaps_with_ai } : withInstructions;
+      const saved = editing ? await update(workspace.id, withRecaps) : await create({ ...withInstructions, id: draftId });
       if (v.makeDefault && !saved.is_default) await makeDefault(saved.id);
       onClose(saved);
     } catch (e) {
@@ -261,6 +274,15 @@ export function WorkspaceDialog({
               onChange={(c) => setV((cur) => ({ ...cur, keep_separate: c, include_general: c ? false : cur.include_general }))}
               label="Keep separate"
               description="Blocks borrowing in both directions and never mixes in General."
+            />
+          )}
+          {editing && (
+            <Switch
+              checked={v.recaps_with_ai}
+              onChange={(c) => set("recaps_with_ai", c)}
+              disabled={detailPending}
+              label="Prepare recaps with AI"
+              description={recapsDescription(`${llmProvider}${llmModel ? ` ${llmModel}` : ""}`)}
             />
           )}
           <Switch

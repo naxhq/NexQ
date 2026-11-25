@@ -1,5 +1,7 @@
 import type { WorkspaceItem } from "../lib/types";
 import { formatTokens } from "../voiceprint";
+import { useContextStore } from "../stores/contextStore";
+import { useSourcesStore } from "../stores/sourcesStore";
 
 /** `detail` of a document whose text is still being read (the context list says `loading`). */
 export const READING = "reading";
@@ -55,9 +57,34 @@ export function sortItems(items: WorkspaceItem[]): WorkspaceItem[] {
   );
 }
 
-/** What the user calls it: their label, else the name. */
-export function itemTitle(item: Pick<WorkspaceItem, "label" | "name">): string {
-  return item.label?.trim() || item.name;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A name a person can read. When the backend could only say the id (a folder or
+ * tool whose record is gone from the saved sources), the label or path from the
+ * sources, or the document's own name, is used instead, and failing that a plain word.
+ */
+export function readableName(kind: WorkspaceItem["kind"], refId: string, name: string): string {
+  if (name && name !== refId && !UUID.test(name)) return name;
+  if (kind === "document") {
+    const doc = useContextStore.getState().resources.find((r) => r.id === refId);
+    if (doc?.name) return doc.name;
+  } else {
+    const cfg = useSourcesStore.getState().config;
+    if (kind === "folder") {
+      const f = cfg.notes_folders.find((x) => x.id === refId);
+      if (f) return f.label || f.path;
+    } else {
+      const sv = cfg.mcp_servers.find((x) => x.id === refId);
+      if (sv) return sv.label;
+    }
+  }
+  return kind === "folder" ? "A folder that was removed" : kind === "server" ? "A tool that was removed" : "A document that was removed";
+}
+
+/** What the user calls it: their label, else the name (never an id). */
+export function itemTitle(item: Pick<WorkspaceItem, "label" | "name"> & Partial<Pick<WorkspaceItem, "kind" | "ref_id">>): string {
+  return item.label?.trim() || (item.kind && item.ref_id ? readableName(item.kind, item.ref_id, item.name) : item.name);
 }
 
 /** The one sentence shown next to the folder switch: where its text can go. */

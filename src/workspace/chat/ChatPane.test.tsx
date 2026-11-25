@@ -30,6 +30,7 @@ const ipc = vi.hoisted(() => ({
   listMemory: vi.fn(),
   getWorkspace: vi.fn(),
   saveAnswerToLibrary: vi.fn(),
+  addAnswerToInstructions: vi.fn(),
   listModels: vi.fn(),
   getApiKey: vi.fn(),
   listChatMeetingPrefs: vi.fn(),
@@ -535,19 +536,43 @@ describe("room for the answer", () => {
 });
 
 describe("add to instructions", () => {
-  it("shows the whole text, editable, and stores exactly what is shown", async () => {
+  const open = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(await screen.findByRole("button", { name: "Add to instructions" }));
+    return screen.findByRole("dialog");
+  };
+
+  it("shows the answer as plain text to read, adds it through the backend command, and can undo", async () => {
     const update = vi.fn().mockResolvedValue(undefined);
     useWorkspaceStore.setState({ update: update as never, loadDetail: (async () => ({ instructions: "Be brief." })) as never });
+    ipc.addAnswerToInstructions.mockResolvedValue(undefined);
     setup({ chats: [chat("c1")], messages: [message(1, "user", "Q"), message(2, "assistant", "Always cite [S1]. [x](https://evil.example/p " + '"t"' + ")")] });
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "Add to instructions" }));
-    const dialog = await screen.findByRole("dialog");
+    const dialog = await open(user);
     expect(within(dialog).getByText(/instructions the AI follows/)).toBeInTheDocument();
-    const field = within(dialog).getByLabelText("Text to add") as HTMLTextAreaElement;
+    const field = within(dialog).getByLabelText("The answer, as plain text") as HTMLTextAreaElement;
     expect(field.value).toBe("Always cite. x");
-    fireEvent.change(field, { target: { value: "Always cite sources." } });
+    expect(field.readOnly).toBe(true);
     await user.click(within(dialog).getByRole("button", { name: "Add to instructions" }));
-    await waitFor(() => expect(update).toHaveBeenCalledWith(WS, { instructions: "Be brief." + String.fromCharCode(10, 10) + "Always cite sources." }));
+    await waitFor(() => expect(ipc.addAnswerToInstructions).toHaveBeenCalledWith(2));
+    expect(update).not.toHaveBeenCalled();
+    await user.click(await within(dialog).findByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith(WS, { instructions: "Be brief." }));
+  });
+
+  it("shows the backend's refusal in place and adds nothing", async () => {
+    useWorkspaceStore.setState({ loadDetail: (async () => ({ instructions: "" })) as never });
+    ipc.addAnswerToInstructions.mockRejectedValue("Something this answer used has left this workspace, so it can't be added.");
+    setup({ chats: [chat("c1")], messages: [message(1, "user", "Q"), message(2, "assistant", "Text")] });
+    const user = userEvent.setup();
+    const dialog = await open(user);
+    await user.click(within(dialog).getByRole("button", { name: "Add to instructions" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("has left this workspace");
+    expect(within(dialog).queryByRole("button", { name: "Undo" })).toBeNull();
+  });
+
+  it("is not offered for an answer that isn't saved yet", async () => {
+    setup({ chats: [chat("c1")], messages: [message(1, "user", "Q"), message(-5, "assistant", "Unsaved")] });
+    expect(await screen.findByRole("button", { name: "Add to instructions" })).toBeDisabled();
   });
 });
 
@@ -636,5 +661,52 @@ describe("access changed and notices", () => {
     await waitFor(() => expect(screen.getAllByText("Still indexing 312 of 540 files").length).toBeGreaterThanOrEqual(2));
     await userEvent.setup().click(screen.getByRole("button", { name: "Search deeper" }));
     expect(screen.getAllByText("Still indexing 312 of 540 files").length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("a turn ends only by its own request", () => {
+  it("a follow-up right after an answer does not show the old answer", async () => {
+    const old = message(2, "assistant", "OLD ANSWER", { created_at: Date.now() - 500 });
+    setup({ chats: [chat("c1")], messages: [message(1, "user", "First", { created_at: Date.now() - 600 }), old] });
+    const box = await typeQuestion("Follow-up");
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(ipc.askWorkspace).toHaveBeenCalled());
+    // ask_workspace has returned; the backend still lists only the old answer.
+    await new Promise((r) => setTimeout(r, 80));
+    expect(useWorkspaceChatStore.getState().sessions.c1.turn?.status).toBe("waiting");
+    expect(screen.getAllByText("OLD ANSWER")).toHaveLength(1);
+    const id = ipc.askWorkspace.mock.calls[0][2] as string;
+    const fresh = message(4, "assistant", "NEW ANSWER", { created_at: Date.now() });
+    emit("workspace_chat_end", { chat_id: "c1", request_id: id, cancelled: false, message: fresh });
+    expect(await screen.findByText("NEW ANSWER")).toBeInTheDocument();
+  });
+
+  it("fills What it looked at from the activity of its own request", async () => {
+    setup();
+    const box = await typeQuestion("Q");
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(ipc.askWorkspace).toHaveBeenCalled());
+    const id = ipc.askWorkspace.mock.calls[0][2] as string;
+    emit("workspace_chat_activity", { chat_id: "c1", request_id: id, activity: { kind: "tool", label: "CRM: get_deal (Acme)", chip: null } });
+    emit("workspace_chat_activity", { chat_id: "c1", request_id: "other", activity: { kind: "tool", label: "NOT MINE", chip: null } });
+    const saved = message(2, "assistant", "Done");
+    ipc.listWorkspaceMessages.mockResolvedValue([message(1, "user", "Q"), saved]);
+    emit("workspace_chat_end", { chat_id: "c1", request_id: id, cancelled: false, message: saved });
+    await userEvent.setup().click(await screen.findByRole("button", { name: "What it looked at" }));
+    const did = screen.getByRole("list", { name: "What it did" });
+    expect(within(did).getByText("CRM: get_deal (Acme)")).toBeInTheDocument();
+    expect(screen.queryByText("NOT MINE")).toBeNull();
+  });
+
+  it("closes an approval as timed out with the backend's word", async () => {
+    setup();
+    const box = await typeQuestion("x");
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(ipc.askWorkspace).toHaveBeenCalled());
+    const id = ipc.askWorkspace.mock.calls[0][2] as string;
+    emit("workspace_chat_approval", { chat_id: "c1", request_id: id, approval_id: "t1", server: "s", tool: "t", args: {} });
+    await screen.findByRole("button", { name: "Allow once" });
+    emit("workspace_chat_approval_closed", { chat_id: "c1", approval_id: "t1", reason: "timed_out" });
+    expect(await screen.findByText(/No answer in 60 seconds, so it was denied/)).toBeInTheDocument();
   });
 });

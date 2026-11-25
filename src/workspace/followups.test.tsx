@@ -276,11 +276,16 @@ describe("pieces", () => {
     expect(changeNotice("remove", "Docs")).toMatch(/^Answers stop using Docs from now on\./);
   });
 
-  it("archived workspaces are not started in by the store either", async () => {
-    mockBackend({ start_meeting: (a: Record<string, unknown>) => JSON.stringify({ id: "m", title: "t", workspace_id: a.workspaceId ?? "general" }) });
+  it("an archived workspace asked for is not swapped for another: the meeting starts unfiled, says so, and borrows nothing", async () => {
+    const b = mockBackend({
+      start_meeting: (a: Record<string, unknown>) =>
+        JSON.stringify({ id: "m", title: "t", workspace_id: `unfiled:m`, workspace_notice: `asked ${String(a.workspaceId)}` }),
+    });
     seedWorkspaces([ws(), ws({ id: "old", name: "Old job", archived: true, is_default: false })], "general");
     await useMeetingStore.getState().startMeetingFlow("t", "online", "team_meeting", { workspaceId: "old", borrowed: ["x"] });
-    expect(useMeetingStore.getState().activeMeeting?.workspace_id).toBe("general");
+    expect(b.called("start_meeting")[0].args).toMatchObject({ workspaceId: "old" });
+    expect(b.called("set_meeting_scope")).toHaveLength(0);
+    expect(useMeetingStore.getState().activeMeeting?.workspace_id).toBe("unfiled:m");
     expect(useMeetingStore.getState().activeBorrowed).toEqual([]);
     useMeetingStore.getState().stopTimer();
     useMeetingStore.setState({ activeMeeting: null });

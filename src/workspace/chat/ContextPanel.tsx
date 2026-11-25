@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { CONTEXT_LAYER_NAMES, ContextWave, formatTokens, type ContextSelection } from "../../voiceprint";
 import type { ContextBar, ContextReport, ItemPref } from "../../lib/types";
@@ -6,6 +6,7 @@ import { readWaveOpen, useWorkspaceChatStore, writeWaveOpen } from "../../stores
 import { cn } from "../../lib/utils";
 import { COLUMN } from "./column";
 import { openItem, openMeeting, type ChatOpeners } from "./open";
+import { displayTitle } from "./titles";
 
 /** A bar's id is "<kind>:<ref>[:<sub>]" (a bare id is its own ref). */
 export function parseBar(bar: ContextBar): { kind: string; ref: string; sub: string | null } {
@@ -62,6 +63,8 @@ export function ContextPanel({
     writeWaveOpen(next);
     setOpen(next);
   };
+  // Bars with no usable name read "Removed item", never an id.
+  const bars = useMemo(() => report?.bars.map((b) => ({ ...b, title: displayTitle(b.title, b.id) })) ?? [], [report]);
   const numbers = report ? `${formatTokens(report.used)} of ${formatTokens(report.budget)}` : estimating ? "Estimating" : failed ? "No estimate" : "";
 
   return (
@@ -82,7 +85,7 @@ export function ContextPanel({
           {!open && report && (
             <div className={cn("h-[22px] min-w-0 flex-1 overflow-hidden", STRIP_ONLY)}>
               <ContextWave
-                bars={report.bars}
+                bars={bars}
                 window={report.window}
                 budget={report.budget}
                 height={22}
@@ -103,7 +106,7 @@ export function ContextPanel({
             <p className="ui-meta pb-1 font-medium text-foreground">{HEADINGS[subject]}</p>
             {report ? (
               <>
-                <ContextWave bars={report.bars} window={report.window} budget={report.budget} height={52} onSelect={setSelection} />
+                <ContextWave bars={bars} window={report.window} budget={report.budget} height={52} onSelect={setSelection} />
                 <p className="ui-meta mt-1.5 text-muted-foreground">
                   {report.strategy === "full" ? "Everything included fit." : "Picked the most relevant material."} The model's window is {formatTokens(report.window)}.
                   {report.omitted > 0 ? ` ${report.omitted} smaller ${report.omitted === 1 ? "item was" : "items were"} left out.` : ""}
@@ -133,6 +136,17 @@ export function ContextPanel({
       </div>
     </section>
   );
+}
+
+/** Opens what a bar stands for, by its own kind: a meeting at its moment, a document, a folder file or a talking point. */
+export function openBar(openers: ChatOpeners, kind: string, ref: string, sub: string | null) {
+  if (kind === "meeting" || kind === "meetings" || kind === "transcript") {
+    const at = sub !== null && /^\d+$/.test(sub) ? Number(sub) : null;
+    return openMeeting(openers, ref, at);
+  }
+  if (kind === "talking_point" || kind === "talking_points") return openItem(openers, "talking_point", ref, sub);
+  if (kind === "folder" || kind === "folders") return openItem(openers, "folder", ref, sub);
+  return openItem(openers, "document", ref, sub);
 }
 
 const rowBtn =
@@ -167,7 +181,7 @@ function Inspector({
       </div>
       <ul className="mt-1 divide-y divide-border/50">
         {shown.map((bar) => {
-          const { kind, ref } = parseBar(bar);
+          const { kind, ref, sub } = parseBar(bar);
           const meeting = bar.layer === "meetings";
           const left = excluded.includes(ref);
           const saved = itemPrefs.find((p) => p.kind === kind && p.ref_id === ref)?.pref;
@@ -176,14 +190,14 @@ function Inspector({
           const fixed = bar.layer === "instructions" || bar.layer === "conversation";
           return (
             <li key={bar.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-1.5">
-              <span className="ui-body min-w-0 flex-1 truncate text-foreground">{bar.title}</span>
+              <span className="ui-body min-w-0 flex-1 truncate text-foreground">{displayTitle(bar.title, bar.id)}</span>
               <span className="ui-meta tabular-nums text-muted-foreground">
                 {formatTokens(bar.tokens)} tokens{pinned ? ", pinned" : ""}{kept ? ", left out" : bar.included ? "" : ", didn't fit"}
               </span>
               {!fixed && (
                 <button
                   type="button"
-                  onClick={() => (meeting ? openMeeting(openers, ref, null) : openItem(openers, bar.layer === "folders" ? "folder" : "document", ref, null))}
+                  onClick={() => openBar(openers, kind, ref, sub)}
                   className={rowBtn}
                 >
                   Open

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { BookmarkPlus, Check, Copy, ListPlus, RefreshCw } from "lucide-react";
 import { Dialog, Button, buttonClasses } from "../../ui";
-import { saveAnswerToLibrary } from "../../lib/ipc";
+import { addAnswerToInstructions, saveAnswerToLibrary } from "../../lib/ipc";
 import type { WorkspaceMessage } from "../../lib/types";
 import { showToast } from "../../stores/toastStore";
 import { useWorkspaceStore } from "../../stores/workspaceStore";
@@ -81,13 +81,13 @@ export function AnswerActions({
           <BookmarkPlus className="h-3.5 w-3.5" aria-hidden="true" />
           Save to library
         </Button>
-        <Button variant="ghost" size="sm" onClick={() => setAddOpen(true)}>
+        <Button variant="ghost" size="sm" onClick={() => setAddOpen(true)} disabled={message.id < 0}>
           <ListPlus className="h-3.5 w-3.5" aria-hidden="true" />
           Add to instructions
         </Button>
       </div>
       {saving && <SaveDialog messageId={message.id} initial={titleFrom(question)} onClose={() => setSaving(false)} />}
-      <AddToInstructions open={addOpen} workspaceId={workspaceId} text={plainAnswer(message.content)} onClose={() => setAddOpen(false)} />
+      <AddToInstructions open={addOpen} workspaceId={workspaceId} messageId={message.id} text={plainAnswer(message.content)} onClose={() => setAddOpen(false)} />
     </>
   );
 }
@@ -177,27 +177,45 @@ export function plainInstructionText(markdown: string): string {
     .slice(0, INSTRUCTION_CAP);
 }
 
-function AddToInstructions({ open, workspaceId, text, onClose }: { open: boolean; workspaceId: string; text: string; onClose: () => void }) {
+function AddToInstructions({ open, workspaceId, messageId, text, onClose }: { open: boolean; workspaceId: string; messageId: number; text: string; onClose: () => void }) {
   if (!open) return null;
-  return <AddToInstructionsDialog workspaceId={workspaceId} initial={plainInstructionText(text)} onClose={onClose} />;
+  return <AddToInstructionsDialog workspaceId={workspaceId} messageId={messageId} preview={plainInstructionText(text)} onClose={onClose} />;
 }
 
-function AddToInstructionsDialog({ workspaceId, initial, onClose }: { workspaceId: string; initial: string; onClose: () => void }) {
-  const [text, setText] = useState(initial);
+/**
+ * The backend adds the saved answer itself (it checks, in one step, that nothing the answer used
+ * has left the workspace), so the text is shown here to read, not to edit. It can be undone
+ * right after: the instructions go back to what they were.
+ */
+function AddToInstructionsDialog({ workspaceId, messageId, preview, onClose }: { workspaceId: string; messageId: number; preview: string; onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<{ before: string } | null>(null);
   const field = useRef<HTMLTextAreaElement | null>(null);
   const confirm = async () => {
-    if (!text.trim() || busy) return;
+    if (busy) return;
     setBusy(true);
     setError(null);
     try {
       const store = useWorkspaceStore.getState();
-      const detail = (await store.loadDetail(workspaceId)) ?? store.details[workspaceId];
-      const current = detail?.instructions?.trimEnd() ?? "";
-      // Exactly what is in the box, after what is already there.
-      await store.update(workspaceId, { instructions: current ? `${current}\n\n${text}` : text });
-      showToast("Added to the instructions.", "success");
+      const before = ((await store.loadDetail(workspaceId)) ?? store.details[workspaceId])?.instructions ?? "";
+      await addAnswerToInstructions(messageId);
+      void store.loadDetail(workspaceId);
+      setDone({ before });
+    } catch (e) {
+      // The backend's own words, for example that something the answer used left this workspace.
+      setError(typeof e === "string" ? e : e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const undo = async () => {
+    if (!done || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await useWorkspaceStore.getState().update(workspaceId, { instructions: done.before });
+      showToast("Taken out of the instructions again.", "success");
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -208,40 +226,48 @@ function AddToInstructionsDialog({ workspaceId, initial, onClose }: { workspaceI
     <Dialog
       open
       onClose={onClose}
-      title="Add this to the instructions?"
-      description="These words become instructions the AI follows in every question of this workspace. Edit them, and keep only what you want it to obey."
+      title={done ? "Added to the instructions" : "Add this to the instructions?"}
+      description="These words become instructions the AI follows in every question of this workspace. Add it only if you want it to obey this."
       size="lg"
       initialFocusRef={field}
       dismissible={!busy}
       footer={
-        <>
-          <Button onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button variant="primary" onClick={() => void confirm()} disabled={busy || !text.trim()}>
-            {busy ? "Adding" : "Add to instructions"}
-          </Button>
-        </>
+        done ? (
+          <>
+            <Button onClick={() => void undo()} disabled={busy}>
+              Undo
+            </Button>
+            <Button variant="primary" onClick={onClose} disabled={busy}>
+              Done
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button onClick={onClose} disabled={busy}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={() => void confirm()} disabled={busy}>
+              {busy ? "Adding" : "Add to instructions"}
+            </Button>
+          </>
+        )
       }
     >
       <label htmlFor="ws-add-instr" className="ui-section mb-1.5 block text-foreground">
-        Text to add
+        The answer, as plain text
       </label>
       <textarea
         id="ws-add-instr"
         ref={field}
-        value={text}
-        maxLength={INSTRUCTION_CAP}
+        value={preview}
+        readOnly
         rows={10}
-        onChange={(e) => setText(e.target.value)}
         className="ui-body max-h-[50vh] w-full resize-y overflow-y-auto rounded-lg border border-input bg-background px-3 py-2 text-foreground outline-none ui-focus ui-r-lg"
       />
-      <p className="ui-meta mt-1 text-right tabular-nums text-muted-foreground">
-        {text.length.toLocaleString()} of {INSTRUCTION_CAP.toLocaleString()} characters. Plain text only: links, images and HTML were removed.
-      </p>
+      <p className="ui-meta mt-1 text-muted-foreground">Added after what is already there, as plain text: links, images and HTML are left out.</p>
       {error && (
         <p role="alert" className="ui-body mt-2 text-destructive">
-          Couldn't change the instructions: {error}
+          {error}
         </p>
       )}
     </Dialog>

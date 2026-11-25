@@ -54,6 +54,15 @@ export function skippedByFolder(folders: Array<Pick<WorkspaceItem, "ref_id" | "n
   const other: SkippedFile[] = [];
   const roots = folders.map((f) => ({ id: f.ref_id, root: norm(f.name) }));
   for (const file of skipped) {
+    // The backend's own folder id is the truth; the path is only a fallback for an older answer.
+    if (file.folder_id && roots.some((r) => r.id === file.folder_id)) {
+      byFolder.set(file.folder_id, [...(byFolder.get(file.folder_id) ?? []), file]);
+      continue;
+    }
+    if (file.folder_id) {
+      other.push(file);
+      continue;
+    }
     const p = norm(file.path);
     const hit = roots.filter((r) => r.root && p.startsWith(r.root + "/")).sort((a, b) => b.root.length - a.root.length)[0];
     if (hit) byFolder.set(hit.id, [...(byFolder.get(hit.id) ?? []), file]);

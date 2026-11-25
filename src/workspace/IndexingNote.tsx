@@ -8,14 +8,14 @@ import { hintClass } from "./styles";
  * what is found may not be everything yet. Give it the progress you already
  * have, or just the workspace id and it reads the index itself.
  */
-export function IndexingNote({ workspaceId, progress }: { workspaceId: string; progress?: IndexProgress | null }) {
+export function IndexingNote({ workspaceId, progress, compact = false }: { workspaceId: string; progress?: IndexProgress | null; compact?: boolean }) {
   const own = useWorkspaceIndex(workspaceId);
   const words = indexingWords(progress === undefined ? own.progress : progress);
   if (!words) return null;
   return (
-    <p role="status" className={`${hintClass} flex items-center gap-1.5`}>
+    <p role="status" className={`${hintClass} flex min-w-0 items-center gap-1.5`}>
       <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-      <span>{words}. Results may leave out files that aren't indexed yet.</span>
+      {compact ? <span className="truncate">{words}</span> : <span>{words}. Results may leave out files that aren't indexed yet.</span>}
     </p>
   );
 }

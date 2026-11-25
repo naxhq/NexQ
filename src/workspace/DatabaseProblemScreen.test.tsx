@@ -77,11 +77,12 @@ describe("unreadable", () => {
     const list = screen.getByRole("list", { name: "Copies of your meetings" });
     const rows = within(list).getAllByRole("listitem");
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toHaveTextContent("41 meetings, 17.5 MB");
-    expect(rows[1]).toHaveTextContent("1 meeting, 18.2 MB");
-    expect(rows[0]).toHaveTextContent(formatCopyDate(Date.UTC(2026, 10, 16, 9, 41)));
+    // Newest first.
+    expect(rows[0]).toHaveTextContent("1 meeting, 18.2 MB");
+    expect(rows[1]).toHaveTextContent("41 meetings, 17.5 MB");
+    expect(rows[1]).toHaveTextContent(formatCopyDate(Date.UTC(2026, 10, 16, 9, 41)));
 
-    await userEvent.click(within(rows[1]).getByRole("button", { name: /^Restore the copy from .*, 1 meeting$/ }));
+    await userEvent.click(within(rows[0]).getByRole("button", { name: /^Restore the copy from .*, 1 meeting$/ }));
     await waitFor(() => expect(b.called("restore_database_copy")[0]?.args).toMatchObject({ name: "nexq-2026-11-20.db" }));
     const restart = await screen.findByRole("button", { name: "Restart NexQ" });
     expect(screen.getByRole("heading", { level: 1, name: "NexQ needs to restart" })).toBeInTheDocument();
@@ -143,13 +144,50 @@ describe("the other kinds", () => {
     await waitFor(() => expect(b.called("restart_app")).toHaveLength(1));
   });
 
-  it("locked: Try again looks again, and says so while it is still in use", async () => {
-    const b = mockBackend({ get_workspaces_status: { available: false, error: null, db: problem("locked") } });
+  it("locked: Try again opens the file again, then looks, and says so while it is still in use", async () => {
+    const b = mockBackend({ retry_open_database: null, get_workspaces_status: { available: false, error: null, db: problem("locked") } });
     useWorkspaceStore.setState({ database: problem("locked") });
     render(<DatabaseProblemScreen problem={problem("locked")} />);
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByRole("status")).toHaveTextContent("It is still in use. Close the other program, then try again.");
+    expect(b.called("retry_open_database")).toHaveLength(1);
     expect(b.called("get_workspaces_status").length).toBeGreaterThan(0);
+    expect(b.called("restart_app")).toHaveLength(0);
+  });
+
+  it("locked: a file that opens but needs a restart offers Restart, and one still held says it is in use", async () => {
+    const b = mockBackend({ retry_open_database: { ok: true, needs_restart: true }, restart_app: null });
+    render(<DatabaseProblemScreen problem={problem("locked")} />);
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Your meetings can be opened now. Restart to open your meetings.");
+    await userEvent.click(screen.getByRole("button", { name: "Restart NexQ" }));
+    await waitFor(() => expect(b.called("restart_app")).toHaveLength(1));
+    cleanup();
+    mockBackend({ retry_open_database: { ok: false, needs_restart: false } });
+    render(<DatabaseProblemScreen problem={problem("locked")} />);
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("It is still in use");
+  });
+
+  it("locked: without a reopen command it restarts instead, and a refusal is said in words", async () => {
+    const b = mockBackend({
+      retry_open_database: () => {
+        throw "command retry_open_database not found";
+      },
+      restart_app: null,
+    });
+    render(<DatabaseProblemScreen problem={problem("locked")} />);
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(b.called("restart_app")).toHaveLength(1));
+    cleanup();
+    mockBackend({
+      retry_open_database: () => {
+        throw "The file is held by another NexQ";
+      },
+    });
+    render(<DatabaseProblemScreen problem={problem("locked")} />);
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The file is held by another NexQ");
   });
 
   it("Open data folder asks the backend, and a refusal is reported", async () => {

@@ -5,6 +5,7 @@ import { noRemoteImages } from "../../lib/answerMarkdown";
 import type { WorkspaceCitation } from "../../lib/types";
 import { Tooltip } from "../../ui";
 import { cn } from "../../lib/utils";
+import { displayTitle } from "./titles";
 import { CITE_SCHEME, citationKindName, citationWhere, findCitation, linkCitations } from "./citations";
 
 export type OpenCitation = (citation: WorkspaceCitation) => void;
@@ -39,7 +40,7 @@ export function CitationChip({
   }
   // The source is gone (its ref is empty): a muted chip that says why on hover or focus, and opens nothing.
   if (!citation.ref_id) {
-    const reason = citation.snippet || citation.title;
+    const reason = citation.snippet || displayTitle(citation.title, citation.ref_id);
     return (
       <Tooltip content={<span className="block max-w-[16rem] text-foreground">{reason}</span>} delay={200}>
         <span

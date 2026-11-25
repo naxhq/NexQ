@@ -1,4 +1,5 @@
 import type { WorkspaceCitation } from "../../lib/types";
+import { displayTitle } from "./titles";
 
 /** Markdown links with this scheme are citations; the answer renderer turns them into chips. */
 export const CITE_SCHEME = "nexq-cite:";
@@ -36,8 +37,9 @@ export function formatMs(ms: number): string {
 
 /** Where a citation points, in words: "Weekly sync at 12:41", "Pricing.pdf". */
 export function citationWhere(c: WorkspaceCitation): string {
-  if (c.kind === "transcript") return c.start_ms != null ? `${c.title} at ${formatMs(c.start_ms)}` : c.title;
-  return c.title;
+  const title = displayTitle(c.title, c.ref_id);
+  if (c.kind === "transcript") return c.start_ms != null ? `${title} at ${formatMs(c.start_ms)}` : title;
+  return title;
 }
 
 export function citationKindName(c: WorkspaceCitation): string {

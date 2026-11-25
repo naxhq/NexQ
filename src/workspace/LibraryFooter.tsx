@@ -60,7 +60,7 @@ export function LibraryFooter({ workspaceId, hasFolders, progress }: { workspace
   return (
     <div className="space-y-1 border-t border-border px-3 py-2" role="group" aria-label="Knowledge base">
       <div className="px-2.5">
-        <IndexingNote workspaceId={workspaceId} progress={progress ?? null} />
+        <IndexingNote workspaceId={workspaceId} progress={progress ?? null} compact />
       </div>
       {ragOn && rag === "idle" && (
         <Button variant="ghost" onClick={update} className={cn("w-full justify-start", indexStale && "text-warning hover:text-warning")}>

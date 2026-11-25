@@ -6,7 +6,7 @@ import { cn } from "../lib/utils";
 import { getMeetingScope } from "../lib/ipc";
 import { useMeetingStore } from "../stores/meetingStore";
 import { showToast } from "../stores/toastStore";
-import { GENERAL_ID, useWorkspaceStore, workspaceById } from "../stores/workspaceStore";
+import { GENERAL_ID, isUnfiledHome, useWorkspaceStore, workspaceById } from "../stores/workspaceStore";
 import { borrowBlocker, moveMeetingTo, setBorrowed, syncActiveScope } from "./meetingScope";
 
 /** What the person is told after a change in a running meeting: one line, both halves of the truth. */
@@ -52,6 +52,8 @@ export function MeetingWorkspaceChip({ meetingId, className }: { meetingId: stri
   }, [meetingId]);
 
   const homeWs = workspaceById(workspaces, home);
+  // Started with a workspace that could not be used: filed nowhere until the person picks one here.
+  const unfiled = isUnfiledHome(home);
   const items = useMemo<MenuItemSpec[]>(() => {
     const open = workspaces.filter((w) => !w.archived);
     const fail = (what: string) => (e: unknown) => showToast(`Couldn't ${what}: ${e instanceof Error ? e.message : String(e)}`, "error");
@@ -66,7 +68,7 @@ export function MeetingWorkspaceChip({ meetingId, className }: { meetingId: stri
           .catch(fail("move the meeting"));
       },
     }));
-    const also: MenuItemSpec[] = open
+    const also: MenuItemSpec[] = (unfiled ? [] : open)
       .filter((w) => w.id !== home)
       .map((w, i) => {
         const blocked = borrowBlocker(homeWs, w);
@@ -88,9 +90,9 @@ export function MeetingWorkspaceChip({ meetingId, className }: { meetingId: stri
         };
       });
     return [...filed, ...also];
-  }, [workspaces, home, borrowed, homeWs, meetingId]);
+  }, [workspaces, home, borrowed, homeWs, meetingId, unfiled]);
 
-  const name = homeWs?.name ?? "General";
+  const name = unfiled ? "No workspace" : homeWs?.name ?? "General";
   const extra = borrowed.length;
 
   return (

@@ -6,6 +6,9 @@ import { sampleDoc } from "../../live-notes/fixtures";
 const h = vi.hoisted(() => ({ doc: null as unknown, saved: [] as unknown[], exported: [] as unknown[], copied: [] as string[] }));
 
 vi.mock("../../lib/ipc", () => ({
+  getNotetakerState: async () => {
+    throw new Error("no state");
+  },
   getMeetingNotes: async () => h.doc,
   getNotetakerSettings: async () => ({ enabled: false, scope: "meeting", provider: null, model: null, effort: null, update_mode: "automatic", detail: "standard", language: "meeting", cap: 120000, colors: true }),
   saveMeetingNotesEdit: async (_id: string, edit: unknown) => {

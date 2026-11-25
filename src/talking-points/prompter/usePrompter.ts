@@ -81,6 +81,9 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
   const wantVoice = reading.mode === "voice" && voiceOk;
   const wantSaid = reading.saidIt && voiceOk;
 
+  // A hidden panel or background tab does no work: no frame loop, no polling.
+  const shown = useShown(scrollRef);
+
   // the "Go to" and "Back to where I was" offers; they need resume and updateCurrent, defined further down
   const late = useRef<{ resume: () => void; updateCurrent: (token: number) => void } | null>(null);
   const jump = useJumpOffers({
@@ -94,6 +97,7 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     wantVoice,
     followState,
     suggestEnabled: !!opts.suggest,
+    shown,
     clock,
   });
   const jumpRef = useRef(jump);
@@ -157,9 +161,6 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     indexRef,
     layoutKey: [index, reading.fontSize, reading.lineSpacing],
   });
-
-  // A hidden panel or background tab does no work: no frame loop, no polling.
-  const shown = useShown(scrollRef);
 
   // -- the user's voice --------------------------------------------------------------------
 

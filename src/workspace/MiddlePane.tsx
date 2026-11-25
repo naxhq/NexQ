@@ -13,6 +13,7 @@ import type { WorkspaceSummary } from "../lib/types";
 import { ChatPane } from "./chat/ChatPane";
 import { handleOpenRequest } from "./openRequest";
 import { useWorkspaceMeetings } from "./useWorkspaceMeetings";
+import { AGG_PREFIX, waveMeetings } from "./waveMeetings";
 import { WorkspaceSwitcher, SWITCHER_SHORTCUT } from "./WorkspaceSwitcher";
 import { useWorkspaceActions } from "./WorkspaceActions";
 
@@ -83,7 +84,8 @@ export function MiddlePane({
   const remembered = useConfigStore((s) => s.rememberedMeetingSetup);
   const activeMeeting = useMeetingStore((s) => s.activeMeeting);
   const unavailable = useWorkspaceStore((s) => s.unavailable);
-  const { meetings, total } = useWorkspaceMeetings(workspace.id, "", "here");
+  // The wave shows the whole history: a big page, with the oldest gathered by month.
+  const { meetings, total } = useWorkspaceMeetings(workspace.id, "", "here", 1000);
   const hasMessages = useChatHasMessages(workspace.id);
   const box = useRef<HTMLDivElement | null>(null);
   const { width, height } = useElementSize(box);
@@ -93,7 +95,7 @@ export function MiddlePane({
   const iconsOnly = width < HEADER_ICONS_BELOW;
   const nameOnly = width < HEADER_NAME_ONLY_BELOW;
 
-  const wave = meetings.map((m) => ({ id: m.id, title: m.title, date: m.start_time, duration_seconds: m.duration_seconds }));
+  const wave = waveMeetings(meetings);
 
   const crumbs = (
     <nav aria-label="Breadcrumb" className="ui-meta flex min-w-0 flex-1 items-center gap-1 overflow-hidden text-muted-foreground">
@@ -197,7 +199,7 @@ export function MiddlePane({
             <div className="min-w-0 flex-1 pb-3">
               {wave.length > 0 ? (
                 <>
-                  <MeetingWave meetings={wave} hue={workspace.color} onOpen={onOpenMeeting} height={30} />
+                  <MeetingWave meetings={wave} hue={workspace.color} onOpen={(id) => !id.startsWith(AGG_PREFIX) && onOpenMeeting(id)} height={30} />
                   <Tooltip content="Each bar is one meeting, as long as it ran.">
                     <span tabIndex={0} className="ui-meta mt-1 inline-block rounded text-muted-foreground outline-none ui-focus ui-focus-sm">
                       {total} {total === 1 ? "meeting" : "meetings"}

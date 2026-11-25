@@ -180,7 +180,7 @@ export function Composer(p: ComposerProps) {
         placeholder={compact ? "Ask a follow-up" : "Ask about your meetings, documents and notes"}
         aria-describedby={`${uid}-hint`}
         className={cn(
-          "ui-body block w-full min-w-0 resize-none bg-transparent text-foreground outline-none placeholder:text-muted-foreground/70",
+          "ui-body block w-full min-w-0 resize-none bg-transparent text-foreground outline-none focus-visible:outline-none placeholder:text-muted-foreground/70",
           compact ? "px-2 pb-0.5 pt-1.5" : "px-3.5 pb-1 pt-3",
         )}
       />

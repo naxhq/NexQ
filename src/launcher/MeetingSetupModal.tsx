@@ -7,6 +7,10 @@ import { defaultWorkspaceOf, useWorkspaceStore, workspaceById } from "../stores/
 import { borrowBlocker } from "../workspace/meetingScope";
 import { pickScenario } from "../workspace/scenarioOrder";
 import { VoiceprintMark } from "../voiceprint";
+import { Combobox } from "../ui";
+
+/** Past this many workspaces the picker is a searchable field, not a row of chips. */
+export const MANY_WORKSPACES = 6;
 import type { AudioMode, AIScenario } from "../lib/types";
 import {
   Monitor,
@@ -149,10 +153,10 @@ export function MeetingSetupModal({ open, onStart, onCancel, workspaceId }: Meet
       aria-modal="true"
       aria-label="Meeting setup"
     >
-      <div className="w-[420px] rounded-2xl border border-border/40 bg-card shadow-2xl overflow-hidden">
+      <div className="flex max-h-[calc(100vh-2rem)] w-[420px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl border border-border/40 bg-card shadow-2xl">
 
         {/* ── HEADER ── */}
-        <div className="flex items-center justify-between border-b border-border/20 px-5 py-4">
+        <div className="flex shrink-0 items-center justify-between border-b border-border/20 px-5 py-4">
           <div className="flex items-center gap-2.5">
             <div
               className="flex h-8 w-8 items-center justify-center rounded-lg"
@@ -166,7 +170,7 @@ export function MeetingSetupModal({ open, onStart, onCancel, workspaceId }: Meet
             <div>
               <h2 className="text-sm font-semibold text-foreground">Start Meeting</h2>
               <p className="text-[11px] text-muted-foreground/60 leading-tight">
-                Configure audio mode and scenario
+                {home ? `Goes to ${home.name}` : "Configure audio mode and scenario"}
               </p>
             </div>
           </div>
@@ -181,7 +185,7 @@ export function MeetingSetupModal({ open, onStart, onCancel, workspaceId }: Meet
 
         {/* ── COMPACT VIEW (remembered, not expanded) ── */}
         {!isExpanded && rememberedSetup !== null ? (
-          <div className="px-5 py-4 space-y-4">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
             {/* Saved preferences summary */}
             <div className="rounded-xl border border-border/30 bg-secondary/20 px-4 py-3 space-y-2">
               <div className="flex items-center justify-between">
@@ -210,12 +214,24 @@ export function MeetingSetupModal({ open, onStart, onCancel, workspaceId }: Meet
                   {audioMode === "online" ? "Online" : "In-Person"}
                 </span>
                 {/* Workspace */}
-                {workspaces.length > 1 && home && (
-                  <span className="flex items-center gap-1.5 rounded-full border border-border/30 px-2.5 py-1 text-xs font-medium text-foreground/80">
-                    <VoiceprintMark id={home.id} hue={home.color} size={11} />
-                    {home.name}
-                  </span>
-                )}
+                {home &&
+                  (selectable.length > 1 ? (
+                    <button
+                      type="button"
+                      onClick={() => setIsExpanded(true)}
+                      aria-label={`Workspace: ${home.name}. Change`}
+                      className="flex cursor-pointer items-center gap-1.5 rounded-full border border-border/40 px-2.5 py-1 text-xs font-medium text-foreground/80 outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60"
+                    >
+                      <VoiceprintMark id={home.id} hue={home.color} size={11} />
+                      {home.name}
+                      <span className="text-muted-foreground">Change</span>
+                    </button>
+                  ) : (
+                    <span className="flex items-center gap-1.5 rounded-full border border-border/30 px-2.5 py-1 text-xs font-medium text-foreground/80">
+                      <VoiceprintMark id={home.id} hue={home.color} size={11} />
+                      {home.name}
+                    </span>
+                  ))}
                 {/* Scenario badge */}
                 <span className="rounded-full border border-border/30 bg-accent/20 px-2.5 py-1 text-xs font-medium text-foreground/80">
                   {scenarioName}
@@ -249,7 +265,123 @@ export function MeetingSetupModal({ open, onStart, onCancel, workspaceId }: Meet
           </div>
         ) : (
           /* ── FULL SELECTION VIEW ── */
-          <div className="px-5 py-4 space-y-5">
+          <>
+            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
+            {/* ── Workspace and what it also uses ── */}
+            {selectable.length > 1 && (
+              <div>
+                <p id="setup-workspace-label" className="mb-2.5 text-xs font-semibold text-foreground/80">
+                  Workspace
+                </p>
+                {archivedNote && (
+                  <p className="mb-2 text-xs text-muted-foreground" role="note">
+                    {archivedNote}
+                  </p>
+                )}
+                {selectable.length > MANY_WORKSPACES ? (
+                  // Many workspaces: one searchable field, so the dialog does not grow with them.
+                  <Combobox
+                    label="Workspace"
+                    value={homeId}
+                    onChange={changeHome}
+                    options={selectable.map((w) => ({ value: w.id, label: w.name }))}
+                    emptyText="No workspace matches that"
+                  />
+                ) : (
+                <div role="radiogroup" aria-labelledby="setup-workspace-label" className="flex flex-wrap gap-1.5">
+                  {selectable.map((w) => (
+                    <button
+                      key={w.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={w.id === homeId}
+                      onClick={() => changeHome(w.id)}
+                      className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60 cursor-pointer ${
+                        w.id === homeId ? "border-primary/50 bg-primary/10 text-foreground" : "border-border/40 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      }`}
+                    >
+                      <VoiceprintMark id={w.id} hue={w.color} size={12} />
+                      {w.name}
+                    </button>
+                  ))}
+                </div>
+                )}
+                {selectable.length > 1 && (
+                  <fieldset className="mt-3">
+                    <legend className="mb-1.5 text-xs font-medium text-muted-foreground">Also use</legend>
+                    {home?.keep_separate ? (
+                      // One line, not one disabled row per workspace.
+                      <p className="text-xs text-muted-foreground">{home.name} is kept separate, so it neither borrows from nor lends to the others.</p>
+                    ) : (
+                    <div className="max-h-28 space-y-1 overflow-y-auto pr-1">
+                      {selectable
+                        .filter((w) => w.id !== homeId)
+                        .map((w) => {
+                          const blocked = borrowBlocker(home, w);
+                          const on = borrowed.includes(w.id);
+                          return (
+                            <label key={w.id} className={`flex items-center gap-2 text-xs ${blocked ? "opacity-60" : "cursor-pointer"}`}>
+                              <input
+                                type="checkbox"
+                                checked={on}
+                                disabled={!!blocked}
+                                onChange={() => setBorrowed((cur) => (on ? cur.filter((b) => b !== w.id) : [...cur, w.id]))}
+                                className="h-3.5 w-3.5 accent-[hsl(var(--primary))]"
+                              />
+                              <span className="text-foreground/80">{w.name}</span>
+                              {blocked && <span className="text-meta text-muted-foreground">{blocked}</span>}
+                            </label>
+                          );
+                        })}
+                    </div>
+                    )}
+                  </fieldset>
+                )}
+              </div>
+            )}
+
+            {/* ── Scenario Picker ── */}
+            <div>
+              <p className="mb-2.5 text-xs font-semibold text-foreground/80">
+                Scenario
+              </p>
+              <div className="relative">
+                <button
+                  onClick={() => setShowScenarioPicker((v) => !v)}
+                  className="flex w-full items-center justify-between rounded-xl border border-border/30 bg-secondary/10 px-3.5 py-2.5 text-sm font-medium text-foreground transition-all duration-150 hover:bg-secondary/20 hover:border-border/50 cursor-pointer"
+                >
+                  <span>{scenarioName}</span>
+                  <ChevronDown
+                    className={`h-4 w-4 text-muted-foreground/60 transition-transform duration-150 ${showScenarioPicker ? "rotate-180" : ""}`}
+                  />
+                </button>
+
+                {showScenarioPicker && (
+                  <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-[224px] overflow-y-auto rounded-xl border border-border/40 bg-card shadow-xl">
+                    {scenarios.map((s) => (
+                      <button
+                        key={s.id}
+                        onClick={() => {
+                          setScenario(s.id as AIScenario);
+                          setScenarioPicked(true);
+                          setShowScenarioPicker(false);
+                        }}
+                        className={`flex w-full flex-col items-start px-4 py-2.5 text-left transition-colors duration-100 cursor-pointer ${
+                          scenario === s.id
+                            ? "bg-primary/10 text-primary"
+                            : "hover:bg-accent/50 text-foreground"
+                        }`}
+                      >
+                        <span className="text-xs font-semibold">{s.name}</span>
+                        <span className="text-[10px] text-muted-foreground/70 leading-tight mt-0.5">
+                          {s.description}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
 
             {/* ── Audio Mode Cards ── */}
             <div>
@@ -338,106 +470,6 @@ export function MeetingSetupModal({ open, onStart, onCancel, workspaceId }: Meet
               </div>
             </div>
 
-            {/* ── Workspace and what it also uses ── */}
-            {selectable.length > 1 && (
-              <div>
-                <p id="setup-workspace-label" className="mb-2.5 text-xs font-semibold text-foreground/80">
-                  Workspace
-                </p>
-                {archivedNote && (
-                  <p className="mb-2 text-xs text-muted-foreground" role="note">
-                    {archivedNote}
-                  </p>
-                )}
-                <div role="radiogroup" aria-labelledby="setup-workspace-label" className="flex flex-wrap gap-1.5">
-                  {selectable.map((w) => (
-                    <button
-                      key={w.id}
-                      type="button"
-                      role="radio"
-                      aria-checked={w.id === homeId}
-                      onClick={() => changeHome(w.id)}
-                      className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60 cursor-pointer ${
-                        w.id === homeId ? "border-primary/50 bg-primary/10 text-foreground" : "border-border/40 text-muted-foreground hover:bg-accent hover:text-foreground"
-                      }`}
-                    >
-                      <VoiceprintMark id={w.id} hue={w.color} size={12} />
-                      {w.name}
-                    </button>
-                  ))}
-                </div>
-                {selectable.length > 1 && (
-                  <fieldset className="mt-3">
-                    <legend className="mb-1.5 text-xs font-medium text-muted-foreground">Also use</legend>
-                    <div className="space-y-1">
-                      {selectable
-                        .filter((w) => w.id !== homeId)
-                        .map((w) => {
-                          const blocked = borrowBlocker(home, w);
-                          const on = borrowed.includes(w.id);
-                          return (
-                            <label key={w.id} className={`flex items-center gap-2 text-xs ${blocked ? "opacity-60" : "cursor-pointer"}`}>
-                              <input
-                                type="checkbox"
-                                checked={on}
-                                disabled={!!blocked}
-                                onChange={() => setBorrowed((cur) => (on ? cur.filter((b) => b !== w.id) : [...cur, w.id]))}
-                                className="h-3.5 w-3.5 accent-[hsl(var(--primary))]"
-                              />
-                              <span className="text-foreground/80">{w.name}</span>
-                              {blocked && <span className="text-meta text-muted-foreground">{blocked}</span>}
-                            </label>
-                          );
-                        })}
-                    </div>
-                  </fieldset>
-                )}
-              </div>
-            )}
-
-            {/* ── Scenario Picker ── */}
-            <div>
-              <p className="mb-2.5 text-xs font-semibold text-foreground/80">
-                Scenario
-              </p>
-              <div className="relative">
-                <button
-                  onClick={() => setShowScenarioPicker((v) => !v)}
-                  className="flex w-full items-center justify-between rounded-xl border border-border/30 bg-secondary/10 px-3.5 py-2.5 text-sm font-medium text-foreground transition-all duration-150 hover:bg-secondary/20 hover:border-border/50 cursor-pointer"
-                >
-                  <span>{scenarioName}</span>
-                  <ChevronDown
-                    className={`h-4 w-4 text-muted-foreground/60 transition-transform duration-150 ${showScenarioPicker ? "rotate-180" : ""}`}
-                  />
-                </button>
-
-                {showScenarioPicker && (
-                  <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-[224px] overflow-y-auto rounded-xl border border-border/40 bg-card shadow-xl">
-                    {scenarios.map((s) => (
-                      <button
-                        key={s.id}
-                        onClick={() => {
-                          setScenario(s.id as AIScenario);
-                          setScenarioPicked(true);
-                          setShowScenarioPicker(false);
-                        }}
-                        className={`flex w-full flex-col items-start px-4 py-2.5 text-left transition-colors duration-100 cursor-pointer ${
-                          scenario === s.id
-                            ? "bg-primary/10 text-primary"
-                            : "hover:bg-accent/50 text-foreground"
-                        }`}
-                      >
-                        <span className="text-xs font-semibold">{s.name}</span>
-                        <span className="text-[10px] text-muted-foreground/70 leading-tight mt-0.5">
-                          {s.description}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
             {/* ── Recording Toggle ── */}
             <div className={`flex items-center justify-between rounded-xl border p-3 transition-all duration-150 ${
               recordingEnabled
@@ -478,6 +510,8 @@ export function MeetingSetupModal({ open, onStart, onCancel, workspaceId }: Meet
               </label>
             </div>
 
+            </div>
+            <div className="shrink-0 space-y-2.5 border-t border-border/20 px-5 py-3">
             {/* ── Remember checkbox ── */}
             <button
               onClick={() => setRemember((v) => !v)}
@@ -503,14 +537,9 @@ export function MeetingSetupModal({ open, onStart, onCancel, workspaceId }: Meet
                 <Play className="h-4 w-4 ml-0.5" fill="white" />
                 <span className="text-sm">Start Meeting</span>
               </button>
-              <button
-                onClick={onCancel}
-                className="w-full rounded-xl border border-border/30 bg-secondary/20 py-2 text-xs font-medium text-muted-foreground transition-all duration-150 hover:bg-secondary/40 hover:text-foreground active:scale-[0.98] cursor-pointer"
-              >
-                Cancel
-              </button>
             </div>
-          </div>
+            </div>
+          </>
         )}
       </div>
     </div>
