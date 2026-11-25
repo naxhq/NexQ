@@ -5,8 +5,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  BriefSettings, BriefSheet, ChatItemPrefValue, ChatMeetingPref, DeleteWorkspaceMode, ContextReport, IndexStatus, LibraryItem, MeetingScope,
-  MemoryItem, NoteDoc, NoteEdit, NotetakerSettings, Passage, PassageKind, PointProgress, PointSaid,
+  BriefSettings, BriefSheet, ChatCapabilities, ItemPref, ChatItemPrefValue, ChatMeetingPref, DeleteWorkspaceMode, ContextReport, IndexStatus, LibraryItem, MeetingScope,
+  MemoryItem, MemorySettings, NoteDoc, NoteEdit, NotetakerSettings, Passage, PassageKind, PointProgress, PointSaid,
   TalkingPoint, TalkingPointPatch, WorkspaceChat, WorkspaceChatPatch, WorkspaceDetail, WorkspaceInput, WorkspaceItemKind,
   WorkspaceMeetingPage, WorkspaceMessage, WorkspacePatch, WorkspaceSummary,
 } from "./types";
@@ -1212,6 +1212,14 @@ export async function listChatMeetingPrefs(workspaceId: string, chatId: string):
 export async function setChatItemPref(chatId: string, kind: string, refId: string, pref: ChatItemPrefValue): Promise<void> {
   return invoke("set_chat_item_pref", { chatId, kind, refId, pref });
 }
+/** Pins and exclusions saved for this chat, so the context panel shows them after a reload. */
+export async function listChatItemPrefs(chatId: string): Promise<ItemPref[]> {
+  return invoke<ItemPref[]>("list_chat_item_prefs", { chatId });
+}
+/** What this chat's model can use now; `tools_off` says which tools are off and why. */
+export async function getChatCapabilities(chatId: string): Promise<ChatCapabilities> {
+  return invoke<ChatCapabilities>("get_chat_capabilities", { chatId });
+}
 /** The estimate shown before sending. */
 export async function previewChatContext(chatId: string, question?: string): Promise<ContextReport> {
   return invoke<ContextReport>("preview_chat_context", { chatId, question });
@@ -1290,6 +1298,14 @@ export async function setBriefSettings(patch: Partial<BriefSettings>): Promise<B
 }
 
 // == IPC: Workspace memory ==
+
+export async function getMemorySettings(): Promise<MemorySettings> {
+  return invoke<MemorySettings>("get_memory_settings");
+}
+/** A patch: only the fields present change. Returns the merged settings. */
+export async function setMemorySettings(patch: Partial<MemorySettings>): Promise<MemorySettings> {
+  return invoke<MemorySettings>("set_memory_settings", { patch });
+}
 
 export async function listMemory(workspaceId: string): Promise<MemoryItem[]> {
   return invoke<MemoryItem[]>("list_memory", { workspaceId });

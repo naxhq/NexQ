@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
-import { buttonClass } from "../../ui";
+import { Button } from "../../ui";
 import { cn } from "../../lib/utils";
 import { APPROVAL_SECONDS, useWorkspaceChatStore, type Approval } from "../../stores/workspaceChatStore";
 
@@ -93,7 +93,7 @@ export function ApprovalCard({ approval }: { approval: Approval }) {
       aria-labelledby={`${id}-t`}
       aria-describedby={`${id}-d`}
       data-approval={approval.state}
-      className="rounded-lg border border-border bg-card px-3.5 py-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+      className="rounded-lg border border-border bg-card px-3.5 py-3 outline-none ui-focus ui-r-lg"
     >
       <p id={`${id}-t`} className="ui-section text-foreground">
         {pending ? "Needs your answer" : "Tool request"}
@@ -106,7 +106,7 @@ export function ApprovalCard({ approval }: { approval: Approval }) {
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-controls={`${id}-a`}
-        className="ui-meta mt-2 inline-flex items-center gap-1 rounded text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+        className="ui-meta mt-2 inline-flex items-center gap-1 rounded text-muted-foreground outline-none hover:text-foreground ui-focus ui-focus-sm"
       >
         <ChevronRight className={cn("h-3 w-3 transition-transform motion-reduce:transition-none", open && "rotate-90")} aria-hidden="true" />
         {open ? "Hide arguments" : "Show arguments"}
@@ -122,7 +122,7 @@ export function ApprovalCard({ approval }: { approval: Approval }) {
           id={`${id}-a`}
           tabIndex={0}
           aria-label="Exact arguments"
-          className="ui-meta mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/60 px-2.5 py-2 text-foreground/90 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          className="ui-meta mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/60 px-2.5 py-2 text-foreground/90 outline-none ui-focus ui-r-md"
         >
           {prettyArgs(approval.args)}
         </pre>
@@ -130,12 +130,12 @@ export function ApprovalCard({ approval }: { approval: Approval }) {
       <div className="mt-3 flex min-h-8 flex-wrap items-center gap-2">
         {pending || approval.state === "sending" ? (
           <>
-            <button type="button" disabled={!pending} onClick={() => respond(true)} className={cn(buttonClass.base, partial ? buttonClass.quiet : buttonClass.primary)}>
+            <Button variant={partial ? "quiet" : "primary"} disabled={!pending} onClick={() => respond(true)}>
               Allow once
-            </button>
-            <button type="button" data-deny disabled={!pending} onClick={() => respond(false)} className={cn(buttonClass.base, partial ? buttonClass.primary : buttonClass.quiet)}>
+            </Button>
+            <Button variant={partial ? "primary" : "quiet"} data-deny disabled={!pending} onClick={() => respond(false)}>
               Deny
-            </button>
+            </Button>
             <span className="ui-meta ml-auto tabular-nums text-muted-foreground" role="timer" aria-label={`${left} seconds left`}>
               {approval.state === "sending" ? "Sending" : `Denied automatically in ${left} s`}
             </span>

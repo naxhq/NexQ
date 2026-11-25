@@ -257,3 +257,44 @@ describe("NotePage on long and narrow meetings", () => {
     expect(stops.filter((s) => s.matches("[data-block-id]"))).toHaveLength(1);
   });
 });
+
+describe("NotePage live regions", () => {
+  const more: NoteDoc = { version: 1, blocks: [...sampleDoc.blocks, block({ id: "n1", parent: "b1", text: "a" })] };
+  function scrolled(container: HTMLElement) {
+    const el = screen.getByTestId("note-scroll");
+    Object.defineProperty(el, "scrollHeight", { configurable: true, value: 1000 });
+    Object.defineProperty(el, "clientHeight", { configurable: true, value: 100 });
+    fireEvent.scroll(el);
+    void container;
+  }
+
+  it("speaks a count only while focus is in the page, and at most every 30 seconds", () => {
+    vi.useFakeTimers();
+    const a = actions();
+    const { container, rerender } = render(<NotePage doc={sampleDoc} colors editable follow arrivals={{ seq: 0, added: [] }} actions={a} />);
+    scrolled(container);
+    const announcer = screen.getByTestId("note-announcer");
+    // Focus elsewhere: nothing is said.
+    rerender(<NotePage doc={more} colors editable follow arrivals={{ seq: 1, added: ["n1"] }} actions={a} />);
+    act(() => void vi.advanceTimersByTime(1000));
+    expect(announcer).toHaveTextContent("");
+    // Focus inside: the next count is said.
+    container.querySelector<HTMLElement>("[data-block-id]")!.focus();
+    rerender(<NotePage doc={more} colors editable follow arrivals={{ seq: 2, added: ["n1", "n1b"] }} actions={a} />);
+    act(() => void vi.advanceTimersByTime(1000));
+    expect(announcer).toHaveTextContent(/new line/);
+    const first = announcer.textContent;
+    rerender(<NotePage doc={more} colors editable follow arrivals={{ seq: 3, added: ["x", "y", "z"] }} actions={a} />);
+    act(() => void vi.advanceTimersByTime(10_000));
+    expect(announcer.textContent).toBe(first);
+    act(() => void vi.advanceTimersByTime(21_000));
+    expect(announcer.textContent).not.toBe(first);
+    vi.useRealTimers();
+  });
+
+  it("never marks the page itself live", () => {
+    const { container } = page();
+    expect(container.querySelector("[aria-live]")).toBeNull();
+    expect(container.querySelector(".ln-page [role='status']")).toBeNull();
+  });
+});

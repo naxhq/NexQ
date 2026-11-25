@@ -1,11 +1,10 @@
 import type { ReactNode } from "react";
 import { FolderInput } from "lucide-react";
-import { Menu, type MenuTriggerProps } from "../ui";
+import { Menu, type MenuTriggerProps, Button, IconButton } from "../ui";
 import { showToast } from "../stores/toastStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { cn } from "../lib/utils";
 import { moveMeetingTo } from "./meetingScope";
-import { iconButtonClass, quietButton } from "./styles";
 
 export interface MoveMeetingMenuProps {
   meetingId: string;
@@ -48,8 +47,7 @@ export function MoveMeetingMenu({ meetingId, currentWorkspaceId = "general", var
       className={className}
       renderTrigger={(props: MenuTriggerProps, state): ReactNode =>
         variant === "icon" ? (
-          <button
-            type="button"
+          <IconButton
             {...props}
             onClick={(e) => {
               e.stopPropagation();
@@ -59,16 +57,14 @@ export function MoveMeetingMenu({ meetingId, currentWorkspaceId = "general", var
               e.stopPropagation();
               props.onKeyDown(e);
             }}
-            aria-label="Move to workspace"
-            className={cn(iconButtonClass, state.open && "bg-accent text-foreground")}
-          >
+            aria-label="Move to workspace" className={cn(state.open && "bg-accent text-foreground")}>
             <FolderInput className="h-3.5 w-3.5" aria-hidden="true" />
-          </button>
+          </IconButton>
         ) : (
-          <button type="button" {...props} className={cn(quietButton, state.open && "bg-accent text-foreground")}>
+          <Button variant="ghost" {...props} className={cn(state.open && "bg-accent text-foreground")}>
             <FolderInput className="h-3.5 w-3.5" aria-hidden="true" />
             Move to workspace
-          </button>
+          </Button>
         )
       }
     />

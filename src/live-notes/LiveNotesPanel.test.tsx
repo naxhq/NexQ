@@ -5,6 +5,8 @@ import type { NotetakerSettings, NotetakerState } from "../lib/types";
 import { sampleDoc } from "./fixtures";
 
 vi.mock("../lib/ipc", () => ({
+  cliAgentStatus: async () => null,
+  getApiKey: async () => null,
   getLLMProviders: async () => ["openai", "groq"],
   listModels: async () => [],
   cliAgentModels: async () => [],
@@ -62,7 +64,7 @@ describe("statusWords", () => {
     expect(statusWords(run("capped"), on).word).toBe("Paused");
     expect(statusWords(run("error"), on).word).toBe("Stopped");
     expect(statusWords(run("finished"), on).word).toBe("Stopped");
-    expect(statusWords(run("running"), { ...on, enabled: false }).word).toBe("Notes are off");
+    expect(statusWords(run("running"), { ...on, enabled: false }).word).toBe("Off");
     expect(statusWords(run("idle"), { ...on, update_mode: "manual" }).word).toBe("Waiting for you");
   });
 });
@@ -71,7 +73,7 @@ describe("NotesPanel", () => {
   it("first run explains what it does and what it sends, then turns on with the chosen scope", async () => {
     seed({ settings: { enabled: false }, doc: false, run: null });
     render(<NotesPanel />);
-    expect(screen.getByRole("heading", { name: "Notes are off" })).toBeInTheDocument();
+    expect(screen.getByText("Live notes: Off")).toBeInTheDocument();
     expect(screen.getByText(/sends only the transcript/i)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("radio", { name: "Every meeting" }));
     await userEvent.click(screen.getByRole("button", { name: "Turn on notes" }));
@@ -81,7 +83,7 @@ describe("NotesPanel", () => {
   it("shows the status, the page, the token meter and the shortcut", () => {
     seed({});
     render(<NotesPanel />);
-    expect(screen.getByRole("heading", { name: "Taking notes" })).toBeInTheDocument();
+    expect(screen.getByText("Live notes: Taking notes")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Launch plan" })).toBeInTheDocument();
     expect(screen.getByText("42k of 120k tokens")).toBeInTheDocument();
     expect(screen.getByRole("meter", { name: "Notes tokens used" })).toHaveAttribute("aria-valuenow", "42000");
@@ -105,7 +107,7 @@ describe("NotesPanel", () => {
   it("asks Keep taking notes? at the cap, with Keep going and Stop", async () => {
     seed({ run: { status: "capped", tokens_used: 120000, cap: 120000 } });
     render(<NotesPanel />);
-    expect(screen.getByRole("heading", { name: "Paused" })).toBeInTheDocument();
+    expect(screen.getByText("Live notes: Paused")).toBeInTheDocument();
     const prompt = screen.getByRole("group", { name: "Keep taking notes?" });
     expect(prompt).toHaveTextContent("120k tokens");
     expect(screen.getByRole("button", { name: /Update now/ })).toBeDisabled();
@@ -129,7 +131,7 @@ describe("NotesPanel", () => {
   it("shows a stopped run and a failed command in words", () => {
     seed({ run: { status: "error", reason: "The model did not answer three times." }, error: "Could not reach the app." });
     render(<NotesPanel />);
-    expect(screen.getByRole("heading", { name: "Stopped" })).toBeInTheDocument();
+    expect(screen.getByText("Live notes: Stopped")).toBeInTheDocument();
     expect(screen.getAllByRole("alert")).toHaveLength(2);
     expect(screen.getByText("Could not reach the app.")).toBeInTheDocument();
   });
@@ -160,5 +162,13 @@ describe("NotesPanel", () => {
     render(<NotesPanel />);
     await userEvent.click(screen.getByRole("button", { name: "Undo delete" }));
     expect(calls).toEqual(["undo"]);
+  });
+
+  it("speaks its state once, in a status region, and the heading is not live", () => {
+    seed({});
+    const { container } = render(<NotesPanel />);
+    expect(screen.getByRole("heading", { name: "Live notes" })).toBeInTheDocument();
+    expect(screen.getByText("Live notes: Taking notes", { selector: "[role='status']" })).toBeInTheDocument();
+    expect(container.querySelector("h2[aria-live]")).toBeNull();
   });
 });

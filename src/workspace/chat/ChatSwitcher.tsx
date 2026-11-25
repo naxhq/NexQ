@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Pencil, Plus, Search, Trash2 } from "lucide-react";
-import { ConfirmDialog, InlineEdit } from "../../ui";
+import { Button, ConfirmDialog, IconButton, InlineEdit } from "../../ui";
 import { Portal, anchorOf, placeBox, useDismiss, useMeasured, type Anchor } from "../../ui/portal";
 import { formatCheckedAgo } from "../../lib/claudeModels";
 import type { WorkspaceChat } from "../../lib/types";
@@ -8,9 +8,6 @@ import { useWorkspaceChatStore } from "../../stores/workspaceChatStore";
 import { cn } from "../../lib/utils";
 import { COLUMN } from "./column";
 import { PickerCaret } from "./ModelPicker";
-
-const iconBtn =
-  "inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60";
 
 /** Filter by title, newest first. */
 export function filterChats(chats: WorkspaceChat[], query: string): WorkspaceChat[] {
@@ -119,7 +116,7 @@ export function ChatSwitcher({
           aria-haspopup="dialog"
           aria-expanded={open}
           onClick={() => (open ? close(false) : openIt())}
-          className="ui-meta inline-flex h-7 items-center gap-1.5 rounded-md px-2 font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+          className="ui-meta inline-flex h-7 items-center gap-1.5 rounded-md px-2 font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground ui-focus ui-r-md"
         >
           Chats{chats.length > 0 ? ` (${chats.length})` : ""}
           <PickerCaret />
@@ -127,7 +124,7 @@ export function ChatSwitcher({
         <button
           type="button"
           onClick={() => void create()}
-          className="ui-meta inline-flex h-7 items-center gap-1.5 rounded-md px-2 font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+          className="ui-meta inline-flex h-7 items-center gap-1.5 rounded-md px-2 font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground ui-focus ui-r-md"
         >
           <Plus className="h-3.5 w-3.5" aria-hidden="true" />
           New chat
@@ -184,14 +181,14 @@ export function ChatSwitcher({
                           setRenaming(null);
                         }
                       }}
-                      className="ui-body m-1 min-w-0 flex-1 rounded border border-input bg-background px-2 py-1 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                      className="ui-body m-1 min-w-0 flex-1 rounded border border-input bg-background px-2 py-1 text-foreground outline-none ui-focus ui-focus-sm"
                     />
                   ) : (
                     <button
                       type="button"
                       onClick={() => pick(c)}
                       aria-current={chat?.id === c.id ? "true" : undefined}
-                      className="min-w-0 flex-1 rounded-md px-2 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                      className="min-w-0 flex-1 rounded-md px-2 py-1.5 text-left outline-none ui-focus ui-r-md"
                     >
                       <span className={cn("ui-body block truncate text-foreground", chat?.id === c.id && "font-semibold")}>{c.title || "New chat"}</span>
                       <span className="ui-meta block text-muted-foreground">
@@ -201,20 +198,18 @@ export function ChatSwitcher({
                   )}
                   {renaming !== c.id && (
                     <span className="flex shrink-0 opacity-0 transition-opacity focus-within:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100">
-                      <button
-                        type="button"
+                      <IconButton
                         aria-label={`Rename ${c.title}`}
-                        className={iconBtn}
                         onClick={() => {
                           setRenameText(c.title);
                           setRenaming(c.id);
                         }}
                       >
                         <Pencil className="h-3 w-3" aria-hidden="true" />
-                      </button>
-                      <button type="button" aria-label={`Delete ${c.title}`} className={iconBtn} onClick={() => setDeleting(c)}>
+                      </IconButton>
+                      <IconButton aria-label={`Delete ${c.title}`} onClick={() => setDeleting(c)}>
                         <Trash2 className="h-3 w-3" aria-hidden="true" />
-                      </button>
+                      </IconButton>
                     </span>
                   )}
                 </li>

@@ -52,7 +52,7 @@ export function CitationChip({
         aria-label={`Source ${tag}: ${citationWhere(citation)}`}
         className={cn(
           chipClass,
-          "cursor-pointer bg-accent text-foreground/85 outline-none transition-colors hover:bg-accent/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/70",
+          "cursor-pointer bg-accent text-foreground/85 outline-none transition-colors hover:bg-accent/70 hover:text-foreground ui-focus",
         )}
       >
         {tag}
@@ -89,7 +89,7 @@ function buildComponents(citations: WorkspaceCitation[], live: boolean, onOpen?:
     ol: ({ children }) => <ol className="list-decimal space-y-1 pl-5 marker:text-muted-foreground">{children}</ol>,
     blockquote: ({ children }) => <blockquote className="border-l-2 border-border pl-3 text-foreground/80">{children}</blockquote>,
     hr: () => <hr className="border-border" />,
-    pre: ({ children }) => <pre className="max-w-full overflow-x-auto rounded-lg bg-muted/60 px-3 py-2.5 text-[0.8rem] leading-relaxed">{children}</pre>,
+    pre: ({ children }) => <pre className="max-w-full overflow-x-auto rounded-lg bg-muted/60 px-3 py-2.5 ui-meta leading-relaxed">{children}</pre>,
     code: ({ className, children }) =>
       className ? (
         <code className={className}>{children}</code>

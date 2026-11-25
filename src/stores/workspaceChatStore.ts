@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import type {
+  ChatCapabilities,
   ChatItemPrefValue,
+  ItemPref,
+  WorkspaceChatErrorKind,
   ContextReport,
   SourceActivity,
   WorkspaceChat,
@@ -12,6 +15,7 @@ import {
   onWorkspaceChatActivity,
   onWorkspaceChatApproval,
   onWorkspaceChatApprovalClosed,
+  onWorkspaceChatApprovalRefused,
   onWorkspaceChatContext,
   onWorkspaceChatEnd,
   onWorkspaceChatError,
@@ -64,6 +68,8 @@ export interface Turn {
   report: ContextReport | null;
   approvals: Approval[];
   error: string | null;
+  /** The backend's name for the failure, when it gave one. */
+  errorKind: WorkspaceChatErrorKind | null;
   startedAt: number;
 }
 
@@ -85,6 +91,10 @@ export interface ChatSession {
   previewFailed: boolean;
   /** Meetings left out of this chat (a mirror of what was sent to the backend, which has no getter). */
   excluded: string[];
+  /** Pins and exclusions saved for this chat (the backend's list). */
+  itemPrefs: ItemPref[];
+  /** What the chat's model can use now, and which tools are off and why. */
+  capabilities: ChatCapabilities | null;
 }
 
 const emptySession = (): ChatSession => ({
@@ -98,6 +108,8 @@ const emptySession = (): ChatSession => ({
   previewing: false,
   previewFailed: false,
   excluded: [],
+  itemPrefs: [],
+  capabilities: null,
 });
 
 export const EMPTY_SESSION: ChatSession = Object.freeze(emptySession()) as ChatSession;
@@ -217,6 +229,8 @@ interface ChatState {
   dismissTurn: (chatId: string) => void;
   answerApproval: (approval: Approval, allow: boolean) => Promise<void>;
   refreshPreview: (chatId: string, question?: string) => Promise<void>;
+  refreshCapabilities: (chatId: string) => Promise<void>;
+  loadItemPrefs: (chatId: string) => Promise<void>;
   setItemPref: (chatId: string, kind: string, refId: string, pref: ChatItemPrefValue) => Promise<boolean>;
   setMeetingIncluded: (workspaceId: string, chatId: string, meetingId: string, included: boolean) => Promise<boolean>;
 }
@@ -320,13 +334,13 @@ export const useWorkspaceChatStore = create<ChatState>((set, get) => {
     void reconcile(chatId, message.id);
   };
 
-  const failTurn = (chatId: string, requestId: string, error: string) => {
+  const failTurn = (chatId: string, requestId: string, error: string, kind: WorkspaceChatErrorKind | null = null) => {
     if (!turnOf(chatId, requestId)) return;
     flushTokens(chatId, requestId);
     const stop = stopTimers.get(requestId);
     if (stop) clearTimeout(stop);
     stopTimers.delete(requestId);
-    patchTurn(chatId, requestId, (t) => ({ status: "failed", error, approvals: settleApprovals(t.approvals) }));
+    patchTurn(chatId, requestId, (t) => ({ status: "failed", error, errorKind: kind, approvals: settleApprovals(t.approvals) }));
   };
 
   return {
@@ -478,6 +492,7 @@ export const useWorkspaceChatStore = create<ChatState>((set, get) => {
       loadSeq.set(chatId, mine);
       const excluded = readExcluded(chatId);
       patchSession(set, chatId, () => ({ loading: true, loadError: null, excluded }));
+      void get().loadItemPrefs(chatId);
       // The backend's own list is the truth; the local mirror is only for older backends.
       const wsOf = findChat(get().chats, chatId)?.workspace_id;
       if (wsOf) {
@@ -538,6 +553,7 @@ export const useWorkspaceChatStore = create<ChatState>((set, get) => {
           report: null,
           approvals: [],
           error: null,
+          errorKind: null,
           startedAt: Date.now(),
         },
       }));
@@ -622,10 +638,29 @@ export const useWorkspaceChatStore = create<ChatState>((set, get) => {
       }
     },
 
+    refreshCapabilities: async (chatId) => {
+      try {
+        const caps = await ipc.getChatCapabilities(chatId);
+        if (caps && typeof caps === "object") patchSession(set, chatId, () => ({ capabilities: caps }));
+      } catch {
+        patchSession(set, chatId, () => ({ capabilities: null }));
+      }
+    },
+
+    loadItemPrefs: async (chatId) => {
+      try {
+        const prefs = await ipc.listChatItemPrefs(chatId);
+        if (Array.isArray(prefs)) patchSession(set, chatId, () => ({ itemPrefs: prefs }));
+      } catch {
+        /* the panel shows what the estimate says */
+      }
+    },
+
     setItemPref: (chatId, kind, refId, pref) =>
       enqueueWrite(chatId, async () => {
         try {
           await ipc.setChatItemPref(chatId, kind, refId, pref);
+          void get().loadItemPrefs(chatId);
           void get().refreshPreview(chatId);
           return true;
         } catch (e) {
@@ -743,7 +778,7 @@ function internal(
     patchTurn: (chatId: string, requestId: string, fn: (t: Turn) => Partial<Turn>) => void;
     flushTokens: (chatId: string, requestId: string) => void;
     finishOk: (chatId: string, requestId: string, message: WorkspaceMessage) => void;
-    failTurn: (chatId: string, requestId: string, error: string) => void;
+    failTurn: (chatId: string, requestId: string, error: string, kind?: WorkspaceChatErrorKind | null) => void;
   },
 ) {
   handlers = {
@@ -780,7 +815,14 @@ function internal(
       }
       h.finishOk(e.chat_id, e.request_id, e.message);
     },
-    error: (e) => h.failTurn(e.chat_id, e.request_id, e.error),
+    error: (e) => h.failTurn(e.chat_id, e.request_id, e.error, e.error_kind ?? null),
+    approvalRefused: (e) => {
+      const turn = get().sessions[e.chat_id]?.turn;
+      if (!turn || (e.request_id && turn.requestId !== e.request_id)) return;
+      const label = `A tool was not run: ${e.reason}`;
+      if (turn.activity.some((a) => a.label === label)) return;
+      h.patchTurn(e.chat_id, turn.requestId, (t) => ({ activity: [...t.activity, { kind: "notice", label, chip: null }] }));
+    },
     approvalClosed: (e) => {
       const timer = approvalTimers.get(e.approval_id);
       if (timer) clearTimeout(timer);
@@ -827,6 +869,7 @@ type Handlers = {
   end: (e: Parameters<Parameters<typeof onWorkspaceChatEnd>[0]>[0]) => void;
   error: (e: Parameters<Parameters<typeof onWorkspaceChatError>[0]>[0]) => void;
   approval: (e: Parameters<Parameters<typeof onWorkspaceChatApproval>[0]>[0]) => void;
+  approvalRefused: (e: Parameters<Parameters<typeof onWorkspaceChatApprovalRefused>[0]>[0]) => void;
   approvalClosed: (e: Parameters<Parameters<typeof onWorkspaceChatApprovalClosed>[0]>[0]) => void;
 };
 
@@ -861,6 +904,7 @@ export function watchWorkspaceChats(): Promise<() => void> {
     await add(onWorkspaceChatError((e) => h().error(e)));
     await add(onWorkspaceChatApproval((e) => h().approval(e)));
     await add(onWorkspaceChatApprovalClosed((e) => h().approvalClosed(e)));
+    await add(onWorkspaceChatApprovalRefused((e) => h().approvalRefused(e)));
     return () => {
       stops.forEach((s) => s());
       watching = null;

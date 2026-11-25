@@ -76,7 +76,7 @@ export function ExampleQuestions({ questions, onPick }: { questions: string[]; o
             <button
               type="button"
               onClick={() => onPick(q)}
-              className="ui-body w-full rounded-md px-2 py-1.5 text-left text-foreground/85 outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+              className="ui-body w-full rounded-md px-2 py-1.5 text-left text-foreground/85 outline-none transition-colors hover:bg-accent hover:text-foreground ui-focus ui-r-md"
             >
               {q}
             </button>

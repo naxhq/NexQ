@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Plus, Search } from "lucide-react";
-import { Select, Switch, buttonClass } from "../ui";
-import { useConfigStore } from "../stores/configStore";
+import { Select, Switch, Button, IconButton } from "../ui";
 import { useMeetingStore } from "../stores/meetingStore";
 import { showToast } from "../stores/toastStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import type { MemoryKind } from "../lib/types";
 import { cn } from "../lib/utils";
-import { fieldClass, hintClass, iconButtonClass } from "../workspace/styles";
+import { fieldClass, hintClass } from "../workspace/styles";
 import { onMemoryChanged } from "../lib/events";
 import { MEMORY_KINDS, UNSUPPORTED_TEXT, groupSaved, useMemoryStore, type MemoryRow } from "./memoryStore";
+import { ModelField, describeModel } from "../models/ModelField";
+import { useMemoryModel } from "./useMemoryModel";
 
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const kindName = (k: MemoryKind) => MEMORY_KINDS.find((x) => x.kind === k)?.singular ?? k;
@@ -88,12 +89,12 @@ function MemoryForm({
         </p>
       )}
       <div className="flex justify-end gap-1.5">
-        <button type="button" className={`${buttonClass.base} ${buttonClass.quiet}`} onClick={onCancel} disabled={busy}>
+        <Button  onClick={onCancel} disabled={busy}>
           Cancel
-        </button>
-        <button type="submit" className={`${buttonClass.base} ${buttonClass.primary}`} disabled={invalid || busy}>
+        </Button>
+        <Button variant="primary" type="submit"  disabled={invalid || busy}>
           {busy ? "Saving" : saveLabel}
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -108,7 +109,7 @@ function SourceLink({ item }: { item: MemoryRow }) {
     <button
       type="button"
       onClick={() => useMeetingStore.getState().setSelectedMeetingId(item.source_meeting)}
-      className="ui-meta rounded text-left text-muted-foreground underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+      className="ui-meta rounded text-left text-muted-foreground underline underline-offset-2 outline-none hover:text-foreground ui-focus ui-focus-sm"
     >
       From {title}
       {at}
@@ -219,22 +220,20 @@ function SuggestionRow({ item, reviewed, onReviewed }: { item: MemoryRow; review
           Reviewed
         </label>
         <span className="flex gap-1">
-          <button type="button" className={`${buttonClass.base} ${buttonClass.quiet} h-7 px-2`} onClick={() => void resolve(item, "dismiss").catch(fail("dismiss it"))}>
+          <Button size="sm"  onClick={() => void resolve(item, "dismiss").catch(fail("dismiss it"))}>
             Dismiss
-          </button>
-          <button
-            type="button"
-            className={`${buttonClass.base} ${buttonClass.quiet} h-7 px-2`}
+          </Button>
+          <Button size="sm"
+            
             onClick={() => {
               onReviewed(true);
               setEditing(true);
-            }}
-          >
+            }}>
             Edit
-          </button>
-          <button type="button" className={`${buttonClass.base} ${buttonClass.primary} h-7 px-2.5`} onClick={() => void resolve(item, "save").catch(fail("save it"))}>
+          </Button>
+          <Button variant="primary" size="sm"  onClick={() => void resolve(item, "save").catch(fail("save it"))}>
             Save
-          </button>
+          </Button>
         </span>
       </div>
     </li>
@@ -257,8 +256,6 @@ export function MemorySection({ workspaceId }: { workspaceId: string }) {
   const meetings = useMeetingStore((s) => s.recentMeetings);
   const detail = useWorkspaceStore((s) => s.details[workspaceId]);
   const update = useWorkspaceStore((s) => s.update);
-  const provider = useConfigStore((s) => s.llmProvider);
-  const model = useConfigStore((s) => s.llmModel);
   const [query, setQuery] = useState("");
   const [adding, setAdding] = useState(false);
   const [reviewed, setReviewed] = useState<Set<string>>(new Set());
@@ -289,7 +286,8 @@ export function MemorySection({ workspaceId }: { workspaceId: string }) {
   const groups = useMemo(() => groupSaved(all, query), [all, query]);
   const savedCount = all.filter((m) => m.status === "saved").length;
   const fromMeeting = suggested[0]?.source_meeting ? meetings.find((m) => m.id === suggested[0].source_meeting)?.title : undefined;
-  const modelName = model ? `${provider} ${model}` : provider;
+  const memoryModel = useMemoryModel();
+  const modelName = describeModel(memoryModel.value);
   const reviewedItems = suggested.filter((m) => reviewed.has(m.id));
 
   const saveReviewed = async () => {
@@ -309,9 +307,9 @@ export function MemorySection({ workspaceId }: { workspaceId: string }) {
         <h3 className="ui-section text-foreground">
           Memory <span className="ui-meta font-normal tabular-nums text-muted-foreground">{savedCount || ""}</span>
         </h3>
-        <button type="button" onClick={() => setAdding(true)} className={iconButtonClass} aria-label="Add to memory">
+        <IconButton onClick={() => setAdding(true)}  aria-label="Add to memory">
           <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-        </button>
+        </IconButton>
       </div>
 
       {suggest?.status === "running" && (
@@ -349,7 +347,7 @@ export function MemorySection({ workspaceId }: { workspaceId: string }) {
               type="button"
               disabled={reviewedItems.length === 0}
               onClick={() => void saveReviewed()}
-              className="ui-meta rounded font-semibold underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:no-underline disabled:opacity-50"
+              className="ui-meta rounded font-semibold underline underline-offset-2 outline-none ui-focus ui-focus-sm disabled:no-underline disabled:opacity-50"
             >
               Save all reviewed{reviewedItems.length ? ` (${reviewedItems.length})` : ""}
             </button>
@@ -419,8 +417,12 @@ export function MemorySection({ workspaceId }: { workspaceId: string }) {
           checked={!!detail?.suggest_memory}
           onChange={(on) => void update(workspaceId, { suggest_memory: on }).catch((e) => showToast(`Couldn't change it: ${messageOf(e)}`, "error"))}
           label="Suggest after meetings"
-          description={`After a meeting here, one AI call to ${modelName} reads its transcript and proposes up to 8 items. Nothing is kept until you save it.`}
+          description={`After a meeting here, one AI call (${modelName}) reads its transcript and proposes up to 8 items. Nothing is kept until you save it.`}
         />
+        <div className="mt-2 max-w-sm">
+          <ModelField label="Model for memory suggestions" value={memoryModel.value} onChange={(v) => void memoryModel.change(v)} />
+          {memoryModel.error && <p className="ui-meta mt-1 text-muted-foreground" role="alert">{memoryModel.error}</p>}
+        </div>
       </div>
     </section>
   );

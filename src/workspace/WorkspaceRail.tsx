@@ -1,13 +1,12 @@
 import { useMemo } from "react";
 import { Archive, LayoutList, MoreHorizontal, Pin, Plus, MessagesSquare } from "lucide-react";
-import { Menu, Tooltip } from "../ui";
+import { Menu, Tooltip, IconButton } from "../ui";
 import { VoiceprintMark } from "../voiceprint";
 import { cn } from "../lib/utils";
 import { railOrder, useWorkspaceStore } from "../stores/workspaceStore";
 import type { WorkspaceSummary } from "../lib/types";
 import { useWorkspaceActions } from "./WorkspaceActions";
 import { MeetingList } from "./MeetingList";
-import { iconButtonClass } from "./styles";
 
 function WorkspaceRow({ workspace, active, onOpen }: { workspace: WorkspaceSummary; active: boolean; onOpen: () => void }) {
   const actions = useWorkspaceActions();
@@ -18,7 +17,7 @@ function WorkspaceRow({ workspace, active, onOpen }: { workspace: WorkspaceSumma
         onClick={onOpen}
         aria-current={active ? "page" : undefined}
         className={cn(
-          "flex w-full items-center gap-2.5 rounded-lg py-1.5 pl-2.5 pr-9 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60",
+          "flex w-full items-center gap-2.5 rounded-lg py-1.5 pl-2.5 pr-9 text-left outline-none transition-colors ui-focus ui-r-lg",
           active ? "bg-accent text-foreground" : "text-foreground/80 hover:bg-accent/60 hover:text-foreground",
         )}
       >
@@ -38,9 +37,9 @@ function WorkspaceRow({ workspace, active, onOpen }: { workspace: WorkspaceSumma
           items={actions.menuFor(workspace)}
           align="end"
           renderTrigger={(props) => (
-            <button type="button" {...props} className={iconButtonClass} aria-label={`Actions for ${workspace.name}`}>
+            <IconButton {...props}  aria-label={`Actions for ${workspace.name}`}>
               <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
-            </button>
+            </IconButton>
           )}
         />
       </div>
@@ -93,7 +92,7 @@ export function WorkspaceRail({
                   aria-label={w.name}
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "flex h-9 w-10 items-center justify-center rounded-lg outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60",
+                    "flex h-9 w-10 items-center justify-center rounded-lg outline-none transition-colors ui-focus ui-r-lg",
                     active ? "bg-accent" : "hover:bg-accent/60",
                   )}
                 >
@@ -104,19 +103,19 @@ export function WorkspaceRail({
           })}
         <div className="mt-1 flex flex-col items-center gap-1 border-t border-border pt-2">
           <Tooltip content="New workspace">
-            <button type="button" onClick={actions.create} className={iconButtonClass} aria-label="New workspace">
+            <IconButton onClick={actions.create}  aria-label="New workspace">
               <Plus className="h-4 w-4" aria-hidden="true" />
-            </button>
+            </IconButton>
           </Tooltip>
           <Tooltip content="All workspaces">
-            <button type="button" onClick={() => setView("all")} className={iconButtonClass} aria-label="All workspaces" aria-current={view === "all" ? "page" : undefined}>
+            <IconButton onClick={() => setView("all")}  aria-label="All workspaces" aria-current={view === "all" ? "page" : undefined}>
               <LayoutList className="h-4 w-4" aria-hidden="true" />
-            </button>
+            </IconButton>
           </Tooltip>
           <Tooltip content={`Meetings in ${open?.name ?? "General"}`}>
-            <button type="button" onClick={onShowMeetings} className={iconButtonClass} aria-label={`Meetings in ${open?.name ?? "General"}`}>
+            <IconButton onClick={onShowMeetings}  aria-label={`Meetings in ${open?.name ?? "General"}`}>
               <MessagesSquare className="h-4 w-4" aria-hidden="true" />
-            </button>
+            </IconButton>
           </Tooltip>
         </div>
       </nav>
@@ -132,15 +131,15 @@ export function WorkspaceRail({
             <button
               type="button"
               onClick={() => setView("all")}
-              className="ui-meta rounded-md px-1.5 py-1 font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+              className="ui-meta rounded-md px-1.5 py-1 font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground ui-focus ui-r-md"
               aria-current={view === "all" ? "page" : undefined}
             >
               See all
             </button>
             <Tooltip content="New workspace">
-              <button type="button" onClick={actions.create} className={iconButtonClass} aria-label="New workspace">
+              <IconButton onClick={actions.create}  aria-label="New workspace">
                 <Plus className="h-4 w-4" aria-hidden="true" />
-              </button>
+              </IconButton>
             </Tooltip>
           </div>
         </div>
@@ -154,7 +153,7 @@ export function WorkspaceRail({
             type="button"
             onClick={() => setShowArchived(!showArchived)}
             aria-expanded={showArchived}
-            className="ui-meta mx-2 mb-2 flex items-center gap-1.5 rounded-md px-2 py-1 text-left text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+            className="ui-meta mx-2 mb-2 flex items-center gap-1.5 rounded-md px-2 py-1 text-left text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground ui-focus ui-r-md"
           >
             <Archive className="h-3 w-3" aria-hidden="true" />
             {showArchived ? "Hide archived" : `Show archived (${archivedCount})`}

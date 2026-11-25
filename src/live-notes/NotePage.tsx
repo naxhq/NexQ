@@ -34,6 +34,9 @@ export interface NotePageProps {
 
 type Draft = { after: string | null; parent: string | null; type: NoteBlockType } | null;
 
+/** The most often the page may speak up about new lines. */
+export const ANNOUNCE_EVERY_MS = 30_000;
+
 const prefersCalm = () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
 /** The notes as a set page: topics with a time rule, lead lines, marked items. */
@@ -45,6 +48,23 @@ export function NotePage({ doc, colors, editable, fresh, arrivals, follow = fals
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
+
+  const [spoken, setSpoken] = useState("");
+  const lastSpoken = useRef(0);
+  useEffect(() => {
+    if (unseen === 0) {
+      setSpoken("");
+      return;
+    }
+    const say = () => {
+      if (!scroller.current?.parentElement?.contains(document.activeElement)) return;
+      lastSpoken.current = Date.now();
+      setSpoken(`${unseen} new ${unseen === 1 ? "line" : "lines"}`);
+    };
+    const wait = Math.max(0, ANNOUNCE_EVERY_MS - (Date.now() - lastSpoken.current));
+    const t = setTimeout(say, wait);
+    return () => clearTimeout(t);
+  }, [unseen]);
 
   const sections = useMemo(() => buildSections(doc.blocks), [doc.blocks]);
   const { shown, hidden } = useMemo(() => windowSections(sections, limit), [sections, limit]);
@@ -224,7 +244,7 @@ export function NotePage({ doc, colors, editable, fresh, arrivals, follow = fals
     <div className={cn("relative flex min-h-0 flex-1 flex-col", className)}>
       <div
         ref={scroller}
-        className="ln-scroll"
+        className="rs-scroll"
         onScroll={onScroll}
         onKeyDown={onKeyDown}
         role="region"
@@ -233,7 +253,7 @@ export function NotePage({ doc, colors, editable, fresh, arrivals, follow = fals
       >
         <div className={cn("ln-page", !colors && "ln-plain")}>
           {hidden > 0 && (
-            <button type="button" className="ln-tool ln-tool-solid mb-2 ml-1" onClick={() => setLimit((n) => n + windowSize)}>
+            <button type="button" className="rs-tool rs-tool-solid mb-2 ml-1" onClick={() => setLimit((n) => n + windowSize)}>
               Show {Math.min(hidden, windowSize)} earlier {Math.min(hidden, windowSize) === 1 ? "line" : "lines"} ({hidden} folded)
             </button>
           )}
@@ -241,7 +261,7 @@ export function NotePage({ doc, colors, editable, fresh, arrivals, follow = fals
           {editable && (
             <button
               type="button"
-              className="ln-tool ln-add"
+              className="rs-tool ln-add"
               onClick={() => setDraft({ after: lastBlock?.id ?? null, parent: lastTopic?.id ?? null, type: "bullet" })}
             >
               <Plus className="h-3 w-3" aria-hidden />
@@ -264,19 +284,21 @@ export function NotePage({ doc, colors, editable, fresh, arrivals, follow = fals
           )}
         </div>
       </div>
-      <div role="status" aria-live="polite">
-        {unseen > 0 && (
-          <button
-            type="button"
-            className="ln-pill"
-            onClick={() => {
-              scrollToEnd(true);
-              setUnseen(0);
-            }}
-          >
-            {unseen} new {unseen === 1 ? "line" : "lines"}
-          </button>
-        )}
+      {unseen > 0 && (
+        <button
+          type="button"
+          className="ln-pill"
+          onClick={() => {
+            scrollToEnd(true);
+            setUnseen(0);
+          }}
+        >
+          {unseen} new {unseen === 1 ? "line" : "lines"}
+        </button>
+      )}
+      {/* Spoken rarely: a count at most every 30 s, and only while focus is in the page. */}
+      <div role="status" className="rs-sr" data-testid="note-announcer">
+        {spoken}
       </div>
     </div>
   );

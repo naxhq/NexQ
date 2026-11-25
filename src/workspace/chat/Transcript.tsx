@@ -55,7 +55,7 @@ function Marker({ count, expanded, onToggle }: { count: number; expanded: boolea
             type="button"
             onClick={onToggle}
             aria-expanded={expanded}
-            className="rounded font-medium text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+            className="rounded font-medium text-foreground underline underline-offset-2 outline-none ui-focus ui-focus-sm"
           >
             {expanded ? "Hide originals" : `Show ${count} ${count === 1 ? "original" : "originals"}`}
           </button>
@@ -247,7 +247,7 @@ export function Transcript({
         <p id="ws-chat-keys" className="sr-only">
           Alt and the up or down arrow move between answers.
         </p>
-        <div className={cn(COLUMN, "text-[0.84375rem]")}>
+        <div className={cn(COLUMN, "ui-body")}>
           {virtual && virtualizer.getVirtualItems().length === 0 ? (
             // The window has no size yet (hidden pane): draw the newest few so it is never blank.
             items.slice(-FALLBACK_TAIL).map((it, i) => <div key={it.type === "turn" ? it.turn.key : `m${i}`}>{renderItem(it)}</div>)
@@ -283,7 +283,7 @@ export function Transcript({
             toBottom();
             setAway(false);
           }}
-          className="ui-meta absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-border bg-popover px-3 py-1.5 font-medium text-foreground shadow-[0_6px_18px_-8px_rgba(0,0,0,0.5)] outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60"
+          className="ui-meta absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-border bg-popover px-3 py-1.5 font-medium text-foreground shadow-[0_6px_18px_-8px_rgba(0,0,0,0.5)] outline-none hover:bg-accent ui-focus ui-focus-pill"
         >
           Jump to the latest
         </button>

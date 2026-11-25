@@ -5,6 +5,8 @@ import type { BriefSheet } from "../lib/types";
 
 const hits = vi.hoisted(() => ({ list: [] as unknown[] }));
 vi.mock("../lib/ipc", () => ({
+  cliAgentStatus: async () => null,
+  getApiKey: async () => null,
   getLLMProviders: async () => [],
   listModels: async () => [],
   cliAgentModels: async () => [],
@@ -63,7 +65,7 @@ describe("BriefPanel", () => {
   it("shows the topic line, facts with source chips, earlier points folded, and the age", () => {
     seed();
     render(<BriefPanel />);
-    expect(screen.getByRole("heading", { name: "Listening" })).toBeInTheDocument();
+    expect(screen.getByText("Brief: Waiting for speech")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Pricing for the Berlin launch" })).toBeInTheDocument();
     expect(within(screen.getByRole("list", { name: "Facts about this topic" })).getAllByRole("listitem")).toHaveLength(2);
     expect(screen.getByRole("button", { name: "Open source: Launch notes" })).toBeInTheDocument();
@@ -98,7 +100,7 @@ describe("BriefPanel", () => {
   it("starts by explaining itself and what it sends, then turns on", async () => {
     seed({ sheet: null, workspaceEnabled: false, run: null });
     render(<BriefPanel />);
-    expect(screen.getByRole("heading", { name: "Brief is off" })).toBeInTheDocument();
+    expect(screen.getByText("Brief: Off")).toBeInTheDocument();
     expect(screen.getByText(/Live answers use it/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Turn on the brief" }));
     expect(calls).toEqual(["turn_on"]);
@@ -154,9 +156,9 @@ describe("BriefPanel", () => {
 
 describe("briefStatusWords", () => {
   it("says the state in words", () => {
-    expect(briefStatusWords(undefined, false)).toBe("Brief is off");
-    expect(briefStatusWords("running", true)).toBe("Looking");
-    expect(briefStatusWords("idle", true)).toBe("Listening");
+    expect(briefStatusWords(undefined, false)).toBe("Off");
+    expect(briefStatusWords("running", true)).toBe("Checking the workspace");
+    expect(briefStatusWords("idle", true)).toBe("Waiting for speech");
     expect(briefStatusWords("capped", true)).toBe("Paused");
     expect(briefStatusWords("error", true)).toBe("Stopped");
   });

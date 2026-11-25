@@ -34,6 +34,7 @@ const ipc = vi.hoisted(() => ({
   getApiKey: vi.fn(),
   listChatMeetingPrefs: vi.fn(),
   setChatItemPref: vi.fn(),
+  getChatCapabilities: vi.fn(),
 }));
 vi.mock("../../lib/ipc", async (orig) => ({ ...(await orig<typeof import("../../lib/ipc")>()), ...ipc }));
 
@@ -547,5 +548,28 @@ describe("add to instructions", () => {
     fireEvent.change(field, { target: { value: "Always cite sources." } });
     await user.click(within(dialog).getByRole("button", { name: "Add to instructions" }));
     await waitFor(() => expect(update).toHaveBeenCalledWith(WS, { instructions: "Be brief." + String.fromCharCode(10, 10) + "Always cite sources." }));
+  });
+});
+
+describe("can_ask never blocks the chat", () => {
+  it.each([
+    ["claude_cli", true],
+    ["codex_cli", false],
+    ["antigravity_cli", false],
+    ["ollama", false],
+    ["openai", false],
+  ])("%s (can_ask %s) asks normally and still shows the tools-off note", async (provider, canAsk) => {
+    useConfigStore.setState({ llmProvider: provider as never, llmModel: "m" });
+    ipc.getChatCapabilities.mockResolvedValue({
+      can_ask: canAsk,
+      tools_off: canAsk ? [] : [{ tool: "CRM: update_deal", reason: "This one can't ask before running a tool that changes things." }],
+      notes: [],
+    });
+    setup({ chats: [chat("c1")], messages: pairs(1) });
+    const box = await typeQuestion("Go ahead");
+    if (!canAsk) expect(await screen.findByRole("button", { name: /CRM: update_deal is off/ })).toBeInTheDocument();
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(ipc.askWorkspace).toHaveBeenCalledWith("c1", "Go ahead", expect.any(String), false));
+    useConfigStore.setState({ llmProvider: "ollama", llmModel: "" });
   });
 });

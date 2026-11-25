@@ -1,6 +1,6 @@
 import type { NotetakerSettings } from "../lib/types";
 import { Segmented, Select, Switch } from "../ui";
-import { ModelPicker } from "./ModelPicker";
+import { ModelField } from "../models/ModelField";
 
 export const CAP_CHOICES = [30000, 60000, 120000, 240000, 500000];
 
@@ -101,8 +101,7 @@ export function NotesSettingsForm({
         />
       </Field>
       <Field label="Model">
-        <ModelPicker
-          idPrefix="notes"
+        <ModelField
           value={{ provider: settings.provider, model: settings.model, effort: settings.effort }}
           onChange={(c) => onChange(c)}
         />

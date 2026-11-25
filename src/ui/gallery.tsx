@@ -2,6 +2,7 @@
 // the import with import.meta.env.DEV, so none of this reaches a release).
 
 import { useMemo, useState, type ReactNode } from "react";
+import { Plus } from "lucide-react";
 import {
   ColorSwatches,
   Combobox,
@@ -17,7 +18,8 @@ import {
   Switch,
   Tooltip,
   WORKSPACE_HUES,
-  buttonClass,
+  Button,
+  IconButton,
 } from "./index";
 import { ContextWave, MeetingWave, VoiceprintMark } from "../voiceprint";
 import type { ContextBar, ContextLayer } from "../lib/types";
@@ -85,9 +87,9 @@ export default function UiGallery() {
     <div className="mx-auto max-w-3xl px-6 py-8">
       <header className="mb-2 flex items-center justify-between">
         <h1 className="ui-title">UI gallery</h1>
-        <button className={cn(buttonClass.base, buttonClass.quiet, "border border-border")} onClick={toggleTheme}>
+        <Button onClick={toggleTheme}>
           {dark ? "Switch to light" : "Switch to dark"}
-        </button>
+        </Button>
       </header>
       <p className="ui-body ui-measure text-muted-foreground">Review page for the workspace kit. Not part of the release build.</p>
 
@@ -141,9 +143,7 @@ export default function UiGallery() {
           <Menu
             label="Panels"
             renderTrigger={(props) => (
-              <button {...props} className={cn(buttonClass.base, buttonClass.quiet, "border border-border")}>
-                Panels
-              </button>
+              <Button {...props}>Panels</Button>
             )}
             items={[
               { id: "t", label: "Transcript", checked: true, onSelect: () => {} },
@@ -152,7 +152,7 @@ export default function UiGallery() {
             ]}
           />
           <Tooltip content="Search deeper uses the deep budget">
-            <button className={cn(buttonClass.base, buttonClass.quiet, "border border-border")}>Hover or focus me</button>
+            <Button>Hover or focus me</Button>
           </Tooltip>
         </div>
         <div className="mt-4 flex items-center gap-3">
@@ -164,18 +164,33 @@ export default function UiGallery() {
         </div>
       </Block>
 
+      <Block title="Buttons">
+        <div className="flex flex-wrap items-center gap-3">
+          <Button variant="primary" size="lg">Start meeting</Button>
+          <Button variant="primary">Primary</Button>
+          <Button>Quiet</Button>
+          <Button variant="ghost">Ghost</Button>
+          <Button variant="danger">Delete</Button>
+          <Button variant="primary" size="sm">Small</Button>
+          <Button size="sm">Small quiet</Button>
+          <Button disabled>Disabled</Button>
+          <IconButton aria-label="Add"><Plus className="h-3.5 w-3.5" aria-hidden="true" /></IconButton>
+          <IconButton aria-label="Add (larger)" size="md" variant="quiet"><Plus className="h-4 w-4" aria-hidden="true" /></IconButton>
+        </div>
+      </Block>
+
       <Block title="Dialogs and sheets">
         <div className="flex gap-2">
-          <button className={cn(buttonClass.base, buttonClass.primary)} onClick={() => setDialog("plain")}>Dialog</button>
-          <button className={cn(buttonClass.base, buttonClass.danger)} onClick={() => setDialog("danger")}>Confirm delete</button>
-          <button className={cn(buttonClass.base, buttonClass.quiet, "border border-border")} onClick={() => setDialog("sheet")}>Slide over</button>
+          <Button variant="primary" onClick={() => setDialog("plain")}>Dialog</Button>
+          <Button variant="danger" onClick={() => setDialog("danger")}>Confirm delete</Button>
+          <Button onClick={() => setDialog("sheet")}>Slide over</Button>
         </div>
         <Dialog
           open={dialog === "plain"}
           onClose={() => setDialog(null)}
           title="New workspace"
           description="A place for the meetings, chats and material of one job."
-          footer={<button className={cn(buttonClass.base, buttonClass.primary)} onClick={() => setDialog(null)}>Create</button>}
+          footer={<Button variant="primary" onClick={() => setDialog(null)}>Create</Button>}
         >
           <InlineEdit value="" onCommit={() => {}} label="name" placeholder="Name" />
         </Dialog>
@@ -198,7 +213,7 @@ export default function UiGallery() {
           mark={<VoiceprintMark id="empty" size={28} />}
           title="No meetings yet"
           body="Start one, or add material to ask questions across it."
-          action={<button className={cn(buttonClass.base, buttonClass.primary)}>Start meeting</button>}
+          action={<Button variant="primary">Start meeting</Button>}
         />
       </Block>
     </div>

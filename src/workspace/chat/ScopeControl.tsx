@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Search } from "lucide-react";
 import { Portal, anchorOf, placeBox, useDismiss, useMeasured, type Anchor } from "../../ui/portal";
-import { Switch } from "../../ui";
+import { Switch, Button } from "../../ui";
 import { listWorkspaceMeetings } from "../../lib/ipc";
 import type { MeetingSummary, WorkspaceChat } from "../../lib/types";
 import { useWorkspaceChatStore } from "../../stores/workspaceChatStore";
@@ -135,12 +135,12 @@ export function ScopeBody({ workspaceId, chat, excluded, autoFocus = true }: Sco
             </span>
             <span className="flex gap-1">
               {meetings.length < total && (
-                <button type="button" onClick={() => setLimit((n) => n + PAGE)} className="ui-meta rounded px-1.5 py-0.5 text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60">
+                <button type="button" onClick={() => setLimit((n) => n + PAGE)} className="ui-meta rounded px-1.5 py-0.5 text-foreground outline-none hover:bg-accent ui-focus ui-focus-sm">
                   Show more
                 </button>
               )}
               {left > 0 && (
-                <button type="button" onClick={includeAll} className="ui-meta rounded px-1.5 py-0.5 text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60">
+                <button type="button" onClick={includeAll} className="ui-meta rounded px-1.5 py-0.5 text-foreground outline-none hover:bg-accent ui-focus ui-focus-sm">
                   Use all again
                 </button>
               )}
@@ -184,7 +184,7 @@ export function ScopeControl({ workspaceId, chat, excluded, ensureChat, disabled
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => (open ? close(false) : void openIt())}
-        className="ui-meta inline-flex h-7 items-center gap-1.5 rounded-md px-2 font-medium text-foreground/85 outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-50"
+        className="ui-meta inline-flex h-7 items-center gap-1.5 rounded-md px-2 font-medium text-foreground/85 outline-none transition-colors hover:bg-accent ui-focus ui-r-md disabled:opacity-50"
       >
         <span>{scopeSummary(includeMeetings, excluded.length)}</span>
         <PickerCaret />

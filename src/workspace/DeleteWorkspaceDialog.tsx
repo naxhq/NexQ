@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Dialog, buttonClass } from "../ui";
+import { Dialog, Button } from "../ui";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import type { WorkspaceSummary } from "../lib/types";
 import { hintClass } from "./styles";
@@ -70,17 +70,15 @@ export function DeleteWorkspaceDialog({
       dismissible={!busy}
       footer={
         <>
-          <button type="button" className={`${buttonClass.base} ${buttonClass.quiet}`} onClick={() => onClose(false)} disabled={busy}>
+          <Button  onClick={() => onClose(false)} disabled={busy}>
             Cancel
-          </button>
-          <button
-            type="button"
-            className={`${buttonClass.base} ${choice === "delete" ? buttonClass.danger : buttonClass.primary}`}
+          </Button>
+          <Button variant={choice === "delete" ? "danger" : "primary"}
+            
             onClick={run}
-            disabled={busy}
-          >
+            disabled={busy}>
             {busy ? "Working" : confirmLabel}
-          </button>
+          </Button>
         </>
       }
     >

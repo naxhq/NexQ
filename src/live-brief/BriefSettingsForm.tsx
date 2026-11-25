@@ -1,6 +1,6 @@
 import type { BriefSettings } from "../lib/types";
 import { Select } from "../ui";
-import { ModelPicker } from "../live-notes/ModelPicker";
+import { ModelField } from "../models/ModelField";
 import { formatTokens } from "../live-notes/NotesSettingsForm";
 
 export const BRIEF_CAP_CHOICES = [30000, 60000, 120000, 240000];
@@ -12,7 +12,7 @@ export function BriefSettingsForm({ settings, onChange }: { settings: BriefSetti
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-1.5">
         <div className="ui-section">Model</div>
-        <ModelPicker idPrefix="brief" value={{ provider: settings.provider, model: settings.model, effort: settings.effort }} onChange={(c) => onChange(c)} />
+        <ModelField value={{ provider: settings.provider, model: settings.model, effort: settings.effort }} onChange={(c) => onChange(c)} />
       </div>
       <div className="flex flex-col gap-1.5">
         <div className="ui-section">Limit per meeting</div>

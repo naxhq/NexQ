@@ -1,5 +1,6 @@
 import { useId, useRef, type ReactNode, type RefObject } from "react";
 import { cn } from "../lib/utils";
+import { Button, buttonBase } from "./Button";
 import { Portal } from "./portal";
 import { useFocusTrap } from "./useFocusTrap";
 
@@ -103,8 +104,9 @@ export function Dialog({ size = "md", ...rest }: DialogProps) {
   return <ModalLayer {...rest} placement="center" className={SIZES[size]} />;
 }
 
+/** The recipe as class strings, for code that has not moved to <Button> yet. Same look as Button, size md. */
 export const buttonClass = {
-  base: "ui-body inline-flex h-8 items-center justify-center rounded-lg px-3.5 font-medium outline-none ui-focus transition-colors duration-150 disabled:opacity-50",
+  base: buttonBase("md"),
   quiet: "ui-field text-foreground",
   primary: "bg-primary text-primary-foreground hover:bg-primary/90",
   danger: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
@@ -149,17 +151,12 @@ export function ConfirmDialog({
       initialFocusRef={tone === "danger" ? cancelRef : confirmRef}
       footer={
         <>
-          <button ref={cancelRef} type="button" onClick={onCancel} className={cn(buttonClass.base, buttonClass.quiet)}>
+          <Button ref={cancelRef} onClick={onCancel}>
             {cancelLabel}
-          </button>
-          <button
-            ref={confirmRef}
-            type="button"
-            onClick={onConfirm}
-            className={cn(buttonClass.base, tone === "danger" ? buttonClass.danger : buttonClass.primary)}
-          >
+          </Button>
+          <Button ref={confirmRef} variant={tone === "danger" ? "danger" : "primary"} onClick={onConfirm}>
             {confirmLabel}
-          </button>
+          </Button>
         </>
       }
     >

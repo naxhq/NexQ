@@ -80,7 +80,7 @@ export function Segmented<T extends string = string>({ value, onChange, options,
             tabIndex={i === at ? 0 : -1}
             onClick={() => onChange(o.value)}
             className={cn(
-              "ui-body ui-focus-sm inline-flex h-7 items-center justify-center rounded-md px-3 outline-none ui-focus transition-colors duration-150 disabled:opacity-45",
+              "ui-body ui-r-md inline-flex h-7 items-center justify-center rounded-md px-3 outline-none ui-focus transition-colors duration-150 disabled:opacity-45",
               on ? "ui-raised font-medium text-foreground" : "text-muted-foreground hover:bg-[hsl(var(--ui-field-hover))] hover:text-foreground",
             )}
           >

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import type { CliAgentKind, ClaudeModelInfo, ModelInfo, WorkspaceChat } from "../../lib/types";
-import { CLI_AGENTS, cliAgentInfo, cliEffectiveEffort, cliModelLabel, isCliAgent, resolveListedModel } from "../../lib/cliAgents";
-import { STATIC_CLAUDE_MODELS, findClaudeModel } from "../../lib/claudeModels";
-import { isOutdated } from "../../lib/agentUsage";
-import { getApiKey, listModels } from "../../lib/ipc";
-import { useConfigStore } from "../../stores/configStore";
-import { useAgentStore } from "../../stores/agentStore";
+import type { CliAgentKind, ClaudeModelInfo, ModelInfo, WorkspaceChat } from "../lib/types";
+import { CLI_AGENTS, cliAgentInfo, cliEffectiveEffort, cliModelLabel, isCliAgent, resolveListedModel } from "../lib/cliAgents";
+import { STATIC_CLAUDE_MODELS, findClaudeModel } from "../lib/claudeModels";
+import { isOutdated } from "../lib/agentUsage";
+import { getApiKey, listModels } from "../lib/ipc";
+import { useConfigStore } from "../stores/configStore";
+import { useAgentStore } from "../stores/agentStore";
+import { PROVIDER_LABELS, providerLabel } from "./labels";
 
 export type ProviderGroup = "subscription" | "cloud" | "local";
 /** What an answer can use: folders and tools (CLI agents) or only the passages found for it. */
@@ -18,20 +19,6 @@ export const CAPABILITY_TEXT: Record<Capability, string> = {
 
 /** Said where Codex and Antigravity are offered: they can't ask before a tool runs yet. */
 export const TOOLS_OFF_TEXT = "Tools that change things are off with this version";
-
-export const PROVIDER_LABELS: Record<string, string> = {
-  ollama: "Ollama",
-  lm_studio: "LM Studio",
-  openai: "OpenAI",
-  anthropic: "Anthropic",
-  groq: "Groq",
-  gemini: "Gemini",
-  openrouter: "OpenRouter",
-  custom: "Custom endpoint",
-  claude_cli: "Claude",
-  antigravity_cli: "Antigravity",
-  codex_cli: "Codex",
-};
 
 const GROUP_OF: Record<string, ProviderGroup> = {
   ollama: "local",
@@ -55,7 +42,7 @@ export const GROUP_NAMES: Record<ProviderGroup, string> = {
 
 const EMBEDDING = ["embed", "all-minilm", "nomic-embed", "bge-", "text-embedding", "snowflake-arctic", "jina-embedding"];
 
-export const providerLabel = (provider: string) => PROVIDER_LABELS[provider] ?? provider;
+export { PROVIDER_LABELS, providerLabel };
 export const capabilityOf = (provider: string): Capability => (isCliAgent(provider) ? "tools" : "passages");
 
 export interface ModelChoice {

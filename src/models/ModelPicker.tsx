@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Check, ChevronDown, Search } from "lucide-react";
-import { Portal, anchorOf, placeBox, useDismiss, useMeasured, type Anchor } from "../../ui/portal";
-import { cn } from "../../lib/utils";
-import { CAPABILITY_TEXT, GROUP_NAMES, TOOLS_OFF_TEXT, choiceKey, toolsOffInChat, useModelCatalog, type ModelChoice, type ProviderSection } from "./models";
+import { Portal, anchorOf, placeBox, useDismiss, useMeasured, type Anchor } from "../ui/portal";
+import { cn } from "../lib/utils";
+import { CAPABILITY_TEXT, GROUP_NAMES, TOOLS_OFF_TEXT, choiceKey, toolsOffInChat, useModelCatalog, type ModelChoice, type ProviderSection } from "./catalog";
 
 export interface ModelPickerProps {
   /** What is chosen now (null = nothing yet). */
@@ -15,13 +15,15 @@ export interface ModelPickerProps {
   buttonClassName?: string;
   onOpenSettings?: () => void;
   disabled?: boolean;
+  /** Say what each provider can use in chat (folders and tools, or found passages). Off for notes and brief. */
+  showCapabilities?: boolean;
 }
 
 /**
  * Any configured provider: subscriptions (Claude, Codex, Antigravity), cloud keys and local
  * servers, grouped, filterable, each saying what it can use. Our own listbox (no native select).
  */
-export function ModelPicker({ value, onPick, label, children, buttonClassName, onOpenSettings, disabled }: ModelPickerProps) {
+export function ModelPicker({ value, onPick, label, children, buttonClassName, onOpenSettings, disabled, showCapabilities = true }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -169,6 +171,7 @@ export function ModelPicker({ value, onPick, label, children, buttonClassName, o
                   onHover={setActive}
                   onChoose={choose}
                   onOpenSettings={onOpenSettings}
+                  showCapabilities={showCapabilities}
                 />
               ))}
             </div>
@@ -189,7 +192,9 @@ function Section({
   onHover,
   onChoose,
   onOpenSettings,
+  showCapabilities,
 }: {
+  showCapabilities: boolean;
   section: ProviderSection;
   firstOfGroup: boolean;
   uid: string;
@@ -211,7 +216,9 @@ function Section({
       <div role="group" aria-labelledby={headId}>
         <div id={headId} className="px-3 pb-0.5 pt-1.5">
           <span className="ui-body font-semibold text-foreground">{section.label}</span>
-          <span className="ui-meta ml-2 text-muted-foreground">{CAPABILITY_TEXT[section.capability]}{toolsOffInChat(section.provider) ? `. ${TOOLS_OFF_TEXT}` : ""}</span>
+          {showCapabilities && (
+            <span className="ui-meta ml-2 text-muted-foreground">{CAPABILITY_TEXT[section.capability]}{toolsOffInChat(section.provider) ? `. ${TOOLS_OFF_TEXT}` : ""}</span>
+          )}
         </div>
         {section.loading && <p className="ui-meta px-3 py-1 text-muted-foreground">Loading models</p>}
         {section.error && (

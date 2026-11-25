@@ -56,16 +56,16 @@ export function NotesTab({ meetingId, title, onJump }: NotesTabProps) {
   const empty = !mine || mine.blocks.length === 0;
 
   return (
-    <div className="ln-root mx-auto w-full max-w-3xl" data-testid="notes-tab">
-      <div className="ln-head">
-        <h2 className="ln-status">Notes</h2>
-        <button type="button" className="ln-tool ln-tool-solid" disabled={empty} onClick={() => void copyText(markdown, "Notes copied")}>
+    <div className="rs-root mx-auto w-full max-w-3xl" data-testid="notes-tab">
+      <div className="rs-head">
+        <h2 className="rs-status">Notes</h2>
+        <button type="button" className="rs-tool rs-tool-solid" disabled={empty} onClick={() => void copyText(markdown, "Notes copied")}>
           <Copy className="h-3 w-3" aria-hidden />
           Copy as Markdown
         </button>
         <button
           type="button"
-          className="ln-tool ln-tool-solid"
+          className="rs-tool rs-tool-solid"
           disabled={empty}
           onClick={() => void saveExportFile({ defaultName: `${title || "meeting"} notes`, extension: "md", filterLabel: "Markdown", content: markdown })}
         >
@@ -73,22 +73,22 @@ export function NotesTab({ meetingId, title, onJump }: NotesTabProps) {
           Save as file
         </button>
         {undoStack.length > 0 && (
-          <button type="button" className="ln-tool" onClick={() => void store.getState().undo(meetingId)}>
+          <button type="button" className="rs-tool" onClick={() => void store.getState().undo(meetingId)}>
             <Undo2 className="h-3 w-3" aria-hidden />
             Undo {undoStack[undoStack.length - 1].label.toLowerCase()}
           </button>
         )}
       </div>
       {error && (
-        <div className="ln-notice" role="alert">
-          <div className="ln-notice-title">That did not work</div>
+        <div className="rs-notice" role="alert">
+          <div className="rs-notice-title">That did not work</div>
           <p>{error}</p>
         </div>
       )}
       {!loaded ? (
-        <p className="ln-empty text-muted-foreground" role="status">Loading the notes</p>
+        <p className="rs-empty text-muted-foreground" role="status">Loading the notes</p>
       ) : empty ? (
-        <div className="ln-empty">
+        <div className="rs-empty">
           <h3>No notes for this meeting</h3>
           <p>Turn on live notes in the meeting window and they are saved here, ready to edit and export.</p>
         </div>

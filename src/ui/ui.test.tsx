@@ -3,7 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  Button,
   ColorSwatches,
+  IconButton,
   Combobox,
   ConfirmDialog,
   Dialog,
@@ -478,5 +480,48 @@ describe("EmptyState and Kbd", () => {
   it("Kbd is a kbd element", () => {
     render(<Kbd>N</Kbd>);
     expect(screen.getByText("N").tagName).toBe("KBD");
+  });
+});
+
+describe("Button and IconButton", () => {
+  it("is a type=button by default, with one focus treatment and a size-matched radius", () => {
+    render(<Button>Save</Button>);
+    const b = screen.getByRole("button", { name: "Save" });
+    expect(b).toHaveAttribute("type", "button");
+    expect(b.className).toContain("ui-focus");
+    expect(b.className).toContain("rounded-lg");
+    expect(b.className).toContain("ui-r-lg");
+  });
+  it("sm is h-7 rounded-md and lg is rounded-xl; variants change only colour", () => {
+    render(
+      <div>
+        <Button size="sm">S</Button>
+        <Button size="lg" variant="primary">L</Button>
+        <Button variant="danger">D</Button>
+      </div>,
+    );
+    expect(screen.getByRole("button", { name: "S" }).className).toMatch(/h-7.*rounded-md|rounded-md.*h-7/);
+    expect(screen.getByRole("button", { name: "L" }).className).toContain("rounded-xl");
+    expect(screen.getByRole("button", { name: "D" }).className).toContain("bg-destructive");
+  });
+  it("forwards its ref, clicks and the disabled state", async () => {
+    const user = userEvent.setup();
+    const onClick = vi.fn();
+    let ref: HTMLButtonElement | null = null;
+    render(
+      <Button ref={(el) => { ref = el; }} onClick={onClick} disabled>
+        Go
+      </Button>,
+    );
+    expect(ref).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    expect(onClick).not.toHaveBeenCalled();
+  });
+  it("IconButton needs a name and is at least 28 px square", () => {
+    render(<IconButton aria-label="Add">+</IconButton>);
+    const b = screen.getByRole("button", { name: "Add" });
+    expect(b.className).toContain("h-7");
+    expect(b.className).toContain("w-7");
+    expect(b.className).toContain("ui-focus");
   });
 });

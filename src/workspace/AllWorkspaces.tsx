@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { MoreHorizontal, Pin, Plus, Search } from "lucide-react";
-import { Menu, Select, Switch, buttonClass } from "../ui";
+import { Menu, Select, Switch, Button, IconButton } from "../ui";
 import { MeetingWave, VoiceprintMark } from "../voiceprint";
 import { listWorkspaceMeetings } from "../lib/ipc";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { formatRelativeTime, cn } from "../lib/utils";
 import type { MeetingSummary, WorkspaceSummary } from "../lib/types";
 import { useWorkspaceActions } from "./WorkspaceActions";
-import { fieldClass, hintClass, iconButtonClass } from "./styles";
+import { fieldClass, hintClass } from "./styles";
 
 export type WorkspaceSort = "manual" | "name" | "activity" | "meetings";
 
@@ -97,10 +97,10 @@ export function AllWorkspaces({ onOpenMeeting }: { onOpenMeeting: (workspaceId: 
               {workspaces.filter((w) => !w.archived).length} {workspaces.filter((w) => !w.archived).length === 1 ? "workspace" : "workspaces"}. Each keeps its meetings, chats and files apart.
             </p>
           </div>
-          <button type="button" onClick={actions.create} className={`${buttonClass.base} ${buttonClass.primary} h-9 gap-1.5 px-4`}>
+          <Button variant="primary" size="lg" onClick={actions.create} className="gap-1.5">
             <Plus className="h-4 w-4" aria-hidden="true" />
             New workspace
-          </button>
+          </Button>
         </div>
 
         <div className="mt-6 flex flex-wrap items-center gap-3">
@@ -133,7 +133,7 @@ export function AllWorkspaces({ onOpenMeeting }: { onOpenMeeting: (workspaceId: 
                       <button
                         type="button"
                         onClick={() => openWorkspace(w.id)}
-                        className="truncate rounded text-left text-[1.0625rem] font-semibold leading-snug text-foreground outline-none hover:underline hover:underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring/60"
+                        className="truncate rounded text-left ui-dialog-title text-foreground outline-none hover:underline hover:underline-offset-4 ui-focus ui-focus-sm"
                       >
                         {w.name}
                       </button>
@@ -162,9 +162,9 @@ export function AllWorkspaces({ onOpenMeeting }: { onOpenMeeting: (workspaceId: 
                     items={actions.menuFor(w, { canMove: sort === "manual" && !w.archived })}
                     align="end"
                     renderTrigger={(props) => (
-                      <button type="button" {...props} className={iconButtonClass} aria-label={`Actions for ${w.name}`}>
+                      <IconButton {...props}  aria-label={`Actions for ${w.name}`}>
                         <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
-                      </button>
+                      </IconButton>
                     )}
                   />
                 </div>

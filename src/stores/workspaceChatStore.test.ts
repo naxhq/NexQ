@@ -14,6 +14,8 @@ const ipc = vi.hoisted(() => ({
   setChatMeetingIncluded: vi.fn(),
   listChatMeetingPrefs: vi.fn(),
   setChatItemPref: vi.fn(),
+  listChatItemPrefs: vi.fn(),
+  getChatCapabilities: vi.fn(),
 }));
 vi.mock("../lib/ipc", () => ipc);
 vi.mock("../lib/events", () => {
@@ -27,6 +29,7 @@ vi.mock("../lib/events", () => {
     onWorkspaceChatError: none,
     onWorkspaceChatApproval: none,
     onWorkspaceChatApprovalClosed: none,
+    onWorkspaceChatApprovalRefused: none,
   };
 });
 
@@ -400,5 +403,34 @@ describe("left-out meetings", () => {
     ipc.previewChatContext.mockResolvedValue(report());
     expect(await S().setItemPref("c1", "document", "d1", "pin")).toBe(true);
     expect(ipc.setChatItemPref).toHaveBeenCalledWith("c1", "document", "d1", "pin");
+  });
+});
+
+describe("backend words", () => {
+  it("keeps the backend's error kind on a failed turn", async () => {
+    const { reqId } = await startAsk();
+    h().error({ chat_id: "c1", request_id: reqId, error: "boom", error_kind: "rate_limited" });
+    expect(S().sessions.c1.turn).toMatchObject({ status: "failed", errorKind: "rate_limited" });
+  });
+
+  it("a refused tool shows as a note on the answer, once", async () => {
+    const { reqId } = await startAsk();
+    h().approvalRefused({ chat_id: "c1", request_id: reqId, reason: "update_deal can't be undone" });
+    h().approvalRefused({ chat_id: "c1", request_id: reqId, reason: "update_deal can't be undone" });
+    const notes = S().sessions.c1.turn!.activity.filter((a) => a.kind === "notice");
+    expect(notes).toHaveLength(1);
+    expect(notes[0].label).toContain("update_deal");
+  });
+
+  it("loads saved pins and capabilities, and tolerates failures", async () => {
+    ipc.listChatItemPrefs.mockResolvedValue([{ kind: "document", ref_id: "d1", pref: "pin" }]);
+    await S().loadItemPrefs("c1");
+    expect(S().sessions.c1.itemPrefs).toHaveLength(1);
+    ipc.getChatCapabilities.mockResolvedValue({ can_ask: true, tools_off: [{ tool: "CRM: update_deal", reason: "r" }], notes: [] });
+    await S().refreshCapabilities("c1");
+    expect(S().sessions.c1.capabilities?.tools_off[0].tool).toBe("CRM: update_deal");
+    ipc.getChatCapabilities.mockRejectedValue(new Error("x"));
+    await S().refreshCapabilities("c1");
+    expect(S().sessions.c1.capabilities).toBeNull();
   });
 });

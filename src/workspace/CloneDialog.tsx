@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Dialog, buttonClass } from "../ui";
+import { Dialog, Button } from "../ui";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import type { WorkspaceDetail, WorkspaceSummary } from "../lib/types";
 import { fieldClass, hintClass, labelClass } from "./styles";
@@ -55,12 +55,12 @@ export function CloneDialog({
       initialFocusRef={input}
       footer={
         <>
-          <button type="button" className={`${buttonClass.base} ${buttonClass.quiet}`} onClick={() => onClose()} disabled={busy}>
+          <Button  onClick={() => onClose()} disabled={busy}>
             Cancel
-          </button>
-          <button type="button" className={`${buttonClass.base} ${buttonClass.primary}`} onClick={run} disabled={invalid || busy}>
+          </Button>
+          <Button variant="primary"  onClick={run} disabled={invalid || busy}>
             {busy ? "Cloning" : "Clone workspace"}
-          </button>
+          </Button>
         </>
       }
     >

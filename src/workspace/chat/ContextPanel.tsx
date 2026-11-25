@@ -1,7 +1,7 @@
 import { useId, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { CONTEXT_LAYER_NAMES, ContextWave, formatTokens, type ContextSelection } from "../../voiceprint";
-import type { ContextBar, ContextReport } from "../../lib/types";
+import type { ContextBar, ContextReport, ItemPref } from "../../lib/types";
 import { readWaveOpen, useWorkspaceChatStore, writeWaveOpen } from "../../stores/workspaceChatStore";
 import { cn } from "../../lib/utils";
 import { COLUMN } from "./column";
@@ -41,6 +41,7 @@ export function ContextPanel({
   workspaceId,
   chatId,
   excluded,
+  itemPrefs,
   openers,
 }: {
   report: ContextReport | null;
@@ -50,6 +51,8 @@ export function ContextPanel({
   workspaceId: string;
   chatId: string | null;
   excluded: string[];
+  /** Saved pins and exclusions (they persist across reloads). */
+  itemPrefs: ItemPref[];
   openers: ChatOpeners;
 }) {
   const [open, setOpen] = useState(readWaveOpen);
@@ -71,7 +74,7 @@ export function ContextPanel({
             aria-expanded={open}
             aria-controls={`${id}-body`}
             aria-label={`${HEADINGS[subject]}: ${numbers || "nothing yet"}`}
-            className="ui-meta inline-flex h-[22px] shrink-0 items-center gap-1 rounded text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+            className="ui-meta inline-flex h-[22px] shrink-0 items-center gap-1 rounded text-muted-foreground outline-none transition-colors hover:text-foreground ui-focus ui-focus-sm"
           >
             <ChevronRight className={cn("h-3 w-3 transition-transform motion-reduce:transition-none", open && "rotate-90")} aria-hidden="true" />
             Context
@@ -120,6 +123,7 @@ export function ContextPanel({
                 workspaceId={workspaceId}
                 chatId={chatId}
                 excluded={excluded}
+                itemPrefs={itemPrefs}
                 openers={openers}
                 onClose={() => setSelection(null)}
               />
@@ -132,13 +136,14 @@ export function ContextPanel({
 }
 
 const rowBtn =
-  "ui-meta rounded px-1.5 py-0.5 text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60";
+  "ui-meta rounded px-1.5 py-0.5 text-foreground outline-none hover:bg-accent ui-focus ui-focus-sm";
 
 function Inspector({
   selection,
   workspaceId,
   chatId,
   excluded,
+  itemPrefs,
   openers,
   onClose,
 }: {
@@ -146,6 +151,7 @@ function Inspector({
   workspaceId: string;
   chatId: string | null;
   excluded: string[];
+  itemPrefs: ItemPref[];
   openers: ChatOpeners;
   onClose: () => void;
 }) {
@@ -164,12 +170,15 @@ function Inspector({
           const { kind, ref } = parseBar(bar);
           const meeting = bar.layer === "meetings";
           const left = excluded.includes(ref);
+          const saved = itemPrefs.find((p) => p.kind === kind && p.ref_id === ref)?.pref;
+          const pinned = bar.pinned || saved === "pin";
+          const kept = saved === "exclude";
           const fixed = bar.layer === "instructions" || bar.layer === "conversation";
           return (
             <li key={bar.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-1.5">
               <span className="ui-body min-w-0 flex-1 truncate text-foreground">{bar.title}</span>
               <span className="ui-meta tabular-nums text-muted-foreground">
-                {formatTokens(bar.tokens)} tokens{bar.pinned ? ", pinned" : ""}{bar.included ? "" : ", didn't fit"}
+                {formatTokens(bar.tokens)} tokens{pinned ? ", pinned" : ""}{kept ? ", left out" : bar.included ? "" : ", didn't fit"}
               </span>
               {!fixed && (
                 <button
@@ -183,10 +192,10 @@ function Inspector({
               {!fixed && chatId && (
                 <button
                   type="button"
-                  onClick={() => void store.getState().setItemPref(chatId, kind, ref, bar.pinned ? "default" : "pin")}
+                  onClick={() => void store.getState().setItemPref(chatId, kind, ref, pinned ? "default" : "pin")}
                   className={rowBtn}
                 >
-                  {bar.pinned ? "Unpin" : "Pin"}
+                  {pinned ? "Unpin" : "Pin"}
                 </button>
               )}
               {meeting && chatId && (
@@ -195,8 +204,8 @@ function Inspector({
                 </button>
               )}
               {!meeting && !fixed && chatId && (
-                <button type="button" onClick={() => void store.getState().setItemPref(chatId, kind, ref, "exclude")} className={rowBtn}>
-                  Leave out of this chat
+                <button type="button" onClick={() => void store.getState().setItemPref(chatId, kind, ref, kept ? "default" : "exclude")} className={rowBtn}>
+                  {kept ? "Use in this chat" : "Leave out of this chat"}
                 </button>
               )}
             </li>

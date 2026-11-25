@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown } from "lucide-react";
-import { Menu, type MenuItemSpec } from "../ui";
+import { Menu, type MenuItemSpec, Button } from "../ui";
 import { VoiceprintMark } from "../voiceprint";
 import { cn } from "../lib/utils";
 import { getMeetingScope } from "../lib/ipc";
@@ -100,20 +100,18 @@ export function MeetingWorkspaceChip({ meetingId, className }: { meetingId: stri
       align="end"
       className={className}
       renderTrigger={(props, state) => (
-        <button
-          type="button"
+        <Button
           {...props}
+          variant="ghost"
+          size="sm"
           aria-label={`Workspace: ${name}${extra ? `, also using ${extra}` : ""}`}
-          className={cn(
-            "ui-meta inline-flex h-6 max-w-[11rem] items-center gap-1.5 rounded-md px-2 text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60",
-            state.open && "bg-accent",
-          )}
+          className={cn("max-w-[11rem] font-normal text-foreground", state.open && "bg-accent")}
         >
           <VoiceprintMark id={home} hue={homeWs?.color} size={14} />
           {!compact && <span className="truncate">{name}</span>}
           {extra > 0 && <span className="text-muted-foreground">+{extra}</span>}
           {!compact && <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden="true" />}
-        </button>
+        </Button>
       )}
     />
   );

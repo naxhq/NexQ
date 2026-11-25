@@ -1,8 +1,11 @@
 import { BookmarkPlus, Loader2 } from "lucide-react";
 import { showToast } from "../stores/toastStore";
 import { cn } from "../lib/utils";
-import { quietButton } from "../workspace/styles";
 import { useMemoryStore } from "./memoryStore";
+import { Button, Dialog } from "../ui";
+import { useState } from "react";
+import { ModelField, describeModel } from "../models/ModelField";
+import { useMemoryModel } from "./useMemoryModel";
 
 /**
  * "Suggest from this meeting" for the meeting details header: one AI call that
@@ -14,6 +17,8 @@ export function SuggestFromMeeting({ meetingId, workspaceId = "general", classNa
   const run = useMemoryStore((s) => s.runSuggest);
   const mine = state?.meetingId === meetingId ? state : undefined;
   const running = state?.status === "running";
+  const [choosing, setChoosing] = useState(false);
+  const model = useMemoryModel();
 
   const click = async () => {
     await run(workspaceId, meetingId);
@@ -24,9 +29,18 @@ export function SuggestFromMeeting({ meetingId, workspaceId = "general", classNa
   };
 
   return (
-    <button type="button" onClick={() => void click()} disabled={running} aria-busy={running} className={cn(quietButton, className)}>
-      {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <BookmarkPlus className="h-3.5 w-3.5" aria-hidden="true" />}
-      {running && mine ? "Reading the meeting" : "Suggest from this meeting"}
-    </button>
+    <>
+      <Button variant="ghost" onClick={() => void click()} disabled={running} aria-busy={running} className={cn(className)}>
+        {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <BookmarkPlus className="h-3.5 w-3.5" aria-hidden="true" />}
+        {running && mine ? "Reading the meeting" : "Suggest from this meeting"}
+      </Button>
+      <Button variant="ghost" onClick={() => setChoosing(true)} className={cn(className)} aria-label={`Model for suggestions: ${describeModel(model.value)}`}>
+        Model
+      </Button>
+      <Dialog open={choosing} onClose={() => setChoosing(false)} title="Model for memory suggestions" description="Used for this and every later suggestion.">
+        <ModelField label="Model for memory suggestions" value={model.value} onChange={(v) => void model.change(v)} />
+        {model.error && <p className="ui-meta mt-1 text-muted-foreground" role="alert">{model.error}</p>}
+      </Dialog>
+    </>
   );
 }

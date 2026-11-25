@@ -1,6 +1,6 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { FilePlus2, X } from "lucide-react";
-import { SlideOver } from "../ui";
+import { SlideOver, IconButton } from "../ui";
 import { useTauriFileDrop, describeAdd } from "../context/FileUpload";
 import { showToast } from "../stores/toastStore";
 import { defaultWorkspaceOf, shouldShowGeneralNote, useWorkspaceStore, workspaceById } from "../stores/workspaceStore";
@@ -119,14 +119,9 @@ export function WorkspaceHome({
       {noteVisible && (
         <div role="note" className="ui-body flex items-center justify-between gap-3 border-b border-border bg-accent/50 px-6 py-2 text-foreground">
           <span>Your meetings and files are in General. New workspaces keep their own.</span>
-          <button
-            type="button"
-            onClick={dismissNote}
-            aria-label="Dismiss this note"
-            className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
-          >
+          <IconButton onClick={dismissNote} aria-label="Dismiss this note">
             <X className="h-3.5 w-3.5" aria-hidden="true" />
-          </button>
+          </IconButton>
         </div>
       )}
       <div className="flex min-h-0 flex-1 overflow-hidden">

@@ -1,5 +1,5 @@
 import { Suspense, useEffect, useState } from "react";
-import { Dialog, SlideOver, buttonClass } from "../ui";
+import { Dialog, SlideOver, Button } from "../ui";
 import { getLibraryFilePath, revealLibraryFile } from "../lib/ipc";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { TalkingPointsEditor } from "./slots";
@@ -41,12 +41,12 @@ function FolderFileDialog({ folderId, subPath, onClose }: { folderId: string; su
       size="sm"
       footer={
         <>
-          <button type="button" className={`${buttonClass.base} ${buttonClass.quiet}`} onClick={onClose}>
+          <Button  onClick={onClose}>
             Close
-          </button>
-          <button type="button" className={`${buttonClass.base} ${buttonClass.primary}`} onClick={() => void reveal()} disabled={!path}>
+          </Button>
+          <Button variant="primary"  onClick={() => void reveal()} disabled={!path}>
             Open folder
-          </button>
+          </Button>
         </>
       }
     >

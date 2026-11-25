@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { Portal, anchorOf, placeBox, useDismiss, useMeasured, type Anchor } from "../../ui/portal";
-import { Segmented } from "../../ui";
+import { Segmented, Button } from "../../ui";
 import { cliEffortLabel, isCliAgent } from "../../lib/cliAgents";
 import type { ContextDepth, WorkspaceChat } from "../../lib/types";
 import { DEPTHS } from "./depths";
@@ -61,7 +61,7 @@ export function OptionsMenu({
           setOpen(true);
           void ensureChat();
         }}
-        className="ui-meta inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2 font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-50"
+        className="ui-meta inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2 font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground ui-focus ui-r-md disabled:opacity-50"
       >
         {summary}
         <PickerCaret />

@@ -1,6 +1,6 @@
 import { ChevronDown, Library, Loader2, PencilLine, Play, Radio } from "lucide-react";
 import { MeetingWave, VoiceprintMark } from "../voiceprint";
-import { Tooltip } from "../ui";
+import { Tooltip, Button } from "../ui";
 import { formatShortcut } from "../lib/shortcutLabel";
 import { useConfigStore } from "../stores/configStore";
 import { useMeetingStore } from "../stores/meetingStore";
@@ -12,7 +12,6 @@ import { handleOpenRequest } from "./openRequest";
 import { useWorkspaceMeetings } from "./useWorkspaceMeetings";
 import { WorkspaceSwitcher, SWITCHER_SHORTCUT } from "./WorkspaceSwitcher";
 import { useWorkspaceActions } from "./WorkspaceActions";
-import { quietButton } from "./styles";
 
 /** "Online, team meeting": what Start will use, said under the button. */
 function startHint(remembered: { audioMode: string; scenario: string } | null, workspace: WorkspaceSummary): string {
@@ -33,22 +32,13 @@ function useChatHasMessages(workspaceId: string): boolean {
   });
 }
 
+/** One recipe for both Start meeting buttons: md in the header, lg on the empty start screen. */
 function StartButton({ starting, onStart, small }: { starting: boolean; onStart: () => void; small?: boolean }) {
   return (
-    <button
-      type="button"
-      onClick={onStart}
-      disabled={starting}
-      aria-busy={starting}
-      className={
-        small
-          ? "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3.5 text-[0.8125rem] font-semibold text-primary-foreground outline-none transition-colors hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring/70 disabled:opacity-60"
-          : "inline-flex h-11 items-center gap-2.5 rounded-xl bg-primary px-6 text-[0.9375rem] font-semibold text-primary-foreground outline-none transition-colors hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-60"
-      }
-    >
+    <Button variant="primary" size={small ? "md" : "lg"} onClick={onStart} disabled={starting} aria-busy={starting}>
       {starting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Play className="h-4 w-4" fill="currentColor" aria-hidden="true" />}
       {starting ? "Starting" : "Start meeting"}
-    </button>
+    </Button>
   );
 }
 
@@ -93,25 +83,22 @@ export function MiddlePane({
 
   const crumbs = (
     <nav aria-label="Breadcrumb" className="ui-meta flex min-w-0 items-center gap-1 text-muted-foreground">
-      <button
-        type="button"
-        onClick={onGoAll}
-        className="shrink-0 rounded px-1 py-0.5 outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
-      >
+      <Button variant="ghost" size="sm" onClick={onGoAll} className="px-1.5">
         Workspaces
-      </button>
+      </Button>
       <span aria-hidden="true">/</span>
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="sm"
         onClick={() => onSwitcherOpenChange(true)}
         aria-haspopup="dialog"
         aria-label={`${workspace.name}, switch workspace (${formatShortcut(SWITCHER_SHORTCUT)})`}
-        className="flex min-w-0 items-center gap-1 rounded px-1 py-0.5 font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60"
+        className="min-w-0 px-1.5 text-foreground"
       >
         <VoiceprintMark id={workspace.id} hue={workspace.color} size={13} />
         <span className="truncate">{workspace.name}</span>
         <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
-      </button>
+      </Button>
     </nav>
   );
 
@@ -123,15 +110,15 @@ export function MiddlePane({
           Live
         </span>
       )}
-      <button type="button" onClick={() => actions.edit(workspace.id)} className={quietButton}>
+      <Button variant="ghost" onClick={() => actions.edit(workspace.id)}>
         <PencilLine className="h-3.5 w-3.5" aria-hidden="true" />
         Edit workspace
-      </button>
+      </Button>
       {showLibraryToggle && (
-        <button type="button" onClick={onToggleLibrary} className={quietButton}>
+        <Button variant="ghost" onClick={onToggleLibrary}>
           <Library className="h-3.5 w-3.5" aria-hidden="true" />
           Library
-        </button>
+        </Button>
       )}
     </div>
   );
@@ -170,7 +157,7 @@ export function MiddlePane({
                 <>
                   <MeetingWave meetings={wave} hue={workspace.color} onOpen={onOpenMeeting} height={30} />
                   <Tooltip content="Each bar is one meeting, as long as it ran.">
-                    <span tabIndex={0} className="ui-meta mt-1 inline-block rounded text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
+                    <span tabIndex={0} className="ui-meta mt-1 inline-block rounded text-muted-foreground outline-none ui-focus ui-focus-sm">
                       {total} {total === 1 ? "meeting" : "meetings"}
                     </span>
                   </Tooltip>

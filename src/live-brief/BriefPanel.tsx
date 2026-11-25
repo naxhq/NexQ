@@ -9,6 +9,7 @@ import { sheetTimeMs, useLiveBriefStore } from "../stores/liveBriefStore";
 import { formatTokens } from "../live-notes/NotesSettingsForm";
 import { NoteText } from "../live-notes/NoteBlockRow";
 import { Age } from "./Age";
+import { RunStatusHeader, runWords, type RunStatusName } from "../live-notes/RunStatusHeader";
 import { BriefSettingsForm } from "./BriefSettingsForm";
 import "../live-notes/liveNotes.css";
 
@@ -16,18 +17,7 @@ import "../live-notes/liveNotes.css";
 export const ANSWER_FRESH_MS = 4 * 60_000;
 
 export function briefStatusWords(status: string | undefined, enabled: boolean): string {
-  if (!enabled) return "Brief is off";
-  switch (status) {
-    case "running":
-      return "Looking";
-    case "paused":
-    case "capped":
-      return "Paused";
-    case "error":
-      return "Stopped";
-    default:
-      return "Listening";
-  }
+  return runWords("brief", status as RunStatusName | undefined, enabled).word;
 }
 
 function SourceChip({ fact }: { fact: BriefFact }) {
@@ -90,7 +80,7 @@ export function BriefPanel() {
   }, [store]);
 
   if (!meetingId) {
-    return <div className="ln-root"><p className="ln-empty text-muted-foreground">The brief appears here once a meeting has started.</p></div>;
+    return <div className="rs-root"><p className="rs-empty text-muted-foreground">The brief appears here once a meeting has started.</p></div>;
   }
 
   const workspaceEnabled = store((st) => st.workspaceEnabled);
@@ -107,18 +97,17 @@ export function BriefPanel() {
   ];
 
   return (
-    <div className="ln-root" data-testid="brief-panel">
-      <header className="ln-head">
-        <h2 className="ln-status" aria-live="polite">{briefStatusWords(run?.status, enabled)}</h2>
+    <div className="rs-root" data-testid="brief-panel">
+      <RunStatusHeader title="Brief" word={briefStatusWords(run?.status, enabled)}>
         {enabled && (
           <>
-            <button type="button" className="ln-tool ln-tool-solid" disabled={run?.status === "running" || capped} onClick={() => void store.getState().refresh()}>
+            <button type="button" className="rs-tool rs-tool-solid" disabled={run?.status === "running" || capped} onClick={() => void store.getState().refresh()}>
               <RefreshCw className="h-3 w-3" aria-hidden />
               Refresh
             </button>
             <button
               type="button"
-              className="ln-tool"
+              className="rs-tool"
               disabled={capped}
               onClick={() => void (paused ? store.getState().resume() : store.getState().pause())}
               aria-label={paused ? "Resume the brief" : "Pause the brief"}
@@ -133,46 +122,46 @@ export function BriefPanel() {
           label="Brief options"
           align="end"
           renderTrigger={(props) => (
-            <button {...props} type="button" className="ln-tool h-[1.625rem] w-[1.625rem] justify-center px-0" aria-label="Brief options">
+            <button {...props} type="button" className="rs-tool h-[1.625rem] w-[1.625rem] justify-center px-0" aria-label="Brief options">
               <MoreHorizontal className="h-3.5 w-3.5" aria-hidden />
             </button>
           )}
         />
-      </header>
+      </RunStatusHeader>
 
       {capped && (
-        <div className="ln-notice" role="group" aria-labelledby="lb-cap-title">
-          <div id="lb-cap-title" className="ln-notice-title">Keep the brief going?</div>
+        <div className="rs-notice" role="group" aria-labelledby="lb-cap-title">
+          <div id="lb-cap-title" className="rs-notice-title">Keep the brief going?</div>
           <p>It used {formatTokens(run?.tokens_used ?? 0)} tokens, the limit you set. Keep going adds {formatTokens(settings?.cap ?? run?.cap ?? 0)} more.</p>
-          <div className="ln-notice-actions">
+          <div className="rs-notice-actions">
             <button type="button" className={cn(buttonClass.base, buttonClass.primary, "h-7")} onClick={() => void store.getState().keepGoing()}>Keep going</button>
             <button type="button" className={cn(buttonClass.base, buttonClass.quiet, "h-7")} onClick={() => void store.getState().pause()}>Stop</button>
           </div>
         </div>
       )}
       {failed && !capped && (
-        <div className="ln-notice" role="alert">
-          <div className="ln-notice-title">{run?.status === "error" ? "The brief stopped" : "The brief paused"}</div>
+        <div className="rs-notice" role="alert">
+          <div className="rs-notice-title">{run?.status === "error" ? "The brief stopped" : "The brief paused"}</div>
           <p>{run?.reason || "The model could not answer."}</p>
-          <div className="ln-notice-actions">
-            <button type="button" className="ln-tool ln-tool-solid" onClick={() => setDialog(true)}>Change model</button>
-            <button type="button" className="ln-tool" onClick={() => void store.getState().resume()}>Try again</button>
+          <div className="rs-notice-actions">
+            <button type="button" className="rs-tool rs-tool-solid" onClick={() => setDialog(true)}>Change model</button>
+            <button type="button" className="rs-tool" onClick={() => void store.getState().resume()}>Try again</button>
           </div>
         </div>
       )}
       {error && (
-        <div className="ln-notice" role="alert">
-          <div className="ln-notice-title">That did not work</div>
+        <div className="rs-notice" role="alert">
+          <div className="rs-notice-title">That did not work</div>
           <p>{error}</p>
-          <div className="ln-notice-actions">
-            <button type="button" className="ln-tool" onClick={() => store.getState().clearError()}>Dismiss</button>
+          <div className="rs-notice-actions">
+            <button type="button" className="rs-tool" onClick={() => store.getState().clearError()}>Dismiss</button>
           </div>
         </div>
       )}
 
-      <div className="ln-scroll" role="region" aria-label="Brief">
+      <div className="rs-scroll" role="region" aria-label="Brief">
         {!enabled ? (
-          <div className="ln-empty">
+          <div className="rs-empty">
             <h3>Brief</h3>
             <p>While you talk, NexQ looks through this workspace for what is known about the topic and keeps a short sheet. Live answers use it. It sends the transcript and the matching passages to your chosen model.</p>
             <button type="button" className={cn(buttonClass.base, buttonClass.primary, "mt-3")} onClick={() => void store.getState().turnOn()}>
@@ -180,7 +169,7 @@ export function BriefPanel() {
             </button>
           </div>
         ) : !sheet ? (
-          <div className="ln-empty" role="status">
+          <div className="rs-empty" role="status">
             <h3>{hidden ? "Finding what’s known about the new topic" : "Listening for the topic"}</h3>
             <p>{hidden ? "The old sheet is hidden so answers do not use it." : "The first sheet appears after a minute or so of conversation."}</p>
           </div>

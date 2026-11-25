@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { ListFilter, Search, X } from "lucide-react";
-import { ConfirmDialog, Menu, Segmented } from "../ui";
+import { Button, ConfirmDialog, IconButton, Menu, Segmented } from "../ui";
 import { RecentMeetings } from "../launcher/RecentMeetings";
 import { deleteMeeting, renameMeeting } from "../lib/ipc";
 import { deleteAllInWorkspace, deleteMeetingsById, describeDeleteAll } from "./deleteAll";
@@ -12,7 +12,7 @@ import { cn } from "../lib/utils";
 import { useFavorites } from "./favorites";
 import { MEETING_FILTERS, filterMeetings, type MeetingFilter } from "./meetingGroups";
 import { useWorkspaceMeetings, type MeetingScopeChoice } from "./useWorkspaceMeetings";
-import { fieldClass, iconButtonClass } from "./styles";
+import { fieldClass } from "./styles";
 
 /**
  * The open workspace's meetings: search (here or everywhere), the filters,
@@ -114,9 +114,9 @@ export function MeetingList({
             className={cn(fieldClass, "h-8 pl-8 pr-8 [&::-webkit-search-cancel-button]:hidden")}
           />
           {query && (
-            <button type="button" onClick={() => onQueryChange("")} className={cn(iconButtonClass, "absolute right-1 top-1/2 h-6 w-6 -translate-y-1/2")} aria-label="Clear search">
+            <IconButton onClick={() => onQueryChange("")}  aria-label="Clear search" className="absolute right-1 top-1/2 h-6 w-6 -translate-y-1/2">
               <X className="h-3 w-3" aria-hidden="true" />
-            </button>
+            </IconButton>
           )}
         </div>
         <Segmented<MeetingScopeChoice>
@@ -152,19 +152,16 @@ export function MeetingList({
               },
             ]}
             renderTrigger={(props, state) => (
-              <button
-                type="button"
+              <Button
                 {...props}
+                variant="ghost"
+                size="sm"
                 aria-label="Filter meetings"
-                className={cn(
-                  "ui-meta inline-flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 font-medium outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60",
-                  filter !== "all" ? "text-foreground" : "text-muted-foreground",
-                  state.open && "bg-accent",
-                )}
+                className={cn(filter !== "all" && "text-foreground", state.open && "bg-accent text-foreground")}
               >
                 <ListFilter className="h-3 w-3" aria-hidden="true" />
                 {MEETING_FILTERS.find((f) => f.key === filter)?.label ?? "Filter"}
-              </button>
+              </Button>
             )}
           />
         </div>
@@ -199,9 +196,9 @@ export function MeetingList({
           }
         />
         {hasMore && (
-          <button type="button" onClick={loadMore} className="ui-meta mx-2 mt-2 rounded-md px-2 py-1 text-muted-foreground hover:bg-accent hover:text-foreground">
+          <Button variant="ghost" size="sm" onClick={loadMore} className="mx-2 mt-2">
             Show more
-          </button>
+          </Button>
         )}
       </div>
 

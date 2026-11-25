@@ -13,7 +13,7 @@ import { NEXQ_VERSION, NEXQ_DEVELOPER } from "../lib/version";
 import { ServiceStatusBar } from "../components/ServiceStatusBar";
 import { showMeetingOverlay } from "../lib/windows";
 import { endMeetingFromThisWindow } from "../hooks/useUpdater";
-import { Dialog, buttonClass } from "../ui";
+import { Dialog, Button } from "../ui";
 import { WorkspaceActionsProvider } from "../workspace/WorkspaceActions";
 import { WorkspaceHome } from "../workspace/WorkspaceHome";
 import { handleOpenRequest, type OpenRequest } from "../workspace/openRequest";
@@ -174,7 +174,7 @@ export function LauncherView() {
           {activeMeeting && (
             <button
               onClick={handleReturnToMeeting}
-              className="flex max-w-[24rem] cursor-pointer items-center gap-2 rounded-full border border-success/30 bg-success/10 py-1 pl-3 pr-1.5 outline-none transition-colors hover:bg-success/15 focus-visible:ring-2 focus-visible:ring-ring/60"
+              className="flex max-w-[24rem] cursor-pointer items-center gap-2 rounded-full border border-success/30 bg-success/10 py-1 pl-3 pr-1.5 outline-none transition-colors hover:bg-success/15 ui-focus ui-focus-pill"
             >
               <Radio className="h-3 w-3 shrink-0 text-success" aria-hidden="true" />
               <span className="ui-meta truncate font-medium text-foreground">{activeMeeting.title}</span>
@@ -186,7 +186,7 @@ export function LauncherView() {
             <LauncherStealthButton />
             <button
               onClick={() => setCurrentView("settings")}
-              className="cursor-pointer rounded-lg p-2 text-muted-foreground outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+              className="cursor-pointer rounded-lg p-2 text-muted-foreground outline-none transition-colors hover:bg-secondary hover:text-foreground ui-focus ui-r-lg"
               aria-label={`Settings (${formatShortcut("CmdOrCtrl+,")})`}
             >
               <Settings className="h-4 w-4" aria-hidden="true" />
@@ -212,7 +212,7 @@ export function LauncherView() {
 
         <footer className="flex items-center justify-between border-t border-border">
           <ServiceStatusBar />
-          <div className="flex items-center gap-2 pr-5 text-xs text-muted-foreground">
+          <div className="flex items-center gap-2 pr-5 ui-meta text-muted-foreground">
             <span>&copy; {new Date().getFullYear()} {NEXQ_DEVELOPER}</span>
             <span className="text-muted-foreground/60">|</span>
             <span className="font-medium">NexQ v{NEXQ_VERSION}</span>
@@ -234,22 +234,20 @@ export function LauncherView() {
           size="sm"
           footer={
             <>
-              <button type="button" className={`${buttonClass.base} ${buttonClass.quiet}`} onClick={closeConflict}>
+              <Button  onClick={closeConflict}>
                 Cancel
-              </button>
-              <button
-                type="button"
-                className={`${buttonClass.base} ${buttonClass.quiet}`}
+              </Button>
+              <Button
+                
                 onClick={() => {
                   closeConflict();
                   handleReturnToMeeting();
-                }}
-              >
+                }}>
                 Return to current meeting
-              </button>
-              <button type="button" className={`${buttonClass.base} ${buttonClass.primary}`} onClick={handleEndAndStartNew}>
+              </Button>
+              <Button variant="primary"  onClick={handleEndAndStartNew}>
                 End current and start new
-              </button>
+              </Button>
             </>
           }
         />

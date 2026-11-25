@@ -754,3 +754,9 @@ select option {
 .ui-wave-rect {
   transition: y 280ms var(--ui-ease), height 280ms var(--ui-ease);
 }
+
+/* Focus-ring corner radius that matches each control's own corners (rounded-md, -lg, -xl). */
+.ui-r-md { --ui-r: 8px; }
+.ui-r-lg { --ui-r: 10px; }
+.ui-r-xl { --ui-r: 12px; }
+.ui-r-sm { --ui-r: 6px; }

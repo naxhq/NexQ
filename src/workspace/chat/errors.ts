@@ -1,6 +1,8 @@
 // What went wrong with an answer, in words that say what to do. The raw text is always kept (shown under it).
 
-export type ChatErrorKind = "auth" | "model" | "limit" | "window" | "offline" | "busy" | "other";
+import type { WorkspaceChatErrorKind } from "../../lib/types";
+
+export type ChatErrorKind = "auth" | "model" | "limit" | "window" | "offline" | "busy" | "preempted" | "other";
 export type ChatFix = "settings" | "model" | "retry";
 
 export interface ChatErrorInfo {
@@ -28,6 +30,7 @@ const TITLES: Record<ChatErrorKind, string> = {
   window: "The question and its material don't fit this model",
   offline: "Couldn't reach the model",
   busy: "Another answer is still running",
+  preempted: "A live answer took priority",
   other: "The answer failed",
 };
 
@@ -38,11 +41,21 @@ const FIXES: Record<ChatErrorKind, ChatFix[]> = {
   window: ["model", "retry"],
   offline: ["settings", "retry", "model"],
   busy: ["retry"],
+  preempted: ["retry"],
   other: ["retry", "model", "settings"],
 };
 
-export function classifyChatError(raw: string): ChatErrorInfo {
+/** The backend's own kind wins; the text is only read when there is none (or it says "other"). */
+const WIRE: Partial<Record<WorkspaceChatErrorKind, ChatErrorKind>> = {
+  no_key: "auth",
+  rate_limited: "limit",
+  unavailable: "offline",
+  too_long: "window",
+  preempted: "preempted",
+};
+
+export function classifyChatError(raw: string, wire?: WorkspaceChatErrorKind | null): ChatErrorInfo {
   const detail = (raw || "").trim();
-  const kind = RULES.find(([re]) => re.test(detail))?.[1] ?? "other";
+  const kind = (wire && WIRE[wire]) || RULES.find(([re]) => re.test(detail))?.[1] || "other";
   return { kind, title: TITLES[kind], detail: detail || "No details were given.", fixes: FIXES[kind] };
 }

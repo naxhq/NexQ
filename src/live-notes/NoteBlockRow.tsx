@@ -130,7 +130,7 @@ function NoteBlockRowImpl({ block, fresh, editable, editing, tabbable, actions, 
       {block.pinned && (
         <>
           <Pin className="ln-pin h-3 w-3" aria-hidden />
-          <span className="ln-sr"> (pinned)</span>
+          <span className="rs-sr"> (pinned)</span>
         </>
       )}
       {block.edited && (
@@ -138,7 +138,7 @@ function NoteBlockRowImpl({ block, fresh, editable, editing, tabbable, actions, 
           <span className="ln-edited" aria-hidden>
             Edited by you
           </span>
-          <span className="ln-sr"> (edited by you)</span>
+          <span className="rs-sr"> (edited by you)</span>
         </>
       )}
     </>
@@ -166,7 +166,7 @@ function NoteBlockRowImpl({ block, fresh, editable, editing, tabbable, actions, 
         <h3 className="ln-body ln-topic-head">{body}</h3>
       ) : (
         <div className={cn("ln-body", isLead && "ln-lead")} style={isLead ? { marginTop: 0 } : undefined}>
-          {block.type !== "bullet" && block.type !== "summary" && <span className="ln-sr">{TYPE_LABEL[block.type]}: </span>}
+          {block.type !== "bullet" && block.type !== "summary" && <span className="rs-sr">{TYPE_LABEL[block.type]}: </span>}
           {body}
         </div>
       )}
@@ -179,7 +179,7 @@ function NoteBlockRowImpl({ block, fresh, editable, editing, tabbable, actions, 
             {...props}
             type="button"
             tabIndex={ti}
-            className="ln-more ln-tool h-6 w-6 justify-center px-0"
+            className="ln-more rs-tool h-6 w-6 justify-center px-0"
             aria-label={`Options for this ${TYPE_LABEL[block.type].toLowerCase()}`}
           >
             <MoreHorizontal className="h-3.5 w-3.5" aria-hidden />
@@ -257,11 +257,11 @@ export function BlockEditor({
         />
       )}
       <div className="flex items-center gap-1.5">
-        <button type="button" className="ln-tool ln-tool-solid" onClick={save}>
+        <button type="button" className="rs-tool rs-tool-solid" onClick={save}>
           {block ? <Pencil className="h-3 w-3" aria-hidden /> : <Plus className="h-3 w-3" aria-hidden />}
           {block ? "Save" : "Add"}
         </button>
-        <button type="button" className="ln-tool" onClick={onCancel}>
+        <button type="button" className="rs-tool" onClick={onCancel}>
           Cancel
         </button>
         <span className="ui-meta ml-auto text-muted-foreground">Enter to save</span>

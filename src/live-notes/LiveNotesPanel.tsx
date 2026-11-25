@@ -7,6 +7,7 @@ import { onNotesUpdateRequested } from "../lib/events";
 import { useMeetingStore } from "../stores/meetingStore";
 import { EMPTY_ENTRY, useLiveNotesStore } from "../stores/liveNotesStore";
 import { NotePage } from "./NotePage";
+import { RunStatusHeader, runWords } from "./RunStatusHeader";
 import { NotesSettingsForm, formatTokens } from "./NotesSettingsForm";
 import { jumpToTranscript } from "./jump";
 import { docToMarkdown } from "./page";
@@ -14,22 +15,7 @@ import { copyText } from "./clipboard";
 
 /** The run's state in plain words. */
 export function statusWords(run: NotetakerState | null, settings: NotetakerSettings | null): { word: string; note?: string } {
-  if (!settings?.enabled) return { word: "Notes are off" };
-  const manual = settings.update_mode === "manual";
-  switch (run?.status) {
-    case "running":
-      return { word: "Taking notes" };
-    case "paused":
-    case "capped":
-      return { word: "Paused" };
-    case "error":
-    case "finished":
-    case "off":
-      return { word: "Stopped" };
-    case "idle":
-    default:
-      return manual ? { word: "Waiting for you", note: "Press Update now" } : { word: "Waiting for speech" };
-  }
+  return runWords("notes", run?.status, !!settings?.enabled, { manual: settings?.update_mode === "manual" });
 }
 
 /** The live notes panel of the meeting window. Takes no props. */
@@ -100,7 +86,7 @@ export function NotesPanel() {
   }, [store, meetingId]);
 
   if (!meetingId) {
-    return <div className="ln-root"><p className="ln-empty text-muted-foreground">Notes appear here once a meeting has started.</p></div>;
+    return <div className="rs-root"><p className="rs-empty text-muted-foreground">Notes appear here once a meeting has started.</p></div>;
   }
 
   const { word, note: baseNote } = statusWords(run, settings);
@@ -127,16 +113,12 @@ export function NotesPanel() {
   ];
 
   return (
-    <div className="ln-root" data-testid="notes-panel">
-      <header className="ln-head">
-        <h2 className="ln-status" aria-live="polite">
-          {word}
-          {note && <span className="ln-status-note">{`, ${note.toLowerCase()}`}</span>}
-        </h2>
+    <div className="rs-root" data-testid="notes-panel">
+      <RunStatusHeader title="Live notes" word={word} note={note}>
         {enabled && (
           <button
             type="button"
-            className="ln-tool ln-tool-solid"
+            className="rs-tool rs-tool-solid"
             disabled={run?.status === "running" || capped || run?.status === "finished"}
             onClick={() => void store.getState().updateNow()}
           >
@@ -146,7 +128,7 @@ export function NotesPanel() {
           </button>
         )}
         {hasBlocks && (
-          <button type="button" className="ln-tool" aria-label="Copy all as Markdown" onClick={() => void copyText(docToMarkdown(doc), "Notes copied")}>
+          <button type="button" className="rs-tool" aria-label="Copy all as Markdown" onClick={() => void copyText(docToMarkdown(doc), "Notes copied")}>
             <Copy className="h-3 w-3" aria-hidden />
           </button>
         )}
@@ -155,20 +137,20 @@ export function NotesPanel() {
           label="Notes options"
           align="end"
           renderTrigger={(props) => (
-            <button {...props} type="button" className="ln-tool h-[1.625rem] w-[1.625rem] justify-center px-0" aria-label="Notes options">
+            <button {...props} type="button" className="rs-tool h-[1.625rem] w-[1.625rem] justify-center px-0" aria-label="Notes options">
               <MoreHorizontal className="h-3.5 w-3.5" aria-hidden />
             </button>
           )}
         />
-      </header>
+      </RunStatusHeader>
 
       {capped && (
-        <div className="ln-notice" role="group" aria-labelledby="ln-cap-title">
-          <div id="ln-cap-title" className="ln-notice-title">Keep taking notes?</div>
+        <div className="rs-notice" role="group" aria-labelledby="ln-cap-title">
+          <div id="ln-cap-title" className="rs-notice-title">Keep taking notes?</div>
           <p>
             The notes used {formatTokens(used)} tokens, the limit you set. Keep going adds {formatTokens(settings?.cap ?? cap)} more.
           </p>
-          <div className="ln-notice-actions">
+          <div className="rs-notice-actions">
             <button type="button" className={cn(buttonClass.base, buttonClass.primary, "h-7")} onClick={() => void store.getState().keepGoing()}>
               Keep going
             </button>
@@ -180,28 +162,28 @@ export function NotesPanel() {
       )}
 
       {failed && !capped && (
-        <div className="ln-notice" role="alert">
-          <div className="ln-notice-title">{run?.status === "error" ? "Notes stopped" : "Notes paused"}</div>
+        <div className="rs-notice" role="alert">
+          <div className="rs-notice-title">{run?.status === "error" ? "Notes stopped" : "Notes paused"}</div>
           <p>{run?.reason || "The model could not answer."}</p>
-          <div className="ln-notice-actions">
-            <button type="button" className="ln-tool ln-tool-solid" onClick={() => setDialog(true)}>Change model</button>
-            <button type="button" className="ln-tool" onClick={() => void store.getState().start()}>Try again</button>
+          <div className="rs-notice-actions">
+            <button type="button" className="rs-tool rs-tool-solid" onClick={() => setDialog(true)}>Change model</button>
+            <button type="button" className="rs-tool" onClick={() => void store.getState().start()}>Try again</button>
           </div>
         </div>
       )}
 
       {error && (
-        <div className="ln-notice" role="alert">
-          <div className="ln-notice-title">That did not work</div>
+        <div className="rs-notice" role="alert">
+          <div className="rs-notice-title">That did not work</div>
           <p>{error}</p>
-          <div className="ln-notice-actions">
-            <button type="button" className="ln-tool" onClick={() => store.getState().clearError()}>Dismiss</button>
+          <div className="rs-notice-actions">
+            <button type="button" className="rs-tool" onClick={() => store.getState().clearError()}>Dismiss</button>
           </div>
         </div>
       )}
 
       {!enabled && settings && !hasBlocks ? (
-        <div className="ln-empty">
+        <div className="rs-empty">
           <h3>Live notes</h3>
           <p>Turns the conversation into a tidy page of topics, decisions, tasks and questions while you talk. It sends only the transcript to your chosen model, nothing from your workspace.</p>
           <div className="mt-3 flex flex-col gap-2">
@@ -222,7 +204,7 @@ export function NotesPanel() {
           </div>
         </div>
       ) : !hasBlocks ? (
-        <div className="ln-empty">
+        <div className="rs-empty">
           <h3>Nothing yet</h3>
           <p>The first notes appear after a minute or so of conversation.</p>
         </div>
@@ -242,12 +224,12 @@ export function NotesPanel() {
       )}
 
       {(enabled || hasBlocks) && (
-        <footer className="ln-foot">
+        <footer className="rs-foot">
           {enabled && cap > 0 && (
             <>
               <span>{formatTokens(used)} of {formatTokens(cap)} tokens{run?.total_tokens ? `, ${formatTokens(run.total_tokens)} seen in all` : ""}</span>
               <div
-                className="ln-meter"
+                className="rs-meter"
                 role="meter"
                 aria-label="Notes tokens used"
                 aria-valuemin={0}
@@ -260,7 +242,7 @@ export function NotesPanel() {
             </>
           )}
           {undoStack.length > 0 && (
-            <button type="button" className="ln-tool ml-auto" onClick={() => void store.getState().undo(meetingId)}>
+            <button type="button" className="rs-tool ml-auto" onClick={() => void store.getState().undo(meetingId)}>
               <Undo2 className="h-3 w-3" aria-hidden />
               Undo {undoStack[undoStack.length - 1].label.toLowerCase()}
             </button>

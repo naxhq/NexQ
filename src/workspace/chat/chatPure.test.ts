@@ -31,6 +31,22 @@ describe("classifyChatError", () => {
   });
 });
 
+describe("backend error kinds", () => {
+  it.each([
+    ["no_key", "auth"],
+    ["rate_limited", "limit"],
+    ["unavailable", "offline"],
+    ["too_long", "window"],
+    ["preempted", "preempted"],
+  ] as const)("%s -> %s, even when the text says nothing", (wire, kind) => {
+    expect(classifyChatError("x", wire).kind).toBe(kind);
+  });
+  it("other and internal fall back to reading the text", () => {
+    expect(classifyChatError("429 rate limit", "other").kind).toBe("limit");
+    expect(classifyChatError("zzz", "internal").kind).toBe("other");
+  });
+});
+
 describe("citations", () => {
   it("turns [S1] and [S1, S2] into links, but not inside code", () => {
     const out = linkCitations("Yes [S1]. Both [S2, S3]. `[S4]`\n```\n[S5]\n```");

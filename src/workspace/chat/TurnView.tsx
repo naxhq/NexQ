@@ -2,7 +2,7 @@ import { memo, useId, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import type { SourceActivity, WorkspaceCitation, WorkspaceMessage } from "../../lib/types";
 import type { AnswerExtras, Turn } from "../../stores/workspaceChatStore";
-import { buttonClass } from "../../ui";
+import { Button, buttonClasses } from "../../ui";
 import { cn } from "../../lib/utils";
 import type { ModelChoice } from "./models";
 import { classifyChatError } from "./errors";
@@ -75,7 +75,7 @@ function SourcesDisclosure({
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-controls={id}
-        className="ui-meta inline-flex items-center gap-1 rounded text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+        className="ui-meta inline-flex items-center gap-1 rounded text-muted-foreground outline-none transition-colors hover:text-foreground ui-focus ui-focus-sm"
       >
         <ChevronRight className={cn("h-3 w-3 transition-transform motion-reduce:transition-none", open && "rotate-90")} aria-hidden="true" />
         {count > 0 ? `${count} ${count === 1 ? "source" : "sources"}` : "What it looked at"}
@@ -90,7 +90,7 @@ function SourcesDisclosure({
                   <button
                     type="button"
                     onClick={() => onOpen(c)}
-                    className="min-w-0 flex-1 rounded text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                    className="min-w-0 flex-1 rounded text-left outline-none ui-focus ui-focus-sm"
                   >
                     <span className="ui-body block truncate text-foreground underline-offset-2 hover:underline">{citationWhere(c)}</span>
                     <span className="ui-meta block text-muted-foreground">{citationKindName(c)}</span>
@@ -154,7 +154,7 @@ export const SavedTurn = memo(function SavedTurn({
       data-turn={index}
       tabIndex={last ? 0 : -1}
       aria-labelledby={qid}
-      className="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      className="rounded-md outline-none ui-focus ui-r-md"
     >
       {question && <Question id={qid} text={question.content} />}
       {answer && (
@@ -178,7 +178,7 @@ export const SavedTurn = memo(function SavedTurn({
                   type="button"
                   disabled={ctx.busy}
                   onClick={() => ctx.onAsk(question.content, { deeper: true })}
-                  className="rounded font-medium text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-50"
+                  className="rounded font-medium text-foreground underline underline-offset-2 outline-none ui-focus ui-focus-sm disabled:opacity-50"
                 >
                   Search deeper
                 </button>
@@ -203,7 +203,7 @@ export const SavedTurn = memo(function SavedTurn({
 
 /** The failure, in place: what happened, the real message, and what to do. */
 function ErrorBlock({ error, turn, ctx }: { error: string; turn: Turn; ctx: TurnContext }) {
-  const info = classifyChatError(error);
+  const info = classifyChatError(error, turn.errorKind);
   return (
     <div role="alert" className="mt-3 rounded-lg border border-destructive/50 bg-destructive/10 px-3.5 py-3">
       <p className="ui-section text-foreground">{info.title}</p>
@@ -211,9 +211,9 @@ function ErrorBlock({ error, turn, ctx }: { error: string; turn: Turn; ctx: Turn
       <div className="mt-3 flex flex-wrap items-center gap-2">
         {info.fixes.map((fix) =>
           fix === "settings" ? (
-            <button key={fix} type="button" onClick={ctx.onOpenSettings} className={cn(buttonClass.base, buttonClass.quiet)}>
+            <Button key={fix} onClick={ctx.onOpenSettings}>
               Open provider settings
-            </button>
+            </Button>
           ) : fix === "model" ? (
             <ModelPicker
               key={fix}
@@ -221,15 +221,15 @@ function ErrorBlock({ error, turn, ctx }: { error: string; turn: Turn; ctx: Turn
               label="Pick another model"
               onPick={(choice) => ctx.onAsk(turn.question, { choice, deeper: turn.deeper })}
               onOpenSettings={ctx.onOpenSettings}
-              buttonClassName={cn(buttonClass.base, buttonClass.quiet, "gap-1.5")}
+              buttonClassName={buttonClasses("quiet", "md")}
             >
               Pick another model
               <PickerCaret />
             </ModelPicker>
           ) : (
-            <button key={fix} type="button" onClick={() => ctx.onAsk(turn.question, { deeper: turn.deeper })} className={cn(buttonClass.base, buttonClass.quiet)}>
+            <Button key={fix} onClick={() => ctx.onAsk(turn.question, { deeper: turn.deeper })}>
               Try again
-            </button>
+            </Button>
           ),
         )}
       </div>
@@ -276,13 +276,13 @@ export function LiveTurn({ turn, ctx, onDismiss }: { turn: Turn; ctx: TurnContex
       {(turn.status === "stopped" || turn.status === "failed") && (
         <div className="-ml-2 mt-1 flex gap-1">
           {turn.status === "stopped" && (
-            <button type="button" onClick={() => ctx.onAsk(turn.question, { deeper: turn.deeper })} className={cn(buttonClass.base, "ui-meta h-7 px-2 font-medium text-muted-foreground hover:bg-accent hover:text-foreground")}>
+            <Button variant="ghost" size="sm" onClick={() => ctx.onAsk(turn.question, { deeper: turn.deeper })} className="ui-meta">
               Ask again
-            </button>
+            </Button>
           )}
-          <button type="button" onClick={onDismiss} className={cn(buttonClass.base, "ui-meta h-7 px-2 font-medium text-muted-foreground hover:bg-accent hover:text-foreground")}>
+          <Button variant="ghost" size="sm" onClick={onDismiss} className="ui-meta">
             Dismiss
-          </button>
+          </Button>
         </div>
       )}
     </article>

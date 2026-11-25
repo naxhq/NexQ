@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { Pencil } from "lucide-react";
-import { buttonClass } from "../ui";
+import { Button, IconButton } from "../ui";
 import { showToast } from "../stores/toastStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
-import { fieldClass, hintClass, iconButtonClass } from "./styles";
+import { fieldClass, hintClass } from "./styles";
 
 /** Rough size the way the old custom instructions counted it: characters over four. */
 export const estimateTokens = (text: string) => Math.ceil(text.length / 4);
@@ -37,9 +37,9 @@ export function InstructionsBlock({ workspaceId, instructions }: { workspaceId: 
       <div className="flex items-center justify-between">
         <h3 className="ui-section text-foreground">Instructions</h3>
         {!editing && (
-          <button type="button" onClick={() => setEditing(true)} className={iconButtonClass} aria-label="Edit instructions">
+          <IconButton onClick={() => setEditing(true)}  aria-label="Edit instructions">
             <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
-          </button>
+          </IconButton>
         )}
       </div>
       {editing ? (
@@ -56,20 +56,18 @@ export function InstructionsBlock({ workspaceId, instructions }: { workspaceId: 
           <div className="flex items-center justify-between">
             <span className={hintClass}>About {estimateTokens(draft)} tokens</span>
             <span className="flex gap-1.5">
-              <button
-                type="button"
-                className={`${buttonClass.base} ${buttonClass.quiet}`}
+              <Button
+                
                 onClick={() => {
                   setDraft(instructions);
                   setEditing(false);
                 }}
-                disabled={busy}
-              >
+                disabled={busy}>
                 Cancel
-              </button>
-              <button type="button" className={`${buttonClass.base} ${buttonClass.primary}`} onClick={save} disabled={busy || draft === instructions}>
+              </Button>
+              <Button variant="primary"  onClick={save} disabled={busy || draft === instructions}>
                 {busy ? "Saving" : "Save"}
-              </button>
+              </Button>
             </span>
           </div>
         </div>

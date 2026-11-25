@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { BookmarkPlus, Check, Copy, ListPlus, RefreshCw } from "lucide-react";
-import { Dialog, buttonClass } from "../../ui";
+import { Dialog, Button, buttonClasses } from "../../ui";
 import { saveAnswerToLibrary } from "../../lib/ipc";
 import type { WorkspaceMessage } from "../../lib/types";
 import { showToast } from "../../stores/toastStore";
@@ -9,8 +9,6 @@ import { cn } from "../../lib/utils";
 import { ModelPicker, PickerCaret } from "./ModelPicker";
 import type { ModelChoice } from "./models";
 
-const actionClass =
-  "ui-meta inline-flex h-7 items-center gap-1.5 rounded-md px-2 font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-50";
 
 /** The answer without its `[S1]` tags, for copying and for saving. */
 export function plainAnswer(content: string): string {
@@ -63,30 +61,30 @@ export function AnswerActions({
   return (
     <>
       <div className="-ml-2 mt-1 flex flex-wrap items-center gap-x-0.5">
-        <button type="button" onClick={() => void copy()} className={actionClass}>
+        <Button variant="ghost" size="sm" onClick={() => void copy()}>
           {copied ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : <Copy className="h-3.5 w-3.5" aria-hidden="true" />}
           <span aria-live="polite">{copied ? "Copied" : "Copy"}</span>
-        </button>
+        </Button>
         <ModelPicker
           value={current}
           label="Ask again with another model"
           onPick={onRetryWith}
           onOpenSettings={onOpenSettings}
           disabled={busy}
-          buttonClassName={cn(actionClass)}
+          buttonClassName={buttonClasses("ghost", "sm")}
         >
           <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
           Ask another model
           <PickerCaret />
         </ModelPicker>
-        <button type="button" onClick={() => setSaving(true)} className={actionClass} disabled={message.id < 0}>
+        <Button variant="ghost" size="sm" onClick={() => setSaving(true)} disabled={message.id < 0}>
           <BookmarkPlus className="h-3.5 w-3.5" aria-hidden="true" />
           Save to library
-        </button>
-        <button type="button" onClick={() => setAddOpen(true)} className={actionClass}>
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => setAddOpen(true)}>
           <ListPlus className="h-3.5 w-3.5" aria-hidden="true" />
           Add to instructions
-        </button>
+        </Button>
       </div>
       {saving && <SaveDialog messageId={message.id} initial={titleFrom(question)} onClose={() => setSaving(false)} />}
       <AddToInstructions open={addOpen} workspaceId={workspaceId} text={plainAnswer(message.content)} onClose={() => setAddOpen(false)} />
@@ -123,12 +121,12 @@ function SaveDialog({ messageId, initial, onClose }: { messageId: number; initia
       dismissible={!busy}
       footer={
         <>
-          <button type="button" onClick={onClose} disabled={busy} className={cn(buttonClass.base, buttonClass.quiet)}>
+          <Button onClick={onClose} disabled={busy}>
             Cancel
-          </button>
-          <button type="button" onClick={() => void save()} disabled={busy || !title.trim()} className={cn(buttonClass.base, buttonClass.primary)}>
+          </Button>
+          <Button variant="primary" onClick={() => void save()} disabled={busy || !title.trim()}>
             {busy ? "Saving" : "Save"}
-          </button>
+          </Button>
         </>
       }
     >
@@ -147,7 +145,7 @@ function SaveDialog({ messageId, initial, onClose }: { messageId: number; initia
             void save();
           }
         }}
-        className="ui-body w-full rounded-lg border border-input bg-background px-3 py-2 text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="ui-body w-full rounded-lg border border-input bg-background px-3 py-2 text-foreground outline-none ui-focus ui-r-lg"
       />
       {error && (
         <p role="alert" className="ui-body mt-2 text-destructive">
@@ -217,12 +215,12 @@ function AddToInstructionsDialog({ workspaceId, initial, onClose }: { workspaceI
       dismissible={!busy}
       footer={
         <>
-          <button type="button" onClick={onClose} disabled={busy} className={cn(buttonClass.base, buttonClass.quiet)}>
+          <Button onClick={onClose} disabled={busy}>
             Cancel
-          </button>
-          <button type="button" onClick={() => void confirm()} disabled={busy || !text.trim()} className={cn(buttonClass.base, buttonClass.primary)}>
+          </Button>
+          <Button variant="primary" onClick={() => void confirm()} disabled={busy || !text.trim()}>
             {busy ? "Adding" : "Add to instructions"}
-          </button>
+          </Button>
         </>
       }
     >
@@ -236,7 +234,7 @@ function AddToInstructionsDialog({ workspaceId, initial, onClose }: { workspaceI
         maxLength={INSTRUCTION_CAP}
         rows={10}
         onChange={(e) => setText(e.target.value)}
-        className="ui-body max-h-[50vh] w-full resize-y overflow-y-auto rounded-lg border border-input bg-background px-3 py-2 text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="ui-body max-h-[50vh] w-full resize-y overflow-y-auto rounded-lg border border-input bg-background px-3 py-2 text-foreground outline-none ui-focus ui-r-lg"
       />
       <p className="ui-meta mt-1 text-right tabular-nums text-muted-foreground">
         {text.length.toLocaleString()} of {INSTRUCTION_CAP.toLocaleString()} characters. Plain text only: links, images and HTML were removed.

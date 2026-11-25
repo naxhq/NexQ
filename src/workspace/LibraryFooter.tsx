@@ -1,6 +1,7 @@
 import { Suspense, useState } from "react";
 import { CheckCircle2, FlaskConical, FolderSync, Loader2, TriangleAlert, Zap } from "lucide-react";
 import { lazyNamed } from "../lib/lazyNamed";
+import { Button } from "../ui";
 
 const TestSearchDialog = lazyNamed(() => import("../context/TestSearchDialog"), "TestSearchDialog");
 import { rescanWorkspace } from "../lib/ipc";
@@ -8,7 +9,6 @@ import { useConfigStore } from "../stores/configStore";
 import { useContextStore } from "../stores/contextStore";
 import { useRagStore } from "../stores/ragStore";
 import { cn } from "../lib/utils";
-import { quietButton } from "./styles";
 
 /**
  * Knowledge base actions, as the old dashboard had them: build or update,
@@ -58,10 +58,10 @@ export function LibraryFooter({ workspaceId, hasFolders }: { workspaceId: string
   return (
     <div className="space-y-1 border-t border-border px-3 py-2" role="group" aria-label="Knowledge base">
       {ragOn && rag === "idle" && (
-        <button type="button" onClick={update} className={cn(quietButton, "w-full justify-start", indexStale && "text-warning hover:text-warning")}>
+        <Button variant="ghost" onClick={update} className={cn("w-full justify-start", indexStale && "text-warning hover:text-warning")}>
           <Icon className="h-3.5 w-3.5" aria-hidden="true" />
           {label}
-        </button>
+        </Button>
       )}
       {rag === "updating" && (
         <p role="status" className="ui-body flex items-center gap-2 px-2.5 py-1.5 text-muted-foreground">
@@ -82,16 +82,16 @@ export function LibraryFooter({ workspaceId, hasFolders }: { workspaceId: string
         </p>
       )}
       {ragOn && hasIndex && rag !== "updating" && (
-        <button type="button" onClick={() => setTesting(true)} className={cn(quietButton, "w-full justify-start")}>
+        <Button variant="ghost" onClick={() => setTesting(true)} className="w-full justify-start">
           <FlaskConical className="h-3.5 w-3.5" aria-hidden="true" />
           Test a search
-        </button>
+        </Button>
       )}
       {hasFolders && (
-        <button type="button" onClick={rescan} disabled={rescanning} className={cn(quietButton, "w-full justify-start")}>
+        <Button variant="ghost" onClick={rescan} disabled={rescanning} className="w-full justify-start">
           <FolderSync className="h-3.5 w-3.5" aria-hidden="true" />
           {rescanning ? "Scanning folders" : "Rescan folders"}
-        </button>
+        </Button>
       )}
       {testing && (
         <Suspense fallback={null}>

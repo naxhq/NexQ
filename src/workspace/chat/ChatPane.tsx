@@ -81,6 +81,12 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
   ].join("|");
   useChatPreview(chatId, view.draft, signature, !!chatId && !writing);
 
+  // What this chat's model can use (and which tools are off, and why) follows the model and the workspace's library.
+  const capSignature = [chat?.provider, chat?.model, chat?.effort, detail?.items.length].join("|");
+  useEffect(() => {
+    if (chatId) void store.getState().refreshCapabilities(chatId);
+  }, [chatId, capSignature, store]);
+
   const ensureChat = useCallback(() => store.getState().ensureChat(workspaceId), [store, workspaceId]);
 
   const sendText = useCallback(
@@ -159,7 +165,7 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
       {view.error && (
         <div role="alert" className={cn(COLUMN, "ui-body flex items-center gap-3 px-5 py-2 text-foreground")}>
           <span className="min-w-0 flex-1">Couldn't load the chats: {view.error}</span>
-          <button type="button" onClick={() => void store.getState().loadChats(workspaceId)} className="ui-meta rounded px-2 py-1 font-medium underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
+          <button type="button" onClick={() => void store.getState().loadChats(workspaceId)} className="ui-meta rounded px-2 py-1 font-medium underline underline-offset-2 outline-none ui-focus ui-focus-sm">
             Try again
           </button>
         </div>
@@ -175,7 +181,7 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
       ) : session.loadError ? (
         <div role="alert" className={cn(COLUMN, "ui-body flex-1 px-5 py-6 text-foreground")}>
           Couldn't open this chat: {session.loadError}{" "}
-          <button type="button" onClick={() => chatId && void store.getState().loadMessages(chatId)} className="rounded font-medium underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
+          <button type="button" onClick={() => chatId && void store.getState().loadMessages(chatId)} className="rounded font-medium underline underline-offset-2 outline-none ui-focus ui-focus-sm">
             Try again
           </button>
         </div>
@@ -205,6 +211,7 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
             workspaceId={workspaceId}
             chatId={chatId}
             excluded={session.excluded}
+            itemPrefs={session.itemPrefs}
             openers={openers}
           />
         )}
@@ -230,6 +237,7 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
           autoFocusKey={chatId ?? `new:${workspaceId}`}
           compact={!empty}
           showEstimate={wide}
+          capabilities={session.capabilities}
         />
       </div>
 

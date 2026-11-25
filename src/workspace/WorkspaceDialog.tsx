@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Dialog, buttonClass, ColorSwatches, Select, Switch } from "../ui";
+import { Dialog, ColorSwatches, Select, Switch, Button } from "../ui";
 import { VoiceprintMark } from "../voiceprint";
 import { useMeetingScenarios } from "../stores/scenarioStore";
 import { GENERAL_ID, useWorkspaceStore } from "../stores/workspaceStore";
@@ -148,12 +148,12 @@ export function WorkspaceDialog({
       initialFocusRef={nameRef}
       footer={
         <>
-          <button type="button" className={`${buttonClass.base} ${buttonClass.quiet}`} onClick={() => onClose()} disabled={busy}>
+          <Button  onClick={() => onClose()} disabled={busy}>
             Cancel
-          </button>
-          <button type="button" className={`${buttonClass.base} ${buttonClass.primary}`} onClick={save} disabled={busy || !!nameError}>
+          </Button>
+          <Button variant="primary"  onClick={save} disabled={busy || !!nameError}>
             {busy ? "Saving" : editing ? "Save" : "Create workspace"}
-          </button>
+          </Button>
         </>
       }
     >

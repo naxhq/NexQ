@@ -1,13 +1,14 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Info, Square } from "lucide-react";
-import { Segmented, Select, buttonClass } from "../../ui";
+import { Segmented, Select, Button, buttonClasses } from "../../ui";
 import { formatTokens } from "../../voiceprint";
 import { cliEffortLabel, cliModelLabel, isCliAgent } from "../../lib/cliAgents";
-import type { ContextDepth, WorkspaceChat } from "../../lib/types";
+import type { ChatCapabilities, ContextDepth, WorkspaceChat } from "../../lib/types";
 import type { ChatSession } from "../../stores/workspaceChatStore";
 import { cn } from "../../lib/utils";
 import { COLUMN } from "./column";
 import { DEPTHS } from "./depths";
+import { CapabilityNotes } from "./CapabilityNotes";
 import { ModelPicker, PickerCaret } from "./ModelPicker";
 import { OptionsMenu } from "./OptionsMenu";
 import { ScopeControl } from "./ScopeControl";
@@ -44,6 +45,8 @@ export interface ComposerProps {
   autoFocusKey: string;
   /** A chat with messages: one quiet row, so the answers keep the room. */
   compact: boolean;
+  /** What the backend says this chat can do (null until it answers, or on an older backend). */
+  capabilities?: ChatCapabilities | null;
   /** false when the pane is narrower than 620 px. */
   showEstimate: boolean;
 }
@@ -80,6 +83,7 @@ export function Composer(p: ComposerProps) {
   const cap = capabilityOf(selection.provider);
   const offTools = toolsOffInChat(selection.provider);
   const smallWindow = !!report && report.window > 0 && report.window < 8000;
+  const caps = p.capabilities ?? null;
   const canSend = !p.writing && !p.waitingForOther && p.draft.trim().length > 0;
   const open = focused || p.draft.length > 0;
 
@@ -121,14 +125,14 @@ export function Composer(p: ComposerProps) {
   const estimate = p.showEstimate ? estimateText : "";
 
   const action = p.writing ? (
-    <button type="button" onClick={p.onStop} disabled={p.stopping} className={cn(buttonClass.base, buttonClass.quiet, "shrink-0 gap-1.5")}>
+    <Button onClick={p.onStop} disabled={p.stopping} className="shrink-0 gap-1.5">
       <Square className="h-3 w-3 fill-current" aria-hidden="true" />
       {p.stopping ? "Stopping" : "Stop"}
-    </button>
+    </Button>
   ) : (
-    <button type="button" onClick={send} disabled={!canSend} className={cn(buttonClass.base, buttonClass.primary, "shrink-0")}>
+    <Button variant="primary" onClick={send} disabled={!canSend} className="shrink-0">
       Ask
-    </button>
+    </Button>
   );
 
   const textarea = (
@@ -169,10 +173,7 @@ export function Composer(p: ComposerProps) {
       onPick={p.onPickModel}
       onOpenSettings={p.onOpenSettings}
       disabled={p.writing}
-      buttonClassName={cn(
-        "ui-meta inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2 font-medium outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-50",
-        compact ? "text-muted-foreground hover:text-foreground" : "text-foreground/90",
-      )}
+      buttonClassName={cn(buttonClasses("ghost", "sm"), "ui-meta px-2", !compact && "text-foreground/90")}
     >
       <span>{selectionText(selection)}</span>
       {!compact && <span className="font-normal text-muted-foreground">{CAPABILITY_TEXT[cap]}</span>}
@@ -184,12 +185,13 @@ export function Composer(p: ComposerProps) {
     <div className={cn("space-y-1", compact ? "pb-1.5" : "pb-2")}>
       {p.meetingActive && <Notice>A meeting is running. Answers here take turns, one at a time, so live answers stay fast.</Notice>}
       {p.waitingForOther && !p.writing && <Notice>Another answer is still being written. Yours can go once it ends.</Notice>}
-      {offTools && p.hasLibrary && (
+      {caps && <CapabilityNotes caps={caps} />}
+      {!caps && offTools && p.hasLibrary && (
         <Notice>
           {providerLabel(selection.provider)} can't ask before it runs a tool yet. {TOOLS_OFF_TEXT}; it still reads folders and answers from your meetings.
         </Notice>
       )}
-      {cap === "passages" && p.hasLibrary && (
+      {!caps && cap === "passages" && p.hasLibrary && (
         <Notice>{providerLabel(selection.provider)} can't open folders or use tools. It answers from the passages found in your meetings and documents.</Notice>
       )}
       {smallWindow && report && <Notice>This model's window is small ({report.window.toLocaleString()} tokens), so answers see less of your material.</Notice>}

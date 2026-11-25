@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Dialog, buttonClass } from "../ui";
+import { Dialog, Button } from "../ui";
 import { addWorkspaceItem, listLibrary } from "../lib/ipc";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import type { LibraryItem } from "../lib/types";
@@ -46,12 +46,12 @@ export function PasteTextDialog({ workspaceId, open, onClose }: { workspaceId: s
       dismissible={!busy}
       footer={
         <>
-          <button type="button" className={`${buttonClass.base} ${buttonClass.quiet}`} onClick={onClose} disabled={busy}>
+          <Button  onClick={onClose} disabled={busy}>
             Cancel
-          </button>
-          <button type="button" className={`${buttonClass.base} ${buttonClass.primary}`} onClick={save} disabled={busy || !text.trim()}>
+          </Button>
+          <Button variant="primary"  onClick={save} disabled={busy || !text.trim()}>
             {busy ? "Saving" : "Add to workspace"}
-          </button>
+          </Button>
         </>
       }
     >
@@ -129,12 +129,12 @@ export function FromLibraryDialog({ workspaceId, open, onClose }: { workspaceId:
       dismissible={!busy}
       footer={
         <>
-          <button type="button" className={`${buttonClass.base} ${buttonClass.quiet}`} onClick={onClose} disabled={busy}>
+          <Button  onClick={onClose} disabled={busy}>
             Cancel
-          </button>
-          <button type="button" className={`${buttonClass.base} ${buttonClass.primary}`} onClick={add} disabled={busy || picked.size === 0}>
+          </Button>
+          <Button variant="primary"  onClick={add} disabled={busy || picked.size === 0}>
             {picked.size > 0 ? `Add ${picked.size}` : "Add"}
-          </button>
+          </Button>
         </>
       }
     >

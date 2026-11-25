@@ -1257,6 +1257,10 @@ export interface McpTool {
   /** `mcp__<key>__<name>`. */
   full_name: string;
   allowed: boolean;
+  /** The server marks the tool read-only (it may then run without asking). */
+  read_only_hint?: boolean;
+  /** The server marks the tool as one that can destroy or overwrite things. */
+  destructive_hint?: boolean;
 }
 
 export interface McpCheckStatus {
@@ -1499,6 +1503,12 @@ export interface Passage {
   occurred_at: number | null;
   /** Fused rank, higher is better. */
   score: number;
+  /** 0..1, how well it matches the query (newer backends). */
+  relevance?: number;
+  /** A short excerpt around the match. */
+  snippet?: string;
+  /** [start, end) pairs in `snippet`, in UTF-16 offsets. */
+  match_ranges?: Array<[number, number]>;
 }
 
 export interface SkippedFile {
@@ -1642,8 +1652,35 @@ export interface WorkspaceChatEndEvent extends WorkspaceChatEventBase {
   message: WorkspaceMessage;
   cancelled: boolean;
 }
+/** Why an answer failed, as the backend names it. Absent from older backends. */
+export type WorkspaceChatErrorKind = "no_key" | "rate_limited" | "unavailable" | "too_long" | "preempted" | "other" | "internal";
+
 export interface WorkspaceChatErrorEvent extends WorkspaceChatEventBase {
   error: string;
+  error_kind?: WorkspaceChatErrorKind;
+}
+
+/** `workspace_chat_approval_refused`: a tool was not run and no question was asked (for example it can't be answered safely). */
+export interface WorkspaceChatApprovalRefusedEvent {
+  chat_id: string;
+  request_id?: string | null;
+  reason: string;
+}
+
+/** A pin or exclusion saved for a chat (`list_chat_item_prefs`). */
+export interface ItemPref {
+  /** The first two parts of a context bar id: `<kind>:<ref>`. */
+  kind: string;
+  ref_id: string;
+  pref: ChatItemPrefValue;
+}
+
+/** `get_chat_capabilities`: what this chat's model can do right now, and what is off and why. */
+export interface ChatCapabilities {
+  /** This CLI can ask the user before it runs a tool. It does NOT say whether the chat can run: Codex, Antigravity, API and local models are false and chat normally. */
+  can_ask: boolean;
+  tools_off: Array<{ tool: string; reason: string }>;
+  notes: string[];
 }
 
 /** `workspace_chat_approval`: a tool that is not read-only asks first (auto-denied after 60 s). */
@@ -1789,6 +1826,13 @@ export interface BriefSheetEvent {
 
 export type MemoryKind = "person" | "decision" | "open_item" | "fact" | "preference";
 export type MemoryStatus = "suggested" | "saved" | "dismissed";
+
+/** Which AI proposes memory after a meeting; nothing set = the cheapest model automatically. */
+export interface MemorySettings {
+  provider: string | null;
+  model: string | null;
+  effort: string | null;
+}
 
 export interface MemoryItem {
   id: string;

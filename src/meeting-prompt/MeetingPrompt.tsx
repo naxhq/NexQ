@@ -172,7 +172,7 @@ export function MeetingPrompt({
               <input
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder={`${meeting.app_name} — name this meeting`}
+                placeholder={`Name this meeting (${meeting.app_name})`}
                 aria-label="Meeting name"
                 maxLength={120}
                 className="mt-0.5 w-full truncate bg-transparent text-sm font-semibold text-foreground placeholder:font-medium placeholder:text-muted-foreground/50 focus:outline-none"

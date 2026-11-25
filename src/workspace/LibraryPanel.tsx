@@ -1,6 +1,6 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { ClipboardPaste, FolderPlus, Library as LibraryIcon, Plus, Plug2 } from "lucide-react";
-import { ConfirmDialog, Menu, buttonClass, type MenuItemSpec } from "../ui";
+import { ConfirmDialog, Menu, type MenuItemSpec, Button } from "../ui";
 import { FileUpload } from "../context/FileUpload";
 import {
   getIndexStatus,
@@ -170,10 +170,10 @@ export function LibraryPanel({ workspaceId }: { workspaceId: string }) {
           items={addItems}
           align="end"
           renderTrigger={(props) => (
-            <button type="button" {...props} className={`${buttonClass.base} ${buttonClass.quiet} gap-1 px-2`}>
+            <Button {...props} className="gap-1 px-2">
               <Plus className="h-3.5 w-3.5" aria-hidden="true" />
               Add
-            </button>
+            </Button>
           )}
         />
       </header>
@@ -196,18 +196,18 @@ export function LibraryPanel({ workspaceId }: { workspaceId: string }) {
               <p className="ui-section text-foreground">Nothing here yet</p>
               <p className="ui-body mt-1 text-muted-foreground">Add files, a folder or a tool. The AI uses them in this workspace's meetings and chats.</p>
               <div className="mt-3 flex flex-wrap gap-2">
-                <button type="button" onClick={() => void addFolder()} className={`${buttonClass.base} ${buttonClass.quiet} gap-1.5 border border-border`}>
+                <Button onClick={() => void addFolder()} className="gap-1.5">
                   <FolderPlus className="h-3.5 w-3.5" aria-hidden="true" />
                   Add a folder
-                </button>
-                <button type="button" onClick={() => setDialog("server")} className={`${buttonClass.base} ${buttonClass.quiet} gap-1.5 border border-border`}>
+                </Button>
+                <Button onClick={() => setDialog("server")} className="gap-1.5">
                   <Plug2 className="h-3.5 w-3.5" aria-hidden="true" />
                   Add a tool
-                </button>
-                <button type="button" onClick={() => setDialog("paste")} className={`${buttonClass.base} ${buttonClass.quiet} gap-1.5 border border-border`}>
+                </Button>
+                <Button onClick={() => setDialog("paste")} className="gap-1.5">
                   <ClipboardPaste className="h-3.5 w-3.5" aria-hidden="true" />
                   Paste text
-                </button>
+                </Button>
               </div>
             </div>
           ) : (

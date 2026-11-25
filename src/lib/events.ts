@@ -5,8 +5,8 @@
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { NOTES_UPDATE_EVENT } from "./hotkeys";
 import type {
-  BriefSettings, BriefSheetEvent, BriefState, NotetakerSettings, MemoryChangedEvent, NotetakerDocEvent, NotetakerState,
-  WorkspaceChatActivityEvent, WorkspaceChatApprovalEvent, WorkspaceChatApprovalClosedEvent, WorkspaceChatContextEvent, WorkspaceChatEndEvent,
+  BriefSettings, BriefSheetEvent, MemorySettings, BriefState, NotetakerSettings, MemoryChangedEvent, NotetakerDocEvent, NotetakerState,
+  WorkspaceChatActivityEvent, WorkspaceChatApprovalEvent, WorkspaceChatApprovalClosedEvent, WorkspaceChatApprovalRefusedEvent, WorkspaceChatContextEvent, WorkspaceChatEndEvent,
   WorkspaceChatErrorEvent, WorkspaceChatStartEvent, WorkspaceChatTokenEvent, WorkspaceIndexProgressEvent,
   WorkspacesChangedEvent,
 } from "./types";
@@ -451,6 +451,10 @@ export function onWorkspaceChatError(handler: (e: WorkspaceChatErrorEvent) => vo
 export function onWorkspaceChatApproval(handler: (e: WorkspaceChatApprovalEvent) => void): Promise<UnlistenFn> {
   return listen<WorkspaceChatApprovalEvent>("workspace_chat_approval", (e) => handler(e.payload));
 }
+/** A tool was refused without asking (nothing to click). */
+export function onWorkspaceChatApprovalRefused(handler: (e: WorkspaceChatApprovalRefusedEvent) => void): Promise<UnlistenFn> {
+  return listen<WorkspaceChatApprovalRefusedEvent>("workspace_chat_approval_refused", (e) => handler(e.payload));
+}
 /** The approval question ended without a click here (answered elsewhere, timeout, cancelled). */
 export function onWorkspaceChatApprovalClosed(handler: (e: WorkspaceChatApprovalClosedEvent) => void): Promise<UnlistenFn> {
   return listen<WorkspaceChatApprovalClosedEvent>("workspace_chat_approval_closed", (e) => handler(e.payload));
@@ -473,6 +477,9 @@ export function onBriefSettingsChanged(handler: (e: BriefSettings) => void): Pro
 }
 export function onBriefSheet(handler: (e: BriefSheetEvent) => void): Promise<UnlistenFn> {
   return listen<BriefSheetEvent>("brief_sheet", (e) => handler(e.payload));
+}
+export function onMemorySettingsChanged(handler: (e: MemorySettings) => void): Promise<UnlistenFn> {
+  return listen<MemorySettings>("memory_settings_changed", (e) => handler(e.payload));
 }
 export function onMemoryChanged(handler: (e: MemoryChangedEvent) => void): Promise<UnlistenFn> {
   return listen<MemoryChangedEvent>("memory_changed", (e) => handler(e.payload));

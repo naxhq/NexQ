@@ -1,10 +1,9 @@
 import { useEffect, useRef } from "react";
 import { File as FileIcon, Folder, MoreHorizontal, Pin, Plug2 } from "lucide-react";
-import { InlineEdit, Menu, Switch, Tooltip, type MenuItemSpec } from "../ui";
+import { InlineEdit, Menu, Switch, Tooltip, type MenuItemSpec, IconButton } from "../ui";
 import { cn } from "../lib/utils";
 import type { WorkspaceItem } from "../lib/types";
 import { FOLDER_OPT_IN_SENTENCE, itemStatus, itemTitle, type IndexProgress } from "./libraryStatus";
-import { iconButtonClass } from "./styles";
 
 const KIND_WORD = { document: "Document", folder: "Folder", server: "Tool" } as const;
 const TONE: Record<string, string> = {
@@ -71,7 +70,7 @@ export function LibraryRow({
               <button
                 type="button"
                 onClick={onRemove}
-                className="ml-2 rounded px-1 font-medium underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+                className="ml-2 rounded px-1 font-medium underline underline-offset-2 outline-none hover:text-foreground ui-focus ui-focus-sm"
                 aria-label={`Remove ${title} from this workspace`}
               >
                 Remove
@@ -80,23 +79,20 @@ export function LibraryRow({
           </p>
         </div>
         <div className="flex shrink-0 items-center">
-          <button
-            type="button"
+          <IconButton
             onClick={onTogglePin}
             aria-pressed={item.pinned}
-            aria-label={item.pinned ? `Unpin ${title}` : `Pin ${title}`}
-            className={cn(iconButtonClass, item.pinned ? "text-foreground" : "opacity-0 focus-visible:opacity-100 group-hover:opacity-100")}
-          >
+            aria-label={item.pinned ? `Unpin ${title}` : `Pin ${title}`} className={cn(item.pinned ? "text-foreground" : "opacity-0 focus-visible:opacity-100 group-hover:opacity-100")}>
             <Pin className="h-3.5 w-3.5" fill={item.pinned ? "currentColor" : "none"} aria-hidden="true" />
-          </button>
+          </IconButton>
           <Menu
             label={`Actions for ${title}`}
             items={menuItems}
             align="end"
             renderTrigger={(props) => (
-              <button type="button" {...props} className={iconButtonClass} aria-label={`Actions for ${title}`}>
+              <IconButton {...props}  aria-label={`Actions for ${title}`}>
                 <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
-              </button>
+              </IconButton>
             )}
           />
         </div>
