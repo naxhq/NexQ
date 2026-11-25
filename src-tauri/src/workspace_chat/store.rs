@@ -172,15 +172,24 @@ pub struct Answer<'a> {
     pub output_tokens: i64,
 }
 
+/// An answered pair, saved in one transaction of its own.
 pub fn save_answer(conn: &Connection, chat_id: &str, a: Answer) -> Result<WorkspaceMessage, String> {
-    let now = now_ms();
     let tx = conn.unchecked_transaction().map_err(|e| err("Couldn't save the answer", e))?;
-    tx.execute(
+    let saved = save_answer_in_tx(&tx, chat_id, a)?;
+    tx.commit().map_err(|e| err("Couldn't save the answer", e))?;
+    Ok(saved)
+}
+
+/// The pair, written on a connection whose caller owns the transaction (see
+/// `guard::atomically`).
+pub fn save_answer_in_tx(conn: &Connection, chat_id: &str, a: Answer) -> Result<WorkspaceMessage, String> {
+    let now = now_ms();
+    conn.execute(
         "INSERT INTO workspace_messages (chat_id, role, content, created_at) VALUES (?1, 'user', ?2, ?3)",
         params![chat_id, a.question, now],
     )
     .map_err(|e| err("Couldn't save the answer", e))?;
-    tx.execute(
+    conn.execute(
         "INSERT INTO workspace_messages (chat_id, role, content, model, citations_json, context_json, input_tokens, output_tokens, created_at)
          VALUES (?1, 'assistant', ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
@@ -195,18 +204,17 @@ pub fn save_answer(conn: &Connection, chat_id: &str, a: Answer) -> Result<Worksp
         ],
     )
     .map_err(|e| err("Couldn't save the answer", e))?;
-    let id = tx.last_insert_rowid();
+    let id = conn.last_insert_rowid();
     // the title comes from the first question, locally
-    let title: String = tx
+    let title: String = conn
         .query_row("SELECT title FROM workspace_chats WHERE id = ?1", params![chat_id], |r| r.get(0))
         .map_err(|e| err("Couldn't save the answer", e))?;
     if title.trim().is_empty() {
-        tx.execute("UPDATE workspace_chats SET title = ?2 WHERE id = ?1", params![chat_id, title_from(a.question)])
+        conn.execute("UPDATE workspace_chats SET title = ?2 WHERE id = ?1", params![chat_id, title_from(a.question)])
             .map_err(|e| err("Couldn't save the answer", e))?;
     }
-    tx.execute("UPDATE workspace_chats SET updated_at = ?2 WHERE id = ?1", params![chat_id, now])
+    conn.execute("UPDATE workspace_chats SET updated_at = ?2 WHERE id = ?1", params![chat_id, now])
         .map_err(|e| err("Couldn't save the answer", e))?;
-    tx.commit().map_err(|e| err("Couldn't save the answer", e))?;
     Ok(get_message(conn, id)?.expect("just inserted"))
 }
 
@@ -222,6 +230,13 @@ pub fn title_from(question: &str) -> String {
         Some(i) if i > 25 => format!("{}…", cut[..i].trim_end()),
         _ => format!("{}…", cut.trim_end()),
     }
+}
+
+/// Forget the condensed history (what it was made from changed).
+pub fn clear_condensed(conn: &Connection, chat_id: &str) -> Result<(), String> {
+    conn.execute("UPDATE workspace_chats SET condensed = NULL, condensed_upto = NULL WHERE id = ?1", params![chat_id])
+        .map(|_| ())
+        .map_err(|e| err("Couldn't clear the condensed history", e))
 }
 
 pub fn set_condensed(conn: &Connection, chat_id: &str, text: &str, upto: i64) -> Result<(), String> {

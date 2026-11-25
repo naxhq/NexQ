@@ -41,6 +41,8 @@ enum Step {
     /// Streams `tokens`, runs `hook` after the first `after` of them (0 = before the
     /// first, tokens.len() = after the last), then goes on and finishes.
     Hooked { tokens: Vec<&'static str>, after: usize, hook: Arc<dyn Fn() + Send + Sync> },
+    /// Like `Hooked`, but the call then fails.
+    HookedErr { tokens: Vec<&'static str>, after: usize, hook: Arc<dyn Fn() + Send + Sync>, err: fn() -> LLMError },
 }
 
 struct FakeApi {
@@ -96,6 +98,21 @@ impl ApiBackend for FakeApi {
                 Err(LLMError::Cancelled)
             }
             Step::Panic => panic!("the network layer crashed"),
+            Step::HookedErr { tokens, after, hook, err } => {
+                for (i, t) in tokens.iter().enumerate() {
+                    if i == after {
+                        hook();
+                    }
+                    if let Some(s) = &sink {
+                        s(t);
+                    }
+                    tokio::task::yield_now().await;
+                }
+                if after >= tokens.len() {
+                    hook();
+                }
+                Err(err())
+            }
             Step::Hooked { tokens, after, hook } => {
                 for (i, t) in tokens.iter().enumerate() {
                     if i == after {
@@ -143,6 +160,8 @@ impl ConfigSource for Keys {
 struct FakeSession {
     asked: Mutex<Vec<String>>,
     closed: AtomicBool,
+    /// Streams a first word, then waits until the turn is cancelled.
+    hang: bool,
 }
 
 #[async_trait]
@@ -150,8 +169,13 @@ impl SessionHandle for FakeSession {
     async fn append_context(&self, _t: &str) -> Result<(), AgentError> {
         Ok(())
     }
-    async fn ask(&self, prompt: &str, on_delta: OnDelta, _c: Arc<CancelToken>) -> Result<TurnResult, AgentError> {
+    async fn ask(&self, prompt: &str, on_delta: OnDelta, cancel: Arc<CancelToken>) -> Result<TurnResult, AgentError> {
         self.asked.lock().unwrap().push(prompt.to_string());
+        if self.hang {
+            on_delta("partial ");
+            cancel.cancelled().await;
+            return Err(AgentError::Cancelled);
+        }
         on_delta("cli answer [S1]");
         Ok(TurnResult { text: "cli answer [S1]".into(), input_tokens: 10, output_tokens: 3, ..Default::default() })
     }
@@ -172,12 +196,13 @@ impl SessionHandle for FakeSession {
 #[derive(Default)]
 struct FakeSpawner {
     spawned: Mutex<Vec<(SessionConfig, Arc<FakeSession>)>>,
+    hang: AtomicBool,
 }
 
 #[async_trait]
 impl SessionSpawner for FakeSpawner {
     async fn spawn(&self, cfg: SessionConfig) -> Result<Arc<dyn SessionHandle>, AgentError> {
-        let s = Arc::new(FakeSession { asked: Mutex::new(vec![]), closed: AtomicBool::new(false) });
+        let s = Arc::new(FakeSession { asked: Mutex::new(vec![]), closed: AtomicBool::new(false), hang: self.hang.load(Ordering::SeqCst) });
         self.spawned.lock().unwrap().push((cfg, s.clone()));
         Ok(s)
     }
@@ -1548,4 +1573,353 @@ async fn an_upgraded_database_reports_indexing_from_the_first_moment_until_the_b
     let st = ops::index_status(&reader, &rig.deps.hub, &rig.ws, false).unwrap();
     assert_eq!(st.state, "idle");
     assert!(ops::search_workspace_page(&reader, &rig.ws, "lynx programme", None, 5).unwrap().indexing.is_none());
+}
+
+// ── errors after a revocation, atomic writes, what a CLI can reach, old answers ──
+
+#[tokio::test]
+async fn a_revocation_wins_over_a_cancel_a_failure_and_a_timeout() {
+    let errors: [(&str, fn() -> LLMError); 3] = [
+        ("cancelled", || LLMError::Cancelled),
+        ("unavailable", || LLMError::ConnectionFailed("the server went away".into())),
+        ("timeout", || LLMError::ProviderError("request timed out".into())),
+    ];
+    for (name, err) in errors {
+        for what in [Revoke::MoveMeeting, Revoke::UnfileDocument] {
+            for after in [2usize, 4] {
+                let rig = Rig::new();
+                rig.with_secrets();
+                let chat = rig.chat();
+                rig.api.push(Step::HookedErr { tokens: vec!["One ", "two ", "three ", "four"], after, hook: rig.revoker(what), err });
+                rig.ask(&chat, "What is the Kestrel budget?").await;
+                let errs = rig.events_named("workspace_chat_error");
+                assert_eq!(errs.len(), 1, "{name} {what:?} {after}: {errs:?}");
+                assert_eq!(errs[0]["error_kind"], "access_changed", "{name} {what:?} {after}");
+                assert!(rig.events_named("workspace_chat_end").is_empty(), "{name} {what:?} {after}: no partial is delivered");
+                assert_eq!(rig.tokens_shown().len(), after.min(4), "{name} {what:?} {after}: nothing is shown after the change");
+                assert!(store::list_messages(&rig.conn(), &chat).unwrap().is_empty(), "{name} {what:?} {after}: nothing is saved");
+            }
+        }
+    }
+    // without a revocation the same errors keep their own meaning
+    let rig = Rig::new();
+    rig.with_secrets();
+    let chat = rig.chat();
+    rig.api.push(Step::HookedErr { tokens: vec!["a "], after: 1, hook: Arc::new(|| {}), err: || LLMError::ConnectionFailed("down".into()) });
+    rig.ask(&chat, "q?").await;
+    assert_eq!(rig.events_named("workspace_chat_error")[0]["error_kind"], "unavailable");
+}
+
+fn conn_with_busy(path: &std::path::Path) -> Connection {
+    crate::db::open_writer(path).unwrap()
+}
+
+#[test]
+fn the_check_and_the_write_are_one_transaction() {
+    use super::guard::{AccessGuard, Used, WriteError};
+    let rig = Rig::new();
+    rig.with_secrets();
+    let chat = rig.chat();
+    let mut used = Used::default();
+    used.meetings.insert("m-secret".into());
+    let report = ContextReport { strategy: "full".into(), depth: "balanced".into(), budget: 1, window: 1, used: 1, bars: vec![], omitted: 0, notices: vec![], estimate: false };
+    let cite = WorkspaceCitation { tag: "S1".into(), kind: "transcript".into(), ref_id: "m-secret".into(), sub_ref: None, title: "Secret meeting".into(), start_ms: Some(0), snippet: "CANARYMEET".into() };
+    let write = |conn: &Connection| {
+        store::save_answer_in_tx(conn, &chat, store::Answer { question: "q", text: "a", model: "m", citations: &[cite.clone()], context: &report, input_tokens: 0, output_tokens: 0 }).map(|_| ())
+    };
+
+    // (a) a revocation that holds the write lock while it commits comes first: nothing is written
+    let guard = AccessGuard::new(conn_with_busy(&rig.deps.db_path), &chat, used.clone());
+    assert!(guard.ok());
+    let path = rig.deps.db_path.clone();
+    let revoker = rig.revoker(Revoke::MoveMeeting);
+    let t = std::thread::spawn(move || {
+        let c = conn_with_busy(&path);
+        c.execute_batch("BEGIN IMMEDIATE").unwrap();
+        std::thread::sleep(Duration::from_millis(400));
+        c.execute_batch("COMMIT").unwrap();
+        revoker();
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    let r = guard.check_and_write(&write);
+    t.join().unwrap();
+    // the lock was released before the move itself ran, so the write may have won; run the real race below
+    drop(r);
+    store::delete_chat(&rig.conn(), &chat).ok();
+
+    // (b) the real race: the move is in flight (holding the lock) when the guard asks
+    let rig = Rig::new();
+    rig.with_secrets();
+    let chat = rig.chat();
+    let guard = AccessGuard::new(conn_with_busy(&rig.deps.db_path), &chat, used.clone());
+    assert!(guard.ok());
+    let path = rig.deps.db_path.clone();
+    let ws = rig.ws.clone();
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+    let t = std::thread::spawn(move || {
+        let c = conn_with_busy(&path);
+        c.execute_batch("BEGIN IMMEDIATE").unwrap();
+        started_tx.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(400));
+        let other = new_ws(&c, "Elsewhere", false, false);
+        c.execute("UPDATE meetings SET workspace_id = ?2 WHERE id = ?1", rusqlite::params!["m-secret", other]).unwrap();
+        c.execute_batch("COMMIT").unwrap();
+        let _ = ws;
+    });
+    started_rx.recv().unwrap();
+    let report2 = report.clone();
+    let cite2 = cite.clone();
+    let chat2 = chat.clone();
+    let r = guard.check_and_write(|conn| {
+        store::save_answer_in_tx(conn, &chat2, store::Answer { question: "q", text: "a", model: "m", citations: &[cite2.clone()], context: &report2, input_tokens: 0, output_tokens: 0 }).map(|_| ())
+    });
+    t.join().unwrap();
+    assert_eq!(r, Err(WriteError::Revoked), "the guard waited for the move and saw it");
+    assert!(store::list_messages(&rig.conn(), &chat).unwrap().is_empty(), "nothing was written");
+    assert!(guard.revoked());
+
+    // (c) the write comes first: it commits, then the move runs and redacts the citation
+    let rig = Rig::new();
+    rig.with_secrets();
+    let chat = rig.chat();
+    let guard = AccessGuard::new(conn_with_busy(&rig.deps.db_path), &chat, used);
+    assert!(guard.ok());
+    let revoker = rig.revoker(Revoke::MoveMeeting);
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+    let t = std::thread::spawn(move || {
+        started_rx.recv().unwrap();
+        revoker(); // waits for the guard's lock
+    });
+    let chat3 = chat.clone();
+    let r = guard.check_and_write(|conn| {
+        started_tx.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        store::save_answer_in_tx(conn, &chat3, store::Answer { question: "q", text: "a", model: "m", citations: &[cite.clone()], context: &report, input_tokens: 0, output_tokens: 0 }).map(|_| ())
+    });
+    t.join().unwrap();
+    assert!(r.is_ok());
+    let saved = store::list_messages(&rig.conn(), &chat).unwrap();
+    assert_eq!(saved.len(), 2, "written before the move");
+    assert_eq!(saved[1].citations[0].title, "Deleted meeting", "and the move then took the citation out");
+}
+
+fn recording_policy(
+    cell: Arc<Mutex<Option<Arc<RecBroker>>>>,
+    sources: Arc<RwLock<PersonalSourcesConfig>>,
+) -> Option<Box<dyn FnOnce(Arc<AgentSessionManager>) -> Arc<dyn ToolPolicy>>> {
+    Some(Box::new(move |cli| {
+        let broker = Arc::new(RecBroker::default());
+        *cell.lock().unwrap() = Some(broker.clone());
+        Arc::new(ApprovalToolPolicy::new(cli, broker, sources, Arc::new(|_| ApprovalSupport::Supported)))
+    }))
+}
+
+#[derive(Default)]
+struct RecBroker {
+    denied: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl crate::llm::cli_agent::approval::ApprovalBroker for RecBroker {
+    async fn ask(&self, _req: crate::llm::cli_agent::approval::ApprovalRequest) -> bool {
+        false
+    }
+    fn deny_chat(&self, chat_id: &str) {
+        self.denied.lock().unwrap().push(chat_id.to_string());
+    }
+    fn deny_request(&self, _: &str, _: &str) {}
+    fn pending(&self, _: &str) -> usize {
+        0
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Exposed {
+    MeetingNotInThePrompt,
+    FolderOfTheScope,
+    ServerOfTheScope,
+}
+
+/// A workspace so big that the ladder is used: the oldest meeting is not in
+/// the prompt. A folder and a server are in the scope without being indexed.
+fn exposed_rig(sources: Arc<RwLock<PersonalSourcesConfig>>) -> (Rig, Arc<Mutex<Option<Arc<RecBroker>>>>) {
+    let cell: Arc<Mutex<Option<Arc<RecBroker>>>> = Arc::default();
+    let rig = Rig::with_tools(recording_policy(cell.clone(), sources.clone()));
+    *rig.sources.write().unwrap() = sources.read().unwrap().clone();
+    // the rig's own sources cell is the one the engine reads: keep both the same
+    rig.meeting("m00", "Old lunch", 1, &["CANARYOLD lunch plans only"]);
+    for i in 1..15u32 {
+        rig.meeting(&format!("m{i:02}"), &format!("Weekly {i}"), 1 + i, &budget_lines());
+    }
+    {
+        let conn = rig.conn();
+        let big = "word ".repeat(30_000);
+        let res = crate::context::ContextResource {
+            id: "dbig".into(), name: "big.txt".into(), file_type: "txt".into(), file_path: "x".into(), size_bytes: 3,
+            token_count: 2, preview: "p".into(), loaded_at: "now".into(), status: "ready".into(),
+        };
+        crate::workspace::documents::add_document(&conn, &res, &big, Some(&rig.ws)).unwrap();
+        crate::workspace::store::add_item(&conn, &rig.ws, crate::workspace::types::ItemKind::Folder, "f-in", None).unwrap();
+        crate::workspace::store::add_item(&conn, &rig.ws, crate::workspace::types::ItemKind::Server, "s1", None).unwrap();
+    }
+    rig.index();
+    (rig, cell)
+}
+
+fn exposed_revoker(rig: &Rig, what: Exposed) -> Arc<dyn Fn() + Send + Sync> {
+    let (path, ws) = (rig.deps.db_path.clone(), rig.ws.clone());
+    Arc::new(move || {
+        let conn = crate::db::open_writer(&path).unwrap();
+        match what {
+            Exposed::MeetingNotInThePrompt => {
+                let other = new_ws(&conn, &format!("Elsewhere {}", uuid::Uuid::new_v4()), false, false);
+                crate::workspace::meetings::move_meeting_atomic(&conn, "m00", &other).unwrap();
+            }
+            Exposed::FolderOfTheScope => {
+                crate::workspace::store::remove_item(&conn, &ws, crate::workspace::types::ItemKind::Folder, "f-in").unwrap()
+            }
+            Exposed::ServerOfTheScope => {
+                crate::workspace::store::remove_item(&conn, &ws, crate::workspace::types::ItemKind::Server, "s1").unwrap()
+            }
+        }
+    })
+}
+
+fn cli_sources(rig_dir: &std::path::Path) -> Arc<RwLock<PersonalSourcesConfig>> {
+    let folder = rig_dir.join("notes-in");
+    std::fs::create_dir_all(&folder).unwrap();
+    Arc::new(RwLock::new(PersonalSourcesConfig {
+        notes_folders: vec![NotesFolder { id: "f-in".into(), label: "In".into(), path: folder.to_string_lossy().into(), enabled: true }],
+        mcp_servers: vec![crate::sources::config::McpServer { id: "s1".into(), key: "kb".into(), label: "KB".into(), enabled: true, ..Default::default() }],
+        ..Default::default()
+    }))
+}
+
+#[tokio::test]
+async fn a_cli_run_is_stopped_when_anything_its_session_can_reach_leaves_the_scope() {
+    for what in [Exposed::MeetingNotInThePrompt, Exposed::FolderOfTheScope, Exposed::ServerOfTheScope] {
+        let tmp = temp_dir("cli-exposed");
+        let (rig, cell) = exposed_rig(cli_sources(&tmp));
+        rig.spawner.hang.store(true, Ordering::SeqCst);
+        *rig.selection.lock().unwrap() = ModelSelection::new("claude_cli", "", None);
+        let chat = store::create_chat(&rig.conn(), &rig.ws, Some("claude_cli"), None, None).unwrap().id;
+        let broker = cell.lock().unwrap().clone().unwrap();
+        let h = engine::start_ask(rig.deps.clone(), &chat, "What is the Kestrel budget?", "req-x", false).unwrap();
+        // the session is running (and waiting, as when a tool or an approval is pending)
+        let t = Instant::now();
+        loop {
+            let up = rig.spawner.spawned.lock().unwrap().iter().any(|(_, s)| !s.asked.lock().unwrap().is_empty());
+            if up {
+                break;
+            }
+            assert!(t.elapsed() < Duration::from_secs(10), "{what:?}: the session never started");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // it was not part of the prompt: the report has no bar for the oldest meeting
+        let ctx = rig.events_named("workspace_chat_context");
+        let bars = ctx[0]["report"]["bars"].to_string();
+        assert!(!bars.contains("meeting:m00"), "{what:?}: the old meeting is not in the prompt: {bars}");
+        assert_eq!(rig.events_named("workspace_chat_context")[0]["report"]["strategy"], "ladder");
+        assert!(broker.denied.lock().unwrap().is_empty());
+        let revoked_at = Instant::now();
+        (exposed_revoker(&rig, what))();
+        // the question waiting for approval is refused right away, without waiting for the run to end
+        while broker.denied.lock().unwrap().is_empty() {
+            assert!(revoked_at.elapsed() < Duration::from_secs(2), "{what:?}: the approval was not refused in time");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(broker.denied.lock().unwrap()[0], chat);
+        h.await.unwrap();
+        let errs = rig.events_named("workspace_chat_error");
+        assert_eq!(errs.len(), 1, "{what:?}: {errs:?}");
+        assert_eq!(errs[0]["error_kind"], "access_changed", "{what:?}");
+        assert!(rig.events_named("workspace_chat_end").is_empty(), "{what:?}");
+        assert!(rig.tokens_shown().len() <= 1, "{what:?}: at most the word streamed before the change");
+        assert!(store::list_messages(&rig.conn(), &chat).unwrap().is_empty(), "{what:?}");
+        assert!(rig.deps.transcripts.dir_for(&chat).is_none(), "{what:?}: the transcripts folder is gone");
+        assert!(rig.spawner.spawned.lock().unwrap()[0].1.closed.load(Ordering::SeqCst), "{what:?}: the session ended");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+}
+
+#[tokio::test]
+async fn an_api_chat_is_not_stopped_by_a_meeting_that_was_not_in_its_prompt() {
+    let tmp = temp_dir("api-exposed");
+    let (rig, _) = exposed_rig(cli_sources(&tmp));
+    let chat = rig.chat();
+    rig.api.push(Step::Hooked { tokens: vec!["Fine ", "answer ", "here."], after: 1, hook: exposed_revoker(&rig, Exposed::MeetingNotInThePrompt) });
+    rig.ask(&chat, "What is the Kestrel budget?").await;
+    assert!(!rig.api.sent(0).contains("CANARYOLD"), "it was never in the prompt");
+    assert!(rig.events_named("workspace_chat_error").is_empty(), "{:?}", rig.events_named("workspace_chat_error"));
+    assert_eq!(store::list_messages(&rig.conn(), &chat).unwrap().len(), 2);
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+fn all_labels(reply: &str) -> String {
+    let labels: String = (1..=12).map(|n| format!("[S{n}]")).collect::<Vec<_>>().join(" ");
+    format!("{reply} {labels}")
+}
+
+#[tokio::test]
+async fn old_answers_that_rest_on_material_the_chat_lost_are_not_sent_again() {
+    for what in [Revoke::MoveMeeting, Revoke::DeleteMeeting, Revoke::UnfileDocument, Revoke::DeleteDocument] {
+        let rig = Rig::new();
+        rig.with_secrets();
+        let chat = rig.chat();
+        rig.api.push(Step::Text(all_labels("ANSWERMARK first answer")));
+        rig.ask(&chat, "FIRSTQUESTION about the Kestrel budget?").await;
+        let first = store::list_messages(&rig.conn(), &chat).unwrap();
+        assert_eq!(first.len(), 2);
+        assert!(first[1].citations.len() >= 2, "{what:?}: the answer cites its sources");
+        // a condensed history that covers it
+        store::set_condensed(&rig.conn(), &chat, "CONDENSEDMARK notes of the first answer", first[1].id).unwrap();
+        // control: nothing changed yet, the old pair is sent
+        rig.api.push(Step::Text("Second.".into()));
+        rig.ask(&chat, "SECONDQUESTION?").await;
+        assert!(rig.api.sent(0).contains("FIRSTQUESTION") || rig.api.sent(1).contains("FIRSTQUESTION"));
+        let before = rig.api.calls().len();
+        // the revocation
+        (rig.revoker(what))();
+        rig.api.push(Step::Text("Third.".into()));
+        rig.ask(&chat, "THIRDQUESTION?").await;
+        let sent = rig.api.sent(before);
+        assert!(!sent.contains("ANSWERMARK"), "{what:?}: the old answer is not sent again");
+        assert!(!sent.contains("FIRSTQUESTION"), "{what:?}: nor its question");
+        assert!(!sent.contains("CONDENSEDMARK"), "{what:?}: nor the summary made from it");
+        assert!(!sent.contains(canary_of(what)), "{what:?}");
+        let row = store::get_chat(&rig.conn(), &chat).unwrap().unwrap();
+        assert!(row.condensed.as_deref().map_or(true, |c| !c.contains("CONDENSEDMARK")), "{what:?}: the stored summary is gone");
+        let notices = rig.events_named("workspace_chat_end").last().unwrap()["message"]["context"]["notices"].to_string();
+        assert!(notices.contains("left out because they used material"), "{what:?}: {notices}");
+        // the old answer is still there for the user to read
+        assert!(store::list_messages(&rig.conn(), &chat).unwrap().iter().any(|m| m.content.contains("ANSWERMARK")));
+    }
+}
+
+#[tokio::test]
+async fn an_answer_that_rests_on_lost_material_cannot_be_saved_or_added_to_instructions() {
+    let rig = Rig::new();
+    rig.with_secrets();
+    let chat = rig.chat();
+    rig.api.push(Step::Text(all_labels("ANSWERMARK")));
+    rig.ask(&chat, "Kestrel budget?").await;
+    let answer = store::list_messages(&rig.conn(), &chat).unwrap().remove(1);
+    (rig.revoker(Revoke::UnfileDocument))();
+    let mut ctx = crate::context::ContextManager::new();
+    let docs_before: i64 = rig.conn().query_row("SELECT COUNT(*) FROM context_resources", [], |r| r.get(0)).unwrap();
+    assert_eq!(ops::save_answer_as_document(&rig.conn(), &mut ctx, answer.id, "x").unwrap_err(), ops::ANSWER_STALE);
+    let docs_after: i64 = rig.conn().query_row("SELECT COUNT(*) FROM context_resources", [], |r| r.get(0)).unwrap();
+    assert_eq!(docs_before, docs_after, "no document was left behind");
+    assert_eq!(ops::add_answer_to_instructions(&rig.conn(), answer.id).unwrap_err(), ops::ANSWER_STALE);
+    assert!(crate::workspace::store::get_workspace(&rig.conn(), &rig.ws).unwrap().instructions.is_empty());
+    // a clean answer still can
+    let rig2 = Rig::new();
+    rig2.with_secrets();
+    let chat2 = rig2.chat();
+    rig2.api.push(Step::Text(all_labels("CLEANMARK")));
+    rig2.ask(&chat2, "Kestrel budget?").await;
+    let clean = store::list_messages(&rig2.conn(), &chat2).unwrap().remove(1);
+    let mut ctx2 = crate::context::ContextManager::new();
+    assert!(ops::save_answer_as_document(&rig2.conn(), &mut ctx2, clean.id, "ok").is_ok());
+    assert!(ops::add_answer_to_instructions(&rig2.conn(), clean.id).is_ok());
 }

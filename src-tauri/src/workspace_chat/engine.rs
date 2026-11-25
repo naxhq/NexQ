@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 
 use futures::FutureExt;
@@ -12,7 +13,7 @@ use serde_json::json;
 
 use super::errors::describe;
 use super::files::meeting_files;
-use super::guard::{AccessGuard, Used};
+use super::guard::{atomically, message_tainted, AccessGuard, Used, WriteError};
 use super::hub::{ChatHub, Permit, ToolContext, ToolPolicy};
 use super::scope_adapter::{self, ChatScope};
 use super::store::{self, ChatRow};
@@ -270,7 +271,15 @@ pub fn build(
             }
         }
     }
-    let messages = store::list_messages(&conn, chat_id)?;
+    let (messages, dropped_pairs, condensed_ok) = clean_history(&conn, &row, &scope)?;
+    if !condensed_ok {
+        store::clear_condensed(&conn, chat_id)?;
+    }
+    if dropped_pairs > 0 {
+        extra_notices.push(format!(
+            "{dropped_pairs} earlier answer(s) were left out because they used material that is no longer part of this chat."
+        ));
+    }
     let conversation: Vec<ChatTurn> = messages.iter().map(|m| ChatTurn { role: m.role.clone(), content: m.content.clone() }).collect();
 
     let input = ContextInput {
@@ -284,7 +293,7 @@ pub fn build(
         meetings,
         materials,
         conversation,
-        condensed: row.condensed.clone(),
+        condensed: if condensed_ok { row.condensed.clone() } else { None },
         nonce: Some(row.nonce.clone()),
     };
     let search_fn = |q: &str, n: usize| search(&conn, &scope.search, q, &[], n).unwrap_or_default();
@@ -313,6 +322,33 @@ pub fn build(
     );
     let report = report_of(&plan, &depth_name, estimate, &extra_notices);
     Ok(Assembled { plan, selection, chat: row, scope, system, user_text, history, report, fingerprint, cards: sizes.cards })
+}
+
+/// The chat's messages minus the answers (and their questions) that rest on
+/// material the chat no longer has, how many pairs that is, and whether the
+/// condensed history is still good (it is not when anything it covers was left out).
+fn clean_history(conn: &rusqlite::Connection, row: &ChatRow, scope: &ChatScope) -> Result<(Vec<WorkspaceMessage>, usize, bool), String> {
+    let all = store::list_messages(conn, &row.chat.id)?;
+    let mut kept: Vec<WorkspaceMessage> = Vec::new();
+    let (mut dropped, mut condensed_ok) = (0usize, true);
+    let upto = row.chat.condensed_upto.unwrap_or(0);
+    for m in all {
+        if message_tainted(&m, scope) {
+            if kept.last().map_or(false, |p| p.role == "user") {
+                let q = kept.pop().unwrap();
+                if q.id <= upto {
+                    condensed_ok = false;
+                }
+            }
+            if m.id <= upto {
+                condensed_ok = false;
+            }
+            dropped += 1;
+        } else {
+            kept.push(m);
+        }
+    }
+    Ok((kept, dropped, condensed_ok))
 }
 
 /// The estimate shown before sending.
@@ -345,7 +381,9 @@ async fn maybe_condense(deps: &ChatDeps, chat_id: &str, selection: &ModelSelecti
     let (prompt, upto, nonce) = {
         let Ok(conn) = deps.conn() else { return Condensed::Nothing };
         let Ok(row) = store::require_chat(&conn, chat_id) else { return Condensed::Nothing };
-        let Ok(messages) = store::list_messages(&conn, chat_id) else { return Condensed::Nothing };
+        let Ok(scope) = scope_adapter::chat_scope(&conn, &row) else { return Condensed::Nothing };
+        let Ok((messages, _, condensed_ok)) = clean_history(&conn, &row, &scope) else { return Condensed::Nothing };
+        let row = if condensed_ok { row } else { ChatRow { condensed: None, ..row } };
         let older_end = messages.len().saturating_sub(VERBATIM_TURNS);
         let from = row.chat.condensed_upto.unwrap_or(0);
         let older: Vec<&WorkspaceMessage> = messages[..older_end].iter().filter(|m| m.id > from).collect();
@@ -377,9 +415,22 @@ async fn maybe_condense(deps: &ChatDeps, chat_id: &str, selection: &ModelSelecti
     match deps.ai.run(req, None).await {
         Ok(res) if !res.text.trim().is_empty() => {
             let Ok(conn) = deps.conn() else { return Condensed::Nothing };
-            match store::set_condensed(&conn, chat_id, res.text.trim(), upto) {
+            // written only if nothing it covers has become unusable since it was made
+            let written = atomically(
+                &conn,
+                |c| {
+                    let Ok(Some(row)) = store::get_chat(c, chat_id) else { return false };
+                    let Ok(scope) = scope_adapter::chat_scope(c, &row) else { return false };
+                    store::list_messages(c, chat_id)
+                        .map(|ms| ms.iter().filter(|m| m.id <= upto).all(|m| !message_tainted(m, &scope)))
+                        .unwrap_or(false)
+                },
+                |c| store::set_condensed(c, chat_id, res.text.trim(), upto),
+            );
+            match written {
                 Ok(()) => Condensed::Done,
-                Err(e) => Condensed::Failed(e),
+                Err(WriteError::Revoked) => Condensed::Failed("what it was made from changed".into()),
+                Err(WriteError::Failed(e)) => Condensed::Failed(e),
             }
         }
         Ok(_) => Condensed::Failed("the model returned nothing".into()),
@@ -628,8 +679,19 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
             Err(e) => return fail(e),
         };
         // From here on, what this answer was built from is watched.
+        let mut used = Used::of_plan(&a.plan);
+        if cli {
+            // a CLI session can also read the transcripts folder, the scope's folders and call its servers
+            let cfg = deps.sources.read().map(|c| c.clone()).unwrap_or_default();
+            let scoped = ws_runtime::scoped_sources(&cfg, &a.scope.eff);
+            used.expose(
+                a.chat.chat.include_meetings.then(|| a.scope.meetings.iter().map(|m| m.id.clone()).collect::<Vec<_>>()).unwrap_or_default(),
+                scoped.notes_folders.iter().map(|f| f.id.clone()),
+                scoped.mcp_servers.iter().map(|s| s.id.clone()),
+            );
+        }
         let guard = match deps.conn() {
-            Ok(c) => Arc::new(AccessGuard::new(c, chat_id, Used::of_plan(&a.plan))),
+            Ok(c) => Arc::new(AccessGuard::new(c, chat_id, used)),
             Err(e) => return fail(e),
         };
         // a session built from something that changed starts again
@@ -692,14 +754,36 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
                 deps.emit("workspace_chat_token", json!({ "chat_id": chat, "request_id": request, "token": token }));
             })
         };
+        // While the run waits (a tool call, a slow model) nothing streams, so the
+        // guard is also looked at on a timer; a revocation cancels the run and
+        // refuses any question waiting for approval right away.
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watcher = {
+            let (guard, cancel, done, tools, chat) = (guard.clone(), permit.cancel.clone(), done.clone(), deps.tools.clone(), chat_id.to_string());
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+                    if done.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    if !guard.ok() {
+                        cancel.cancel();
+                        tools.on_cancel(&chat);
+                        break;
+                    }
+                }
+            })
+        };
         let result = deps.ai.run(req, Some(sink)).await;
-        if attempt == 1 && matches!(&result, Err(e) if scope_changed(e)) && !permit.cancel.is_cancelled() {
+        done.store(true, Ordering::SeqCst);
+        watcher.abort();
+        if attempt == 1 && matches!(&result, Err(e) if scope_changed(e)) && !permit.cancel.is_cancelled() && !guard.revoked() {
             continue;
         }
         break (a, result, guard);
     };
     // Revoked while it ran (or while the last token arrived): nothing is shown or saved.
-    if guard.revoked() || (result.is_ok() && !guard.ok()) {
+    if guard.revoked() || !guard.ok() {
         close_chat_session(deps, chat_id).await;
         return Outcome::Revoked;
     }
@@ -729,21 +813,19 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
                 })
                 .collect();
             let model = if res.model.is_empty() { a.selection.model.clone() } else { res.model.clone() };
-            // the last look, right before it is written
-            if !guard.ok() {
-                close_chat_session(deps, chat_id).await;
-                return Outcome::Revoked;
-            }
-            let saved = deps.conn().and_then(|conn| {
-                store::save_answer(
-                    &conn,
+            // The last look and the write are one transaction: a revocation either
+            // comes first (nothing is written) or after the commit.
+            let report = ContextReport { estimate: false, ..a.report.clone() };
+            let saved = guard.check_and_write(|conn| {
+                store::save_answer_in_tx(
+                    conn,
                     chat_id,
                     store::Answer {
                         question,
                         text: validated.text.trim(),
                         model: &model,
                         citations: &citations,
-                        context: &ContextReport { estimate: false, ..a.report.clone() },
+                        context: &report,
                         input_tokens: res.usage.prompt_tokens() as i64,
                         output_tokens: res.usage.output_tokens as i64,
                     },
@@ -751,7 +833,11 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
             });
             match saved {
                 Ok(m) => Outcome::Answered(m),
-                Err(e) => fail(e),
+                Err(WriteError::Revoked) => {
+                    close_chat_session(deps, chat_id).await;
+                    Outcome::Revoked
+                }
+                Err(WriteError::Failed(e)) => fail(e),
             }
         }
         Err(AiRunError::Cancelled) => Outcome::Cancelled(partial.lock().unwrap().clone()),

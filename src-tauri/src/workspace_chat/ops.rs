@@ -110,6 +110,9 @@ pub fn answer_of(conn: &Connection, message_id: i64) -> Result<(WorkspaceMessage
     Ok((m, chat.chat.workspace_id))
 }
 
+/// Why an answer can no longer go to the library or the instructions.
+pub const ANSWER_STALE: &str = "This answer used material that is no longer part of this workspace, so it can't be saved. Ask again.";
+
 /// "Save to library": the answer becomes a Markdown document of the chat's
 /// workspace. Returns the document id. The document is not left half made: a
 /// failed save removes it again.
@@ -122,24 +125,50 @@ pub fn save_answer_as_document(
     let (message, workspace_id) = answer_of(conn, message_id)?;
     let title = if title.trim().is_empty() { "Chat answer".to_string() } else { title.trim().to_string() };
     let resource = context.add_text(&title, &message.content)?;
-    if let Err(e) = crate::workspace::documents::add_document(conn, &resource, &message.content, Some(&workspace_id)) {
-        let _ = context.remove_file(&resource.id);
-        return Err(e);
+    // the check and the inserts are one transaction
+    let saved = super::guard::atomically(
+        conn,
+        |c| super::guard::answer_is_clean(c, &message),
+        |c| {
+            crate::db::context::add_context_resource(c, &crate::workspace::documents::db_row(&resource)).map_err(|e| e.to_string())?;
+            crate::workspace::documents::store_text(c, &resource.id, &message.content, resource.token_count as i64)?;
+            crate::workspace::store::add_item(c, &workspace_id, crate::workspace::types::ItemKind::Document, &resource.id, None)
+        },
+    );
+    match saved {
+        Ok(()) => Ok(resource.id),
+        Err(e) => {
+            let _ = context.remove_file(&resource.id);
+            Err(match e {
+                super::guard::WriteError::Revoked => ANSWER_STALE.to_string(),
+                super::guard::WriteError::Failed(m) => m,
+            })
+        }
     }
-    Ok(resource.id)
 }
 
 /// "Add to instructions": the answer is appended to the workspace's
 /// instructions after a separator. Returns the workspace id.
 pub fn add_answer_to_instructions(conn: &Connection, message_id: i64) -> Result<String, String> {
     let (message, workspace_id) = answer_of(conn, message_id)?;
-    let ws = crate::workspace::store::get_workspace(conn, &workspace_id)?;
-    let text = super::engine::append_to_instructions(&ws.instructions, &message.content);
-    crate::workspace::store::update_workspace(
+    super::guard::atomically(
         conn,
-        &workspace_id,
-        crate::workspace::types::WorkspacePatch { instructions: Some(text), ..Default::default() },
-    )?;
+        |c| super::guard::answer_is_clean(c, &message),
+        |c| {
+            let ws = crate::workspace::store::get_workspace(c, &workspace_id)?;
+            let text = super::engine::append_to_instructions(&ws.instructions, &message.content);
+            c.execute(
+                "UPDATE workspaces SET instructions = ?2, updated_at = ?3 WHERE id = ?1",
+                rusqlite::params![workspace_id, text, crate::db::workspace_migrations::now_ms()],
+            )
+            .map(|_| ())
+            .map_err(|e| format!("Couldn't save the instructions: {e}"))
+        },
+    )
+    .map_err(|e| match e {
+        super::guard::WriteError::Revoked => ANSWER_STALE.to_string(),
+        super::guard::WriteError::Failed(m) => m,
+    })?;
     Ok(workspace_id)
 }
 
