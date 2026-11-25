@@ -33,8 +33,10 @@ export function ModalLayer({
   className,
 }: LayerProps & { placement: "center" | "right" | "left"; className?: string }) {
   const boxRef = useRef<HTMLDivElement | null>(null);
-  const titleId = useId();
-  const descId = useId();
+  // Readable ids ("dialog-title-r2q"), not ":r2q:": anything that shows an id shows something sensible.
+  const uid = useId().replace(/:/g, "");
+  const titleId = `dialog-title-${uid}`;
+  const descId = `dialog-desc-${uid}`;
   useFocusTrap(boxRef, open, initialFocusRef);
   if (!open) return null;
 

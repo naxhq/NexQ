@@ -334,7 +334,7 @@ export function WorkspaceDialog({
           </p>
         )}
         {/* The button above is outside the form: Enter in a field saves through the form. */}
-        <button type="submit" hidden aria-hidden="true" tabIndex={-1} />
+        <button type="submit" hidden aria-hidden="true" tabIndex={-1} aria-label="Save" />
         {unavailable && (
           <p className={hintClass}>Workspaces are not available right now, so changes may not be kept.</p>
         )}

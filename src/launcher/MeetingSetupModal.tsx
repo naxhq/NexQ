@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { useConfigStore } from "../stores/configStore";
 import { setRecordingEnabled } from "../lib/ipc";
 import { useMeetingScenarios, useScenarioStore } from "../stores/scenarioStore";
@@ -7,7 +7,7 @@ import { defaultWorkspaceOf, useWorkspaceStore, workspaceById } from "../stores/
 import { borrowBlocker } from "../workspace/meetingScope";
 import { pickScenario } from "../workspace/scenarioOrder";
 import { VoiceprintMark } from "../voiceprint";
-import { Combobox } from "../ui";
+import { Combobox, useFocusTrap } from "../ui";
 
 /** Past this many workspaces the picker is a searchable field, not a row of chips. */
 export const MANY_WORKSPACES = 6;
@@ -70,6 +70,18 @@ export function MeetingSetupModal({ open, onStart, onCancel, workspaceId }: Meet
   const [isExpanded, setIsExpanded] = useState(rememberedSetup === null);
 
   const backdropRef = useRef<HTMLDivElement>(null);
+  const initialRef = useRef<HTMLElement | null>(null);
+
+  // A dialog: focus goes into it (onto the chosen setup, not the close button), Tab stays inside,
+  // and on close focus goes back to what opened it.
+  useLayoutEffect(() => {
+    if (!open) return;
+    initialRef.current =
+      backdropRef.current?.querySelector<HTMLElement>('[role="radio"][aria-checked="true"], button[aria-pressed="true"]') ??
+      backdropRef.current?.querySelector<HTMLElement>('button:not([aria-label="Cancel"])') ??
+      null;
+  }, [open, isExpanded]);
+  useFocusTrap(backdropRef, open, initialRef);
 
   // Reset state whenever the modal opens or remembered setup changes
   useEffect(() => {
@@ -492,6 +504,7 @@ export function MeetingSetupModal({ open, onStart, onCancel, workspaceId }: Meet
               <label className="relative inline-flex cursor-pointer items-center">
                 <input
                   type="checkbox"
+                  aria-label="Record audio"
                   checked={recordingEnabled}
                   onChange={async (e) => {
                     const enabled = e.target.checked;

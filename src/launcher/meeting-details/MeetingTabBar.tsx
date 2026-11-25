@@ -27,7 +27,7 @@ export function MeetingTabBar({ activeTab, setActiveTab, meeting, onGenerateSumm
   const speakerCount = meeting.speakers?.filter((s) => s.source !== "remote_tag").length ?? 0;
 
   return (
-    <div className="relative flex items-center border-b border-border/20 px-3 py-1.5" role="tablist">
+    <div className="relative flex items-center border-b border-border/20 px-3 py-1.5" role="tablist" aria-label="Meeting sections">
       <div className="flex items-center gap-1 overflow-x-auto">
         <TabButton
           active={activeTab === "transcript"}
