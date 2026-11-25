@@ -82,7 +82,7 @@ export function ModeButtons() {
     }
 
     // Add custom actions
-    for (const [key, cfg] of Object.entries(actions)) {
+    for (const cfg of Object.values(actions)) {
       if (!cfg.isBuiltIn && cfg.visible) {
         result.push({
           mode: cfg.mode,

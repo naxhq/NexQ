@@ -73,7 +73,7 @@ export interface Backing {
 
 export const TEXT_RATIO = 4.5;
 export const ICON_RATIO = 3;
-const TRANSPARENT_MARGIN = 0.6;
+const TRANSPARENT_MARGIN = 1.0;
 
 /**
  * The least change that guarantees the ratios at window opacity `opacity` (0 to 1).
@@ -113,6 +113,9 @@ export const ACCENT_TOKENS = [
   "--info-text",
   "--speaker-user-text",
   "--speaker-interviewer-text",
+  // Live notes entity colours (liveNotes.css): panels that show them get the same guaranteed surface.
+  "--ln-person",
+  "--ln-place",
 ] as const;
 
 export function readThemeColours(): ThemeColours {

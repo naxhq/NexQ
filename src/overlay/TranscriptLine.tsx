@@ -53,7 +53,6 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
   const translations = useTranslationStore((s) => s.translations);
   const translating = useTranslationStore((s) => s.translating);
   const displayMode = useTranslationStore((s) => s.displayMode);
-  const autoTranslateActive = useTranslationStore((s) => s.autoTranslateActive);
 
   // SP2 Task 7: Bookmark state + context menu position
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -329,7 +328,7 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
 
         {/* Inline translation — visible below the original text */}
         {displayMode === "inline" && (
-          <div className="mt-1 leading-[1.5]" style={{ fontSize: `${translationFontSize}px`, color: readableOn(translationTextColor, isLight ? "light" : "dark") }}>
+          <div className="mt-1 leading-[1.5]" style={{ fontSize: `${translationFontSize}px`, color: readableOn(translationTextColor, isLight ? "light" : "dark", 5.4) }}>
             {isTranslating ? (
               <span className="text-muted-foreground/40 animate-pulse">Translating...</span>
             ) : translation ? (
@@ -348,7 +347,7 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
               top: `${Math.max(8, mousePos.y - 90)}px`,
             }}
           >
-            <p style={{ fontSize: `${translationFontSize + 1}px`, color: readableOn(translationTextColor, isLight ? "light" : "dark") }} className="leading-[1.6]">
+            <p style={{ fontSize: `${translationFontSize + 1}px`, color: readableOn(translationTextColor, isLight ? "light" : "dark", 5.4) }} className="leading-[1.6]">
               {translation.translated_text}
             </p>
             <div className="mt-1.5 flex items-center gap-1.5 text-[0.6rem] text-muted-foreground/50">
@@ -382,7 +381,7 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
         <button
           onClick={handleToggleBookmark}
           className="-m-1 rounded p-1.5 hover:bg-accent/50 transition-colors ui-focus"
-          aria-label={isBookmarked ? "Remove bookmark" : "Bookmark this line"}
+          aria-label={`${isBookmarked ? "Remove bookmark" : "Bookmark this line"} by ${speakerLabel} at ${hours > 0 ? `${hours}:` : ""}${minutes}:${String(seconds).padStart(2, "0")}`}
         >
           <BookmarkIcon className={`h-3 w-3 ${isBookmarked ? "fill-primary text-primary" : "text-muted-foreground/40"}`} />
         </button>

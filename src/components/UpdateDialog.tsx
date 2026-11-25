@@ -243,7 +243,7 @@ export function UpdateDialog() {
 
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-background/70 p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget && !installing) setDialogOpen(false);
       }}
@@ -252,7 +252,7 @@ export function UpdateDialog() {
         role="dialog"
         aria-modal="true"
         aria-labelledby="update-dialog-version"
-        className="flex max-h-full w-full max-w-[520px] flex-col overflow-hidden rounded-2xl border border-border/40 bg-card shadow-2xl"
+        className="flex max-h-full w-full max-w-[520px] flex-col overflow-hidden rounded-2xl border border-border/40 bg-popover shadow-2xl"
       >
         <header className="space-y-4 px-6 pt-6">
           <div>

@@ -21,7 +21,6 @@ export function TranscriptPanel({ onOpenDevLog, short = false }: { onOpenDevLog?
   const setAutoScroll = useTranscriptStore((s) => s.setAutoScroll);
   const isRecording = useMeetingStore((s) => s.isRecording);
   const audioMode = useMeetingStore((s) => s.audioMode);
-  const meetingAudioConfig = useConfigStore((s) => s.meetingAudioConfig);
   const { micLevel, systemLevel } = useAudioLevel();
   const mutedYou = useConfigStore((s) => s.mutedYou);
   const mutedThem = useConfigStore((s) => s.mutedThem);
@@ -44,7 +43,6 @@ export function TranscriptPanel({ onOpenDevLog, short = false }: { onOpenDevLog?
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollAnimRef = useRef<number>(0);
   const isAnimatingRef = useRef(false);
-  const isSearchVisible = searchQuery.length > 0;
 
   // Momentum-based smooth scroll — exponential deceleration for a buttery feel
   const scrollToBottom = useCallback(() => {
@@ -214,7 +212,7 @@ export function TranscriptPanel({ onOpenDevLog, short = false }: { onOpenDevLog?
     <div className="flex flex-1 min-h-0 flex-col">
       <NoTranscriptBanner onOpenDevLog={onOpenDevLog} />
       {/* Search bar (shown when there's a search query or toggled) */}
-      <div className="flex items-center gap-2 rounded-lg border border-input bg-muted/20 mx-1 mt-1 mb-1.5 px-2.5 py-1.5">
+      <div className={`flex shrink-0 items-center gap-2 rounded-lg border border-input bg-muted/20 mx-1 mt-1 mb-1.5 px-2.5 py-1.5 ${short && !searchQuery ? "hidden" : ""}`}>
         <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
         <input
           type="text"
@@ -266,17 +264,17 @@ export function TranscriptPanel({ onOpenDevLog, short = false }: { onOpenDevLog?
       <div className={`flex flex-wrap items-center gap-x-2 gap-y-1 mx-1 mb-1 px-2.5 py-1 border-t border-border/10 ${short ? "hidden" : ""}`}>
         <span className="text-[0.6rem] uppercase tracking-widest text-muted-foreground/40 font-medium">Text</span>
         <div className="flex items-center gap-0.5">
-          <button onClick={() => setTranscriptFontSize(Math.max(10, transcriptFontSize - 1))} className="h-5 w-5 flex items-center justify-center rounded text-[0.6rem] text-muted-foreground/50 hover:bg-accent/40 transition-colors">A</button>
+          <button aria-label="Smaller transcript text" onClick={() => setTranscriptFontSize(Math.max(10, transcriptFontSize - 1))} className="h-5 w-5 flex items-center justify-center rounded text-[0.6rem] text-muted-foreground/50 hover:bg-accent/40 transition-colors">A</button>
           <span className="text-[0.6rem] tabular-nums text-muted-foreground/50 w-5 text-center">{transcriptFontSize}</span>
-          <button onClick={() => setTranscriptFontSize(Math.min(20, transcriptFontSize + 1))} className="h-5 w-5 flex items-center justify-center rounded text-[0.75rem] font-medium text-muted-foreground/50 hover:bg-accent/40 transition-colors">A</button>
+          <button aria-label="Larger transcript text" onClick={() => setTranscriptFontSize(Math.min(20, transcriptFontSize + 1))} className="h-5 w-5 flex items-center justify-center rounded text-[0.75rem] font-medium text-muted-foreground/50 hover:bg-accent/40 transition-colors">A</button>
         </div>
         <ColorPickerButton value={transcriptTextColor} onChange={setTranscriptTextColor} label="Text color" />
         <div className="h-3 w-px bg-border/10" />
         <span className="text-[0.6rem] uppercase tracking-widest text-muted-foreground/40 font-medium">Translation</span>
         <div className="flex items-center gap-0.5">
-          <button onClick={() => setTranslationFontSize(Math.max(9, translationFontSize - 1))} className="h-5 w-5 flex items-center justify-center rounded text-[0.6rem] text-muted-foreground/50 hover:bg-accent/40 transition-colors">A</button>
+          <button aria-label="Smaller translation text" onClick={() => setTranslationFontSize(Math.max(9, translationFontSize - 1))} className="h-5 w-5 flex items-center justify-center rounded text-[0.6rem] text-muted-foreground/50 hover:bg-accent/40 transition-colors">A</button>
           <span className="text-[0.6rem] tabular-nums text-muted-foreground/50 w-5 text-center">{translationFontSize}</span>
-          <button onClick={() => setTranslationFontSize(Math.min(18, translationFontSize + 1))} className="h-5 w-5 flex items-center justify-center rounded text-[0.75rem] font-medium text-muted-foreground/50 hover:bg-accent/40 transition-colors">A</button>
+          <button aria-label="Larger translation text" onClick={() => setTranslationFontSize(Math.min(18, translationFontSize + 1))} className="h-5 w-5 flex items-center justify-center rounded text-[0.75rem] font-medium text-muted-foreground/50 hover:bg-accent/40 transition-colors">A</button>
         </div>
         <ColorPickerButton value={translationTextColor} onChange={setTranslationTextColor} label="Translation color" />
       </div>

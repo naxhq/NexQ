@@ -5,11 +5,15 @@ import { ACCENT_TOKENS, ICON_RATIO, TEXT_RATIO, backingFor, hslVarToRgb, surface
 async function tokens(): Promise<Record<"light" | "dark", ThemeColours>> {
   // @ts-expect-error the node types are not part of the app's build
   const { readFileSync } = await import("node:fs");
-  const css: string = readFileSync("src/index.css", "utf8");
-  const block = (sel: string) => {
-    const i = css.indexOf(sel + " {");
-    return css.slice(i, css.indexOf("}", i));
-  };
+  const files: string[] = ["src/index.css", "src/live-notes/liveNotes.css"].map((f) => readFileSync(f, "utf8"));
+  // a theme's variables can be spread over files: join the same selector's blocks
+  const block = (sel: string) =>
+    files
+      .map((css) => {
+        const i = css.indexOf(sel + " {");
+        return i < 0 ? "" : css.slice(i, css.indexOf("}", i));
+      })
+      .join(" ");
   const get = (b: string, name: string) => hslVarToRgb(new RegExp(`${name}:\\s*([^;]+);`).exec(b)![1]);
   const make = (sel: string): ThemeColours => {
     const b = block(sel);

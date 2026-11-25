@@ -72,15 +72,15 @@ export function DemoPicker() {
       onClick={handleBackdropClick}
       className={`fixed inset-0 z-50 flex items-center justify-center transition-all duration-150 ${
         isVisible
-          ? 'bg-black/60 backdrop-blur-sm'
-          : 'bg-black/0 backdrop-blur-none'
+          ? 'bg-background/70'
+          : 'bg-background/0'
       }`}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Demo Mode"
-        className={`w-[520px] max-h-[600px] flex flex-col rounded-2xl border border-border/20 bg-card shadow-2xl shadow-black/20 transition-all duration-200 ${
+        className={`w-[520px] max-h-[600px] flex flex-col rounded-2xl border border-border/20 bg-popover shadow-2xl shadow-black/20 transition-all duration-200 ${
           isVisible
             ? 'opacity-100 scale-100 translate-y-0'
             : 'opacity-0 scale-[0.97] translate-y-3'

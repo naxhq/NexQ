@@ -246,6 +246,8 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
   // mute buttons (the header has them too) and dividers go.
   const [barRef, bar] = useElementSize<HTMLDivElement>();
   const narrow = compact && bar.w > 0 && bar.w < 640;
+  // Below ~460 px the two STT chips and their language pickers cannot all fit with names: icon and dot only, name in the tooltip.
+  const tight = compact && bar.w > 0 && bar.w < 460;
 
   return (
     <div
@@ -313,6 +315,7 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
               onClick={() => setPickerOpen(pickerOpen === "them" ? null : "them")}
               tooltip={`Room STT: ${themStt.provider}${themStt.model ? ` / ${themStt.model}` : ""}`}
               hideModel={narrow}
+                iconOnly={tight}
             />
             {pickerOpen === "them" && (
               <STTPickerDropdown
@@ -350,6 +353,7 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
                 onClick={() => setPickerOpen(pickerOpen === "you" ? null : "you")}
                 tooltip={`Your STT: ${youStt.provider}${youStt.model ? ` / ${youStt.model}` : ""}`}
                 hideModel={narrow}
+                iconOnly={tight}
               />
               {pickerOpen === "you" && (
                 <STTPickerDropdown
@@ -386,6 +390,7 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
                 onClick={() => setPickerOpen(pickerOpen === "them" ? null : "them")}
                 tooltip={`Their STT: ${themStt.provider}${themStt.model ? ` / ${themStt.model}` : ""}`}
                 hideModel={narrow}
+                iconOnly={tight}
           />
           {pickerOpen === "them" && (
             <STTPickerDropdown
@@ -550,8 +555,10 @@ function STTChip({
   onClick,
   tooltip,
   hideModel = false,
+  iconOnly = false,
 }: {
   hideModel?: boolean;
+  iconOnly?: boolean;
   icon: React.ReactNode;
   provider: string;
   model: string;
@@ -571,6 +578,7 @@ function STTChip({
     <Root
       {...(interactive ? { type: "button" as const, "aria-haspopup": "dialog" as const, "aria-expanded": pickerOpen } : {})}
       aria-label={tooltip}
+      title={iconOnly ? tooltip : undefined}
       className={`flex min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-left transition-all duration-200 ui-focus ${hideModel ? "overflow-hidden" : ""} ${
         muted
           ? "bg-destructive/5 border border-destructive/10"
@@ -598,7 +606,7 @@ function STTChip({
       </span>
 
       {/* Text */}
-      <span className="flex items-center gap-1 min-w-0">
+      <span className={`flex items-center gap-1 min-w-0 ${iconOnly ? "hidden" : ""}`}>
         {label && !hideModel && (
           <span className={`shrink-0 text-meta font-semibold uppercase tracking-wide transition-colors duration-200 ${
             muted ? "text-destructive/50" : active ? c.active : "text-muted-foreground/60"

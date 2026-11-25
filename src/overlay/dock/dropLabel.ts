@@ -19,7 +19,6 @@ export function dropLabel(
   }
   const stackId = to.target.stackId;
   const stack = findStackOf(layout.root, panel);
-  const into = leafById(layout, stackId);
   const stays = targetPanel(layout, to, panel);
   const name = stays ? title(stays) : "panel";
   if (to.zone === "center") return stack && stack.id === stackId ? "Reorder" : `Tab in ${name}`;

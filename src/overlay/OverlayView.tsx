@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { OVERLAY_MOTION_CSS } from "./overlayMotion";
-import { readableOn, useIsLight } from "../lib/themeText";
+import { useIsLight } from "../lib/themeText";
 import { backingFor, readThemeColours, rgbToHslVar, surfaceAlphaFor } from "./backing";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useScenarioStore } from "../stores/scenarioStore";
@@ -251,7 +251,6 @@ export function OverlayView() {
   const displayMode = useTranslationStore((s) => s.displayMode);
   const setDisplayMode = useTranslationStore((s) => s.setDisplayMode);
   const targetLang = useTranslationStore((s) => s.targetLang);
-  const provider = useTranslationStore((s) => s.provider);
   const batchProgress = useTranslationStore((s) => s.batchProgress);
   const isBatchTranslating = batchProgress !== null;
 
@@ -352,6 +351,8 @@ export function OverlayView() {
     transcript: {
       title: "Transcript",
       reading: true,
+      // At the smallest window the lines come first: a few of them stay readable beside the Assistant.
+      minH: 144,
       node: (
         <div ref={transcriptRef} className="flex min-h-0 flex-1 flex-col overflow-hidden p-2.5">
           <TranscriptPanel short={shortTranscript} onOpenDevLog={() => openPanel("devlog")} />
@@ -361,6 +362,7 @@ export function OverlayView() {
     assistant: {
       title: "Assistant",
       reading: true,
+      minH: 124,
       node: (
         <div ref={assistantRef} className="flex min-h-0 flex-1 flex-col gap-2 p-2.5">
           <QuestionPanel />
