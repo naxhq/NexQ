@@ -6,6 +6,7 @@ import { useWorkspaceChatStore } from "../../stores/workspaceChatStore";
 import type { ContextDepth, ContextReport, WorkspaceCitation } from "../../lib/types";
 import { cn } from "../../lib/utils";
 import { COLUMN } from "./column";
+import { ChatAnnouncer } from "./ChatAnnouncer";
 import { ChatSwitcher } from "./ChatSwitcher";
 import { Composer } from "./Composer";
 import { ContextPanel, type WaveSubject } from "./ContextPanel";
@@ -159,7 +160,8 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
   const waitingForOther = meetingActive && view.anyBusy && !writing;
 
   return (
-    <div ref={root} className={cn("flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background", className)} data-workspace-chat>
+    <div ref={root} className={cn("flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background", className)} data-workspace-chat role="region" aria-label="Workspace chat">
+      <ChatAnnouncer chatId={chatId} />
       <ChatSwitcher workspaceId={workspaceId} chats={view.chats} chat={chat} busyIds={busyList} />
 
       {view.error && (

@@ -7,13 +7,13 @@ import { showToast } from "../../stores/toastStore";
 import { useWorkspaceStore } from "../../stores/workspaceStore";
 import { cn } from "../../lib/utils";
 import { ModelPicker, PickerCaret } from "./ModelPicker";
-import { DOCUMENT_CAP, INSTRUCTION_CAP, sanitizeInstructionText, sanitizePlainText } from "./instructionText";
+import { DOCUMENT_CAP, INSTRUCTION_CAP, sanitizeInstructionText, sanitizePlainText, stripHidden } from "./instructionText";
 import type { ModelChoice } from "./models";
 
 
 /** The answer without its `[S1]` tags, for copying and for saving. */
 export function plainAnswer(content: string): string {
-  return content.replace(/\s?\[S\d+(?:\s*,\s*S\d+)*\]/g, "").trim();
+  return stripHidden(content).replace(/\s?\[S\d+(?:\s*,\s*S\d+)*\]/g, "").trim();
 }
 
 function titleFrom(question: string): string {

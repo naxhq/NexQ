@@ -677,7 +677,7 @@ describe("access changed and notices", () => {
     const id = ipc.askWorkspace.mock.calls[0][2] as string;
     emit("workspace_chat_token", { chat_id: "c1", request_id: id, token: "Secret partial text" });
     await screen.findByText("Secret partial text");
-    emit("workspace_chat_error", { chat_id: "c1", request_id: id, error: "moved", error_kind: "access_changed" });
+    emit("workspace_chat_error", { chat_id: "c1", request_id: id, error: "moved", error_kind: "access_changed", error_detail: "moved" });
     expect(await screen.findByText("Something this answer used was moved out of this workspace, so it was stopped.")).toBeInTheDocument();
     expect(screen.queryByText(/Secret partial text/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Copy" })).toBeNull();
@@ -780,5 +780,78 @@ describe("removed answers and saved pins, in words", () => {
     expect(list.textContent).not.toContain("3f2b8c1e");
     await userEvent.setup().click(within(list).getByRole("button", { name: "Unpin" }));
     await waitFor(() => expect(ipc.setChatItemPref).toHaveBeenCalledWith("c1", "document", "d1", "default"));
+  });
+});
+
+describe("hidden characters and screen readers", () => {
+  const ZW = String.fromCharCode(0x200b);
+  const RLO = String.fromCharCode(0x202e);
+  const ZWNJ = String.fromCharCode(0x200c);
+
+  async function ask(q = "Q") {
+    setup();
+    const box = await typeQuestion(q);
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(ipc.askWorkspace).toHaveBeenCalled());
+    return ipc.askWorkspace.mock.calls[0][2] as string;
+  }
+  const live = (kind: "polite" | "assertive") => document.querySelector(`[data-chat-live="${kind}"]`) as HTMLElement;
+
+  it("never draws hidden characters, even when they arrive split across tokens, and keeps real writing", async () => {
+    const id = await ask();
+    emit("workspace_chat_token", { chat_id: "c1", request_id: id, token: "Hel" + RLO + ZW });
+    emit("workspace_chat_token", { chat_id: "c1", request_id: id, token: "lo " + ZW + "ی" + ZWNJ });
+    emit("workspace_chat_token", { chat_id: "c1", request_id: id, token: "خ" });
+    await waitFor(() => expect(document.body.textContent).toContain("Hello"));
+    const prose = document.body.textContent ?? "";
+    expect(prose).not.toContain(RLO);
+    expect(prose).not.toContain(ZW);
+    expect(prose).toContain("ی" + ZWNJ + "خ");
+  });
+
+  it("copies the answer without hidden characters", async () => {
+    setup({ chats: [chat("c1")], messages: [message(1, "user", "Q"), message(2, "assistant", "Pay" + RLO + " now" + ZW)] });
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    await user.click(await screen.findByRole("button", { name: /Copy/ }));
+    expect(writeText).toHaveBeenCalledWith("Pay now");
+  });
+
+  it("announces Answering once, then Answer ready with the tools it used, and never the tokens", async () => {
+    const id = await ask();
+    emit("workspace_chat_start", { chat_id: "c1", request_id: id, model: "m" });
+    await waitFor(() => expect(live("polite").textContent).toBe("Answering"));
+    emit("workspace_chat_token", { chat_id: "c1", request_id: id, token: "Some long answer text" });
+    emit("workspace_chat_activity", { chat_id: "c1", request_id: id, activity: { kind: "tool", label: "CRM: get_deal", chip: null } });
+    await new Promise((r) => setTimeout(r, 60));
+    expect(live("polite").textContent).toBe("Answering");
+    expect(live("assertive").textContent).not.toContain("Some long");
+    const saved = message(2, "assistant", "Some long answer text");
+    ipc.listWorkspaceMessages.mockResolvedValue([message(1, "user", "Q"), saved]);
+    emit("workspace_chat_end", { chat_id: "c1", request_id: id, cancelled: false, message: saved });
+    await waitFor(() => expect(live("polite").textContent).toBe("Answer ready. It used 1 tool."));
+  });
+
+  it("announces a tool request assertively, and an error through its own alert", async () => {
+    const id = await ask();
+    emit("workspace_chat_approval", { chat_id: "c1", request_id: id, approval_id: "an1", server: "CRM", tool: "update_deal", args: {} });
+    await waitFor(() => expect(live("assertive").textContent).toContain("update_deal on CRM"));
+    emit("workspace_chat_error", { chat_id: "c1", request_id: id, error: "429 rate limit", error_kind: "rate_limited" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("limiting requests");
+  });
+
+  it("has one named region for the chat, with the question box after the answers in the tab order", async () => {
+    setup({ chats: [chat("c1")], messages: pairs(1) });
+    const region = await screen.findByRole("region", { name: "Workspace chat" });
+    const box = within(region).getByRole("textbox", { name: /ask about this workspace/i });
+    const answers = within(region).getByRole("region", { name: "Conversation" });
+    expect(answers.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("does not say moved when the reason is unknown", async () => {
+    const id = await ask();
+    emit("workspace_chat_error", { chat_id: "c1", request_id: id, error: "x", error_kind: "access_changed" });
+    expect(await screen.findByText("Something this answer used is no longer available here, so it was stopped.")).toBeInTheDocument();
+    expect(screen.queryByText(/was moved out of this workspace/)).toBeNull();
   });
 });

@@ -10,6 +10,7 @@ import { citationKindName, citationWhere } from "./citations";
 import { Prose, type OpenCitation } from "./Prose";
 import { ApprovalCard } from "./ApprovalCard";
 import { ReportNotices } from "./ReportNotices";
+import { stripHidden } from "./instructionText";
 import { AnswerActions } from "./AnswerActions";
 import { ModelPicker, PickerCaret } from "./ModelPicker";
 import { formatTokens } from "../../voiceprint";
@@ -29,7 +30,7 @@ export interface TurnContext {
 function Question({ text, id }: { text: string; id: string }) {
   return (
     <h3 id={id} className="ui-section ui-measure whitespace-pre-wrap break-words text-muted-foreground">
-      {text}
+      {stripHidden(text)}
     </h3>
   );
 }
@@ -271,7 +272,11 @@ export function LiveTurn({ turn, ctx, onDismiss }: { turn: Turn; ctx: TurnContex
       {turn.status === "failed" && turn.error !== null && <ErrorBlock error={turn.error} turn={turn} ctx={ctx} />}
       {turn.status === "removed" && (
         <p role="status" className="ui-body mt-2 text-muted-foreground">
-          {turn.removedBecause === "deleted" ? "Something this answer used was deleted, so it was stopped." : "Something this answer used was moved out of this workspace, so it was stopped."}
+          {turn.removedBecause === "deleted"
+            ? "Something this answer used was deleted, so it was stopped."
+            : turn.removedBecause === "moved"
+              ? "Something this answer used was moved out of this workspace, so it was stopped."
+              : "Something this answer used is no longer available here, so it was stopped."}
         </p>
       )}
       {turn.status !== "failed" && turn.status !== "removed" && (
