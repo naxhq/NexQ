@@ -11,6 +11,7 @@ import type {
   WorkspaceMeetingPage, WorkspaceMessage, WorkspacePatch, WorkspaceSummary,
 } from "./types";
 import type {
+  StoreRecovery,
   MeetingDetectionConfig,
   MeetingPromptInfo,
   StealthSupport,
@@ -1397,4 +1398,9 @@ export async function saveMeetingPointEdit(
   doc: string | null,
 ): Promise<void> {
   return invoke("save_meeting_point_edit", { meetingId, pointId, doc });
+}
+
+/** Settings files that were unreadable at start. Returned once. */
+export function takeStoreRecovery(): Promise<StoreRecovery[]> {
+  return invoke<StoreRecovery[]>("take_store_recovery");
 }

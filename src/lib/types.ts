@@ -1889,3 +1889,10 @@ export interface PointProgress {
   point_id: string;
   said: PointSaid[];
 }
+
+/** A settings file that could not be read at start and what was done. */
+export interface StoreRecovery {
+  file: string;
+  kept_as: string | null;
+  restored: boolean;
+}

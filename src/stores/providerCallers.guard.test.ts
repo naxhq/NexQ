@@ -1,29 +1,24 @@
-// @vitest-environment node
-//
 // Guard: the app's AI provider (and its model) change only when the user says
 // so (footer picker, Settings, the first-run wizard, the CLI agents' "Use"
 // button) and when a window loads its saved settings. No workspace, chat,
 // notes, brief, meeting or model-refresh code may call these. A new caller
 // has to be added here on purpose.
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const SRC = join(__dirname, "..");
+const sources = import.meta.glob<string>(["../**/*.{ts,tsx}", "!../**/*.test.{ts,tsx}"], {
+  query: "?raw",
+  import: "default",
+  eager: true,
+});
 
-function files(dir: string): string[] {
-  return readdirSync(dir).flatMap((name) => {
-    const path = join(dir, name);
-    if (statSync(path).isDirectory()) return files(path);
-    return /\.(ts|tsx)$/.test(name) && !/\.test\.(ts|tsx)$/.test(name) ? [path] : [];
-  });
-}
+// Keys are relative to this folder, so this folder's own files are "./name".
+const path = (key: string) => (key.startsWith("./") ? `stores/${key.slice(2)}` : key.replace(/^\.\.\//, ""));
 
 function callers(pattern: RegExp): string[] {
-  return files(SRC)
-    .filter((f) => pattern.test(readFileSync(f, "utf8")))
-    .map((f) => relative(SRC, f).replace(/\\/g, "/"))
+  return Object.entries(sources)
+    .filter(([, text]) => pattern.test(text))
+    .map(([key]) => path(key))
     .sort();
 }
 
