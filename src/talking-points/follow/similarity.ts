@@ -94,7 +94,7 @@ export class VocabMatcher {
   row(word: string): { dense: Float32Array; hits: Int32Array } {
     const hit = this.cache.get(word);
     if (hit) return hit;
-    if (this.cache.size > 500) this.cache.clear();
+    if (this.cache.size > Math.max(500, Math.floor(8e6 / (this.vocab.length * 4 + 64)))) this.cache.clear();
     const dense = new Float32Array(this.vocab.length);
     const hitIds: number[] = [];
     const exact = this.vocabIdx.get(word) ?? -1;

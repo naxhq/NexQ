@@ -65,6 +65,18 @@ export class SpokenStream {
     return out.reverse();
   }
 
+  /** Whole newest segments (the current line), extended backwards only until `min` words, capped at `max`. */
+  recentSegments(min: number, max: number): string[] {
+    const out: string[][] = [];
+    let n = 0;
+    for (let i = this.segs.length - 1; i >= 0 && n < min; i--) {
+      out.push(this.segs[i].words);
+      n += this.segs[i].words.length;
+    }
+    const all = out.reverse().flat();
+    return all.length > max ? all.slice(all.length - max) : all;
+  }
+
   clear(): void {
     this.segs = [];
     this.byId.clear();

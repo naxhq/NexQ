@@ -144,6 +144,7 @@ export function useJumpOffers(env: JumpEnv) {
 
   const dismissSuggestion = useCallback(() => {
     dismissed.current = rawSuggest.current?.blockId ?? null;
+    if (dismissed.current) env.follower.current?.dismissSuggestion?.(dismissed.current); // it does not come back
     setSuggestBlock(null);
   }, []);
 

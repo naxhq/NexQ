@@ -23,6 +23,8 @@ export interface FollowerLike {
   seek(token: number): void;
   reset(): void;
   setIndex(index: NoteIndex): void;
+  /** The user waved an offer away: the follower stops offering that point. */
+  dismissSuggestion?(blockId: string): void;
 }
 
 export interface GoToSuggestion {

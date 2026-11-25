@@ -11,6 +11,7 @@
 import { NoteIndex, isMonth } from "./tokenize";
 import { VocabMatcher, MATCH_MIN } from "./similarity";
 import { SpokenStream } from "./stream";
+import { SuggestionScorer, SuggestionOffer, SPOKEN_WORDS } from "./suggest";
 
 export type FollowState = "following" | "unsure" | "lost" | "paused";
 
@@ -78,6 +79,8 @@ export class VoiceFollower {
   private since = 10;
   private lastAdded = 0;
   private lastFar = 0;
+  private scorer: SuggestionScorer;
+  private offer = new SuggestionOffer();
   private suggest: { blockId: string; conf: number; until: number } | null = null;
   /** 4-grams of the note: end index when unique in the note, -1 otherwise. */
   private grams = new Map<string, number>();
@@ -102,6 +105,7 @@ export class VoiceFollower {
     this.debug = opts.debug;
     this.tailLen = Math.round(TAIL_WORDS * index.scale);
     this.buildGrams();
+    this.scorer = new SuggestionScorer(index, this.matcher);
   }
 
   /** Replace the note (edited mid-meeting); keeps the place as a token index. */
@@ -110,6 +114,7 @@ export class VoiceFollower {
     this.matcher = new VocabMatcher(index.vocab, index.vocabIdx);
     this.tailLen = Math.round(TAIL_WORDS * index.scale);
     this.buildGrams();
+    this.scorer = new SuggestionScorer(index, this.matcher);
     this.pos = Math.min(this.pos, index.tokens.length);
     this.pending = null;
   }
@@ -127,6 +132,7 @@ export class VoiceFollower {
     this.pos = Math.max(0, Math.min(this.index.tokens.length, tokenIndex));
     this.pending = null;
     this.suggest = null;
+    this.offer.clear();
     this.since = 8;
     this.baseState = "unsure";
     this.conf = 0.3;
@@ -140,20 +146,35 @@ export class VoiceFollower {
     this.conf = 0;
     this.pending = null;
     this.lastInputAt = -Infinity;
+    this.offer.reset();
     this.lastAdded = this.stream.added;
     this.lastFar = this.stream.added;
   }
 
   snapshot(): FollowSnapshot {
-    const paused = this.lastInputAt > -Infinity && this.clock() - this.lastInputAt > this.pauseMs;
+    const now = this.clock();
+    const paused = this.lastInputAt > -Infinity && now - this.lastInputAt > this.pauseMs;
     const sg = this.suggest;
     const live = sg && this.stream.added <= sg.until && this.index.blocks.findIndex((b) => b.id === sg.blockId) !== this.blockAt(this.pos);
+    const offer = this.offer.current(now, this.blockAt(Math.max(0, this.pos - 1)), this.blockAt(this.pos) + 1);
+    let suggestion: FollowSnapshot["suggestion"];
+    if (offer) suggestion = { blockId: this.index.blocks[offer.block].id, confidence: Math.min(1, offer.score) };
+    else if (live && sg) suggestion = { blockId: sg.blockId, confidence: sg.conf };
+    // an offer never changes the state: scroll-follow depends on it, and an on-script speaker stays "following"
+    const base = this.baseState;
     return {
       position: this.pos,
       confidence: this.conf,
-      state: paused ? "paused" : this.baseState,
-      ...(live && sg ? { suggestion: { blockId: sg.blockId, confidence: sg.conf } } : {}),
+      state: paused ? "paused" : base,
+      ...(suggestion ? { suggestion } : {}),
     };
+  }
+
+  /** The user waved an offer away: it does not come back. */
+  dismissSuggestion(blockId: string): void {
+    const bi = this.index.blocks.findIndex((b) => b.id === blockId);
+    if (bi >= 0) this.offer.dismiss(bi);
+    if (this.suggest?.blockId === blockId) this.suggest = null;
   }
 
   private feed(text: string, segId: string, final: boolean): FollowSnapshot {
@@ -174,6 +195,7 @@ export class VoiceFollower {
     const m = words.length;
     if (m === 0) return;
     const sc = this.index.scale;
+    this.observeOffer();
     const rows = words.map((w) => this.matcher.row(w).dense);
     const p = Math.round(this.pos);
 
@@ -266,6 +288,15 @@ export class VoiceFollower {
       if (id === undefined || !set.has(id)) return true;
     }
     return false;
+  }
+
+  private observeOffer(): void {
+    const sc = this.index.scale;
+    const sw = this.stream.recentSegments(Math.round(3 * sc), Math.round(SPOKEN_WORDS * sc));
+    if (sw.length < 3) return;
+    const lo = this.blockAt(Math.max(0, this.pos - 1));
+    const hi = Math.min(this.blockAt(this.pos) + 1, this.index.blocks.length - 1);
+    this.offer.observe(this.scorer.candidate(sw, lo, hi), this.clock());
   }
 
   private moveTo(e: number): void {
