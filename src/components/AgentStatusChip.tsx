@@ -3,7 +3,8 @@
 // effort and thinking per tier, and the meeting's usage and response times.
 // Rendered by ServiceStatusBar in both windows.
 
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useKeepInWindow } from "../ui/portal";
 import { ChevronUp } from "lucide-react";
 import { ProviderLogo } from "./icons/ProviderLogos";
 import { useAgentStore } from "../stores/agentStore";
@@ -170,9 +171,12 @@ function HoverCard({
   const avg = avgLatencyMs(usage);
   const avgFirst = avgFirstTokenMs(usage);
   const agent = cliAgentInfo(kind);
+  const cardRef = useRef<HTMLDivElement>(null);
+  useKeepInWindow(cardRef);
 
   return (
     <div
+      ref={cardRef}
       id={id}
       role="tooltip"
       data-testid="agent-hover-card"

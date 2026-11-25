@@ -29,7 +29,8 @@ export function RunStatusHeader({ title, word, note, children }: { title: string
   return (
     <header className="rs-head">
       <div className="rs-status">
-        <h2 className="rs-title">{title}</h2>
+        {/* The dock tab already names the panel: the title stays for assistive tech only. */}
+        <h2 className="rs-title rs-sr">{title}</h2>
         <span className="rs-state" aria-hidden="true">
           {word}
           {note && <span className="rs-status-note">{`, ${note}`}</span>}

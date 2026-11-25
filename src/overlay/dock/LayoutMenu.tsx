@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
+import { Popover } from "../../ui/Popover";
 import { Check, LayoutDashboard, Lock, LockOpen, Pencil, RotateCcw, Trash2 } from "lucide-react";
 import { LayoutPreview } from "./LayoutPreview";
 import {
@@ -230,35 +231,15 @@ interface ButtonProps extends MenuProps {
 /** Header button + popover. Place it in the overlay header; it is not a drag region. */
 export function LayoutMenuButton({ className, ...menu }: ButtonProps) {
   const [open, setOpen] = useState(false);
-  const wrap = useRef<HTMLDivElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const close = useCallback(() => setOpen(false), []);
   // Opening the menu moves focus into it (the first layout), so arrows work at once.
-  useEffect(() => {
-    if (open) wrap.current?.querySelector<HTMLElement>('[role="dialog"] button:not(:disabled)')?.focus();
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const away = (e: PointerEvent) => {
-      if (wrap.current && !wrap.current.contains(e.target as Node)) setOpen(false);
-    };
-    const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        setOpen(false);
-        wrap.current?.querySelector<HTMLElement>("button")?.focus();
-      }
-    };
-    window.addEventListener("pointerdown", away, true);
-    window.addEventListener("keydown", key, true);
-    return () => {
-      window.removeEventListener("pointerdown", away, true);
-      window.removeEventListener("keydown", key, true);
-    };
-  }, [open]);
+  const popRef = useCallback((el: HTMLElement | null) => el?.querySelector<HTMLElement>("button:not(:disabled)")?.focus(), []);
 
   return (
-    <div ref={wrap} className={`relative ${className ?? ""}`}>
+    <div className={`relative ${className ?? ""}`}>
       <button
+        ref={btn}
         type="button"
         aria-label="Layout"
         aria-haspopup="dialog"
@@ -268,15 +249,11 @@ export function LayoutMenuButton({ className, ...menu }: ButtonProps) {
       >
         <LayoutDashboard className="h-3.5 w-3.5" aria-hidden="true" />
       </button>
-      {open && (
-        <div
-          role="dialog"
-          aria-label="Layout"
-          className="absolute right-0 top-full z-50 mt-1.5 w-[272px] max-h-[70vh] overflow-y-auto rounded-xl border border-border/40 bg-popover p-1.5 shadow-xl"
-        >
-          <LayoutMenu {...menu} onClose={() => setOpen(false)} />
+      <Popover open={open} onClose={close} anchorRef={btn} label="Layout" align="end" className="w-[272px] p-1.5">
+        <div ref={popRef}>
+          <LayoutMenu {...menu} onClose={close} />
         </div>
-      )}
+      </Popover>
     </div>
   );
 }

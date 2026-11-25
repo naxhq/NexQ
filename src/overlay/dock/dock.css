@@ -151,7 +151,11 @@
   opacity: 1;
 }
 .nq-dock-extra {
-  flex: 0 0 auto;
+  /* the tabs keep their room: the extras (meters) shrink first, down to nothing */
+  flex: 0 100 8.5rem;
+  min-width: 0;
+  overflow: hidden;
+  container-type: inline-size;
   display: inline-flex;
   align-items: center;
   padding-right: 4px;
@@ -327,4 +331,11 @@
 .nq-dock-strip {
   min-width: 24px;
   min-height: 24px;
+}
+
+/* ...and an extra that no longer fits whole is hidden, never shown clipped */
+@container (max-width: 8.4rem) {
+  .nq-dock-extra > * {
+    visibility: hidden;
+  }
 }

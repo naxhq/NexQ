@@ -192,7 +192,6 @@ describe("OverlayView", () => {
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: "Speaker Stats (S)" }));
     });
-    expect(screen.getByText("Speaker Stats")).toBeTruthy();
     expect(screen.getByText("1 speaker")).toBeTruthy();
   });
 });

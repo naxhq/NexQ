@@ -10,6 +10,7 @@ import { useAgentStore } from "../stores/agentStore";
 import { formatUsageSummary, formatCostEstimate, formatDuration, usageAttribution } from "../lib/agentUsage";
 import { cliAgentName, isCliAgent } from "../lib/cliAgents";
 import { useConfigStore } from "../stores/configStore";
+import { Popover } from "../ui/Popover";
 import { PromptViewer } from "./PromptViewer";
 import { callLogStats, formatCompactTokens } from "./stats";
 import type { LogFilterKind } from "../lib/types";
@@ -72,7 +73,7 @@ export function CallLogPanel({ embedded = false, onClose }: { embedded?: boolean
     useAgentStore.getState().init();
   }, []);
   const [showExportMenu, setShowExportMenu] = useState(false);
-  const exportMenuRef = useRef<HTMLDivElement>(null);
+  const exportBtnRef = useRef<HTMLButtonElement>(null);
 
   // Close on Escape (skip if settings overlay is open)
   useEffect(() => {
@@ -113,18 +114,6 @@ export function CallLogPanel({ embedded = false, onClose }: { embedded?: boolean
     () => entries.find((e) => e.id === expandedEntryId) ?? null,
     [entries, expandedEntryId]
   );
-
-  // Close export menu on outside click
-  useEffect(() => {
-    if (!showExportMenu) return;
-    const handler = (e: MouseEvent) => {
-      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
-        setShowExportMenu(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [showExportMenu]);
 
   // Export translated transcript
   const handleExport = useCallback(async (format: string) => {
@@ -185,8 +174,9 @@ export function CallLogPanel({ embedded = false, onClose }: { embedded?: boolean
               <div className="flex items-center gap-1">
                 {/* Export dropdown */}
                 {meetingId && entries.length > 0 && (
-                  <div className="relative" ref={exportMenuRef}>
+                  <div className="relative">
                     <button
+                      ref={exportBtnRef}
                       onClick={() => setShowExportMenu((v) => !v)}
                       className="flex items-center gap-1 rounded-lg border border-border/30 bg-secondary/30 px-2 py-1 text-meta font-medium text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
                       title="Export transcript"
@@ -196,9 +186,8 @@ export function CallLogPanel({ embedded = false, onClose }: { embedded?: boolean
                       <ChevronDown className="h-2.5 w-2.5" />
                     </button>
 
-                    {showExportMenu && (
-                      <div className="absolute right-0 top-full z-50 mt-1 w-52 rounded-lg border border-border/40 bg-popover shadow-lg">
-                        <div className="py-1">
+                    <Popover open={showExportMenu} onClose={() => setShowExportMenu(false)} anchorRef={exportBtnRef} label="Export transcript" align="end" className="w-52 rounded-lg shadow-lg">
+                      <div className="py-1">
                           <button
                             onClick={() => handleExport("translated_txt")}
                             className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-foreground/80 hover:bg-accent/40 transition-colors"
@@ -224,9 +213,8 @@ export function CallLogPanel({ embedded = false, onClose }: { embedded?: boolean
                           >
                             Copy to clipboard
                           </button>
-                        </div>
                       </div>
-                    )}
+                    </Popover>
                   </div>
                 )}
 

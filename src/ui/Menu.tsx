@@ -176,7 +176,7 @@ export function Menu({ items, label, renderTrigger, align = "start", className }
             role="menu"
             aria-label={label}
             onKeyDown={onListKey}
-            style={{ position: "fixed", left: pos.left, top: pos.top, zIndex: 60 }}
+            style={{ position: "fixed", left: pos.left, top: pos.top, zIndex: 60, ...("maxHeight" in pos ? { maxHeight: pos.maxHeight, maxWidth: pos.maxWidth, overflowY: "auto" as const } : {}) }}
             className={cn(
               "ui-pop-in min-w-[11rem] max-w-[20rem] rounded-xl border border-border bg-popover p-1 text-popover-foreground shadow-[0_12px_32px_-12px_rgba(0,0,0,0.55)]",
               className,

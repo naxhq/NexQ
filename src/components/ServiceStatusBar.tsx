@@ -26,6 +26,7 @@ import { StreamLatency } from "./StreamLatency";
 import { CLI_AGENTS, cliAgentInfo, cliTierLabel, isCliAgent } from "../lib/cliAgents";
 import { openUpdateDialog } from "../hooks/useUpdater";
 import { SideLanguagePicker } from "../overlay/SideLanguagePicker";
+import { useKeepInWindow } from "../ui/portal";
 
 // ── Human-friendly provider labels ──
 const LLM_LABELS: Record<string, string> = {
@@ -660,6 +661,7 @@ function STTPickerDropdown({
   otherPartyLabel: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  useKeepInWindow(ref);
   const [apiKeyStatus, setApiKeyStatus] = useState<Record<string, boolean>>({});
   const [localEngines, setLocalEngines] = useState<LocalSTTEngineInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -917,6 +919,7 @@ function LLMPickerDropdown({
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  useKeepInWindow(ref);
   const verifiedProviders = useConfigStore((s) => s.verifiedCloudProviders);
   const cliAgentConfigs = useConfigStore((s) => s.cliAgentConfigs);
   const cliAgentModels = useConfigStore((s) => s.cliAgentModels);

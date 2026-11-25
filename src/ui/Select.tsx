@@ -187,7 +187,7 @@ export function Select({
               boxRef.current = el;
               setEl(el);
             }}
-            style={{ position: "fixed", left: pos.left, top: pos.top, zIndex: 60, minWidth: anchor?.width }}
+            style={{ position: "fixed", left: pos.left, top: pos.top, zIndex: 60, minWidth: anchor?.width, ...("maxHeight" in pos ? { maxHeight: pos.maxHeight, maxWidth: pos.maxWidth } : {}) }}
             className="ui-pop-in w-max max-w-[22rem] rounded-xl border border-border bg-popover p-1 text-popover-foreground shadow-[0_12px_32px_-12px_rgba(0,0,0,0.55)]"
           >
             {filterable && (

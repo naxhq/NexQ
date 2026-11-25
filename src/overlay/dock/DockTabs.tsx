@@ -40,6 +40,7 @@ export function DockTabs({
   tabKeyDown,
   renderTabExtra,
 }: Props) {
+  const extraOf = (p: PanelId) => (renderTabExtra ? renderTabExtra(p) : null);
   return (
       <div className="nq-dock-layer" data-dock-layer="tabs">
         {geo.stacks.map((s) =>
@@ -104,7 +105,7 @@ export function DockTabs({
                   );
                 })}
               </div>
-              {renderTabExtra && <div className="nq-dock-extra">{renderTabExtra(s.active)}</div>}
+              {extraOf(s.active) && <div className="nq-dock-extra">{extraOf(s.active)}</div>}
               {!s.virtual && (
                 <button
                   type="button"
