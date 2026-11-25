@@ -1,0 +1,141 @@
+import { describe, expect, it } from "vitest";
+import type { MeetingSummary, MemoryItem, WorkspaceChat, WorkspaceMessage } from "../../lib/types";
+import { classifyChatError } from "./errors";
+import { CITE_SCHEME, formatMs, linkCitations } from "./citations";
+import { buildExamples } from "./StartState";
+import { buildTurns, isCondensed } from "./Transcript";
+import { filterChats } from "./ChatSwitcher";
+import { prettyArgs } from "./ApprovalCard";
+import { plainAnswer } from "./AnswerActions";
+import { scopeSummary } from "./ScopeControl";
+
+describe("classifyChatError", () => {
+  it.each([
+    ["401 Unauthorized: invalid x-api-key", "auth"],
+    ["Claude is not logged in", "auth"],
+    ["model `gpt-9` does not exist", "model"],
+    ["429 rate limit reached", "limit"],
+    ["This model's maximum context length is 8192 tokens", "window"],
+    ["connect ECONNREFUSED 127.0.0.1:11434", "offline"],
+    ["something odd", "other"],
+  ])("%s -> %s", (raw, kind) => {
+    expect(classifyChatError(raw).kind).toBe(kind);
+  });
+
+  it("always keeps the real message and offers a way forward", () => {
+    const info = classifyChatError("connect ECONNREFUSED 127.0.0.1:11434");
+    expect(info.detail).toContain("ECONNREFUSED");
+    expect(info.fixes).toContain("settings");
+    expect(classifyChatError("").detail).toBe("No details were given.");
+  });
+});
+
+describe("citations", () => {
+  it("turns [S1] and [S1, S2] into links, but not inside code", () => {
+    const out = linkCitations("Yes [S1]. Both [S2, S3]. `[S4]`\n```\n[S5]\n```");
+    expect(out).toContain(`[S1](${CITE_SCHEME}S1)`);
+    expect(out).toContain(`[S2](${CITE_SCHEME}S2)[S3](${CITE_SCHEME}S3)`);
+    expect(out).toContain("`[S4]`");
+    expect(out).toContain("[S5]\n```");
+    expect(out).not.toContain(`${CITE_SCHEME}S4`);
+    expect(out).not.toContain(`${CITE_SCHEME}S5`);
+  });
+
+  it("formats time", () => {
+    expect(formatMs(75_000)).toBe("1:15");
+    expect(formatMs(3_725_000)).toBe("1:02:05");
+    expect(formatMs(-5)).toBe("0:00");
+  });
+
+  it("copies an answer without its tags", () => {
+    expect(plainAnswer("We ship Friday [S1]. Owner is Ana [S2, S3].")).toBe("We ship Friday. Owner is Ana.");
+  });
+});
+
+const meeting = (id: string, title: string, segments = 10): MeetingSummary => ({
+  id,
+  title,
+  start_time: "2026-11-01T10:00:00Z",
+  end_time: null,
+  duration_seconds: 60,
+  segment_count: segments,
+  has_summary: false,
+});
+const mem = (kind: MemoryItem["kind"], title: string, status: MemoryItem["status"] = "saved"): MemoryItem => ({
+  id: title,
+  workspace_id: "w",
+  kind,
+  title,
+  text: "",
+  source_meeting: null,
+  source_ms: null,
+  status,
+  created_at: 1,
+  updated_at: 1,
+});
+
+describe("buildExamples", () => {
+  it("uses real meeting titles, people and open items, at most three", () => {
+    const q = buildExamples([meeting("1", "Pricing review"), meeting("2", "Kickoff")], [mem("person", "Dana"), mem("open_item", "Contract redlines")]);
+    expect(q).toHaveLength(3);
+    expect(q[0]).toContain("Pricing review");
+    expect(q.join(" ")).toContain("Dana");
+    expect(q.join(" ")).toContain("Contract redlines");
+  });
+
+  it("skips empty meetings and memory that was not approved, and says nothing generic", () => {
+    expect(buildExamples([meeting("1", "Empty", 0)], [mem("person", "Sam", "suggested")])).toEqual([]);
+  });
+});
+
+const msg = (id: number, role: "user" | "assistant"): WorkspaceMessage => ({
+  id,
+  chat_id: "c",
+  role,
+  content: `${role}${id}`,
+  model: null,
+  citations: [],
+  context: null,
+  input_tokens: 0,
+  output_tokens: 0,
+  created_at: id,
+});
+
+describe("turns", () => {
+  it("pairs questions with answers and keeps a lone question", () => {
+    const turns = buildTurns([msg(1, "user"), msg(2, "assistant"), msg(3, "user"), msg(4, "assistant"), msg(5, "user")]);
+    expect(turns.map((t) => [t.question?.id, t.answer?.id])).toEqual([
+      [1, 2],
+      [3, 4],
+      [5, undefined],
+    ]);
+  });
+
+  it("marks turns up to the condensed id, never unsaved ones", () => {
+    const [a, b] = buildTurns([msg(1, "user"), msg(2, "assistant"), msg(-3, "user"), msg(-4, "assistant")]);
+    expect(isCondensed(a, 2)).toBe(true);
+    expect(isCondensed(b, 2)).toBe(false);
+    expect(isCondensed(a, null)).toBe(false);
+  });
+});
+
+describe("small helpers", () => {
+  const c = (id: string, title: string, updated_at: number) => ({ id, title, updated_at }) as WorkspaceChat;
+  it("filters chats by title, newest first", () => {
+    const list = [c("1", "Pricing", 1), c("2", "Hiring", 5), c("3", "Pricing again", 9)];
+    expect(filterChats(list, "pric").map((x) => x.id)).toEqual(["3", "1"]);
+    expect(filterChats(list, "").map((x) => x.id)).toEqual(["3", "2", "1"]);
+  });
+
+  it("cuts very long arguments and says so", () => {
+    const out = prettyArgs({ text: "x".repeat(5000) });
+    expect(out).toContain("(cut,");
+    expect(prettyArgs({ a: 1 })).toBe('{\n  "a": 1\n}');
+  });
+
+  it("summarises the scope in words", () => {
+    expect(scopeSummary(false, 0)).toBe("Meetings off");
+    expect(scopeSummary(true, 0)).toBe("All meetings");
+    expect(scopeSummary(true, 3)).toBe("Meetings, 3 left out");
+  });
+});
