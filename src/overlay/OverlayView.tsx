@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { OVERLAY_MOTION_CSS } from "./overlayMotion";
+import { OVERLAY_CONTRAST_CSS, OVERLAY_MOTION_CSS } from "./overlayMotion";
+import { readableOn, useIsLight } from "../lib/themeText";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useScenarioStore } from "../stores/scenarioStore";
 import { useTranslationStore } from "../stores/translationStore";
@@ -91,6 +92,7 @@ export function OverlayView() {
   const setCurrentView = useMeetingStore((s) => s.setCurrentView);
   const scenarioName = useScenarioStore((s) => s.getActiveTemplate().name);
   const meetingId = activeMeeting?.id ?? "";
+  const isLight = useIsLight();
 
   useEffect(() => {
     if (!returnFocusToSettings) return;
@@ -389,7 +391,7 @@ export function OverlayView() {
   return (
     <div className="overlay-bg flex h-full flex-col rounded-xl border border-border/20 shadow-xl" style={{ background: `hsl(var(--background) / ${overlayOpacity})`, backdropFilter: overlayOpacity > 0.7 ? "blur(12px) saturate(1.1)" : "none" }}>
 
-      <style>{OVERLAY_MOTION_CSS}</style>
+      <style>{`${OVERLAY_MOTION_CSS} ${OVERLAY_CONTRAST_CSS}`}</style>
       {/* ═══ HEADER ═══ */}
       <div
         ref={headerRef}
@@ -414,7 +416,7 @@ export function OverlayView() {
           {/* Mode badge */}
           <span
             className="text-[9px] font-bold tracking-wider px-1.5 py-0.5 rounded"
-            style={{ color: MODE_COLORS[audioMode].text, backgroundColor: MODE_COLORS[audioMode].bg }}
+            style={{ color: readableOn(MODE_COLORS[audioMode].text, isLight ? "light" : "dark", 5.6), backgroundColor: MODE_COLORS[audioMode].bg }}
           >
             {audioMode === "online" ? "ONLINE" : "IN-PERSON"}
           </span>

@@ -3,7 +3,7 @@
 // Speaker color is dynamic via speakerStore; confidence underline when enabled.
 // SP2 Task 7: Hover bookmark icon, right-click context menu, bookmarked line indicator.
 
-import { readingTextColor } from "../lib/themeText";
+import { readableOn, readingTextColor, useIsLight } from "../lib/themeText";
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Bookmark as BookmarkIcon } from "lucide-react";
@@ -76,6 +76,7 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
   const speaker = useSpeakerStore((s) => isPending ? undefined : s.speakers[speakerId]);
   const renameSpeaker = useSpeakerStore((s) => s.renameSpeaker);
   const ensureRemoteSpeaker = useSpeakerStore((s) => s.ensureRemoteSpeaker);
+  const isLight = useIsLight();
 
   const speakerLabel = isPending
     ? "..."
@@ -280,12 +281,12 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
           }}
           maxLength={40}
           className="mt-[2px] shrink-0 w-20 rounded bg-white/5 border border-purple-400/30 px-1 py-0 text-[0.6875rem] font-semibold outline-none"
-          style={{ color: speakerHex }}
+          style={{ color: readableOn(speakerHex, isLight ? "light" : "dark") }}
         />
       ) : (
         <span
           className={`mt-[3px] shrink-0 text-[0.6875rem] font-semibold tracking-tight ${canRename ? "cursor-pointer hover:underline" : ""} ${isPending ? "animate-pulse" : ""}`}
-          style={{ color: speakerHex }}
+          style={{ color: readableOn(speakerHex, isLight ? "light" : "dark") }}
           onClick={startEditing}
           title={canRename ? "Click to rename" : undefined}
         >
@@ -322,7 +323,7 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
 
         {/* Inline translation — visible below the original text */}
         {displayMode === "inline" && (
-          <div className="mt-1 leading-[1.5]" style={{ fontSize: `${translationFontSize}px`, color: translationTextColor }}>
+          <div className="mt-1 leading-[1.5]" style={{ fontSize: `${translationFontSize}px`, color: readableOn(translationTextColor, isLight ? "light" : "dark") }}>
             {isTranslating ? (
               <span className="text-muted-foreground/40 animate-pulse">Translating...</span>
             ) : translation ? (
@@ -341,7 +342,7 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
               top: `${Math.max(8, mousePos.y - 90)}px`,
             }}
           >
-            <p style={{ fontSize: `${translationFontSize + 1}px`, color: translationTextColor }} className="leading-[1.6]">
+            <p style={{ fontSize: `${translationFontSize + 1}px`, color: readableOn(translationTextColor, isLight ? "light" : "dark") }} className="leading-[1.6]">
               {translation.translated_text}
             </p>
             <div className="mt-1.5 flex items-center gap-1.5 text-[0.6rem] text-muted-foreground/50">

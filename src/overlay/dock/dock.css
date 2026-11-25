@@ -86,7 +86,7 @@
   line-height: 1.4;
   font-weight: 500;
   white-space: nowrap;
-  color: hsl(var(--muted-foreground) / 0.65);
+  color: hsl(var(--muted-foreground));
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;

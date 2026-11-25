@@ -937,12 +937,38 @@ function LLMPickerDropdown({
   const cliAgentModels = useConfigStore((s) => s.cliAgentModels);
   const agentStatuses = useAgentStore((s) => s.statuses);
   const refreshAgentStatus = useAgentStore((s) => s.refreshStatus);
+  const customBaseUrl = useConfigStore((s) => s.customLlmBaseUrl);
+  const customAuthType = useConfigStore((s) => s.customLlmAuthType);
+  const lastModelByProvider = useConfigStore((s) => s.lastModelByProvider);
+  // A local server that started after the app answers when the picker opens (never switches anything).
+  const [reachable, setReachable] = useState<string[]>([]);
+  // The model the custom endpoint is set up with: the active one, else the last one used with it.
+  const customModel = currentProvider === "custom" ? currentModel : lastModelByProvider["custom"] ?? "";
 
-  // Detect each CLI agent once per window so a logged-in one shows up here.
+  // Look again every time the picker opens: a subscription login or a local server that became
+  // ready while the app ran shows up now, not after a restart. These are cheap local checks
+  // (no model call).
   useEffect(() => {
-    for (const { id } of CLI_AGENTS) {
-      if (!useAgentStore.getState().statuses[id]) void refreshAgentStatus(id);
-    }
+    for (const { id } of CLI_AGENTS) void refreshAgentStatus(id);
+    let cancelled = false;
+    (async () => {
+      const { listModels } = await import("../lib/ipc");
+      for (const o of LLM_PROVIDER_OPTIONS) {
+        if (!o.isLocal || o.value === "custom") continue;
+        try {
+          await Promise.race([
+            listModels(JSON.stringify({ provider_type: o.value })),
+            new Promise((_, no) => setTimeout(() => no(new Error("timeout")), 2500)),
+          ]);
+          if (!cancelled) setReachable((r) => (r.includes(o.value) ? r : [...r, o.value]));
+        } catch {
+          /* not running */
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [refreshAgentStatus]);
   const availableAgents = CLI_AGENTS.filter(
     (a) => currentProvider === a.id || (!!agentStatuses[a.id]?.auth?.logged_in && !isOutdated(agentStatuses[a.id])),
@@ -970,15 +996,21 @@ function LLMPickerDropdown({
         const config = JSON.stringify({
           provider_type: pendingProvider,
           ...(key && { api_key: key }),
+          ...(pendingProvider === "custom" && customBaseUrl && { base_url: customBaseUrl, auth_type: customAuthType }),
         });
         const modelList = await listModels(config);
         if (cancelled) return;
         const chatModels = modelList.filter(
           (m: { id: string }) => !EMBEDDING_PATTERNS.some((p) => m.id.toLowerCase().includes(p))
         );
-        setModels(chatModels.map((m: { id: string; name?: string }) => ({ id: m.id, name: m.name || m.id })));
+        const list = chatModels.map((m: { id: string; name?: string }) => ({ id: m.id, name: m.name || m.id }));
+        // The endpoint's own model stays offered even when it does not list models.
+        if (pendingProvider === "custom" && customModel && !list.some((m) => m.id === customModel)) {
+          list.unshift({ id: customModel, name: customModel });
+        }
+        setModels(list);
       } catch {
-        if (!cancelled) setModels([]);
+        if (!cancelled) setModels(pendingProvider === "custom" && customModel ? [{ id: customModel, name: customModel }] : []);
       } finally {
         if (!cancelled) setModelsLoading(false);
       }
@@ -1002,16 +1034,33 @@ function LLMPickerDropdown({
   }, [onClose]);
 
   // Only show verified/ready providers
+  // A configured provider stays in the list (the custom endpoint once it has a URL); a local one
+  // that answered just now shows up even if it was never verified in Settings.
   const available = LLM_PROVIDER_OPTIONS.filter((o) => {
-    if (o.value === "custom") return false;
-    if (o.requiresKey) return verifiedProviders.includes(o.value);
-    return verifiedProviders.includes(o.value); // Local also needs verification
+    if (o.value === "custom") return !!customBaseUrl;
+    return verifiedProviders.includes(o.value) || reachable.includes(o.value);
   });
   // Fallback: always include the current active provider
   if (!available.some((o) => o.value === currentProvider)) {
     const opt = LLM_PROVIDER_OPTIONS.find((o) => o.value === currentProvider);
     if (opt) available.unshift(opt);
   }
+
+  const hostOf = (url: string) => {
+    try {
+      return new URL(url).host;
+    } catch {
+      return "";
+    }
+  };
+  const statusOf = (v: string): string =>
+    currentProvider === v
+      ? "active"
+      : v === "custom"
+        ? hostOf(customBaseUrl)
+        : !verifiedProviders.includes(v) && reachable.includes(v)
+          ? "running"
+          : "";
 
   const localOpts = available.filter((o) => o.isLocal);
   const cloudOpts = available.filter((o) => !o.isLocal);
@@ -1042,7 +1091,7 @@ function LLMPickerDropdown({
               >
                 <Icon className={`h-3.5 w-3.5 shrink-0 ${isPending ? "text-primary" : "text-emerald-400"}`} />
                 <span className="flex-1 text-left font-medium">{opt.label}</span>
-                {isActive && <span className="text-meta text-primary/80">active</span>}
+                {statusOf(opt.value) && <span className={`text-meta ${isActive ? "text-primary/80" : "text-muted-foreground/70"}`}>{statusOf(opt.value)}</span>}
               </button>
             );
           })}
@@ -1069,7 +1118,7 @@ function LLMPickerDropdown({
               >
                 <Icon className={`h-3.5 w-3.5 shrink-0 ${isPending ? "text-primary" : "text-blue-400"}`} />
                 <span className="flex-1 text-left font-medium">{opt.label}</span>
-                {isActive && <span className="text-meta text-primary/80">active</span>}
+                {statusOf(opt.value) && <span className={`text-meta ${isActive ? "text-primary/80" : "text-muted-foreground/70"}`}>{statusOf(opt.value)}</span>}
               </button>
             );
           })}
