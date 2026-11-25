@@ -1125,6 +1125,15 @@ export async function removeWorkspaceItem(id: string, kind: WorkspaceItemKind, r
 export async function listLibrary(): Promise<LibraryItem[]> {
   return invoke<LibraryItem[]>("list_library");
 }
+/** The display path of a file inside a Library folder, checked by the backend (rejects when it is outside the folder or gone). */
+export async function getLibraryFilePath(folderId: string, subPath: string): Promise<string> {
+  return invoke<string>("get_library_file_path", { folderId, subPath });
+}
+/** Shows that file in the file manager. The backend decides what may be revealed. */
+export async function revealLibraryFile(folderId: string, subPath: string): Promise<void> {
+  return invoke("reveal_library_file", { folderId, subPath });
+}
+
 /** Deletes every meeting of a workspace in one call; what went and what did not. */
 export async function deleteWorkspaceMeetings(id: string): Promise<{ deleted: number; failed: Array<{ id: string; reason: string }> }> {
   return invoke("delete_workspace_meetings", { id });

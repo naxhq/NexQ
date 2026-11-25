@@ -85,6 +85,16 @@ function readNumber(key: string, fallback: number): number {
 
 export type WorkspaceView = "home" | "all";
 
+/** Something asked to be shown: a Library row to highlight, a folder file to point at, a note to edit. */
+export interface OpenFocus {
+  kind: "document" | "folder" | "talking_point";
+  refId: string;
+  subRef: string | null;
+  workspaceId: string;
+  /** Changes with every request, so asking twice for the same thing shows it twice. */
+  nonce: number;
+}
+
 interface WorkspaceState {
   workspaces: WorkspaceSummary[];
   loaded: boolean;
@@ -102,6 +112,8 @@ interface WorkspaceState {
   /** The 820 to 1099 px Library sheet. */
   librarySheetOpen: boolean;
   noteSeen: boolean;
+  focus: OpenFocus | null;
+  setFocus: (f: Omit<OpenFocus, "nonce"> | null) => void;
 
   load: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -152,6 +164,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   showArchived: readPref(PREF_KEYS.archived) === "1",
   librarySheetOpen: false,
   noteSeen: readPref(PREF_KEYS.note) === "1",
+  focus: null,
+  setFocus: (f) => set({ focus: f ? { ...f, nonce: Date.now() + Math.random() } : null }),
 
   load: async () => {
     await get().refresh();

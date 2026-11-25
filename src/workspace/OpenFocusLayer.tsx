@@ -1,20 +1,78 @@
-import { Suspense } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { Dialog, SlideOver, buttonClass } from "../ui";
+import { getLibraryFilePath, revealLibraryFile } from "../lib/ipc";
 import { useWorkspaceStore } from "../stores/workspaceStore";
-import { showToast } from "../stores/toastStore";
 import { TalkingPointsEditor } from "./slots";
 import { hintClass } from "./styles";
 
-/** The folder a path is in (either kind of separator). */
-export function folderOf(path: string): string {
-  const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-  return cut > 0 ? path.slice(0, cut) : path;
+const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** A file inside a Library folder: its path as the backend checked it, and a way to show it. */
+function FolderFileDialog({ folderId, subPath, onClose }: { folderId: string; subPath: string; onClose: () => void }) {
+  const [path, setPath] = useState<string | null>(null);
+  const [refused, setRefused] = useState<string | null>(null);
+  const [revealError, setRevealError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    getLibraryFilePath(folderId, subPath)
+      .then((p) => live && setPath(p))
+      .catch((e) => live && setRefused(messageOf(e)));
+    return () => {
+      live = false;
+    };
+  }, [folderId, subPath]);
+
+  const reveal = async () => {
+    setRevealError(null);
+    try {
+      await revealLibraryFile(folderId, subPath);
+      onClose();
+    } catch (e) {
+      setRevealError(messageOf(e));
+    }
+  };
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title="A file in your folder"
+      size="sm"
+      footer={
+        <>
+          <button type="button" className={`${buttonClass.base} ${buttonClass.quiet}`} onClick={onClose}>
+            Close
+          </button>
+          <button type="button" className={`${buttonClass.base} ${buttonClass.primary}`} onClick={() => void reveal()} disabled={!path}>
+            Open folder
+          </button>
+        </>
+      }
+    >
+      {refused ? (
+        <p role="alert" className="ui-body text-foreground">
+          This file can't be shown: {refused}
+        </p>
+      ) : (
+        <>
+          <p className="ui-body break-all text-foreground">{path ?? "Looking for the file"}</p>
+          <p className={`${hintClass} mt-2`}>This file is read from the folder in your Library. Opening the folder shows it in your file manager.</p>
+        </>
+      )}
+      {revealError && (
+        <p role="alert" className="ui-body mt-2 text-destructive">
+          Couldn't open the folder: {revealError}
+        </p>
+      )}
+    </Dialog>
+  );
 }
 
 /**
  * What a click on a source asks for beyond a meeting or a Library row: a file
- * inside a folder (its path, with "Open folder") and a talking point (its
- * editor). Documents and folders are marked in the Library itself.
+ * inside a folder (the checked path, with "Open folder") and a talking point
+ * (its editor). Documents and folders are marked in the Library itself.
  */
 export function OpenFocusLayer() {
   const focus = useWorkspaceStore((s) => s.focus);
@@ -34,37 +92,7 @@ export function OpenFocusLayer() {
   }
 
   if (focus.kind === "folder" && focus.subRef) {
-    const dir = folderOf(focus.subRef);
-    const openFolder = async () => {
-      try {
-        const { open } = await import("@tauri-apps/plugin-shell");
-        await open(dir);
-        close();
-      } catch (e) {
-        showToast(`Couldn't open the folder: ${e instanceof Error ? e.message : String(e)}`, "error");
-      }
-    };
-    return (
-      <Dialog
-        open
-        onClose={close}
-        title="A file in your folder"
-        size="sm"
-        footer={
-          <>
-            <button type="button" className={`${buttonClass.base} ${buttonClass.quiet}`} onClick={close}>
-              Close
-            </button>
-            <button type="button" className={`${buttonClass.base} ${buttonClass.primary}`} onClick={() => void openFolder()}>
-              Open folder
-            </button>
-          </>
-        }
-      >
-        <p className="ui-body break-all text-foreground">{focus.subRef}</p>
-        <p className={`${hintClass} mt-2`}>This file is read from the folder in your Library. Opening the folder shows it in your file manager.</p>
-      </Dialog>
-    );
+    return <FolderFileDialog key={focus.nonce} folderId={focus.refId} subPath={focus.subRef} onClose={close} />;
   }
   return null;
 }

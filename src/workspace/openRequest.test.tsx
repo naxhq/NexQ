@@ -7,7 +7,7 @@ const shell = vi.hoisted(() => ({ open: vi.fn(async () => {}) }));
 vi.mock("@tauri-apps/plugin-shell", () => ({ open: shell.open }));
 
 import { handleOpenRequest } from "./openRequest";
-import { OpenFocusLayer, folderOf } from "./OpenFocusLayer";
+import { OpenFocusLayer } from "./OpenFocusLayer";
 import { LibraryPanel } from "./LibraryPanel";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
@@ -61,15 +61,45 @@ describe("opening what a chat answer or brief cites", () => {
     expect(rows.filter((r) => r.getAttribute("data-highlighted") === "true")).toHaveLength(1);
   });
 
-  it("shows a folder file's path and opens its folder", async () => {
+  it("shows the checked path of a folder file and reveals it through the backend, never through the shell", async () => {
+    const b = mockBackend({ get_library_file_path: "/notes/clients/acme.md", reveal_library_file: null });
     render(<OpenFocusLayer />);
     expect(screen.queryByRole("dialog")).toBeNull();
-    act(() => useWorkspaceStore.getState().setFocus({ kind: "folder", refId: "f1", subRef: "/notes/clients/acme.md", workspaceId: "general" }));
+    act(() => useWorkspaceStore.getState().setFocus({ kind: "folder", refId: "f1", subRef: "clients/acme.md", workspaceId: "general" }));
     const dialog = await screen.findByRole("dialog", { name: "A file in your folder" });
-    expect(dialog).toHaveTextContent("/notes/clients/acme.md");
+    await waitFor(() => expect(dialog).toHaveTextContent("/notes/clients/acme.md"));
+    expect(b.called("get_library_file_path")[0].args).toMatchObject({ folderId: "f1", subPath: "clients/acme.md" });
     await userEvent.click(within(dialog).getByRole("button", { name: "Open folder" }));
-    await waitFor(() => expect(shell.open).toHaveBeenCalledWith("/notes/clients"));
-    expect(folderOf("/a/b/c.md")).toBe("/a/b");
+    await waitFor(() => expect(b.called("reveal_library_file")[0]?.args).toMatchObject({ folderId: "f1", subPath: "clients/acme.md" }));
+    expect(shell.open).not.toHaveBeenCalled();
+  });
+
+  it("says so plainly when the backend refuses the path, and offers no reveal", async () => {
+    const b = mockBackend({
+      get_library_file_path: () => {
+        throw "That file is outside the folder";
+      },
+    });
+    render(<OpenFocusLayer />);
+    act(() => useWorkspaceStore.getState().setFocus({ kind: "folder", refId: "f1", subRef: "../secret.txt", workspaceId: "general" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("This file can't be shown: That file is outside the folder");
+    expect(screen.getByRole("button", { name: "Open folder" })).toBeDisabled();
+    expect(b.called("reveal_library_file")).toHaveLength(0);
+  });
+
+  it("reports a failed reveal without closing", async () => {
+    mockBackend({
+      get_library_file_path: "/notes/a.md",
+      reveal_library_file: () => {
+        throw "Not allowed";
+      },
+    });
+    render(<OpenFocusLayer />);
+    act(() => useWorkspaceStore.getState().setFocus({ kind: "folder", refId: "f1", subRef: "a.md", workspaceId: "general" }));
+    const dialog = await screen.findByRole("dialog", { name: "A file in your folder" });
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "Open folder" })).toBeEnabled());
+    await userEvent.click(within(dialog).getByRole("button", { name: "Open folder" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Couldn't open the folder: Not allowed");
   });
 
   it("opens the talking points editor for a cited note", async () => {
