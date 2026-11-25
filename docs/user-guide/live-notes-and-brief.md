@@ -24,6 +24,8 @@ Both are panels in the meeting window. They are hidden in the default layout. Ch
 2. Under **Turn on for**, choose **This meeting** or **Every meeting**.
 3. Click **Turn on notes**.
 
+Before you turn them on, the panel says which model they will use, for example **Automatic, uses Ollama · llama3.2 (active model)**.
+
 **This meeting** turns notes off again when the meeting ends. **Every meeting** starts them in each new meeting.
 
 You can also use the **Take live notes** switch in **Settings > Live Notes and Brief**. To stop notes for the meeting you are in, choose **Stop notes for this meeting** in the panel's **...** menu.
@@ -52,11 +54,25 @@ With **Updates** on **Automatic** (the default), NexQ updates the notes:
 - After about 100 new words and a short pause of 2 seconds, and at least 20 seconds after the last update
 - After 90 seconds without an update, if at least 15 new words are waiting
 - When you click **Update now** or press `N` in the meeting window
-- Once more when the meeting ends. It never delays ending the meeting
+- When the meeting ends, once more, until what is left is covered or about 20 seconds are used. It never delays ending the meeting
 
-Nothing runs on silence, and only one update runs at a time. If a live answer is being written, the notes wait. Choose **Manual** (or **Update only when I ask** in the **...** menu) to update only when you ask.
+Nothing runs on silence, and only one update runs at a time. If a live answer is being written, the notes wait.
 
-The panel tells you what it is doing: **Waiting for speech**, **Taking notes**, **Paused**, **Stopped**, or **Waiting for you** (in manual mode).
+**Manual** (or **Update only when I ask** in the **...** menu) never runs unasked, and that includes the end of the meeting. If part of the call was never sent, the panel says so, for example **Not covered: 02:00 to 40:00**, and **Update notes** sends it.
+
+The panel tells you what it is doing, in words:
+
+| What it says | Meaning |
+|--------------|---------|
+| **Off** | Notes are not turned on |
+| **Waiting for speech** | On, nothing said yet |
+| **On** | On, between updates. In automatic mode it counts down, for example "next update in 12 s" |
+| **Taking notes** | A model call is running |
+| **Waiting for you**, press Update now | Manual mode |
+| **Paused** | Paused by you, at the limit, or by a plan limit |
+| **Stopped** | Stopped by you, or after repeated failures |
+
+The buttons follow the state. **Update now** (also `N`) is dimmed while a call runs. **Pause** and **Resume** pause and continue the notes. After **Stop notes for this meeting**, **Start notes again** starts them again. A button that can't do anything right now isn't shown. A command with no meeting running says so instead of doing nothing.
 
 ### Model, detail and language
 
@@ -64,13 +80,15 @@ In **Settings > Live Notes and Brief**, or **Model, detail and limit** in the pa
 
 | Setting | Choices |
 |---------|---------|
-| **Model** | **Automatic** uses the cheapest model of your active provider. Or pick any provider, model and effort |
+| **Model** | **Automatic**, which names the model it will use, or any provider, model and effort you pick |
 | **Updates** | **Automatic** or **Manual** |
 | **Detail** | **Brief**, **Standard** or **Detailed** |
 | **Language of the notes** | **The meeting's language**, or one of 12 languages |
 | **Limit per meeting** | 30k, 60k, 120k, 240k or 500k tokens |
 
-If the model can't answer (no key, plan limit, server not running), NexQ doesn't switch to another one. The panel says **Notes stopped** or **Notes paused** with the reason, and offers **Change model** and **Try again**. Three failures in a row pause the notes. NexQ can also read notes from a small local model that answers in plain lines instead of structured output, and it drops anything it can't read.
+**Automatic** works like this. With a subscription (Claude, Codex or Antigravity) it uses the CLI's fast tier. With OpenRouter it takes the first small model from a short list (a nano, Haiku or Flash-Lite model, for example) that OpenRouter's model list contains. With every other provider (OpenAI, Anthropic, Gemini, Groq, Ollama, LM Studio, a custom server) it uses your active model and says so ("active model"), so it is not cheaper there. To use a smaller model, pick one yourself. The brief and memory suggestions follow the same rule.
+
+If the model can't answer (no key, plan limit, server not running), NexQ doesn't switch to another one. A plan limit shows **Notes paused** with the reason and **Try again**. Three failures in a row show **Notes stopped** with the reason. Both offer **Change model**, and **Try again** or **Start notes again**. NexQ can also read notes from a small local model that answers in plain lines instead of structured output, and it drops anything it can't read.
 
 ### Cost and the limit
 
@@ -80,7 +98,7 @@ The default limit is **120k tokens** per meeting. When the notes reach it, they 
 
 > **Keep taking notes?** The notes used 120k tokens, the limit you set. Keep going adds 120k more.
 
-Choose **Keep going** to continue (it adds the same amount again) or **Stop** to keep the notes you have. Nothing more is sent until you choose. Pick a smaller limit under **Limit per meeting** if you want a tighter ceiling.
+Choose **Keep going** to continue (it adds the same amount again) or **Stop** to keep the notes you have. Nothing more is sent until you choose. Pick a smaller limit under **Limit per meeting** if you want a tighter ceiling. A new limit applies at once: raising it above what was used lets notes that stopped at the limit go on, and lowering it below stops them.
 
 With a Claude, Codex or Antigravity subscription, the notes use your plan rather than money, and a plan limit pauses them with the reason.
 
@@ -96,7 +114,7 @@ Live notes read **only the transcript**: the new lines with their time and speak
 
 ### Turn it on
 
-The brief is turned on **per workspace**. In the **Brief** panel, click **Turn on the brief**. From then on it starts in every meeting of that workspace. **Turn the brief off** in the panel's **...** menu turns it off for the workspace. The brief is always off in a workspace until you do this.
+The brief is turned on **per workspace**, and that is its only switch. In the **Brief** panel, click **Turn on the brief**. Before you do, the panel says which model it will use. From then on it starts in every meeting of that workspace. **Turn the brief off** in the panel's **...** menu turns it off for the workspace. The brief is off in a workspace until you do this. It is not an on and off switch in Settings: **Settings > Live Notes and Brief** only holds its model and limit.
 
 ### What you get
 
@@ -119,13 +137,13 @@ A fact only appears if it cites a passage that was really sent to the model, and
 2. It asks the model for a new sheet only when half of the top passages changed, the topic changed, or you click **Refresh**, and never more often than every 45 seconds. It sends about 2,500 tokens of passages, the recent transcript and your saved memory.
 3. The model writes the sheet in at most 350 tokens.
 
-**Pause** and **Resume** stop and restart it, and **Refresh** makes a new sheet now. The panel says **Listening for the topic**, **Checking the workspace**, **Paused** or **Stopped**.
+**Pause** and **Resume** pause and continue it, and **Refresh** makes a new sheet now (dimmed while one is being made). If it stopped, **Start the brief again** starts it. A button that can't do anything right now isn't shown. The state is said in words: **Off**, **Waiting for speech**, **On** (with "next update in 12 s" between calls), **Checking the workspace** (a call is running), **Paused** or **Stopped**. While there is no sheet yet, the panel says **Listening for the topic**.
 
 ### Model and the limit
 
-**Model and limit** in the panel's **...** menu, or **Settings > Live Notes and Brief**, set the model (**Automatic** is the cheapest model of your active provider) and the **Limit per meeting**: 30k, 60k, 120k (the default) or 240k tokens. A brief uses roughly 60k tokens an hour of conversation, so the default covers about two hours.
+**Model and limit** in the panel's **...** menu, or **Settings > Live Notes and Brief**, set the model (**Automatic** names the model it uses, by the [same rule as the notes](#model-detail-and-language)) and the **Limit per meeting**: 30k, 60k, 120k (the default) or 240k tokens. A new limit applies at once. A brief uses roughly 60k tokens an hour of conversation, so the default covers about two hours.
 
-When the limit is reached, the brief pauses and asks **Keep the brief going?** with **Keep going** (adds the same amount) or **Stop**. If the model fails it says so with the reason and **Change model** and **Try again**. It never switches to another provider on its own.
+When the limit is reached, the brief pauses and asks **Keep the brief going?** with **Keep going** (adds the same amount) or **Stop**. If the model fails it says **The brief stopped** or **The brief paused** with the reason, and offers **Change model** and, when it can, **Try again**. It never switches to another provider on its own.
 
 The brief can't be exported, since it is only there for the live moment.
 
@@ -145,10 +163,10 @@ The recent transcript, the passages found in the workspace for this topic and yo
 
 ## Tips
 
-- **Start with Automatic and Standard.** They use the cheapest model your provider offers.
+- **Start with Automatic and Standard.** With a subscription that is the fast tier. With most API providers it is your active model, so pick a smaller model yourself if you want to spend less.
 - **Use a local model for notes** if you don't want the conversation to leave your PC. It can be slower on a long meeting.
 - **Turn the brief on in the workspaces that have a lot of material**, such as a client you have talked to many times.
-- **Press N before the end** if you want the notes right up to the last minute. A final update runs anyway when you end the meeting.
+- **Press N before the end** if you want the notes right up to the last minute. In automatic mode a final update runs anyway when you end the meeting. In manual mode it doesn't.
 
 ## Next Steps
 

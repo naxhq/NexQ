@@ -210,6 +210,18 @@ For a practical check, start a test meeting, speak on each configured side, veri
 2. If the note stays, copy your log (**Settings > About > Diagnostics > Copy recent log**) and [report it](https://github.com/naxhq/NexQ/issues/new?template=bug_report.yml).
 3. Don't delete `nexq-before-workspaces.db` in the app data folder. It is a copy of your data from before the upgrade, kept for 14 days.
 
+### "Your meetings could not be opened"
+
+NexQ shows a screen in place of your workspaces when it can't use `nexq.db`: it couldn't be read, it was saved by a newer NexQ, its upgrade didn't finish, or another program is using it. Nothing was deleted, and the screen shows the file's path. Follow the screen: **Restore** a copy, **Install the newer NexQ**, **Try again**, or **Open data folder**. Details and what each choice does are in [Workspaces](workspaces.md#if-nexq-cant-open-your-meetings). A restore or **Start with an empty database** keeps the old files aside as `nexq.db.damaged-` and a number.
+
+### "Your meetings file has some damage"
+
+The daily check found damage in the open file. NexQ keeps working with it and has changed nothing. The notice names the app data folder and says how many copies of your meetings exist there. Make sure you have a copy you trust, and [report it](https://github.com/naxhq/NexQ/issues/new?template=bug_report.yml) with your log if it repeats.
+
+### A Meeting Says It Is Not Filed in a Workspace
+
+The workspace you started it in was archived, deleted or couldn't be read, so NexQ did not use another one. The meeting uses none of any workspace's material. Pick a workspace from the workspace button in the meeting window to file it ([details](workspaces.md#the-default-workspace)).
+
 ### A Document or Folder Shows "Missing"
 
 The file or folder moved or was deleted. Click **Remove** on its row, or put it back where it was. If it is a folder or tool, check **Settings > Personal Sources**: after a [settings reset](#settings-restored-or-reset) the list there may need to be filled again.
@@ -223,12 +235,16 @@ NexQ doesn't search a folder until you allow it. Turn on **Search its text** und
 - Check the answer's sources, and open **Context** to see what the answer saw.
 - If it says "N things didn't fit", click **Search deeper**.
 - A meeting you left out of the chat, a document you removed from the workspace, and anything in another workspace are not used. See [What is shared between workspaces](workspaces.md#what-is-shared-between-workspaces).
-- A folder is only searched after **Search its text** is on. Files over 2 MB, hidden files and files with names like `.env` or containing `secret` or `password` are skipped.
-- Very recent meetings are searched as soon as they are indexed. Indexing waits while a meeting is running, so a meeting you just finished may take a moment.
+- A folder is only searched after **Search its text** is on. Files over 2 MB, hidden files and files with names like `.env` or containing `secret` or `password` are skipped. The folder's row shows **N files skipped**, and clicking it lists each file with the reason.
+- If the Library says **Still indexing**, or the answer says "Still indexing: 40 of 300 meetings are searchable", older meetings may be missing until it finishes. Indexing waits while a meeting is running, so a meeting you just finished may take a moment.
 
 ### Workspace Chat Says a Tool Is Off
 
 Codex and Antigravity can't ask before a tool that changes something yet, so those tools are off in chat. With Claude, update the Claude command-line tool to version 2.1.328 or newer. API and local models can't use tools at all. See [Workspace chat](workspace-chat.md#tool-approval).
+
+### "Something this answer used was moved out of this workspace"
+
+You moved or deleted a meeting, took a file out, or changed what the workspace uses while the answer was being written, or just after. The answer was stopped and removed, and only your question stays. Click **Ask again**. See [Workspace chat](workspace-chat.md#when-something-an-answer-used-leaves-the-workspace).
 
 ### "A live answer took priority"
 
@@ -245,8 +261,10 @@ The panel says why when it is unavailable: an in-person meeting, a muted microph
 ### Live Notes or the Brief Paused
 
 - **Keep taking notes?** or **Keep the brief going?** means the limit was reached. Choose **Keep going** or **Stop**. See [Live notes and the brief](live-notes-and-brief.md#cost-and-the-limit).
-- **Notes paused** or **Notes stopped** with a reason means the model couldn't answer: a missing key, a plan limit or a server that isn't running. Click **Change model** or **Try again**.
-- The brief says **The brief is turned off** or **The brief is off in this workspace** when it is off for the workspace. Turn it on in the Brief panel.
+- **Notes paused** or **Notes stopped** (and **The brief paused** or **The brief stopped**) with a reason means the model couldn't answer: a missing key, a plan limit or a server that isn't running. Click **Change model**, then **Try again** or **Start notes again**.
+- **Not covered: 02:00 to 40:00** means the notes were on manual and that part of the call was never sent. Click **Update notes**.
+- A button you expect, such as **Resume** or **Try again**, is only shown when it can do something in the current state.
+- The brief says **The brief is off in this workspace** when the workspace's switch is off. Turn it on in the Brief panel. That switch is the only one.
 
 ## Overlay Issues
 

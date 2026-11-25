@@ -211,7 +211,7 @@ NexQ supports loading documents (PDF, TXT, MD, DOCX) as context for AI responses
 
 ## Workspaces
 
-Meetings, chats and files are kept in [workspaces](workspaces.md). Most workspace options are on the workspace itself: open it and use **Edit workspace** (name, colour, instructions for the AI, the scenario it starts as, **Also use General**, **Keep separate** and **Make default**) and the **Library** (documents, folders, tools, talking points and memory). Settings keeps the global parts:
+Meetings, chats and files are kept in [workspaces](workspaces.md). Most workspace options are on the workspace itself: open it and use **Edit workspace** (name, colour, instructions for the AI, the scenario it starts as, **Also use General**, **Keep separate**, **Make default** and **Prepare recaps with AI**) and the **Library** (documents, folders, tools, talking points and memory). Settings keeps the global parts:
 
 - **Settings > Personal Sources**: the list of notes folders and tools, their on and off switches, tool permissions and secret values
 - **Settings > Context Strategy**: how documents reach live answers ([Using Context Intelligence](rag-context.md))

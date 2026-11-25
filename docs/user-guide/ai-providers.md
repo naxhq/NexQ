@@ -135,8 +135,8 @@ NexQ supports 9 LLM providers. The LLM powers all AI features: Assist, What to S
 Live answers use the provider you set above. Three newer features can use a different one, so a slow, careful model for questions doesn't have to answer live:
 
 - **[Workspace chat](workspace-chat.md)** has a **Model** picker in each chat. A new chat starts on your active provider and model (on your **Deep** model if the provider is a subscription).
-- **[Live notes and the brief](live-notes-and-brief.md)** have their own **Model** in **Settings > Live Notes and Brief**. The default, **Automatic**, is the cheapest model of your active provider.
-- **[Memory suggestions](talking-points.md#memory)** have their own model too, also **Automatic** by default.
+- **[Live notes and the brief](live-notes-and-brief.md)** have their own **Model** in **Settings > Live Notes and Brief**. The default, **Automatic**, names the model it will use. With a subscription it is the CLI's fast tier. With OpenRouter it is the first small model from a short list that OpenRouter offers. With any other provider it is your active model, so choose a smaller one yourself to spend less.
+- **[Memory suggestions](talking-points.md#memory)** have their own model too, **Automatic** by default. The optional AI recaps (**Prepare recaps with AI** in a workspace's settings) use your subscription's fast tier, or else your active model.
 
 None of them switches to another provider if yours fails. They say what failed and let you choose. A live answer always goes first: on a local server (Ollama, LM Studio or a local custom server) it can stop a chat answer or hold back notes that use the same server.
 

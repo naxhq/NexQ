@@ -42,7 +42,7 @@ A layout only decides where panels go. Panels it doesn't use are hidden, not clo
 
 ### Save your own
 
-Type a name in **Save this layout as...** and click **Save**. It appears under **Your layouts**. Click it to use it again. The pencil renames it and the bin deletes it. You can keep 20.
+Type a name in **Save this layout as...** and click **Save**. It appears under **Your layouts**. Click it to use it again. The pencil renames it and the bin deletes it. After a delete, the menu says **Deleted "name"** with **Undo**, which brings it back at its old place. Undo stays until you close the menu or delete another layout. You can keep 20.
 
 ### Reset
 
@@ -81,6 +81,7 @@ With the keyboard, `Tab` to a separator and use the arrow keys (16 pixels at a t
 
 - **Hide.** Open the **Layout** menu and untick the panel under **Panels**, or choose **Hide ...** in its **Move** menu. Tick it again to bring it back.
 - **Collapse.** **Collapse to a strip** shrinks a panel to a thin bar. Click the bar to open it again. The header's view button does this for you: **Focus AI panel**, **Focus Transcript**, **Split view**.
+- **A hidden panel, or one behind another tab, does no work.** The talking points reader, for example, stops scrolling and polling until you see it again.
 - **The assistant comes back by itself** when you use the Ask key, or when a screenshot is captured, even if you hid it or it is a tab behind another one.
 
 ## Lock the layout
@@ -89,11 +90,13 @@ With the keyboard, `Tab` to a separator and use the arrow keys (16 pixels at a t
 
 - Dragging, moving, resizing, choosing a layout and **Reset to Classic** do nothing
 - You can still show, hide and collapse panels
-- The Move menu says: "Layout is locked. Unlock it from the Layout menu to move panels."
+- The **Move** menu still opens, and says "Layout is locked: panels can't move" with an **Unlock layout** item
 
 The menu says **Layout locked** while it is on. Click it again to unlock.
 
 ## Small windows
+
+In a narrow window the header keeps two rows instead of three. Below about 1040 pixels the view buttons move into one **More view options** menu: **Focus AI panel** (or **Focus Transcript**, or **Split view**), **Speaker stats** (`S`), **Bookmarks** (`K`), **AI call log**, **Dev log** (`Ctrl+Shift+L`) and **Transparency** (each press cycles it). The panels in the menu show a tick when they are on. The **Translate** button keeps only its icon.
 
 When the window is too small for the arrangement, NexQ doesn't squeeze panels until they are unreadable. It first lets a side-by-side pair stack on top of each other, and if that doesn't fit either, it merges the panels into one set of tabs. Your saved layout isn't changed, so making the window bigger brings it back. Classic is designed to look the same as before at 400, 500 and 900 pixels wide. While the panels are merged, dragging and moving are off.
 

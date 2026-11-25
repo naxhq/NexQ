@@ -12,7 +12,7 @@ A workspace is a named place for the meetings, chats and files of one job, clien
 The launcher opens on your workspaces. It has three parts:
 
 - **The list on the left.** Your workspaces, then the meetings of the one that is open, with a search box that looks **Here** or **Everywhere**. Each workspace has a small waveform mark in its own colour, so you can tell them apart at a glance.
-- **The middle.** The name of the open workspace, one bar for each of its meetings (taller means a longer meeting; click a bar to open it), the **Start meeting** button, and the [workspace chat](workspace-chat.md).
+- **The middle.** The name of the open workspace, one bar for each of its meetings (taller means a longer meeting; click a bar to open it; the 60 newest are single bars, and older ones are gathered into one bar a month, named like "12 earlier meetings"), the **Start meeting** button, and the [workspace chat](workspace-chat.md).
 - **The Library on the right.** The documents, folders and tools this workspace uses, its instructions, its [talking points](talking-points.md) and its memory.
 
 How much you see depends on the width of the window:
@@ -44,6 +44,7 @@ The launcher opens at 1180 by 740 pixels, or 92 percent of your screen if that i
 | **Also use General** | Lets this workspace use General's files and tools as well. Off for a new workspace. The line under it says how many files and tools General has |
 | **Keep separate** | Cuts this workspace off from all others (see [What is shared](#what-is-shared-between-workspaces)) |
 | **Make default** | Makes this the workspace that meetings start in when you didn't choose one |
+| **Prepare recaps with AI** | Only when you edit an existing workspace. Off by default. See [Recaps](#recaps-with-ai) |
 
 3. Click **Create workspace**. It opens right away.
 
@@ -73,7 +74,18 @@ One workspace is the default. It starts as General. Meetings go to it when you s
 - The call detection prompt, unless you pick another workspace there
 - **Start on Login** (Settings > General)
 
-When you press **Start meeting** in the launcher, the setup dialog suggests the workspace that is open. If you have more than one workspace, the dialog shows a **Workspace** choice and an **Also use** list, so you can change both before you start. The call detection prompt has a workspace button for the same reason.
+When you press **Start meeting** in the launcher, a setup dialog opens first. It suggests the workspace that is open. From top to bottom it has:
+
+1. **Workspace**, and under it **Also use** (only when you have more than one workspace). With more than six workspaces, **Workspace** is a field you can search instead of a row of buttons
+2. **Scenario**
+3. **Audio mode**
+4. **Record Audio**
+5. **Remember these settings for next time**
+6. **Start Meeting**
+
+When you have remembered settings, the dialog opens compact: a line of badges (audio mode, the workspace, the scenario) and a **Start Meeting** button, with **Change settings** to open the full list. The workspace badge says **Change**; clicking it opens the full list. The call detection prompt has a workspace button for the same reason.
+
+**A workspace that is gone.** If the workspace a meeting is asked to start in has been archived, deleted or can't be read, NexQ does not file the meeting somewhere else, because that would use material you didn't choose. The meeting starts **not filed in a workspace** and uses none of their material. A notice says so, and the workspace button in the meeting window reads **No workspace**. Pick one from that button to file it. Until then it can't also use other workspaces.
 
 The scenario comes from the first of these that applies:
 
@@ -109,7 +121,7 @@ Everything exists once in the **library**, and workspaces point to it. To use a 
 
 ### What you can do with a row
 
-- **Rename it.** Click the name. Your name is only a label; the file keeps its own.
+- **Rename it.** Click the name. Your name is only a label; the file keeps its own. A folder or tool whose record is gone shows as **A folder that was removed** or **A tool that was removed**, never as a code.
 - **Pin a document.** A pinned document is offered to every workspace chat answer first, up to a quarter of what one answer can hold.
 - **Remove from this workspace.** The library keeps it, and other workspaces keep using it.
 - **Remove from library** (documents). It leaves every workspace that uses it and its index is removed. The file on your disk is not touched.
@@ -137,9 +149,19 @@ When it is on, NexQ reads `.md`, `.txt`, `.pdf` and `.docx` files and skips:
 - Files over 2 MB, and anything past 5,000 files in one folder
 - Links and junctions, which are never followed
 
-NexQ scans again when you open the workspace and every 10 minutes while it is open. **Rescan folders** at the bottom of the Library does it now. Indexing waits while a meeting is running.
+Skipped files are listed. A folder with skipped files shows **N files skipped** in its row. Click it to open **Skipped in (folder)**, with each file's path and the reason (too large, a name that looks like a secret, hidden, over the limit). Nothing is changed or removed. Skipped files that can't be matched to a folder are listed under the Library as **N files skipped**.
+
+NexQ scans again every 10 minutes while a workspace is open. **Rescan folders** at the bottom of the Library does it now. Indexing waits while a meeting is running.
+
+While the index is being built, the Library says **Still indexing 312 of 540**, and the chat box and the context estimate say that results may leave out files that aren't indexed yet.
 
 This switch only controls NexQ's own search. With the Claude subscription, a chat or a meeting can also open files in the folders of the workspace itself (see [Personal sources](claude-subscription.md#personal-sources)), and that does not depend on this switch.
+
+### Recaps with AI
+
+By default a meeting's recap is its saved summary, or a short extract NexQ makes on your PC. **Prepare recaps with AI** (in **Edit workspace**, off by default) lets NexQ write a short recap with a model for meetings that have no summary. The setting says the transcript is sent to that model. A recap is at most about 120 words and is made from at most the first 24,000 characters of the transcript. At most 5 are made each time, newest meetings first, never while a meeting is running, and only when you click **Rescan folders** in the Library (which is shown only when the workspace has a folder). Recaps are what [workspace chat](workspace-chat.md) reads first when it looks across many meetings.
+
+The model is your subscription's fast tier, or else your active model, and not necessarily the one the setting names (see [how Automatic chooses](live-notes-and-brief.md#model-detail-and-language)).
 
 ### The knowledge base buttons
 
@@ -199,11 +221,11 @@ NexQ only fills General once, at the upgrade. After that, a document, folder or 
 
 | Choice | What happens |
 |--------|--------------|
-| **Move to General** (the default) | Its meetings, chats and talking points go to General. Files stay in your library |
-| **Archive it instead** | Hides it. Everything stays |
-| **Delete everything in it** | Permanently removes its meetings (with their recordings), chats and talking points. This can't be undone |
+| **Move to General** (the default) | Its meetings, chats and talking points go to General. Its saved memory is deleted with it, and the dialog says how many items. Files stay in your library |
+| **Archive it instead** | Hides it. Everything stays, memory included |
+| **Delete everything in it** | Permanently removes its meetings (with their recordings), chats, talking points and memory. This can't be undone |
 
-Memory of the workspace is deleted with it in both cases. Documents are never deleted from the library by deleting a workspace. Meetings that borrowed the workspace lose what came from it.
+Other workspaces' chats that used material of this one stop using it, and a chat answer that is being written from it stops (see [Workspace chat](workspace-chat.md#when-something-an-answer-used-leaves-the-workspace)). Documents are never deleted from the library by deleting a workspace. Meetings that borrowed the workspace lose what came from it.
 
 ## What happens when you upgrade
 
@@ -211,8 +233,23 @@ NexQ adds workspaces to your existing data, and it does that safely:
 
 1. **A copy first.** Before changing your database for the first time, NexQ saves a copy of it as `nexq-before-workspaces.db` in the app data folder, next to `nexq.db` (`%APPDATA%\com.nexq.app\` on Windows). It does this only if you have meetings or documents, and only once. The copy is deleted at the first start after 14 days, because it still holds transcripts you may have deleted since. If the copy can't be made, NexQ writes that to its log and carries on, since the upgrade only adds things.
 2. **Everything goes into General.** All your meetings, documents, folders and tools are in General, and General is the default workspace. Until you make another workspace, answers work as before. A note at the top says so until you dismiss it: "Your meetings and files are in General. New workspaces keep their own."
-3. **The upgrade is all or nothing.** If a step fails, nothing is changed. NexQ shows "Workspaces aren't available right now. Everything is in General, and NexQ works as before." and tries again the next time it starts.
+3. **The upgrade is all or nothing.** If a step of the workspace upgrade fails, nothing is changed. NexQ shows "Workspaces aren't available right now. Everything is in General, and NexQ works as before." and tries again the next time it starts.
 4. **Folders are not searched yet.** Every folder starts with **Search its text** off, until you turn it on.
+
+## If NexQ can't open your meetings
+
+NexQ never creates, upgrades or overwrites a database it can't use. Instead of the workspaces, the launcher shows a screen that says what is wrong, that nothing was deleted, and the full path of your file (`nexq.db`). Settings and the footer still work, and you can't start a meeting from it. The four cases:
+
+| Title | What it means | What you can do |
+|-------|---------------|-----------------|
+| **NexQ couldn't open your meetings** | The file couldn't be read (damaged, cut short, empty) | **Restore a copy**, **Open data folder**, or **Start with an empty database** |
+| **Your meetings were saved by a newer NexQ** | This version is older than the one that last used them, so it leaves them alone | **Install the newer NexQ**, **Open data folder** |
+| **NexQ couldn't finish updating your data** | Bringing your meetings up to this version didn't complete | **Try again** (restarts NexQ), **Open data folder** |
+| **Your meetings are in use** | Another NexQ or program is using the file | **Try again** once you have closed the other program, **Open data folder** |
+
+**Copies.** For a damaged file, **Restore a copy** lists the copies NexQ can open and check, with the date, time, number of meetings and size. NexQ makes `nexq-before-workspaces.db` at the upgrade (kept 14 days); a restore also keeps the files it replaces, as `nexq.db.damaged-` and a number. A restore, and **Start with an empty database** (which asks first), put the old files aside under new names. They never delete anything, and NexQ asks you to restart afterwards. If the power goes out in the middle, the next start finishes the recovery. Neither works while a meeting or a recording is in progress.
+
+**A daily check.** About two minutes after NexQ starts, and then at most once a day (never during a meeting or while a recording is saved), NexQ checks the open file for damage without changing it. If it finds some, a notice says **Your meetings file has some damage**, that NexQ keeps working with it and has changed nothing, and where the copies of your meetings are. Closing the notice hides it until the next start, and it returns while the damage is there.
 
 ## Tips
 

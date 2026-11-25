@@ -19,7 +19,7 @@ The toolbar has bold, italic and underline, three heading sizes, bullet and numb
 
 For each note:
 
-- **Use as AI context** is a switch under the title: "Live answers and the workspace chat can draw on this note." It is **on** for a new note. Turn it off for notes that are only for you to read.
+- **Use as AI context** is a switch under the title: "Live answers and the workspace chat can draw on this note." It is **on** for a new note. Turn it off for notes that are only for you to read. When you edit such a note during a meeting, the change reaches the AI session about 30 seconds after you stop typing, not on every autosave.
 - The **...** menu in the list has **Duplicate**, **Copy to another workspace**, **Move up**, **Move down** and **Delete**. Drag the grip beside a note, or focus it and press an arrow key, to reorder.
 - **More for this note** has **Export as Markdown** and **Copy Markdown**.
 
@@ -123,9 +123,9 @@ Ticks need your own voice, so they follow the same rules as **My voice**: not in
 
 A workspace can also keep **Memory**: short facts that you approved, such as a person's role, a decision, an open item or a preference. The AI uses them in this workspace's answers. Memory appears in the **Library**, under the talking points.
 
-**Add a fact** with **+**. Choose a kind (**Person**, **Decision**, **Open item**, **Fact** or **Preference**), give it a short title and write what to remember. Saved items are grouped by kind. **Edit** changes one and **Forget** deletes it (it asks first). With more than four items, a search box appears. An item that came from a meeting has a **From (meeting)** link.
+**Add a fact** with **+**. Choose a kind (**Person**, **Decision**, **Open item**, **Fact** or **Preference**), give it a short title and write what to remember. Saved items are grouped by kind. **Edit** changes one and **Forget** deletes it (it asks first). With more than four items, a search box appears. An item that came from a meeting has a **From (meeting)** link that opens the meeting at that moment.
 
-**Let NexQ suggest.** In a past meeting, click **Suggest from this meeting**. One AI call reads the transcript and proposes up to 8 items, each with the time in the meeting it came from. Nothing is kept until you approve it: each suggestion has **Dismiss**, **Edit** and **Save**, a **Reviewed** tick, and **Save all reviewed**. A suggestion that isn't backed by the transcript says **Not found in the transcript**. To have suggestions made after every meeting, turn on **Suggest after meetings** in the Memory section. It is off by default. The **Model** button next to it picks the model, by default the cheapest one of your active provider.
+**Let NexQ suggest.** In a past meeting, click **Suggest from this meeting**. One AI call reads the transcript and proposes up to 8 items, each with the time in the meeting it came from. Nothing is kept until you approve it: each suggestion has **Dismiss**, **Edit** and **Save**, a **Reviewed** tick, and **Save all reviewed**. A suggestion that isn't backed by the transcript says **Not found in the transcript**. To have suggestions made after every meeting, turn on **Suggest after meetings** in the Memory section. It is off by default. **Model for memory suggestions** (in the Memory section, and behind the **Model** button next to **Suggest from this meeting**) picks the model. **Automatic**, the default, names the model it will use ([how Automatic chooses](live-notes-and-brief.md#model-detail-and-language)). If NexQ can't read or save the choice, it says so.
 
 Memory is used as background facts, never as instructions. It is used in the workspace's chat and in live answers, and it reaches another workspace only if that workspace is borrowed or General is included. Meeting suggestions are made by the model you pick, so the transcript goes to that provider.
 
