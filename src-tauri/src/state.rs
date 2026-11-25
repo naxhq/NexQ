@@ -139,6 +139,8 @@ pub struct AppState {
     /// provider (Claude, Antigravity or Codex). `setup` replaces this with one
     /// that emits `agent_session_status` to the app.
     pub agent_sessions: Arc<AgentSessionManager>,
+    /// Workspace chat: request guard, session fingerprints, search indexer.
+    pub workspace_chat: Arc<crate::workspace_chat::ChatHub>,
     /// Per-CLI model settings and catalogs (one of each per CLI agent), read
     /// whenever a session is spawned, and which CLI is active.
     pub cli_settings: Arc<CliSettings>,
@@ -218,6 +220,7 @@ impl AppState {
             update_downloading: Arc::new(AtomicBool::new(false)),
             meeting_active: Arc::new(AtomicBool::new(false)),
             recording_jobs: Arc::new(AtomicUsize::new(0)),
+            workspace_chat: crate::workspace_chat::ChatHub::new(),
             agent_sessions: Arc::new(AgentSessionManager::new(
                 Arc::new(CliSpawner),
                 Arc::new(NoopStatusSink),

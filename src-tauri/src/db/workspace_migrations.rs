@@ -26,8 +26,8 @@ pub struct Step {
 /// The steps in version order. Add a line here for each new step.
 pub const STEPS: &[Step] = &[
     Step { version: 9, name: "workspaces", run: v9_workspaces },
-    // v10 search:  Step { version: 10, name: "search", run: crate::search::migrate },
-    // v11 chat:    Step { version: 11, name: "chat",   run: crate::workspace_chat::migrate },
+    Step { version: 10, name: "search", run: crate::workspace_search::migrate::migrate_conn },
+    Step { version: 11, name: "chat", run: crate::workspace_chat::migrate::migrate },
     // v12 notes:   Step { version: 12, name: "notes",  run: crate::notes::migrate },
     Step { version: 13, name: "talking_points", run: v13_talking_points },
     Step { version: 14, name: "brief", run: v14_brief },
@@ -564,10 +564,10 @@ mod tests {
             conn.execute_batch("CREATE TABLE IF NOT EXISTS later_thing (id TEXT)")
         }
         let mut with_v10: Vec<Step> = STEPS.iter().map(|s| Step { version: s.version, name: s.name, run: s.run }).collect();
-        with_v10.push(Step { version: 10, name: "later", run: v10 });
+        with_v10.push(Step { version: 20, name: "later", run: v10 });
         run_steps(&conn, Some(&path), &with_v10).unwrap();
         assert!(table_exists(&conn, "later_thing"));
-        assert_eq!(count(&conn, "PRAGMA user_version"), 15);
+        assert_eq!(count(&conn, "PRAGMA user_version"), 20);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

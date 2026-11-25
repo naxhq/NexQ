@@ -10,9 +10,10 @@
 
 use super::cards::{build_card, card_is_current, card_key, put_card};
 use super::cjk::unit_count;
-use super::crawler::{crawl_folder, CrawlFile, CrawlOptions};
+use super::crawler::{crawl_folder, still_allowed, CrawlFile, CrawlOptions};
 use super::passages::{
     build_markdown_passages, build_text_passages, build_transcript_passages, NewPassage, SegmentInput,
+    MAX_PASSAGES_PER_FILE, MAX_SOURCE_CHARS,
 };
 use super::store::{self, sha_hex};
 use super::PassageKind;
@@ -340,19 +341,24 @@ fn decode_text(bytes: &[u8]) -> String {
     }
 }
 
-/// Read a file, hash it, extract its text. Panics in extractors are caught.
-fn read_file(file: &CrawlFile) -> Result<(String, String), String> {
-    let bytes = std::fs::read(&file.abs_path).map_err(|e| format!("not readable ({})", e.kind()))?;
-    let hash = sha_hex(&bytes);
-    let path_str = file.abs_path.to_string_lossy().into_owned();
+/// Read a file once without following links (it must lie inside
+/// `canon_root`), hash the bytes and extract the text from them. Extractor
+/// panics are caught; the text is cut at [`MAX_SOURCE_CHARS`].
+fn read_file(file: &CrawlFile, canon_root: &std::path::Path, max_bytes: u64) -> Result<(String, String), String> {
+    let read = crate::workspace_search::safe_open::read_confined(&file.abs_path, canon_root, max_bytes)?;
+    let hash = sha_hex(&read.bytes);
+    let bytes = &read.bytes;
     let text = match file.ext.as_str() {
-        "md" | "txt" => decode_text(&bytes),
-        "pdf" => catch_unwind(AssertUnwindSafe(|| crate::context::pdf_extractor::extract_text_from_pdf(&path_str)))
-            .map_err(|_| "could not read this PDF".to_string())??,
-        "docx" => catch_unwind(AssertUnwindSafe(|| crate::rag::file_processor::extract_docx_text(&path_str)))
+        "md" | "txt" => decode_text(bytes),
+        "pdf" => catch_unwind(AssertUnwindSafe(|| {
+            crate::context::pdf_extractor::extract_text_from_pdf_bytes(bytes, MAX_SOURCE_CHARS)
+        }))
+        .map_err(|_| "could not read this PDF".to_string())??,
+        "docx" => catch_unwind(AssertUnwindSafe(|| crate::rag::file_processor::extract_docx_text_bytes(bytes)))
             .map_err(|_| "could not read this Word file".to_string())??,
         other => return Err(format!("unsupported type .{other}")),
     };
+    let text = crate::workspace_search::cjk::truncate_chars(&text, MAX_SOURCE_CHARS);
     let nuls = text.chars().take(4096).filter(|c| *c == '\0').count();
     if nuls > 8 {
         return Err("looks like a binary file".into());
@@ -371,15 +377,34 @@ pub struct FolderReport {
     pub cancelled: bool,
 }
 
+/// Delete everything indexed for a folder right now (opt-out or removal).
+pub fn remove_folder_index(conn: &Connection, folder_id: &str) -> rusqlite::Result<()> {
+    store::remove_ref(conn, PassageKind::Folder, folder_id)
+}
+
 fn index_folder(
     conn: &mut Connection,
     folder: &FolderInput,
     ctl: &RunControl,
     on_file: &mut dyn FnMut(&str, usize),
 ) -> Result<FolderReport, String> {
+    index_folder_with(conn, folder, ctl, &CrawlOptions::default(), on_file)
+}
+
+pub(crate) fn index_folder_with(
+    conn: &mut Connection,
+    folder: &FolderInput,
+    ctl: &RunControl,
+    opts: &CrawlOptions,
+    on_file: &mut dyn FnMut(&str, usize),
+) -> Result<FolderReport, String> {
     let e = |x: rusqlite::Error| x.to_string();
     let mut rep = FolderReport::default();
-    let crawl = crawl_folder(&folder.path, &CrawlOptions::default(), &|| ctl.cancelled())?;
+    let crawl = crawl_folder(&folder.path, opts, &|| ctl.cancelled())?;
+    if crawl.aborted {
+        rep.cancelled = true;
+        return Ok(rep);
+    }
     rep.truncated = crawl.truncated;
     let existing: HashMap<String, store::SourceRow> =
         store::list_sub_refs(conn, PassageKind::Folder, &folder.id).map_err(e)?.into_iter().collect();
@@ -406,21 +431,38 @@ fn index_folder(
         seen.insert(f.rel_path.clone());
         on_file(&f.rel_path, 0);
         let prev = existing.get(&f.rel_path);
-        if prev.map_or(false, |r| r.status == "ok" && r.mtime == f.mtime_ms && r.size == f.size as i64) {
+        let same_stat = |r: &store::SourceRow| r.mtime == f.mtime_ms && r.size == f.size as i64;
+        if prev.map_or(false, |r| r.status == "ok" && same_stat(r)) {
             rep.unchanged += 1;
             continue;
         }
+        // Being read when the app died: do not read it again until it changes.
+        if prev.map_or(false, |r| (r.status == "in_progress" || r.status == "crashed") && same_stat(r)) {
+            store::upsert_source(
+                conn, PassageKind::Folder, &folder.id, &f.rel_path, "", f.mtime_ms, f.size as i64, "crashed",
+                Some("NexQ stopped while reading this file, so it is skipped until the file changes"),
+            )
+            .map_err(e)?;
+            rep.failed += 1;
+            continue;
+        }
+        store::upsert_source(
+            conn, PassageKind::Folder, &folder.id, &f.rel_path, "", f.mtime_ms, f.size as i64, "in_progress",
+            Some("being read"),
+        )
+        .map_err(e)?;
         let work = catch_unwind(AssertUnwindSafe(|| -> Result<Option<(String, Vec<NewPassage>)>, String> {
-            let (hash, text) = read_file(f)?;
+            let (hash, text) = read_file(f, &crawl.canon_root, opts.max_file_bytes)?;
             if prev.map_or(false, |r| r.status == "ok" && r.content_hash == hash) {
                 return Ok(None);
             }
             let stem = f.rel_path.rsplit('/').next().unwrap_or(&f.rel_path).to_string();
-            let p = if f.ext == "md" {
+            let mut p = if f.ext == "md" {
                 build_markdown_passages(&folder.id, &f.rel_path, &text, Some(f.mtime_ms))
             } else {
                 build_text_passages(PassageKind::Folder, &folder.id, Some(&f.rel_path), &stem, &text, Some(f.mtime_ms))
             };
+            p.truncate(MAX_PASSAGES_PER_FILE);
             Ok(Some((hash, p)))
         }));
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(e)?;
@@ -448,19 +490,22 @@ fn index_folder(
         tx.commit().map_err(e)?;
     }
 
-    // files that disappeared (only when the walk saw everything)
-    if !crawl.truncated {
-        for (sub, _) in existing.iter().filter(|(k, _)| !seen.contains(*k)) {
-            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(e)?;
-            store::delete_passages(&tx, PassageKind::Folder, &folder.id, Some(sub)).map_err(e)?;
-            tx.execute(
-                "DELETE FROM search_sources WHERE kind = 'folder' AND ref_id = ?1 AND sub_ref = ?2",
-                params![folder.id, sub],
-            )
-            .map_err(e)?;
-            tx.commit().map_err(e)?;
-            rep.removed += 1;
+    // Files seen before but not in this walk. A complete walk says they are
+    // gone; a walk cut short by a limit cannot, so each one is checked directly.
+    for (sub, _) in existing.iter().filter(|(k, _)| !seen.contains(*k)) {
+        let remove = !crawl.truncated || !still_allowed(&crawl.canon_root, sub, opts);
+        if !remove {
+            continue;
         }
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(e)?;
+        store::delete_passages(&tx, PassageKind::Folder, &folder.id, Some(sub)).map_err(e)?;
+        tx.execute(
+            "DELETE FROM search_sources WHERE kind = 'folder' AND ref_id = ?1 AND sub_ref = ?2",
+            params![folder.id, sub],
+        )
+        .map_err(e)?;
+        tx.commit().map_err(e)?;
+        rep.removed += 1;
     }
     Ok(rep)
 }
@@ -646,6 +691,7 @@ enum Cmd {
     Rescan,
     Meeting(String),
     RemoveMeeting(String),
+    RemoveFolder(String),
     Stop,
 }
 
@@ -657,6 +703,9 @@ pub struct IndexerConfig {
     /// Rescan period (spec: every 10 minutes while a workspace is open).
     pub rescan_interval: Duration,
     pub initial_scan: bool,
+    /// Asked before a timer-driven pass (None: always). The timer is for
+    /// while a workspace is open; explicit requests always run.
+    pub timer_enabled: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
 }
 
 pub struct IndexerService {
@@ -693,6 +742,7 @@ impl IndexerService {
                     }
                     match rx.recv_timeout(cfg.rescan_interval) {
                         Ok(Cmd::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) if !cfg.timer_enabled.as_ref().map_or(true, |f| f()) => {}
                         Ok(Cmd::Rescan) | Err(mpsc::RecvTimeoutError::Timeout) => {
                             // collapse a burst of rescan requests
                             while let Ok(c) = rx.try_recv() {
@@ -714,6 +764,9 @@ impl IndexerService {
                         Ok(Cmd::RemoveMeeting(id)) => {
                             let _ = store::remove_meeting(&conn, &id);
                         }
+                        Ok(Cmd::RemoveFolder(id)) => {
+                            let _ = remove_folder_index(&conn, &id);
+                        }
                     }
                 }
             })
@@ -732,6 +785,10 @@ impl IndexerService {
     /// Drop a deleted meeting from the index.
     pub fn remove_meeting(&self, id: &str) {
         let _ = self.tx.send(Cmd::RemoveMeeting(id.to_string()));
+    }
+    /// Delete a folder's passages now (the user opted out or removed it).
+    pub fn remove_folder(&self, id: &str) {
+        let _ = self.tx.send(Cmd::RemoveFolder(id.to_string()));
     }
     /// Abort the pass in flight; the service keeps running.
     pub fn cancel_pass(&self) {
@@ -1088,6 +1145,7 @@ mod tests {
             }),
             rescan_interval: Duration::from_secs(600),
             initial_scan: true,
+            timer_enabled: None,
         })
         .unwrap();
         std::thread::sleep(Duration::from_millis(500));
@@ -1119,6 +1177,7 @@ mod tests {
             on_progress: Arc::new(|_| {}),
             rescan_interval: Duration::from_secs(600),
             initial_scan: true,
+            timer_enabled: None,
         })
         .unwrap();
         assert!(svc.wait_for_passes(1, Duration::from_secs(10)));
@@ -1161,6 +1220,7 @@ mod tests {
             on_progress: Arc::new(|_| {}),
             rescan_interval: Duration::from_secs(600),
             initial_scan: true,
+            timer_enabled: None,
         })
         .unwrap();
         assert!(svc.wait_for_passes(1, Duration::from_secs(10)));
@@ -1173,6 +1233,173 @@ mod tests {
         let reader = open_search_connection(&db).unwrap();
         assert_eq!(q(&reader, &SearchScope::with_meetings(["m9"]), "marmot"), vec!["m9"]);
         drop(svc);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    fn docx_bytes(xml: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+            zip.start_file("word/document.xml", o).unwrap();
+            zip.write_all(xml).unwrap();
+            zip.finish().unwrap();
+        }
+        buf.into_inner()
+    }
+
+    #[test]
+    fn a_decompression_bomb_is_refused_and_the_rest_still_indexes() {
+        let (root, prov) = folder_fixture("idx-bomb");
+        let bomb = docx_bytes(&vec![b'a'; 40 * 1024 * 1024]);
+        assert!(bomb.len() < 2 * 1024 * 1024);
+        fs::write(root.join("bomb.docx"), &bomb).unwrap();
+        let mut conn = mem_db();
+        let t = Instant::now();
+        let r = run(&mut conn, prov.as_ref());
+        assert!(t.elapsed() < Duration::from_secs(30));
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        let problems = store::list_problem_sources(&conn, PassageKind::Folder, "f1").unwrap();
+        let p = problems.iter().find(|p| p.sub_ref == "bomb.docx").expect("listed");
+        assert_eq!(p.status, "error");
+        assert!(p.error.as_deref().unwrap().contains("too much"), "{:?}", p.error);
+        let scope = SearchScope { folder_ids: vec!["f1".into()], ..Default::default() };
+        assert_eq!(q(&conn, &scope, "ibex"), vec!["f1"]);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_file_that_was_in_progress_when_the_app_died_is_not_read_again_until_it_changes() {
+        let (root, prov) = folder_fixture("idx-crash");
+        let mut conn = mem_db();
+        run(&mut conn, prov.as_ref());
+        // simulate a crash while reading notes.txt: the row says in_progress with its current stat
+        let md = fs::metadata(root.join("sub/notes.txt")).unwrap();
+        let mtime = md.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+        store::delete_passages(&conn, PassageKind::Folder, "f1", Some("sub/notes.txt")).unwrap();
+        store::upsert_source(&conn, PassageKind::Folder, "f1", "sub/notes.txt", "", mtime, md.len() as i64, "in_progress", Some("being read")).unwrap();
+        let scope = SearchScope { folder_ids: vec!["f1".into()], ..Default::default() };
+        let r = run(&mut conn, prov.as_ref());
+        assert_eq!(r.files_indexed, 0);
+        assert!(q(&conn, &scope, "capybara").is_empty(), "not read again");
+        let row = store::get_source(&conn, PassageKind::Folder, "f1", "sub/notes.txt").unwrap().unwrap();
+        assert_eq!(row.status, "crashed");
+        assert!(row.error.unwrap().contains("stopped"));
+        // still skipped on the next pass
+        run(&mut conn, prov.as_ref());
+        assert!(q(&conn, &scope, "capybara").is_empty());
+        // changed: tried again
+        std::thread::sleep(Duration::from_millis(30));
+        fs::write(root.join("sub/notes.txt"), "Remember the capybara demo, now with extra words on Friday.").unwrap();
+        let r = run(&mut conn, prov.as_ref());
+        assert_eq!(r.files_indexed, 1);
+        assert_eq!(q(&conn, &scope, "capybara"), vec!["f1"]);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_walk_cut_short_still_removes_files_that_are_gone_or_no_longer_allowed() {
+        let root = temp_dir("idx-trunc");
+        for i in 0..6 {
+            fs::write(root.join(format!("n{i}.md")), format!("note number {i} about the quokka{i} plan")).unwrap();
+        }
+        let folder = FolderInput { id: "f".into(), path: root.clone(), index_enabled: true };
+        let mut conn = mem_db();
+        let ctl = RunControl::idle();
+        let full = CrawlOptions::default();
+        index_folder_with(&mut conn, &folder, &ctl, &full, &mut |_, _| {}).unwrap();
+        let scope = SearchScope { folder_ids: vec!["f".into()], ..Default::default() };
+        assert_eq!(store::counts(&conn, PassageKind::Folder, "f").unwrap().0, 6);
+        // one file goes, one becomes secret-looking, while the next walk is limited to 2 files
+        fs::remove_file(root.join("n5.md")).unwrap();
+        fs::rename(root.join("n4.md"), root.join("n4 secret.md")).unwrap();
+        let limited = CrawlOptions { max_files: 2, ..Default::default() };
+        let rep = index_folder_with(&mut conn, &folder, &ctl, &limited, &mut |_, _| {}).unwrap();
+        assert!(rep.truncated);
+        assert!(q(&conn, &scope, "quokka5").is_empty(), "deleted file removed");
+        assert!(q(&conn, &scope, "quokka4").is_empty(), "now secret-looking: removed");
+        // files still allowed but beyond the limit keep their rows
+        assert_eq!(q(&conn, &scope, "quokka3"), vec!["f"]);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn an_aborted_walk_changes_nothing() {
+        let (root, prov) = folder_fixture("idx-abort");
+        let mut conn = mem_db();
+        run(&mut conn, prov.as_ref());
+        let before = store::counts(&conn, PassageKind::Folder, "f1").unwrap();
+        let ctl = RunControl::idle();
+        ctl.cancel();
+        let f = prov.folders.lock().unwrap()[0].clone();
+        let rep = index_folder_with(&mut conn, &f, &ctl, &CrawlOptions::default(), &mut |_, _| {}).unwrap();
+        assert!(rep.cancelled);
+        assert_eq!(store::counts(&conn, PassageKind::Folder, "f1").unwrap(), before);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn opting_out_or_removing_a_folder_deletes_its_passages_at_once() {
+        let (root, prov) = folder_fixture("idx-optout");
+        let mut conn = mem_db();
+        run(&mut conn, prov.as_ref());
+        let scope = SearchScope { folder_ids: vec!["f1".into()], ..Default::default() };
+        assert_eq!(q(&conn, &scope, "ibex"), vec!["f1"]);
+        remove_folder_index(&conn, "f1").unwrap();
+        assert!(q(&conn, &scope, "ibex").is_empty());
+        assert_eq!(store::counts(&conn, PassageKind::Folder, "f1").unwrap(), (0, 0));
+        let fts: i64 = conn.query_row("SELECT COUNT(*) FROM search_fts WHERE search_fts MATCH 'ibex'", [], |r| r.get(0)).unwrap();
+        assert_eq!(fts, 0);
+        // through the running service too
+        let dir = temp_dir("idx-optout2");
+        let db = file_db(&dir);
+        let svc = IndexerService::start(IndexerConfig {
+            db_path: db.clone(),
+            provider: prov.clone(),
+            meeting_active: Arc::new(|| false),
+            on_progress: Arc::new(|_| {}),
+            rescan_interval: Duration::from_secs(600),
+            initial_scan: true,
+            timer_enabled: None,
+        })
+        .unwrap();
+        assert!(svc.wait_for_passes(1, Duration::from_secs(20)));
+        let reader = open_search_connection(&db).unwrap();
+        assert_eq!(q(&reader, &scope, "ibex"), vec!["f1"]);
+        prov.folders.lock().unwrap().clear();
+        svc.remove_folder("f1");
+        let t = Instant::now();
+        while !q(&reader, &scope, "ibex").is_empty() && t.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(q(&reader, &scope, "ibex").is_empty());
+        svc.shutdown();
+        fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_timer_pass_waits_for_an_open_workspace() {
+        let dir = temp_dir("idx-timer");
+        let db = file_db(&dir);
+        let open = Arc::new(AtomicBool::new(false));
+        let o2 = open.clone();
+        let svc = IndexerService::start(IndexerConfig {
+            db_path: db,
+            provider: Arc::new(MeetingsOnly),
+            meeting_active: Arc::new(|| false),
+            on_progress: Arc::new(|_| {}),
+            rescan_interval: Duration::from_millis(60),
+            initial_scan: false,
+            timer_enabled: Some(Arc::new(move || o2.load(Ordering::SeqCst))),
+        })
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(svc.passes_completed(), 0);
+        open.store(true, Ordering::SeqCst);
+        assert!(svc.wait_for_passes(1, Duration::from_secs(5)));
+        svc.shutdown();
         fs::remove_dir_all(&dir).ok();
     }
 }

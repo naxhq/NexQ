@@ -3228,6 +3228,7 @@ dependencies = [
  "coreaudio-sys",
  "cpal",
  "encoding_rs",
+ "flate2",
  "futures",
  "hound",
  "image",

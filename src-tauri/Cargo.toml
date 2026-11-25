@@ -43,6 +43,8 @@ url = "2"
 whisper-rs = "0.16"
 sha2 = "0.11"
 zip = { version = "9", default-features = false, features = ["deflate"] }
+# bounded inflate of PDF streams (workspace_search::safe_extract)
+flate2 = "1"
 # load-dynamic: onnxruntime.dll is bundled and loaded on first use (see src/ort_runtime.rs)
 ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "tracing", "api-24", "load-dynamic"] }
 ndarray = "0.17"  # Must match ort's ndarray version
@@ -95,6 +97,8 @@ windows = { version = "0.62", features = [
     # Job object: a Check's diagnose run is killed with every process it started
     "Win32_System_JobObjects",
     "Win32_Security",
+    # open without following links, final path of a handle (workspace_search::safe_open)
+    "Win32_Storage_FileSystem",
 ] }
 
 # macOS-specific

@@ -704,6 +704,7 @@ pub async fn end_meeting(
         let id = meeting_id.clone();
         tauri::async_runtime::spawn(async move { ai.close_meeting(&id).await });
     }
+    crate::workspace_chat::runtime::meeting_ended(&state.workspace_chat, &meeting_id);
 
     let db_arc = state
         .database
@@ -878,6 +879,7 @@ pub async fn delete_meeting(
     if let Some(dir) = crate::workspace::purge::recordings_dir() {
         crate::workspace::purge::delete_files_inside(&dir, &files);
     }
+    crate::workspace_chat::runtime::meeting_deleted(&state.workspace_chat, &meeting_id);
     close_scope_in_background(&state, SessionScope::Past(meeting_id));
     Ok(())
 }

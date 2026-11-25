@@ -98,6 +98,11 @@ CREATE TABLE IF NOT EXISTS period_digests (
 );
 ";
 
+/// The same as a migration step on a plain connection (see `STEPS`).
+pub fn migrate_conn(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(SCHEMA)
+}
+
 /// Creates every v10 object. Safe to run again.
 pub fn migrate_search(tx: &Transaction) -> rusqlite::Result<()> {
     tx.execute_batch(SCHEMA)

@@ -412,6 +412,7 @@ pub async fn update_workspace_item(
     change_and_restart(&state, &app, |_| Touch::ws(&id), || {
         with_conn(&state, |conn| store::update_item(conn, &id, kind, &ref_id, patch))
     })?;
+    crate::workspace_chat::runtime::folder_opt_out_check(&state, kind == ItemKind::Folder, &ref_id);
     emit_changed(&app, Some(&id));
     Ok(())
 }
@@ -427,6 +428,7 @@ pub async fn remove_workspace_item(
     change_and_restart(&state, &app, |_| Touch::ws(&id), || {
         with_conn(&state, |conn| store::remove_item(conn, &id, kind, &ref_id))
     })?;
+    crate::workspace_chat::runtime::folder_opt_out_check(&state, kind == ItemKind::Folder, &ref_id);
     emit_changed(&app, Some(&id));
     Ok(())
 }
@@ -495,7 +497,10 @@ pub async fn add_workspace_text(
         }
         Ok(resource.id)
     })
-    .inspect(|_| emit_changed(&app, Some(&id)))
+    .inspect(|_| {
+        crate::workspace_chat::runtime::material_changed(&state.workspace_chat);
+        emit_changed(&app, Some(&id));
+    })
 }
 
 // ── Meetings ─────────────────────────────────────────────────────────────────
@@ -618,6 +623,7 @@ pub async fn create_talking_point(
     let point = change_and_restart(&state, &app, |_| Touch::ws_if(feeds_context, &workspace_id), || {
         with_conn(&state, |conn| talking_points::create_talking_point(conn, &workspace_id, title, content))
     })?;
+    crate::workspace_chat::runtime::material_changed(&state.workspace_chat);
     emit_changed(&app, Some(&point.workspace_id));
     Ok(point)
 }
@@ -638,6 +644,7 @@ pub async fn patch_talking_point(
     let point = change_and_restart(&state, &app, |conn| context_point(conn, &id), || {
         with_conn(&state, |conn| talking_points::patch_talking_point(conn, &id, patch, expected_updated_at))
     })?;
+    crate::workspace_chat::runtime::material_changed(&state.workspace_chat);
     emit_changed(&app, Some(&point.workspace_id));
     Ok(point)
 }
@@ -648,6 +655,7 @@ pub async fn delete_talking_point(id: String, state: State<'_, AppState>, app: A
     change_and_restart(&state, &app, |conn| context_point(conn, &id), || {
         with_conn(&state, |conn| talking_points::delete_talking_point(conn, &id))
     })?;
+    crate::workspace_chat::runtime::material_changed(&state.workspace_chat);
     emit_changed(&app, workspace.as_deref());
     Ok(())
 }
@@ -799,6 +807,11 @@ mod tests {
             ("workspace_commands.rs", code(include_str!("workspace_commands.rs")), MUTATING),
             ("context_commands.rs", code(include_str!("context_commands.rs")), &["load_context_file", "remove_context_file"]),
             ("sources_commands.rs", code(include_str!("sources_commands.rs")), &["set_personal_sources"]),
+            (
+                "workspace_chat_commands.rs",
+                code(include_str!("workspace_chat_commands.rs")),
+                &["save_answer_to_library", "add_answer_to_instructions"],
+            ),
         ]
     }
 

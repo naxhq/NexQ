@@ -37,6 +37,14 @@ pub fn is_mostly_cjk(text: &str) -> bool {
     cjk_ratio(text) >= 0.30
 }
 
+/// The text cut to at most `max_chars` characters (on a character boundary).
+pub fn truncate_chars(text: &str, max_chars: usize) -> String {
+    match text.char_indices().nth(max_chars) {
+        Some((i, _)) => text[..i].to_string(),
+        None => text.to_string(),
+    }
+}
+
 /// Byte ranges of "atoms": one CJK character, or a run of non-CJK,
 /// non-space characters with its trailing space. The flag says whether the
 /// atom counts as a unit (it holds a letter or digit).

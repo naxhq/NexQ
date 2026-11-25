@@ -41,6 +41,7 @@ pub fn purge_meeting(conn: &Connection, meeting_id: &str) -> Result<Vec<PathBuf>
     run_if_table(conn, "meeting_cards", "DELETE FROM meeting_cards WHERE meeting_id = ?1", &[id])?;
     run_if_table(conn, "workspace_meeting_prefs", "DELETE FROM workspace_meeting_prefs WHERE meeting_id = ?1", &[id])?;
     purge_search_rows(conn, meeting_id)?;
+    crate::workspace_chat::store::redact_deleted_meeting(conn, meeting_id)?;
     if let Some(home) = home {
         detach_from_workspace(conn, meeting_id, &home)?;
     }
@@ -86,6 +87,7 @@ pub fn detach_from_workspace(conn: &Connection, meeting_id: &str, workspace_id: 
         "DELETE FROM workspace_meeting_prefs WHERE meeting_id = ?1 AND workspace_id = ?2",
         &[m, w],
     )?;
+    crate::workspace_chat::store::redact_meeting_in_workspace(conn, meeting_id, workspace_id)?;
     run_if_table(
         conn,
         "workspace_chats",
@@ -338,12 +340,9 @@ mod tests {
         assert!(purge_meeting(&conn, "m").is_ok());
         conn.execute("INSERT INTO meetings (id, title, start_time) VALUES ('m2', 't', 'x')", []).unwrap();
         conn.execute_batch(
-            "CREATE TABLE search_passages (id INTEGER PRIMARY KEY, kind TEXT, ref_id TEXT);
-             CREATE TABLE search_embeddings (passage_id INTEGER PRIMARY KEY);
-             CREATE TABLE meeting_cards (meeting_id TEXT PRIMARY KEY);
-             INSERT INTO search_passages VALUES (1, 'transcript', 'm2'), (2, 'document', 'm2'), (3, 'transcript', 'other');
-             INSERT INTO search_embeddings VALUES (1), (3);
-             INSERT INTO meeting_cards VALUES ('m2');",
+            "INSERT INTO search_passages (id, kind, ref_id, text) VALUES (1, 'transcript', 'm2', 'a'), (2, 'document', 'm2', 'b'), (3, 'transcript', 'other', 'c');
+             INSERT INTO search_embeddings (passage_id, model, dims, vec) VALUES (1, 'm', 1, x'00'), (3, 'm', 1, x'00');
+             INSERT INTO meeting_cards (meeting_id, recap, origin) VALUES ('m2', 'r', 'extract');",
         )
         .unwrap();
         purge_meeting(&conn, "m2").unwrap();

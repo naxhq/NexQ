@@ -18,6 +18,7 @@ pub mod stt;
 pub mod translation;
 pub mod tray;
 pub mod workspace;
+pub mod workspace_chat;
 pub mod workspace_search;
 
 use state::AppState;
@@ -71,6 +72,7 @@ use commands::updater_commands;
 use commands::claude_cli_commands;
 use commands::cli_agent_commands;
 // == MODULE COMMANDS: workspaces ==
+use commands::workspace_chat_commands;
 use commands::workspace_commands;
 
 /// Show the launcher window and hide the overlay window.
@@ -375,6 +377,7 @@ pub fn run() {
             ));
 
             app.manage(app_state);
+            workspace_chat::runtime::attach(app.handle());
 
             // -- Auto-detect first Ollama model in background --
             let auto_detect_app = app.handle().clone();
@@ -816,6 +819,24 @@ pub fn run() {
             workspace_commands::list_memory,
             workspace_commands::create_memory,
             workspace_commands::update_memory,
+            workspace_chat_commands::search_workspace,
+            workspace_chat_commands::get_index_status,
+            workspace_chat_commands::rescan_workspace,
+            workspace_chat_commands::list_workspace_chats,
+            workspace_chat_commands::create_workspace_chat,
+            workspace_chat_commands::update_workspace_chat,
+            workspace_chat_commands::delete_workspace_chat,
+            workspace_chat_commands::list_workspace_messages,
+            workspace_chat_commands::set_chat_meeting_included,
+            workspace_chat_commands::list_chat_meeting_prefs,
+            workspace_chat_commands::set_chat_item_pref,
+            workspace_chat_commands::list_chat_item_prefs,
+            workspace_chat_commands::preview_chat_context,
+            workspace_chat_commands::get_chat_capabilities,
+            workspace_chat_commands::ask_workspace,
+            workspace_chat_commands::cancel_workspace_request,
+            workspace_chat_commands::save_answer_to_library,
+            workspace_chat_commands::add_answer_to_instructions,
             workspace_commands::delete_memory,
             workspace_commands::resolve_memory,
             sources_commands::set_personal_sources,

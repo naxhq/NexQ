@@ -42,16 +42,22 @@ pub fn extract_text_from_pdf(file_path: &str) -> Result<String, String> {
 // ── lopdf fallback ────────────────────────────────────────────────────────────
 
 fn extract_with_lopdf(file_path: &str) -> Result<String, String> {
-    use lopdf::content::Content;
-    use lopdf::Document;
-
-    let doc = Document::load(file_path)
+    let doc = lopdf::Document::load(file_path)
         .map_err(|e| format!("lopdf failed to load PDF: {}", e))?;
+    extract_lopdf_doc(&doc)
+}
+
+/// Text of an already loaded document (bounded: 2,000 pages, 4 M characters).
+fn extract_lopdf_doc(doc: &lopdf::Document) -> Result<String, String> {
+    use lopdf::content::Content;
 
     let mut full_text = String::new();
 
-    for page_id in doc.page_iter() {
-        let font_maps = get_page_font_maps(&doc, page_id);
+    for page_id in doc.page_iter().take(2000) {
+        if full_text.len() > 4_000_000 {
+            break;
+        }
+        let font_maps = get_page_font_maps(doc, page_id);
 
         // lopdf 0.46: a page with unreadable content streams yields empty bytes.
         let content_bytes = doc.get_page_content(page_id);
@@ -526,5 +532,136 @@ mod tests {
     #[test]
     fn missing_file_is_an_error() {
         assert!(extract_text_from_pdf("Z:/definitely/not/here.pdf").is_err());
+    }
+}
+
+
+// ── from memory (the indexer reads a file once, then extracts from the bytes) ──
+
+/// Most decompressed bytes all of a PDF's streams may add up to.
+pub const MAX_PDF_INFLATED: u64 = 48 * 1024 * 1024;
+/// Longest the text extraction of one PDF may take.
+const PDF_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// What one PDF may cost, by its size: a file over 5 MB gets lower limits
+/// (it is the likelier bomb and the costlier one to be wrong about).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PdfLimits {
+    pub max_pages: usize,
+    pub max_objects: usize,
+    pub max_inflated: u64,
+    pub deadline: std::time::Duration,
+}
+
+impl PdfLimits {
+    pub const BIG_FILE: usize = 5 * 1024 * 1024;
+
+    pub fn for_size(len: usize) -> Self {
+        if len > Self::BIG_FILE {
+            PdfLimits { max_pages: 300, max_objects: 60_000, max_inflated: 16 * 1024 * 1024, deadline: std::time::Duration::from_secs(10) }
+        } else {
+            PdfLimits { max_pages: 2000, max_objects: 250_000, max_inflated: MAX_PDF_INFLATED, deadline: PDF_DEADLINE }
+        }
+    }
+}
+
+/// Rejects a PDF whose streams would inflate beyond [`MAX_PDF_INFLATED`] (a
+/// decompression bomb). Streams are inflated into a counter, never kept.
+fn check_pdf_streams(doc: &lopdf::Document, limits: &PdfLimits) -> Result<(), String> {
+    use std::io::Read;
+    // counted before any page or stream is touched
+    if doc.objects.len() > limits.max_objects {
+        return Err("This PDF has too many parts".to_string());
+    }
+    if doc.get_pages().len() > limits.max_pages {
+        return Err("This PDF has too many pages".to_string());
+    }
+    let mut total = 0u64;
+    for obj in doc.objects.values() {
+        let lopdf::Object::Stream(stream) = obj else { continue };
+        let flate = match stream.dict.get(b"Filter") {
+            Ok(lopdf::Object::Name(n)) => n.as_slice() == b"FlateDecode",
+            Ok(lopdf::Object::Array(a)) => a.iter().any(|o| matches!(o, lopdf::Object::Name(n) if n.as_slice() == b"FlateDecode")),
+            _ => false,
+        };
+        if !flate {
+            total += stream.content.len() as u64;
+        } else {
+            let mut dec = flate2::read::ZlibDecoder::new(&stream.content[..]).take(limits.max_inflated + 1);
+            let n = std::io::copy(&mut dec, &mut std::io::sink()).unwrap_or(0);
+            total += n;
+        }
+        if total > limits.max_inflated {
+            return Err("This PDF expands to too much data when opened".to_string());
+        }
+    }
+    Ok(())
+}
+
+/// Text of a PDF held in memory. Bounded: streams are checked first, the
+/// work has a deadline, and the text is cut at `max_chars`.
+pub fn extract_text_from_pdf_bytes(bytes: &[u8], max_chars: usize) -> Result<String, String> {
+    let doc = lopdf::Document::load_mem(bytes).map_err(|e| format!("Could not read this PDF: {e}"))?;
+    let limits = PdfLimits::for_size(bytes.len());
+    check_pdf_streams(&doc, &limits)?;
+    let data = bytes.to_vec();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("nexq-pdf-extract".into())
+        .spawn(move || {
+            let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match pdf_extract::extract_text_from_mem(&data) {
+                Ok(t) if !t.trim().is_empty() => Ok(t.trim().to_string()),
+                _ => extract_lopdf_doc(&doc),
+            }));
+            let _ = tx.send(attempt.unwrap_or_else(|_| Err("Could not read this PDF".to_string())));
+        })
+        .map_err(|e| e.to_string())?;
+    let text = rx
+        .recv_timeout(limits.deadline)
+        .map_err(|_| "Reading this PDF took too long".to_string())??;
+    if text.trim().is_empty() {
+        return Err("PDF has no extractable text".to_string());
+    }
+    Ok(crate::workspace_search::cjk::truncate_chars(&text, max_chars))
+}
+
+#[cfg(test)]
+mod bytes_tests {
+    use super::*;
+
+    #[test]
+    fn garbage_is_an_error_not_a_panic() {
+        assert!(extract_text_from_pdf_bytes(b"%PDF-1.4 nonsense", 1000).is_err());
+        assert!(extract_text_from_pdf_bytes(&[0u8; 100], 1000).is_err());
+    }
+
+    #[test]
+    fn a_stream_that_inflates_beyond_the_limit_is_rejected() {
+        use std::io::Write;
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        let chunk = vec![0u8; 1024 * 1024];
+        for _ in 0..(MAX_PDF_INFLATED / (1024 * 1024) + 2) {
+            z.write_all(&chunk).unwrap();
+        }
+        let bomb = z.finish().unwrap();
+        assert!(bomb.len() < 200_000, "the bomb itself is small: {}", bomb.len());
+        let mut doc = lopdf::Document::with_version("1.5");
+        let mut dict = lopdf::Dictionary::new();
+        dict.set("Filter", lopdf::Object::Name(b"FlateDecode".to_vec()));
+        doc.add_object(lopdf::Stream::new(dict, bomb));
+        assert!(check_pdf_streams(&doc, &PdfLimits::for_size(1000)).unwrap_err().contains("too much"));
+    }
+
+    #[test]
+    fn page_and_object_counts_are_checked_before_extraction_and_big_files_get_lower_limits() {
+        let mut doc = lopdf::Document::with_version("1.5");
+        for _ in 0..70_000 {
+            doc.add_object(lopdf::Object::Integer(1));
+        }
+        assert!(check_pdf_streams(&doc, &PdfLimits::for_size(1000)).is_ok());
+        assert!(check_pdf_streams(&doc, &PdfLimits::for_size(PdfLimits::BIG_FILE + 1)).unwrap_err().contains("too many parts"));
+        let small = PdfLimits::for_size(1000);
+        let big = PdfLimits::for_size(6 * 1024 * 1024);
+        assert!(big.max_pages < small.max_pages && big.max_inflated < small.max_inflated && big.deadline < small.deadline);
     }
 }

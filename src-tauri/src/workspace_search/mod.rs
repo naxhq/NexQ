@@ -14,15 +14,18 @@ pub mod crawler;
 pub mod indexer;
 pub mod migrate;
 pub mod passages;
+pub mod safe_open;
 pub mod search;
 pub mod store;
 
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 #[cfg(test)]
 mod tests_bench;
 #[cfg(test)]
 mod tests_eval;
+#[cfg(test)]
+mod tests_redteam;
 
 use serde::{Deserialize, Serialize};
 

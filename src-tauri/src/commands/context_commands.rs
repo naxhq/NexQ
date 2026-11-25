@@ -57,6 +57,7 @@ fn load_context_file_now(file_path: &str, workspace_id: Option<&str>, state: &Ap
         }
     }
 
+    crate::workspace_chat::runtime::material_changed(&state.workspace_chat);
     serde_json::to_string(&resource)
         .map_err(|e| format!("Failed to serialize resource: {}", e))
 }

@@ -10,6 +10,10 @@ pub const MIN_UNITS: usize = 120;
 pub const MAX_UNITS: usize = 220;
 /// Hard cap per source so one pathological file cannot flood the index.
 pub const MAX_PASSAGES_PER_SOURCE: usize = 3000;
+/// Most passages one file of a folder may make.
+pub const MAX_PASSAGES_PER_FILE: usize = 1500;
+/// Most characters of one source that are ever chunked.
+pub const MAX_SOURCE_CHARS: usize = 2_000_000;
 /// Longest passage text in bytes.
 pub const MAX_PASSAGE_BYTES: usize = 16_000;
 /// Markdown sections smaller than this are merged with the next one.
@@ -72,7 +76,8 @@ fn make(
 }
 
 fn clean(text: &str) -> String {
-    text.replace("\r\n", "\n").replace('\r', "\n").replace('\0', "")
+    let cut = super::cjk::truncate_chars(text, MAX_SOURCE_CHARS);
+    cut.replace("\r\n", "\n").replace('\r', "\n").replace('\0', "")
 }
 
 /// Rough speaking time of a line (400 ms a word, 250 ms a CJK character).
@@ -446,6 +451,16 @@ mod tests {
         let jp = "あ".repeat(100_000);
         let p = build_text_passages(PassageKind::Document, "d", None, "JP", &jp, None);
         assert!(p.iter().all(|x| x.text.len() <= MAX_PASSAGE_BYTES));
+    }
+
+    #[test]
+    fn extracted_text_is_cut_before_chunking() {
+        let big = "word ".repeat(MAX_SOURCE_CHARS); // 10 M characters
+        let t = std::time::Instant::now();
+        let p = build_text_passages(PassageKind::Document, "d", None, "Big", &big, None);
+        let chars: usize = p.iter().map(|x| x.text.len()).sum();
+        assert!(chars <= MAX_SOURCE_CHARS + p.len(), "{chars}");
+        assert!(t.elapsed() < std::time::Duration::from_secs(30));
     }
 
     #[test]

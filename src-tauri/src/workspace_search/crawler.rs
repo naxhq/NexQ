@@ -57,8 +57,13 @@ pub struct CrawlResult {
     pub skipped: Vec<SkippedFile>,
     /// Entries with other extensions (counted, not listed).
     pub unsupported: usize,
-    /// True when a limit stopped the walk early.
+    /// True when a limit (depth, folders, files) stopped the walk early: files
+    /// beyond it were not seen, so unseen ones need their own check.
     pub truncated: bool,
+    /// True when the walk was told to stop: nothing about unseen files is known.
+    pub aborted: bool,
+    /// The canonical root every file was checked against.
+    pub canon_root: PathBuf,
 }
 
 const SKIP_DIR_NAMES: &[&str] = &[
@@ -130,7 +135,7 @@ pub fn crawl_folder(
     }
     let canon_root = fs::canonicalize(root).map_err(|e| format!("Folder not readable: {e}"))?;
 
-    let mut res = CrawlResult::default();
+    let mut res = CrawlResult { canon_root: canon_root.clone(), ..Default::default() };
     let skip = |res: &mut CrawlResult, rel: String, reason: &str| {
         if res.skipped.len() < opts.max_skipped_listed {
             res.skipped.push(SkippedFile { rel_path: rel, reason: reason.to_string() });
@@ -141,7 +146,7 @@ pub fn crawl_folder(
     let mut dirs_seen = 0usize;
     while let Some((dir, depth)) = stack.pop() {
         if should_stop() {
-            res.truncated = true;
+            res.aborted = true;
             break;
         }
         dirs_seen += 1;
@@ -257,6 +262,39 @@ pub fn crawl_folder(
     Ok(res)
 }
 
+/// Whether a file seen before may still be indexed: it exists, is a regular
+/// file that is not a link, lives inside the root, passes the name rules (no
+/// hidden, system or secret-looking part of its path), is a supported type
+/// and is small enough. Used when a walk was cut short and cannot say.
+pub fn still_allowed(canon_root: &Path, rel: &str, opts: &CrawlOptions) -> bool {
+    let mut path = canon_root.to_path_buf();
+    let parts: Vec<&str> = rel.split('/').filter(|p| !p.is_empty()).collect();
+    if parts.is_empty() || parts.iter().any(|p| *p == ".." || *p == ".") {
+        return false;
+    }
+    for (i, part) in parts.iter().enumerate() {
+        let last = i + 1 == parts.len();
+        let lower = part.to_lowercase();
+        if part.starts_with('.') || is_secret_like(part) || (!last && SKIP_DIR_NAMES.contains(&lower.as_str())) {
+            return false;
+        }
+        path.push(part);
+        let Ok(md) = fs::symlink_metadata(&path) else { return false };
+        let (hidden, system, reparse) = attr_flags(&md);
+        if md.file_type().is_symlink() || reparse || hidden || system {
+            return false;
+        }
+        if last && (!md.is_file() || md.len() > opts.max_file_bytes) {
+            return false;
+        }
+        if !last && !md.is_dir() {
+            return false;
+        }
+    }
+    let ext = path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
+    SUPPORTED_EXTENSIONS.contains(&ext.as_str()) && fs::canonicalize(&path).map_or(false, |c| c.starts_with(canon_root))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,11 +404,29 @@ mod tests {
     }
 
     #[test]
+    fn still_allowed_checks_each_file_directly() {
+        let root = temp_dir("crawl9");
+        write(&root, "ok/a.md", "x");
+        write(&root, "ok/my token.md", "x");
+        write(&root, ".hid/b.md", "x");
+        write(&root, "big.txt", &"x".repeat(2 * 1024 * 1024 + 1));
+        write(&root, "pic.png", "x");
+        write(&root, "node_modules/p/r.md", "x");
+        let canon = fs::canonicalize(&root).unwrap();
+        let o = CrawlOptions::default();
+        assert!(still_allowed(&canon, "ok/a.md", &o));
+        for gone in ["ok/missing.md", "ok/my token.md", ".hid/b.md", "big.txt", "pic.png", "node_modules/p/r.md", "../x.md", "ok", ""] {
+            assert!(!still_allowed(&canon, gone, &o), "{gone}");
+        }
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn stop_flag_ends_the_walk_early() {
         let root = temp_dir("crawl7");
         write(&root, "a/x.md", "x");
         let r = crawl_folder(&root, &CrawlOptions::default(), &|| true).unwrap();
-        assert!(r.truncated);
+        assert!(r.aborted && !r.truncated);
         assert!(r.files.is_empty());
         fs::remove_dir_all(&root).ok();
     }

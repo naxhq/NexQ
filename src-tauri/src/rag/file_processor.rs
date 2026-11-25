@@ -26,20 +26,46 @@ pub fn extract_text(file_path: &str, file_type: &str) -> Result<String, String> 
 pub fn extract_docx_text(file_path: &str) -> Result<String, String> {
     let file = std::fs::File::open(file_path)
         .map_err(|e| format!("Failed to open DOCX file '{}': {}", file_path, e))?;
+    docx_from_reader(file)
+}
 
-    let mut archive = zip::ZipArchive::new(file)
+/// Longest `word/document.xml` we unpack (bytes).
+pub const MAX_DOCX_XML: u64 = 16 * 1024 * 1024;
+/// Most entries a DOCX archive may hold.
+pub const MAX_DOCX_ENTRIES: usize = 4000;
+/// Largest believable compression ratio of the document part.
+const MAX_DOCX_RATIO: u64 = 400;
+
+/// Extract text from DOCX bytes, with bounds against zip bombs: entry count,
+/// the declared size and ratio of the document part, and a hard cap on what
+/// is actually read from it.
+pub fn extract_docx_text_bytes(bytes: &[u8]) -> Result<String, String> {
+    docx_from_reader(std::io::Cursor::new(bytes))
+}
+
+fn docx_from_reader<R: std::io::Read + std::io::Seek>(reader: R) -> Result<String, String> {
+    use std::io::Read;
+    let mut archive = zip::ZipArchive::new(reader)
         .map_err(|e| format!("Failed to read DOCX as ZIP archive: {}", e))?;
-
-    let mut xml_content = String::new();
-    {
-        let mut document_xml = archive
-            .by_name("word/document.xml")
-            .map_err(|e| format!("DOCX missing word/document.xml: {}", e))?;
-
-        std::io::Read::read_to_string(&mut document_xml, &mut xml_content)
-            .map_err(|e| format!("Failed to read document.xml: {}", e))?;
+    if archive.len() > MAX_DOCX_ENTRIES {
+        return Err("This Word file has too many parts".to_string());
     }
-
+    let document_xml = archive
+        .by_name("word/document.xml")
+        .map_err(|e| format!("DOCX missing word/document.xml: {}", e))?;
+    let (size, packed) = (document_xml.size(), document_xml.compressed_size().max(1));
+    if size > MAX_DOCX_XML || (size > 1024 * 1024 && size / packed > MAX_DOCX_RATIO) {
+        return Err("This Word file expands to too much data".to_string());
+    }
+    let mut raw = Vec::new();
+    document_xml
+        .take(MAX_DOCX_XML + 1)
+        .read_to_end(&mut raw)
+        .map_err(|e| format!("Failed to read document.xml: {}", e))?;
+    if raw.len() as u64 > MAX_DOCX_XML {
+        return Err("This Word file expands to too much data".to_string());
+    }
+    let xml_content = String::from_utf8_lossy(&raw);
     Ok(parse_docx_xml(&xml_content))
 }
 
@@ -164,5 +190,34 @@ mod tests {
         let result = extract_text("test.xyz", "xyz");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Unsupported"));
+    }
+
+    fn zip_of(entry: &str, body: &[u8], count: usize) -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+            zip.start_file(entry, options).unwrap();
+            zip.write_all(body).unwrap();
+            for i in 0..count {
+                zip.start_file(format!("extra/{i}.txt"), options).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf.into_inner()
+    }
+
+    #[test]
+    fn docx_bytes_roundtrip_and_bombs_are_rejected() {
+        let ok = zip_of("word/document.xml", br#"<w:p><w:r><w:t>Hello plan</w:t></w:r></w:p>"#, 0);
+        assert!(extract_docx_text_bytes(&ok).unwrap().contains("Hello plan"));
+        // 40 MB of one repeated byte packs to a few dozen KB: past the ratio and size limits
+        let bomb = zip_of("word/document.xml", &vec![b'a'; 40 * 1024 * 1024], 0);
+        assert!(bomb.len() < 200_000, "{}", bomb.len());
+        assert!(extract_docx_text_bytes(&bomb).unwrap_err().contains("too much"));
+        let many = zip_of("word/document.xml", b"<w:t>x</w:t>", MAX_DOCX_ENTRIES + 5);
+        assert!(extract_docx_text_bytes(&many).unwrap_err().contains("too many"));
+        assert!(extract_docx_text_bytes(b"PK\x03\x04 junk").is_err());
     }
 }

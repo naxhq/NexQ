@@ -55,11 +55,13 @@ pub fn file_db(dir: &std::path::Path) -> std::path::PathBuf {
 }
 
 pub fn temp_dir(tag: &str) -> std::path::PathBuf {
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
-        "nexq-ws-search-{}-{}-{}",
+        "nexq-ws-search-{}-{}-{}-{}",
         tag,
         std::process::id(),
-        super::now_ms()
+        super::now_ms(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
     ));
     std::fs::create_dir_all(&dir).unwrap();
     dir
