@@ -1,8 +1,8 @@
 /** Test fixtures: notes in four languages, a deterministic STT corrupter and a scenario runner. */
-import { buildNoteIndex, NoteBlock, NoteIndex } from "./tokenize";
-import { VoiceFollower, FollowState } from "./follower";
-import { SaidTracker } from "./said";
-import { EXTRA_NOTES } from "./fixtures2";
+import { buildNoteIndex, NoteBlock, NoteIndex } from "../tokenize";
+import { VoiceFollower, FollowState } from "../follower";
+import { SaidTracker } from "../said";
+import { EXTRA_NOTES } from "./extra-notes";
 
 export type Lang = "en" | "es" | "de" | "ja";
 

@@ -1,5 +1,5 @@
-import { Scenario, Step, Lang } from "./fixtures";
-import { EXTRA_NOTES } from "./fixtures2";
+import { Scenario, Step, Lang } from "./notes-and-runner";
+import { EXTRA_NOTES } from "./extra-notes";
 
 const v = (note: string, i: number, wer?: number): Step => ({ say: EXTRA_NOTES[note][i - 1].text, wer, truth: i, said: [i] });
 const p = (i: number, say: string, wer?: number): Step => ({ say, wer, truth: i, said: [i] });

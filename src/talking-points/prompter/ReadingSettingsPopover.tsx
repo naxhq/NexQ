@@ -16,7 +16,10 @@ interface Props {
 function Stepper({
   label,
   value,
+  min,
+  max,
   shown,
+  valueText,
   onMinus,
   onPlus,
   minusDisabled,
@@ -24,7 +27,11 @@ function Stepper({
 }: {
   label: string;
   value: number;
+  min: number;
+  max: number;
   shown: string;
+  /** Said by a screen reader when focus lands on the value or it changes with the arrow keys. */
+  valueText: string;
   onMinus: () => void;
   onPlus: () => void;
   minusDisabled: boolean;
@@ -33,15 +40,33 @@ function Stepper({
   const b =
     "inline-flex h-7 w-7 items-center justify-center rounded-md bg-muted text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-40";
   return (
-    <div className="flex items-center justify-between gap-3" role="group" aria-label={label}>
+    <div className="flex items-center justify-between gap-3">
       <span className="ui-body">{label}</span>
       <span className="flex items-center gap-2">
         <button type="button" className={b} aria-label={`Decrease ${label.toLowerCase()}`} disabled={minusDisabled} onClick={onMinus}>
           <Minus className="h-3.5 w-3.5" aria-hidden />
         </button>
-        <output aria-live="polite" aria-label={`${label} value`} data-value={value} className="ui-body w-12 text-center tabular-nums">
+        <span
+          role="spinbutton"
+          tabIndex={0}
+          aria-label={label}
+          aria-valuemin={min}
+          aria-valuemax={max}
+          aria-valuenow={value}
+          aria-valuetext={valueText}
+          onKeyDown={(e) => {
+            if ((e.key === "ArrowUp" || e.key === "ArrowRight" || e.key === "PageUp") && !plusDisabled) {
+              e.preventDefault();
+              onPlus();
+            } else if ((e.key === "ArrowDown" || e.key === "ArrowLeft" || e.key === "PageDown") && !minusDisabled) {
+              e.preventDefault();
+              onMinus();
+            }
+          }}
+          className="ui-body w-12 rounded-md text-center tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+        >
           {shown}
-        </output>
+        </span>
         <button type="button" className={b} aria-label={`Increase ${label.toLowerCase()}`} disabled={plusDisabled} onClick={onPlus}>
           <Plus className="h-3.5 w-3.5" aria-hidden />
         </button>
@@ -84,7 +109,10 @@ export function ReadingSettingsPopover({ reading, onChange, onClose, saidItNote,
       <Stepper
         label="Text size"
         value={reading.fontSize}
+        min={L.fontSize.min}
+        max={L.fontSize.max}
         shown={`${reading.fontSize}`}
+        valueText={`${reading.fontSize} pixels`}
         minusDisabled={reading.fontSize <= L.fontSize.min}
         plusDisabled={reading.fontSize >= L.fontSize.max}
         onMinus={() => onChange({ fontSize: Math.max(L.fontSize.min, reading.fontSize - L.fontSize.step) })}
@@ -93,7 +121,10 @@ export function ReadingSettingsPopover({ reading, onChange, onClose, saidItNote,
       <Stepper
         label="Line spacing"
         value={reading.lineSpacing}
+        min={L.lineSpacing.min}
+        max={L.lineSpacing.max}
         shown={reading.lineSpacing.toFixed(1)}
+        valueText={`${reading.lineSpacing.toFixed(1)} times the text size`}
         minusDisabled={reading.lineSpacing <= L.lineSpacing.min + 0.001}
         plusDisabled={reading.lineSpacing >= L.lineSpacing.max - 0.001}
         onMinus={() => onChange({ lineSpacing: r1(Math.max(L.lineSpacing.min, reading.lineSpacing - L.lineSpacing.step)) })}
@@ -102,7 +133,10 @@ export function ReadingSettingsPopover({ reading, onChange, onClose, saidItNote,
       <Stepper
         label="Speed"
         value={reading.wpm}
+        min={L.wpm.min}
+        max={L.wpm.max}
         shown={`${reading.wpm}`}
+        valueText={`${reading.wpm} words a minute`}
         minusDisabled={reading.wpm <= L.wpm.min}
         plusDisabled={reading.wpm >= L.wpm.max}
         onMinus={() => onChange({ wpm: Math.max(L.wpm.min, reading.wpm - L.wpm.step) })}

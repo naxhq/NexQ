@@ -1,5 +1,5 @@
 // Held-out set 2, authored blind (no implementation read).
-import type { Blk, Step, Scenario } from "./heldout.fixtures";
+import type { Blk, Step, Scenario } from "./heldout-set1.fixtures";
 
 const B = (arr: string[], p: string): Blk[] => arr.map((text, i) => ({ id: p + (i + 1), text }));
 type SayStep = Extract<Step, { t: "say" }>;

@@ -1,4 +1,4 @@
-import { NOTES, Scenario, Step, Lang } from "./fixtures";
+import { NOTES, Scenario, Step, Lang } from "./notes-and-runner";
 
 /** Verbatim delivery of block i (1-based). */
 const v = (lang: Lang, i: number, wer?: number): Step => ({ say: NOTES[lang][i - 1].text, wer, truth: i, said: [i] });

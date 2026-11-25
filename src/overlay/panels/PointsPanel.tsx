@@ -5,7 +5,7 @@
  * It reads the note with our own renderer (the editor loads only when you edit).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, Pause, Pencil, Play, RotateCcw, SlidersHorizontal } from "lucide-react";
+import { ChevronDown, Pencil, SlidersHorizontal } from "lucide-react";
 import { useMeetingStore } from "../../stores/meetingStore";
 import { useConfigStore } from "../../stores/configStore";
 import { useTalkingPointsStore } from "../../stores/talkingPointsStore";
@@ -18,16 +18,12 @@ import { languageNote as langNote, resolveLanguage } from "../../talking-points/
 import { Switcher, type SwitcherNote } from "../../talking-points/prompter/Switcher";
 import { ReadingSettingsPopover } from "../../talking-points/prompter/ReadingSettingsPopover";
 import { PromptEditor } from "../../talking-points/prompter/PromptEditor";
-import { EmptyState, Segmented, Tooltip, Kbd, buttonClass } from "../../ui";
+import { Tooltip } from "../../ui";
+import { ReaderControls } from "../../talking-points/prompter/ReaderControls";
+import { ReaderOffers } from "../../talking-points/prompter/ReaderOffers";
+import { PanelEmpty } from "../../talking-points/prompter/PanelEmpty";
 import { cn } from "../../lib/utils";
 import "../../talking-points/talkingPoints.css";
-
-const FOLLOW_TEXT: Record<string, string> = {
-  following: "Following you",
-  unsure: "Listening",
-  lost: "Lost your place. Scroll to show me.",
-  paused: "Waiting for you",
-};
 
 function useReducedMotion(): boolean {
   const [r, setR] = useState(() => (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) || false);
@@ -237,33 +233,7 @@ export function PointsPanel() {
   const err = scopeIds.map((id) => loadError[id]).find(Boolean);
 
   if (!note && !editing) {
-    if (loading) return <div className="ui-body p-4 text-muted-foreground" role="status">Loading your notes</div>;
-    if (err && notes.length === 0) {
-      return (
-        <EmptyState
-          title="Your notes did not load"
-          body={err}
-          action={
-            <button type="button" className={cn(buttonClass.base, buttonClass.primary)} onClick={() => scopeIds.forEach((id) => void store.getState().load(id))}>
-              Try again
-            </button>
-          }
-        />
-      );
-    }
-    return (
-      <div className="flex h-full items-center">
-        <EmptyState
-          title="Write your first talking points"
-          body="Keep what you want to say in front of you. NexQ can follow your voice and tick off what you have covered."
-          action={
-            <button type="button" className={cn(buttonClass.base, buttonClass.primary)} onClick={() => void startFirstNote()}>
-              Write a note
-            </button>
-          }
-        />
-      </div>
-    );
+    return <PanelEmpty loading={loading} error={notes.length === 0 ? err : undefined} onRetry={() => scopeIds.forEach((id) => void store.getState().load(id))} onStart={() => void startFirstNote()} />;
   }
 
   const voiceNote = !availability.ok ? availability.message : null;
@@ -347,59 +317,15 @@ export function PointsPanel() {
 
       {!editing && (
         <>
-          <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 px-2.5 pb-1.5 pt-1">
-            <Segmented
-              label="How the note moves"
-              value={reading.mode}
-              onChange={setMode}
-              options={[
-                { value: "manual", label: "Manual" },
-                { value: "auto", label: "Auto" },
-                { value: "voice", label: "My voice", ariaLabel: availability.ok ? "Follow my voice" : `Follow my voice, unavailable. ${availability.message}` },
-              ]}
-            />
-            {reading.mode === "auto" && (
-              <Tooltip
-                content={
-                  <span className="inline-flex items-center gap-2">
-                    {p.playing ? "Pause" : "Play"}
-                    <Kbd>Space</Kbd>
-                  </span>
-                }
-              >
-                <button
-                  type="button"
-                  aria-label={p.playing ? "Pause auto-scroll" : "Start auto-scroll"}
-                  onClick={() => (p.playing ? p.pause() : p.play())}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground outline-none transition-colors hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring/60"
-                >
-                  {p.playing ? <Pause className="h-4 w-4" aria-hidden /> : <Play className="h-4 w-4" aria-hidden />}
-                </button>
-              </Tooltip>
-            )}
-            {reading.mode === "auto" && <span className="ui-meta text-muted-foreground tabular-nums">{reading.wpm} words a minute</span>}
-            {saidLabel && (
-              <span className="ui-meta ml-auto shrink-0 tabular-nums text-muted-foreground" aria-live="polite">
-                {saidLabel}
-              </span>
-            )}
-            {reading.mode === "voice" && availability.ok && p.followState !== "off" && (
-              <span className="ui-meta text-muted-foreground" role="status">
-                {FOLLOW_TEXT[p.followState]}
-              </span>
-            )}
-          </div>
-          {reading.mode === "voice" && availability.ok && honesty && (
-            <p className="ui-meta shrink-0 px-3 pb-1.5 text-muted-foreground">{honesty}</p>
-          )}
-          {reading.mode === "voice" && !availability.ok && (
-            <p className="ui-meta shrink-0 px-3 pb-1.5 text-muted-foreground" role="status">
-              {availability.message}
-            </p>
-          )}
-          <div className="tp-progress shrink-0" aria-hidden>
-            <span ref={progressRef} style={{ transform: "scaleX(0)" }} />
-          </div>
+          <ReaderControls
+            reading={reading}
+            availability={availability}
+            p={p}
+            honesty={honesty}
+            saidLabel={saidLabel}
+            progressRef={progressRef}
+            onMode={setMode}
+          />
         </>
       )}
 
@@ -434,44 +360,7 @@ export function PointsPanel() {
             Enter ticks the current line, or goes to the suggested point. Backspace returns after a big jump. Plus and minus change the text size. Space plays or pauses auto-scroll.
           </span>
           <span aria-hidden className="tp-focus-mark" style={{ top: `calc(${FOCUS_RATIO * 100}% - ${(reading.fontSize * reading.lineSpacing) / 2}px)`, height: reading.fontSize * reading.lineSpacing }} />
-          <div aria-live="polite" className="sr-only">
-            {p.suggestion ? `Go to: ${p.suggestion.text}` : ""}
-          </div>
-          {p.suggestion && (
-            <button
-              type="button"
-              tabIndex={-1}
-              onClick={p.goToSuggestion}
-              className={cn(
-                buttonClass.base,
-                "tp-suggest max-w-[calc(100%-1.5rem)] border border-border bg-popover/95 text-popover-foreground shadow-md backdrop-blur-sm hover:bg-accent",
-                p.suggestion.edge === "top" ? "tp-suggest-top" : "tp-suggest-bottom",
-              )}
-            >
-              <span className="truncate">Go to: {p.suggestion.text}</span>
-            </button>
-          )}
-          {p.canGoBack && (
-            <button
-              type="button"
-              tabIndex={-1}
-              onClick={p.goBack}
-              className={cn(buttonClass.base, "tp-back border border-border bg-popover/95 text-popover-foreground shadow-md backdrop-blur-sm hover:bg-accent")}
-            >
-              <RotateCcw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-              Back to where I was
-            </button>
-          )}
-          {p.yielding && reading.mode !== "manual" && (
-            <button
-              type="button"
-              onClick={p.resume}
-              className={cn(buttonClass.base, "tp-resume border border-border bg-popover/95 text-popover-foreground shadow-md backdrop-blur-sm hover:bg-accent")}
-            >
-              <RotateCcw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-              Resume
-            </button>
-          )}
+          <ReaderOffers p={p} readingMode={reading.mode} />
         </div>
       )}
       {state === "failed" && !editing && (

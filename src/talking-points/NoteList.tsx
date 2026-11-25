@@ -150,7 +150,7 @@ export function NoteList({ notes, selectedId, onSelect, onReorder, onDuplicate, 
                 onPointerUp={() => finish(true)}
                 onPointerCancel={() => finish(false)}
                 onKeyDown={(e) => onGripKey(e, n.id)}
-                className="inline-flex h-9 w-6 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-muted-foreground/50 outline-none transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 active:cursor-grabbing"
+                className="inline-flex h-9 w-6 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 active:cursor-grabbing"
               >
                 <GripVertical className="h-4 w-4" aria-hidden />
               </button>
@@ -175,7 +175,7 @@ export function NoteList({ notes, selectedId, onSelect, onReorder, onDuplicate, 
                     {...props}
                     type="button"
                     aria-label={`Actions for ${n.title}`}
-                    className="mr-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-60 outline-none transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/60"
+                    className="mr-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
                   >
                     <MoreHorizontal className="h-4 w-4" aria-hidden />
                   </button>

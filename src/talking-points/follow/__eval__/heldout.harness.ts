@@ -1,6 +1,6 @@
 // Shared runner for the held-out evals (blind: uses only the public API).
-import { buildNoteIndex, VoiceFollower, SaidTracker } from "./index";
-import type { Scenario, Step } from "./heldout.fixtures";
+import { buildNoteIndex, VoiceFollower, SaidTracker } from "../index";
+import type { Scenario, Step } from "./heldout-set1.fixtures";
 
 export const TOL = 8;
 const isCjk = (s: string) => /[぀-ヿ㐀-鿿가-힯]/.test(s) && !/\s/.test(s.trim());

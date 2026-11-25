@@ -4,7 +4,7 @@ import { wordSim } from "./similarity";
 import { VoiceFollower } from "./follower";
 import { SaidTracker } from "./said";
 import { ScrollController, ManualYield, MANUAL_YIELD_MS, LineMetric } from "./scroll";
-import { NOTES, mulberry32 } from "./fixtures";
+import { NOTES, mulberry32 } from "./__eval__/notes-and-runner";
 
 const toks = (s: string) => tokenizeText(s).map((t) => t.t);
 

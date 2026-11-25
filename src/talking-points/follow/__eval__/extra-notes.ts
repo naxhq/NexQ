@@ -1,4 +1,4 @@
-import type { NoteBlock } from "./tokenize";
+import type { NoteBlock } from "../tokenize";
 
 const mk = (prefix: string, texts: string[]): NoteBlock[] => texts.map((text, i) => ({ id: `${prefix}${i + 1}`, text }));
 

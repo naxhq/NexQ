@@ -203,7 +203,7 @@ export function FloatingToolbar({ editor, container, compact }: Props) {
                   setPop(null);
                 }}
                 className={cn(
-                  "tp-swatch h-5 w-5 rounded-full outline-none ring-offset-popover transition-shadow focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:ring-offset-2",
+                  "tp-swatch h-6 w-6 rounded-full outline-none ring-offset-popover transition-shadow focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:ring-offset-2",
                   curColor === n && "ring-2 ring-foreground/70 ring-offset-2",
                 )}
                 style={{ background: `hsl(var(--tp-${n}))` }}

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { runScenario, ScenarioResult } from "./fixtures";
-import { SCENARIOS as BASE } from "./scenarios";
-import { SCENARIOS2 } from "./scenarios2";
+import { runScenario, ScenarioResult } from "./notes-and-runner";
+import { SCENARIOS as BASE } from "./scripted-scenarios";
+import { SCENARIOS2 } from "./scripted-scenarios-extra";
 
 const SCENARIOS = [...BASE, ...SCENARIOS2];
 

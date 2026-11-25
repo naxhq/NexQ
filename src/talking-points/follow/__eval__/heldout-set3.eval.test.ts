@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { scenarios3 } from "./heldout3.fixtures";
+import { scenarios3 } from "./heldout-set3.fixtures";
 import { evaluate } from "./heldout.harness";
 
 describe("heldout eval (set 3)", () => {

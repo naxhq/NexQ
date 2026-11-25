@@ -7,9 +7,8 @@
  * store, and reports what the view needs: the state of each block, how many are
  * left to say, the follow state and whether a manual scroll is being respected.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranscriptStore } from "../../stores/transcriptStore";
-import type { ReadingSettings } from "../../stores/talkingPointsStore";
 import {
   SaidTracker,
   ScrollController,
@@ -21,99 +20,19 @@ import {
 } from "../follow";
 import { docBlocks, type TpDoc } from "../doc/model";
 import type { BlockState } from "../reader/DocView";
-import { measureLines, rangeUpTo } from "./measure";
-import { marksToSaid, VoiceBridge, type FollowAvailability } from "./voice";
-import type { PointSaid } from "../../lib/types";
+import { useJumpOffers } from "./useJumpOffers";
+import { useNoteMeasure } from "./useNoteMeasure";
+import { useSpokenHighlight } from "./useSpokenHighlight";
+import {
+  FOCUS_RATIO,
+  stateOf,
+  type FollowerLike,
+  type PrompterOptions,
+  type PrompterState,
+} from "./prompterTypes";
+import { marksToSaid, VoiceBridge } from "./voice";
 
-export const FOCUS_RATIO = 0.33;
-/** A suggestion must hold this long before it is shown, and goes after this long. */
-export const SUGGEST_AFTER_MS = 1000;
-export const SUGGEST_EXPIRE_MS = 12_000;
-/** An automatic move longer than this many words (or to a block that is not next door) can be undone. */
-export const BIG_MOVE_WORDS = 25;
-export const BACK_CHIP_MS = 8000;
-
-/** What the prompter needs from a follower (the real one, or a fake in tests). */
-export interface FollowerLike {
-  onInterim(text: string, segId: string): unknown;
-  onFinal(text: string, segId: string): unknown;
-  snapshot(): { position: number; confidence: number; state: FollowState; suggestion?: { blockId: string; confidence: number } | null };
-  seek(token: number): void;
-  reset(): void;
-  setIndex(index: NoteIndex): void;
-}
-
-export interface GoToSuggestion {
-  blockId: string;
-  /** First words of that block. */
-  text: string;
-  /** Where it is relative to the reading line: the chip sits at that edge. */
-  edge: "top" | "bottom";
-}
-
-export interface PrompterOptions {
-  doc: TpDoc | null;
-  /** Changes when the note changes (resets position and "said it"). */
-  noteKey: string;
-  scrollRef: RefObject<HTMLDivElement | null>;
-  contentRef: RefObject<HTMLDivElement | null>;
-  progressRef?: RefObject<HTMLElement | null>;
-  reading: ReadingSettings;
-  availability: FollowAvailability;
-  /** Saved "said it" state to start from. */
-  savedSaid?: readonly PointSaid[] | null;
-  /** Called when the said-it state changed (the store saves it). */
-  onSaidChange?: (said: PointSaid[]) => void;
-  reducedMotion?: boolean;
-  clock?: () => number;
-  /** Offer "Go to" when you stray to another point (reading setting `suggest`). */
-  suggest?: boolean;
-  /** Replaces the real follower (tests). */
-  follower?: FollowerLike;
-}
-
-export interface PrompterState {
-  index: NoteIndex;
-  states: ReadonlyMap<string, BlockState>;
-  currentBlockId: string | null;
-  leftToSay: number;
-  totalBlocks: number;
-  followState: FollowState | "off";
-  /** A manual scroll is being respected right now. */
-  yielding: boolean;
-  playing: boolean;
-  toggleSaid: (blockId: string) => void;
-  play: () => void;
-  pause: () => void;
-  resume: () => void;
-  onScroll: () => void;
-  /** Mark a user action that scrolls (wheel, keys, pointer on the scrollbar). */
-  noteUserIntent: () => void;
-  /** Token the speaker has reached (follower), for tests and the progress line. */
-  followPosition: number;
-  /** Scroll to the start. */
-  restart: () => void;
-  /** A quiet offer to jump to the point you seem to be on. */
-  suggestion: GoToSuggestion | null;
-  goToSuggestion: () => void;
-  dismissSuggestion: () => void;
-  /** After a big automatic move: return to where you were (the follower holds there). */
-  canGoBack: boolean;
-  goBack: () => void;
-}
-
-function stateOf(
-  i: number,
-  id: string,
-  cur: number,
-  saidIt: boolean,
-  said: (id: string) => boolean,
-  auto: (id: string) => boolean,
-): BlockState {
-  if (saidIt && said(id)) return auto(id) ? "autosaid" : "said";
-  if (i === cur) return "current";
-  return i < cur ? "past" : "ahead";
-}
+export * from "./prompterTypes";
 
 export function usePrompter(opts: PrompterOptions): PrompterState {
   const { doc, noteKey, scrollRef, contentRef, progressRef, reading, availability } = opts;
@@ -122,6 +41,9 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
 
   const blocks = useMemo(() => (doc ? docBlocks(doc) : []), [doc]);
   const index = useMemo(() => buildNoteIndex(blocks.map((b) => ({ id: b.id, text: b.text }))), [blocks]);
+
+  const indexRef = useRef(index);
+  indexRef.current = index;
 
   const mkCtrl = useCallback(
     () => new ScrollController({ clock, focusRatio: FOCUS_RATIO, reducedMotion: reduced, wpm: reading.wpm }),
@@ -144,14 +66,6 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
   const [playing, setPlaying] = useState(false);
   const [curBlock, setCurBlock] = useState(0);
   const [followPosition, setFollowPosition] = useState(0);
-  const rawSuggest = useRef<{ blockId: string; since: number } | null>(null);
-  const dismissed = useRef<string | null>(null);
-  const [suggestBlock, setSuggestBlock] = useState<string | null>(null);
-  const lastPos = useRef<number | null>(null);
-  const backTo = useRef<number | null>(null);
-  const backTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [canGoBack, setCanGoBack] = useState(false);
-
   const optsRef = useRef(opts);
   optsRef.current = opts;
   const lastMarksKey = useRef("");
@@ -161,12 +75,28 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
   const voiceTarget = useRef(0);
   const yieldTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const curBlockRef = useRef(0);
-  const indexRef = useRef(index);
-  indexRef.current = index;
 
   const voiceOk = availability.ok;
   const wantVoice = reading.mode === "voice" && voiceOk;
   const wantSaid = reading.saidIt && voiceOk;
+
+  // the "Go to" and "Back to where I was" offers; they need resume and updateCurrent, defined further down
+  const late = useRef<{ resume: () => void; updateCurrent: (token: number) => void } | null>(null);
+  const jump = useJumpOffers({
+    follower,
+    ctrl,
+    indexRef,
+    voiceTarget,
+    late,
+    blocks,
+    curBlock,
+    wantVoice,
+    followState,
+    suggestEnabled: !!opts.suggest,
+    clock,
+  });
+  const jumpRef = useRef(jump);
+  jumpRef.current = jump;
 
   // -- note changes: new index, reset position, load saved "said it" ------------------------
 
@@ -219,44 +149,13 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     ctrl.current.setWpm(reading.wpm);
   }, [reading.wpm]);
 
-  // -- measuring ---------------------------------------------------------------------------
-
-  const measureRaf = useRef(0);
-  const scheduleMeasure = useCallback(() => {
-    if (measureRaf.current) return;
-    measureRaf.current = requestAnimationFrame(() => {
-      measureRaf.current = 0;
-      const el = scrollRef.current;
-      const content = contentRef.current;
-      if (!el || !content) return;
-      content.style.paddingBottom = `${Math.round(el.clientHeight * (1 - FOCUS_RATIO))}px`;
-      try {
-        const lines = measureLines(content, indexRef.current);
-        ctrl.current.setMetrics({ lines, contentHeight: el.scrollHeight, viewportHeight: el.clientHeight });
-      } catch {
-        /* a measuring failure leaves manual scrolling working */
-      }
-    });
-  }, [scrollRef, contentRef]);
-
-  useEffect(() => {
-    scheduleMeasure();
-  }, [index, reading.fontSize, reading.lineSpacing, scheduleMeasure]);
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    const content = contentRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => scheduleMeasure());
-    ro.observe(el);
-    if (content) ro.observe(content);
-    void (document as Document & { fonts?: { ready: Promise<unknown> } }).fonts?.ready.then(scheduleMeasure);
-    return () => {
-      ro.disconnect();
-      if (measureRaf.current) cancelAnimationFrame(measureRaf.current);
-      measureRaf.current = 0;
-    };
-  }, [scrollRef, contentRef, scheduleMeasure]);
+  const scheduleMeasure = useNoteMeasure({
+    scrollRef,
+    contentRef,
+    ctrl,
+    indexRef,
+    layoutKey: [index, reading.fontSize, reading.lineSpacing],
+  });
 
   // -- the user's voice --------------------------------------------------------------------
 
@@ -265,35 +164,8 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     const snap = f.snapshot();
     setFollowState((prev) => (prev === snap.state ? prev : snap.state));
     setFollowPosition(snap.position);
-    if (snap.state === "following") {
-      const prev = lastPos.current;
-      if (prev !== null) {
-        const far = Math.abs(snap.position - prev) > BIG_MOVE_WORDS;
-        const ix = indexRef.current;
-        const blockAt = (t: number) => (ix.tokens.length ? ix.tokens[Math.max(0, Math.min(ix.tokens.length - 1, Math.floor(t)))].block : 0);
-        const skipped = Math.abs(blockAt(snap.position) - blockAt(prev)) > 1;
-        if (far || skipped) {
-          backTo.current = prev;
-          setCanGoBack(true);
-          if (backTimer.current) clearTimeout(backTimer.current);
-          backTimer.current = setTimeout(() => {
-            backTo.current = null;
-            setCanGoBack(false);
-          }, BACK_CHIP_MS);
-        }
-      }
-      lastPos.current = snap.position;
-    }
+    jumpRef.current.observe(snap);
     said.current!.setPlace(snap.position);
-    const sg = snap.state === "unsure" ? snap.suggestion : null;
-    if (!sg || !optsRef.current.suggest) {
-      rawSuggest.current = null;
-      dismissed.current = null;
-      setSuggestBlock(null);
-    } else if (rawSuggest.current?.blockId !== sg.blockId) {
-      rawSuggest.current = { blockId: sg.blockId, since: clock() };
-      setSuggestBlock(null);
-    }
     ctrl.current.setVoice(snap.position, snap.state);
     if (snap.state === "following") voiceTarget.current = snap.position;
     const marks = said.current!.marks();
@@ -326,24 +198,6 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
       if (tick) clearInterval(tick);
     };
   }, [wantVoice, wantSaid, publishVoiceState, noteKey]);
-
-  // a suggestion shows once it has held for a second, and goes after twelve
-  useEffect(() => () => {
-    if (backTimer.current) clearTimeout(backTimer.current);
-  }, []);
-
-  useEffect(() => {
-    if (!wantVoice) return;
-    const t = setInterval(() => {
-      const r = rawSuggest.current;
-      if (!r || dismissed.current === r.blockId) return setSuggestBlock((b) => (b === null ? b : null));
-      const age = clock() - r.since;
-      const show = age >= SUGGEST_AFTER_MS && age < SUGGEST_EXPIRE_MS;
-      setSuggestBlock((b) => (show ? (b === r.blockId ? b : r.blockId) : b === null ? b : null));
-    }, 250);
-    return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wantVoice]);
 
   // -- scroll mode and the frame loop ---------------------------------------------------------
 
@@ -446,7 +300,7 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     lastSet.current = el.scrollTop;
     if (effRef.current !== "off") {
       follower.current!.seek(token);
-      lastPos.current = token;
+      jumpRef.current.markPosition(token);
       voiceTarget.current = token;
       c.setVoice(token, "following");
       yieldRef.current = true;
@@ -470,6 +324,8 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     yieldRef.current = false;
     setYielding(false);
   }, [mkCtrl, scrollRef, scheduleMeasure]);
+
+  late.current = { resume, updateCurrent };
 
   const playingRef = useRef(false);
   playingRef.current = playing;
@@ -506,38 +362,6 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     updateCurrent(0);
   }, [scrollRef, updateCurrent]);
 
-  const goToSuggestion = useCallback(() => {
-    const id = rawSuggest.current?.blockId;
-    const bi = indexRef.current.blocks.findIndex((b) => b.id === id);
-    if (bi < 0) return;
-    const tok = indexRef.current.blocks[bi].first;
-    follower.current!.seek(tok);
-    lastPos.current = tok;
-    voiceTarget.current = tok;
-    ctrl.current.setVoice(tok, "following");
-    rawSuggest.current = null;
-    setSuggestBlock(null);
-    updateCurrent(tok);
-    resume();
-  }, [updateCurrent, resume]);
-  const goBack = useCallback(() => {
-    const tok = backTo.current;
-    if (tok === null) return;
-    follower.current!.seek(tok); // the follower holds here until it hears you again
-    lastPos.current = tok;
-    voiceTarget.current = tok;
-    ctrl.current.setVoice(tok, "following");
-    backTo.current = null;
-    if (backTimer.current) clearTimeout(backTimer.current);
-    setCanGoBack(false);
-    updateCurrent(tok);
-    resume();
-  }, [updateCurrent, resume]);
-  const dismissSuggestion = useCallback(() => {
-    dismissed.current = rawSuggest.current?.blockId ?? null;
-    setSuggestBlock(null);
-  }, []);
-
   const toggleSaid = useCallback(
     (blockId: string) => {
       said.current!.toggle(blockId);
@@ -562,40 +386,7 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blocks, curBlock, reading.saidIt, rev]);
 
-  // the part of the current block already spoken, dimmed through the CSS highlight API where it exists
-  useEffect(() => {
-    const css = (globalThis as { CSS?: { highlights?: Map<string, unknown> } }).CSS;
-    const HighlightCtor = (globalThis as { Highlight?: new (...r: Range[]) => unknown }).Highlight;
-    if (!css?.highlights || !HighlightCtor) return;
-    const content = contentRef.current;
-    const block = blocks[curBlock];
-    if (!content || !block || !wantVoice || followState !== "following") {
-      css.highlights.delete("tp-spoken");
-      return;
-    }
-    const span = index.blocks[curBlock];
-    const el = content.querySelector(`[data-block-id="${block.id}"]`);
-    const tok = Math.floor(followPosition);
-    if (!el || !span || tok <= span.first || tok > span.end) {
-      css.highlights.delete("tp-spoken");
-      return;
-    }
-    const endChar = index.tokens[Math.min(tok, span.end) - 1]?.end ?? 0;
-    const r = rangeUpTo(el, endChar);
-    if (r) css.highlights.set("tp-spoken", new HighlightCtor(r));
-    else css.highlights.delete("tp-spoken");
-    return () => {
-      css.highlights?.delete("tp-spoken");
-    };
-  }, [blocks, curBlock, followPosition, followState, wantVoice, index, contentRef]);
-
-  const suggestion = useMemo<GoToSuggestion | null>(() => {
-    if (!suggestBlock || !wantVoice || followState !== "unsure") return null;
-    const i = blocks.findIndex((b) => b.id === suggestBlock);
-    if (i < 0) return null;
-    const text = blocks[i].text.trim().split(/\s+/).slice(0, 6).join(" ") || "next point";
-    return { blockId: suggestBlock, text, edge: i < curBlock ? "top" : "bottom" };
-  }, [suggestBlock, wantVoice, followState, blocks, curBlock]);
+  useSpokenHighlight({ blocks, index, curBlock, followPosition, followState, wantVoice, contentRef });
 
   // headings are structure, not things to say: they never count and are never ticked
   const leftToSay = useMemo(() => {
@@ -622,10 +413,10 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     noteUserIntent,
     followPosition,
     restart,
-    suggestion,
-    goToSuggestion,
-    dismissSuggestion,
-    canGoBack,
-    goBack,
+    suggestion: jump.suggestion,
+    goToSuggestion: jump.goToSuggestion,
+    dismissSuggestion: jump.dismissSuggestion,
+    canGoBack: jump.canGoBack,
+    goBack: jump.goBack,
   };
 }
