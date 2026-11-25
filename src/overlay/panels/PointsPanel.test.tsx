@@ -486,3 +486,51 @@ describe("a hostile note is only ever drawn as text", () => {
     expect(region.querySelector("h1, h2, h3")).not.toBeNull();
   });
 });
+
+describe("saving a meeting edit over a base note that changed meanwhile", () => {
+  async function startEdit() {
+    const user = userEvent.setup();
+    render(<PointsPanel />);
+    await screen.findByRole("region", { name: /Opening/ });
+    await user.click(screen.getByRole("button", { name: "Edit this note" }));
+    await user.click(await screen.findByRole("textbox", { name: "Edit Opening" }));
+    await user.keyboard("Meeting words. ");
+    // the launcher saves its own version of the note meanwhile
+    const launcher = { ...NOTES[0], plain_text: "launcher text", doc_json: JSON.stringify(docFromText("launcher text")), updated_at: 50 };
+    ipc.listTalkingPoints.mockResolvedValue([launcher]);
+    ipc.patchTalkingPoint.mockClear();
+    return user;
+  }
+
+  it("shows Keep mine, Use theirs and See both, and writes nothing until one is chosen", async () => {
+    const user = await startEdit();
+    await user.click(screen.getByRole("button", { name: "Save to workspace" }));
+    const alert = await screen.findByText(/changed in another window/i);
+    expect(alert).toBeInTheDocument();
+    expect(ipc.patchTalkingPoint).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Keep mine" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "See both" }));
+    expect(await screen.findByLabelText("Their version")).toHaveTextContent("launcher text");
+    expect(screen.getByRole("textbox", { name: "Edit Opening" })).toBeInTheDocument(); // mine is still there
+  });
+
+  it("Keep mine saves from the launcher's revision and closes the editor", async () => {
+    const user = await startEdit();
+    await user.click(screen.getByRole("button", { name: "Save to workspace" }));
+    await user.click(await screen.findByRole("button", { name: "Keep mine" }));
+    await waitFor(() => expect(ipc.patchTalkingPoint).toHaveBeenCalled());
+    expect(ipc.patchTalkingPoint.mock.calls[0][2]).toBe(50);
+    expect(ipc.patchTalkingPoint.mock.calls[0][1].plain_text).toContain("Meeting words.");
+    await waitFor(() => expect(ipc.saveMeetingPointEdit).toHaveBeenLastCalledWith("m1", "n1", null));
+  });
+
+  it("Use theirs keeps the launcher text and drops the meeting copy", async () => {
+    const user = await startEdit();
+    await user.click(screen.getByRole("button", { name: "Save to workspace" }));
+    await user.click(await screen.findByRole("button", { name: "Use theirs" }));
+    await waitFor(() => expect(ipc.saveMeetingPointEdit).toHaveBeenLastCalledWith("m1", "n1", null));
+    expect(ipc.patchTalkingPoint).not.toHaveBeenCalled();
+    const region = await screen.findByRole("region", { name: /Opening/ });
+    expect(within(region).getByText(/launcher text/)).toBeInTheDocument();
+  });
+});

@@ -248,7 +248,7 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
   return (
     <div
       ref={barRef}
-      className={`flex items-center ${narrow ? "flex-nowrap gap-1.5 overflow-hidden" : "flex-wrap gap-2.5"} ${compact ? "px-3 py-2" : "px-5 py-2.5"}`}
+      className={`flex items-center ${narrow ? "flex-nowrap gap-1 overflow-hidden" : "flex-wrap gap-2.5"} ${narrow ? "px-2 py-2" : compact ? "px-3 py-2" : "px-5 py-2.5"}`}
     >
       {/* LLM — always interactive */}
       <div className="relative">

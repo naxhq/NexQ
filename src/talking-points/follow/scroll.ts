@@ -84,8 +84,12 @@ export class ScrollController {
     this.yielder = new ManualYield(this.clock);
   }
 
+  /** Called whenever something that can move the note changes, so a sleeping frame loop can start again. */
+  onWake?: () => void;
+
   setMetrics(m: ScrollMetrics): void {
     this.metrics = m;
+    this.onWake?.();
     this.target = this.clampScroll(this.target);
     if (this.cur > this.maxScroll()) this.cur = this.maxScroll();
   }
@@ -93,6 +97,7 @@ export class ScrollController {
   setMode(mode: ScrollMode): void {
     this.mode = mode;
     this.lastTick = null;
+    this.onWake?.();
   }
   getMode(): ScrollMode {
     return this.mode;
@@ -104,6 +109,7 @@ export class ScrollController {
   setVoice(position: number, state: FollowState): void {
     if (state !== "following") return;
     this.voicePos = position;
+    this.onWake?.();
   }
 
   // -- wpm mode -----------------------------------------------------------
@@ -111,6 +117,7 @@ export class ScrollController {
   play(): void {
     this.playing = true;
     this.lastTick = null;
+    this.onWake?.();
   }
   pause(): void {
     this.playing = false;
@@ -120,6 +127,7 @@ export class ScrollController {
   }
   setWpm(wpm: number): void {
     this.wpm = Math.max(20, Math.min(400, wpm));
+    this.onWake?.();
   }
   getWpm(): number {
     return this.wpm;
@@ -127,6 +135,7 @@ export class ScrollController {
   /** Set the auto-scroll position (token index), e.g. on restart. */
   setWpmPosition(token: number): void {
     this.wpmPos = Math.max(0, token);
+    this.onWake?.();
   }
 
   // -- manual scroll ------------------------------------------------------
@@ -138,6 +147,7 @@ export class ScrollController {
     this.target = scrollTop;
     this.vel = 0;
     this.wpmPos = this.tokenAtScroll(scrollTop);
+    this.onWake?.();
   }
   isYielding(): boolean {
     return this.yielder.active();

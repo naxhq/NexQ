@@ -262,35 +262,57 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     }
     let raf = 0;
     let stopped = false;
+    let running = true;
+    let idle = 0;
     const frame = () => {
       if (stopped) return;
-      raf = requestAnimationFrame(frame);
       const el = scrollRef.current;
-      if (!el) return;
-      const c = ctrl.current;
-      syncMode(el);
-      const top = c.update();
-      if (!c.isYielding() && Math.abs(el.scrollTop - top) >= 0.5) {
-        el.scrollTop = top;
-        lastSet.current = el.scrollTop;
+      let moving = true;
+      if (el) {
+        const c = ctrl.current;
+        syncMode(el);
+        const top = c.update();
+        if (!c.isYielding() && Math.abs(el.scrollTop - top) >= 0.5) {
+          el.scrollTop = top;
+          lastSet.current = el.scrollTop;
+        }
+        const want = effRef.current;
+        if (want === "wpm" || (want === "voice" && followStateRef.current !== "following")) {
+          updateCurrent(c.tokenAtScroll(el.scrollTop));
+        }
+        if (progressRef?.current) {
+          const max = Math.max(1, el.scrollHeight - el.clientHeight);
+          progressRef.current.style.transform = `scaleX(${Math.max(0, Math.min(1, el.scrollTop / max)).toFixed(4)})`;
+        }
+        if (c.isYielding() !== yieldRef.current) {
+          yieldRef.current = c.isYielding();
+          setYielding(yieldRef.current);
+        }
+        // Nothing moves it: not yielding to the user, at its target, and not auto-playing.
+        moving = c.isYielding() || Math.abs(c.targetTop - c.scrollTop) >= 0.5 || (want === "wpm" && c.isPlaying());
       }
-      const want = effRef.current;
-      if (want === "wpm" || (want === "voice" && followStateRef.current !== "following")) {
-        updateCurrent(c.tokenAtScroll(el.scrollTop));
+      idle = moving ? 0 : idle + 1;
+      if (idle >= 30) {
+        // Half a second of stillness: sleep until the controller is told something (a voice position,
+        // play, a scroll, new measurements), instead of ticking at display rate for nothing.
+        running = false;
+        return;
       }
-      if (progressRef?.current) {
-        const max = Math.max(1, el.scrollHeight - el.clientHeight);
-        progressRef.current.style.transform = `scaleX(${Math.max(0, Math.min(1, el.scrollTop / max)).toFixed(4)})`;
-      }
-      if (c.isYielding() !== yieldRef.current) {
-        yieldRef.current = c.isYielding();
-        setYielding(yieldRef.current);
-      }
+      raf = requestAnimationFrame(frame);
     };
+    const wake = () => {
+      if (running || stopped) return;
+      running = true;
+      idle = 0;
+      raf = requestAnimationFrame(frame);
+    };
+    const c0 = ctrl.current;
+    c0.onWake = wake;
     raf = requestAnimationFrame(frame);
     return () => {
       stopped = true;
       cancelAnimationFrame(raf);
+      if (c0.onWake === wake) c0.onWake = undefined;
     };
   }, [scrollRef, progressRef, updateCurrent, effMode, shown]);
 
