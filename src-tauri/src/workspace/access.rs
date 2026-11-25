@@ -4,7 +4,7 @@
 //! computed from the two views, never declared by the caller, so it can't be
 //! misdeclared.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rusqlite::Connection;
 
@@ -33,6 +33,11 @@ pub struct AccessView {
     pub meetings: BTreeSet<String>,
     /// The scope has instructions of its own.
     pub instructions: bool,
+    /// Content hashes: instructions, each talking point (with the meeting's own
+    /// edit), each document's cached text version, each saved memory text and
+    /// each opted-in folder's index. A changed or removed one is an edit of
+    /// something the dependent already used.
+    pub hashes: BTreeMap<String, u64>,
 }
 
 /// A restart caused by a grant waits (it may be coalesced); one caused by a
@@ -40,10 +45,65 @@ pub struct AccessView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Grant,
+    /// Something it already used changed its content (a note edit, a reloaded
+    /// document, a memory text): restarts soon, at most once per 5 s.
+    Edit,
     Revoke,
 }
 
-fn view_from(conn: &Connection, scope: &EffectiveScope, folders: Vec<String>, meetings: BTreeSet<String>, fingerprint: String) -> AccessView {
+/// What a read of a dependent's access found.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ViewState {
+    Present(AccessView),
+    /// It does not exist (any more).
+    Gone,
+    /// It could not be read: treated as a revocation.
+    Unreadable,
+}
+
+fn h64(parts: &[&str]) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    parts.hash(&mut h);
+    h.finish()
+}
+
+/// Content hashes of what the scope's prompts carry (see `AccessView::hashes`).
+fn content_hashes(conn: &Connection, scope: &EffectiveScope, folders: &[String], meeting_id: Option<&str>) -> BTreeMap<String, u64> {
+    let mut out = BTreeMap::new();
+    if !scope.instructions.trim().is_empty() {
+        out.insert("instructions".to_string(), h64(&[&scope.instructions]));
+    }
+    for id in &scope.talking_point_ids {
+        let text: String = conn.query_row("SELECT plain_text FROM talking_points WHERE id = ?1", params![id], |r| r.get(0)).unwrap_or_default();
+        let edit: String = meeting_id
+            .and_then(|m| conn.query_row("SELECT doc_json FROM talking_point_edits WHERE meeting_id = ?1 AND point_id = ?2", params![m, id], |r| r.get(0)).ok())
+            .unwrap_or_default();
+        out.insert(format!("tp:{id}"), h64(&[&text, &edit]));
+    }
+    for id in &scope.document_ids {
+        // the cached text version: when it was loaded and what it was called
+        let v: String = conn
+            .query_row("SELECT loaded_at || '|' || name FROM context_resources WHERE id = ?1", params![id], |r| r.get(0))
+            .unwrap_or_default();
+        out.insert(format!("doc:{id}"), h64(&[&v]));
+    }
+    for m in memory::saved_for_scope(conn, scope).unwrap_or_default() {
+        out.insert(format!("mem:{}", m.id), h64(&[&m.kind, &m.title, &m.text]));
+    }
+    for id in folders {
+        let v: String = conn
+            .prepare("SELECT group_concat(sub_ref || ':' || content_hash || ':' || status) FROM search_sources WHERE kind = 'folder' AND ref_id = ?1")
+            .and_then(|mut s| s.query_row(params![id], |r| r.get::<_, Option<String>>(0)))
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        out.insert(format!("folder-index:{id}"), h64(&[&v]));
+    }
+    out
+}
+
+fn view_from(conn: &Connection, scope: &EffectiveScope, folders: Vec<String>, meetings: BTreeSet<String>, fingerprint: String, meeting_id: Option<&str>) -> AccessView {
+    let hashes = content_hashes(conn, scope, &folders, meeting_id);
     let mut items = BTreeSet::new();
     for (kind, ids) in [
         ("document", &scope.document_ids),
@@ -61,34 +121,61 @@ fn view_from(conn: &Connection, scope: &EffectiveScope, folders: Vec<String>, me
         fingerprint,
         meetings,
         instructions: !scope.instructions.trim().is_empty(),
+        hashes,
     }
 }
 
-/// What `meeting_id` may use now (None when it does not exist).
-pub fn view_of_meeting(conn: &Connection, meeting_id: &str) -> Option<AccessView> {
-    let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM meetings WHERE id = ?1)", [meeting_id], |r| r.get(0)).ok()?;
-    if !exists {
-        return None;
+/// What `meeting_id` may use now: present, gone, or unreadable.
+pub fn read_meeting_view(conn: &Connection, meeting_id: &str) -> ViewState {
+    match conn.query_row("SELECT EXISTS(SELECT 1 FROM meetings WHERE id = ?1)", [meeting_id], |r| r.get::<_, bool>(0)) {
+        Ok(false) => return ViewState::Gone,
+        Err(_) => return ViewState::Unreadable,
+        Ok(true) => {}
     }
-    let scope = scope_for(conn, ScopeOwner::Meeting(meeting_id)).ok()?;
+    let Ok(scope) = scope_for(conn, ScopeOwner::Meeting(meeting_id)) else { return ViewState::Unreadable };
     let parts = live_parts_from(conn, &scope, meeting_id);
-    let meetings: BTreeSet<String> = conn
+    let meetings: BTreeSet<String> = match conn
         .prepare("SELECT id FROM meetings WHERE workspace_id = ?1")
-        .and_then(|mut s| s.query_map([&scope.home], |r| r.get::<_, String>(0)).map(|r| r.filter_map(Result::ok).collect::<Vec<_>>()))
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|m| m != meeting_id && !parts.excluded_meetings.contains(m))
-        .collect();
-    Some(view_from(conn, &scope, parts.folder_ids.clone(), meetings, parts.fingerprint))
+        .and_then(|mut s| s.query_map([&scope.home], |r| r.get::<_, String>(0)).and_then(|r| r.collect::<Result<Vec<_>, _>>()))
+    {
+        Ok(ids) => ids.into_iter().filter(|m| m != meeting_id && !parts.excluded_meetings.contains(m)).collect(),
+        Err(_) => return ViewState::Unreadable,
+    };
+    ViewState::Present(view_from(conn, &scope, parts.folder_ids.clone(), meetings, parts.fingerprint, Some(meeting_id)))
 }
 
-/// What the chat `chat_id` may use now (None when it does not exist): its
-/// workspace's scope after the chat's own exclusions and meeting choices.
-pub fn view_of_chat(conn: &Connection, chat_id: &str) -> Option<AccessView> {
-    let chat = crate::workspace_chat::store::get_chat(conn, chat_id).ok().flatten()?;
-    let cs = crate::workspace_chat::scope_adapter::chat_scope(conn, &chat).ok()?;
+/// What the chat `chat_id` may use now: its workspace's scope after the chat's
+/// own exclusions and meeting choices.
+pub fn read_chat_view(conn: &Connection, chat_id: &str) -> ViewState {
+    let chat = match crate::workspace_chat::store::get_chat(conn, chat_id) {
+        Ok(Some(c)) => c,
+        Ok(None) => return ViewState::Gone,
+        Err(_) => return ViewState::Unreadable,
+    };
+    let Ok(cs) = crate::workspace_chat::scope_adapter::chat_scope(conn, &chat) else { return ViewState::Unreadable };
     let meetings: BTreeSet<String> = cs.meetings.iter().map(|m| m.id.clone()).collect();
-    Some(view_from(conn, &cs.eff, cs.folder_ids.clone(), meetings, String::new()))
+    ViewState::Present(view_from(conn, &cs.eff, cs.folder_ids.clone(), meetings, String::new(), None))
+}
+
+/// What `meeting_id` may use now (None when it does not exist or can't be read).
+pub fn view_of_meeting(conn: &Connection, meeting_id: &str) -> Option<AccessView> {
+    match read_meeting_view(conn, meeting_id) {
+        ViewState::Present(v) => Some(v),
+        _ => None,
+    }
+}
+
+/// What the chat `chat_id` may use now (None when it does not exist or can't be read).
+pub fn view_of_chat(conn: &Connection, chat_id: &str) -> Option<AccessView> {
+    match read_chat_view(conn, chat_id) {
+        ViewState::Present(v) => Some(v),
+        _ => None,
+    }
+}
+
+/// Whether anything a view's prompts carried changed or went (content hashes).
+pub fn is_edit(before: &AccessView, after: &AccessView) -> bool {
+    before.hashes.iter().any(|(k, v)| after.hashes.get(k) != Some(v))
 }
 
 /// Whether something the first view allowed is not allowed by the second.
@@ -183,7 +270,13 @@ pub fn live_parts(conn: &Connection, meeting_id: &str) -> Option<LiveParts> {
 
 /// The kind of a change from what one dependent could use before and after.
 pub fn kind_of(before: &AccessView, after: &AccessView) -> Kind {
-    if is_revoke(before, after) { Kind::Revoke } else { Kind::Grant }
+    if is_revoke(before, after) {
+        Kind::Revoke
+    } else if is_edit(before, after) {
+        Kind::Edit
+    } else {
+        Kind::Grant
+    }
 }
 
 /// A view that holds General only (what a fresh meeting in General can use).
@@ -219,7 +312,7 @@ mod tests {
         assert_eq!(kind_after(&conn, "m", || {}), Kind::Grant, "no change at all takes nothing away");
         // Editing a note's text keeps its id: access is the same.
         conn.execute("INSERT INTO talking_points (id, workspace_id, title, in_context, created_at, updated_at) VALUES ('p', ?1, 't', 1, 0, 0)", params![a]).unwrap();
-        assert_eq!(kind_after(&conn, "m", || { conn.execute("UPDATE talking_points SET plain_text = 'edited' WHERE id = 'p'", []).unwrap(); }), Kind::Grant);
+        assert_eq!(kind_after(&conn, "m", || { conn.execute("UPDATE talking_points SET plain_text = 'edited' WHERE id = 'p'", []).unwrap(); }), Kind::Edit);
         let b = new_ws(&conn, "B", false, false);
         assert_eq!(kind_after(&conn, "m", || { set_meeting_scope(&conn, "m", &[b.clone()]).unwrap(); }), Kind::Grant, "a borrow added");
     }

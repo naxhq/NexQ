@@ -16,6 +16,7 @@ use crate::commands::meeting_commands;
 use crate::state::AppState;
 use crate::workspace::library::{self, LibrarySnapshot};
 use crate::workspace::types::*;
+use crate::workspace::access::ViewState;
 use crate::workspace::access::{self, AccessView, Kind};
 use crate::workspace::{documents, meetings, memory, purge, restart, scope, sources_seed, store, talking_points};
 
@@ -233,26 +234,31 @@ impl Target {
 #[derive(Debug, Default)]
 pub(crate) struct Pending {
     deps: Dependents,
-    views: BTreeMap<Target, AccessView>,
+    views: BTreeMap<Target, ViewState>,
 }
 
-/// What each of `deps` may use now (one that no longer exists is left out).
-fn views_of(state: &AppState, deps: &Dependents) -> BTreeMap<Target, AccessView> {
+/// What each of `deps` may use now: present, gone (it does not exist) or
+/// unreadable (the read failed: treated as a revocation).
+fn views_of(state: &AppState, deps: &Dependents) -> BTreeMap<Target, ViewState> {
+    let targets: Vec<Target> = deps
+        .meetings
+        .iter()
+        .map(|m| Target::Meeting(m.clone()))
+        .chain(deps.chats.iter().map(|c| Target::Chat(c.clone())))
+        .collect();
     with_conn(state, |conn| {
-        let mut out = BTreeMap::new();
-        for id in &deps.meetings {
-            if let Some(v) = access::view_of_meeting(conn, id) {
-                out.insert(Target::Meeting(id.clone()), v);
-            }
-        }
-        for id in &deps.chats {
-            if let Some(v) = access::view_of_chat(conn, id) {
-                out.insert(Target::Chat(id.clone()), v);
-            }
-        }
-        Ok(out)
+        Ok(targets
+            .iter()
+            .map(|t| {
+                let v = match t {
+                    Target::Meeting(id) => access::read_meeting_view(conn, id),
+                    Target::Chat(id) => access::read_chat_view(conn, id),
+                };
+                (t.clone(), v)
+            })
+            .collect::<BTreeMap<_, _>>())
     })
-    .unwrap_or_default()
+    .unwrap_or_else(|_| targets.into_iter().map(|t| (t, ViewState::Unreadable)).collect())
 }
 
 /// First half of a change: who depends on what it touches, and what they may use now.
@@ -263,20 +269,41 @@ pub(crate) fn begin_change(state: &AppState, touched: &dyn Fn(&Connection) -> To
     Pending { deps, views }
 }
 
-/// What to restart, and how, once a change is done: for every dependent from
-/// before or after, a revocation when anything it could use is gone (or the
-/// change failed part way, which is treated as one), a grant otherwise.
-/// Pure, so the rule is tested without an app.
+/// What to do with one dependent once a change is done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Decision {
+    Restart(Kind),
+    /// It no longer exists: its sessions end and nothing starts again.
+    Close,
+}
+
+/// What to do for every dependent from before OR after (the union): a
+/// revocation when anything it could use is gone, was unreadable, or the change
+/// failed part way; an edit when something it used changed content; a grant
+/// otherwise; and `Close` for one that no longer exists. Pure, so the rule is
+/// tested without an app.
 pub(crate) fn decisions(
-    before: &BTreeMap<Target, AccessView>,
-    after: &BTreeMap<Target, AccessView>,
+    before: &BTreeMap<Target, ViewState>,
+    after: &BTreeMap<Target, ViewState>,
     ok: bool,
-) -> Vec<(Target, Kind)> {
+) -> Vec<(Target, Decision)> {
+    let mut targets: Vec<&Target> = before.keys().chain(after.keys()).collect();
+    targets.sort();
+    targets.dedup();
     let mut out = Vec::new();
-    for (target, now) in after {
-        let was = before.get(target).cloned().unwrap_or_default();
-        let kind = if ok { access::kind_of(&was, now) } else { Kind::Revoke };
-        out.push((target.clone(), kind));
+    for target in targets {
+        let d = match after.get(target) {
+            None | Some(ViewState::Gone) => Decision::Close,
+            Some(ViewState::Unreadable) => Decision::Restart(Kind::Revoke),
+            Some(ViewState::Present(now)) => match before.get(target) {
+                Some(ViewState::Present(was)) => Decision::Restart(if ok { access::kind_of(was, now) } else { Kind::Revoke }),
+                // it was a dependent but could not be read, or was not there: unknown before = revoke
+                Some(_) => Decision::Restart(Kind::Revoke),
+                // a new dependent (a borrow or General added)
+                None => Decision::Restart(if ok { Kind::Grant } else { Kind::Revoke }),
+            },
+        };
+        out.push((target.clone(), d));
     }
     out
 }
@@ -295,8 +322,21 @@ pub(crate) fn finish_change(state: &AppState, app: &AppHandle, touched: &dyn Fn(
         }
     }
     let after = views_of(state, &deps);
-    for (target, kind) in decisions(&before.views, &after, ok) {
-        apply_restart(app, target, kind);
+    for (target, d) in decisions(&before.views, &after, ok) {
+        match d {
+            Decision::Restart(kind) => apply_restart(app, target, kind),
+            Decision::Close => close_gone(app, &target),
+        }
+    }
+}
+
+/// A dependent that no longer exists: its sessions end, nothing starts again.
+fn close_gone(app: &AppHandle, target: &Target) {
+    use tauri::Manager;
+    app.state::<AppState>().restarts.forget(&target.key());
+    match target {
+        Target::Meeting(id) => meeting_commands::drop_meeting_sessions(app, id),
+        Target::Chat(id) => meeting_commands::restart_chat_sessions(app, vec![id.clone()]),
     }
 }
 
@@ -324,35 +364,40 @@ pub(crate) fn apply_restart(app: &AppHandle, target: Target, kind: Kind) {
             restart_now(app, &target);
             restarts.restarted(&key, Instant::now());
         }
-        Kind::Grant => match restarts.decide(&key, Instant::now(), answering(&target)) {
-            restart::Action::Now => {
-                restart_now(app, &target);
-                restarts.restarted(&key, Instant::now());
-            }
-            restart::Action::Later(wait) => {
-                if !restarts.mark_pending(&key) {
-                    return; // a restart already waits and covers this one
+        Kind::Grant | Kind::Edit => {
+            // grants wait for the 30 s mark, edits of what it already used for 5 s;
+            // both wait out a live answer, but never longer than a minute
+            let gap = if kind == Kind::Edit { restart::EDIT_GAP } else { restart::GRANT_COALESCE };
+            match restarts.decide_gap(&key, Instant::now(), answering(&target), gap) {
+                restart::Action::Now => {
+                    restart_now(app, &target);
+                    restarts.restarted(&key, Instant::now());
                 }
-                let app = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    let mut wait = wait;
-                    loop {
-                        tokio::time::sleep(wait).await;
-                        if !restarts.is_pending(&key) {
-                            break; // a revocation restarted it meanwhile
-                        }
-                        match restarts.decide(&key, Instant::now(), answering(&target)) {
-                            restart::Action::Now => {
-                                restart_now(&app, &target);
-                                restarts.restarted(&key, Instant::now());
-                                break;
-                            }
-                            restart::Action::Later(next) => wait = next,
-                        }
+                restart::Action::Later(wait) => {
+                    if !restarts.mark_pending(&key) {
+                        return; // a restart already waits and covers this one
                     }
-                });
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let mut wait = wait;
+                        loop {
+                            tokio::time::sleep(wait).await;
+                            if !restarts.is_pending(&key) {
+                                break; // a revocation restarted it meanwhile
+                            }
+                            match restarts.decide_gap(&key, Instant::now(), answering(&target), gap) {
+                                restart::Action::Now => {
+                                    restart_now(&app, &target);
+                                    restarts.restarted(&key, Instant::now());
+                                    break;
+                                }
+                                restart::Action::Later(next) => wait = next,
+                            }
+                        }
+                    });
+                }
             }
-        },
+        }
     }
 }
 
@@ -1130,25 +1175,53 @@ mod tests {
     #[test]
     fn a_change_is_a_revocation_exactly_when_something_a_dependent_had_is_gone() {
         let m = |id: &str| Target::Meeting(id.into());
-        let before: BTreeMap<Target, AccessView> =
-            [(m("a"), view(&["document:d1"], &["mem1"])), (m("b"), view(&["document:d1"], &[])), (m("c"), view(&[], &[]))].into();
-        let after: BTreeMap<Target, AccessView> = [
-            (m("a"), view(&["document:d1"], &[])),             // memory forgotten
-            (m("b"), view(&["document:d1", "document:d2"], &[])), // a document added
-            (m("c"), view(&["folder:f"], &[])),                // new access
-            (m("d"), view(&["document:d1"], &[])),             // became a dependent
+        let p = |v: AccessView| ViewState::Present(v);
+        let before: BTreeMap<Target, ViewState> =
+            [(m("a"), p(view(&["document:d1"], &["mem1"]))), (m("b"), p(view(&["document:d1"], &[]))), (m("c"), p(view(&[], &[])))].into();
+        let after: BTreeMap<Target, ViewState> = [
+            (m("a"), p(view(&["document:d1"], &[]))),                // memory forgotten
+            (m("b"), p(view(&["document:d1", "document:d2"], &[]))), // a document added
+            (m("c"), p(view(&["folder:f"], &[]))),                   // new access
+            (m("d"), p(view(&["document:d1"], &[]))),                // became a dependent
         ]
         .into();
-        let kinds: BTreeMap<Target, Kind> = decisions(&before, &after, true).into_iter().collect();
-        assert_eq!(kinds[&m("a")], Kind::Revoke);
-        assert_eq!(kinds[&m("b")], Kind::Grant);
-        assert_eq!(kinds[&m("c")], Kind::Grant);
-        assert_eq!(kinds[&m("d")], Kind::Grant);
+        let kinds: BTreeMap<Target, Decision> = decisions(&before, &after, true).into_iter().collect();
+        assert_eq!(kinds[&m("a")], Decision::Restart(Kind::Revoke));
+        assert_eq!(kinds[&m("b")], Decision::Restart(Kind::Grant));
+        assert_eq!(kinds[&m("c")], Decision::Restart(Kind::Grant));
+        assert_eq!(kinds[&m("d")], Decision::Restart(Kind::Grant));
         // A change that failed part way restarts at once, whatever it was.
-        assert!(decisions(&before, &after, false).iter().all(|(_, k)| *k == Kind::Revoke));
-        // A dependent that is gone (its meeting was deleted) is not restarted.
-        let gone: BTreeMap<Target, AccessView> = BTreeMap::new();
-        assert!(decisions(&before, &gone, true).is_empty());
+        assert!(decisions(&before, &after, false).iter().all(|(_, d)| *d == Decision::Restart(Kind::Revoke)));
+    }
+
+    #[test]
+    fn the_union_of_before_and_after_is_decided_and_the_gone_are_closed_not_rewarmed() {
+        let m = |id: &str| Target::Meeting(id.into());
+        let c = |id: &str| Target::Chat(id.into());
+        let p = |v: AccessView| ViewState::Present(v);
+        let before: BTreeMap<Target, ViewState> = [(m("a"), p(view(&[], &[]))), (m("b"), p(view(&[], &[]))), (c("x"), p(view(&[], &[])))].into();
+        // a was deleted; b can't be read; x is not read at all after (it fell out of the list)
+        let after: BTreeMap<Target, ViewState> = [(m("a"), ViewState::Gone), (m("b"), ViewState::Unreadable)].into();
+        let d: BTreeMap<Target, Decision> = decisions(&before, &after, true).into_iter().collect();
+        assert_eq!(d[&m("a")], Decision::Close);
+        assert_eq!(d[&m("b")], Decision::Restart(Kind::Revoke));
+        assert_eq!(d[&c("x")], Decision::Close, "no view after means closed, not forgotten");
+        // a dependent whose view before was unreadable or gone is a revocation
+        let before2: BTreeMap<Target, ViewState> = [(m("a"), ViewState::Unreadable), (m("b"), ViewState::Gone)].into();
+        let after2: BTreeMap<Target, ViewState> = [(m("a"), p(view(&[], &[]))), (m("b"), p(view(&[], &[])))].into();
+        assert!(decisions(&before2, &after2, true).iter().all(|(_, d)| *d == Decision::Restart(Kind::Revoke)));
+    }
+
+    #[test]
+    fn a_content_edit_is_an_edit_not_a_grant_and_not_a_revocation() {
+        let m = Target::Meeting("a".into());
+        let mut was = view(&["talking_point:p"], &[]);
+        was.hashes.insert("tp:p".into(), 1);
+        let mut now = was.clone();
+        now.hashes.insert("tp:p".into(), 2);
+        let before: BTreeMap<Target, ViewState> = [(m.clone(), ViewState::Present(was))].into();
+        let after: BTreeMap<Target, ViewState> = [(m.clone(), ViewState::Present(now))].into();
+        assert_eq!(decisions(&before, &after, true)[0].1, Decision::Restart(Kind::Edit));
     }
 
     #[test]

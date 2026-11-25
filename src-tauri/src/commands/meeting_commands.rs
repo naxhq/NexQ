@@ -525,6 +525,32 @@ fn live_meeting_is(state: &AppState, meeting_id: &str) -> bool {
     state.live_meeting.lock().ok().map_or(false, |m| m.as_ref().map_or(false, |m| m.id == meeting_id))
 }
 
+/// A meeting that no longer exists: every session of it ends and nothing
+/// starts again (no rewarm), and its notes and brief stop.
+pub(crate) fn drop_meeting_sessions(app: &AppHandle, meeting_id: &str) {
+    let state = app.state::<AppState>();
+    if let Some(rt) = crate::live_runtime::global() {
+        rt.meeting_deleted(meeting_id);
+    }
+    state.restarts.forget(&format!("meeting:{meeting_id}"));
+    let scopes = [
+        SessionScope::Live(meeting_id.to_string()),
+        SessionScope::Past(meeting_id.to_string()),
+        SessionScope::Notes(meeting_id.to_string()),
+        SessionScope::Brief(meeting_id.to_string()),
+    ];
+    for scope in &scopes {
+        state.meeting_sessions.remove_scope(scope);
+        state.agent_sessions.detach_scope(scope);
+    }
+    let sessions = state.agent_sessions.clone();
+    tauri::async_runtime::spawn(async move {
+        for scope in &scopes {
+            sessions.close_retired_graceful(scope, crate::llm::cli_agent::manager::DRAIN_TIMEOUT).await;
+        }
+    });
+}
+
 /// Forget and close every session of `scope` without blocking the caller
 /// (closing waits for a session that is still starting).
 fn close_scope_in_background(state: &AppState, scope: SessionScope) {
