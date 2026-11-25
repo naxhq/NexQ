@@ -223,6 +223,10 @@ pub(crate) fn dependents_of(state: &AppState, workspace_id: &str) -> Dependents 
 
 /// The live runtimes of the meetings that use `workspace_id` look their scope up again now.
 pub(crate) fn poke_live(state: &AppState, workspace_id: &str) {
+    // the switch may just have gone off: automatic suggestions of this workspace stop
+    if !with_reader(state, |conn| store::get_workspace(conn, workspace_id)).map_or(false, |w| w.suggest_memory && !w.archived) {
+        crate::live_runtime::memory::cancel_automatic_runs_of(workspace_id);
+    }
     if let Some(rt) = crate::live_runtime::global() {
         for id in dependents_of(state, workspace_id).meetings {
             rt.scope_changed(&id);
@@ -345,12 +349,27 @@ pub(crate) fn decisions(
     out
 }
 
+/// Background runs tied to consent (recaps, memory suggestions) are cancelled again once a
+/// change has committed: one queued between the first cancel and the commit started with
+/// the old consent and keeps its token. Their own checks also hold (see `ops::recap_job`).
+pub(crate) fn cancel_after_commit<'a>(hub: &crate::workspace_chat::ChatHub, meetings: impl Iterator<Item = &'a str>, revoking: bool) {
+    hub.cancel_recaps();
+    if revoking {
+        for id in meetings {
+            crate::live_runtime::memory::cancel_runs_of_meeting(id);
+        }
+    }
+}
+
 /// Second half: reads the dependents again, decides and restarts.
 pub(crate) fn finish_change(state: &AppState, app: &AppHandle, touched: &dyn Fn(&Connection) -> Touch, before: Pending, ok: bool) {
     let touch = with_reader(state, |conn| Ok(touched(conn))).unwrap_or_default();
     let forced = before.forced || touch.revoke;
     let mut deps = dependents_for(state, &touch);
     deps.merge(before.deps);
+    if ok {
+        cancel_after_commit(&state.workspace_chat, deps.meetings.iter().map(|m| m.as_str()), forced);
+    }
     // The live brief and the core memory follow every change at once, grant or
     // revocation: invalidating is cheap, local and not a session restart, so
     // it is neither coalesced nor delayed and comes before anything else.

@@ -10,7 +10,60 @@ use crate::live_runtime::{LiveRuntimes, Deps};
 use crate::workspace::types::{MemoryCreate, MemoryItem};
 use crate::workspace_memory::{suggest_memory, MemLine, MemoryConfig, MemoryInput, Proposal, MAX_SUGGESTIONS};
 use serde_json::json;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+
+use crate::llm::provider::CancelToken;
+
+/// Suggestion runs in flight, so a deleted or moved meeting, or a switch turned off,
+/// can cancel the call that is running instead of waiting for its result to be dropped.
+struct RunEntry {
+    id: u64,
+    meeting: String,
+    workspace: String,
+    automatic: bool,
+    cancel: Arc<CancelToken>,
+}
+
+static RUNS: Mutex<Vec<RunEntry>> = Mutex::new(Vec::new());
+static NEXT_RUN: AtomicU64 = AtomicU64::new(1);
+
+struct RunGuard(u64);
+
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        if let Ok(mut r) = RUNS.lock() {
+            r.retain(|e| e.id != self.0);
+        }
+    }
+}
+
+fn register_run(meeting: &str, workspace: &str, automatic: bool, cancel: Arc<CancelToken>) -> RunGuard {
+    let id = NEXT_RUN.fetch_add(1, Ordering::SeqCst);
+    if let Ok(mut r) = RUNS.lock() {
+        r.push(RunEntry { id, meeting: meeting.to_string(), workspace: workspace.to_string(), automatic, cancel });
+    }
+    RunGuard(id)
+}
+
+/// The meeting was deleted or moved (or its access changed): its suggestion runs stop.
+pub fn cancel_runs_of_meeting(meeting_id: &str) {
+    if let Ok(r) = RUNS.lock() {
+        for e in r.iter().filter(|e| e.meeting == meeting_id) {
+            e.cancel.cancel();
+        }
+    }
+}
+
+/// The workspace's "suggest memory" switch went off (or it was archived or deleted):
+/// the runs nobody asked for stop. A person's own request is not touched.
+pub fn cancel_automatic_runs_of(workspace_id: &str) {
+    if let Ok(r) = RUNS.lock() {
+        for e in r.iter().filter(|e| e.automatic && e.workspace == workspace_id) {
+            e.cancel.cancel();
+        }
+    }
+}
 
 /// Longest transcript chunk sent in one call (tokens) and most chunks per meeting.
 pub const CHUNK_TOKENS: u32 = 10_000;
@@ -92,6 +145,7 @@ pub async fn suggest(deps: &Deps, workspace_id: &str, meeting_id: &str, cap: Opt
         deps.db.kv_get(crate::live_runtime::settings::MEMORY_KEY).and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
     let selection = Selection { provider: settings.provider.clone(), model: settings.model.clone(), effort: settings.effort.clone() };
     let slot = deps.factory.make(AiPurpose::Memory, meeting_id, &selection)?;
+    let _registered = register_run(meeting_id, workspace_id, automatic, slot.cancel.clone());
     let mut proposals: Vec<Proposal> = Vec::new();
     let mut last_err: Option<String> = None;
     let mut ok_calls = 0;
@@ -105,10 +159,12 @@ pub async fn suggest(deps: &Deps, workspace_id: &str, meeting_id: &str, cap: Opt
             }
         }
         sent += chunk_tokens;
-        if automatic
-            && (!deps.db.suggest_flag(workspace_id)
-                || deps.db.meeting_home(meeting_id).as_deref() != Some(workspace_id)
-                || deps.deleted.lock().unwrap().contains(meeting_id))
+        // Every run needs the meeting to still exist and still be filed here; only a run
+        // nobody asked for also needs the workspace's switch.
+        if slot.cancel.is_cancelled()
+            || (automatic && !deps.db.suggest_flag(workspace_id))
+            || deps.db.meeting_home(meeting_id).as_deref() != Some(workspace_id)
+            || deps.deleted.lock().unwrap().contains(meeting_id)
         {
             return Ok(Vec::new()); // consent ended: nothing more is sent
         }
@@ -127,6 +183,9 @@ pub async fn suggest(deps: &Deps, workspace_id: &str, meeting_id: &str, cap: Opt
             }
             Err(e) => last_err = Some(e.message),
         }
+    }
+    if slot.cancel.is_cancelled() {
+        return Ok(Vec::new()); // cancelled because consent ended: the result is dropped
     }
     if ok_calls == 0 {
         return Err(last_err.unwrap_or_else(|| "The suggestion failed".into()));

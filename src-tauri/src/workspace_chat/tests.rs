@@ -2603,3 +2603,23 @@ async fn a_recap_is_dropped_when_consent_ends_before_it_is_written_and_never_sta
         }
     }
 }
+
+#[tokio::test]
+async fn a_recap_queued_between_the_first_cancel_and_the_commit_is_cancelled_after_it() {
+    let rig = Rig::new();
+    rig.meeting("m1", "Planning", 5, &["We agreed the lynx programme budget.", "Owners were named."]);
+    rig.index();
+    crate::workspace::store::update_workspace(&rig.conn(), &rig.ws, crate::workspace::types::WorkspacePatch { recaps_with_ai: Some(true), ..Default::default() }).unwrap();
+    // order 1: the recap is queued after the first cancel, before the commit
+    rig.deps.hub.cancel_recaps(); // the command's first cancel
+    let queued = Arc::new(CancelToken::new());
+    rig.deps.hub.set_recap_cancel(Some(queued.clone())); // queued with the old consent
+    crate::workspace::store::update_workspace(&rig.conn(), &rig.ws, crate::workspace::types::WorkspacePatch { recaps_with_ai: Some(false), ..Default::default() }).unwrap(); // the commit
+    crate::commands::workspace_commands::cancel_after_commit(&rig.deps.hub, std::iter::empty(), false); // finish_change
+    assert!(queued.is_cancelled(), "the second cancel reaches a run queued in between");
+    rig.api.push(Step::Text("A recap.".into()));
+    assert_eq!(ops::recap_missing(&rig.deps, &rig.ws, queued).await, 0);
+    // order 2: queued after the commit: it reads the new consent and does nothing
+    assert_eq!(ops::recap_missing(&rig.deps, &rig.ws, Arc::new(CancelToken::new())).await, 0);
+    assert!(rig.api.calls().is_empty(), "no model call in either order");
+}

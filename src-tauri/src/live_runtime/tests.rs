@@ -1587,6 +1587,52 @@ async fn automatic_memory_suggestions_need_the_switch_when_sent_and_when_saved()
     assert_eq!(n, 0);
 }
 
+#[tokio::test]
+async fn a_deleted_or_moved_meeting_cancels_its_memory_run_in_flight_for_every_kind_of_run() {
+    for automatic in [true, false] {
+        let h = harness();
+        let ws = { let c = h.conn.lock().unwrap(); new_ws(&c, "Run", false, false) };
+        set_suggest(&h, &ws, true);
+        let m = make_meeting(&h, &ws);
+        talk(&h, &m);
+        *h.fake.delay.lock().unwrap() = Duration::from_millis(500);
+        let cancel = async {
+            until("the call is in flight", || h.fake.inflight.load(Ordering::SeqCst) == 1).await;
+            super::memory::cancel_runs_of_meeting(&m);
+        };
+        let cap = if automatic { Some(100_000) } else { None };
+        let (out, _) = tokio::join!(super::memory::suggest(h.rt.deps(), &ws, &m, cap), cancel);
+        assert!(out.unwrap().is_empty(), "automatic={automatic}: the result is dropped");
+        let n: i64 = h.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM workspace_memory WHERE workspace_id = ?1", [&ws], |r| r.get(0)).unwrap_or(0);
+        assert_eq!(n, 0, "automatic={automatic}");
+        // moved before the run starts: refused, nothing sent
+        let other = { let c = h.conn.lock().unwrap(); new_ws(&c, "Other", false, false) };
+        { let c = h.conn.lock().unwrap(); crate::workspace::meetings::move_meeting_atomic(&c, &m, &other).unwrap(); }
+        let before = h.fake.count(AiPurpose::Memory);
+        assert!(super::memory::suggest(h.rt.deps(), &ws, &m, cap).await.is_err());
+        assert_eq!(h.fake.count(AiPurpose::Memory), before);
+    }
+}
+
+#[tokio::test]
+async fn turning_the_switch_off_cancels_only_automatic_runs() {
+    let h = harness();
+    let ws = { let c = h.conn.lock().unwrap(); new_ws(&c, "Sw", false, false) };
+    set_suggest(&h, &ws, true);
+    let m = make_meeting(&h, &ws);
+    talk(&h, &m);
+    *h.fake.delay.lock().unwrap() = Duration::from_millis(400);
+    // a person's own request is not cancelled by the switch
+    let off = async {
+        until("the call is in flight", || h.fake.inflight.load(Ordering::SeqCst) == 1).await;
+        set_suggest(&h, &ws, false);
+        super::memory::cancel_automatic_runs_of(&ws);
+    };
+    let (out, _) = tokio::join!(super::memory::suggest(h.rt.deps(), &ws, &m, None), off);
+    assert!(out.is_ok());
+    assert_eq!(h.fake.count(AiPurpose::Memory), 1);
+}
+
 #[test]
 fn the_webview_payload_for_a_new_memory_item_deserialises() {
     let c: crate::workspace::types::MemoryCreate =

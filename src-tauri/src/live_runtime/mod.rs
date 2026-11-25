@@ -269,6 +269,7 @@ impl LiveRuntimes {
 
     pub fn meeting_deleted(&self, meeting_id: &str) {
         self.deps.deleted.lock().unwrap().insert(meeting_id.to_string());
+        memory::cancel_runs_of_meeting(meeting_id);
         let mut g = self.inner.lock().unwrap();
         if let Some(h) = g.notes.remove(meeting_id) {
             let _ = h.tx.send(NotesCmd::Discard);
