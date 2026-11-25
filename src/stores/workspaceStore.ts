@@ -86,7 +86,7 @@ function readNumber(key: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-export type WorkspaceView = "home" | "all";
+export type WorkspaceView = "home" | "all" | "unfiled";
 
 /** Something asked to be shown: a Library row to highlight, a folder file to point at, a note to edit. */
 export interface OpenFocus {

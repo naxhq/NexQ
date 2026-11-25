@@ -39,8 +39,8 @@ describe("one vocabulary", () => {
   });
 
   it("describes the automatic choice and a chosen one in words", () => {
-    expect(describeModel({ provider: null, model: null, effort: null })).toMatch(/Automatic/);
-    expect(describeModel({ provider: "openai", model: null, effort: null })).toBe("OpenAI, cheapest model");
+    expect(describeModel({ provider: null, model: null, effort: null })).toBe("Automatic");
+    expect(describeModel({ provider: "openai", model: null, effort: null })).toBe("OpenAI, its default model");
     expect(describeModel({ provider: "ollama", model: "llama3", effort: null })).toBe("Ollama llama3");
   });
 });
@@ -64,7 +64,7 @@ describe("ModelField", () => {
     await screen.findByRole("option", { name: "GPT Mini" });
     expect(screen.queryByText(/Uses found passages/)).toBeNull();
     await userEvent.keyboard("{Escape}");
-    await userEvent.click(screen.getByRole("button", { name: "Use the cheapest model automatically" }));
+    await userEvent.click(screen.getByRole("button", { name: "Choose the model automatically" }));
     expect(onChange).toHaveBeenCalledWith({ provider: null, model: null, effort: null });
   });
 });

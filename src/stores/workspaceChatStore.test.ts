@@ -415,11 +415,11 @@ describe("backend words", () => {
 
   it("a refused tool shows as a note on the answer, once", async () => {
     const { reqId } = await startAsk();
-    h().approvalRefused({ chat_id: "c1", request_id: reqId, reason: "update_deal can't be undone" });
-    h().approvalRefused({ chat_id: "c1", request_id: reqId, reason: "update_deal can't be undone" });
+    h().approvalRefused({ chat_id: "c1", request_id: reqId, server: "CRM", tool: "update_deal", reason: "it can't be undone" });
+    h().approvalRefused({ chat_id: "c1", request_id: reqId, server: "CRM", tool: "update_deal", reason: "it can't be undone" });
     const notes = S().sessions.c1.turn!.activity.filter((a) => a.kind === "notice");
     expect(notes).toHaveLength(1);
-    expect(notes[0].label).toContain("update_deal");
+    expect(notes[0].label).toBe("CRM: update_deal was not run: it can't be undone");
   });
 
   it("loads saved pins and capabilities, and tolerates failures", async () => {

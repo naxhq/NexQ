@@ -892,7 +892,8 @@ function internal(
     approvalRefused: (e) => {
       const turn = get().sessions[e.chat_id]?.turn;
       if (!turn || (e.request_id && turn.requestId !== e.request_id)) return;
-      const label = `A tool was not run: ${e.reason}`;
+      // "CRM: send_mail was not run: ...": which tool, then the backend's reason
+      const label = `${e.server}: ${e.tool} was not run: ${e.reason}`;
       if (turn.activity.some((a) => a.label === label)) return;
       h.patchTurn(e.chat_id, turn.requestId, (t) => ({ activity: [...t.activity, { kind: "notice", label, chip: null }] }));
     },

@@ -611,3 +611,86 @@ describe("what the panel remembers", () => {
     expect(S().progress).toEqual({});
   });
 });
+
+describe("own saves and other windows (revisions, not text compare)", () => {
+  const ZWNJ = "‌";
+  async function open() {
+    install([point("a")]);
+    await S().load("w1");
+  }
+
+  it("Persian typed with a half space is saved exactly, mid-word, and nothing reloads under the caret", async () => {
+    await open();
+    S().edit("a", { doc: docFromText(`می${ZWNJ}`) }); // the user paused right after the half space
+    await vi.advanceTimersByTimeAsync(900);
+    expect(server.get("a")!.plain_text).toBe(`می${ZWNJ}`);
+    await S().syncFromBackend("w1"); // the change event for our own save
+    expect(S().docRev.a ?? 0).toBe(0);
+    S().edit("a", { doc: docFromText(`می${ZWNJ}خواهم`) });
+    await S().syncFromBackend("w1"); // an echo arrives while typing
+    expect(S().saveState.a).toBe("dirty");
+    expect(S().docRev.a ?? 0).toBe(0);
+    await vi.advanceTimersByTimeAsync(900);
+    expect(server.get("a")!.plain_text).toBe(`می${ZWNJ}خواهم`);
+    expect(S().find("a")!.plain_text).toBe(`می${ZWNJ}خواهم`);
+    expect(S().saveState.a).toBe("saved");
+  });
+
+  it("an echo is recognised by its revision: even if the stored text differs, same revision means no reload and no conflict", async () => {
+    await open();
+    S().edit("a", { doc: docFromText(`text${ZWNJ}one`) });
+    await vi.advanceTimersByTimeAsync(900);
+    const known = S().find("a")!.updated_at;
+    // a backend that normalised something: different text, same revision as the one we were handed
+    server.get("a")!.doc_json = JSON.stringify(docFromText("normalised"));
+    expect(server.get("a")!.updated_at).toBe(known);
+    await S().syncFromBackend("w1");
+    expect(S().docRev.a ?? 0).toBe(0);
+    expect(S().find("a")!.plain_text).toBe(`text${ZWNJ}one`);
+    // and while we still have unsaved text, the same revision is never a clash
+    S().edit("a", { doc: docFromText(`text${ZWNJ}one two`) });
+    await S().syncFromBackend("w1");
+    expect(S().saveState.a).toBe("dirty");
+  });
+
+  it("two windows really editing: disjoint edits merge, each side keeps typing, the same field asks", async () => {
+    await open();
+    // window A types; window B (another client of the same backend) renames the note and saves
+    S().edit("a", { doc: docFromText("alpha") });
+    await vi.advanceTimersByTimeAsync(900);
+    const bView = { ...server.get("a")! };
+    await ipc.patchTalkingPoint("a", { title: "Renamed in B" }, bView.updated_at);
+    await S().syncFromBackend("w1"); // A hears about B
+    expect(S().find("a")!.title).toBe("Renamed in B");
+    expect(S().find("a")!.plain_text).toBe("alpha");
+    expect(S().docRev.a ?? 0).toBe(0); // the text did not change: the editor is left alone
+    // A keeps typing on top of B's revision
+    S().edit("a", { doc: docFromText("alpha beta") });
+    await vi.advanceTimersByTimeAsync(900);
+    expect(server.get("a")!.plain_text).toBe("alpha beta");
+    expect(server.get("a")!.title).toBe("Renamed in B");
+    expect(S().saveState.a).toBe("saved");
+    // B now edits the text too while A has unsaved text of its own: a real clash
+    S().edit("a", { doc: docFromText("alpha beta gamma") });
+    const rev = server.get("a")!.updated_at;
+    await ipc.patchTalkingPoint("a", { doc_json: JSON.stringify(docFromText("B wrote this")), plain_text: "B wrote this", markdown: "B wrote this" }, rev);
+    await S().syncFromBackend("w1");
+    expect(S().saveState.a).toBe("conflict");
+    expect(S().find("a")!.plain_text).toBe("alpha beta gamma");
+    await S().resolveConflict("a", "theirs");
+    expect(S().find("a")!.plain_text).toBe("B wrote this");
+    expect(S().docRev.a).toBe(1);
+  });
+
+  it("a real change from another window with no unsaved text reloads once", async () => {
+    await open();
+    server.get("a")!.doc_json = JSON.stringify(docFromText("from elsewhere"));
+    server.get("a")!.plain_text = "from elsewhere";
+    server.get("a")!.updated_at = 900;
+    await S().syncFromBackend("w1");
+    expect(S().find("a")!.plain_text).toBe("from elsewhere");
+    expect(S().docRev.a).toBe(1);
+    await S().syncFromBackend("w1");
+    expect(S().docRev.a).toBe(1);
+  });
+});

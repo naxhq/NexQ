@@ -1,6 +1,7 @@
 // What a helper's run state means for the panel: the words, which buttons exist,
 // and the plain facts the header shows. Pure, so both panels and the tests share it.
-import type { NotetakerState, RunAction } from "../lib/types";
+import type { NotCovered, NotetakerState, RunAction } from "../lib/types";
+import { formatClock } from "./page";
 
 export type RunKind = "notes" | "brief";
 export type RunStatusName = NotetakerState["status"];
@@ -45,14 +46,29 @@ export function countdownText(deadline: number, now: number): string {
   return s < 90 ? `next update in ${s} s` : `next update in ${Math.ceil(s / 60)} min`;
 }
 
-/** The range the final pass could not cover, from the backend's reason ("Not covered: 02:00 to 40:00"). */
-export function notCovered(reason: string | null | undefined): string | null {
-  const m = /Not covered:\s*([^.]+)/.exec(reason ?? "");
-  return m ? m[1].trim() : null;
+/** "Not covered: 2:00 to 40:00", from the backend's range. */
+export function notCoveredText(nc: NotCovered | null | undefined): string | null {
+  return nc ? `Not covered: ${formatClock(nc.from_ms)} to ${formatClock(nc.to_ms)}` : null;
+}
+
+/** What became of the notes of a meeting that is over, in plain words. */
+export function endedWords(run: { status?: RunStatusName; not_covered?: NotCovered | null } | null | undefined): string {
+  switch (run?.status) {
+    case "capped":
+      return "Stopped at the limit";
+    case "error":
+      return "Stopped by an error";
+    case "paused":
+      return "Paused when the meeting ended";
+    case "running":
+      return "Updating the notes";
+    default:
+      return run?.not_covered ? "Stopped early" : "Finished";
+  }
 }
 
 /** The model a run will use, said before it is turned on. */
 export function modelLine(chosen: { provider: string | null; label: string }, automatic: { label: string } | null): string {
   if (chosen.provider) return `Uses ${chosen.label}`;
-  return automatic ? `Automatic, uses ${automatic.label}` : "Automatic, choosing the cheapest model";
+  return automatic ? `Automatic, uses ${automatic.label}` : "Automatic, choosing a model";
 }

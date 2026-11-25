@@ -12,6 +12,8 @@ export interface MoveMeetingMenuProps {
   currentWorkspaceId?: string;
   /** `icon` for a row, `button` for a header ("Move to workspace"). */
   variant?: "icon" | "button";
+  /** The words on the `button` variant ("Move to workspace" by default). */
+  buttonLabel?: string;
   onMoved?: (workspaceId: string) => void;
   className?: string;
 }
@@ -20,7 +22,7 @@ export interface MoveMeetingMenuProps {
  * "Move to workspace": a menu of the workspaces a meeting can be filed in.
  * Exported for the rail and for the meeting details header.
  */
-export function MoveMeetingMenu({ meetingId, currentWorkspaceId = "general", variant = "icon", onMoved, className }: MoveMeetingMenuProps) {
+export function MoveMeetingMenu({ meetingId, currentWorkspaceId = "general", variant = "icon", buttonLabel = "Move to workspace", onMoved, className }: MoveMeetingMenuProps) {
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const targets = workspaces.filter((w) => !w.archived || w.id === currentWorkspaceId);
 
@@ -63,7 +65,7 @@ export function MoveMeetingMenu({ meetingId, currentWorkspaceId = "general", var
         ) : (
           <Button variant="ghost" {...props} className={cn(state.open && "bg-accent text-foreground")}>
             <FolderInput className="h-3.5 w-3.5" aria-hidden="true" />
-            Move to workspace
+            {buttonLabel}
           </Button>
         )
       }

@@ -44,6 +44,7 @@ export function ContextPanel({
   excluded,
   itemPrefs,
   openers,
+  short = false,
 }: {
   report: ContextReport | null;
   subject: WaveSubject;
@@ -55,11 +56,15 @@ export function ContextPanel({
   /** Saved pins and exclusions (they persist across reloads). */
   itemPrefs: ItemPref[];
   openers: ChatOpeners;
+  /** The pane is short: only the one-line strip, never the expanded view. */
+  short?: boolean;
 }) {
-  const [open, setOpen] = useState(readWaveOpen);
+  const [wanted, setOpen] = useState(readWaveOpen);
+  const open = wanted && !short;
   const [selection, setSelection] = useState<ContextSelection | null>(null);
   const id = useId();
   const set = (next: boolean) => {
+    if (short) return;
     writeWaveOpen(next);
     setOpen(next);
   };

@@ -148,7 +148,7 @@ describe("MemorySection", () => {
     useWorkspaceStore.setState({ details: { acme: detailOf(ACME) } });
     render(<MemorySection workspaceId="acme" />);
     const sw = await screen.findByRole("switch", { name: /Suggest after meetings/ });
-    expect(screen.getByText(/reads its transcript and proposes up to 8 items/)).toBeInTheDocument();
+    expect(screen.getByText(/in up to 4 calls .*It proposes up to 8 items/)).toBeInTheDocument();
     await userEvent.click(sw);
     await waitFor(() => expect(b.called("update_workspace")[0]?.args).toMatchObject({ id: "acme", patch: { suggest_memory: true } }));
   });

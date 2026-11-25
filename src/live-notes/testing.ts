@@ -21,6 +21,6 @@ export function defaultCan(status: NotetakerState["status"]): RunAction[] {
 
 /** A complete run state, as the backend sends it, for tests that need a particular one. */
 export function ns(status: NotetakerState["status"], can: RunAction[] = defaultCan(status), over: Partial<NotetakerState> = {}): NotetakerState {
-  return { meeting_id: "m1", status, tokens_used: 0, cap: 120000, next_in_ms: null, total_tokens: 0, reason: null, error_kind: null, can, model: null, ...over };
+  return { meeting_id: "m1", status, tokens_used: 0, cap: 120000, next_in_ms: null, total_tokens: 0, reason: null, error_kind: null, can, model: null, not_covered: null, ...over };
 }
 export const bs = (status: BriefState["status"], can: RunAction[] = defaultCan(status), over: Partial<BriefState> = {}): BriefState => ({ ...ns(status, can), ...over }) as BriefState;

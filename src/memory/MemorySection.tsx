@@ -10,6 +10,7 @@ import { fieldClass, hintClass } from "../workspace/styles";
 import { onMemoryChanged } from "../lib/events";
 import { MEMORY_KINDS, UNSUPPORTED_TEXT, groupSaved, useMemoryStore, type MemoryRow } from "./memoryStore";
 import { ModelField, describeModel } from "../models/ModelField";
+import { useAutomaticModel } from "../models/useAutomaticModel";
 import { useMemoryModel } from "./useMemoryModel";
 
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -287,7 +288,9 @@ export function MemorySection({ workspaceId }: { workspaceId: string }) {
   const savedCount = all.filter((m) => m.status === "saved").length;
   const fromMeeting = suggested[0]?.source_meeting ? meetings.find((m) => m.id === suggested[0].source_meeting)?.title : undefined;
   const memoryModel = useMemoryModel();
-  const modelName = describeModel(memoryModel.value);
+  // Automatic means what the backend says it means right now ("Claude Haiku (cheapest)"), not a guess.
+  const automatic = useAutomaticModel(memoryModel.value.provider).model;
+  const modelName = describeModel(memoryModel.value, automatic);
   const reviewedItems = suggested.filter((m) => reviewed.has(m.id));
 
   const saveReviewed = async () => {
@@ -417,7 +420,7 @@ export function MemorySection({ workspaceId }: { workspaceId: string }) {
           checked={!!detail?.suggest_memory}
           onChange={(on) => void update(workspaceId, { suggest_memory: on }).catch((e) => showToast(`Couldn't change it: ${messageOf(e)}`, "error"))}
           label="Suggest after meetings"
-          description={`After a meeting here, one AI call (${modelName}) reads its transcript and proposes up to 8 items. Nothing is kept until you save it.`}
+          description={`After a meeting here, its transcript goes to ${modelName} in up to 4 calls (a very long meeting keeps its start and end). It proposes up to 8 items. Nothing is kept until you save it.`}
         />
         <div className="mt-2 max-w-sm">
           <ModelField label="Model for memory suggestions" value={memoryModel.value} onChange={(v) => void memoryModel.change(v)} />

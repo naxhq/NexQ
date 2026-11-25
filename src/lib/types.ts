@@ -1534,6 +1534,8 @@ export interface IndexStatus {
   last_indexed_at: number | null;
   /** Meetings whose recap the AI wrote ("Prepare recaps with AI"); absent from older backends. */
   ai_recaps?: number;
+  /** Recaps that failed, with the latest short reason; not tried again until the transcript changes or you rescan. */
+  ai_recaps_failed?: { count: number; reason: string | null };
 }
 
 /** `workspace_index_progress` */
@@ -1682,6 +1684,9 @@ export interface WorkspaceChatErrorEvent extends WorkspaceChatEventBase {
 export interface WorkspaceChatApprovalRefusedEvent {
   chat_id: string;
   request_id?: string | null;
+  /** The server and tool that were not run. */
+  server: string;
+  tool: string;
   reason: string;
 }
 
@@ -1753,6 +1758,12 @@ export type NotetakerStatus = "off" | "waiting" | "on" | "running" | "paused" | 
 /** What the person may do now; the panel's buttons come from this, never from token counts. */
 export type RunAction = "update" | "pause" | "resume" | "keep_going" | "try_again" | "start";
 
+/** The stretch of the call the notes do not cover (meeting time, ms), when a run ended early. */
+export interface NotCovered {
+  from_ms: number;
+  to_ms: number;
+}
+
 /** Which model a run will use (the cheapest tier when nothing was chosen). */
 export interface RunModel {
   provider: string;
@@ -1799,6 +1810,8 @@ export interface NotetakerState {
   error_kind: string | null;
   can: RunAction[];
   model: RunModel | null;
+  /** What the notes miss: shown with "Update notes" in the ended panel and the Notes tab. */
+  not_covered: NotCovered | null;
 }
 
 /** `notetaker_doc` */
@@ -1854,6 +1867,8 @@ export interface BriefState {
   error_kind: string | null;
   can: RunAction[];
   model: RunModel | null;
+  /** Always null for a brief (it has no transcript to cover); the backend sends the same shape for both. */
+  not_covered: NotCovered | null;
 }
 
 /** Which model writes the brief. Whether it runs is the workspace's own switch (`brief_enabled`). */

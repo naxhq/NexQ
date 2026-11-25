@@ -5,6 +5,7 @@ import { NotePage } from "../../live-notes/NotePage";
 import { docToMarkdown } from "../../live-notes/page";
 import { copyText } from "../../live-notes/clipboard";
 import { saveExportFile } from "../../lib/export";
+import { can, endedWords, inFlight, notCoveredText } from "../../live-notes/runState";
 
 interface NotesTabProps {
   meetingId: string;
@@ -18,6 +19,8 @@ export function NotesTab({ meetingId, title, onJump }: NotesTabProps) {
   const store = useLiveNotesStore;
   const { doc, undoStack } = store((s) => s.entries[meetingId] ?? EMPTY_ENTRY);
   const settings = store((s) => s.settings);
+  const run = store((s) => s.runs[meetingId] ?? null);
+  const notice = store((s) => s.notice);
   const error = store((s) => s.error);
   const [loaded, setLoaded] = useState(false);
 
@@ -79,6 +82,26 @@ export function NotesTab({ meetingId, title, onJump }: NotesTabProps) {
           </button>
         )}
       </div>
+      {run && (
+        <div className="rs-notice" role="group" aria-label="State of the notes">
+          <div className="rs-notice-title" data-testid="notes-tab-state">{endedWords(run)}</div>
+          {notCoveredText(run.not_covered) && <p>{notCoveredText(run.not_covered)}</p>}
+          {run.reason && <p>{run.reason}</p>}
+          {(can(run, "update") || inFlight(run)) && (
+            <div className="rs-notice-actions">
+              <button type="button" className="rs-tool rs-tool-solid" disabled={inFlight(run)} onClick={() => void store.getState().updateNow(meetingId)}>
+                {inFlight(run) ? "Updating" : "Update notes"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {notice && (
+        <div className="rs-notice" role="status">
+          <div className="rs-notice-title">Not updated</div>
+          <p>{notice}</p>
+        </div>
+      )}
       {error && (
         <div className="rs-notice" role="alert">
           <div className="rs-notice-title">That did not work</div>

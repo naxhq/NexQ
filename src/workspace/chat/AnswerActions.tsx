@@ -7,7 +7,7 @@ import { showToast } from "../../stores/toastStore";
 import { useWorkspaceStore } from "../../stores/workspaceStore";
 import { cn } from "../../lib/utils";
 import { ModelPicker, PickerCaret } from "./ModelPicker";
-import { DOCUMENT_CAP, INSTRUCTION_CAP, sanitizeInstructionText, sanitizePlainText, stripHidden } from "./instructionText";
+import { DOCUMENT_CAP, INSTRUCTION_CAP, describeRemoved, hiddenCount, sanitizeDocumentText, sanitizeInstructionText, stripHidden } from "./instructionText";
 import type { ModelChoice } from "./models";
 
 
@@ -101,17 +101,22 @@ export function AnswerActions({
  */
 function SaveDialog({ messageId, initial, answer, onClose }: { messageId: number; initial: string; answer: string; onClose: () => void }) {
   const [title, setTitle] = useState(initial);
-  const [text, setText] = useState(() => sanitizePlainText(answer, DOCUMENT_CAP));
+  const [text, setText] = useState(() => sanitizeDocumentText(answer));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const input = useRef<HTMLInputElement | null>(null);
   const save = async () => {
     const name = title.trim();
     if (!name || !text.trim() || busy) return;
-    const clean = sanitizePlainText(text, DOCUMENT_CAP);
+    const clean = sanitizeDocumentText(text);
     if (clean !== text) {
+      const hidden = hiddenCount(text);
       setText(clean);
-      setError("Some of it was removed: hidden characters, HTML, link targets or extra length. Read it again, then save.");
+      setError(
+        hidden > 0
+          ? `Removed ${hidden} hidden ${hidden === 1 ? "character" : "characters"}${Array.from(text).length - hidden > DOCUMENT_CAP ? ` and everything after ${DOCUMENT_CAP.toLocaleString()} characters` : ""}. Read it again, then save.`
+          : `Cut at ${DOCUMENT_CAP.toLocaleString()} characters. Read it again, then save.`,
+      );
       return;
     }
     setBusy(true);
@@ -130,7 +135,7 @@ function SaveDialog({ messageId, initial, answer, onClose }: { messageId: number
       open
       onClose={onClose}
       title="Save this answer to the library"
-      description="It becomes a plain-text document in this workspace, so later answers can use it. What you see below is what is saved."
+      description="It becomes a document in this workspace, so later answers can use it. What you see below is what is saved, as it is: code, links and HTML are kept, and only hidden characters are removed."
       size="lg"
       initialFocusRef={input}
       dismissible={!busy}
@@ -170,7 +175,7 @@ function SaveDialog({ messageId, initial, answer, onClose }: { messageId: number
         className="ui-body max-h-[45vh] w-full resize-y overflow-y-auto rounded-lg border border-input bg-background px-3 py-2 text-foreground outline-none ui-focus ui-r-lg"
       />
       <p className="ui-meta mt-1 text-right tabular-nums text-muted-foreground">
-        {text.length.toLocaleString()} characters. Plain text only: links, images and HTML are not kept.
+        {text.length.toLocaleString()} characters.
       </p>
       {error && (
         <p role="alert" className="ui-body mt-2 text-destructive">
@@ -209,8 +214,9 @@ function AddToInstructionsDialog({ workspaceId, messageId, preview, onClose }: {
     if (busy || !text.trim()) return;
     const clean = sanitizeInstructionText(text);
     if (clean !== text) {
+      const removed = describeRemoved(text);
       setText(clean);
-      setError("Some of it was removed: hidden characters, HTML, link targets or extra length. Read it again, then add it.");
+      setError(`Removed: ${removed.length ? removed.join(", ") : "extra spaces"}. Read it again, then add it.`);
       return;
     }
     setBusy(true);

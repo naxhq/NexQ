@@ -77,3 +77,30 @@ describe("NotesTab", () => {
     expect(onJump).toHaveBeenCalledWith(65_000);
   });
 });
+
+describe("NotesTab state of a finished meeting", () => {
+  it("says what became of the notes, shows what is not covered, and Update notes runs on that meeting", async () => {
+    h.doc = structuredClone(sampleDoc);
+    render(<NotesTab meetingId="m1" title="Sync" />);
+    await screen.findByRole("heading", { name: "Launch plan" });
+    const { ns } = await import("../../live-notes/testing");
+    const calls: string[] = [];
+    useLiveNotesStore.setState({
+      runs: { m1: ns("finished", ["update", "start"], { not_covered: { from_ms: 120_000, to_ms: 2_400_000 }, reason: "Stopped at the limit you set." }) },
+      updateNow: (async (id?: string) => void calls.push(String(id))) as never,
+    });
+    expect(await screen.findByTestId("notes-tab-state")).toHaveTextContent("Stopped early");
+    expect(screen.getByText("Not covered: 2:00 to 40:00")).toBeInTheDocument();
+    expect(screen.getByText("Stopped at the limit you set.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Update notes" }));
+    expect(calls).toEqual(["m1"]);
+  });
+
+  it("shows a refusal from Update notes", async () => {
+    h.doc = structuredClone(sampleDoc);
+    render(<NotesTab meetingId="m1" title="Sync" />);
+    await screen.findByRole("heading", { name: "Launch plan" });
+    useLiveNotesStore.setState({ notice: "Nothing new to add." });
+    expect(await screen.findByText("Nothing new to add.")).toBeInTheDocument();
+  });
+});

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Archive, LayoutList, MoreHorizontal, Pin, Plus, MessagesSquare } from "lucide-react";
+import { Archive, Inbox, LayoutList, MoreHorizontal, Pin, Plus, MessagesSquare } from "lucide-react";
 import { Menu, Tooltip, IconButton } from "../ui";
 import { VoiceprintMark } from "../voiceprint";
 import { cn } from "../lib/utils";
@@ -7,6 +7,7 @@ import { railOrder, useWorkspaceStore } from "../stores/workspaceStore";
 import type { WorkspaceSummary } from "../lib/types";
 import { useWorkspaceActions } from "./WorkspaceActions";
 import { MeetingList } from "./MeetingList";
+import { useUnfiledCount } from "./unfiled";
 
 function WorkspaceRow({ workspace, active, onOpen }: { workspace: WorkspaceSummary; active: boolean; onOpen: () => void }) {
   const actions = useWorkspaceActions();
@@ -74,6 +75,7 @@ export function WorkspaceRail({
   const actions = useWorkspaceActions();
 
   const rows = useMemo(() => railOrder(workspaces, showArchived), [workspaces, showArchived]);
+  const unfiled = useUnfiledCount();
   const archivedCount = workspaces.filter((w) => w.archived).length;
   const open = workspaces.find((w) => w.id === openId) ?? workspaces[0];
 
@@ -107,6 +109,13 @@ export function WorkspaceRail({
               <Plus className="h-4 w-4" aria-hidden="true" />
             </IconButton>
           </Tooltip>
+          {unfiled > 0 && (
+            <Tooltip content={`Not filed, ${unfiled}`}>
+              <IconButton onClick={() => setView("unfiled")} aria-label={`Not filed, ${unfiled}`} aria-current={view === "unfiled" ? "page" : undefined}>
+                <Inbox className="h-4 w-4" aria-hidden="true" />
+              </IconButton>
+            </Tooltip>
+          )}
           <Tooltip content="All workspaces">
             <IconButton onClick={() => setView("all")}  aria-label="All workspaces" aria-current={view === "all" ? "page" : undefined}>
               <LayoutList className="h-4 w-4" aria-hidden="true" />
@@ -148,6 +157,24 @@ export function WorkspaceRail({
             <WorkspaceRow key={w.id} workspace={w} active={view === "home" && w.id === openId} onOpen={() => openWorkspace(w.id)} />
           ))}
         </ul>
+        {unfiled > 0 && (
+          // Always in view, not at the end of the scrolling list.
+          <div className="shrink-0 px-2 pb-1">
+            <button
+              type="button"
+              onClick={() => setView("unfiled")}
+              aria-current={view === "unfiled" ? "page" : undefined}
+              className={cn(
+                "flex w-full items-center gap-2.5 rounded-lg py-1.5 pl-2.5 pr-2.5 text-left outline-none transition-colors ui-focus",
+                view === "unfiled" ? "bg-accent text-foreground" : "text-foreground/80 hover:bg-accent/60 hover:text-foreground",
+              )}
+            >
+              <Inbox className="h-[18px] w-[18px] shrink-0 text-muted-foreground" aria-hidden="true" />
+              <span className="ui-body min-w-0 flex-1 truncate font-medium">Not filed</span>
+              <span className="ui-meta tabular-nums text-muted-foreground">{unfiled}</span>
+            </button>
+          </div>
+        )}
         {archivedCount > 0 && (
           <button
             type="button"

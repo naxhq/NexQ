@@ -18,3 +18,11 @@ export function ReportNotices({ notices, className }: { notices: string[] | null
     </ul>
   );
 }
+
+/**
+ * The note that a session "already holds" the stable part is about how the answer was sent, not about
+ * what it says: it belongs in the Context panel only, never under every answer or in the composer.
+ */
+export function withoutSessionNote(notices: string[] | null | undefined): string[] {
+  return Array.isArray(notices) ? notices.filter((n) => !/already holds/i.test(n)) : [];
+}

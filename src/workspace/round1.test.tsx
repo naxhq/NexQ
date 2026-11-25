@@ -53,7 +53,7 @@ describe("F23 Prepare recaps with AI", () => {
     expect(sw).toHaveAttribute("aria-checked", "false");
     expect(await within(dialog).findByText(/one AI call writes a short recap from the transcript/)).toBeInTheDocument();
     expect(within(dialog).getByText(/for up to 5 meetings without one when this workspace opens/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/It never runs during a meeting, uses the cheapest model you have set up \(Claude Haiku \(cheapest\)\)/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/It never runs during a meeting, uses the automatic model, Claude Haiku \(cheapest\), and sends/)).toBeInTheDocument();
     expect(within(dialog).getByText(/sends that meeting's transcript to it/)).toBeInTheDocument();
     expect(within(dialog).getByText(/Meetings that already have a summary are left alone/)).toBeInTheDocument();
     expect(within(dialog).getByText(/Chat reads recaps first/)).toBeInTheDocument();
@@ -278,6 +278,12 @@ describe("the AI recap count in Edit workspace", () => {
     cleanup();
     dialog = await open({ ...base, ai_recaps: 0 });
     expect(await within(dialog).findByText("No meeting here has an AI recap yet.")).toBeInTheDocument();
+  });
+
+  it("shows failed recaps with the latest reason, and says so politely", async () => {
+    const dialog = await open({ ...base, ai_recaps: 4, ai_recaps_failed: { count: 3, reason: "no key" } });
+    expect(await within(dialog).findByText("4 meetings have an AI recap.")).toBeInTheDocument();
+    expect(await within(dialog).findByRole("status")).toHaveTextContent("3 recaps failed: no key.");
   });
 
   it("says nothing about a count an older backend does not give", async () => {

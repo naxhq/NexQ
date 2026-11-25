@@ -9,7 +9,7 @@ import { cn } from "../../lib/utils";
 import { COLUMN } from "./column";
 import { DEPTHS } from "./depths";
 import { CapabilityNotes } from "./CapabilityNotes";
-import { ReportNotices } from "./ReportNotices";
+import { ReportNotices, withoutSessionNote } from "./ReportNotices";
 import { IndexingNote } from "../IndexingNote";
 import { ModelPicker, PickerCaret } from "./ModelPicker";
 import { OptionsMenu } from "./OptionsMenu";
@@ -19,6 +19,8 @@ import { CAPABILITY_TEXT, TOOLS_OFF_TEXT, capabilityOf, providerLabel, toolsOffI
 export { DEPTHS } from "./depths";
 
 const MAX_PX = 200;
+/** The chat header's height, counted when the answers' share is reserved. */
+const HEADER_PX = 48;
 const ONE_ROW_PX = 24;
 const TWO_ROWS_PX = 48;
 
@@ -47,6 +49,8 @@ export interface ComposerProps {
   autoFocusKey: string;
   /** A chat with messages: one quiet row, so the answers keep the room. */
   compact: boolean;
+  /** The pane is short: notes shrink to one line. */
+  short?: boolean;
   /** What the backend says this chat can do (null until it answers, or on an older backend). */
   capabilities?: ChatCapabilities | null;
   /** false when the pane is narrower than 620 px. */
@@ -96,10 +100,15 @@ export function Composer(p: ComposerProps) {
     const el = box.current;
     if (!el || typeof ResizeObserver === "undefined") return;
     const pane = el.closest("[data-workspace-chat]");
-    const read = () => setBoxSize(`${Math.round(el.getBoundingClientRect().width)}x${Math.round(pane?.getBoundingClientRect().height ?? 0)}`);
+    const bottom = el.closest("[data-chat-bottom]");
+    const read = () =>
+      setBoxSize(
+        `${Math.round(el.getBoundingClientRect().width)}x${Math.round(pane?.getBoundingClientRect().height ?? 0)}x${Math.round(bottom?.getBoundingClientRect().height ?? 0)}`,
+      );
     const ro = new ResizeObserver(read);
     ro.observe(el);
     if (pane) ro.observe(pane);
+    if (bottom) ro.observe(bottom);
     return () => ro.disconnect();
   }, [compact]);
 
@@ -114,10 +123,14 @@ export function Composer(p: ComposerProps) {
       el.style.overflowY = "hidden";
       return;
     }
-    // A long draft never pushes Ask out of sight: the box may use about a fifth of the pane.
+    // A long draft never takes the room of the answers: they keep at least 35% of the pane (110 px where it fits),
+    // so the box may only use what is left once the header, the Context row and the controls are counted.
     const paneH = el.closest("[data-workspace-chat]")?.getBoundingClientRect().height || window.innerHeight;
-    const narrow = el.getBoundingClientRect().width < 380; // the controls wrap to more rows here
-    const max = Math.max(narrow ? 44 : 60, Math.min(MAX_PX, Math.round(paneH * (narrow ? 0.1 : 0.2))));
+    el.style.height = `${floor}px`;
+    const bottomH = el.closest("[data-chat-bottom]")?.getBoundingClientRect().height ?? floor + 110;
+    const others = bottomH - floor;
+    const answers = Math.min(Math.max(110, paneH * 0.35), paneH * 0.5);
+    const max = Math.max(floor, Math.min(MAX_PX, Math.round(paneH - HEADER_PX - answers - others)));
     el.style.height = "auto";
     const h = Math.min(Math.max(el.scrollHeight, floor), max);
     el.style.height = `${h}px`;
@@ -206,7 +219,7 @@ export function Composer(p: ComposerProps) {
   );
 
   const notices = (
-    <div className={cn("space-y-1", compact ? "pb-1.5" : "pb-2")}>
+    <div className={cn("space-y-1", compact ? "pb-1.5" : "pb-2", p.short && "max-h-[1.35rem] overflow-hidden [&_p]:truncate")} data-composer-notes>
       {p.meetingActive && <Notice>A meeting is running. Answers here take turns, one at a time, so live answers stay fast.</Notice>}
       {p.waitingForOther && !p.writing && <Notice>Another answer is still being written. Yours can go once it ends.</Notice>}
       {caps && <CapabilityNotes caps={caps} />}
@@ -218,7 +231,7 @@ export function Composer(p: ComposerProps) {
       {!caps && cap === "passages" && p.hasLibrary && (
         <Notice>{providerLabel(selection.provider)} can't open folders or use tools. It answers from the passages found in your meetings and documents.</Notice>
       )}
-      <ReportNotices notices={report?.notices} className="space-y-0.5" />
+      <ReportNotices notices={withoutSessionNote(report?.notices)} className="space-y-0.5" />
       {!(report?.notices ?? []).some((n) => /^still indexing/i.test(n)) && <IndexingNote workspaceId={p.workspaceId} />}
       {smallWindow && report && <Notice>This model's window is small ({report.window.toLocaleString()} tokens), so answers see less of your material.</Notice>}
     </div>

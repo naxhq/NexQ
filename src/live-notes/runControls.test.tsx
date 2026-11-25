@@ -27,13 +27,14 @@ vi.mock("../lib/events", async () => {
 import { NotesPanel } from "./LiveNotesPanel";
 import { BriefPanel } from "../live-brief/BriefPanel";
 import { Countdown } from "./RunStatusHeader";
-import { countdownText, notCovered, can, modelLine } from "./runState";
+import { countdownText, notCoveredText, endedWords, can, modelLine } from "./runState";
 import { ns, bs } from "./testing";
 import { DEFAULT_NOTETAKER_SETTINGS, EMPTY_ENTRY, useLiveNotesStore } from "../stores/liveNotesStore";
 import { DEFAULT_BRIEF_SETTINGS, useLiveBriefStore } from "../stores/liveBriefStore";
 import { useMeetingStore } from "../stores/meetingStore";
 
 const calls = vi.hoisted(() => [] as string[]);
+let updateArgs: string[] = [];
 const h = vi.hoisted(() => ({ automatic: null as null | { provider: string; model: string; effort: string | null; label: string } }));
 const spy = (name: string) => vi.fn(async () => void calls.push(name));
 
@@ -48,7 +49,7 @@ function notes(state: NotetakerState, settings: Partial<NotetakerSettings> = {},
     error: null,
     attach: async () => () => {},
     watchSettings: async () => () => {},
-    updateNow: spy("update") as never,
+    updateNow: (async (id?: string) => void (calls.push("update"), (updateArgs = id ? [id] : []))) as never,
     pause: spy("pause") as never,
     resume: spy("resume") as never,
     start: spy("start") as never,
@@ -167,13 +168,25 @@ describe("the model it will use", () => {
   });
 });
 
-describe("not covered, from the backend's reason", () => {
-  it("shows the range and offers Update notes when an update is allowed", async () => {
-    notes(run("finished", ["update", "start"], { reason: "Notes were on manual. Not covered: 02:00 to 40:00" }));
+describe("not covered, from the backend's range", () => {
+  const range = { from_ms: 120_000, to_ms: 2_400_000 };
+
+  it("shows the range in the panel after the meeting ended, and Update notes runs on that meeting", async () => {
+    notes(run("finished", ["update", "start"], { not_covered: range }));
+    const { rerender } = render(<NotesPanel />);
+    act(() => useMeetingStore.setState({ activeMeeting: null as never }));
+    rerender(<NotesPanel />);
+    expect(screen.getByText("Not covered: 2:00 to 40:00")).toBeInTheDocument();
+    expect(screen.getByText("Live notes: Stopped early")).toBeInTheDocument();
+    const update = screen.getByRole("button", { name: "Update notes" });
+    await userEvent.click(update);
+    expect(updateArgs).toEqual(["m1"]);
+  });
+
+  it("shows progress while the update runs", () => {
+    notes(run("running", [], { not_covered: range }));
     render(<NotesPanel />);
-    expect(screen.getByText("Not covered: 02:00 to 40:00")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Update notes" }));
-    expect(calls).toEqual(["update"]);
+    expect(screen.getByRole("button", { name: "Updating" })).toBeDisabled();
   });
 
   it("says nothing when there is nothing uncovered", () => {
@@ -182,9 +195,13 @@ describe("not covered, from the backend's reason", () => {
     expect(screen.queryByText(/Not covered/)).toBeNull();
   });
 
-  it("reads the range out of the reason", () => {
-    expect(notCovered("Final pass failed. Not covered: 02:00 to 40:00.")).toBe("02:00 to 40:00");
-    expect(notCovered(null)).toBeNull();
+  it("words", () => {
+    expect(notCoveredText(range)).toBe("Not covered: 2:00 to 40:00");
+    expect(notCoveredText(null)).toBeNull();
+    expect(endedWords({ status: "capped" })).toBe("Stopped at the limit");
+    expect(endedWords({ status: "error" })).toBe("Stopped by an error");
+    expect(endedWords({ status: "finished", not_covered: range })).toBe("Stopped early");
+    expect(endedWords({ status: "finished", not_covered: null })).toBe("Finished");
   });
 });
 
@@ -264,7 +281,7 @@ describe("after Stop, at the end, and when the limit changes", () => {
     const { rerender } = render(<NotesPanel />);
     act(() => useMeetingStore.setState({ activeMeeting: null as never }));
     rerender(<NotesPanel />);
-    expect(screen.getByText("Live notes: Meeting ended")).toBeInTheDocument();
+    expect(screen.getByText("Live notes: Finished")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Launch plan" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Update now|Start notes again/ })).toBeNull();
   });

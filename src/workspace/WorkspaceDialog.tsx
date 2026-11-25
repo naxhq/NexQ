@@ -34,7 +34,13 @@ const NO_SCENARIO = "__none";
  * meeting, which model, what is sent, and who reads a recap.
  */
 export function recapsDescription(model: string): string {
-  return `Off by default. After a meeting here ends, and for up to 5 meetings without one when this workspace opens, one AI call writes a short recap from the transcript. It never runs during a meeting, uses the cheapest model you have set up (${model}), and sends that meeting's transcript to it. Meetings that already have a summary are left alone. Chat reads recaps first when it looks across many meetings.`;
+  return `Off by default. After a meeting here ends, and for up to 5 meetings without one when this workspace opens, one AI call writes a short recap from the transcript. It never runs during a meeting, uses ${model}, and sends that meeting's transcript to it. Meetings that already have a summary are left alone. A recap that failed is not tried again until the transcript changes or you rescan. Chat reads recaps first when it looks across many meetings.`;
+}
+
+/** "3 recaps failed: no key": what went wrong, with the latest reason, said plainly. */
+export function recapFailureLine(failed: { count: number; reason: string | null } | null | undefined): string | null {
+  if (!failed || !failed.count) return null;
+  return `${failed.count} ${failed.count === 1 ? "recap" : "recaps"} failed${failed.reason ? `: ${failed.reason}` : ""}.`;
 }
 
 /** "12 meetings have an AI recap": the count from the index, said plainly. */
@@ -62,6 +68,7 @@ export function WorkspaceDialog({
   const unavailable = useWorkspaceStore((s) => s.unavailable);
   const automatic = useAutomaticModel(null).model;
   const [recapCount, setRecapCount] = useState<number | null>(null);
+  const [recapFailed, setRecapFailed] = useState<{ count: number; reason: string | null } | null>(null);
   // How many meetings already have an AI recap (from the index; older backends do not say).
   const editedId = workspace?.id;
   useEffect(() => {
@@ -69,13 +76,18 @@ export function WorkspaceDialog({
     let live = true;
     setRecapCount(null);
     getIndexStatus(editedId)
-      .then((s) => live && setRecapCount(typeof s?.ai_recaps === "number" ? s.ai_recaps : null))
+      .then((s) => {
+        if (!live) return;
+        setRecapCount(typeof s?.ai_recaps === "number" ? s.ai_recaps : null);
+        setRecapFailed(s?.ai_recaps_failed ?? null);
+      })
       .catch(() => {});
     return () => {
       live = false;
     };
   }, [open, editedId]);
   const recapLine = recapCountLine(recapCount);
+  const failureLine = recapFailureLine(recapFailed);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const create = useWorkspaceStore((s) => s.create);
   const update = useWorkspaceStore((s) => s.update);
@@ -309,8 +321,13 @@ export function WorkspaceDialog({
               label="Prepare recaps with AI"
               description={
                 <>
-                  {recapsDescription(automatic?.label ?? "the cheapest model")}
+                  {recapsDescription(automatic?.label ? `the automatic model, ${automatic.label}` : "the cheapest model you have set up")}
                   {recapLine && <span className="mt-1 block font-medium text-foreground">{recapLine}</span>}
+                  {failureLine && (
+                    <span role="status" className="mt-0.5 block font-medium text-warning">
+                      {failureLine}
+                    </span>
+                  )}
                 </>
               }
             />

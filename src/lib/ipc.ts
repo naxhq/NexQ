@@ -1177,6 +1177,10 @@ export async function listWorkspaceMeetings(
 ): Promise<WorkspaceMeetingPage> {
   return invoke<WorkspaceMeetingPage>("list_workspace_meetings", { id, query, limit, offset });
 }
+/** Meetings filed in no workspace; `listWorkspaceMeetings("unfiled", ...)` lists them. */
+export async function countUnfiledMeetings(): Promise<number> {
+  return invoke<number>("count_unfiled_meetings");
+}
 export async function getMeetingRecap(meetingId: string): Promise<MeetingRecap | null> {
   return invoke<MeetingRecap | null>("get_meeting_recap", { meetingId });
 }

@@ -288,9 +288,10 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
       const local = prev.find((x) => x.id === p.id);
       if (e && Object.keys(e.dirty).length > 0) {
         if (!e.inFlight) {
-          const clash = (Object.keys(e.dirty) as Array<keyof TextFields>).some(
-            (k) => e.orig[k] !== undefined && p[k] !== e.orig[k] && p[k] !== e.dirty[k],
-          );
+          // the backend copy is still the revision our edits are based on: nobody else changed it
+          const clash =
+            p.updated_at !== e.base &&
+            (Object.keys(e.dirty) as Array<keyof TextFields>).some((k) => e.orig[k] !== undefined && p[k] !== e.orig[k] && p[k] !== e.dirty[k]);
           if (clash && !e.conflict) {
             e.conflict = true;
             if (e.timer) clearTimeout(e.timer);
@@ -303,7 +304,9 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
         out.push({ ...p, ...e.dirty });
         continue;
       }
-      if (local && local.doc_json !== p.doc_json) reload.push(p.id);
+      // Same revision as the copy we hold: our own save coming back (or nothing new). Never a reason to reload,
+      // whatever the text compare says. A different revision with different text is another window's change.
+      if (local && local.updated_at !== p.updated_at && local.doc_json !== p.doc_json) reload.push(p.id);
       out.push(p);
     }
     // unsaved notes the backend no longer lists stay until their save is refused ("not_found")

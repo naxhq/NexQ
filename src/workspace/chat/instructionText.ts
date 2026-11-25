@@ -14,7 +14,8 @@ export const INSTRUCTION_CAP = 4000;
 
 /**
  * Everything invisible that this pass removes: control characters, the Unicode default-ignorable and
- * format (Cf) characters, the tag block, noncharacters and unpaired surrogates. Kept on purpose: the
+ * format (Cf) characters, the tag block, noncharacters and unpaired surrogates. A zero-width space stays only
+ * between two letters of Thai, Lao, Khmer or Myanmar; joiners stay after a letter of the scripts that spell with them. Kept on purpose: the
  * Arabic number signs (U+0600-0605, 06DD, 070F, 0890-0891, 08E2, 110BD, 110CD), which print a visible
  * mark, and private-use characters (they print in some fonts). U+2028 and U+2029 become a newline.
  * The same table is `hidden_always` in prompt_data.rs; the test `every code point agrees` checks both
@@ -35,7 +36,6 @@ function hiddenAlways(cp: number): boolean {
     cp === 0x17b4 ||
     cp === 0x17b5 ||
     cp === 0x180e ||
-    cp === 0x200b ||
     cp === 0x200e ||
     cp === 0x200f ||
     (cp >= 0x202a && cp <= 0x202e) ||
@@ -92,9 +92,19 @@ function joinerLetter(cp: number): boolean {
 }
 
 function joinerOk(cp: number, base: number, next: number): boolean {
-  if (joinerLetter(base) && joinerLetter(next)) return true;
+  // after a letter or vowel sign of a script that spells with joiners: inside a word (Persian half-space,
+  // Indic conjuncts) and at its end (Malayalam chillu forms, Arabic heh with a joiner)
+  if (joinerLetter(base)) return true;
   // an emoji sequence: only the zero-width joiner, between two symbols
   return cp === 0x200d && isSymbolBase(base) && isSymbolBase(next);
+}
+
+/** A letter of a script written without spaces (Thai, Lao, Khmer, Myanmar): a zero-width space between two is a word break. */
+function breakLetter(cp: number): boolean {
+  const inScript = inRange(cp, 0x0e01, 0x0e7f) || inRange(cp, 0x0e81, 0x0eff) || inRange(cp, 0x1780, 0x17ff) || inRange(cp, 0x1000, 0x109f);
+  const notLetter =
+    inRange(cp, 0x0e50, 0x0e5b) || cp === 0x0e4f || inRange(cp, 0x0ed0, 0x0ed9) || inRange(cp, 0x17d4, 0x17dc) || inRange(cp, 0x17e0, 0x17e9) || inRange(cp, 0x1040, 0x104f);
+  return inScript && !notLetter;
 }
 
 function selectorOk(cp: number, base: number, next: number): boolean {
@@ -121,6 +131,12 @@ export function stripHidden(text: string): string {
       continue;
     }
     const next = i + 1 < chars.length ? chars[i + 1].codePointAt(0)! : 0;
+    if (cp === 0x200b) {
+      if (last === "joiner" || !(breakLetter(base) && breakLetter(next))) continue;
+      out.push(c);
+      last = "joiner";
+      continue;
+    }
     if (cp === 0x200c || cp === 0x200d) {
       if (last === "joiner" || !joinerOk(cp, base, next)) continue;
       out.push(c);
@@ -176,4 +192,48 @@ export function sanitizePlainText(raw: string, cap: number): string {
 /** Plain instruction text (see `sanitizePlainText`). */
 export function sanitizeInstructionText(raw: string): string {
   return sanitizePlainText(raw, INSTRUCTION_CAP);
+}
+
+/** A document keeps everything it says (code, `<T>`, links, HTML samples): only hidden characters go, and it is cut at `DOCUMENT_CAP`. */
+export function sanitizeDocumentText(raw: string): string {
+  return Array.from(stripHidden(raw)).slice(0, DOCUMENT_CAP).join("");
+}
+
+/** How many hidden characters `sanitizeDocumentText` would take out. */
+export function hiddenCount(raw: string): number {
+  return Array.from(raw).length - Array.from(stripHidden(raw)).length;
+}
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+const shorten = (s: string) => (s.length > 60 ? `${s.slice(0, 59)}…` : s);
+
+/** Exactly what `sanitizeInstructionText` would take out of `raw`, in words ("2 HTML tags", "the link address https://..."). */
+export function describeRemoved(raw: string): string[] {
+  const out: string[] = [];
+  const hidden = hiddenCount(raw);
+  if (hidden > 0) out.push(plural(hidden, "hidden character", "hidden characters"));
+  let t = stripHidden(raw.replace(/\r\n?/g, "\n"));
+  const count = (re: RegExp, one: string, many: string) => {
+    const n = (t.match(re) ?? []).length;
+    if (n > 0) out.push(plural(n, one, many));
+    t = t.replace(re, "");
+  };
+  count(/\s?\[S\d+(?:\s*,\s*S\d+)*\]/g, "source tag", "source tags");
+  count(/<!--[\s\S]*?-->/g, "HTML comment", "HTML comments");
+  count(/<\/?[a-zA-Z][^>]*>/g, "HTML tag", "HTML tags");
+  count(/^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*\S.*$/gm, "link reference line", "link reference lines");
+  const addresses: string[] = [];
+  t = t.replace(/!\[([^\]]*)\]\(([^)]*)\)/g, (_m, alt: string, url: string) => {
+    if (url.trim()) addresses.push(`the image address ${shorten(url.trim())}`);
+    return alt;
+  });
+  t = t.replace(/\[([^\]]+)\]\(([^)]*)\)/g, (_m, text: string, url: string) => {
+    if (url.trim()) addresses.push(`the link address ${shorten(url.trim())}`);
+    return text;
+  });
+  out.push(...addresses.slice(0, 3));
+  if (addresses.length > 3) out.push(`${addresses.length - 3} more addresses`);
+  count(/\[([^\]]+)\]\[[^\]]*\]/g, "link reference", "link references");
+  if (Array.from(t.trim()).length > INSTRUCTION_CAP) out.push(`everything after ${INSTRUCTION_CAP.toLocaleString()} characters`);
+  return out;
 }

@@ -1449,6 +1449,10 @@ export const useConfigStore = create<ConfigState>((set) => ({
       store.onKeyChange<boolean>("contextScopeSticky", (val) => {
         if (val != null) set({ contextScopeSticky: val });
       });
+      // The theme chosen in one window reaches the others at once (the meeting window stays mounted).
+      store.onKeyChange<ThemeMode>("theme", (val) => {
+        if (val === "dark" || val === "light" || val === "system") set({ theme: val });
+      });
       store.onKeyChange<number>("overlayOpacity", (val) => {
         if (val != null) set({ overlayOpacity: val });
       });

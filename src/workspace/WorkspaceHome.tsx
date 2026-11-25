@@ -20,6 +20,7 @@ import {
   useElementWidth,
 } from "./layout";
 import { LibraryPanel } from "./LibraryPanel";
+import { UnfiledMeetings } from "./UnfiledMeetings";
 import { MeetingList } from "./MeetingList";
 import { MiddlePane } from "./MiddlePane";
 import { ResizeHandle } from "./ResizeHandle";
@@ -140,7 +141,9 @@ export function WorkspaceHome({
         {narrow && <div className="w-px shrink-0 bg-border" aria-hidden="true" />}
 
         <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
-          {view === "all" ? (
+          {view === "unfiled" ? (
+            <UnfiledMeetings onOpenMeeting={onOpenMeeting} />
+          ) : view === "all" ? (
             <Suspense fallback={null}>
               <AllWorkspaces onOpenMeeting={openMeetingFromAll} />
             </Suspense>

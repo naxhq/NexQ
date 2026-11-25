@@ -9,7 +9,7 @@ import { classifyChatError } from "./errors";
 import { citationKindName, citationWhere } from "./citations";
 import { Prose, type OpenCitation } from "./Prose";
 import { ApprovalCard } from "./ApprovalCard";
-import { ReportNotices } from "./ReportNotices";
+import { ReportNotices, withoutSessionNote } from "./ReportNotices";
 import { stripHidden } from "./instructionText";
 import { AnswerActions } from "./AnswerActions";
 import { ModelPicker, PickerCaret } from "./ModelPicker";
@@ -172,7 +172,7 @@ export const SavedTurn = memo(function SavedTurn({
             </ul>
           )}
           <SourcesDisclosure citations={answer.citations} activity={extras?.activity ?? []} onOpen={ctx.onOpenCitation} />
-          <ReportNotices notices={answer.context?.notices} />
+          <ReportNotices notices={withoutSessionNote(answer.context?.notices)} />
           {missed > 0 && (
             <p className="ui-meta mt-2 text-muted-foreground">
               {missed} {missed === 1 ? "thing" : "things"} didn't fit.{" "}
@@ -268,7 +268,7 @@ export function LiveTurn({ turn, ctx, onDismiss }: { turn: Turn; ctx: TurnContex
         </ul>
       )}
       <Notices activity={turn.activity} />
-      <ReportNotices notices={turn.report?.notices} />
+      <ReportNotices notices={withoutSessionNote(turn.report?.notices)} />
       {turn.status === "failed" && turn.error !== null && <ErrorBlock error={turn.error} turn={turn} ctx={ctx} />}
       {turn.status === "removed" && (
         <p role="status" className="ui-body mt-2 text-muted-foreground">

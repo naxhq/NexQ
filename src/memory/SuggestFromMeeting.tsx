@@ -6,6 +6,7 @@ import { Button, Dialog } from "../ui";
 import { useState } from "react";
 import { ModelField, describeModel } from "../models/ModelField";
 import { useMemoryModel } from "./useMemoryModel";
+import { isUnfiledHome } from "../workspace/unfiled";
 
 /**
  * "Suggest from this meeting" for the meeting details header: one AI call that
@@ -27,6 +28,21 @@ export function SuggestFromMeeting({ meetingId, workspaceId = "general", classNa
     else if (after?.status === "none") showToast("Nothing new to remember was found in this meeting", "info");
     else if (after?.status === "failed") showToast(`Couldn't get suggestions: ${after.error}`, "error");
   };
+
+  // An unfiled meeting has no workspace to remember for: file it first.
+  if (isUnfiledHome(workspaceId)) {
+    return (
+      <>
+        <Button variant="ghost" disabled aria-describedby="suggest-unfiled-why" className={cn(className)}>
+          <BookmarkPlus className="h-3.5 w-3.5" aria-hidden="true" />
+          Suggest from this meeting
+        </Button>
+        <span id="suggest-unfiled-why" className="sr-only">
+          File this meeting in a workspace first.
+        </span>
+      </>
+    );
+  }
 
   return (
     <>

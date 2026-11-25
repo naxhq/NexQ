@@ -1,6 +1,7 @@
 import type { MeetingSummary, WorkspaceSummary } from "../lib/types";
 import { groupMeetingsByDate } from "../workspace/meetingGroups";
 import { MeetingCard } from "./MeetingCard";
+import { NOT_FILED, isUnfiledHome } from "../workspace/unfiled";
 
 interface RecentMeetingsProps {
   meetings: MeetingSummary[];
@@ -58,7 +59,7 @@ export function RecentMeetings({
                 onToggleFavorite={onToggleFavorite}
                 isLive={meeting.id === activeMeetingId}
                 canMove={!!workspaces && workspaces.length > 1}
-                workspace={workspaces ? workspaces.find((w) => w.id === (meeting.workspace_id ?? "general")) : undefined}
+                workspace={workspaces ? (isUnfiledHome(meeting.workspace_id) ? NOT_FILED : workspaces.find((w) => w.id === (meeting.workspace_id ?? "general"))) : undefined}
               />
             ))}
           </div>

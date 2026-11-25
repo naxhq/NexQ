@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { MoreHorizontal, Pin, Plus, Search } from "lucide-react";
+import { Inbox, MoreHorizontal, Pin, Plus, Search } from "lucide-react";
+import { useUnfiledCount } from "./unfiled";
 import { Menu, Select, Switch, Button, IconButton } from "../ui";
 import { MeetingWave, VoiceprintMark } from "../voiceprint";
 import { listWorkspaceMeetings } from "../lib/ipc";
@@ -78,6 +79,7 @@ export function AllWorkspaces({ onOpenMeeting }: { onOpenMeeting: (workspaceId: 
   const [showArchived, setShowArchived] = useState(false);
 
   const archivedCount = workspaces.filter((w) => w.archived).length;
+  const unfiled = useUnfiledCount();
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
     const list = workspaces.filter(
@@ -171,6 +173,25 @@ export function AllWorkspaces({ onOpenMeeting }: { onOpenMeeting: (workspaceId: 
               </li>
             );
           })}
+          {unfiled > 0 && !query.trim() && (
+            <li className="py-5">
+              <div className="flex items-start gap-4">
+                <Inbox className="h-[30px] w-[30px] shrink-0 text-muted-foreground" aria-hidden="true" />
+                <div className="min-w-0 flex-1">
+                  <button
+                    type="button"
+                    onClick={() => useWorkspaceStore.getState().setView("unfiled")}
+                    className="rounded text-left text-[1.0625rem] font-semibold leading-snug text-foreground outline-none hover:underline hover:underline-offset-4 ui-focus ui-focus-sm"
+                  >
+                    Not filed
+                  </button>
+                  <p className={`${hintClass} mt-1`}>
+                    {unfiled} {unfiled === 1 ? "meeting isn't" : "meetings aren't"} in a workspace. File them to bring them home.
+                  </p>
+                </div>
+              </div>
+            </li>
+          )}
           {shown.length === 0 && (
             <li className="py-10 text-center">
               <p className="ui-section text-foreground">{query ? "No workspace matches that" : "No workspaces yet"}</p>

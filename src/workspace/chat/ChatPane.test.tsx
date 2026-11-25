@@ -269,22 +269,23 @@ describe("answers", () => {
     await waitFor(() => expect(ipc.saveAnswerToLibrary).toHaveBeenCalledWith(2, "What is the plan?", "The plan."));
   });
 
-  it("shows the text that will be stored, cleans what must go, and stores exactly the reviewed text", async () => {
+  it("keeps everything in a saved document and removes only hidden characters, naming them", async () => {
     ipc.saveAnswerToLibrary.mockResolvedValue("doc1");
     const zw = String.fromCharCode(0x200b);
-    setup({ chats: [chat("c1")], messages: [message(1, "user", "Plan?"), message(2, "assistant", "Plan" + zw + " <b>A</b> [x](https://evil.example) [S1]")] });
+    const code = "Plan <b>A</b> [x](https://evil.example) Vec<T> [S1]";
+    setup({ chats: [chat("c1")], messages: [message(1, "user", "Plan?"), message(2, "assistant", "Plan" + zw + code.slice(4))] });
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Save to library" }));
     const dialog = await screen.findByRole("dialog");
     const field = within(dialog).getByLabelText("Text to save") as HTMLTextAreaElement;
-    expect(field.value).toBe("Plan A x");
-    fireEvent.change(field, { target: { value: "Plan A x" + zw + "!" } });
+    expect(field.value).toBe(code);
+    fireEvent.change(field, { target: { value: code + zw + "!" } });
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     expect(ipc.saveAnswerToLibrary).not.toHaveBeenCalled();
-    expect(field.value).toBe("Plan A x!");
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Some of it was removed");
+    expect(field.value).toBe(code + "!");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Removed 1 hidden character");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(ipc.saveAnswerToLibrary).toHaveBeenCalledWith(2, "Plan?", "Plan A x!"));
+    await waitFor(() => expect(ipc.saveAnswerToLibrary).toHaveBeenCalledWith(2, "Plan?", code + "!"));
   });
 });
 
@@ -546,10 +547,18 @@ describe("room for the answer", () => {
     expect(localStorage.getItem("nexq_ws_chat_wave_open")).toBe("1");
   });
 
-  it("keeps the answer column at least half the pane", async () => {
+  it("keeps the question box outside every scroll box, with only the Context panel scrolling above it", async () => {
     setup({ chats: [chat("c1")], messages: pairs(1) });
-    const region = await screen.findByRole("region", { name: "Conversation" });
-    expect(region.parentElement?.className).toContain("min-h-[50%]");
+    const box = await screen.findByRole("textbox", { name: /ask about this workspace/i });
+    const bottom = document.querySelector("[data-chat-bottom]") as HTMLElement;
+    expect(bottom.contains(box)).toBe(true);
+    // no ancestor of the question box between it and the pane scrolls
+    for (let el: HTMLElement | null = box.parentElement; el && el !== document.querySelector("[data-workspace-chat]"); el = el.parentElement) {
+      expect(el.className).not.toMatch(/overflow-y-auto|overflow-auto|overflow-y-scroll/);
+    }
+    const ctx = bottom.querySelector("[data-context-scroll]") as HTMLElement;
+    expect(ctx.className).toContain("overflow-y-auto");
+    expect(ctx.contains(box)).toBe(false);
     expect(document.querySelector("[data-workspace-chat]")?.className).toContain("overflow-hidden");
   });
 });
@@ -591,7 +600,7 @@ describe("add to instructions", () => {
     await user.click(within(dialog).getByRole("button", { name: "Add to instructions" }));
     expect(ipc.addAnswerToInstructions).not.toHaveBeenCalled();
     expect(field.value).toBe("Be kind always x");
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Some of it was removed");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Removed: 1 hidden character, 2 HTML tags, the link address https://evil.example");
     await user.click(within(dialog).getByRole("button", { name: "Add to instructions" }));
     await waitFor(() => expect(ipc.addAnswerToInstructions).toHaveBeenCalledWith(2, "Be kind always x"));
   });
@@ -886,5 +895,30 @@ describe("entities and the question itself", () => {
     fireEvent.keyDown(box, { key: "Enter" });
     await new Promise((r) => setTimeout(r, 60));
     expect(ipc.askWorkspace).not.toHaveBeenCalled();
+  });
+});
+
+describe("the session note lives in the Context panel only", () => {
+  const note = "This chat's session already holds 4,200 tokens (instructions, pinned items and the material that fits); only your question and what is new goes in this turn.";
+  it("is not repeated under an answer or in the composer, but is in the Context panel", async () => {
+    const r = { ...report, estimate: false, notices: [note, "Still indexing: 3 of 9 meetings are searchable"], bars: [] };
+    ipc.previewChatContext.mockResolvedValue({ ...report, notices: [note, "Still indexing: 3 of 9 meetings are searchable"] });
+    setup({ chats: [chat("c1")], messages: [message(1, "user", "Q"), message(2, "assistant", "A", { context: r as never })] });
+    expect((await screen.findAllByText(/Still indexing: 3 of 9/)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/already holds/)).toBeNull();
+    await userEvent.setup().click(await screen.findByRole("button", { name: /What the next answer will see/ }, { timeout: 2000 }));
+    expect(await screen.findByText(/already holds 4,200 tokens/)).toBeInTheDocument();
+  });
+});
+
+describe("a refused tool, in the answer", () => {
+  it("names the server and tool, then the reason", async () => {
+    setup();
+    const box = await typeQuestion("Q");
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(ipc.askWorkspace).toHaveBeenCalled());
+    const id = ipc.askWorkspace.mock.calls[0][2] as string;
+    emit("workspace_chat_approval_refused", { chat_id: "c1", request_id: id, server: "CRM", tool: "send_mail", reason: "its arguments are too long to show." });
+    expect(await screen.findByText("CRM: send_mail was not run: its arguments are too long to show.")).toBeInTheDocument();
   });
 });

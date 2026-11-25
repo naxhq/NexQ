@@ -15,8 +15,8 @@ const DEFAULT_EFFORT = "__default";
 
 /** The words for a choice: "Claude Sonnet", "Ollama llama3", or the automatic default. */
 export function describeModel(v: ModelValue, automatic?: { label: string } | null): string {
-  if (!v.provider) return automatic ? `Automatic: ${automatic.label}` : "Automatic: the cheapest model";
-  return v.model ? selectionLabel({ provider: v.provider, model: v.model }) : `${providerLabel(v.provider)}, cheapest model`;
+  if (!v.provider) return automatic ? `Automatic: ${automatic.label}` : "Automatic";
+  return v.model ? selectionLabel({ provider: v.provider, model: v.model }) : `${providerLabel(v.provider)}, its default model`;
 }
 
 /**
@@ -46,7 +46,7 @@ export function ModelField({ value, onChange, label = "Model" }: { value: ModelV
       </ModelPicker>
       {value.provider && (
         <button type="button" className="ui-meta self-start rounded text-muted-foreground underline underline-offset-2 outline-none hover:text-foreground ui-focus" onClick={() => onChange({ provider: null, model: null, effort: null })}>
-          Use the cheapest model automatically
+          Choose the model automatically
         </button>
       )}
       {efforts.length > 0 && (

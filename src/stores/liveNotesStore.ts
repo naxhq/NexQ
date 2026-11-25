@@ -96,7 +96,8 @@ interface LiveNotesState {
   turnOn: (scope: NotetakerSettings["scope"]) => Promise<void>;
   stop: () => Promise<void>;
   start: () => Promise<void>;
-  updateNow: () => Promise<void>;
+  /** For the live meeting, or for the ended meeting the panel or tab shows (it runs on the saved transcript). */
+  updateNow: (meetingId?: string) => Promise<void>;
   /** Pause this meeting's notes (they can be resumed); `stop` ends them for the meeting. */
   pause: () => Promise<void>;
   resume: () => Promise<void>;
@@ -296,8 +297,8 @@ export const useLiveNotesStore = create<LiveNotesState>((set, get) => {
       if (!ok) set({ error: "Could not stop the notes. Try again." });
     },
     start: () => onLive((id) => notetakerStart(id)),
-    updateNow: async () => {
-      const id = needLive();
+    updateNow: async (meetingId) => {
+      const id = meetingId ?? needLive();
       if (!id) return;
       set({ error: null, notice: null });
       try {

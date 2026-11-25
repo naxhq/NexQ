@@ -8,7 +8,7 @@ import { useMeetingStore } from "../stores/meetingStore";
 import { EMPTY_ENTRY, useLiveNotesStore } from "../stores/liveNotesStore";
 import { NotePage } from "./NotePage";
 import { Countdown, RunStatusHeader } from "./RunStatusHeader";
-import { can, inFlight, modelLine, notCovered, runWords } from "./runState";
+import { can, endedWords, inFlight, modelLine, notCoveredText, runWords } from "./runState";
 import { useAutomaticModel } from "../models/useAutomaticModel";
 import { describeModel } from "../models/ModelField";
 import { NotesSettingsForm, formatTokens } from "./NotesSettingsForm";
@@ -101,7 +101,7 @@ export function NotesPanel() {
   }
 
   const stat = statusWords(run, settings);
-  const word = ended ? "Meeting ended" : stat.word;
+  const word = ended ? endedWords(run) : stat.word;
   const baseNote = ended ? undefined : stat.note;
   const waiting = run?.status === "waiting" || run?.status === "on";
   const note = baseNote ?? (deadline && waiting && settings?.update_mode !== "manual" ? <Countdown deadline={deadline} /> : undefined);
@@ -111,7 +111,7 @@ export function NotesPanel() {
   const enabled = !!settings?.enabled && !ended;
   const capped = run?.status === "capped" || (can(run, "keep_going") && run?.status !== "off");
   const failed = !capped && (run?.status === "error" || (run?.status === "paused" && !!run.reason));
-  const missed = enabled ? notCovered(run?.reason) : null;
+  const missed = notCoveredText(run?.not_covered);
   const used = run?.tokens_used ?? 0;
   // The limit shown follows the setting at once; the run catches up from its own state.
   const cap = settings?.cap || run?.cap || 0;
@@ -203,11 +203,11 @@ export function NotesPanel() {
 
       {missed && (
         <div className="rs-notice" role="group" aria-labelledby="ln-missed-title">
-          <div id="ln-missed-title" className="rs-notice-title">Not covered: {missed}</div>
+          <div id="ln-missed-title" className="rs-notice-title">{missed}</div>
           <p>That part of the call is not in the notes yet.</p>
-          {can(run, "update") && !busy && (
+          {(can(run, "update") || busy) && (
             <div className="rs-notice-actions">
-              <button type="button" className="rs-tool rs-tool-solid" onClick={() => void store.getState().updateNow()}>Update notes</button>
+              <button type="button" className="rs-tool rs-tool-solid" disabled={busy} onClick={() => void store.getState().updateNow(meetingId)}>{busy ? "Updating" : "Update notes"}</button>
             </div>
           )}
         </div>

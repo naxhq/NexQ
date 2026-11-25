@@ -33,12 +33,15 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
   const store = useWorkspaceChatStore;
   const root = useRef<HTMLDivElement | null>(null);
   const [wide, setWide] = useState(true);
+  const [short, setShort] = useState(false);
   useEffect(() => {
     const el = root.current;
     if (!el || typeof ResizeObserver === "undefined") return;
     const read = () => {
       const w = el.getBoundingClientRect().width;
       setWide(w === 0 || w >= 620);
+      const h = el.getBoundingClientRect().height;
+      setShort(h > 0 && h < 480);
     };
     read();
     const ro = new ResizeObserver(read);
@@ -197,7 +200,6 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
           extras={session.extras}
           turn={turn}
           condensedUpto={chat?.condensed_upto ?? null}
-          className="min-h-[50%] [@media(min-height:800px)]:min-h-[60%]"
           ctx={ctx}
           onDismissTurn={() => store.getState().dismissTurn(chatId)}
         />
@@ -205,19 +207,23 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
         <div className="flex-1" />
       )}
 
-      <div className={cn("shrink-0 px-5 pb-3 pt-1", !empty && "max-h-[42%] overflow-y-auto")}>
+      {/* The question box never scrolls away: only the Context panel above it scrolls, within its own limit. */}
+      <div className="shrink-0 px-5 pb-3 pt-1" data-chat-bottom>
         {!empty && (
-          <ContextPanel
-            report={report}
-            subject={subject}
-            estimating={session.previewing}
-            failed={session.previewFailed}
-            workspaceId={workspaceId}
-            chatId={chatId}
-            excluded={session.excluded}
-            itemPrefs={session.itemPrefs}
-            openers={openers}
-          />
+          <div className="max-h-[min(13rem,26vh)] overflow-y-auto" data-context-scroll>
+            <ContextPanel
+              report={report}
+              subject={subject}
+              estimating={session.previewing}
+              failed={session.previewFailed}
+              workspaceId={workspaceId}
+              chatId={chatId}
+              excluded={session.excluded}
+              itemPrefs={session.itemPrefs}
+              openers={openers}
+              short={short}
+            />
+          </div>
         )}
         <Composer
           workspaceId={workspaceId}
@@ -242,6 +248,7 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
           compact={!empty}
           showEstimate={wide}
           capabilities={session.capabilities}
+          short={short}
         />
       </div>
 
