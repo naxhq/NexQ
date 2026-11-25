@@ -105,6 +105,9 @@ pub(crate) struct Touch {
     workspaces: Vec<String>,
     chats_of: Vec<String>,
     meetings: Vec<String>,
+    /// Workspaces whose consent switches (recaps, memory suggestions, archived) may have
+    /// changed although no session restarts: background runs are checked against them.
+    consent: Vec<String>,
     /// The change takes access away whatever the views say (an opt-out): every
     /// dependent restarts at once.
     revoke: bool,
@@ -116,7 +119,7 @@ impl Touch {
     }
 
     pub fn ws(id: &str) -> Self {
-        Self { workspaces: vec![id.to_string()], ..Self::default() }
+        Self { workspaces: vec![id.to_string()], consent: vec![id.to_string()], ..Self::default() }
     }
 
     pub fn chats(id: &str) -> Self {
@@ -129,13 +132,14 @@ impl Touch {
 
     /// `Touch::ws(id)` when `yes`, nothing otherwise.
     pub fn ws_if(yes: bool, id: &str) -> Self {
-        if yes { Self::ws(id) } else { Self::none() }
+        if yes { Self::ws(id) } else { Self { consent: vec![id.to_string()], ..Self::default() } }
     }
 
     pub fn also(mut self, other: Touch) -> Self {
         self.workspaces.extend(other.workspaces);
         self.chats_of.extend(other.chats_of);
         self.meetings.extend(other.meetings);
+        self.consent.extend(other.consent);
         self.revoke |= other.revoke;
         self
     }
@@ -349,15 +353,38 @@ pub(crate) fn decisions(
     out
 }
 
-/// Background runs tied to consent (recaps, memory suggestions) are cancelled again once a
-/// change has committed: one queued between the first cancel and the commit started with
-/// the old consent and keeps its token. Their own checks also hold (see `ops::recap_job`).
-pub(crate) fn cancel_after_commit<'a>(hub: &crate::workspace_chat::ChatHub, meetings: impl Iterator<Item = &'a str>, revoking: bool) {
-    hub.cancel_recaps();
-    if revoking {
-        for id in meetings {
-            crate::live_runtime::memory::cancel_runs_of_meeting(id);
+/// The one rule for background runs tied to consent (recaps, memory suggestions), applied
+/// to every committed change from what it touched, never from what a command says:
+/// - a touched meeting that is gone, or whose home is no longer the workspace a run of it
+///   was started for, loses its memory runs (and a touched meeting stops the recaps);
+/// - a touched workspace that is now archived or gone stops its recaps and automatic
+///   memory runs; one with "suggest memory" off stops its automatic memory runs, one with
+///   "recaps with AI" off stops the recaps.
+/// A run queued between a command's first cancel and the commit started with the old
+/// consent, so this runs again after the commit. The runs' own checks also hold.
+pub(crate) fn cancel_after_commit(conn: &Connection, hub: &crate::workspace_chat::ChatHub, touch: &Touch, meetings: &[String]) {
+    let mut stop_recaps = !touch.meetings.is_empty();
+    for ws in touch.workspaces.iter().chain(touch.consent.iter()) {
+        match store::get_workspace(conn, ws) {
+            Ok(w) if !w.archived => {
+                if !w.suggest_memory {
+                    crate::live_runtime::memory::cancel_automatic_runs_of(ws);
+                }
+                stop_recaps |= !w.recaps_with_ai;
+            }
+            // archived, deleted or unreadable
+            _ => {
+                crate::live_runtime::memory::cancel_automatic_runs_of(ws);
+                stop_recaps = true;
+            }
         }
+    }
+    for m in meetings.iter().chain(touch.meetings.iter()) {
+        let home: Option<String> = conn.query_row("SELECT workspace_id FROM meetings WHERE id = ?1", [m], |r| r.get(0)).ok();
+        crate::live_runtime::memory::cancel_runs_where(|meeting, workspace, _| meeting == m && home.as_deref() != Some(workspace));
+    }
+    if stop_recaps {
+        hub.cancel_recaps();
     }
 }
 
@@ -368,7 +395,10 @@ pub(crate) fn finish_change(state: &AppState, app: &AppHandle, touched: &dyn Fn(
     let mut deps = dependents_for(state, &touch);
     deps.merge(before.deps);
     if ok {
-        cancel_after_commit(&state.workspace_chat, deps.meetings.iter().map(|m| m.as_str()), forced);
+        let _ = with_reader(state, |conn| {
+            cancel_after_commit(conn, &state.workspace_chat, &touch, &deps.meetings);
+            Ok(())
+        });
     }
     // The live brief and the core memory follow every change at once, grant or
     // revocation: invalidating is cheap, local and not a session restart, so
@@ -1540,7 +1570,8 @@ mod tests {
         assert!(off.revoke && off.workspaces == vec!["w".to_string()]);
         let on = item_touch("w", &ItemPatch { index_opt_in: Some(true), ..Default::default() });
         assert!(!on.revoke && on.workspaces == vec!["w".to_string()]);
-        assert_eq!(item_touch("w", &ItemPatch { pinned: Some(true), label: Some(None), ..Default::default() }), Touch::none());
+        let cosmetic = item_touch("w", &ItemPatch { pinned: Some(true), label: Some(None), ..Default::default() });
+        assert!(cosmetic.workspaces.is_empty() && cosmetic.meetings.is_empty() && cosmetic.chats_of.is_empty() && !cosmetic.revoke, "restarts nothing");
         // The declaration survives combining and forces every dependent to revoke
         // even where the views are identical (so the kind would be Grant or Edit).
         assert!(Touch::ws("a").also(off.clone()).revoke);
@@ -1555,7 +1586,8 @@ mod tests {
     fn touch_and_dependents_merge_without_duplicates() {
         let t = Touch::ws("a").also(Touch::meeting("m")).also(Touch::chats("b"));
         assert_eq!((t.workspaces.len(), t.meetings.len(), t.chats_of.len()), (1, 1, 1));
-        assert_eq!(Touch::ws_if(false, "a"), Touch::none());
+        let cosmetic = Touch::ws_if(false, "a");
+        assert!(cosmetic.workspaces.is_empty() && cosmetic.meetings.is_empty() && !cosmetic.revoke, "restarts nothing, but its consent is still checked");
         let mut d = Dependents { meetings: vec!["m".into()], chats: vec!["c".into()] };
         d.merge(Dependents { meetings: vec!["m".into(), "n".into()], chats: vec!["c".into()] });
         assert_eq!((d.meetings.len(), d.chats.len()), (2, 1));

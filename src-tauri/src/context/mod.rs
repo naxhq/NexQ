@@ -47,6 +47,54 @@ pub fn extract_text(file_type: &str, file_path: &str) -> Result<String, String> 
     }
 }
 
+/// A file name stem for a note saved from text: hidden characters out (joiners and selectors that are
+/// real spelling stay), and only what Windows forbids in a name (`< > : " / \ | ? *`, control
+/// characters) becomes `_`. Letters of every script, combining vowel signs and half-spaces are kept.
+/// Reserved device names get a leading `_`; trailing dots and spaces go; at most 80 characters.
+pub fn file_stem(title: &str) -> String {
+    let cleaned = crate::prompt_data::strip_hidden(title.trim());
+    let mapped: String = cleaned
+        .chars()
+        .map(|c| if matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || c.is_control() { '_' } else { c })
+        .take(80)
+        .collect();
+    let stem = mapped.trim().trim_end_matches(['.', ' ']).to_string();
+    if stem.is_empty() {
+        return "Note".to_string();
+    }
+    let upper = stem.split('.').next().unwrap_or("").trim().to_uppercase();
+    let reserved = matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((upper.starts_with("COM") || upper.starts_with("LPT")) && upper.len() == 4 && upper.chars().last().is_some_and(|d| ('1'..='9').contains(&d)));
+    if reserved {
+        format!("_{stem}")
+    } else {
+        stem
+    }
+}
+
+#[cfg(test)]
+mod file_stem_tests {
+    use super::file_stem;
+
+    #[test]
+    fn real_writing_keeps_its_joiners_and_vowel_signs() {
+        assert_eq!(file_stem("\u{645}\u{6cc}\u{200c}\u{62e}\u{648}\u{627}\u{647}\u{645}"), "\u{645}\u{6cc}\u{200c}\u{62e}\u{648}\u{627}\u{647}\u{645}");
+        assert_eq!(file_stem("\u{915}\u{94d}\u{200d}\u{937} \u{928}\u{94b}\u{91f}"), "\u{915}\u{94d}\u{200d}\u{937} \u{928}\u{94b}\u{91f}");
+        assert_eq!(file_stem("Q3 plan (draft), v2"), "Q3 plan (draft), v2");
+    }
+
+    #[test]
+    fn only_what_windows_forbids_changes() {
+        assert_eq!(file_stem("a<b>c:d\"e/f\\g|h?i*j"), "a_b_c_d_e_f_g_h_i_j");
+        assert_eq!(file_stem("ok\u{202e}exe\u{200b}.txt"), "okexe.txt");
+        assert_eq!(file_stem("report..."), "report");
+        assert_eq!(file_stem("   "), "Note");
+        assert_eq!(file_stem("con"), "_con");
+        assert_eq!(file_stem("LPT3.txt"), "_LPT3.txt");
+        assert_eq!(file_stem(&"x".repeat(200)).chars().count(), 80);
+    }
+}
+
 /// Loads, caches, and serves context text from files.
 /// Files stored in %APPDATA%/com.nexq.app/context/
 pub struct ContextManager {
@@ -252,13 +300,7 @@ impl ContextManager {
     /// Adds a Markdown document made from text (an answer saved to the
     /// library): written to the context folder like any loaded file.
     pub fn add_text(&mut self, title: &str, markdown: &str) -> Result<ContextResource, String> {
-        let stem: String = title
-            .trim()
-            .chars()
-            .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' { c } else { '_' })
-            .take(80)
-            .collect();
-        let stem = if stem.trim().is_empty() { "Note".to_string() } else { stem.trim().to_string() };
+        let stem = file_stem(title);
         let resource_id = Uuid::new_v4().to_string();
         let file_name = format!("{stem}.md");
         let dest_path = self.context_dir.join(format!("{resource_id}_{file_name}"));

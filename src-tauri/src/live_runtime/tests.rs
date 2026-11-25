@@ -1671,7 +1671,8 @@ async fn wall_clock_and_relative_stamps_reach_notes_and_brief_as_time_since_the_
         until("a run", || h.fake.count(AiPurpose::Notes) == 1).await;
         let p = &h.fake.prompts(AiPurpose::Notes)[0];
         assert!(p.contains("[00:10]"), "epoch={epoch}: {p}");
-        assert!(!p.contains("1767348") && !p.contains("498"), "epoch={epoch}: a wall-clock time reached the prompt");
+        // the hours since 1970, as a time label would show them (the prompt's own random marker may hold any digits)
+        assert!(!p.contains("1767348") && !p.contains(&format!("[{}:", START_MS / 3_600_000)), "epoch={epoch}: a wall-clock time reached the prompt");
         let doc = h.rt.get_notes("m1").await.unwrap();
         for b in doc["blocks"].as_array().unwrap() {
             assert!(b["t"].as_u64().unwrap_or(0) < 3_600_000, "epoch={epoch}: {b}");

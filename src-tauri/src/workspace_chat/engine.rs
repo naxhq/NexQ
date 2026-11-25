@@ -719,7 +719,7 @@ async fn run_ask(deps: Arc<ChatDeps>, permit: Permit, chat_id: String, question:
         }
         Ok(Outcome::Revoked(detail)) => {
             deps.tools.on_cancel(&chat_id);
-            let message = if detail == "deleted" { super::guard::STOPPED_DELETED } else { super::guard::STOPPED };
+            let message = if detail == "deleted" { super::guard::STOPPED_DELETED } else { super::guard::STOPPED_MOVED };
             deps.emit("workspace_chat_error", base(json!({ "error": message, "error_kind": "access_changed", "error_detail": detail })))
         }
         Ok(Outcome::Failed(message, kind)) => deps.emit("workspace_chat_error", base(json!({ "error": message, "error_kind": kind }))),
@@ -734,18 +734,28 @@ async fn run_ask(deps: Arc<ChatDeps>, permit: Permit, chat_id: String, question:
 /// A transcript cited as a whole (or by its recap) has no moment of its own: find the
 /// passage of that meeting that best matches the sentence the citation stands in, and
 /// open there. Any other citation keeps the time it was given.
-pub(crate) fn refine_start(conn: Option<&rusqlite::Connection>, c: &crate::workspace_search::context_plan::Citation, answer: &str) -> Option<i64> {
+pub(crate) fn refine_start(
+    conn: Option<&rusqlite::Connection>,
+    c: &crate::workspace_search::context_plan::Citation,
+    answer: &str,
+    question: &str,
+) -> Option<i64> {
     let whole = matches!(c.kind.as_str(), "meeting" | "transcript") && matches!(c.start_ms, None | Some(0));
     let Some(conn) = conn.filter(|_| whole) else { return c.start_ms };
-    let sentence = sentence_citing(answer, &c.label);
-    if sentence.trim().is_empty() {
-        return c.start_ms;
-    }
     let scope = crate::workspace_search::SearchScope::with_meetings(vec![c.ref_id.clone()]);
-    match crate::workspace_search::search::search(conn, &scope, &sentence, &[crate::workspace_search::PassageKind::Transcript], 1) {
-        Ok(hits) => hits.first().and_then(|p| p.start_ms).or(c.start_ms),
-        Err(_) => c.start_ms,
+    // the sentence the citation stands in first; when it names nothing the meeting says
+    // (an answer that is all "see [S1]"), the question the answer was asked for
+    for query in [sentence_citing(answer, &c.label), question.to_string()] {
+        if query.trim().is_empty() {
+            continue;
+        }
+        if let Ok(hits) = crate::workspace_search::search::search(conn, &scope, &query, &[crate::workspace_search::PassageKind::Transcript], 1) {
+            if let Some(start) = hits.first().and_then(|p| p.start_ms) {
+                return Some(start);
+            }
+        }
     }
+    c.start_ms
 }
 
 /// The sentence of `answer` that carries the citation `[label]`, without its citation marks.
@@ -845,7 +855,8 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
     }
     let cli = is_cli(&selection);
     let scope_key = SessionScope::Workspace(chat_id.to_string());
-    let partial = Arc::new(std::sync::Mutex::new(String::new()));
+    let partial = Arc::new(std::sync::Mutex::new(String::new())); // what was shown (cleaned)
+    let raw_so_far = Arc::new(std::sync::Mutex::new(String::new())); // what the model sent
     // At most two tries: the second only when the workspace changed while the
     // first was starting its session (the context is then built again).
     let mut attempt = 0;
@@ -942,7 +953,7 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
         }
         deps.emit("workspace_chat_context", json!({ "chat_id": chat_id, "request_id": request_id, "report": a.report }));
         let sink: crate::llm::provider::TokenSink = {
-            let (deps, partial, chat, request) = (deps.clone(), partial.clone(), chat_id.to_string(), request_id.to_string());
+            let (deps, partial, raw_so_far, chat, request) = (deps.clone(), partial.clone(), raw_so_far.clone(), chat_id.to_string(), request_id.to_string());
             let (guard, cancel) = (guard.clone(), permit.cancel.clone());
             Arc::new(move |token: &str| {
                 // every token is checked: nothing is shown after a revocation
@@ -950,8 +961,26 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
                     cancel.cancel();
                     return;
                 }
-                partial.lock().unwrap().push_str(token);
-                deps.emit("workspace_chat_token", json!({ "chat_id": chat, "request_id": request, "token": token }));
+                // Hidden characters never reach the screen: the text so far is cleaned as a
+                // whole (a joiner is judged by its neighbours), and a token carries only what
+                // the cleaned text gained.
+                let gained = {
+                    let mut raw = raw_so_far.lock().unwrap();
+                    raw.push_str(token);
+                    let clean = crate::prompt_data::strip_hidden(&raw);
+                    let mut shown = partial.lock().unwrap();
+                    match clean.strip_prefix(shown.as_str()) {
+                        Some(more) => {
+                            let more = more.to_string();
+                            *shown = clean;
+                            more
+                        }
+                        None => String::new(), // an earlier decision changed: the end event carries the whole text
+                    }
+                };
+                if !gained.is_empty() {
+                    deps.emit("workspace_chat_token", json!({ "chat_id": chat, "request_id": request, "token": gained }));
+                }
             })
         };
         // While the run waits (a tool call, a slow model) nothing streams, so the
@@ -992,7 +1021,7 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
             if permit.cancel.is_cancelled() {
                 return Outcome::Cancelled(partial.lock().unwrap().clone());
             }
-            let validated = validate_citations(&res.text, &a.plan);
+            let validated = validate_citations(&crate::prompt_data::strip_hidden(&res.text), &a.plan);
             let refine_conn = deps.conn().ok();
             let citations: Vec<WorkspaceCitation> = validated
                 .refs
@@ -1003,7 +1032,7 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
                     ref_id: c.ref_id.clone(),
                     sub_ref: c.sub_ref.clone(),
                     title: c.title.clone(),
-                    start_ms: refine_start(refine_conn.as_ref(), c, &validated.text),
+                    start_ms: refine_start(refine_conn.as_ref(), c, &validated.text, question),
                     snippet: a
                         .plan
                         .items

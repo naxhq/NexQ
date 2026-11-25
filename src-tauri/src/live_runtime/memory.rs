@@ -46,6 +46,23 @@ fn register_run(meeting: &str, workspace: &str, automatic: bool, cancel: Arc<Can
     RunGuard(id)
 }
 
+/// Cancel every run for which `stop(meeting, workspace, automatic)` says so.
+pub(crate) fn cancel_runs_where(stop: impl Fn(&str, &str, bool) -> bool) {
+    if let Ok(r) = RUNS.lock() {
+        for e in r.iter().filter(|e| stop(&e.meeting, &e.workspace, e.automatic)) {
+            e.cancel.cancel();
+        }
+    }
+}
+
+/// Register a run (tests drive the central cancel rule with one).
+#[cfg(test)]
+pub(crate) fn register_test_run(meeting: &str, workspace: &str, automatic: bool) -> (Arc<CancelToken>, impl Drop) {
+    let token = Arc::new(CancelToken::new());
+    let guard = register_run(meeting, workspace, automatic, token.clone());
+    (token, guard)
+}
+
 /// The meeting was deleted or moved (or its access changed): its suggestion runs stop.
 pub fn cancel_runs_of_meeting(meeting_id: &str) {
     if let Ok(r) = RUNS.lock() {

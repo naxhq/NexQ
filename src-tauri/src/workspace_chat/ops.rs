@@ -313,10 +313,16 @@ fn recap_job(conn: &Connection, workspace_id: &str, meeting_id: &str, load_text:
 /// a switch turned off, a meeting moved or deleted, a recap deleted, or a meeting
 /// started while the call ran drops its result. Returns how many were made.
 pub async fn recap_missing(deps: &ChatDeps, workspace_id: &str, cancel: Arc<CancelToken>) -> usize {
+    recap_missing_for(deps, workspace_id, cancel, None).await
+}
+
+/// [`recap_missing`], or with `only` the one meeting that just ended (the backlog waits for
+/// the workspace to be opened).
+pub async fn recap_missing_for(deps: &ChatDeps, workspace_id: &str, cancel: Arc<CancelToken>, only: Option<&str>) -> usize {
     let todo: Vec<String> = {
         let Ok(conn) = deps.conn() else { return 0 };
         let Ok(meetings) = scope_adapter::home_meetings(&conn, workspace_id) else { return 0 };
-        meetings.into_iter().filter(|m| recap_job(&conn, workspace_id, &m.id, false).is_some()).map(|m| m.id).take(MAX_RECAPS).collect()
+        meetings.into_iter().filter(|m| only.map_or(true, |o| o == m.id)).filter(|m| recap_job(&conn, workspace_id, &m.id, false).is_some()).map(|m| m.id).take(MAX_RECAPS).collect()
     };
     if todo.is_empty() {
         return 0;
@@ -371,6 +377,10 @@ pub async fn recap_missing(deps: &ChatDeps, workspace_id: &str, cancel: Arc<Canc
 /// cards are what the recaps hang on). Waits up to two minutes, gives up when
 /// cancelled, and never works during a meeting.
 pub async fn recaps_when_ready(deps: &ChatDeps, workspace_id: &str, cancel: Arc<CancelToken>) -> usize {
+    recaps_when_ready_for(deps, workspace_id, cancel, None).await
+}
+
+pub async fn recaps_when_ready_for(deps: &ChatDeps, workspace_id: &str, cancel: Arc<CancelToken>, only: Option<&str>) -> usize {
     let started = std::time::Instant::now();
     loop {
         if cancel.is_cancelled() || started.elapsed() > std::time::Duration::from_secs(120) {
@@ -386,7 +396,7 @@ pub async fn recaps_when_ready(deps: &ChatDeps, workspace_id: &str, cancel: Arc<
         }
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
-    recap_missing(deps, workspace_id, cancel).await
+    recap_missing_for(deps, workspace_id, cancel, only).await
 }
 
 /// The database path as a reader would open it (for callers without `ChatDeps`).

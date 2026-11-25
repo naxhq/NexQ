@@ -1379,6 +1379,8 @@ async fn a_revocation_mid_stream_stops_the_answer_and_nothing_after_it_is_shown_
         let deleted = matches!(what, Revoke::DeleteMeeting | Revoke::DeleteDocument);
         assert_eq!(errors[0]["error_detail"], if deleted { "deleted" } else { "moved" }, "{what:?}");
         assert_eq!(errors[0]["error"].as_str().unwrap().contains("was deleted"), deleted, "{what:?}");
+        assert_eq!(errors[0]["error"].as_str().unwrap().contains("moved out of this chat"), !deleted, "{what:?}: a move says moved, not deleted");
+        assert!(!deleted || !errors[0]["error"].as_str().unwrap().contains("moved"), "{what:?}: a deletion does not say moved");
         assert!(rig.events_named("workspace_chat_end").is_empty(), "{what:?}: no answer is delivered");
         assert_eq!(rig.tokens_shown(), vec!["The ", "budget ", "is "], "{what:?}: nothing after the change is shown");
         assert!(store::list_messages(&rig.conn(), &chat).unwrap().is_empty(), "{what:?}: nothing is saved");
@@ -2615,11 +2617,195 @@ async fn a_recap_queued_between_the_first_cancel_and_the_commit_is_cancelled_aft
     let queued = Arc::new(CancelToken::new());
     rig.deps.hub.set_recap_cancel(Some(queued.clone())); // queued with the old consent
     crate::workspace::store::update_workspace(&rig.conn(), &rig.ws, crate::workspace::types::WorkspacePatch { recaps_with_ai: Some(false), ..Default::default() }).unwrap(); // the commit
-    crate::commands::workspace_commands::cancel_after_commit(&rig.deps.hub, std::iter::empty(), false); // finish_change
+    let touch = crate::commands::workspace_commands::Touch::ws_if(false, &rig.ws); // the cosmetic switch still names its workspace
+    crate::commands::workspace_commands::cancel_after_commit(&rig.conn(), &rig.deps.hub, &touch, &[]); // finish_change
     assert!(queued.is_cancelled(), "the second cancel reaches a run queued in between");
     rig.api.push(Step::Text("A recap.".into()));
     assert_eq!(ops::recap_missing(&rig.deps, &rig.ws, queued).await, 0);
     // order 2: queued after the commit: it reads the new consent and does nothing
     assert_eq!(ops::recap_missing(&rig.deps, &rig.ws, Arc::new(CancelToken::new())).await, 0);
     assert!(rig.api.calls().is_empty(), "no model call in either order");
+}
+
+/// The central rule, driven with what each command really changes and really touches.
+#[test]
+fn every_committed_change_cancels_the_background_runs_whose_consent_it_ended() {
+    use crate::commands::workspace_commands::{cancel_after_commit, delete_touch, move_touch, Touch};
+    use crate::live_runtime::memory::register_test_run;
+    use crate::workspace::types::{DeleteMode, WorkspacePatch};
+
+    struct Case {
+        name: &'static str,
+        /// (memory run of the meeting cancelled, automatic memory run of the workspace cancelled, recaps cancelled)
+        expect: (bool, bool, bool),
+    }
+    let cases = [
+        Case { name: "move", expect: (true, false, true) },
+        Case { name: "delete meeting", expect: (true, false, true) },
+        Case { name: "delete workspace (move)", expect: (true, true, true) },
+        Case { name: "delete workspace (delete)", expect: (true, true, true) },
+        Case { name: "archive", expect: (false, true, true) },
+        Case { name: "clone", expect: (false, false, false) },
+        Case { name: "memory switch off", expect: (false, true, false) },
+        Case { name: "recaps switch off", expect: (false, false, true) },
+        Case { name: "bulk delete", expect: (true, false, true) },
+    ];
+    for case in cases {
+        let rig = Rig::new();
+        let conn = rig.conn();
+        // a workspace of its own (General and the rig's workspace can't be deleted), with one meeting
+        let home = new_ws(&conn, &format!("Home {}", case.name), false, false);
+        crate::workspace::store::update_workspace(
+            &conn,
+            &home,
+            WorkspacePatch { recaps_with_ai: Some(true), suggest_memory: Some(true), ..Default::default() },
+        )
+        .unwrap();
+        conn.execute("INSERT INTO meetings (id, title, start_time, workspace_id) VALUES ('mx', 'X', '2026-01-01T00:00:00Z', ?1)", [&home]).unwrap();
+        let (own_token, _g1) = register_test_run("mx", &home, false);
+        let (auto_token, _g2) = register_test_run("mx", &home, true);
+        // an automatic run of ANOTHER meeting of the same workspace: only workspace-level changes stop it
+        conn.execute("INSERT INTO meetings (id, title, start_time, workspace_id) VALUES ('my', 'Y', '2026-01-02T00:00:00Z', ?1)", [&home]).unwrap();
+        let (other_auto, _g3) = register_test_run("my", &home, true);
+        let recaps = Arc::new(CancelToken::new());
+        rig.deps.hub.set_recap_cancel(Some(recaps.clone()));
+
+        let (touch, meetings): (Touch, Vec<String>) = match case.name {
+            "move" => {
+                let dest = new_ws(&conn, "Dest", false, false);
+                crate::workspace::meetings::move_meeting_atomic(&conn, "mx", &dest).unwrap();
+                (move_touch(&conn, "mx", &dest), vec![])
+            }
+            "delete meeting" => {
+                let touch = delete_touch(&conn, "mx");
+                let tx = crate::db::immediate_tx(&conn).unwrap();
+                crate::workspace::purge::purge_meeting(&tx, "mx").unwrap();
+                tx.commit().unwrap();
+                (touch, vec![])
+            }
+            "delete workspace (move)" | "delete workspace (delete)" => {
+                let mode = if case.name.contains("(move)") { DeleteMode::Move } else { DeleteMode::Delete };
+                let before = vec!["mx".to_string(), "my".to_string()];
+                crate::workspace::store::update_workspace(&conn, &home, WorkspacePatch::default()).unwrap();
+                // a default workspace can't go: make another the default first
+                let other = new_ws(&conn, "Other default", false, false);
+                crate::workspace::store::set_default_workspace(&conn, &other).unwrap();
+                crate::workspace::store::delete_workspace(&conn, &home, mode).unwrap();
+                (Touch::ws(&home), before)
+            }
+            "archive" => {
+                crate::workspace::store::archive_workspace(&conn, &home, true).unwrap();
+                (Touch::ws(&home), vec![])
+            }
+            "clone" => {
+                crate::workspace::store::clone_workspace(&conn, &home, "Copy", None).unwrap();
+                (Touch::none(), vec![])
+            }
+            "memory switch off" => {
+                crate::workspace::store::update_workspace(&conn, &home, WorkspacePatch { suggest_memory: Some(false), ..Default::default() }).unwrap();
+                (Touch::ws_if(false, &home), vec![])
+            }
+            "recaps switch off" => {
+                crate::workspace::store::update_workspace(&conn, &home, WorkspacePatch { recaps_with_ai: Some(false), ..Default::default() }).unwrap();
+                (Touch::ws_if(false, &home), vec![])
+            }
+            "bulk delete" => {
+                let touch = Touch::ws(&home).also(Touch::meeting("mx")).also(Touch::meeting("my"));
+                for m in ["mx", "my"] {
+                    let tx = crate::db::immediate_tx(&conn).unwrap();
+                    crate::workspace::purge::purge_meeting(&tx, m).unwrap();
+                    tx.commit().unwrap();
+                }
+                (touch, vec![])
+            }
+            _ => unreachable!(),
+        };
+        cancel_after_commit(&conn, &rig.deps.hub, &touch, &meetings);
+        assert_eq!(own_token.is_cancelled(), case.expect.0, "{}: the person's own run of the meeting", case.name);
+        assert_eq!(auto_token.is_cancelled(), case.expect.0 || case.expect.1, "{}: the automatic run of the meeting", case.name);
+        assert_eq!(other_auto.is_cancelled(), case.expect.1 || case.name == "bulk delete", "{}: the automatic run of another meeting", case.name);
+        assert_eq!(recaps.is_cancelled(), case.expect.2, "{}: recaps", case.name);
+    }
+}
+
+/// QA's 31-minute meeting: 200 segments of 9 s, eight topics of 25 segments each, seeded
+/// either with times since the start or with epoch stamps (what the app writes).
+fn mega_meeting(rig: &Rig, epoch: bool) {
+    let topics = ["alphaplan onboarding", "betaflow billing migration", "gammagrid security audit", "deltadock vendor contract", "epsilonlab hiring pipeline", "zetaport customer interviews", "etawave pricing experiment", "thetanet data retention"];
+    let start = "2026-03-05T10:00:00Z";
+    let base = if epoch { chrono::DateTime::parse_from_rfc3339(start).unwrap().timestamp_millis() } else { 0 };
+    let owned: Vec<(String, String, i64)> = (0..200usize)
+        .map(|j| {
+            let t = topics[j / 25];
+            (
+                if j % 3 != 0 { "Them" } else { "You" }.to_string(),
+                format!("Mega segment {j} on {t}: the team reviewed the status of {t}, recorded owner {} and risk {}, agreed that the follow-up for {t} needs numbers, a written decision and a date.", j % 9, j % 6),
+                base + j as i64 * 9000,
+            )
+        })
+        .collect();
+    let rows: Vec<(&str, &str, i64)> = owned.iter().map(|(s, t, ms)| (s.as_str(), t.as_str(), *ms)).collect();
+    let conn = rig.conn();
+    crate::workspace_search::test_support::add_meeting(&conn, "mega", "Mega review", start, None, &rows);
+    conn.execute("UPDATE meetings SET workspace_id = ?2, duration_seconds = 1800 WHERE id = ?1", rusqlite::params!["mega", rig.ws]).unwrap();
+}
+
+#[tokio::test]
+async fn every_citation_of_a_long_meeting_opens_near_the_late_topic_whatever_the_stamps_and_the_strategy() {
+    for epoch in [false, true] {
+        for big in [false, true] {
+            let rig = Rig::new();
+            mega_meeting(&rig, epoch);
+            if big {
+                // enough material to leave the full strategy
+                let conn = rig.conn();
+                let res = crate::context::ContextResource {
+                    id: "dbig".into(), name: "big.txt".into(), file_type: "txt".into(), file_path: "x".into(), size_bytes: 3,
+                    token_count: 2, preview: "p".into(), loaded_at: "now".into(), status: "ready".into(),
+                };
+                crate::workspace::documents::add_document(&conn, &res, &"word ".repeat(30_000), Some(&rig.ws)).unwrap();
+            }
+            rig.index();
+            let chat = rig.chat();
+            // the answer says nothing about the topic itself (QA's mock): the question must place the citations
+            rig.api.push(Step::Text("The answer is mock [S1] [S2] [S3] [S4] [S5] [S6]. Done.".into()));
+            rig.ask(&chat, "What was decided about thetanet data retention?").await;
+            let end = &rig.events_named("workspace_chat_end")[0]["message"];
+            let strategy = end["context"]["strategy"].as_str().unwrap().to_string();
+            let cites = end["citations"].as_array().unwrap();
+            let of_meeting: Vec<i64> = cites.iter().filter(|c| c["kind"] == "transcript").map(|c| c["start_ms"].as_i64().unwrap_or(-1)).collect();
+            assert!(!of_meeting.is_empty(), "epoch={epoch} big={big} ({strategy}): no citation of the meeting");
+            // the topic is segments 175 to 199: 1_575_000 ms to 1_791_000 ms; a passage opens within 75 s before
+            for at in &of_meeting {
+                assert!((1_500_000..=1_800_000).contains(at), "epoch={epoch} big={big} ({strategy}): a citation opens at {at} ms: {of_meeting:?}");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn after_a_meeting_only_that_meeting_gets_its_recap_and_hidden_characters_never_reach_the_screen_or_the_store() {
+    let rig = Rig::new();
+    for i in 0..3u32 {
+        rig.meeting(&format!("m{i}"), &format!("Meeting {i}"), 1 + i, &[&format!("Topic {i} about the lynx programme."), "We agreed the next steps today."]);
+    }
+    rig.index();
+    crate::workspace::store::update_workspace(&rig.conn(), &rig.ws, crate::workspace::types::WorkspacePatch { recaps_with_ai: Some(true), ..Default::default() }).unwrap();
+    rig.api.push(Step::Text("A recap.".into()));
+    let made = ops::recap_missing_for(&rig.deps, &rig.ws, Arc::new(CancelToken::new()), Some("m2")).await;
+    assert_eq!(made, 1);
+    let ai: Vec<String> = rig.conn().prepare("SELECT meeting_id FROM meeting_cards WHERE origin = 'ai'").unwrap().query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
+    assert_eq!(ai, vec!["m2"], "the backlog waits for the workspace to be opened");
+
+    // an answer with hidden characters: shown and saved without them
+    let chat = rig.chat();
+    rig.api.push(Step::Text("Plan \u{202E}evil\u{202C} a\u{200B}b \u{2066}x\u{2069} done [S1].".into()));
+    rig.ask(&chat, "What about the lynx programme?").await;
+    let shown: String = rig.tokens_shown().concat();
+    let end = &rig.events_named("workspace_chat_end")[0]["message"];
+    let saved = store::list_messages(&rig.conn(), &chat).unwrap().remove(1).content;
+    for (what, text) in [("streamed", shown.as_str()), ("end event", end["content"].as_str().unwrap()), ("stored", saved.as_str())] {
+        assert!(!text.chars().any(|c| matches!(c as u32, 0x202A..=0x202E | 0x200B | 0x2066..=0x2069)), "{what}: {text:?}");
+        assert!(text.contains("evil") && text.contains("done"), "{what}: the visible words stay: {text:?}");
+    }
 }

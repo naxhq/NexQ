@@ -186,3 +186,7 @@ pub const STOPPED: &str =
 /// The same, when what the answer was using was deleted.
 pub const STOPPED_DELETED: &str =
     "Something this answer was using (a meeting or a file) was deleted, so the answer was stopped and nothing was saved. Ask again.";
+
+/// The same, when what the answer was using is still there but no longer part of this chat.
+pub const STOPPED_MOVED: &str =
+    "Something this answer was using (a meeting or a file) was moved out of this chat or switched off, so the answer was stopped and nothing was saved. Ask again.";

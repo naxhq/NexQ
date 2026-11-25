@@ -184,7 +184,7 @@ pub fn meeting_ended(hub: &ChatHub, meeting_id: &str) {
 /// index holds the workspace's meetings, never during a meeting, at most
 /// `ops::MAX_RECAPS` per call, on the cheapest model, through the AI gate.
 /// A newer call replaces one still waiting or running.
-fn spawn_recaps(app: &AppHandle, state: &AppState, workspace_id: String, settle: Duration) {
+fn spawn_recaps(app: &AppHandle, state: &AppState, workspace_id: String, settle: Duration, only: Option<String>) {
     let hub = state.workspace_chat.clone();
     let Ok(deps) = build_deps(app, state) else { return };
     let token = Arc::new(crate::llm::provider::CancelToken::new());
@@ -192,7 +192,7 @@ fn spawn_recaps(app: &AppHandle, state: &AppState, workspace_id: String, settle:
     tauri::async_runtime::spawn(async move {
         // the meeting that just ended is still being saved and indexed
         tokio::time::sleep(settle).await;
-        let made = super::ops::recaps_when_ready(&deps, &workspace_id, token).await;
+        let made = super::ops::recaps_when_ready_for(&deps, &workspace_id, token, only.as_deref()).await;
         if made > 0 {
             (deps.emit)("workspaces_changed", serde_json::json!({ "workspace_id": workspace_id }));
         }
@@ -206,7 +206,7 @@ pub fn recaps_after_meeting(app: &AppHandle, state: &AppState, meeting_id: &str)
         db.connection().query_row("SELECT workspace_id FROM meetings WHERE id = ?1", [meeting_id], |r| r.get::<_, Option<String>>(0)).ok().flatten()
     });
     if let Some(ws) = ws {
-        spawn_recaps(app, state, ws, Duration::from_secs(5));
+        spawn_recaps(app, state, ws, Duration::from_secs(5), Some(meeting_id.to_string()));
     }
 }
 
@@ -216,7 +216,7 @@ pub fn workspace_opened(app: &AppHandle, state: &AppState, workspace_id: &str) {
     let changed = hub.open_workspace().as_deref() != Some(workspace_id);
     hub.set_open_workspace(Some(workspace_id.to_string()));
     if changed && !state.meeting_active.load(Ordering::SeqCst) {
-        spawn_recaps(app, state, workspace_id.to_string(), Duration::ZERO);
+        spawn_recaps(app, state, workspace_id.to_string(), Duration::ZERO, None);
     }
 }
 
