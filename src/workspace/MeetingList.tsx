@@ -20,6 +20,17 @@ import { fieldClass } from "./styles";
  * stars, rename, delete, delete all, date groups. Everything the old
  * dashboard's list did, per workspace.
  */
+const FILTER_KEY = "nexq_meeting_filter";
+/** The filter chosen last time (a saved value that is no longer a filter counts as All). */
+function readFilter(): MeetingFilter {
+  try {
+    const v = localStorage.getItem(FILTER_KEY);
+    return MEETING_FILTERS.some((f) => f.key === v) ? (v as MeetingFilter) : "all";
+  } catch {
+    return "all";
+  }
+}
+
 export function MeetingList({
   workspace,
   onOpenMeeting,
@@ -34,7 +45,15 @@ export function MeetingList({
   const [listEl, setListEl] = useState<HTMLDivElement | null>(null);
   useRovingRows(listEl);
   const [scope, setScope] = useState<MeetingScopeChoice>("here");
-  const [filter, setFilter] = useState<MeetingFilter>("all");
+  const [filter, setFilterState] = useState<MeetingFilter>(readFilter);
+  const setFilter = (f: MeetingFilter) => {
+    setFilterState(f);
+    try {
+      localStorage.setItem(FILTER_KEY, f);
+    } catch {
+      /* not remembered */
+    }
+  };
   const [confirmAll, setConfirmAll] = useState(false);
   const [deletingAll, setDeletingAll] = useState(false);
   const activeMeeting = useMeetingStore((s) => s.activeMeeting);

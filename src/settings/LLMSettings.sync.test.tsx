@@ -187,13 +187,13 @@ describe("Settings ↔ footer sync of the active LLM", () => {
     await act(async () => {
       await useConfigStore.getState().activateLLMProvider("openai");
     });
-    const chip = screen.getByTitle(/^LLM:/);
-    expect(chip).toHaveAttribute("title", expect.stringContaining("OpenAI"));
-    expect(chip).not.toHaveAttribute("title", expect.stringContaining("Groq"));
+    const chip = screen.getByRole("button", { name: /^LLM:/ });
+    expect(chip).toHaveAttribute("aria-label", expect.stringContaining("OpenAI"));
+    expect(chip).not.toHaveAttribute("aria-label", expect.stringContaining("Groq"));
 
     // While an answer streams, the chip names what actually serves it.
     act(() => useStreamStore.setState({ isStreaming: true, currentProvider: "ollama", currentModel: "llama3.2" }));
-    expect(screen.getByTitle(/^LLM:/)).toHaveAttribute("title", expect.stringContaining("Ollama"));
+    expect(screen.getByRole("button", { name: /^LLM:/ })).toHaveAttribute("aria-label", expect.stringContaining("Ollama"));
     act(() => useStreamStore.setState({ isStreaming: false, currentProvider: "", currentModel: "" }));
   });
 

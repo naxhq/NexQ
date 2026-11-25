@@ -145,7 +145,7 @@ export function MeetingPrompt({
         <div
           role="dialog"
           aria-label={`${meeting.app_name} meeting detected`}
-          className="meeting-prompt-enter relative w-full overflow-hidden rounded-[18px] border border-white/10 bg-[hsl(228_22%_9%/0.96)] text-foreground shadow-[0_10px_30px_-8px_rgba(0,0,0,0.6)] backdrop-blur-xl"
+          className="dark meeting-prompt-enter relative w-full overflow-hidden rounded-[18px] border border-white/10 bg-[hsl(228_22%_9%/0.96)] text-foreground shadow-[0_10px_30px_-8px_rgba(0,0,0,0.6)] backdrop-blur-xl"
         >
           <button
             type="button"
@@ -238,7 +238,7 @@ export function MeetingPrompt({
           <div
             role="listbox"
             aria-label={menu === "workspace" ? "Workspace" : "Meeting type"}
-            className="scope-pop-enter absolute right-0 top-full z-10 mt-1.5 max-h-[288px] w-64 overflow-y-auto rounded-2xl border border-white/10 bg-[hsl(228_22%_9%/0.97)] p-1.5 shadow-[0_14px_36px_-10px_rgba(0,0,0,0.7)] backdrop-blur-xl"
+            className="dark scope-pop-enter absolute right-0 top-full z-10 mt-1.5 max-h-[288px] w-64 overflow-y-auto rounded-2xl border border-white/10 bg-[hsl(228_22%_9%/0.97)] p-1.5 shadow-[0_14px_36px_-10px_rgba(0,0,0,0.7)] backdrop-blur-xl"
           >
             <p className="px-2.5 pb-1 pt-1 text-[11px] font-medium text-muted-foreground/60">
               {menu === "workspace" ? "File this meeting in" : "Start as"}

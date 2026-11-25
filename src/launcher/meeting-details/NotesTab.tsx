@@ -5,7 +5,9 @@ import { NotePage } from "../../live-notes/NotePage";
 import { docToMarkdown } from "../../live-notes/page";
 import { copyText } from "../../live-notes/clipboard";
 import { saveExportFile } from "../../lib/export";
-import { can, endedWords, inFlight, notCoveredText } from "../../live-notes/runState";
+import { can, endedSentence, endedWords, inFlight, notCoveredText, runWords } from "../../live-notes/runState";
+import { MovedOnlineLine } from "../../live-notes/MovedOnline";
+import { useMeetingStore } from "../../stores/meetingStore";
 
 interface NotesTabProps {
   meetingId: string;
@@ -21,6 +23,7 @@ export function NotesTab({ meetingId, title, onJump }: NotesTabProps) {
   const settings = store((s) => s.settings);
   const run = store((s) => s.runs[meetingId] ?? null);
   const notice = store((s) => s.notice);
+  const live = useMeetingStore((s) => s.activeMeeting?.id === meetingId);
   const error = store((s) => s.error);
   const [loaded, setLoaded] = useState(false);
 
@@ -82,16 +85,27 @@ export function NotesTab({ meetingId, title, onJump }: NotesTabProps) {
           </button>
         )}
       </div>
-      {run && (
+      <MovedOnlineLine moved={run?.moved_online} what="Notes" onDismiss={() => void store.getState().dismissMoved(meetingId)} />
+      {run && !(empty && run.status === "off") && (
         <div className="rs-notice" role="group" aria-label="State of the notes">
-          <div className="rs-notice-title" data-testid="notes-tab-state">{endedWords(run)}</div>
-          {notCoveredText(run.not_covered) && <p>{notCoveredText(run.not_covered)}</p>}
-          {run.reason && ["error", "capped", "paused"].includes(run.status) && <p>{run.reason}</p>}
-          {(can(run, "update") || inFlight(run)) && (
+          <div className="rs-notice-title" data-testid="notes-tab-state">
+            {live ? runWords("notes", run.status, run.status !== "off", { manual: settings?.update_mode === "manual" }).word : endedWords(run)}
+          </div>
+          {!live && endedSentence(run.ended) && <p>{endedSentence(run.ended)}</p>}
+          {!live && notCoveredText(run.not_covered) && <p>{notCoveredText(run.not_covered)}</p>}
+          {run.reason && !live && ["error", "capped", "paused"].includes(run.status) && <p>{run.reason}</p>}
+          {!live && (can(run, "update") || can(run, "keep_going") || inFlight(run)) && (
             <div className="rs-notice-actions">
-              <button type="button" className="rs-tool rs-tool-solid" disabled={inFlight(run)} onClick={() => void store.getState().updateNow(meetingId)}>
-                {inFlight(run) ? "Updating" : "Update notes"}
-              </button>
+              {(can(run, "update") || inFlight(run)) && (
+                <button type="button" className="rs-tool rs-tool-solid" disabled={inFlight(run)} onClick={() => void store.getState().updateNow(meetingId)}>
+                  {inFlight(run) ? "Updating" : "Update notes"}
+                </button>
+              )}
+              {can(run, "keep_going") && (
+                <button type="button" className="rs-tool" onClick={() => void store.getState().keepGoing(meetingId)}>
+                  Keep going
+                </button>
+              )}
             </div>
           )}
         </div>

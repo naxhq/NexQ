@@ -9,6 +9,7 @@ import { sheetTimeMs, useLiveBriefStore } from "../stores/liveBriefStore";
 import { formatTokens } from "../live-notes/NotesSettingsForm";
 import { NoteText } from "../live-notes/NoteBlockRow";
 import { Age } from "./Age";
+import { MovedOnlineLine } from "../live-notes/MovedOnline";
 import { can, inFlight, modelLine } from "../live-notes/runState";
 import { describeModel } from "../models/ModelField";
 import { useAutomaticModel } from "../models/useAutomaticModel";
@@ -140,10 +141,12 @@ export function BriefPanel() {
         />
       </RunStatusHeader>
 
+      <MovedOnlineLine moved={run?.moved_online} what="The brief" onDismiss={() => void store.getState().dismissMoved(meetingId)} />
+
       {capped && (
         <div className="rs-notice" role="group" aria-labelledby="lb-cap-title">
           <div id="lb-cap-title" className="rs-notice-title">Keep the brief going?</div>
-          <p>It used {formatTokens(run?.tokens_used ?? 0)} tokens, the limit you set. Keep going adds {formatTokens(settings?.cap || run?.cap || 0)} more.</p>
+          <p>It used {formatTokens(run?.tokens_used ?? 0)} tokens, the limit you set. Keep going adds {formatTokens(run?.cap || settings?.cap || 0)} more.</p>
           <div className="rs-notice-actions">
             {can(run, "keep_going") && <Button variant="primary" size="sm" onClick={() => void store.getState().keepGoing()}>Keep going</Button>}
             <Button size="sm"  onClick={() => void store.getState().pause()}>Stop</Button>

@@ -286,8 +286,8 @@ describe("after Stop, at the end, and when the limit changes", () => {
     expect(screen.queryByRole("button", { name: /Update now|Start notes again/ })).toBeNull();
   });
 
-  it("the footer follows a changed limit at once", () => {
-    notes(run("on", ["update"], { cap: 120000, tokens_used: 42000 }), { cap: 240000 });
+  it("the footer uses the run's own limit, so Keep going never shows 31k of 30k", () => {
+    notes(run("on", ["update"], { cap: 240000, tokens_used: 42000 }), { cap: 120000 });
     render(<NotesPanel />);
     expect(screen.getByText(/42k of 240k tokens/)).toBeInTheDocument();
   });

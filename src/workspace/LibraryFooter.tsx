@@ -1,10 +1,11 @@
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { CheckCircle2, FlaskConical, FolderSync, Loader2, TriangleAlert, Zap } from "lucide-react";
 import { lazyNamed } from "../lib/lazyNamed";
 import { Button } from "../ui";
 
 const TestSearchDialog = lazyNamed(() => import("../context/TestSearchDialog"), "TestSearchDialog");
-import { rescanWorkspace } from "../lib/ipc";
+import { getIndexStatus, rescanWorkspace } from "../lib/ipc";
+import { RecapRetry, type RecapFailed } from "./RecapRetry";
 import { useConfigStore } from "../stores/configStore";
 import { useContextStore } from "../stores/contextStore";
 import { useRagStore } from "../stores/ragStore";
@@ -27,6 +28,23 @@ export function LibraryFooter({ workspaceId, hasFolders, progress }: { workspace
   const [rag, setRag] = useState<"idle" | "updating" | "done">("idle");
   const [testing, setTesting] = useState(false);
   const [rescanning, setRescanning] = useState(false);
+  const [recapFailed, setRecapFailed] = useState<RecapFailed>(null);
+  // Where recaps are expected, say when some failed (read again when an index run ends).
+  const running = !!progress;
+  const [retried, setRetried] = useState(false);
+  useEffect(() => {
+    let live = true;
+    getIndexStatus(workspaceId)
+      .then((s) => {
+        if (!live) return;
+        setRecapFailed(s?.ai_recaps_failed ?? null);
+        if (s?.ai_recaps_failed) setRetried(true);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [workspaceId, running]);
 
   const update = async () => {
     setRag("updating");
@@ -51,7 +69,7 @@ export function LibraryFooter({ workspaceId, hasFolders, progress }: { workspace
   };
 
   const ragOn = resources.length > 0 && contextStrategy === "local_rag";
-  if (!ragOn && !hasFolders && !progress) return null;
+  if (!ragOn && !hasFolders && !progress && !recapFailed && !retried) return null;
 
   const hasIndex = (indexStatus?.total_chunks ?? 0) > 0;
   const label = indexStale ? "Settings changed, rebuild the knowledge base" : !hasIndex ? "Build the knowledge base" : "Update the knowledge base";
@@ -62,6 +80,7 @@ export function LibraryFooter({ workspaceId, hasFolders, progress }: { workspace
       <div className="px-2.5">
         <IndexingNote workspaceId={workspaceId} progress={progress ?? null} compact />
       </div>
+      <RecapRetry workspaceId={workspaceId} failed={recapFailed} onChange={(f) => setRecapFailed(f)} compact />
       {ragOn && rag === "idle" && (
         <Button variant="ghost" onClick={update} className={cn("w-full justify-start", indexStale && "text-warning hover:text-warning")}>
           <Icon className="h-3.5 w-3.5" aria-hidden="true" />

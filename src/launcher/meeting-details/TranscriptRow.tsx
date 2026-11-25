@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { readableOn, readingTextColor, useIsLight } from "../../lib/themeText";
 import { createPortal } from "react-dom";
 import { Bookmark as BookmarkIcon, Globe, RefreshCw } from "lucide-react";
 import type { TranslationResult, TranslationDisplayMode } from "../../lib/types";
@@ -76,6 +77,7 @@ function TranscriptRowImpl({
   onTranslate,
   onRetranslate,
 }: TranscriptRowProps) {
+  const mode = useIsLight() ? "light" : "dark";
   const rowRef = useRef<HTMLDivElement | null>(null);
   const setRef = useCallback(
     (el: HTMLDivElement | null) => {
@@ -135,7 +137,7 @@ function TranscriptRowImpl({
       ) : (
         <span
           className={`shrink-0 pt-0.5 text-xs font-bold ${speakerColorClass}`}
-          style={speakerColorHex ? { color: speakerColorHex } : undefined}
+          style={speakerColorHex ? { color: readableOn(speakerColorHex, mode) } : undefined}
         >
           {speakerLabel}
         </span>
@@ -147,7 +149,7 @@ function TranscriptRowImpl({
           className="leading-relaxed"
           style={{
             fontSize: `${transcriptFontSize}px`,
-            color: isSelected ? undefined : transcriptTextColor,
+            color: isSelected ? undefined : readingTextColor(transcriptTextColor),
           }}
         >
           {matchOffsets
@@ -162,13 +164,13 @@ function TranscriptRowImpl({
           </div>
         ) : translation && translationDisplayMode === "inline" ? (
           <div className="mt-1 flex items-baseline gap-1.5 leading-[1.5]">
-            <span style={{ fontSize: `${translationFontSize}px`, color: translationTextColor }}>
+            <span style={{ fontSize: `${translationFontSize}px`, color: readableOn(translationTextColor, mode) }}>
               {translation.translated_text}
             </span>
             <span className={`shrink-0 rounded px-1 py-px text-[9px] font-bold tracking-wide ${
               isMismatched
                 ? "text-orange-400 bg-orange-500/[0.08] border border-orange-500/15"
-                : "text-muted-foreground/50 bg-white/[0.03]"
+                : "text-muted-foreground/50 bg-foreground/[0.04]"
             }`}>
               {translation.source_lang.toUpperCase()} → {translation.target_lang.toUpperCase()}
             </span>
@@ -249,6 +251,7 @@ function SpeakerNameEditor({
   colorHex?: string;
   onRename: (speakerKey: string, name: string) => void;
 }) {
+  const mode = useIsLight() ? "light" : "dark";
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(label);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -282,8 +285,8 @@ function SpeakerNameEditor({
             setEditing(false);
           }
         }}
-        className="shrink-0 w-24 rounded bg-white/5 border border-border/40 px-1 py-0 text-xs font-bold outline-none focus:border-primary/40"
-        style={colorHex ? { color: colorHex } : undefined}
+        className="shrink-0 w-24 rounded bg-foreground/5 border border-input px-1 py-0 text-xs font-bold outline-none focus:border-ring"
+        style={colorHex ? { color: readableOn(colorHex, mode) } : undefined}
       />
     );
   }
@@ -298,7 +301,7 @@ function SpeakerNameEditor({
         setEditing(true);
       }}
       className={`shrink-0 pt-0.5 text-xs font-bold cursor-text decoration-dotted underline-offset-2 hover:underline ${colorClass}`}
-      style={colorHex ? { color: colorHex } : undefined}
+      style={colorHex ? { color: readableOn(colorHex, mode) } : undefined}
       title="Rename this speaker"
     >
       {label}
@@ -356,7 +359,7 @@ function HoverTranslationTooltip({
 
   return createPortal(
     <div
-      className="fixed z-[9999] max-w-[420px] rounded-lg border border-white/15 px-3.5 py-2.5 shadow-2xl pointer-events-none"
+      className="dark fixed z-[9999] max-w-[420px] rounded-lg border border-white/15 px-3.5 py-2.5 text-foreground shadow-2xl pointer-events-none"
       style={{
         backgroundColor: "#1a1a2e",
         left: `${Math.min(pos.x + 16, window.innerWidth - 440)}px`,

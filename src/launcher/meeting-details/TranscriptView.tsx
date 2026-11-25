@@ -409,7 +409,7 @@ export function TranscriptView({ segments, mergedSegments, isVisible = true, sea
   return (
     <div className="relative flex flex-1 min-h-0 flex-col">
       {/* Always-visible search bar */}
-      <div className="flex items-center gap-2 rounded-lg bg-muted/20 mx-1 mt-1 mb-1.5 px-2.5 py-1.5">
+      <div className="flex items-center gap-2 rounded-lg border border-input bg-muted/20 mx-1 mt-1 mb-1.5 px-2.5 py-1.5">
         <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
         <input
           ref={setInputRef}
@@ -656,7 +656,7 @@ export function TranscriptView({ segments, mergedSegments, isVisible = true, sea
               placeholder="Add a note..."
               rows={3}
               autoFocus
-              className="w-full resize-none rounded-lg border border-border/30 bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20"
+              className="w-full resize-none rounded-lg border border-border/30 bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 outline-none focus:border-ring focus:ring-1 focus:ring-primary/20"
             />
             <div className="mt-3 flex items-center justify-between">
               <span className="text-[10px] text-muted-foreground/40">{formatShortcut("CmdOrCtrl+Enter")} to save</span>
@@ -822,7 +822,7 @@ function TimelineScrubber({
           {/* Selected marker */}
           {selPct !== null && (
             <div
-              className="absolute top-0 h-full w-0.5 bg-white shadow-[0_0_8px_rgba(255,255,255,0.6)]"
+              className="absolute top-0 h-full w-0.5 bg-foreground shadow-[0_0_8px_hsl(var(--foreground)/0.4)]"
               style={{ left: `${selPct}%` }}
             />
           )}
@@ -830,7 +830,7 @@ function TimelineScrubber({
           {/* Hover line */}
           {hover && (
             <div
-              className="pointer-events-none absolute top-0 h-full w-px bg-white/40"
+              className="pointer-events-none absolute top-0 h-full w-px bg-foreground/40"
               style={{ left: hover.x }}
             />
           )}

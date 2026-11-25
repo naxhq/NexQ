@@ -1764,6 +1764,19 @@ export interface NotCovered {
   to_ms: number;
 }
 
+/** Why a run ended (a meeting that is over), from the backend. */
+export type EndedKind = "covered" | "limit" | "error" | "plan_limit" | "paused" | "manual" | "out_of_time" | "stopped";
+export interface RunEnded {
+  kind: EndedKind;
+  detail: string | null;
+}
+
+/** The notes or brief moved to another provider (an online one) while the meeting ran. */
+export interface MovedOnline {
+  from: string;
+  to: string;
+}
+
 /** Which model a run will use (the cheapest tier when nothing was chosen). */
 export interface RunModel {
   provider: string;
@@ -1812,6 +1825,9 @@ export interface NotetakerState {
   model: RunModel | null;
   /** What the notes miss: shown with "Update notes" in the ended panel and the Notes tab. */
   not_covered: NotCovered | null;
+  /** Why it ended, once the meeting is over. */
+  ended: RunEnded | null;
+  moved_online: MovedOnline | null;
 }
 
 /** `notetaker_doc` */
@@ -1869,6 +1885,8 @@ export interface BriefState {
   model: RunModel | null;
   /** Always null for a brief (it has no transcript to cover); the backend sends the same shape for both. */
   not_covered: NotCovered | null;
+  ended: RunEnded | null;
+  moved_online: MovedOnline | null;
 }
 
 /** Which model writes the brief. Whether it runs is the workspace's own switch (`brief_enabled`). */

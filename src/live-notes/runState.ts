@@ -1,6 +1,6 @@
 // What a helper's run state means for the panel: the words, which buttons exist,
 // and the plain facts the header shows. Pure, so both panels and the tests share it.
-import type { NotCovered, NotetakerState, RunAction } from "../lib/types";
+import type { EndedKind, NotCovered, NotetakerState, RunAction, RunEnded } from "../lib/types";
 import { formatClock } from "./page";
 
 export type RunKind = "notes" | "brief";
@@ -51,8 +51,37 @@ export function notCoveredText(nc: NotCovered | null | undefined): string | null
   return nc ? `Not covered: ${formatClock(nc.from_ms)} to ${formatClock(nc.to_ms)}` : null;
 }
 
+const ENDED_HEADING: Record<EndedKind, string> = {
+  covered: "Finished",
+  limit: "Stopped at the limit",
+  error: "Stopped by an error",
+  plan_limit: "Stopped by a usage limit",
+  paused: "Paused",
+  manual: "Not updated automatically",
+  out_of_time: "Stopped early",
+  stopped: "Stopped",
+};
+const ENDED_SENTENCE: Record<EndedKind, string> = {
+  covered: "The notes cover the whole call.",
+  limit: "The notes stopped at the limit you set.",
+  error: "The notes stopped because of an error.",
+  plan_limit: "The notes stopped because your plan's usage limit was reached.",
+  paused: "The notes were paused when the meeting ended.",
+  manual: "The notes were on manual, so they were not updated by themselves.",
+  out_of_time: "The last update ran out of time.",
+  stopped: "You stopped the notes.",
+};
+
+/** One plain sentence for why the notes of a finished meeting ended as they did. */
+export function endedSentence(ended: RunEnded | null | undefined): string | null {
+  if (!ended) return null;
+  const base = ENDED_SENTENCE[ended.kind];
+  return ended.detail ? `${base} ${ended.detail}` : base;
+}
+
 /** What became of the notes of a meeting that is over, in plain words. */
-export function endedWords(run: { status?: RunStatusName; not_covered?: NotCovered | null } | null | undefined): string {
+export function endedWords(run: { status?: RunStatusName; not_covered?: NotCovered | null; ended?: RunEnded | null } | null | undefined): string {
+  if (run?.ended) return ENDED_HEADING[run.ended.kind];
   switch (run?.status) {
     case "capped":
       return "Stopped at the limit";

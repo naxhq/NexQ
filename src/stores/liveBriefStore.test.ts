@@ -39,6 +39,7 @@ vi.mock("../lib/ipc", () => {
     },
     briefStart: rec("start"),
     briefStop: rec("stop"),
+    briefDismissMoved: rec("dismiss_moved"),
     briefPause: rec("pause"),
     briefResume: rec("resume"),
     briefRefresh: rec("refresh"),
@@ -160,6 +161,11 @@ describe("liveBriefStore", () => {
     h.onState!(null as never);
     expect(useLiveBriefStore.getState().error).toBe("The brief couldn't be read. Try again.");
     expect(useLiveBriefStore.getState().run).toBeNull();
+  });
+
+  it("dismissing the moved-online line tells the backend which meeting", async () => {
+    await useLiveBriefStore.getState().dismissMoved("m1");
+    expect(h.calls).toEqual(["dismiss_moved"]);
   });
 
   it("says what failed", async () => {

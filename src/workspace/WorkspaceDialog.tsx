@@ -7,6 +7,7 @@ import { useAutomaticModel } from "../models/useAutomaticModel";
 import { GENERAL_ID, useWorkspaceStore } from "../stores/workspaceStore";
 import type { AIScenario, WorkspaceDetail, WorkspaceSummary } from "../lib/types";
 import { fieldClass, hintClass, labelClass } from "./styles";
+import { RecapRetry } from "./RecapRetry";
 
 export interface WorkspaceFormValues {
   name: string;
@@ -34,7 +35,7 @@ const NO_SCENARIO = "__none";
  * meeting, which model, what is sent, and who reads a recap.
  */
 export function recapsDescription(model: string): string {
-  return `Off by default. After a meeting here ends, and for up to 5 meetings without one when this workspace opens, one AI call writes a short recap from the transcript. It never runs during a meeting, uses ${model}, and sends that meeting's transcript to it. Meetings that already have a summary are left alone. A recap that failed is not tried again until the transcript changes or you rescan. Chat reads recaps first when it looks across many meetings.`;
+  return `Off by default. After a meeting here ends, and for up to 5 meetings without one when this workspace opens, one AI call writes a short recap from the transcript. It never runs during a meeting, uses ${model}, and sends that meeting's transcript to it. Meetings that already have a summary are left alone. A recap that failed is not tried again until the transcript changes, you rescan, or you choose Try again. Chat reads recaps first when it looks across many meetings.`;
 }
 
 /** "3 recaps failed: no key": what went wrong, with the latest reason, said plainly. */
@@ -87,7 +88,6 @@ export function WorkspaceDialog({
     };
   }, [open, editedId]);
   const recapLine = recapCountLine(recapCount);
-  const failureLine = recapFailureLine(recapFailed);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const create = useWorkspaceStore((s) => s.create);
   const update = useWorkspaceStore((s) => s.update);
@@ -323,15 +323,11 @@ export function WorkspaceDialog({
                 <>
                   {recapsDescription(automatic?.label ? `the automatic model, ${automatic.label}` : "the cheapest model you have set up")}
                   {recapLine && <span className="mt-1 block font-medium text-foreground">{recapLine}</span>}
-                  {failureLine && (
-                    <span role="status" className="mt-0.5 block font-medium text-warning">
-                      {failureLine}
-                    </span>
-                  )}
                 </>
               }
             />
           )}
+          {editedId && <RecapRetry workspaceId={editedId} failed={recapFailed} onChange={(f, n) => { setRecapFailed(f); if (n !== null) setRecapCount(n); }} />}
           <Switch
             checked={v.makeDefault}
             onChange={(c) => set("makeDefault", c)}

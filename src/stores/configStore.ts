@@ -26,7 +26,7 @@ import {
   normalizeThinkingMap,
   requestOptionFields,
 } from "../lib/llmRequestOptions";
-import { sanitizePlacement, type WindowPlacement } from "../lib/windowPlacement";
+import { sanitizePlacement, sanitizeSetups, type SetupEntry, type WindowPlacement } from "../lib/windowPlacement";
 import { CLI_AGENTS, cliAgentInfo, cliAgentName, isCliAgent } from "../lib/cliAgents";
 import { clampMinutes, DEFAULT_CONTEXT_SCOPE, SCOPE_KINDS } from "../lib/contextScope";
 
@@ -348,6 +348,9 @@ interface ConfigState {
   /** Last size and place of each window (null: never saved). Each window writes only its own. */
   launcherPlacement: WindowPlacement | null;
   overlayPlacement: WindowPlacement | null;
+  /** Each window's place per monitor setup (docked, undocked...), newest first, at most 6. */
+  launcherSetups: SetupEntry[];
+  overlaySetups: SetupEntry[];
 
   // Transcript scope of user actions (overlay picker)
   contextScope: ContextScopeSetting;
@@ -466,6 +469,9 @@ interface ConfigState {
   setOverlayDock: (dock: unknown) => void;
   setOverlayDockTransient: (panels: string[]) => void;
   setWindowPlacement: (label: "launcher" | "overlay", placement: WindowPlacement) => void;
+  setWindowSetups: (label: "launcher" | "overlay", entries: SetupEntry[], latest: WindowPlacement) => void;
+  /** Forget every saved window place (the "Reset window positions" command). */
+  clearWindowPlacements: () => void;
   setContextScope: (scope: ContextScopeSetting) => void;
   setContextScopeSticky: (sticky: boolean) => void;
   setShowPostMeetingTranslation: (enabled: boolean) => void;
@@ -560,6 +566,8 @@ export const useConfigStore = create<ConfigState>((set) => ({
   overlayDockTransient: [],
   launcherPlacement: null,
   overlayPlacement: null,
+  launcherSetups: [],
+  overlaySetups: [],
   contextScope: DEFAULT_CONTEXT_SCOPE,
   contextScopeSticky: true,
   showPostMeetingTranslation: true,
@@ -988,6 +996,16 @@ export const useConfigStore = create<ConfigState>((set) => ({
     else set({ overlayPlacement: placement });
     persistValue(`${label}Placement`, placement);
   },
+  setWindowSetups: (label, entries, latest) => {
+    if (label === "launcher") set({ launcherSetups: entries, launcherPlacement: latest });
+    else set({ overlaySetups: entries, overlayPlacement: latest });
+    persistValue(`${label}Setups`, entries);
+    persistValue(`${label}Placement`, latest);
+  },
+  clearWindowPlacements: () => {
+    set({ launcherSetups: [], overlaySetups: [], launcherPlacement: null, overlayPlacement: null });
+    for (const k of ["launcherSetups", "overlaySetups", "launcherPlacement", "overlayPlacement"]) persistValue(k, null);
+  },
   setContextScope: (scope) => {
     const next = normalizeContextScope(scope);
     set({ contextScope: next });
@@ -1138,6 +1156,8 @@ export const useConfigStore = create<ConfigState>((set) => ({
       const overlayDockTransient = await store.get<unknown>("overlayDockTransient");
       const launcherPlacement = await store.get<unknown>("launcherPlacement");
       const overlayPlacement = await store.get<unknown>("overlayPlacement");
+      const launcherSetups = await store.get<unknown>("launcherSetups");
+      const overlaySetups = await store.get<unknown>("overlaySetups");
       const contextScope = await store.get<ContextScopeSetting>("contextScope");
       const contextScopeSticky = await store.get<boolean>("contextScopeSticky");
       const showPostMeetingTranslation = await store.get<boolean>("showPostMeetingTranslation");
@@ -1350,6 +1370,8 @@ export const useConfigStore = create<ConfigState>((set) => ({
           : [],
         launcherPlacement: sanitizePlacement(launcherPlacement),
         overlayPlacement: sanitizePlacement(overlayPlacement),
+        launcherSetups: sanitizeSetups(launcherSetups),
+        overlaySetups: sanitizeSetups(overlaySetups),
         contextScope: normalizeContextScope(contextScope),
         contextScopeSticky: contextScopeSticky ?? true,
         sttLanguage: sttLanguage ?? "en-US",

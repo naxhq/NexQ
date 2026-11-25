@@ -44,7 +44,7 @@ describe("NotesTab of an ended meeting", () => {
     const first = render(<NotesTab meetingId="m1" title="Sync" />);
     await screen.findByText("Not covered: 2:00 to 40:00");
     first.unmount();
-    h.state = { ...finished, status: "finished", not_covered: null, reason: null, can: ["start"] };
+    h.state = { ...finished, status: "finished", not_covered: null, reason: null, can: ["start"], ended: { kind: "covered", detail: null } };
     render(<NotesTab meetingId="m1" title="Sync" />);
     await waitFor(() => expect(screen.getByTestId("notes-tab-state")).toHaveTextContent("Finished"));
     expect(screen.queryByText(/Not covered/)).toBeNull();

@@ -242,7 +242,7 @@ export function Composer(p: ComposerProps) {
     return (
       <div className={cn(COLUMN, "min-w-0")} data-composer="compact">
         {notices}
-        <div className="min-w-0 overflow-hidden rounded-xl border border-border bg-card focus-within:border-ring/60">
+        <div className="min-w-0 overflow-hidden rounded-xl border border-input bg-card focus-within:border-ring">
           {textarea}
           <div className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 px-2 pb-1.5 pt-1" data-composer-controls>
             <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-1">
@@ -275,7 +275,7 @@ export function Composer(p: ComposerProps) {
   return (
     <div className={cn(COLUMN, "min-w-0")} data-composer="full">
       {notices}
-      <div className="min-w-0 overflow-hidden rounded-xl border border-border bg-card shadow-[0_1px_0_rgba(0,0,0,0.12)] focus-within:border-ring/60">
+      <div className="min-w-0 overflow-hidden rounded-xl border border-input bg-card shadow-[0_1px_0_rgba(0,0,0,0.12)] focus-within:border-ring">
         {textarea}
         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 px-2 pb-2 pt-1">
           {modelPicker}

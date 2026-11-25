@@ -753,7 +753,7 @@ describe("saving a meeting edit back to the base note (the revision it was made 
     expect(server.get("a")!.title).toBe("Renamed in the launcher");
     expect(server.get("a")!.plain_text).toBe("meeting edit");
     expect(S().saveState.a).toBe("saved");
-    expect(S().meetingBase.a).toBeUndefined();
+    expect(S().meetingBase.a?.updated_at).toBe(S().find("a")!.updated_at); // the base is now the version just saved
   });
 
   it("the same text saved from the meeting and the launcher is not a conflict", async () => {
@@ -804,5 +804,70 @@ describe("saving a meeting edit back to the base note (the revision it was made 
     const c = await S().copyTo("a", "w1");
     expect(c!.plain_text).toBe("elsewhere");
     expect(ipc.patchTalkingPoint).not.toHaveBeenCalled();
+  });
+});
+
+describe("the base of a meeting edit does not outlive the edit", () => {
+  async function open() {
+    install([point("a", "w1", 0, "base text")]);
+    await S().load("w1");
+  }
+  const launcherSaves = (text: string) => {
+    Object.assign(server.get("a")!, { plain_text: text, doc_json: JSON.stringify(docFromText(text)), updated_at: ++clock });
+  };
+
+  it("cancelling an edit forgets its base, so a later edit is based on what is there then", async () => {
+    await open();
+    S().beginMeetingEdit("a");
+    S().endMeetingEdit("a"); // Cancel
+    expect(S().meetingBase.a).toBeUndefined();
+    launcherSaves("launcher text");
+    await S().syncFromBackend("w1");
+    S().beginMeetingEdit("a");
+    await S().saveToWorkspace("m1", "a", docFromText("meeting text"));
+    expect(S().saveState.a).toBe("saved"); // no false conflict from the old base
+    expect(server.get("a")!.plain_text).toBe("meeting text");
+  });
+
+  it("cancelling keeps the base while a meeting-only copy still rests on it", async () => {
+    await open();
+    S().beginMeetingEdit("a");
+    await S().saveMeetingOnly("m1", "a", docFromText("for today"));
+    S().endMeetingEdit("a");
+    expect(S().meetingBase.a).toBeDefined();
+  });
+
+  it("discarding the meeting copy forgets the base", async () => {
+    await open();
+    S().beginMeetingEdit("a");
+    await S().saveMeetingOnly("m1", "a", docFromText("for today"));
+    await S().discardMeetingEdit("m1", "a");
+    expect(S().meetingBase.a).toBeUndefined();
+    launcherSaves("launcher text");
+    await S().syncFromBackend("w1");
+    S().beginMeetingEdit("a");
+    await S().saveToWorkspace("m1", "a", docFromText("later edit"));
+    expect(S().saveState.a).toBe("saved");
+  });
+
+  it("the end of the meeting forgets every base", async () => {
+    await open();
+    S().beginMeetingEdit("a");
+    S().resetMeeting();
+    expect(S().meetingBase).toEqual({});
+  });
+
+  it("after a save to the workspace the base is the saved revision, and a new editing session starts fresh", async () => {
+    await open();
+    S().beginMeetingEdit("a");
+    await S().saveToWorkspace("m1", "a", docFromText("first"));
+    expect(S().meetingBase.a.updated_at).toBe(server.get("a")!.updated_at);
+    launcherSaves("launcher text");
+    await S().syncFromBackend("w1");
+    S().beginMeetingEdit("a"); // a new session: its base is the launcher version now on screen
+    expect(S().meetingBase.a.updated_at).toBe(server.get("a")!.updated_at);
+    await S().saveToWorkspace("m1", "a", docFromText("second"));
+    expect(S().saveState.a).toBe("saved");
+    expect(server.get("a")!.plain_text).toBe("second");
   });
 });

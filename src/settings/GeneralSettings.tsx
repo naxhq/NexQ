@@ -5,6 +5,7 @@ import type { ThemeMode } from "../lib/types";
 import { Eye } from "lucide-react";
 import { StealthSettings } from "./StealthSettings";
 import { MeetingDetectionSettings } from "./MeetingDetectionSettings";
+import { resetWindowPositions } from "../lib/windowReset";
 
 export function GeneralSettings() {
   const theme = useConfigStore((s) => s.theme);
@@ -172,6 +173,23 @@ export function GeneralSettings() {
           <span className="text-[10px] text-muted-foreground/50">Transparent</span>
           <span className="text-[10px] text-muted-foreground/50">Solid</span>
         </div>
+      </div>
+
+      {/* Window positions */}
+      <div className="rounded-xl border border-border/30 bg-card/50 p-5">
+        <div className="mb-3">
+          <label className="text-sm font-medium text-foreground">Window positions</label>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            NexQ remembers where each window was for every monitor setup. If a window ended up out of reach, put both back on this screen.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void resetWindowPositions("primary")}
+          className="rounded-lg border border-border/50 bg-secondary/30 px-3.5 py-2.5 text-xs font-medium text-muted-foreground transition-all duration-150 hover:bg-secondary hover:text-foreground cursor-pointer"
+        >
+          Reset window positions
+        </button>
       </div>
 
       {/* Data Directory */}

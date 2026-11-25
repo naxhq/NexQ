@@ -179,7 +179,7 @@ describe("honest recap and memory texts", () => {
   it("the recap text names the model it is given and says failed ones are not retried", () => {
     const t = recapsDescription("the automatic model, Claude Haiku (cheapest)");
     expect(t).toMatch(/uses the automatic model, Claude Haiku \(cheapest\), and sends/);
-    expect(t).toMatch(/not tried again until the transcript changes or you rescan/);
+    expect(t).toMatch(/not tried again until the transcript changes, you rescan, or you choose Try again/);
     expect(t).not.toMatch(/\(the automatic/);
   });
 

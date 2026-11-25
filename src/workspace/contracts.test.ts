@@ -38,6 +38,7 @@ describe("commands the launcher sends", () => {
     ["update_memory", () => ipc.updateMemory("k", { text: "y" }), "update_memory", { id: "k", patch: { text: "y" } }],
     ["suggest_memory", () => ipc.suggestMemory("w", "m"), "suggest_memory", { workspaceId: "w", meetingId: "m" }],
     ["resolve_memory", () => ipc.resolveMemory("k", "save", { title: "t" }), "resolve_memory", { id: "k", action: "save", patch: { title: "t" } }],
+    ["retry_recaps", () => ipc.retryRecaps("w"), "retry_recaps", { workspaceId: "w" }],
     ["get_index_status", () => ipc.getIndexStatus("w"), "get_index_status", { id: "w" }],
     ["restore_database_copy", () => restoreDatabaseCopy("nexq-1.db"), "restore_database_copy", { name: "nexq-1.db" }],
     ["retry_open_database", () => retryOpenDatabase(), "retry_open_database", {}],

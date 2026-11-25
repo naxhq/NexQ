@@ -120,7 +120,7 @@ export function AskMeetingTab({ chat, meetingId = null, unavailableReason = null
         }}
       >
         <div className="mx-auto max-w-2xl">
-          <div className="flex items-end gap-2 rounded-xl border border-border/30 bg-card/40 py-1.5 pl-3.5 pr-1.5 transition-colors duration-150 focus-within:border-primary/40">
+          <div className="flex items-end gap-2 rounded-xl border border-input bg-card/40 py-1.5 pl-3.5 pr-1.5 transition-colors duration-150 focus-within:border-ring">
             <div className="flex min-h-[28px] shrink-0 items-center">
               <SourcePills scope="past" meetingId={meetingId} />
             </div>

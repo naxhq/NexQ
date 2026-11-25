@@ -39,6 +39,7 @@ vi.mock("../lib/ipc", async () => {
       h.settings = { ...h.settings, ...patch };
       return h.settings;
     },
+    notetakerDismissMoved: rec("dismiss_moved"),
     notetakerPause: rec("pause"),
     notetakerResume: rec("resume"),
     notetakerStart: rec("start"),
@@ -300,6 +301,16 @@ describe("an unexpected answer is said in plain words", () => {
     h.fail = "No provider is set up";
     await S().start();
     expect(S().error).toBe("No provider is set up");
+  });
+});
+
+describe("the moved-online line", () => {
+  it("dismissing tells the backend which meeting, and a failure is said", async () => {
+    await S().dismissMoved("live1");
+    expect(h.calls.map((c) => [c[0], c[1][0]])).toEqual([["dismiss_moved", "live1"]]);
+    h.failOnly.add("dismiss_moved");
+    await S().dismissMoved("live1");
+    expect(S().error).toBe("failed");
   });
 });
 

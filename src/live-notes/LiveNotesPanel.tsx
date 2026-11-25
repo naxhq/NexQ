@@ -7,6 +7,7 @@ import { onNotesUpdateRequested } from "../lib/events";
 import { useMeetingStore } from "../stores/meetingStore";
 import { EMPTY_ENTRY, useLiveNotesStore } from "../stores/liveNotesStore";
 import { NotePage } from "./NotePage";
+import { MovedOnlineLine } from "./MovedOnline";
 import { Countdown, RunStatusHeader } from "./RunStatusHeader";
 import { can, endedWords, inFlight, modelLine, notCoveredText, runWords } from "./runState";
 import { useAutomaticModel } from "../models/useAutomaticModel";
@@ -113,8 +114,8 @@ export function NotesPanel() {
   const failed = !capped && (run?.status === "error" || (run?.status === "paused" && !!run.reason));
   const missed = notCoveredText(run?.not_covered);
   const used = run?.tokens_used ?? 0;
-  // The limit shown follows the setting at once; the run catches up from its own state.
-  const cap = settings?.cap || run?.cap || 0;
+  // The run's own limit: after Keep going it is higher than the setting.
+  const cap = run?.cap || settings?.cap || 0;
 
   const menu: MenuItemSpec[] = [
     ...(enabled && can(run, "pause") ? [{ id: "pause", label: "Pause notes", onSelect: () => void store.getState().pause() }] : []),
@@ -169,6 +170,8 @@ export function NotesPanel() {
           )}
         />
       </RunStatusHeader>
+
+      <MovedOnlineLine moved={run?.moved_online} what="Notes" onDismiss={() => void store.getState().dismissMoved(meetingId)} />
 
       {capped && (
         <div className="rs-notice" role="group" aria-labelledby="ln-cap-title">

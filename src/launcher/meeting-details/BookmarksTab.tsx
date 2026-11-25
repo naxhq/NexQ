@@ -331,7 +331,7 @@ function BookmarkRow({
             onBlur={saveNote}
             onKeyDown={handleKeyDown}
             disabled={saving}
-            className="w-full rounded-md border border-border/50 bg-background/50 px-2 py-1 text-xs leading-relaxed text-foreground/80 outline-none focus:border-primary/40 focus:ring-1 focus:ring-primary/20 disabled:opacity-50"
+            className="w-full rounded-md border border-border/50 bg-background/50 px-2 py-1 text-xs leading-relaxed text-foreground/80 outline-none focus:border-ring focus:ring-1 focus:ring-primary/20 disabled:opacity-50"
             placeholder="Add a note..."
           />
         ) : (

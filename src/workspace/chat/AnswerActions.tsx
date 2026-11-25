@@ -95,10 +95,10 @@ export function AnswerActions({
 }
 
 /**
- * The document that is stored is the text in the box, read and editable here as plain text: no
- * HTML, no link or image targets, no hidden characters. If something had to be removed, the box
- * is cleaned and nothing is saved until it is read again. The backend refuses anything cleaning
- * would change, so what was shown is what is stored.
+ * The document that is stored is the text in the box, as it is: code, HTML, links and everything else
+ * stay, and only hidden characters are removed. If some had to go, the box is cleaned and says how many,
+ * and nothing is saved until it is read again. The backend refuses anything cleaning would change, so
+ * what was shown is what is stored.
  */
 function SaveDialog({ messageId, initial, answer, onClose }: { messageId: number; initial: string; answer: string; onClose: () => void }) {
   const [title, setTitle] = useState(initial);

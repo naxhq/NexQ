@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { BriefSettings, BriefSheet, BriefState } from "../lib/types";
 import {
   briefContinue,
+  briefDismissMoved,
   briefPause,
   briefResume,
   briefRefresh,
@@ -76,6 +77,7 @@ interface LiveBriefState {
   start: () => Promise<void>;
   refresh: () => Promise<void>;
   keepGoing: () => Promise<void>;
+  dismissMoved: (meetingId: string) => Promise<void>;
   patchSettings: (patch: Partial<BriefSettings>) => Promise<void>;
   clearError: () => void;
 }
@@ -250,6 +252,13 @@ export const useLiveBriefStore = create<LiveBriefState>((set, get) => {
       }
     },
     keepGoing: onLive((id) => briefContinue(id)),
+    dismissMoved: async (meetingId) => {
+      try {
+        await briefDismissMoved(meetingId);
+      } catch (e) {
+        set({ error: describeError(e) });
+      }
+    },
     patchSettings: async (patch) => {
       const before = get().settings;
       if (before) set({ settings: { ...before, ...patch } });

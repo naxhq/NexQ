@@ -122,7 +122,7 @@ export function ActionItemRow({
                 if (e.key === "Escape") { setEditText(item.text); setEditing(false); }
               }}
               onBlur={handleSave}
-              className="flex-1 rounded-md border border-border/30 bg-background px-2 py-1 text-sm text-foreground outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20"
+              className="flex-1 rounded-md border border-border/30 bg-background px-2 py-1 text-sm text-foreground outline-none focus:border-ring focus:ring-1 focus:ring-primary/20"
             />
             <button
               onClick={handleSave}

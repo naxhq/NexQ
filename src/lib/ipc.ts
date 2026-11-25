@@ -845,6 +845,8 @@ export async function downloadUpdate(): Promise<UpdateInfo> {
 
 /** Install the downloaded update. The app exits and relaunches on the new version. */
 export async function installUpdateNow(): Promise<void> {
+  // The app restarts: save where the windows are first.
+  await import("../hooks/useWindowPlacement").then((m) => m.flushWindowPlacement()).catch(() => {});
   return invoke("install_update_now");
 }
 
@@ -889,8 +891,13 @@ export async function setClaudeCliConfig(config: ClaudeCliConfig): Promise<void>
  * Detect the CLI, its version and login state (no model call). For Antigravity
  * the login check also lists its models (the backend catalog is filled).
  */
-export async function cliAgentStatus(kind: CliAgentKind): Promise<CliAgentStatus> {
-  return invoke<CliAgentStatus>("cli_agent_status", { kind });
+/**
+ * What a CLI agent is and whether it is logged in. `refresh` asks the backend to look again instead of
+ * answering from what it saw a moment ago: pass it for an explicit "check again" (Settings, the wizard,
+ * after a login or install), not when merely opening a picker.
+ */
+export async function cliAgentStatus(kind: CliAgentKind, refresh = false): Promise<CliAgentStatus> {
+  return invoke<CliAgentStatus>("cli_agent_status", refresh ? { kind, refresh: true } : { kind });
 }
 
 /** The models the CLI offers (no model call). Cached by the backend; `refresh` asks the CLI again. */
@@ -1181,6 +1188,10 @@ export async function listWorkspaceMeetings(
 export async function countUnfiledMeetings(): Promise<number> {
   return invoke<number>("count_unfiled_meetings");
 }
+/** Try the failed recaps of a workspace again (it runs the way opening the workspace does). */
+export async function retryRecaps(workspaceId: string): Promise<void> {
+  return invoke("retry_recaps", { workspaceId });
+}
 export async function getMeetingRecap(meetingId: string): Promise<MeetingRecap | null> {
   return invoke<MeetingRecap | null>("get_meeting_recap", { meetingId });
 }
@@ -1319,6 +1330,13 @@ export async function briefResume(meetingId: string): Promise<void> {
 /** What "Automatic" is for a provider (or the active one when null), to say before turning on. */
 export async function getAutomaticModel(provider: string | null = null): Promise<AutomaticModel | null> {
   return invoke<AutomaticModel | null>("get_automatic_model", { provider });
+}
+/** The person has seen "now uses an online provider": it will not be said again. */
+export async function notetakerDismissMoved(meetingId: string): Promise<void> {
+  return invoke("notetaker_dismiss_moved", { meetingId });
+}
+export async function briefDismissMoved(meetingId: string): Promise<void> {
+  return invoke("brief_dismiss_moved", { meetingId });
 }
 export async function notetakerContinue(meetingId: string): Promise<void> {
   return invoke("notetaker_continue", { meetingId });

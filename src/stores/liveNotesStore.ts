@@ -5,6 +5,7 @@ import {
   getNotetakerState,
   getNotetakerSettings,
   notetakerContinue,
+  notetakerDismissMoved,
   notetakerPause,
   notetakerResume,
   notetakerStart,
@@ -103,7 +104,9 @@ interface LiveNotesState {
   pause: () => Promise<void>;
   resume: () => Promise<void>;
   tryAgain: () => Promise<void>;
-  keepGoing: () => Promise<void>;
+  keepGoing: (meetingId?: string) => Promise<void>;
+  /** The "moved to an online provider" line has been seen. */
+  dismissMoved: (meetingId: string) => Promise<void>;
   patchSettings: (patch: Partial<NotetakerSettings>) => Promise<void>;
 
   // Edits: the meeting they are about.
@@ -323,7 +326,23 @@ export const useLiveNotesStore = create<LiveNotesState>((set, get) => {
     pause: () => onLive((id) => notetakerPause(id)),
     resume: () => onLive((id) => notetakerResume(id)),
     tryAgain: () => onLive((id) => notetakerStart(id)),
-    keepGoing: () => onLive((id) => notetakerContinue(id)),
+    dismissMoved: async (meetingId) => {
+      try {
+        await notetakerDismissMoved(meetingId);
+      } catch (e) {
+        fail(e);
+      }
+    },
+    keepGoing: async (meetingId) => {
+      const id = meetingId ?? needLive();
+      if (!id) return;
+      set({ error: null });
+      try {
+        await notetakerContinue(id);
+      } catch (e) {
+        fail(e);
+      }
+    },
 
     patchSettings: async (patch) => {
       if (patch.enabled === false) {

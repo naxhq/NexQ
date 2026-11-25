@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useCallback, useState } from "react";
+import { Suspense, useEffect, useCallback, useState, useRef } from "react";
 import { useMeetingStore } from "./stores/meetingStore";
 import { useConfigStore } from "./stores/configStore";
 import { useAIActionsStore, watchSavedActionConfigs } from "./stores/aiActionsStore";
@@ -273,8 +273,14 @@ function App() {
   }, [windowLabel]);
 
   // OVERLAY window: when currentView->"launcher", hide self + show launcher
+  // Not on the first render: the overlay starts in "launcher" and is hidden, and showing the launcher then
+  // would put it on screen at its default place before its saved place is back.
+  const overlayViewSeen = useRef(false);
   useEffect(() => {
     if (windowLabel !== "overlay") return;
+    const first = !overlayViewSeen.current;
+    overlayViewSeen.current = true;
+    if (first) return;
     if (currentView === "launcher") {
       showLauncherWindow().catch(() => {});
     }
@@ -365,6 +371,12 @@ function App() {
       startMeetingFlow().catch((err) => {
         console.error("[App] Tray start meeting failed:", err);
       });
+    }).then((unlisten) => unlisteners.push(unlisten));
+
+    listen("tray_bring_windows", () => {
+      // One window does it for both: the launcher.
+      if (windowLabel !== "launcher") return;
+      import("./lib/windowReset").then((m) => m.resetWindowPositions("cursor")).catch(() => {});
     }).then((unlisten) => unlisteners.push(unlisten));
 
     listen("tray_open_settings", () => {

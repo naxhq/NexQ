@@ -189,6 +189,8 @@ interface TalkingPointsState {
   resolveConflict: (id: string, which: "mine" | "theirs") => Promise<void>;
   loadTheirs: (id: string) => Promise<TalkingPoint | null>;
   beginMeetingEdit: (pointId: string) => void;
+  /** The editor was closed without saving to the workspace: the base only stays if a meeting-only copy still rests on it. */
+  endMeetingEdit: (pointId: string) => void;
   duplicate: (id: string) => Promise<TalkingPoint | null>;
   copyTo: (id: string, workspaceId: string) => Promise<TalkingPoint | null>;
   remove: (id: string) => Promise<void>;
@@ -580,8 +582,18 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
 
     beginMeetingEdit: (pointId) => {
       const n = get().find(pointId);
-      if (!n || get().meetingBase[pointId]) return;
+      // a meeting-only copy already rests on its own base; otherwise every editing session starts from the version on screen now
+      if (!n || (get().meetingBase[pointId] && get().meetingEdits[pointId] !== undefined)) return;
       set((s) => ({ meetingBase: { ...s.meetingBase, [pointId]: { updated_at: n.updated_at, doc_json: n.doc_json, title: n.title } } }));
+    },
+
+    endMeetingEdit: (pointId) => {
+      if (get().meetingEdits[pointId] !== undefined) return;
+      set((s) => {
+        const mb = { ...s.meetingBase };
+        delete mb[pointId];
+        return { meetingBase: mb };
+      });
     },
 
     duplicate: async (id) => {
@@ -729,8 +741,11 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
       set((s) => {
         const edits = { ...s.meetingEdits };
         delete edits[pointId];
+        // the base is now the version just saved (the meeting copy is gone)
+        const saved = Object.values(s.byWorkspace).flat().find((p) => p.id === pointId);
         const mb = { ...s.meetingBase };
-        delete mb[pointId];
+        if (saved) mb[pointId] = { updated_at: saved.updated_at, doc_json: saved.doc_json, title: saved.title };
+        else delete mb[pointId];
         return { meetingEdits: edits, meetingBase: mb };
       });
       await saveMeetingPointEdit(meetingId, pointId, null);
@@ -740,7 +755,9 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
       set((s) => {
         const edits = { ...s.meetingEdits };
         delete edits[pointId];
-        return { meetingEdits: edits };
+        const mb = { ...s.meetingBase };
+        delete mb[pointId];
+        return { meetingEdits: edits, meetingBase: mb };
       });
       await saveMeetingPointEdit(meetingId, pointId, null);
     },
@@ -788,7 +805,7 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
       for (const t of progressTimers.values()) clearTimeout(t);
       progressTimers.clear();
       progressLatest.clear();
-      set({ meetingEdits: {}, progress: {}, progressError: null });
+      set({ meetingEdits: {}, meetingBase: {}, progress: {}, progressError: null });
     },
   };
 });

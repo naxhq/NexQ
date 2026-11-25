@@ -3,6 +3,7 @@ import { useConfigStore } from "../stores/configStore";
 import { setRecordingEnabled } from "../lib/ipc";
 import { useMeetingScenarios, useScenarioStore } from "../stores/scenarioStore";
 import { MODE_COLORS } from "../lib/speakerColors";
+import { readableOn, useIsLight } from "../lib/themeText";
 import { defaultWorkspaceOf, useWorkspaceStore, workspaceById } from "../stores/workspaceStore";
 import { borrowBlocker } from "../workspace/meetingScope";
 import { pickScenario } from "../workspace/scenarioOrder";
@@ -150,10 +151,12 @@ export function MeetingSetupModal({ open, onStart, onCancel, workspaceId }: Meet
     setIsExpanded(true);
   }, [setRememberedMeetingSetup]);
 
+  const themeMode = useIsLight() ? "light" : "dark";
+
   if (!open) return null;
 
-  const onlineColors = MODE_COLORS.online;
-  const inPersonColors = MODE_COLORS.in_person;
+  const onlineColors = { ...MODE_COLORS.online, text: readableOn(MODE_COLORS.online.text, themeMode, 5.6) };
+  const inPersonColors = { ...MODE_COLORS.in_person, text: readableOn(MODE_COLORS.in_person.text, themeMode, 5.6) };
   const activeMode = audioMode === "online" ? onlineColors : inPersonColors;
 
   return (
@@ -420,7 +423,7 @@ export function MeetingSetupModal({ open, onStart, onCancel, workspaceId }: Meet
                   <div
                     className="flex h-8 w-8 items-center justify-center rounded-lg"
                     style={{
-                      background: audioMode === "online" ? onlineColors.bg : "rgba(255,255,255,0.04)",
+                      background: audioMode === "online" ? onlineColors.bg : "hsl(var(--muted))",
                     }}
                   >
                     <Monitor
@@ -459,7 +462,7 @@ export function MeetingSetupModal({ open, onStart, onCancel, workspaceId }: Meet
                   <div
                     className="flex h-8 w-8 items-center justify-center rounded-lg"
                     style={{
-                      background: audioMode === "in_person" ? inPersonColors.bg : "rgba(255,255,255,0.04)",
+                      background: audioMode === "in_person" ? inPersonColors.bg : "hsl(var(--muted))",
                     }}
                   >
                     <Mic

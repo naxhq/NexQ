@@ -112,7 +112,13 @@ export function PromptEditor({ note, docJson, meetingId, onDone }: Props) {
         </p>
       )}
       <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border px-2 py-1.5">
-        <Button  onClick={onDone} disabled={busy !== null}>
+        <Button
+          onClick={() => {
+            useTalkingPointsStore.getState().endMeetingEdit(note.id);
+            onDone();
+          }}
+          disabled={busy !== null}
+        >
           Cancel
         </Button>
         <Button  onClick={() => void run("meeting")} disabled={busy !== null}>
