@@ -536,4 +536,108 @@ mod fail_closed {
         let r = req("mcp_mira_kb_search");
         assert!(acp_decide(&r, &acp).is_allow(&r));
     }
+
+// ---- contracts with the webview (fixtures in src/contracts/fixtures) -----------
+
+mod contracts {
+    use super::*;
+
+    fn sent(n: &ApprovalNotice) -> (&'static str, Value) {
+        notice_payload(n)
+    }
+
+    #[test]
+    fn event_workspace_chat_approval() {
+        let (event, payload) = sent(&ApprovalNotice::Request(ApprovalEvent {
+            chat_id: "c1".into(),
+            request_id: "ask-1".into(),
+            approval_id: "ap-1".into(),
+            server: "notes".into(),
+            tool: "set_flag".into(),
+            args: "{\n  \"value\": \"on\"\n}".into(),
+            redacted: false,
+            truncated: false,
+        }));
+        assert_eq!(event, "workspace_chat_approval");
+        crate::assert_contract!("workspace_chat_approval", payload);
+    }
+
+    #[test]
+    fn event_workspace_chat_approval_closed() {
+        let (event, payload) = sent(&ApprovalNotice::Closed { chat_id: "c1".into(), approval_id: "ap-1".into(), reason: "timed_out" });
+        assert_eq!(event, "workspace_chat_approval_closed");
+        crate::assert_contract!("workspace_chat_approval_closed", payload);
+    }
+
+    #[test]
+    fn event_workspace_chat_approval_refused() {
+        let (event, payload) = sent(&ApprovalNotice::Refused {
+            chat_id: "c1".into(),
+            request_id: "ask-1".into(),
+            server: "notes".into(),
+            tool: "set_flag".into(),
+            reason: "set_flag was refused: its arguments are longer than 100 KB, too long to show before it runs.".into(),
+        });
+        assert_eq!(event, "workspace_chat_approval_refused");
+        crate::assert_contract!("workspace_chat_approval_refused", payload);
+    }
+
+    #[test]
+    fn command_answer_workspace_approval() {
+        let fixture = crate::contract::read("answer_workspace_approval");
+        let args: AnswerApprovalArgs = serde_json::from_value(fixture.clone()).expect("fits the command's arguments");
+        assert_eq!(serde_json::to_value(&args).unwrap(), fixture, "nothing lost on the way");
+        assert_eq!((args.approval_id.as_str(), args.allow), ("ap-1", true));
+    }
+
+    #[test]
+    fn the_words_the_store_reads_are_the_words_the_backend_sends() {
+        // The store (`workspaceChatStore.ts`) treats "timed_out" as expired and anything else as closed.
+        let (_, payload) = sent(&ApprovalNotice::Closed { chat_id: "c".into(), approval_id: "a".into(), reason: "timed_out" });
+        assert_eq!(payload["reason"], "timed_out");
+    }
+}
+
+// ---- the id on every event is the answer's, not the CLI's ----------------------
+
+#[tokio::test]
+async fn every_event_carries_the_running_answers_id_and_the_clis_stays_inside() {
+    let (b, seen) = broker(Duration::from_secs(5));
+    let running = Arc::new(Mutex::new(Some("ask-7".to_string())));
+    let r2 = running.clone();
+    b.set_ask_resolver(Arc::new(move |chat| if chat == "c1" { r2.lock().unwrap().clone() } else { None }));
+
+    // Two questions in one answer, one after the other: the same answer id, different cards.
+    let t1 = tokio::spawn({ let b = b.clone(); async move { b.ask(request("c1", "cli-perm-1")).await } });
+    let first = first_question(&seen).await;
+    assert_eq!(first.request_id, "ask-7");
+    let t2 = tokio::spawn({ let b = b.clone(); async move { b.ask(request("c1", "cli-perm-2")).await } });
+    b.answer(&first.approval_id, true);
+    assert!(t1.await.unwrap());
+    let second = loop {
+        if let Some(e) = questions(&seen).into_iter().find(|e| e.approval_id != first.approval_id) {
+            break e;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    assert_eq!(second.request_id, "ask-7");
+    assert_ne!(second.approval_id, first.approval_id);
+    // The CLI withdrawing its own permission id still finds the question.
+    b.deny_request("c1", "cli-perm-2");
+    assert!(!t2.await.unwrap());
+    assert!(!serde_json::to_string(&questions(&seen).iter().map(|q| q.request_id.clone()).collect::<Vec<_>>()).unwrap().contains("cli-perm"));
+
+    // A refusal carries the answer's id too.
+    let mut big = request("c1", "cli-perm-3");
+    big.args = json!({"body": "x".repeat(MAX_ARGS_BYTES + 1)});
+    assert!(!b.ask(big).await);
+    assert!(seen.lock().unwrap().iter().any(|n| matches!(n, ApprovalNotice::Refused { request_id, .. } if request_id == "ask-7")));
+
+    // No answer running for the chat (it was stopped; another chat has none): nothing is asked.
+    *running.lock().unwrap() = None;
+    assert!(!b.ask(request("c1", "cli-perm-4")).await);
+    assert!(!b.ask(request("c9", "cli-perm-5")).await);
+    assert_eq!(questions(&seen).len(), 2, "no new card");
+    assert!(seen.lock().unwrap().iter().any(|n| matches!(n, ApprovalNotice::Refused { reason, .. } if reason.contains("no answer"))));
+}
 }

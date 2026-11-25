@@ -559,17 +559,46 @@ pub struct ApprovalEvent {
     pub truncated: bool,
 }
 
+/// The arguments of `answer_workspace_approval` as `invoke` sends them.
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnswerApprovalArgs {
+    pub approval_id: String,
+    pub allow: bool,
+}
+
 /// What the UI is told.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ApprovalNotice {
     Request(ApprovalEvent),
-    /// The question is over: `answered`, `timed_out`, `cancelled`.
+    /// The question is over: `answered`, `timed_out`, `cancelled` (the words the store reads).
     Closed { chat_id: String, approval_id: String, reason: &'static str },
     /// A call refused without asking, with the reason to show.
     Refused { chat_id: String, request_id: String, server: String, tool: String, reason: String },
 }
 
 pub type ApprovalEmitter = Arc<dyn Fn(ApprovalNotice) + Send + Sync>;
+
+/// Which answer a chat is writing right now (the `request_id` the chat
+/// store holds), or `None` when it writes none. The CLI's own permission id is
+/// never shown: every event carries this one.
+pub type AskResolver = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
+/// The event name and JSON payload of a notice: the one place the wire shape of
+/// the approval events is made (the app emits it; the contract tests check it).
+pub fn notice_payload(notice: &ApprovalNotice) -> (&'static str, serde_json::Value) {
+    match notice {
+        ApprovalNotice::Request(ev) => (APPROVAL_EVENT, serde_json::to_value(ev).unwrap_or_default()),
+        ApprovalNotice::Refused { chat_id, request_id, server, tool, reason } => (
+            APPROVAL_REFUSED_EVENT,
+            serde_json::json!({ "chat_id": chat_id, "request_id": request_id, "server": server, "tool": tool, "reason": reason }),
+        ),
+        ApprovalNotice::Closed { chat_id, approval_id, reason } => (
+            APPROVAL_CLOSED_EVENT,
+            serde_json::json!({ "chat_id": chat_id, "approval_id": approval_id, "reason": reason }),
+        ),
+    }
+}
 
 #[async_trait]
 pub trait ApprovalBroker: Send + Sync {
@@ -603,12 +632,13 @@ struct BrokerState {
 pub struct WorkspaceApprovals {
     state: Mutex<BrokerState>,
     emitter: Mutex<Option<ApprovalEmitter>>,
+    resolver: Mutex<Option<AskResolver>>,
     timeout: Duration,
 }
 
 impl WorkspaceApprovals {
     pub fn new() -> Self {
-        Self { state: Mutex::default(), emitter: Mutex::new(None), timeout: APPROVAL_TIMEOUT }
+        Self { state: Mutex::default(), emitter: Mutex::new(None), resolver: Mutex::new(None), timeout: APPROVAL_TIMEOUT }
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
@@ -627,25 +657,27 @@ impl WorkspaceApprovals {
         *self.emitter.lock().unwrap() = Some(emitter);
     }
 
-    /// Emit through the app's events (`workspace_chat_approval`, `..._closed`).
+    /// How a chat's running answer is found (see [`AskResolver`]). With none
+    /// set the CLI's own id is used (tests, and anything that is not a chat).
+    pub fn set_ask_resolver(&self, resolver: AskResolver) {
+        *self.resolver.lock().unwrap() = Some(resolver);
+    }
+
+    /// `Ok(id)`: the answer to attach a question to; `Err(())`: a resolver is
+    /// set and the chat writes no answer, so nothing may be asked.
+    fn ask_id(&self, chat_id: &str, cli_id: &str) -> Result<String, ()> {
+        match self.resolver.lock().unwrap().clone() {
+            Some(resolve) => resolve(chat_id).ok_or(()),
+            None => Ok(cli_id.to_string()),
+        }
+    }
+
+    /// Emit through the app's events (`workspace_chat_approval`, `..._closed`, `..._refused`).
     pub fn install_app(&self, app: tauri::AppHandle) {
         use tauri::Emitter;
-        self.set_emitter(Arc::new(move |notice| match notice {
-            ApprovalNotice::Request(ev) => {
-                let _ = app.emit(APPROVAL_EVENT, ev);
-            }
-            ApprovalNotice::Refused { chat_id, request_id, server, tool, reason } => {
-                let _ = app.emit(
-                    APPROVAL_REFUSED_EVENT,
-                    serde_json::json!({ "chat_id": chat_id, "request_id": request_id, "server": server, "tool": tool, "reason": reason }),
-                );
-            }
-            ApprovalNotice::Closed { chat_id, approval_id, reason } => {
-                let _ = app.emit(
-                    APPROVAL_CLOSED_EVENT,
-                    serde_json::json!({ "chat_id": chat_id, "approval_id": approval_id, "reason": reason }),
-                );
-            }
+        self.set_emitter(Arc::new(move |notice| {
+            let (event, payload) = notice_payload(&notice);
+            let _ = app.emit(event, payload);
         }));
     }
 
@@ -701,11 +733,23 @@ impl ApprovalBroker for WorkspaceApprovals {
         if self.emitter.lock().unwrap().is_none() {
             return false;
         }
+        // A question belongs to the answer the chat is writing; with none running
+        // (a late request of a stopped answer) nothing is asked.
+        let Ok(ask_id) = self.ask_id(&req.chat_id, &req.request_id) else {
+            self.notify(ApprovalNotice::Refused {
+                chat_id: req.chat_id.clone(),
+                request_id: String::new(),
+                server: req.server.clone(),
+                tool: req.tool.clone(),
+                reason: format!("{} was refused: no answer is waiting for it.", req.tool),
+            });
+            return false;
+        };
         // What the user cannot read in full they are not asked to approve.
         let Some(args) = display_args(&req.args) else {
             self.notify(ApprovalNotice::Refused {
                 chat_id: req.chat_id.clone(),
-                request_id: req.request_id.clone(),
+                request_id: ask_id.clone(),
                 server: req.server.clone(),
                 tool: req.tool.clone(),
                 reason: format!(
@@ -752,7 +796,7 @@ impl ApprovalBroker for WorkspaceApprovals {
         let truncated = false;
         self.notify(ApprovalNotice::Request(ApprovalEvent {
             chat_id: req.chat_id.clone(),
-            request_id: req.request_id.clone(),
+            request_id: ask_id.clone(),
             approval_id: approval_id.clone(),
             server: req.server.clone(),
             tool: req.tool.clone(),

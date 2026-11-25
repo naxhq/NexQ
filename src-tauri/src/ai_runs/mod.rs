@@ -19,6 +19,7 @@
 //! The network edge is behind [`ApiBackend`] so the whole flow is tested with
 //! fakes; [`LiveBackend`] is the real one.
 
+pub mod chat_events;
 pub mod gate;
 pub mod windows;
 
@@ -28,7 +29,8 @@ use crate::llm::cli_agent::manager::{
     AgentSessionManager, SessionInit, SessionKey, SessionOverride, SessionScope, Tier,
 };
 use crate::llm::cli_agent::protocol::{classify_error, AgentErrorKind, PlanLimit, PlanLimitLevel};
-use crate::llm::cli_agent::session::{is_activity, AgentError, THINKING_SIGNAL};
+use crate::llm::cli_agent::session::{decode_activity, decode_tool_result, is_activity, AgentError, THINKING_SIGNAL};
+use crate::sources::activity::{describe_tool_use, notice, SourceActivity};
 use crate::llm::cli_agent::{transcripts, CliAgentKind};
 use crate::llm::provider::{
     CancelToken, CompletionStats, GenerationParams, LLMError, LLMMessage, ModelInfo, TokenSink,
@@ -461,6 +463,31 @@ pub struct AiRuns {
     /// The window last asked of each local model: only grows, so the server
     /// does not reload the model when a prompt is a little longer.
     ollama_ctx: Mutex<HashMap<(String, String), u64>>,
+    /// Where a chat's tool activity lines go (`workspace_chat_activity`).
+    chat_activity: Mutex<Option<ChatActivityEmitter>>,
+}
+
+/// Gets a workspace chat's id and one activity line of its running answer.
+pub type ChatActivityEmitter = Arc<dyn Fn(&str, SourceActivity) + Send + Sync>;
+
+/// Longest activity line shown (a tool's name and a short detail, never its arguments).
+const ACTIVITY_LABEL_CHARS: usize = 80;
+
+/// An activity line fit for the chat: short, with no path of a private folder.
+pub fn chat_safe(mut line: SourceActivity) -> SourceActivity {
+    let cut = |s: &str| -> String {
+        if s.chars().count() <= ACTIVITY_LABEL_CHARS {
+            s.to_string()
+        } else {
+            format!("{}…", s.chars().take(ACTIVITY_LABEL_CHARS - 1).collect::<String>())
+        }
+    };
+    line.label = cut(&line.label);
+    if let Some(chip) = line.chip.as_mut() {
+        chip.label = cut(&chip.label);
+        chip.path = None;
+    }
+    line
 }
 
 impl AiRuns {
@@ -509,7 +536,13 @@ impl AiRuns {
             windows: ModelWindows::new(),
             defer_limit: DEFER_LIMIT,
             ollama_ctx: Mutex::new(HashMap::new()),
+            chat_activity: Mutex::new(None),
         }
+    }
+
+    /// Chats report what their tools do through this (see [`ChatActivityEmitter`]).
+    pub fn set_chat_activity(&self, emitter: ChatActivityEmitter) {
+        *self.chat_activity.lock().unwrap() = Some(emitter);
     }
 
     pub fn with_defer_limit(mut self, limit: Duration) -> Self {
@@ -702,10 +735,12 @@ impl AiRuns {
     fn sticky_context(&self, config: &ProviderConfig, model: &str, needed: u64, window: Option<u64>) -> u64 {
         let server = config.base_url.clone().unwrap_or_default();
         let mut seen = self.ollama_ctx.lock().unwrap();
-        let slot = seen.entry((server, model.to_string())).or_insert(0);
+        let slot = seen.entry((crate::llm::ollama::server_key(&server), model.to_string())).or_insert(0);
         let wanted = bucket_context(needed, window).max(*slot);
         let wanted = window.map_or(wanted, |w| wanted.min(w));
         *slot = wanted;
+        // Live answers on this model ask for the same size from now on.
+        crate::llm::ollama::publish_context(&server, model, wanted);
         wanted
     }
 
@@ -798,7 +833,34 @@ impl AiRuns {
         if req.cancel.is_cancelled() {
             return Err(AiRunError::Cancelled);
         }
+        // A workspace chat's tool calls become activity lines: the tool and a short
+        // detail, a refused or failed call as a notice; never the arguments.
+        let report: Option<(String, ChatActivityEmitter)> = key
+            .scope
+            .chat_id()
+            .map(str::to_string)
+            .zip(self.chat_activity.lock().unwrap().clone());
+        let labels = req.sources.as_ref().map(|s| s.server_labels.clone()).unwrap_or_default();
+        let chips: Mutex<HashMap<String, (String, Option<crate::sources::activity::SourceChip>)>> = Mutex::default();
         let on_delta: crate::llm::cli_agent::manager::OnDelta = Box::new(move |token: &str| {
+            if let Some((chat, emit)) = &report {
+                if let Some(tool) = decode_activity(token) {
+                    let mut line = describe_tool_use(&tool, &labels);
+                    chips.lock().unwrap().insert(tool.id.clone(), (line.label.clone(), line.chip.take()));
+                    emit(chat, chat_safe(line));
+                    return;
+                }
+                if let Some(done) = decode_tool_result(token) {
+                    if let Some((label, chip)) = chips.lock().unwrap().remove(&done.tool_use_id) {
+                        if done.is_error {
+                            emit(chat, chat_safe(notice(format!("{label} was not run or failed"))));
+                        } else if let Some(chip) = chip {
+                            emit(chat, chat_safe(SourceActivity::chip_only(chip)));
+                        }
+                    }
+                    return;
+                }
+            }
             if token.is_empty() || token == THINKING_SIGNAL || is_activity(token) {
                 return;
             }

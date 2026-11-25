@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use super::provenance::Provenance;
 use crate::ai_runs::AiRuns;
 use crate::llm::cli_agent::command::SourcesLaunch;
 use crate::llm::cli_agent::CliAgentKind;
@@ -94,6 +95,14 @@ fn deliver(i: &IndexerService, w: Wake) {
     }
 }
 
+/// What the session of a chat was built from, compared with now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Seen {
+    First,
+    Same,
+    Changed,
+}
+
 // ── the guard ──────────────────────────────────────────────────────────────
 
 struct Active {
@@ -134,6 +143,9 @@ pub struct ChatHub {
     recap_cancel: Mutex<Option<Arc<CancelToken>>>,
     tools: OnceLock<Arc<dyn ToolPolicy>>,
     pending: Mutex<Vec<Wake>>,
+    /// What each CLI chat's live session has been given so far (it keeps its
+    /// earlier turns), so a revocation of any of it ends that session.
+    session_prov: Mutex<HashMap<String, Provenance>>,
     starter: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
@@ -188,6 +200,12 @@ impl ChatHub {
         Some(a.chat_id.clone())
     }
 
+    /// The `request_id` of the answer this chat is writing now, if any (the id
+    /// the chat store holds; tool events of the answer carry it).
+    pub fn request_of(&self, chat_id: &str) -> Option<String> {
+        self.active.lock().ok()?.iter().find(|(_, a)| a.chat_id == chat_id).map(|(id, _)| id.clone())
+    }
+
     pub fn running_for(&self, chat_id: &str) -> bool {
         self.active.lock().map(|a| a.values().any(|x| x.chat_id == chat_id)).unwrap_or(false)
     }
@@ -207,7 +225,35 @@ impl ChatHub {
         changed
     }
 
+    /// Like [`fingerprint_changed`], and also says when there was nothing yet.
+    pub fn fingerprint_status(&self, chat_id: &str, fingerprint: &str) -> Seen {
+        let mut f = self.fingerprints.lock().unwrap();
+        let status = match f.get(chat_id) {
+            None => Seen::First,
+            Some(old) if old == fingerprint => Seen::Same,
+            Some(_) => Seen::Changed,
+        };
+        f.insert(chat_id.to_string(), fingerprint.to_string());
+        status
+    }
+
+    /// What the chat's live session already holds, if one runs.
+    pub fn session_provenance(&self, chat_id: &str) -> Option<Provenance> {
+        self.session_prov.lock().unwrap().get(chat_id).cloned()
+    }
+
+    /// The session is about to receive something resting on `prov`.
+    pub fn hold_in_session(&self, chat_id: &str, prov: &Provenance) {
+        self.session_prov.lock().unwrap().entry(chat_id.to_string()).or_default().merge(prov);
+    }
+
+    /// The session ended: it holds nothing any more.
+    pub fn reset_session(&self, chat_id: &str) {
+        self.session_prov.lock().unwrap().remove(chat_id);
+    }
+
     pub fn forget_chat(&self, chat_id: &str) {
+        self.session_prov.lock().unwrap().remove(chat_id);
         self.fingerprints.lock().unwrap().remove(chat_id);
     }
 
