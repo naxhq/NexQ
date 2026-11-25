@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { MeetingSummary, WorkspaceSummary } from "../lib/types";
 import { formatRelativeTime, formatDurationLong, cn } from "../lib/utils";
+import { formatMeetingWhen } from "../workspace/meetingGroups";
 import { scenarioLabel, useScenarioStore } from "../stores/scenarioStore";
 import { MoveMeetingMenu } from "../workspace/MoveMeetingMenu";
 import { VoiceprintMark } from "../voiceprint";
@@ -116,6 +117,7 @@ export function MeetingCard({
     : isLive
       ? "In progress"
       : null;
+  const defaultScenario = !meeting.ai_scenario || meeting.ai_scenario === "team_meeting";
 
   const handleCardKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -129,12 +131,12 @@ export function MeetingCard({
     [isEditing, onSelect, meeting.id]
   );
 
+  // One quiet line: when, how long, and only what is not the usual (online, team meeting).
   const facts = [
-    formatRelativeTime(meeting.start_time),
+    formatMeetingWhen(meeting.start_time),
     durationDisplay,
-    meeting.audio_mode === "online" ? "Online" : meeting.audio_mode === "in_person" ? "In person" : null,
-    scenario,
-    meeting.speaker_count ? `${meeting.speaker_count} ${meeting.speaker_count === 1 ? "speaker" : "speakers"}` : null,
+    meeting.audio_mode === "in_person" ? "In person" : null,
+    !defaultScenario ? scenario : null,
   ].filter((f): f is string => !!f);
 
   return (
@@ -145,132 +147,129 @@ export function MeetingCard({
       tabIndex={0}
       aria-label={`Meeting: ${meeting.title}, ${formatRelativeTime(meeting.start_time)}`}
       className={cn(
-        "group relative flex cursor-pointer items-start gap-1.5 rounded-lg px-2 py-2 outline-none transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/60",
+        "group relative cursor-pointer rounded-lg px-2 py-1.5 outline-none transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/60",
         isLive && "bg-success/10 hover:bg-success/15",
       )}
     >
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggleFavorite?.(meeting.id);
-        }}
-        className={cn(
-          iconAction,
-          "mt-px",
-          isFavorite ? "text-warning hover:text-warning" : "opacity-0 focus-visible:opacity-100 group-hover:opacity-100",
-        )}
-        aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
-        aria-pressed={isFavorite}
-      >
-        <Star className="h-3.5 w-3.5" fill={isFavorite ? "currentColor" : "none"} aria-hidden="true" />
-      </button>
+      {isEditing ? (
+        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+          <input
+            ref={inputRef}
+            type="text"
+            value={editTitle}
+            onChange={(e) => setEditTitle(e.target.value)}
+            onKeyDown={handleEditKeyDown}
+            onBlur={(e) => {
+              // Tabbing onto the save/cancel buttons: let the button decide.
+              const next = e.relatedTarget;
+              if (next && (next === saveBtnRef.current || next === cancelBtnRef.current)) return;
+              handleSaveEdit();
+            }}
+            disabled={isSaving}
+            maxLength={200}
+            aria-label="Meeting title"
+            className="ui-body min-w-0 flex-1 rounded-md border border-ring bg-background px-2 py-1 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+          />
+          {/* onMouseDown preventDefault keeps focus in the input so the blur-save never races these buttons */}
+          <button
+            ref={saveBtnRef}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleSaveEdit();
+            }}
+            disabled={isSaving}
+            className={cn(iconAction, "text-success hover:text-success")}
+            aria-label="Save title"
+          >
+            <Check className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+          <button
+            ref={cancelBtnRef}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleCancelEdit();
+            }}
+            className={iconAction}
+            aria-label="Cancel rename"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        </div>
+      ) : (
+        <h3 className={cn("ui-body truncate font-medium text-foreground", isFavorite && "pr-6")}>{meeting.title}</h3>
+      )}
 
-      <div className="min-w-0 flex-1">
-        {isEditing ? (
-          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-            <input
-              ref={inputRef}
-              type="text"
-              value={editTitle}
-              onChange={(e) => setEditTitle(e.target.value)}
-              onKeyDown={handleEditKeyDown}
-              onBlur={(e) => {
-                // Tabbing onto the save/cancel buttons: let the button decide.
-                const next = e.relatedTarget;
-                if (next && (next === saveBtnRef.current || next === cancelBtnRef.current)) return;
-                handleSaveEdit();
-              }}
-              disabled={isSaving}
-              maxLength={200}
-              aria-label="Meeting title"
-              className="ui-body min-w-0 flex-1 rounded-md border border-ring bg-background px-2 py-1 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-            />
-            {/* onMouseDown preventDefault keeps focus in the input so the blur-save never races these buttons */}
-            <button
-              ref={saveBtnRef}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={(e) => {
-                e.stopPropagation();
-                handleSaveEdit();
-              }}
-              disabled={isSaving}
-              className={cn(iconAction, "text-success hover:text-success")}
-              aria-label="Save title"
-            >
-              <Check className="h-3.5 w-3.5" aria-hidden="true" />
-            </button>
-            <button
-              ref={cancelBtnRef}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={(e) => {
-                e.stopPropagation();
-                handleCancelEdit();
-              }}
-              className={iconAction}
-              aria-label="Cancel rename"
-            >
-              <X className="h-3.5 w-3.5" aria-hidden="true" />
-            </button>
-          </div>
-        ) : (
-          <h3 className="ui-body truncate font-medium text-foreground">{meeting.title}</h3>
-        )}
-
-        <p className="ui-meta mt-0.5 flex flex-wrap items-center gap-x-2 text-muted-foreground">
-          {isLive && <span className="font-semibold text-success">Live</span>}
-          {meeting.has_summary && <span className="font-medium text-foreground/80">Summary</span>}
-          {facts.map((f, i) => (
-            <span key={i} className="tabular-nums">
-              {f}
-            </span>
-          ))}
+      <p className="ui-meta mt-0.5 flex flex-wrap items-center gap-x-2 text-muted-foreground">
+        {isLive && <span className="font-semibold text-success">Live</span>}
+        {meeting.has_summary && <span className="font-medium text-foreground/80">Summary</span>}
+        {facts.map((f, i) => (
+          <span key={i} className="tabular-nums">
+            {f}
+          </span>
+        ))}
+      </p>
+      {workspace && (
+        <p className="ui-meta mt-0.5 flex items-center gap-1.5 text-muted-foreground">
+          <VoiceprintMark id={workspace.id} hue={workspace.color} size={11} />
+          <span className="truncate">{workspace.name}</span>
         </p>
-        {workspace && (
-          <p className="ui-meta mt-0.5 flex items-center gap-1.5 text-muted-foreground">
-            <VoiceprintMark id={workspace.id} hue={workspace.color} size={11} />
-            <span className="truncate">{workspace.name}</span>
-          </p>
-        )}
-      </div>
+      )}
 
-      <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover:opacity-100">
-        {showDeleteConfirm ? (
-          <div className="flex items-center gap-1 rounded-md bg-destructive/10 px-1.5 py-0.5">
-            <span className="ui-meta text-destructive">Delete?</span>
-            <button onClick={handleConfirmDelete} className={cn(iconAction, "text-destructive hover:text-destructive")} aria-label="Confirm delete">
-              <Check className="h-3.5 w-3.5" aria-hidden="true" />
-            </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowDeleteConfirm(false);
-              }}
-              className={iconAction}
-              aria-label="Cancel delete"
-            >
-              <X className="h-3.5 w-3.5" aria-hidden="true" />
-            </button>
-          </div>
-        ) : (
-          <>
-            <button onClick={handleStartEdit} className={iconAction} aria-label="Rename">
-              <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
-            </button>
-            {canMove && <MoveMeetingMenu meetingId={meeting.id} currentWorkspaceId={meeting.workspace_id} />}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowDeleteConfirm(true);
-              }}
-              className={cn(iconAction, "hover:bg-destructive/10 hover:text-destructive")}
-              aria-label="Delete meeting"
-            >
-              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-            </button>
-          </>
-        )}
-      </div>
+      {!isEditing && (
+        <div className={cn("absolute right-1 top-1 flex items-center gap-0.5 rounded-md", "group-hover:bg-accent group-focus-within:bg-accent")}>
+          {showDeleteConfirm ? (
+            <div className="flex items-center gap-1 rounded-md bg-destructive/10 px-1.5 py-0.5">
+              <span className="ui-meta text-destructive">Delete?</span>
+              <button onClick={handleConfirmDelete} className={cn(iconAction, "text-destructive hover:text-destructive")} aria-label="Confirm delete">
+                <Check className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowDeleteConfirm(false);
+                }}
+                className={iconAction}
+                aria-label="Cancel delete"
+              >
+                <X className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </div>
+          ) : (
+            <>
+              <span className="flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+                <button onClick={handleStartEdit} className={iconAction} aria-label="Rename">
+                  <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+                {canMove && <MoveMeetingMenu meetingId={meeting.id} currentWorkspaceId={meeting.workspace_id} />}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowDeleteConfirm(true);
+                  }}
+                  className={cn(iconAction, "hover:bg-destructive/10 hover:text-destructive")}
+                  aria-label="Delete meeting"
+                >
+                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              </span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleFavorite?.(meeting.id);
+                }}
+                className={cn(iconAction, isFavorite ? "text-warning hover:text-warning" : "opacity-0 focus-visible:opacity-100 group-hover:opacity-100")}
+                aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
+                aria-pressed={isFavorite}
+              >
+                <Star className="h-3.5 w-3.5" fill={isFavorite ? "currentColor" : "none"} aria-hidden="true" />
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

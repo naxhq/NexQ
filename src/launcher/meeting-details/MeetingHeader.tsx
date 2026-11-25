@@ -4,6 +4,8 @@ import type { MeetingStats } from "../../hooks/useMeetingStats";
 import { renameMeeting } from "../../lib/ipc";
 import { useMeetingStore } from "../../stores/meetingStore";
 import { formatRelativeTime, formatDurationLong } from "../../lib/utils";
+import { MoveMeetingMenu } from "../../workspace/MoveMeetingMenu";
+import { SuggestFromMeeting } from "../../memory/SuggestFromMeeting";
 import {
   ArrowLeft,
   Pencil,
@@ -34,6 +36,8 @@ export function MeetingHeader({
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(meeting.title);
   const [isSaving, setIsSaving] = useState(false);
+  const [home, setHome] = useState(meeting.workspace_id ?? "general");
+  useEffect(() => setHome(meeting.workspace_id ?? "general"), [meeting.workspace_id, meeting.id]);
   const inputRef = useRef<HTMLInputElement>(null);
   const activeMeetingId = useMeetingStore((s) => s.activeMeeting?.id);
   const loadRecentMeetings = useMeetingStore((s) => s.loadRecentMeetings);
@@ -137,6 +141,11 @@ export function MeetingHeader({
           </div>
         </div>
 
+        {/* Where it is filed, and what to remember from it */}
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+          <SuggestFromMeeting meetingId={meeting.id} workspaceId={home} />
+          <MoveMeetingMenu meetingId={meeting.id} currentWorkspaceId={home} variant="button" onMoved={setHome} />
+        </div>
       </div>
 
       {/* Row 2: Stats bar */}

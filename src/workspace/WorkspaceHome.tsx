@@ -126,7 +126,7 @@ export function WorkspaceHome({
           </button>
         </div>
       )}
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         <aside style={{ width: railPx }} className="shrink-0 overflow-hidden bg-card/40" aria-label="Workspaces and meetings">
           <WorkspaceRail
             narrow={narrow}
@@ -141,7 +141,7 @@ export function WorkspaceHome({
         )}
         {narrow && <div className="w-px shrink-0 bg-border" aria-hidden="true" />}
 
-        <main className="min-w-0 flex-1">
+        <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
           {view === "all" ? (
             <AllWorkspaces onOpenMeeting={openMeetingFromAll} />
           ) : (

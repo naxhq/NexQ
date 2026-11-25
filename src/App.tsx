@@ -4,6 +4,7 @@ import { useConfigStore } from "./stores/configStore";
 import { useAIActionsStore, watchSavedActionConfigs } from "./stores/aiActionsStore";
 import { useSourcesStore } from "./stores/sourcesStore";
 import { useWorkspaceStore, watchWorkspaces } from "./stores/workspaceStore";
+import { watchWorkspaceChats } from "./stores/workspaceChatStore";
 import { useScenarioStore, watchSavedScenarios } from "./stores/scenarioStore";
 import { LauncherView } from "./launcher/LauncherView";
 import { OverlayView } from "./overlay/OverlayView";
@@ -131,6 +132,10 @@ function App() {
   const [windowLabel, setWindowLabel] = useState<string>("");
   // Size and place of each window come back as the user left them (never from demo mode).
   useWindowPlacement(windowLabel, { enabled: configLoaded, paused: isDemoActive });
+  // Chat answers keep arriving while another page is open (launcher window only).
+  useEffect(() => {
+    if (windowLabel === "launcher") void watchWorkspaceChats();
+  }, [windowLabel]);
   useEffect(() => {
     import("@tauri-apps/api/webviewWindow").then(({ getCurrentWebviewWindow }) => {
       const label = getCurrentWebviewWindow().label;

@@ -1,5 +1,5 @@
-import { File as FileIcon, Folder, MoreHorizontal, Pin, PinOff, Plug2 } from "lucide-react";
-import { InlineEdit, Menu, Switch, type MenuItemSpec } from "../ui";
+import { File as FileIcon, Folder, MoreHorizontal, Pin, Plug2 } from "lucide-react";
+import { InlineEdit, Menu, Switch, Tooltip, type MenuItemSpec } from "../ui";
 import { cn } from "../lib/utils";
 import type { WorkspaceItem } from "../lib/types";
 import { FOLDER_OPT_IN_SENTENCE, itemStatus, itemTitle, type IndexProgress } from "./libraryStatus";
@@ -71,15 +71,15 @@ export function LibraryRow({
             )}
           </p>
         </div>
-        <div className="flex shrink-0 items-center opacity-70 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+        <div className="flex shrink-0 items-center">
           <button
             type="button"
             onClick={onTogglePin}
             aria-pressed={item.pinned}
             aria-label={item.pinned ? `Unpin ${title}` : `Pin ${title}`}
-            className={cn(iconButtonClass, item.pinned && "text-foreground")}
+            className={cn(iconButtonClass, item.pinned ? "text-foreground" : "opacity-0 focus-visible:opacity-100 group-hover:opacity-100")}
           >
-            {item.pinned ? <Pin className="h-3.5 w-3.5" aria-hidden="true" /> : <PinOff className="h-3.5 w-3.5" aria-hidden="true" />}
+            <Pin className="h-3.5 w-3.5" fill={item.pinned ? "currentColor" : "none"} aria-hidden="true" />
           </button>
           <Menu
             label={`Actions for ${title}`}
@@ -95,13 +95,16 @@ export function LibraryRow({
       </div>
       {item.kind === "folder" && item.status !== "missing" && (
         <div className="ml-6 mt-2">
-          <Switch
-            checked={!!item.index_opt_in}
-            onChange={onOptIn}
-            aria-label={`Search the text of ${title}`}
-            label="Search its text"
-            description={FOLDER_OPT_IN_SENTENCE}
-          />
+          {item.index_opt_in ? (
+            // Already on: the explanation lives in the tooltip, not under every folder.
+            <Tooltip content={FOLDER_OPT_IN_SENTENCE}>
+              <span className="inline-flex">
+                <Switch checked onChange={onOptIn} aria-label={`Search the text of ${title}`} label="Search its text" />
+              </span>
+            </Tooltip>
+          ) : (
+            <Switch checked={false} onChange={onOptIn} aria-label={`Search the text of ${title}`} label="Search its text" description={FOLDER_OPT_IN_SENTENCE} />
+          )}
         </div>
       )}
     </li>

@@ -64,6 +64,7 @@ import {
 import { toggleStealthMode } from "../hooks/useGlobalShortcut";
 import { formatShortcut, isMacPlatform } from "../lib/shortcutLabel";
 import { formatDuration } from "../lib/utils";
+import { MeetingWorkspaceChip } from "../workspace/MeetingWorkspaceChip";
 
 /** Panels the header buttons and keys open on the fly; Escape closes the last of them. */
 const AUXILIARY: PanelId[] = ["stats", "bookmarks", "calllog", "devlog"];
@@ -169,6 +170,16 @@ export function OverlayView() {
     openedRef.current = [];
     rememberOpened();
   }, [meetingId, dockDispatch, rememberOpened]);
+
+  // A panel asks for another one (a note's time reveals the transcript).
+  useEffect(() => {
+    const on = (e: Event) => {
+      const panel = (e as CustomEvent<{ panel?: PanelId }>).detail?.panel;
+      if (panel) openPanel(panel);
+    };
+    window.addEventListener("nexq:reveal-panel", on);
+    return () => window.removeEventListener("nexq:reveal-panel", on);
+  }, [openPanel]);
 
   // A captured screenshot, or the Ask key, needs the Ask box: bring the assistant into
   // view whether it is hidden, behind another tab, a strip or locked in place.
@@ -377,6 +388,7 @@ export function OverlayView() {
           <span className="text-[10px] text-muted-foreground px-1.5 py-0.5 rounded bg-white/5">
             {scenarioName}
           </span>
+          {meetingId && <MeetingWorkspaceChip meetingId={meetingId} />}
           <span className="text-xs text-muted-foreground/60 tabular-nums font-medium">
             {elapsedMs > 0 ? formatDuration(elapsedMs) : "00:00"}
           </span>

@@ -127,7 +127,7 @@ describe("the Library panel", () => {
     render(<LibraryPanel workspaceId="acme" />);
     expect(await screen.findByText("Nothing here yet")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add a folder" })).toBeInTheDocument();
-    expect(await screen.findByText(/Once you start a chat here/)).toBeInTheDocument();
+    expect(await screen.findByText(/The first question shows how much/)).toBeInTheDocument();
   });
 
   it("explains when workspaces are unavailable, and keeps working", async () => {

@@ -181,7 +181,14 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         const resolvedMode: AudioMode = audioMode ?? get().audioMode;
         // An explicit pick beats the workspace's scenario, which beats the current/remembered one.
         const workspaces = useWorkspaceStore.getState().workspaces;
-        const home = options?.workspaceId ? workspaceById(workspaces, options.workspaceId) : defaultWorkspaceOf(workspaces);
+        let home = options?.workspaceId ? workspaceById(workspaces, options.workspaceId) : defaultWorkspaceOf(workspaces);
+        // An archived workspace is never started in: say where it went instead.
+        if (home?.archived) {
+          const fallback = defaultWorkspaceOf(workspaces);
+          showToast(`${home.name} is archived, so the meeting is filed in ${fallback.name}`, "info");
+          home = fallback;
+          options = { ...options, workspaceId: fallback.id, borrowed: [] };
+        }
         let resolvedScenario: AIScenario = pickScenario({
           explicit: scenario,
           workspaceDefault: home?.default_scenario,

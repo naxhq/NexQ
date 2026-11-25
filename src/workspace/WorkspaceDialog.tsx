@@ -50,34 +50,46 @@ export function WorkspaceDialog({
   const general = workspaces.find((w) => w.id === GENERAL_ID);
   const nameRef = useRef<HTMLInputElement | null>(null);
   const editing = workspace !== null;
+  // Only the detail of the workspace being edited counts: a late answer for another one is ignored.
+  const matching = detail && workspace && detail.id === workspace.id ? detail : null;
+  const detailPending = editing && !matching;
 
   const initial = useMemo<WorkspaceFormValues>(
     () => ({
       name: workspace?.name ?? "",
       color: workspace?.color ?? null,
       description: workspace?.description ?? "",
-      instructions: detail?.instructions ?? "",
+      instructions: matching?.instructions ?? "",
       include_general: workspace?.include_general ?? false,
       keep_separate: workspace?.keep_separate ?? false,
       default_scenario: workspace?.default_scenario ?? null,
       makeDefault: workspace?.is_default ?? false,
     }),
-    [workspace, detail],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [workspace?.id],
   );
   const [v, setV] = useState<WorkspaceFormValues>(initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // A new workspace gets its id (and so its exact shape) when it is created; the preview shows a stand-in.
-  const [draftId] = useState(() => `draft-${Math.random().toString(36).slice(2, 8)}`);
+  // A new workspace is created with this id, so the preview is its real mark.
+  const [draftId] = useState(() => (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `draft-${Math.random().toString(36).slice(2, 10)}`));
 
-  // A fresh form every time it opens (and when the details arrive late).
+  const instructionsTouched = useRef(false);
+
+  // A fresh form every time it opens.
   useEffect(() => {
     if (open) {
+      instructionsTouched.current = false;
       setV(initial);
       setError(null);
       setBusy(false);
     }
   }, [open, initial]);
+
+  // The instructions arrive with the detail: they fill in unless the person already typed.
+  useEffect(() => {
+    if (open && matching && !instructionsTouched.current) setV((cur) => ({ ...cur, instructions: matching.instructions }));
+  }, [open, matching]);
 
   const set = <K extends keyof WorkspaceFormValues>(key: K, value: WorkspaceFormValues[K]) => setV((cur) => ({ ...cur, [key]: value }));
   const isGeneral = workspace?.id === GENERAL_ID;
@@ -102,13 +114,14 @@ export function WorkspaceDialog({
         name,
         color: v.color,
         description: v.description.trim(),
-        instructions: v.instructions,
         // Keep separate never includes General: the switch is off and the field false.
         include_general: v.keep_separate ? false : v.include_general,
         keep_separate: v.keep_separate,
         default_scenario: v.default_scenario,
       };
-      const saved = editing ? await update(workspace.id, patch) : await create(patch);
+      // Instructions are only sent once the matching detail is in: never an empty field that was just not loaded yet.
+      const withInstructions = editing && !matching ? patch : { ...patch, instructions: v.instructions };
+      const saved = editing ? await update(workspace.id, withInstructions) : await create({ ...withInstructions, id: draftId });
       if (v.makeDefault && !saved.is_default) await makeDefault(saved.id);
       onClose(saved);
     } catch (e) {
@@ -184,7 +197,6 @@ export function WorkspaceDialog({
             Colour
           </span>
           <ColorSwatches value={v.color} onChange={(c) => set("color", c)} label="Workspace colour" />
-          {!editing && <p className={`${hintClass} mt-1.5`}>The shape of the mark is set when you create it.</p>}
         </div>
 
         <div>
@@ -208,9 +220,13 @@ export function WorkspaceDialog({
           <textarea
             id="ws-instr"
             value={v.instructions}
-            onChange={(e) => set("instructions", e.target.value)}
+            onChange={(e) => {
+              instructionsTouched.current = true;
+              set("instructions", e.target.value);
+            }}
+            disabled={detailPending}
             rows={4}
-            placeholder="How to work here: who the people are, what to focus on, the tone to use."
+            placeholder={detailPending ? "Loading" : "How to work here: who the people are, what to focus on, the tone to use."}
             className={`${fieldClass} resize-y`}
           />
           <p className={`${hintClass} mt-1`}>Read in every meeting and chat of this workspace, after your general instructions.</p>

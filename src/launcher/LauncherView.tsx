@@ -54,6 +54,27 @@ export function LauncherView() {
   // What was chosen in the setup dialog while a meeting still runs: used when "End and start new" goes ahead.
   const pendingMeetingSetup = useRef<PendingSetup | null>(null);
 
+  // A brief source asks to open a meeting (raised in this window or the meeting window).
+  useEffect(() => {
+    const open = (d: { kind?: string; ref_id?: string; meetingId?: string } | undefined) => {
+      const id = d?.ref_id ?? d?.meetingId;
+      if (id && (d?.kind === "transcript" || d?.kind === "meeting")) useMeetingStore.getState().setSelectedMeetingId(id);
+    };
+    const local = (e: Event) => open((e as CustomEvent).detail);
+    window.addEventListener("nexq:workspace_open", local);
+    let off: (() => void) | undefined;
+    let gone = false;
+    void import("@tauri-apps/api/event")
+      .then(({ listen }) => listen<{ kind?: string; ref_id?: string }>("nexq:workspace_open", (e) => open(e.payload)))
+      .then((u) => (gone ? u() : (off = u)))
+      .catch(() => {});
+    return () => {
+      gone = true;
+      off?.();
+      window.removeEventListener("nexq:workspace_open", local);
+    };
+  }, []);
+
   useEffect(() => {
     loadRecentMeetings();
     if (!autoStartDone) {
@@ -178,7 +199,7 @@ export function LauncherView() {
           </p>
         )}
 
-        <div className="min-h-0 flex-1">
+        <div className="min-h-0 flex-1 overflow-hidden">
           {selectedMeetingId ? (
             <MeetingDetails meetingId={selectedMeetingId} onBack={() => setSelectedMeetingId(null)} />
           ) : (

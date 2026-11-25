@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { Menu, type MenuItemSpec } from "../ui";
 import { VoiceprintMark } from "../voiceprint";
@@ -8,6 +8,25 @@ import { useMeetingStore } from "../stores/meetingStore";
 import { showToast } from "../stores/toastStore";
 import { GENERAL_ID, useWorkspaceStore, workspaceById } from "../stores/workspaceStore";
 import { borrowBlocker, moveMeetingTo, setBorrowed, syncActiveScope } from "./meetingScope";
+
+/** What the person is told after a change in a running meeting: one line, both halves of the truth. */
+export function changeNotice(kind: "home" | "add" | "remove", name: string): string {
+  const lead = kind === "home" ? `Answers use ${name} from now on.` : kind === "add" ? `Answers also use ${name} from now on.` : `Answers stop using ${name} from now on.`;
+  return `${lead} What was already said stays in this call.`;
+}
+
+/** Below this width the chip is the mark alone (the header has no room for a name). */
+export const CHIP_COMPACT_BELOW = 560;
+
+function useNarrow(): boolean {
+  const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && window.innerWidth < CHIP_COMPACT_BELOW);
+  useEffect(() => {
+    const on = () => setNarrow(window.innerWidth < CHIP_COMPACT_BELOW);
+    window.addEventListener("resize", on);
+    return () => window.removeEventListener("resize", on);
+  }, []);
+  return narrow;
+}
 
 /**
  * Shows which workspace a running meeting is filed in (and what it also uses),
@@ -19,6 +38,7 @@ export function MeetingWorkspaceChip({ meetingId, className }: { meetingId: stri
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const home = useMeetingStore((s) => (s.activeMeeting?.id === meetingId ? s.activeMeeting.workspace_id : undefined)) ?? GENERAL_ID;
   const borrowed = useMeetingStore((s) => s.activeBorrowed);
+  const compact = useNarrow();
 
   // The scope of a meeting this window did not start comes from the backend once.
   useEffect(() => {
@@ -41,7 +61,9 @@ export function MeetingWorkspaceChip({ meetingId, className }: { meetingId: stri
       checked: w.id === home,
       disabled: w.id === home,
       onSelect: () => {
-        moveMeetingTo(meetingId, w.id).catch(fail("move the meeting"));
+        moveMeetingTo(meetingId, w.id)
+          .then(() => showToast(changeNotice("home", w.name), "info"))
+          .catch(fail("move the meeting"));
       },
     }));
     const also: MenuItemSpec[] = open
@@ -59,7 +81,9 @@ export function MeetingWorkspaceChip({ meetingId, className }: { meetingId: stri
           separatorBefore: i === 0,
           onSelect: () => {
             const next = on ? borrowed.filter((b) => b !== w.id) : [...borrowed, w.id];
-            setBorrowed(meetingId, next).catch(fail("change what this meeting uses"));
+            setBorrowed(meetingId, next)
+              .then(() => showToast(changeNotice(on ? "remove" : "add", w.name), "info"))
+              .catch(fail("change what this meeting uses"));
           },
         };
       });
@@ -81,14 +105,14 @@ export function MeetingWorkspaceChip({ meetingId, className }: { meetingId: stri
           {...props}
           aria-label={`Workspace: ${name}${extra ? `, also using ${extra}` : ""}`}
           className={cn(
-            "ui-meta inline-flex h-7 max-w-[11rem] items-center gap-1.5 rounded-md px-2 text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60",
+            "ui-meta inline-flex h-6 max-w-[11rem] items-center gap-1.5 rounded-md px-2 text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60",
             state.open && "bg-accent",
           )}
         >
           <VoiceprintMark id={home} hue={homeWs?.color} size={14} />
-          <span className="truncate">{name}</span>
+          {!compact && <span className="truncate">{name}</span>}
           {extra > 0 && <span className="text-muted-foreground">+{extra}</span>}
-          <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+          {!compact && <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden="true" />}
         </button>
       )}
     />

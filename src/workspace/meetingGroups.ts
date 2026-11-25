@@ -47,3 +47,16 @@ export function filterMeetings(list: MeetingSummary[], filter: MeetingFilter, fa
       return list;
   }
 }
+
+/**
+ * When a meeting happened, quietly: the time for today and yesterday (the date
+ * group already says which), else "15 Nov", with the year only when it is not this one.
+ */
+export function formatMeetingWhen(iso: string, now: Date = new Date()): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const day = (x: Date) => Date.UTC(x.getFullYear(), x.getMonth(), x.getDate()) / 86400000;
+  if (day(now) - day(d) <= 1) return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  const withYear = d.getFullYear() !== now.getFullYear();
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", ...(withYear ? { year: "numeric" } : {}) });
+}

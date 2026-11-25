@@ -35,7 +35,10 @@ interface MeetingSetupModalProps {
 
 export function MeetingSetupModal({ open, onStart, onCancel, workspaceId }: MeetingSetupModalProps) {
   const workspaces = useWorkspaceStore((s) => s.workspaces);
-  const startWorkspace = workspaceById(workspaces, workspaceId)?.id ?? defaultWorkspaceOf(workspaces).id;
+  // Never start in an archived workspace: the default one is selected, and the dialog says so.
+  const requested = workspaceById(workspaces, workspaceId);
+  const startWorkspace = requested && !requested.archived ? requested.id : defaultWorkspaceOf(workspaces).id;
+  const archivedNote = requested?.archived ? `${requested.name} is archived, so this meeting goes to ${workspaceById(workspaces, startWorkspace)?.name ?? "General"}.` : null;
   const [homeId, setHomeId] = useState(startWorkspace);
   const [borrowed, setBorrowed] = useState<string[]>([]);
   // A scenario picked here beats the workspace's own; until then the workspace decides.
@@ -70,7 +73,8 @@ export function MeetingSetupModal({ open, onStart, onCancel, workspaceId }: Meet
     const hasRemembered = rememberedSetup !== null;
     setAudioMode(rememberedSetup?.audioMode ?? "online");
     const all = useWorkspaceStore.getState().workspaces;
-    const start = workspaceById(all, workspaceId) ?? defaultWorkspaceOf(all);
+    const asked = workspaceById(all, workspaceId);
+    const start = asked && !asked.archived ? asked : defaultWorkspaceOf(all);
     setHomeId(start.id);
     setBorrowed([]);
     setScenarioPicked(false);
@@ -340,6 +344,11 @@ export function MeetingSetupModal({ open, onStart, onCancel, workspaceId }: Meet
                 <p id="setup-workspace-label" className="mb-2.5 text-xs font-semibold text-foreground/80">
                   Workspace
                 </p>
+                {archivedNote && (
+                  <p className="mb-2 text-xs text-muted-foreground" role="note">
+                    {archivedNote}
+                  </p>
+                )}
                 <div role="radiogroup" aria-labelledby="setup-workspace-label" className="flex flex-wrap gap-1.5">
                   {selectable.map((w) => (
                     <button

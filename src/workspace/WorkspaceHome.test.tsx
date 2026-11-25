@@ -4,17 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/plugin-store", () => ({ load: async () => ({ get: async () => undefined, set: async () => {} }) }));
 
-vi.mock("./chat/ChatPane", () => ({
-  // The chat has its own tests; here it only has to sit in the middle and report its openers.
-  ChatPane: (p: { workspaceId: string; onOpenMeeting?: (id: string) => void }) => (
-    <div data-testid="chat" data-ws={p.workspaceId}>
-      <button type="button" onClick={() => p.onOpenMeeting?.("cited-1")}>
-        Open cited meeting
-      </button>
-    </div>
-  ),
-}));
-
 import { WorkspaceHome } from "./WorkspaceHome";
 import { WorkspaceActionsProvider } from "./WorkspaceActions";
 import { useWorkspaceStore } from "../stores/workspaceStore";
@@ -107,18 +96,22 @@ describe("the home, wide", () => {
     const b = backend();
     mount();
     await screen.findByRole("button", { name: /Meeting: acme planning/ });
-    await userEvent.click(screen.getByRole("button", { name: "Starred" }));
+    await userEvent.click(screen.getByRole("button", { name: "Filter meetings" }));
+    await userEvent.click(screen.getByRole("menuitemcheckbox", { name: "Starred" }));
     expect(screen.getByText("No meetings match this filter.")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "All" }));
+    await userEvent.click(screen.getByRole("button", { name: "Filter meetings" }));
+    await userEvent.click(screen.getByRole("menuitemcheckbox", { name: "All meetings" }));
 
     await userEvent.click(screen.getByRole("button", { name: "Delete meeting" }));
     await userEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
     await waitFor(() => expect(b.called("delete_meeting")).toHaveLength(1));
 
-    await userEvent.click(screen.getByRole("button", { name: "Delete all meetings" }));
+    await userEvent.click(screen.getByRole("button", { name: "Filter meetings" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete all meetings" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText(/permanently deletes 3 meetings/)).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: /Delete 3 meetings/ }));
+    // The backend has no one-call delete yet: it pages through the list and deletes each.
     await waitFor(() => expect(b.called("delete_meeting").length).toBeGreaterThan(1));
   });
 
@@ -171,16 +164,23 @@ describe("the home, wide", () => {
 });
 
 describe("the chat in the middle", () => {
-  it("is the open workspace's chat, and a cited meeting opens the meeting", async () => {
+  it("is the real chat pane of the open workspace", async () => {
     backend();
-    const { onOpenMeeting } = mount();
-    expect(screen.getByTestId("chat")).toHaveAttribute("data-ws", "acme");
-    await userEvent.click(screen.getByRole("button", { name: "Open cited meeting" }));
-    expect(onOpenMeeting).toHaveBeenCalledWith("cited-1");
+    mount();
+    expect(document.querySelector("[data-workspace-chat]")).not.toBeNull();
   });
 });
 
 describe("the home at other widths", () => {
+  it("renders the real chat at 860 wide without a crash", async () => {
+    setWidth(860);
+    backend();
+    mount();
+    expect(screen.getByRole("heading", { level: 1, name: "Acme account" })).toBeInTheDocument();
+    expect(document.querySelector("[data-workspace-chat]")).not.toBeNull();
+    expect(screen.queryByText(/NexQ encountered an error/)).toBeNull();
+  });
+
   it("below 1100 the Library is a sheet opened from a button", async () => {
     setWidth(900);
     backend();

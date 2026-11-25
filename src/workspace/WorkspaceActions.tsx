@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
 import type { MenuItemSpec } from "../ui";
 import { showToast } from "../stores/toastStore";
 import { GENERAL_ID, useWorkspaceStore, workspaceById } from "../stores/workspaceStore";
@@ -40,17 +40,25 @@ export function WorkspaceActionsProvider({ children }: { children: ReactNode }) 
   const [cloning, setCloning] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
 
+  // The workspace the dialog is about right now: a late answer for another one never fills it.
+  const editingId = useRef<string | null>(null);
+
   const edit = useCallback((id: string) => {
     const store = useWorkspaceStore.getState();
-    setDetail(store.details[id] ?? null);
+    editingId.current = id;
+    const cached = store.details[id];
+    setDetail(cached && cached.id === id ? cached : null);
     setEditing({ id });
     // The instructions come with the detail: the form fills in when it arrives.
-    void store.loadDetail(id).then((d) => d && setDetail(d));
+    void store.loadDetail(id).then((d) => {
+      if (d && d.id === id && editingId.current === id) setDetail(d);
+    });
   }, []);
 
   const actions = useMemo<WorkspaceActions>(() => {
     const act: WorkspaceActions = {
       create: () => {
+        editingId.current = null;
         setDetail(null);
         setEditing({ id: null });
       },
@@ -108,6 +116,7 @@ export function WorkspaceActionsProvider({ children }: { children: ReactNode }) 
         detail={detail}
         onClose={(saved) => {
           const wasNew = editing?.id == null;
+          editingId.current = null;
           setEditing(null);
           // A new workspace opens right away: that is where the person wants to be.
           if (saved && wasNew) useWorkspaceStore.getState().openWorkspace(saved.id);

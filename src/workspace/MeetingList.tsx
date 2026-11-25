@@ -1,8 +1,9 @@
 import { useCallback, useMemo, useState } from "react";
-import { Search, Trash2, X } from "lucide-react";
-import { ConfirmDialog, Segmented } from "../ui";
+import { ListFilter, Search, X } from "lucide-react";
+import { ConfirmDialog, Menu, Segmented } from "../ui";
 import { RecentMeetings } from "../launcher/RecentMeetings";
-import { deleteMeeting, listWorkspaceMeetings, renameMeeting } from "../lib/ipc";
+import { deleteMeeting, renameMeeting } from "../lib/ipc";
+import { deleteAllInWorkspace, deleteMeetingsById, describeDeleteAll } from "./deleteAll";
 import { useMeetingStore } from "../stores/meetingStore";
 import { showToast } from "../stores/toastStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
@@ -80,19 +81,14 @@ export function MeetingList({
   const deleteAll = async () => {
     setDeletingAll(true);
     try {
-      // Everything of this workspace (the list may show only the first page).
-      const ids =
-        scope === "here" ? (await listWorkspaceMeetings(workspace.id, null, 100000, 0)).meetings.map((m) => m.id) : meetings.map((m) => m.id);
-      let failed = 0;
-      for (const id of ids) {
-        try {
-          await deleteMeeting(id);
-        } catch {
-          failed += 1;
-        }
-      }
+      const result =
+        scope === "here"
+          ? await deleteAllInWorkspace(workspace.id, workspace.meeting_count || total)
+          : await deleteMeetingsById(meetings.map((m) => m.id));
       await after();
-      showToast(failed ? `Deleted ${ids.length - failed} meetings, ${failed} could not be deleted` : "All meetings deleted", failed ? "warning" : "info");
+      showToast(describeDeleteAll(result), result.failed > 0 ? "warning" : "info");
+    } catch (e) {
+      showToast(`Couldn't delete the meetings: ${e instanceof Error ? e.message : String(e)}`, "error");
     } finally {
       setDeletingAll(false);
       setConfirmAll(false);
@@ -132,32 +128,46 @@ export function MeetingList({
             { value: "everywhere", label: "Everywhere" },
           ]}
         />
-        <div className="flex items-center justify-between gap-1">
-          <div role="group" aria-label="Filter meetings" className="flex flex-wrap items-center gap-0.5">
-            {MEETING_FILTERS.map(({ key, label }) => (
+        <div className="flex items-center justify-between gap-2">
+          <p className="ui-meta min-w-0 truncate text-muted-foreground" aria-live="polite">
+            {loading && meetings.length === 0 ? "Loading" : countText}
+          </p>
+          <Menu
+            label="Filter meetings"
+            align="end"
+            items={[
+              ...MEETING_FILTERS.map(({ key, label }) => ({
+                id: key,
+                label: key === "all" ? "All meetings" : label,
+                checked: filter === key,
+                onSelect: () => setFilter(key),
+              })),
+              {
+                id: "delete-all",
+                label: "Delete all meetings",
+                danger: true,
+                separatorBefore: true,
+                disabled: meetings.length === 0,
+                onSelect: () => setConfirmAll(true),
+              },
+            ]}
+            renderTrigger={(props, state) => (
               <button
-                key={key}
                 type="button"
-                onClick={() => setFilter(key)}
-                aria-pressed={filter === key}
+                {...props}
+                aria-label="Filter meetings"
                 className={cn(
-                  "ui-meta rounded-md px-1.5 py-0.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60",
-                  filter === key ? "bg-accent font-semibold text-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                  "ui-meta inline-flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 font-medium outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60",
+                  filter !== "all" ? "text-foreground" : "text-muted-foreground",
+                  state.open && "bg-accent",
                 )}
               >
-                {label}
+                <ListFilter className="h-3 w-3" aria-hidden="true" />
+                {MEETING_FILTERS.find((f) => f.key === filter)?.label ?? "Filter"}
               </button>
-            ))}
-          </div>
-          {meetings.length > 0 && (
-            <button type="button" onClick={() => setConfirmAll(true)} className={cn(iconButtonClass, "hover:text-destructive")} aria-label="Delete all meetings">
-              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-            </button>
-          )}
+            )}
+          />
         </div>
-        <p className="ui-meta text-muted-foreground" aria-live="polite">
-          {loading && meetings.length === 0 ? "Loading" : countText}
-        </p>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3 pt-1">
