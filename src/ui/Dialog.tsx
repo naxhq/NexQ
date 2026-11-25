@@ -110,7 +110,7 @@ export function Dialog({ size = "md", ...rest }: DialogProps) {
 export const buttonClass = {
   base: buttonBase("md"),
   quiet: "ui-field text-foreground",
-  primary: "bg-primary text-primary-foreground hover:bg-primary/90",
+  primary: "ui-solid",
   danger: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
 };
 

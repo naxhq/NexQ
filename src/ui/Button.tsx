@@ -23,7 +23,7 @@ const SIZE: Record<ButtonSize, string> = {
 };
 
 const VARIANT: Record<ButtonVariant, string> = {
-  primary: "bg-primary text-primary-foreground hover:bg-primary/90",
+  primary: "ui-solid",
   /** A secondary action: field surface with a quiet edge. */
   quiet: "ui-field text-foreground",
   /** Text only, for actions inside a list or a footer. */

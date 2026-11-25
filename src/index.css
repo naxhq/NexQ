@@ -760,3 +760,14 @@ select option {
 .ui-r-lg { --ui-r: 10px; }
 .ui-r-xl { --ui-r: 12px; }
 .ui-r-sm { --ui-r: 6px; }
+
+/* The filled primary action of the UI kit. Same blue family as --primary, one step deeper so
+   its white label reaches 4.5:1 (--primary itself is 3.6:1 and stays for old screens). */
+:root, .dark {
+  --primary-solid: 217 91% 45%;
+  --primary-solid-hover: 217 91% 40%;
+  --primary-solid-active: 217 91% 36%;
+}
+.ui-solid { background: hsl(var(--primary-solid)); color: #fff; }
+.ui-solid:hover:not(:disabled) { background: hsl(var(--primary-solid-hover)); }
+.ui-solid:active:not(:disabled) { background: hsl(var(--primary-solid-active)); }

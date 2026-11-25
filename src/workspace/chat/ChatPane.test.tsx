@@ -495,13 +495,13 @@ describe("approval card, security", () => {
     const el = await card({ a: 1 }, { [flag]: true });
     expect(within(el).getByText(text)).toBeInTheDocument();
     await waitFor(() => expect(within(el).getByRole("button", { name: "Deny" })).toHaveFocus());
-    expect(within(el).getByRole("button", { name: "Allow once" }).className).not.toContain("bg-primary");
-    expect(within(el).getByRole("button", { name: "Deny" }).className).toContain("bg-primary");
+    expect(within(el).getByRole("button", { name: "Allow once" }).className).not.toContain("ui-solid");
+    expect(within(el).getByRole("button", { name: "Deny" }).className).toContain("ui-solid");
   });
 
   it("a complete request keeps Allow once as the main button", async () => {
     const el = await card({ a: 1 }, {});
-    expect(within(el).getByRole("button", { name: "Allow once" }).className).toContain("bg-primary");
+    expect(within(el).getByRole("button", { name: "Allow once" }).className).toContain("ui-solid");
   });
 });
 

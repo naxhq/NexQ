@@ -55,7 +55,7 @@ export function SkipLinks() {
             e.preventDefault();
             target.focus();
           }}
-          className="ui-body ui-focus fixed left-3 top-3 z-[60] -translate-y-24 rounded-lg bg-primary px-3 py-2 font-medium text-primary-foreground shadow-lg focus:translate-y-0"
+          className="ui-body ui-focus fixed left-3 top-3 z-[60] -translate-y-24 rounded-lg ui-solid px-3 py-2 font-medium shadow-lg focus:translate-y-0"
         >
           {l.label}
         </a>
