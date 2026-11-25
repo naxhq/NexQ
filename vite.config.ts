@@ -15,6 +15,8 @@ export default defineConfig(async () => ({
     environment: "jsdom",
     setupFiles: ["src/test/setup.ts"],
     globals: true,
+    // The colour guard (src/lib/contrast.test.ts) reads index.css as text; other CSS stays blank in tests.
+    css: { include: [/src\/index\.css/] },
     // Agent worktrees hold full copies of the repo.
     exclude: ["**/node_modules/**", "**/dist/**", ".claude/**"],
   },

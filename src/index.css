@@ -16,37 +16,56 @@
 }
 
 @layer base {
+  /*
+   * Colour tokens. Every pair here is checked by src/lib/contrast.test.ts (index.css is parsed):
+   *  - text tokens (--foreground, --muted-foreground and every --*-text) reach 4.5:1 on every surface and on their own 5-20% tints;
+   *  - fills (--primary, --success ...) reach 4.5:1 with their own -foreground, so a labelled button is readable;
+   *  - --input (the edge of a field) reaches 3:1 on the page and cards.
+   * A semantic colour has two tokens: the fill (bg-success, dots, rings) and the text (text-success: tailwind.config
+   * maps every text-* utility of these names to the -text token), so call sites do not change.
+   * Light surfaces are a ladder: background (content) > card (rails, panels) > secondary/muted (wells, hovers) > accent (selected).
+   */
   :root {
-    --background: 0 0% 100%;
+    --background: 214 40% 99%;
     --foreground: 222 47% 11%;
-    --card: 210 20% 98%;
+    --card: 214 28% 93%;
     --card-foreground: 222 47% 11%;
     --popover: 0 0% 100%;
     --popover-foreground: 222 47% 11%;
-    --primary: 217 91% 60%;
+    --primary: 217 91% 48%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 210 40% 96%;
+    --primary-text: 217 91% 35%;
+    --secondary: 214 26% 90.5%;
     --secondary-foreground: 222 47% 11%;
-    --muted: 210 40% 96%;
-    --muted-foreground: 215 20% 43%;
-    --accent: 210 40% 96%;
+    --muted: 214 26% 90.5%;
+    --muted-foreground: 215 19% 34%;
+    --accent: 214 28% 87%;
     --accent-foreground: 222 47% 11%;
-    --destructive: 0 84% 60%;
+    --destructive: 0 72% 46%;
     --destructive-foreground: 0 0% 100%;
-    --border: 214 32% 91%;
-    --input: 214 32% 91%;
-    --ring: 217 91% 60%;
+    --destructive-text: 0 72% 36%;
+    --border: 214 25% 84%;
+    --input: 214 14% 52%;
+    --ring: 217 91% 55%;
     --radius: 0.625rem;
-    --success: 160 84% 39%;
+    --success: 160 84% 28%;
     --success-foreground: 0 0% 100%;
+    --success-text: 160 84% 20%;
     --warning: 38 92% 50%;
     --warning-foreground: 0 0% 9%;
-    --info: 199 89% 48%;
+    --warning-text: 32 95% 24%;
+    --info: 199 89% 36%;
     --info-foreground: 0 0% 100%;
+    --info-text: 199 89% 25%;
     --highlight: 48 96% 53%;
     --highlight-foreground: 0 0% 9%;
+    --highlight-text: 32 95% 24%;
     --speaker-user: 217 91% 60%;
+    --speaker-user-text: 217 91% 35%;
     --speaker-interviewer: 25 95% 53%;
+    --speaker-interviewer-text: 21 90% 29%;
+    --violet-text: 262 52% 35%;
+    --rose-text: 342 60% 34%;
   }
 
   .dark {
@@ -56,29 +75,39 @@
     --card-foreground: 210 20% 96%;
     --popover: 222 40% 8%;
     --popover-foreground: 210 20% 96%;
-    --primary: 217 91% 60%;
+    --primary: 217 91% 52%;
     --primary-foreground: 0 0% 100%;
+    --primary-text: 217 91% 77%;
     --secondary: 220 26% 14%;
     --secondary-foreground: 210 20% 92%;
     --muted: 220 20% 16%;
     --muted-foreground: 215 14% 64%;
     --accent: 220 26% 14%;
     --accent-foreground: 210 20% 92%;
-    --destructive: 0 72% 51%;
+    --destructive: 0 72% 46%;
     --destructive-foreground: 0 0% 100%;
+    --destructive-text: 0 90% 78%;
     --border: 220 20% 18%;
-    --input: 220 20% 18%;
+    --input: 220 12% 40%;
     --ring: 217 91% 60%;
     --success: 160 84% 45%;
-    --success-foreground: 0 0% 100%;
+    --success-foreground: 0 0% 9%;
+    --success-text: 160 70% 50%;
     --warning: 38 92% 55%;
     --warning-foreground: 0 0% 9%;
+    --warning-text: 38 92% 58%;
     --info: 199 89% 53%;
-    --info-foreground: 0 0% 100%;
+    --info-foreground: 0 0% 9%;
+    --info-text: 199 89% 58%;
     --highlight: 48 96% 60%;
     --highlight-foreground: 0 0% 9%;
+    --highlight-text: 48 96% 62%;
     --speaker-user: 217 91% 60%;
+    --speaker-user-text: 217 91% 77%;
     --speaker-interviewer: 25 95% 53%;
+    --speaker-interviewer-text: 25 95% 64%;
+    --violet-text: 262 80% 80%;
+    --rose-text: 342 78% 78%;
   }
 }
 
@@ -97,6 +126,18 @@
   }
 }
 
+/* Placeholders are text: the muted colour, fully opaque (the browser default is a fixed grey). */
+::placeholder {
+  color: hsl(var(--muted-foreground));
+  opacity: 1;
+}
+
+/* Selected text keeps its colour and gets a visible wash. */
+::selection {
+  background: hsl(var(--primary) / 0.28);
+  color: inherit;
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 5px;
@@ -107,12 +148,12 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: hsl(var(--muted-foreground) / 0.2);
+  background: hsl(var(--input));
   border-radius: 10px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--muted-foreground) / 0.35);
+  background: hsl(var(--muted-foreground));
 }
 
 /* Overlay window transparent background — background + backdrop-filter applied inline */
@@ -771,3 +812,66 @@ select option {
 .ui-solid { background: hsl(var(--primary-solid)); color: #fff; }
 .ui-solid:hover:not(:disabled) { background: hsl(var(--primary-solid-hover)); }
 .ui-solid:active:not(:disabled) { background: hsl(var(--primary-solid-active)); }
+
+/* A combobox is a field: its edge reaches 3:1 (buttons keep the quiet edge, their label names them). */
+.ui-field[role="combobox"] { border-color: hsl(var(--input)); }
+
+/* Every switch in the app (role="switch"): an off switch has a visible track and an edge-coloured knob in both themes. */
+[role="switch"][aria-checked="false"] {
+  background-color: hsl(var(--ui-field));
+  box-shadow: inset 0 0 0 1px hsl(var(--control-edge));
+}
+[role="switch"][aria-checked="false"] > span {
+  background-color: hsl(var(--control-edge));
+}
+.toggle-switch[data-checked="false"] {
+  background-color: hsl(var(--ui-field));
+  box-shadow: inset 0 0 0 1px hsl(var(--control-edge));
+}
+.toggle-switch[data-checked="false"]::after {
+  background-color: hsl(var(--control-edge));
+}
+
+/*
+ * Form controls. A field's edge is part of what says "type here", so it reaches 3:1 (--input) whatever fade the component
+ * asked for (border-border/50 on an input is the field edge, not a divider). Focus and error classes still win: they are
+ * higher specificity or a different colour class. Only input, select and textarea are touched, never dividers.
+ */
+input[class~="border-border"],
+input[class~="border-border/10"],
+input[class~="border-border/15"],
+input[class~="border-border/20"],
+input[class~="border-border/30"],
+input[class~="border-border/40"],
+input[class~="border-border/50"],
+input[class~="border-border/60"],
+input[class~="border-border/70"],
+select[class~="border-border"],
+select[class~="border-border/10"],
+select[class~="border-border/15"],
+select[class~="border-border/20"],
+select[class~="border-border/30"],
+select[class~="border-border/40"],
+select[class~="border-border/50"],
+select[class~="border-border/60"],
+select[class~="border-border/70"],
+textarea[class~="border-border"],
+textarea[class~="border-border/10"],
+textarea[class~="border-border/15"],
+textarea[class~="border-border/20"],
+textarea[class~="border-border/30"],
+textarea[class~="border-border/40"],
+textarea[class~="border-border/50"],
+textarea[class~="border-border/60"],
+textarea[class~="border-border/70"] {
+  border-color: hsl(var(--input));
+}
+input[type="checkbox"], input[type="radio"] { border-color: hsl(var(--input)); }
+
+/* A disabled group (settings greyed out because an agent owns them) stays legible. */
+fieldset:disabled { opacity: 0.65; }
+
+/* A plain border on a field (no colour class) is the field edge too; any border-* class on it is more specific and wins. */
+:where(input, select, textarea) {
+  border-color: hsl(var(--input));
+}

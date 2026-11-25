@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 
 /**
  * The default transcript and answer text colours are light greys picked for the dark theme.
@@ -65,7 +65,19 @@ const SURFACE: Record<"light" | "dark", Rgb> = { light: [250, 251, 252], dark: [
  * `color` itself when it reads at 4.5:1 on the theme's surface, else the same hue made
  * darker (light theme) or lighter (dark theme) until it does. Not a hex colour: returned as is.
  */
+const readableCache = new Map<string, string>();
+
 export function readableOn(color: string, mode: "light" | "dark", target = 4.6): string {
+  const key = `${color}|${mode}|${target}`;
+  const hit = readableCache.get(key);
+  if (hit !== undefined) return hit;
+  const out = computeReadableOn(color, mode, target);
+  if (readableCache.size > 500) readableCache.clear();
+  readableCache.set(key, out);
+  return out;
+}
+
+function computeReadableOn(color: string, mode: "light" | "dark", target: number): string {
   const rgb = parseColor(color);
   if (!rgb) return color;
   const bg = SURFACE[mode];
@@ -79,15 +91,30 @@ export function readableOn(color: string, mode: "light" | "dark", target = 4.6):
   return mode === "light" ? "#000000" : "#ffffff";
 }
 
-/** Whether the document is in the light theme (follows theme changes in any window). */
+const isLightNow = () => typeof document !== "undefined" && document.documentElement.classList.contains("light");
+// One observer for every component that asks, so a 1,000-line transcript costs one subscription, not 1,000.
+const themeListeners = new Set<() => void>();
+let themeObserver: MutationObserver | null = null;
+const subscribeTheme = (notify: () => void) => {
+  if (typeof MutationObserver === "undefined" || typeof document === "undefined") return () => {};
+  themeListeners.add(notify);
+  if (!themeObserver) {
+    themeObserver = new MutationObserver(() => themeListeners.forEach((l) => l()));
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+  }
+  return () => {
+    themeListeners.delete(notify);
+    if (themeListeners.size === 0) {
+      themeObserver?.disconnect();
+      themeObserver = null;
+    }
+  };
+};
+
+/**
+ * Whether the document is in the light theme (follows theme changes in any window). Read with
+ * useSyncExternalStore: the first render already has the right answer, so a row never renders twice for it.
+ */
 export function useIsLight(): boolean {
-  const read = () => typeof document !== "undefined" && document.documentElement.classList.contains("light");
-  const [light, setLight] = useState(read);
-  useEffect(() => {
-    setLight(read());
-    const mo = new MutationObserver(() => setLight(read()));
-    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-    return () => mo.disconnect();
-  }, []);
-  return light;
+  return useSyncExternalStore(subscribeTheme, isLightNow, () => false);
 }
