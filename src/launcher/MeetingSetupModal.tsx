@@ -3,6 +3,10 @@ import { useConfigStore } from "../stores/configStore";
 import { setRecordingEnabled } from "../lib/ipc";
 import { useMeetingScenarios, useScenarioStore } from "../stores/scenarioStore";
 import { MODE_COLORS } from "../lib/speakerColors";
+import { defaultWorkspaceOf, useWorkspaceStore, workspaceById } from "../stores/workspaceStore";
+import { borrowBlocker } from "../workspace/meetingScope";
+import { pickScenario } from "../workspace/scenarioOrder";
+import { VoiceprintMark } from "../voiceprint";
 import type { AudioMode, AIScenario } from "../lib/types";
 import {
   Monitor,
@@ -15,13 +19,29 @@ import {
   Square,
 } from "lucide-react";
 
-interface MeetingSetupModalProps {
-  open: boolean;
-  onStart: (audioMode: AudioMode, scenario: AIScenario) => void;
-  onCancel: () => void;
+/** Where the meeting is filed and what it also uses. */
+export interface MeetingSetupChoice {
+  workspaceId: string;
+  borrowed: string[];
 }
 
-export function MeetingSetupModal({ open, onStart, onCancel }: MeetingSetupModalProps) {
+interface MeetingSetupModalProps {
+  open: boolean;
+  onStart: (audioMode: AudioMode, scenario: AIScenario, choice: MeetingSetupChoice) => void;
+  onCancel: () => void;
+  /** The workspace to file it in first: the open one (the shortcut and the tray use the default). */
+  workspaceId?: string;
+}
+
+export function MeetingSetupModal({ open, onStart, onCancel, workspaceId }: MeetingSetupModalProps) {
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const startWorkspace = workspaceById(workspaces, workspaceId)?.id ?? defaultWorkspaceOf(workspaces).id;
+  const [homeId, setHomeId] = useState(startWorkspace);
+  const [borrowed, setBorrowed] = useState<string[]>([]);
+  // A scenario picked here beats the workspace's own; until then the workspace decides.
+  const [scenarioPicked, setScenarioPicked] = useState(false);
+  const selectable = workspaces.filter((w) => !w.archived);
+  const home = workspaceById(workspaces, homeId);
   const rememberedSetup = useConfigStore((s) => s.rememberedMeetingSetup);
   const setRememberedMeetingSetup = useConfigStore((s) => s.setRememberedMeetingSetup);
   const recordingEnabled = useConfigStore((s) => s.recordingEnabled);
@@ -32,7 +52,7 @@ export function MeetingSetupModal({ open, onStart, onCancel }: MeetingSetupModal
     rememberedSetup?.audioMode ?? "online"
   );
   const [pickedScenario, setScenario] = useState<AIScenario>(
-    rememberedSetup?.scenario ?? "team_meeting"
+    pickScenario({ workspaceDefault: home?.default_scenario, remembered: rememberedSetup?.scenario })
   );
   const scenarios = useMeetingScenarios();
   const scenario = useScenarioStore((s) => s.resolveScenario(pickedScenario));
@@ -49,7 +69,12 @@ export function MeetingSetupModal({ open, onStart, onCancel }: MeetingSetupModal
     if (!open) return;
     const hasRemembered = rememberedSetup !== null;
     setAudioMode(rememberedSetup?.audioMode ?? "online");
-    setScenario(rememberedSetup?.scenario ?? "team_meeting");
+    const all = useWorkspaceStore.getState().workspaces;
+    const start = workspaceById(all, workspaceId) ?? defaultWorkspaceOf(all);
+    setHomeId(start.id);
+    setBorrowed([]);
+    setScenarioPicked(false);
+    setScenario(pickScenario({ workspaceDefault: start.default_scenario, remembered: rememberedSetup?.scenario }));
     setRemember(hasRemembered);
     setIsExpanded(!hasRemembered);
     setShowScenarioPicker(false);
@@ -79,8 +104,25 @@ export function MeetingSetupModal({ open, onStart, onCancel }: MeetingSetupModal
       // If unchecked, clear any existing remembered setup
       setRememberedMeetingSetup(null);
     }
-    onStart(audioMode, scenario);
-  }, [audioMode, scenario, remember, setRememberedMeetingSetup, onStart]);
+    onStart(audioMode, scenario, { workspaceId: homeId, borrowed });
+  }, [audioMode, scenario, remember, setRememberedMeetingSetup, onStart, homeId, borrowed]);
+
+  // Another home: its scenario applies unless one was picked here, and what can be borrowed changes.
+  const changeHome = useCallback(
+    (id: string) => {
+      const all = useWorkspaceStore.getState().workspaces;
+      const next = workspaceById(all, id);
+      setHomeId(id);
+      setBorrowed((cur) =>
+        cur.filter((b) => {
+          const other = workspaceById(all, b);
+          return b !== id && !!other && !borrowBlocker(next, other);
+        })
+      );
+      if (!scenarioPicked) setScenario(pickScenario({ workspaceDefault: next?.default_scenario, remembered: rememberedSetup?.scenario }));
+    },
+    [scenarioPicked, rememberedSetup]
+  );
 
   const handleForget = useCallback(() => {
     setRememberedMeetingSetup(null);
@@ -139,8 +181,8 @@ export function MeetingSetupModal({ open, onStart, onCancel }: MeetingSetupModal
             {/* Saved preferences summary */}
             <div className="rounded-xl border border-border/30 bg-secondary/20 px-4 py-3 space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/60">
-                  Saved Preferences
+                <span className="text-[11px] font-medium text-muted-foreground/70">
+                  Saved preferences
                 </span>
                 <button
                   onClick={handleForget}
@@ -163,6 +205,13 @@ export function MeetingSetupModal({ open, onStart, onCancel }: MeetingSetupModal
                   }
                   {audioMode === "online" ? "Online" : "In-Person"}
                 </span>
+                {/* Workspace */}
+                {workspaces.length > 1 && home && (
+                  <span className="flex items-center gap-1.5 rounded-full border border-border/30 px-2.5 py-1 text-xs font-medium text-foreground/80">
+                    <VoiceprintMark id={home.id} hue={home.color} size={11} />
+                    {home.name}
+                  </span>
+                )}
                 {/* Scenario badge */}
                 <span className="rounded-full border border-border/30 bg-accent/20 px-2.5 py-1 text-xs font-medium text-foreground/80">
                   {scenarioName}
@@ -200,8 +249,8 @@ export function MeetingSetupModal({ open, onStart, onCancel }: MeetingSetupModal
 
             {/* ── Audio Mode Cards ── */}
             <div>
-              <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-                Audio Mode
+              <p className="mb-2.5 text-xs font-semibold text-foreground/80">
+                Audio mode
               </p>
               <div className="grid grid-cols-2 gap-2.5">
                 {/* Online card */}
@@ -285,9 +334,61 @@ export function MeetingSetupModal({ open, onStart, onCancel }: MeetingSetupModal
               </div>
             </div>
 
+            {/* ── Workspace and what it also uses ── */}
+            {selectable.length > 1 && (
+              <div>
+                <p id="setup-workspace-label" className="mb-2.5 text-xs font-semibold text-foreground/80">
+                  Workspace
+                </p>
+                <div role="radiogroup" aria-labelledby="setup-workspace-label" className="flex flex-wrap gap-1.5">
+                  {selectable.map((w) => (
+                    <button
+                      key={w.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={w.id === homeId}
+                      onClick={() => changeHome(w.id)}
+                      className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60 cursor-pointer ${
+                        w.id === homeId ? "border-primary/50 bg-primary/10 text-foreground" : "border-border/40 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      }`}
+                    >
+                      <VoiceprintMark id={w.id} hue={w.color} size={12} />
+                      {w.name}
+                    </button>
+                  ))}
+                </div>
+                {selectable.length > 1 && (
+                  <fieldset className="mt-3">
+                    <legend className="mb-1.5 text-xs font-medium text-muted-foreground">Also use</legend>
+                    <div className="space-y-1">
+                      {selectable
+                        .filter((w) => w.id !== homeId)
+                        .map((w) => {
+                          const blocked = borrowBlocker(home, w);
+                          const on = borrowed.includes(w.id);
+                          return (
+                            <label key={w.id} className={`flex items-center gap-2 text-xs ${blocked ? "opacity-60" : "cursor-pointer"}`}>
+                              <input
+                                type="checkbox"
+                                checked={on}
+                                disabled={!!blocked}
+                                onChange={() => setBorrowed((cur) => (on ? cur.filter((b) => b !== w.id) : [...cur, w.id]))}
+                                className="h-3.5 w-3.5 accent-[hsl(var(--primary))]"
+                              />
+                              <span className="text-foreground/80">{w.name}</span>
+                              {blocked && <span className="text-meta text-muted-foreground">{blocked}</span>}
+                            </label>
+                          );
+                        })}
+                    </div>
+                  </fieldset>
+                )}
+              </div>
+            )}
+
             {/* ── Scenario Picker ── */}
             <div>
-              <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/60">
+              <p className="mb-2.5 text-xs font-semibold text-foreground/80">
                 Scenario
               </p>
               <div className="relative">
@@ -308,6 +409,7 @@ export function MeetingSetupModal({ open, onStart, onCancel }: MeetingSetupModal
                         key={s.id}
                         onClick={() => {
                           setScenario(s.id as AIScenario);
+                          setScenarioPicked(true);
                           setShowScenarioPicker(false);
                         }}
                         className={`flex w-full flex-col items-start px-4 py-2.5 text-left transition-colors duration-100 cursor-pointer ${

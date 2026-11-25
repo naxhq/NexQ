@@ -328,9 +328,11 @@ export async function getActionConfigs(): Promise<AllActionConfigs> {
 // == IPC: Context (Sub-PRD 7) ==
 
 export async function loadContextFile(
-  filePath: string
+  filePath: string,
+  /** The workspace the file joins with the library (omitted = it joins none on its own). */
+  workspaceId?: string
 ): Promise<ContextResource> {
-  const result = await invoke<string>("load_context_file", { filePath });
+  const result = await invoke<string>("load_context_file", { filePath, ...(workspaceId ? { workspaceId } : {}) });
   return JSON.parse(result);
 }
 
@@ -1011,8 +1013,28 @@ export async function deleteMcpSecrets(serverId: string): Promise<void> {
  * when something that goes into it changed. Removing a server here forgets
  * its saved secrets. Rejects on an invalid or duplicate server key.
  */
-export async function setPersonalSources(config: PersonalSourcesConfig): Promise<void> {
-  return invoke("set_personal_sources", { config });
+/** The items the user just added, filed in a workspace: exactly these ids, never inferred. */
+export interface SourcesFiling {
+  workspace_id: string;
+  items: Array<{ kind: "folder" | "server"; ref_id: string }>;
+}
+
+export async function setPersonalSources(config: PersonalSourcesConfig, filing?: SourcesFiling): Promise<void> {
+  return invoke("set_personal_sources", { config, ...(filing ? { filing } : {}) });
+}
+
+/** After a folder or server was removed from the saved sources: it leaves every workspace. */
+export async function removeLibraryItem(kind: WorkspaceItemKind, refId: string): Promise<void> {
+  return invoke("remove_library_item", { kind, refId });
+}
+
+/** Mirrors Rust `WorkspacesStatus`: false when the upgrade failed and the app runs on General alone. */
+export interface WorkspacesStatus {
+  available: boolean;
+  error: string | null;
+}
+export async function getWorkspacesStatus(): Promise<WorkspacesStatus> {
+  return invoke<WorkspacesStatus>("get_workspaces_status");
 }
 
 /**

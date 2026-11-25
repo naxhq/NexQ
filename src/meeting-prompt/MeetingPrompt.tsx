@@ -4,11 +4,16 @@ import { dismissMeetingPrompt, getDetectedMeeting } from "../lib/ipc";
 import { emitStartDetectedMeeting, onDetectedMeetingEnded, onMeetingDetected } from "../lib/events";
 import { composeMeetingTitle } from "../lib/meetingTitle";
 import { useMeetingScenarios, useScenarioStore } from "../stores/scenarioStore";
+import { defaultWorkspaceOf, useWorkspaceStore } from "../stores/workspaceStore";
+import { pickScenario } from "../workspace/scenarioOrder";
+import { VoiceprintMark } from "../voiceprint";
 import type { AIScenario, MeetingPromptInfo } from "../lib/types";
 
 /** Window height with the card alone, and with the meeting-type menu open below it. */
 export const PROMPT_HEIGHT = 104;
 export const PROMPT_HEIGHT_WITH_MENU = 390;
+
+type MenuKind = "scenario" | "workspace";
 
 /**
  * The meeting-detection prompt: a small always-on-top card at the top of the
@@ -22,44 +27,67 @@ export function MeetingPrompt({
   onMenuToggle,
 }: {
   info: MeetingPromptInfo;
-  onStart: (title: string, scenario: AIScenario) => void;
+  /** `workspaceId` only when one was picked here; otherwise the meeting goes to the default workspace. */
+  onStart: (title: string, scenario: AIScenario, workspaceId?: string) => void;
   onDismiss: () => void;
   /** The meeting-type menu opened or closed (the window makes room for it). */
   onMenuToggle?: (open: boolean) => void;
 }) {
   const { meeting } = info;
   const [title, setTitle] = useState(meeting.title ?? "");
-  const [pickedScenario, setScenario] = useState<AIScenario>(info.default_scenario);
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const defaultWorkspace = defaultWorkspaceOf(workspaces);
+  const [pickedWorkspace, setPickedWorkspace] = useState<string | null>(null);
+  const [scenarioChosen, setScenarioChosen] = useState<AIScenario | null>(null);
+  const workspace = workspaces.find((w) => w.id === pickedWorkspace) ?? defaultWorkspace;
+  // What was picked here beats the workspace's scenario, which beats "Start as".
+  const pickedScenario = pickScenario({ explicit: scenarioChosen, workspaceDefault: workspace.default_scenario, startAs: info.default_scenario });
+  const choices = workspaces.filter((w) => !w.archived);
   const scenarios = useMeetingScenarios();
   const scenario = useScenarioStore((s) => s.resolveScenario(pickedScenario));
   const [hovered, setHovered] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [menu, setMenu] = useState<MenuKind | null>(null);
+  const menuOpen = menu !== null;
   const [focusIdx, setFocusIdx] = useState(0);
   const chevronRef = useRef<HTMLButtonElement>(null);
+  const workspaceRef = useRef<HTMLButtonElement>(null);
+  const options: Array<{ id: string; name: string; description: string }> =
+    menu === "workspace"
+      ? choices.map((w) => ({ id: w.id, name: w.name, description: w.description }))
+      : scenarios.map((sc) => ({ id: sc.id, name: sc.name, description: sc.description }));
+  const selectedId = menu === "workspace" ? workspace.id : scenario;
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const scenarioName = scenarios.find((s) => s.id === scenario)?.name ?? "Meeting";
 
   const start = useCallback(() => {
-    onStart(composeMeetingTitle(title.trim() || meeting.app_name), scenario);
-  }, [meeting.app_name, onStart, scenario, title]);
+    const name = composeMeetingTitle(title.trim() || meeting.app_name);
+    if (pickedWorkspace) onStart(name, scenario, pickedWorkspace);
+    else onStart(name, scenario);
+  }, [meeting.app_name, onStart, pickedWorkspace, scenario, title]);
 
-  const openMenu = useCallback(() => {
-    const idx = Math.max(0, scenarios.findIndex((s) => s.id === scenario));
+  const openMenu = useCallback((kind: MenuKind) => {
+    const list = kind === "workspace" ? choices.map((w) => w.id) : scenarios.map((sc) => sc.id as string);
+    const idx = Math.max(0, list.indexOf(kind === "workspace" ? workspace.id : scenario));
     setFocusIdx(idx);
-    setMenuOpen(true);
+    setMenu(kind);
     onMenuToggle?.(true);
-  }, [onMenuToggle, scenario, scenarios]);
+  }, [choices, onMenuToggle, scenario, scenarios, workspace.id]);
 
   const closeMenu = useCallback(() => {
-    setMenuOpen(false);
+    const kind = menu;
+    setMenu(null);
     onMenuToggle?.(false);
-    chevronRef.current?.focus();
-  }, [onMenuToggle]);
+    (kind === "workspace" ? workspaceRef : chevronRef).current?.focus();
+  }, [menu, onMenuToggle]);
 
-  const choose = useCallback((id: AIScenario) => {
-    setScenario(id);
+  const choose = useCallback((id: string) => {
+    if (menu === "workspace") {
+      setPickedWorkspace(id);
+    } else {
+      setScenarioChosen(id as AIScenario);
+    }
     closeMenu();
-  }, [closeMenu]);
+  }, [closeMenu, menu]);
 
   // The open menu takes focus on its current option.
   useEffect(() => {
@@ -83,13 +111,13 @@ export function MeetingPrompt({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (menuOpen) {
-        const count = scenarios.length;
+        const count = options.length;
         if (e.key === "Escape") closeMenu();
         else if (e.key === "ArrowDown") setFocusIdx((i) => (i + 1) % count);
         else if (e.key === "ArrowUp") setFocusIdx((i) => (i - 1 + count) % count);
         else if (e.key === "Home") setFocusIdx(0);
         else if (e.key === "End") setFocusIdx(count - 1);
-        else if (e.key === "Enter" || e.key === " ") choose(scenarios[focusIdx].id as AIScenario);
+        else if (e.key === "Enter" || e.key === " ") choose(options[focusIdx].id);
         else return;
         e.preventDefault();
         return;
@@ -99,7 +127,7 @@ export function MeetingPrompt({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [choose, closeMenu, focusIdx, menuOpen, onDismiss, scenarios, start]);
+  }, [choose, closeMenu, focusIdx, menuOpen, onDismiss, options, start]);
 
   return (
     <div
@@ -138,7 +166,7 @@ export function MeetingPrompt({
                 </span>
                 <span className="truncate">
                   {meeting.app_name} meeting detected
-                  <span className="text-muted-foreground/50"> · {scenarioName}</span>
+                  <span className="text-muted-foreground/50">, {scenarioName}</span>
                 </span>
               </p>
               <input
@@ -164,25 +192,40 @@ export function MeetingPrompt({
               <button
                 ref={chevronRef}
                 type="button"
-                onClick={() => (menuOpen ? closeMenu() : openMenu())}
+                onClick={() => (menu === "scenario" ? closeMenu() : openMenu("scenario"))}
                 aria-haspopup="listbox"
-                aria-expanded={menuOpen}
+                aria-expanded={menu === "scenario"}
                 aria-label={`Meeting type: ${scenarioName}`}
                 className={`flex w-7 items-center justify-center border-l border-primary-foreground/20 transition-colors cursor-pointer ${
-                  menuOpen ? "bg-black/15" : "hover:bg-black/10"
+                  menu === "scenario" ? "bg-black/15" : "hover:bg-black/10"
                 }`}
               >
                 <ChevronDown
-                  className={`h-3.5 w-3.5 transition-transform duration-200 ${menuOpen ? "rotate-180" : ""}`}
+                  className={`h-3.5 w-3.5 transition-transform duration-200 ${menu === "scenario" ? "rotate-180" : ""}`}
                   aria-hidden="true"
                 />
               </button>
             </div>
           </div>
 
-          <p className="-mt-1.5 truncate pb-2.5 pl-8 pr-3 text-[10px] text-muted-foreground/45">
-            Let everyone know the meeting is being transcribed.
-          </p>
+          <div className="-mt-1.5 flex items-center gap-2 pb-2.5 pl-8 pr-3">
+            {choices.length > 1 && (
+              <button
+                ref={workspaceRef}
+                type="button"
+                onClick={() => (menu === "workspace" ? closeMenu() : openMenu("workspace"))}
+                aria-haspopup="listbox"
+                aria-expanded={menu === "workspace"}
+                aria-label={`Workspace: ${workspace.name}`}
+                className="flex max-w-[9rem] shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground outline-none transition-colors hover:bg-white/10 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+              >
+                <VoiceprintMark id={workspace.id} hue={workspace.color} size={11} />
+                <span className="truncate">{workspace.name}</span>
+                <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
+              </button>
+            )}
+            <p className="truncate text-[10px] text-muted-foreground/45">Let everyone know the meeting is being transcribed.</p>
+          </div>
 
           {total > 0 && (
             <div className="absolute inset-x-0 bottom-0 h-[2px] bg-white/5" aria-hidden="true">
@@ -194,14 +237,14 @@ export function MeetingPrompt({
         {menuOpen && (
           <div
             role="listbox"
-            aria-label="Meeting type"
+            aria-label={menu === "workspace" ? "Workspace" : "Meeting type"}
             className="scope-pop-enter absolute right-0 top-full z-10 mt-1.5 max-h-[288px] w-64 overflow-y-auto rounded-2xl border border-white/10 bg-[hsl(228_22%_9%/0.97)] p-1.5 shadow-[0_14px_36px_-10px_rgba(0,0,0,0.7)] backdrop-blur-xl"
           >
-            <p className="px-2.5 pb-1 pt-1 text-[10px] font-medium uppercase tracking-widest text-muted-foreground/45">
-              Start as
+            <p className="px-2.5 pb-1 pt-1 text-[11px] font-medium text-muted-foreground/60">
+              {menu === "workspace" ? "File this meeting in" : "Start as"}
             </p>
-            {scenarios.map((s, idx) => {
-              const selected = s.id === scenario;
+            {options.map((s, idx) => {
+              const selected = s.id === selectedId;
               return (
                 <button
                   key={s.id}
@@ -213,7 +256,7 @@ export function MeetingPrompt({
                   aria-selected={selected}
                   tabIndex={idx === focusIdx ? 0 : -1}
                   onMouseEnter={() => setFocusIdx(idx)}
-                  onClick={() => choose(s.id as AIScenario)}
+                  onClick={() => choose(s.id)}
                   className={`flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left outline-none transition-colors duration-100 cursor-pointer ${
                     idx === focusIdx ? "bg-white/[0.07]" : ""
                   }`}
@@ -253,8 +296,11 @@ export function MeetingPromptWindow() {
       setInfo({ meeting: { app: "zoom", app_name: "Zoom", title: "Weekly design sync" }, auto_dismiss_secs: 60, default_scenario: "team_meeting" });
       return;
     }
-    // This window stays open between calls, and the scenarios can change meanwhile.
-    const readScenarios = () => useScenarioStore.getState().loadScenarioConfig();
+    // This window stays open between calls: the scenarios and the workspaces can change meanwhile.
+    const readScenarios = async () => {
+      void useWorkspaceStore.getState().load();
+      await useScenarioStore.getState().loadScenarioConfig();
+    };
     getDetectedMeeting()
       .then(async (current) => {
         if (!current) return;
@@ -286,8 +332,8 @@ export function MeetingPromptWindow() {
     dismissMeetingPrompt().catch(() => {});
   }, []);
 
-  const start = useCallback((title: string, scenario: AIScenario) => {
-    emitStartDetectedMeeting({ title, scenario }).catch(() => {});
+  const start = useCallback((title: string, scenario: AIScenario, workspaceId?: string) => {
+    emitStartDetectedMeeting({ title, scenario, ...(workspaceId ? { workspace_id: workspaceId } : {}) }).catch(() => {});
     dismiss();
   }, [dismiss]);
 

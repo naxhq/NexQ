@@ -10,7 +10,7 @@ import type {
   PersonalSourcesConfig,
   SourceToggles,
 } from "../lib/types";
-import { setPersonalSources } from "../lib/ipc";
+import { setPersonalSources, type SourcesFiling } from "../lib/ipc";
 import { useConfigStore } from "./configStore";
 import { isCliAgent } from "../lib/cliAgents";
 
@@ -161,7 +161,8 @@ interface SourcesState {
   pushError: string | null;
   load: () => Promise<void>;
   /** Set, save and give to the backend. Resolves once the backend has answered; never rejects. */
-  setConfig: (c: PersonalSourcesConfig) => Promise<void>;
+  /** `filing`: what was just added, filed in a workspace too (startup pushes pass none). */
+  setConfig: (c: PersonalSourcesConfig, filing?: SourcesFiling) => Promise<void>;
   /**
    * Like `setConfig` for a change that must not be lost (a removal): rejects when
    * the save fails, then nothing reaches the backend and the config goes back to
@@ -219,10 +220,10 @@ const STARTING_RE = /state not managed/i;
 const STARTING_WAIT_MS = 150;
 const STARTING_TRIES = 200;
 
-async function sendWhenReady(config: PersonalSourcesConfig): Promise<void> {
+async function sendWhenReady(config: PersonalSourcesConfig, filing?: SourcesFiling): Promise<void> {
   for (let attempt = 1; ; attempt++) {
     try {
-      return await setPersonalSources(config);
+      return await setPersonalSources(config, filing);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       if (!STARTING_RE.test(message) || attempt >= STARTING_TRIES) throw e;
@@ -231,10 +232,10 @@ async function sendWhenReady(config: PersonalSourcesConfig): Promise<void> {
   }
 }
 
-function pushToBackend(config: PersonalSourcesConfig): Promise<void> {
+function pushToBackend(config: PersonalSourcesConfig, filing?: SourcesFiling): Promise<void> {
   const run = async () => {
     try {
-      await sendWhenReady(config);
+      await sendWhenReady(config, filing);
       useSourcesStore.setState({ pushError: null });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -297,11 +298,11 @@ export const useSourcesStore = create<SourcesState>((set, get) => ({
     }
   },
 
-  setConfig: (c) => {
+  setConfig: (c, filing) => {
     const config = normalizeSourcesConfig(c);
     set({ config });
     // Save first so a window that opens next sees it, then tell the backend.
-    return persist(CONFIG_KEY, config).then(() => pushToBackend(config));
+    return persist(CONFIG_KEY, config).then(() => pushToBackend(config, filing));
   },
 
   setConfigDurably: async (c, afterSave) => {

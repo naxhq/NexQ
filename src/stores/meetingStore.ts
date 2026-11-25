@@ -15,6 +15,16 @@ import { useConfigStore } from "./configStore";
 import { useTranscriptStore } from "./transcriptStore";
 import { initMeetingSpeakers, resetMeetingScopedStores } from "./resetMeeting";
 import { showToast } from "./toastStore";
+import { pickScenario } from "../workspace/scenarioOrder";
+import { defaultWorkspaceOf, useWorkspaceStore, workspaceById } from "./workspaceStore";
+
+/** Where a started meeting is filed and what else it may use (spec section 12). */
+export interface StartMeetingOptions {
+  /** The home workspace; omitted = the default workspace (shortcut, tray, detection). */
+  workspaceId?: string;
+  /** Workspaces used in this meeting too ("Also use"). */
+  borrowed?: string[];
+}
 
 interface MeetingState {
   // View state
@@ -41,6 +51,10 @@ interface MeetingState {
 
   // Crash recovery
   unfinishedMeeting: MeetingSummary | null;
+
+  /** Workspaces borrowed by the running meeting (its home is `activeMeeting.workspace_id`). */
+  activeBorrowed: string[];
+  setActiveBorrowed: (ids: string[]) => void;
 
   // Active meeting mode / scenario
   audioMode: AudioMode;
@@ -79,7 +93,7 @@ interface MeetingState {
   meetingStarting: boolean;
 
   // Async flows
-  startMeetingFlow: (title?: string, audioMode?: AudioMode, scenario?: AIScenario) => Promise<void>;
+  startMeetingFlow: (title?: string, audioMode?: AudioMode, scenario?: AIScenario, options?: StartMeetingOptions) => Promise<void>;
   endMeetingFlow: () => Promise<void>;
   loadRecentMeetings: () => Promise<void>;
 
@@ -106,6 +120,8 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   _timerInterval: null,
   audioMode: "online",
   aiScenario: "team_meeting",
+  activeBorrowed: [],
+  setActiveBorrowed: (ids) => set({ activeBorrowed: ids }),
   overlayHidden: false,
   overlayMeetingId: null,
   selectedMeetingId: null,
@@ -147,7 +163,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   },
   setSelectedMeetingId: (id) => set({ selectedMeetingId: id }),
 
-  startMeetingFlow: async (title?: string, audioMode?: AudioMode, scenario?: AIScenario) => {
+  startMeetingFlow: async (title?: string, audioMode?: AudioMode, scenario?: AIScenario, options?: StartMeetingOptions) => {
     startingFlows += 1;
     set({ meetingStarting: true });
     try {
@@ -163,7 +179,14 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
       try {
         // Resolve mode and scenario (fall back to current state if not provided)
         const resolvedMode: AudioMode = audioMode ?? get().audioMode;
-        let resolvedScenario: AIScenario = scenario ?? get().aiScenario;
+        // An explicit pick beats the workspace's scenario, which beats the current/remembered one.
+        const workspaces = useWorkspaceStore.getState().workspaces;
+        const home = options?.workspaceId ? workspaceById(workspaces, options.workspaceId) : defaultWorkspaceOf(workspaces);
+        let resolvedScenario: AIScenario = pickScenario({
+          explicit: scenario,
+          workspaceDefault: home?.default_scenario,
+          startAs: get().aiScenario,
+        });
 
         // 0. Set active scenario in scenarioStore + push prompts to Rust backend.
         // Before start_meeting: a Claude CLI live session starts there with the
@@ -196,7 +219,19 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         }
 
         // 1. Create meeting record in SQLite
-        const meeting = await ipcStartMeeting(title);
+        const meeting = await ipcStartMeeting(title, options?.workspaceId);
+
+        // 1a. "Also use": the borrowed workspaces. A refusal (keep separate) never blocks the meeting.
+        let borrowed: string[] = [];
+        if (options?.borrowed && options.borrowed.length > 0) {
+          try {
+            const { setMeetingScope } = await import("../lib/ipc");
+            const scope = await setMeetingScope(meeting.id, options.borrowed);
+            borrowed = scope.borrowed;
+          } catch (err) {
+            showToast(`Started without the extra workspaces: ${err instanceof Error ? err.message : String(err)}`, "warning");
+          }
+        }
 
         // 1b. Store mode/scenario in state and persist to DB
         set({ audioMode: resolvedMode, aiScenario: resolvedScenario });
@@ -262,6 +297,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
         (await import("../lib/transcriptPersistence")).resetSavedSegments();
         set({
           activeMeeting: meeting,
+          activeBorrowed: borrowed,
           isRecording: true,
           meetingStartTime: now,
           elapsedMs: 0,
@@ -284,6 +320,8 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
             meeting,
             audioMode: resolvedMode,
             aiScenario: resolvedScenario,
+            workspaceId: meeting.workspace_id ?? options?.workspaceId ?? defaultWorkspaceOf(workspaces).id,
+            borrowed,
           }).catch(() => {});
         });
       } catch (err) {
@@ -526,6 +564,7 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
     // 8. Clear active state
     set({
       activeMeeting: null,
+      activeBorrowed: [],
       isRecording: false,
       meetingStartTime: null,
       elapsedMs: 0,

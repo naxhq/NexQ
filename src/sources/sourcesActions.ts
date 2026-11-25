@@ -1,11 +1,29 @@
 import type { McpServer, NotesFolder, PersonalSourcesConfig } from "../lib/types";
 import { useSourcesStore } from "../stores/sourcesStore";
+import { useMeetingStore } from "../stores/meetingStore";
+import { defaultWorkspaceOf, useWorkspaceStore } from "../stores/workspaceStore";
+import { removeLibraryItem, type SourcesFiling } from "../lib/ipc";
 
 // Small edits of the saved config, always made on the latest copy (a Check or a
 // save can finish long after the user clicked), then saved and given to the backend.
 
-function update(edit: (c: PersonalSourcesConfig) => PersonalSourcesConfig): Promise<void> {
-  return useSourcesStore.getState().setConfig(edit(current()));
+function update(edit: (c: PersonalSourcesConfig) => PersonalSourcesConfig, filing?: SourcesFiling): Promise<void> {
+  return useSourcesStore.getState().setConfig(edit(current()), filing);
+}
+
+/**
+ * The workspace an explicit add belongs to: the open one in the launcher, the
+ * default one from Settings (which has no open workspace of its own).
+ */
+export function explicitWorkspaceId(): string {
+  const ws = useWorkspaceStore.getState();
+  const inSettings = useMeetingStore.getState().currentView === "settings";
+  return inSettings ? defaultWorkspaceOf(ws.workspaces).id : ws.openId;
+}
+
+/** A folder or server left the saved sources: it leaves every workspace. A failure is only logged (it shows as missing). */
+function leaveLibrary(kind: "folder" | "server", id: string): void {
+  removeLibraryItem(kind, id).catch((e) => console.warn("[sources] remove_library_item failed:", e));
 }
 
 function current(): PersonalSourcesConfig {
@@ -13,11 +31,11 @@ function current(): PersonalSourcesConfig {
 }
 
 /** Add servers the backend has already taken in (they come back with no secret values). */
-export function addMcpServers(servers: McpServer[]): Promise<void> {
+export function addMcpServers(servers: McpServer[], workspaceId: string = explicitWorkspaceId()): Promise<void> {
   return update((c) => {
     const known = new Set(c.mcp_servers.map((s) => s.id));
     return { ...c, mcp_servers: [...c.mcp_servers, ...servers.filter((s) => !known.has(s.id))] };
-  });
+  }, { workspace_id: workspaceId, items: servers.map((s) => ({ kind: "server" as const, ref_id: s.id })) });
 }
 
 /** Swap in a server's new state (after an edit or a Check). A server removed meanwhile stays removed. */
@@ -70,8 +88,9 @@ export function patchMcpServer(id: string, patch: (s: McpServer) => McpServer): 
   return update((c) => ({ ...c, mcp_servers: c.mcp_servers.map((s) => (s.id === id ? patch(s) : s)) }));
 }
 
-export function removeMcpServer(id: string): Promise<void> {
-  return update((c) => ({ ...c, mcp_servers: c.mcp_servers.filter((s) => s.id !== id) }));
+export async function removeMcpServer(id: string): Promise<void> {
+  await update((c) => ({ ...c, mcp_servers: c.mcp_servers.filter((s) => s.id !== id) }));
+  leaveLibrary("server", id);
 }
 
 /**
@@ -79,15 +98,16 @@ export function removeMcpServer(id: string): Promise<void> {
  * when the save fails. `afterSave` (forgetting its secrets) runs only then,
  * before the backend is told.
  */
-export function removeMcpServerDurably(id: string, afterSave?: () => Promise<void>): Promise<void> {
+export async function removeMcpServerDurably(id: string, afterSave?: () => Promise<void>): Promise<void> {
   const c = current();
-  return useSourcesStore
+  await useSourcesStore
     .getState()
     .setConfigDurably({ ...c, mcp_servers: c.mcp_servers.filter((s) => s.id !== id) }, afterSave);
+  leaveLibrary("server", id);
 }
 
-export function addNotesFolder(folder: NotesFolder): Promise<void> {
-  return update((c) => ({ ...c, notes_folders: [...c.notes_folders, folder] }));
+export function addNotesFolder(folder: NotesFolder, workspaceId: string = explicitWorkspaceId()): Promise<void> {
+  return update((c) => ({ ...c, notes_folders: [...c.notes_folders, folder] }), { workspace_id: workspaceId, items: [{ kind: "folder", ref_id: folder.id }] });
 }
 
 export function patchNotesFolder(id: string, patch: Partial<NotesFolder>): Promise<void> {
@@ -97,8 +117,9 @@ export function patchNotesFolder(id: string, patch: Partial<NotesFolder>): Promi
   }));
 }
 
-export function removeNotesFolder(id: string): Promise<void> {
-  return update((c) => ({ ...c, notes_folders: c.notes_folders.filter((f) => f.id !== id) }));
+export async function removeNotesFolder(id: string): Promise<void> {
+  await update((c) => ({ ...c, notes_folders: c.notes_folders.filter((f) => f.id !== id) }));
+  leaveLibrary("folder", id);
 }
 
 export function markMcpNoticeSeen(): Promise<void> {

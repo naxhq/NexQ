@@ -657,6 +657,8 @@ export interface ContextResource {
   chunk_count?: number;
   index_status?: string;
   last_indexed_at?: string;
+  /** `missing` = the file is gone (the row is kept); `loading` = text is still being read. */
+  status?: "ready" | "loading" | "missing";
 }
 
 export type ContextFileType = "pdf" | "txt" | "md" | "docx";
@@ -1633,7 +1635,17 @@ export interface WorkspaceChatApprovalEvent extends WorkspaceChatEventBase {
   approval_id: string;
   server: string;
   tool: string;
+  /** Pretty JSON, secrets redacted, cut at 4000 characters. */
   args: unknown;
+  /** The arguments were cut: not everything is shown. */
+  truncated?: boolean;
+}
+
+/** `workspace_chat_approval_closed`: the question is over (answered elsewhere, timed out, cancelled). */
+export interface WorkspaceChatApprovalClosedEvent {
+  chat_id: string;
+  approval_id: string;
+  reason: "answered" | "timeout" | "cancelled" | string;
 }
 
 // -- Live notes ---------------------------------------------------------------------

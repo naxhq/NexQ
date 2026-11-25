@@ -6,7 +6,7 @@ import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { NOTES_UPDATE_EVENT } from "./hotkeys";
 import type {
   BriefSheetEvent, BriefState, MemoryChangedEvent, NotetakerDocEvent, NotetakerState,
-  WorkspaceChatActivityEvent, WorkspaceChatApprovalEvent, WorkspaceChatContextEvent, WorkspaceChatEndEvent,
+  WorkspaceChatActivityEvent, WorkspaceChatApprovalEvent, WorkspaceChatApprovalClosedEvent, WorkspaceChatContextEvent, WorkspaceChatEndEvent,
   WorkspaceChatErrorEvent, WorkspaceChatStartEvent, WorkspaceChatTokenEvent, WorkspaceIndexProgressEvent,
   WorkspacesChangedEvent,
 } from "./types";
@@ -450,6 +450,10 @@ export function onWorkspaceChatError(handler: (e: WorkspaceChatErrorEvent) => vo
 /** A tool that is not read-only asks for a click (answer with `answerWorkspaceApproval`). */
 export function onWorkspaceChatApproval(handler: (e: WorkspaceChatApprovalEvent) => void): Promise<UnlistenFn> {
   return listen<WorkspaceChatApprovalEvent>("workspace_chat_approval", (e) => handler(e.payload));
+}
+/** The approval question ended without a click here (answered elsewhere, timeout, cancelled). */
+export function onWorkspaceChatApprovalClosed(handler: (e: WorkspaceChatApprovalClosedEvent) => void): Promise<UnlistenFn> {
+  return listen<WorkspaceChatApprovalClosedEvent>("workspace_chat_approval_closed", (e) => handler(e.payload));
 }
 
 export function onNotetakerState(handler: (e: NotetakerState) => void): Promise<UnlistenFn> {

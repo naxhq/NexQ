@@ -24,6 +24,7 @@ vi.mock("@tauri-apps/plugin-store", () => ({
 
 import { MeetingPrompt, MeetingPromptWindow } from "./MeetingPrompt";
 import { useScenarioStore } from "../stores/scenarioStore";
+import { FALLBACK_GENERAL, useWorkspaceStore } from "../stores/workspaceStore";
 import type { MeetingPromptInfo, ScenarioTemplate } from "../lib/types";
 
 const boardReview = {
@@ -164,5 +165,73 @@ describe("MeetingPromptWindow", () => {
       window_.onCall({ ...info(), default_scenario: "custom_1" });
     });
     expect(await screen.findByRole("button", { name: "Meeting type: Board review" })).toBeInTheDocument();
+  });
+});
+
+describe("MeetingPrompt workspaces", () => {
+  const general = { id: "general", name: "General", description: "", default_scenario: null, archived: false, is_default: true, color: null } as never;
+  const acme = { id: "acme", name: "Acme", description: "A client", default_scenario: "webinar", archived: false, is_default: false, color: "teal" } as never;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 9, 23, 15, 2));
+    useWorkspaceStore.setState({ workspaces: [general, acme] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    useWorkspaceStore.setState({ workspaces: [FALLBACK_GENERAL] });
+  });
+
+  it("has no picker when there is only General", () => {
+    useWorkspaceStore.setState({ workspaces: [FALLBACK_GENERAL] });
+    render(<MeetingPrompt info={info()} onStart={() => {}} onDismiss={() => {}} />);
+    expect(screen.queryByRole("button", { name: /^Workspace:/ })).toBeNull();
+  });
+
+  it("starts in the default workspace unless one is picked, without saying which", () => {
+    const onStart = vi.fn();
+    render(<MeetingPrompt info={info()} onStart={onStart} onDismiss={() => {}} />);
+    expect(screen.getByRole("button", { name: "Workspace: General" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Start NexQ/ }));
+    expect(onStart).toHaveBeenCalledWith(expect.any(String), "interview");
+  });
+
+  it("picks a workspace from our own list, making room for it, and carries its scenario", () => {
+    const onStart = vi.fn();
+    const onMenuToggle = vi.fn();
+    render(<MeetingPrompt info={info()} onStart={onStart} onDismiss={() => {}} onMenuToggle={onMenuToggle} />);
+    fireEvent.click(screen.getByRole("button", { name: "Workspace: General" }));
+    expect(onMenuToggle).toHaveBeenLastCalledWith(true);
+    expect(screen.getByRole("listbox", { name: "Workspace" })).toBeInTheDocument();
+    expect(screen.getAllByRole("option")).toHaveLength(2);
+    expect(screen.getByRole("option", { selected: true })).toHaveTextContent("General");
+    fireEvent.keyDown(window, { key: "ArrowDown" });
+    fireEvent.keyDown(window, { key: "Enter" });
+    expect(onMenuToggle).toHaveBeenLastCalledWith(false);
+    expect(screen.getByRole("button", { name: "Workspace: Acme" })).toBeInTheDocument();
+    // The workspace's scenario replaces "Start as" until one is picked here.
+    expect(screen.getByRole("button", { name: "Meeting type: Webinar" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Start NexQ/ }));
+    expect(onStart).toHaveBeenCalledWith(expect.any(String), "webinar", "acme");
+  });
+
+  it("a scenario picked here survives a change of workspace", () => {
+    const onStart = vi.fn();
+    render(<MeetingPrompt info={info()} onStart={onStart} onDismiss={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: /Meeting type/ }));
+    fireEvent.click(screen.getByRole("option", { name: /Team Meeting/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Workspace: General" }));
+    fireEvent.click(screen.getByRole("option", { name: /Acme/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Start NexQ/ }));
+    expect(onStart).toHaveBeenCalledWith(expect.any(String), "team_meeting", "acme");
+  });
+
+  it("Escape closes the workspace list without dismissing the prompt", () => {
+    const onDismiss = vi.fn();
+    render(<MeetingPrompt info={info()} onStart={() => {}} onDismiss={onDismiss} />);
+    fireEvent.click(screen.getByRole("button", { name: "Workspace: General" }));
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(onDismiss).not.toHaveBeenCalled();
   });
 });

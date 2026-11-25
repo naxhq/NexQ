@@ -3,6 +3,7 @@ import { useMeetingStore } from "./stores/meetingStore";
 import { useConfigStore } from "./stores/configStore";
 import { useAIActionsStore, watchSavedActionConfigs } from "./stores/aiActionsStore";
 import { useSourcesStore } from "./stores/sourcesStore";
+import { useWorkspaceStore, watchWorkspaces } from "./stores/workspaceStore";
 import { useScenarioStore, watchSavedScenarios } from "./stores/scenarioStore";
 import { LauncherView } from "./launcher/LauncherView";
 import { OverlayView } from "./overlay/OverlayView";
@@ -23,7 +24,7 @@ import { useUpdater } from "./hooks/useUpdater";
 import { useAgentFallbackToast } from "./hooks/useAgentFallbackToast";
 import { refreshCliModelsOnStart } from "./stores/agentStore";
 import { useTranslationStore } from "./stores/translationStore";
-import { CallLogPanel } from "./calllog";
+import { useWindowPlacement } from "./hooks/useWindowPlacement";
 import { OverlayResizeHandles } from "./overlay/OverlayResizeHandles";
 import { SelectionToolbar } from "./components/SelectionToolbar";
 import { ActiveMeetingProvider } from "./components/ActiveMeetingProvider";
@@ -80,6 +81,9 @@ function App() {
     loadConfig();
     useAIActionsStore.getState().loadConfigs();
     useSourcesStore.getState().load();
+    // Workspaces load in both windows and follow every change.
+    void useWorkspaceStore.getState().load();
+    watchWorkspaces().catch(() => {});
     useTranslationStore.getState().loadConfig().then(async () => {
       // Sync backend translation provider with persisted frontend setting
       const { provider } = useTranslationStore.getState();
@@ -125,6 +129,8 @@ function App() {
 
   // Detect which Tauri window we're in ("launcher" or "overlay")
   const [windowLabel, setWindowLabel] = useState<string>("");
+  // Size and place of each window come back as the user left them (never from demo mode).
+  useWindowPlacement(windowLabel, { enabled: configLoaded, paused: isDemoActive });
   useEffect(() => {
     import("@tauri-apps/api/webviewWindow").then(({ getCurrentWebviewWindow }) => {
       const label = getCurrentWebviewWindow().label;
@@ -210,9 +216,9 @@ function App() {
   useEffect(() => {
     if (windowLabel !== "launcher") return;
     let unlisten: (() => void) | undefined;
-    onStartDetectedMeeting(({ title, scenario }) => {
+    onStartDetectedMeeting(({ title, scenario, workspace_id }) => {
       if (useMeetingStore.getState().activeMeeting) return;
-      useMeetingStore.getState().startMeetingFlow(title, "online", scenario).catch((err) => {
+      useMeetingStore.getState().startMeetingFlow(title, "online", scenario, workspace_id ? { workspaceId: workspace_id } : undefined).catch((err) => {
         console.error("[App] Starting the detected meeting failed:", err);
       });
     }).then((fn) => { unlisten = fn; });
@@ -242,10 +248,10 @@ function App() {
   useEffect(() => {
     if (windowLabel !== "overlay") return;
     let unlisten: (() => void) | undefined;
-    listen<{ meeting: Meeting; audioMode: AudioMode; aiScenario: AIScenario }>(
+    listen<{ meeting: Meeting; audioMode: AudioMode; aiScenario: AIScenario; workspaceId?: string; borrowed?: string[] }>(
       "nexq:meeting_started",
       async (e) => {
-        const { meeting, audioMode, aiScenario } = e.payload;
+        const { meeting, audioMode, aiScenario, borrowed } = e.payload;
         const startedAt = Date.now();
         // Reset ALL per-meeting stores in THIS (overlay) window first. Each Tauri
         // webview has its own Zustand instances, so the launcher clearing its
@@ -264,6 +270,7 @@ function App() {
         useScenarioStore.setState({ activeScenarioId: aiScenario });
         useMeetingStore.setState({
           activeMeeting: meeting,
+          activeBorrowed: borrowed ?? [],
           currentView: "overlay",
           audioMode,
           aiScenario,
@@ -489,14 +496,14 @@ function App() {
   );
 }
 
-/** Overlay UI shared by the overlay window and the launcher's demo mode. */
+/**
+ * Overlay UI shared by the overlay window and the launcher's demo mode. The AI call
+ * log is a panel of the meeting window's dock now, not a sidebar next to it.
+ */
 function OverlayLayout() {
   return (
-    <div className="flex h-full">
-      <div className="flex-1 min-w-0 overflow-hidden">
-        <OverlayView />
-      </div>
-      <CallLogPanel />
+    <div className="h-full min-w-0 overflow-hidden">
+      <OverlayView />
     </div>
   );
 }

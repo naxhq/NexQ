@@ -2,6 +2,8 @@ import { Radar } from "lucide-react";
 import { useConfigStore } from "../stores/configStore";
 import { useMeetingScenarios, useScenarioStore } from "../stores/scenarioStore";
 import { isMacPlatform } from "../lib/shortcutLabel";
+import { Select } from "../ui";
+import { defaultWorkspaceOf, useWorkspaceStore } from "../stores/workspaceStore";
 import type { AIScenario, MeetingDetectionConfig } from "../lib/types";
 
 type AppKey = "zoom" | "teams" | "google_meet" | "webex" | "slack" | "discord";
@@ -37,6 +39,7 @@ export function MeetingDetectionSettings() {
   const update = (patch: Partial<MeetingDetectionConfig>) => setConfig({ ...config, ...patch });
   const scenarios = useMeetingScenarios();
   const startAs = useScenarioStore((s) => s.resolveScenario(config.default_scenario));
+  const filedIn = defaultWorkspaceOf(useWorkspaceStore((s) => s.workspaces));
   // Detection reads Windows audio sessions; macOS support comes later.
   const unsupported = isMacPlatform();
 
@@ -110,49 +113,43 @@ export function MeetingDetectionSettings() {
             </div>
 
             <div className="grid grid-cols-3 gap-3">
-              <label className="block">
+              <div>
                 <span className="text-xs font-medium text-foreground/80">Start as</span>
-                <select
-                  value={startAs}
-                  onChange={(e) => update({ default_scenario: e.target.value as AIScenario })}
-                  className="mt-1.5 w-full cursor-pointer rounded-lg border border-border/50 bg-background px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none"
-                >
-                  {scenarios.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block">
+                <div className="mt-1.5">
+                  <Select
+                    label="Start as"
+                    value={startAs}
+                    onChange={(v) => update({ default_scenario: v as AIScenario })}
+                    options={scenarios.map((sc) => ({ value: sc.id, label: sc.name }))}
+                  />
+                </div>
+              </div>
+              <div>
                 <span className="text-xs font-medium text-foreground/80">Hide the prompt after</span>
-                <select
-                  value={config.auto_dismiss_secs}
-                  onChange={(e) => update({ auto_dismiss_secs: Number(e.target.value) })}
-                  className="mt-1.5 w-full cursor-pointer rounded-lg border border-border/50 bg-background px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none"
-                >
-                  {DISMISS_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block">
+                <div className="mt-1.5">
+                  <Select
+                    label="Hide the prompt after"
+                    value={String(config.auto_dismiss_secs)}
+                    onChange={(v) => update({ auto_dismiss_secs: Number(v) })}
+                    options={DISMISS_OPTIONS.map((o) => ({ value: String(o.value), label: o.label }))}
+                  />
+                </div>
+              </div>
+              <div>
                 <span className="text-xs font-medium text-foreground/80">Check for calls</span>
-                <select
-                  value={config.check_interval_secs}
-                  onChange={(e) => update({ check_interval_secs: Math.max(1, Number(e.target.value)) })}
-                  className="mt-1.5 w-full cursor-pointer rounded-lg border border-border/50 bg-background px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none"
-                >
-                  {CHECK_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                <div className="mt-1.5">
+                  <Select
+                    label="Check for calls"
+                    value={String(config.check_interval_secs)}
+                    onChange={(v) => update({ check_interval_secs: Math.max(1, Number(v)) })}
+                    options={CHECK_OPTIONS.map((o) => ({ value: String(o.value), label: o.label }))}
+                  />
+                </div>
+              </div>
             </div>
+            <p className="text-meta text-muted-foreground/60">
+              Detected meetings are filed in your default workspace, {filedIn.name}, and start with its scenario when it has one. You can pick another workspace in the prompt.
+            </p>
             <p className="text-meta text-muted-foreground/60">
               Each check takes a few milliseconds. More often means the prompt appears sooner after a call starts.
             </p>

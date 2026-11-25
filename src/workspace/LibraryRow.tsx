@@ -1,0 +1,109 @@
+import { File as FileIcon, Folder, MoreHorizontal, Pin, PinOff, Plug2 } from "lucide-react";
+import { InlineEdit, Menu, Switch, type MenuItemSpec } from "../ui";
+import { cn } from "../lib/utils";
+import type { WorkspaceItem } from "../lib/types";
+import { FOLDER_OPT_IN_SENTENCE, itemStatus, itemTitle, type IndexProgress } from "./libraryStatus";
+import { iconButtonClass } from "./styles";
+
+const KIND_WORD = { document: "Document", folder: "Folder", server: "Tool" } as const;
+const TONE: Record<string, string> = {
+  ok: "text-muted-foreground",
+  busy: "text-muted-foreground",
+  quiet: "text-muted-foreground",
+  warn: "text-warning",
+  error: "text-destructive",
+};
+
+/**
+ * One document, folder or tool in the Library: the name the user gave it,
+ * what state it is in (in words), a pin, and a menu. Removing it here removes
+ * it from this workspace only; the library keeps it.
+ */
+export function LibraryRow({
+  item,
+  progress,
+  menuItems,
+  onRename,
+  onTogglePin,
+  onOptIn,
+  onRemove,
+}: {
+  item: WorkspaceItem;
+  progress?: IndexProgress | null;
+  menuItems: MenuItemSpec[];
+  onRename: (label: string | null) => void;
+  onTogglePin: () => void;
+  onOptIn: (on: boolean) => void;
+  /** Shown beside a missing item, so the next step is in view. */
+  onRemove?: () => void;
+}) {
+  const status = itemStatus(item, progress);
+  const title = itemTitle(item);
+  const Icon = item.kind === "folder" ? Folder : item.kind === "server" ? Plug2 : FileIcon;
+  const renamed = !!item.label && item.label !== item.name;
+
+  return (
+    <li className="group rounded-lg px-2 py-2 transition-colors hover:bg-accent/50">
+      <div className="flex items-start gap-2">
+        <Icon className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <InlineEdit
+            value={title}
+            label={title}
+            maxLength={80}
+            className="ui-body font-medium text-foreground"
+            onCommit={(v) => onRename(v === item.name ? null : v)}
+          />
+          <p className={cn("ui-meta mt-0.5", TONE[status.tone])}>
+            <span className="text-muted-foreground">{KIND_WORD[item.kind]}</span>
+            {renamed && <span className="text-muted-foreground">{`, ${item.name}`}</span>}
+            <span className="sr-only">. </span>
+            <span className="ml-2 font-medium">{status.text}</span>
+            {item.status === "missing" && onRemove && (
+              <button
+                type="button"
+                onClick={onRemove}
+                className="ml-2 rounded px-1 font-medium underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+                aria-label={`Remove ${title} from this workspace`}
+              >
+                Remove
+              </button>
+            )}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center opacity-70 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+          <button
+            type="button"
+            onClick={onTogglePin}
+            aria-pressed={item.pinned}
+            aria-label={item.pinned ? `Unpin ${title}` : `Pin ${title}`}
+            className={cn(iconButtonClass, item.pinned && "text-foreground")}
+          >
+            {item.pinned ? <Pin className="h-3.5 w-3.5" aria-hidden="true" /> : <PinOff className="h-3.5 w-3.5" aria-hidden="true" />}
+          </button>
+          <Menu
+            label={`Actions for ${title}`}
+            items={menuItems}
+            align="end"
+            renderTrigger={(props) => (
+              <button type="button" {...props} className={iconButtonClass} aria-label={`Actions for ${title}`}>
+                <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            )}
+          />
+        </div>
+      </div>
+      {item.kind === "folder" && item.status !== "missing" && (
+        <div className="ml-6 mt-2">
+          <Switch
+            checked={!!item.index_opt_in}
+            onChange={onOptIn}
+            aria-label={`Search the text of ${title}`}
+            label="Search its text"
+            description={FOLDER_OPT_IN_SENTENCE}
+          />
+        </div>
+      )}
+    </li>
+  );
+}
