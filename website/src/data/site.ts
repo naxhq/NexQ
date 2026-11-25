@@ -179,6 +179,7 @@ export const SCENARIOS = [
  * and true to that release's CHANGELOG entry.
  */
 export const RELEASE_ONELINERS: Record<string, string> = {
+  '2.45.0': 'Clear help when Claude Code is too old, and safer CLI lookup.',
   '2.44.0': 'Your ChatGPT plan, through Codex.',
   '2.43.0': 'Point Whisper API at your own speech server.',
   '2.42.0': 'Azure MAI Streaming joins the speech engines.',
