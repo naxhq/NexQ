@@ -223,7 +223,8 @@ const STARTING_TRIES = 200;
 async function sendWhenReady(config: PersonalSourcesConfig, filing?: SourcesFiling): Promise<void> {
   for (let attempt = 1; ; attempt++) {
     try {
-      return await setPersonalSources(config, filing);
+      // Only a push made after the config was read from disk may say so (see `setPersonalSources`).
+      return await setPersonalSources(config, filing, useSourcesStore.getState().loaded);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       if (!STARTING_RE.test(message) || attempt >= STARTING_TRIES) throw e;

@@ -469,6 +469,14 @@ export function onNotetakerDoc(handler: (e: NotetakerDocEvent) => void): Promise
 export function onBriefState(handler: (e: BriefState) => void): Promise<UnlistenFn> {
   return listen<BriefState>("brief_state", (e) => handler(e.payload));
 }
+/** `workspace_material_unavailable`: a file or tool could not be used for this meeting. */
+export interface WorkspaceMaterialUnavailableEvent {
+  meeting_id: string | null;
+  message: string;
+}
+export function onWorkspaceMaterialUnavailable(handler: (e: WorkspaceMaterialUnavailableEvent) => void): Promise<UnlistenFn> {
+  return listen<WorkspaceMaterialUnavailableEvent>("workspace_material_unavailable", (e) => handler(e.payload));
+}
 export function onNotetakerSettingsChanged(handler: (e: NotetakerSettings) => void): Promise<UnlistenFn> {
   return listen<NotetakerSettings>("notetaker_settings_changed", (e) => handler(e.payload));
 }

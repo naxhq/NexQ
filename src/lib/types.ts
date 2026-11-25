@@ -1616,6 +1616,8 @@ export interface WorkspaceCitation {
   title: string;
   start_ms: number | null;
   snippet: string;
+  /** A plain reason instead of text when the source left the workspace ("Removed from the workspace"). */
+  reason?: string | null;
 }
 
 export interface WorkspaceMessage {
@@ -1835,6 +1837,8 @@ export interface MemorySettings {
 }
 
 export interface MemoryItem {
+  /** A suggestion the transcript does not support: shown as "Not found in the transcript". */
+  unsupported?: boolean;
   id: string;
   workspace_id: string;
   kind: MemoryKind;

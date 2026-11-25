@@ -43,7 +43,8 @@ import { SCREENSHOT_EVENT, leaveSettingsForAsk } from "./lib/screenCapture";
 import { SHOW_MEETING_OVERLAY_EVENT, showLauncherWindow, showMeetingOverlay, showOverlayWindow, waitForOverlayMeeting } from "./lib/windows";
 import type { ShowMeetingOverlayPayload } from "./lib/windows";
 import { logToFile } from "./lib/logger";
-import { emitOverlayMeetingReady, onAudioCaptureStatus, onAudioCaptureStopped, onCaptureWarning, onOverlayMeetingReady, onStartDetectedMeeting, onStealthModeChanged } from "./lib/events";
+import { shouldToastMaterial } from "./workspace/materialNotice";
+import { emitOverlayMeetingReady, onWorkspaceMaterialUnavailable, onAudioCaptureStatus, onAudioCaptureStopped, onCaptureWarning, onOverlayMeetingReady, onStartDetectedMeeting, onStealthModeChanged } from "./lib/events";
 import { createCaptureStatusHandler } from "./lib/captureStatus";
 
 // This window's views start loading as the script runs, before React has rendered anything.
@@ -238,6 +239,24 @@ function App() {
       });
     }).then((fn) => { unlisten = fn; });
     return () => { unlisten?.(); };
+  }, [windowLabel]);
+
+  // A file or tool could not be used: one warning, in the window the person is looking at
+  // (the meeting window during a meeting, else the launcher).
+  useEffect(() => {
+    if (windowLabel !== "launcher" && windowLabel !== "overlay") return;
+    let unlisten: (() => void) | undefined;
+    let gone = false;
+    onWorkspaceMaterialUnavailable((e) => {
+      const running = !!useMeetingStore.getState().activeMeeting;
+      if (shouldToastMaterial(windowLabel, running, e.meeting_id)) showToast(e.message, "warning");
+    })
+      .then((fn) => (gone ? fn() : (unlisten = fn)))
+      .catch(() => {});
+    return () => {
+      gone = true;
+      unlisten?.();
+    };
   }, [windowLabel]);
 
   // LAUNCHER window: record that the overlay took the meeting (decides which

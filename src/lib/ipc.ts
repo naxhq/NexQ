@@ -351,10 +351,6 @@ export async function setCustomInstructions(
   return invoke("set_custom_instructions", { instructions });
 }
 
-export async function getAssembledContext(): Promise<string> {
-  return invoke("get_assembled_context");
-}
-
 export async function getTokenBudget(): Promise<TokenBudget> {
   const result = await invoke<string>("get_token_budget");
   return JSON.parse(result);
@@ -1019,8 +1015,9 @@ export interface SourcesFiling {
   items: Array<{ kind: "folder" | "server"; ref_id: string }>;
 }
 
-export async function setPersonalSources(config: PersonalSourcesConfig, filing?: SourcesFiling): Promise<void> {
-  return invoke("set_personal_sources", { config, ...(filing ? { filing } : {}) });
+/** `loaded` is true only once the sources store has read its config from disk: an earlier push could wipe what the backend holds. */
+export async function setPersonalSources(config: PersonalSourcesConfig, filing?: SourcesFiling, loaded?: boolean): Promise<void> {
+  return invoke("set_personal_sources", { config, ...(filing ? { filing } : {}), ...(loaded ? { loaded: true } : {}) });
 }
 
 /** After a folder or server was removed from the saved sources: it leaves every workspace. */
@@ -1313,6 +1310,8 @@ export async function listMemory(workspaceId: string): Promise<MemoryItem[]> {
 /** A new item under a new id; `status` is "saved" when absent (the person typed it). */
 export interface MemoryCreate {
   workspace_id: string;
+  /** The check against the transcript did not find it ("Not found in the transcript"). */
+  unsupported?: boolean;
   kind: MemoryItem["kind"];
   title: string;
   text: string;

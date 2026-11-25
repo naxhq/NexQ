@@ -4,7 +4,7 @@ import { onMemoryChanged } from "../lib/events";
 import type { MemoryItem, MemoryKind } from "../lib/types";
 
 /** A suggestion may carry a flag from the check against the transcript. */
-export type MemoryRow = MemoryItem & { unsupported?: boolean };
+export type MemoryRow = MemoryItem;
 
 export const MEMORY_KINDS: ReadonlyArray<{ kind: MemoryKind; plural: string; singular: string }> = [
   { kind: "person", plural: "People", singular: "Person" },
