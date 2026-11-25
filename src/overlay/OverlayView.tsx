@@ -333,7 +333,7 @@ export function OverlayView() {
         </div>
       ),
     },
-    notes: { title: "Notes", reading: true, node: <NotesPanel /> },
+    notes: { title: "Live notes", reading: true, node: <NotesPanel /> },
     brief: { title: "Brief", reading: true, node: <BriefPanel /> },
     points: { title: "Talking points", reading: true, node: <PointsPanel /> },
     bookmarks: {

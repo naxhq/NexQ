@@ -82,7 +82,8 @@
   background: none;
   cursor: pointer;
   font: inherit;
-  font-size: 11px;
+  font-size: 0.71875rem;
+  line-height: 1.4;
   font-weight: 500;
   white-space: nowrap;
   color: hsl(var(--muted-foreground) / 0.65);
@@ -128,7 +129,7 @@
 .nq-dock-more:focus-visible,
 .nq-dock-strip:focus-visible,
 .nq-dock-sep:focus-visible {
-  outline: 1px solid hsl(var(--primary) / 0.75);
+  outline: 2px solid hsl(var(--ring));
   outline-offset: -2px;
 }
 .nq-dock-more {
@@ -167,7 +168,8 @@
   background: hsl(var(--card) / var(--dock-surface-alpha));
   color: hsl(var(--muted-foreground) / 0.5);
   font: inherit;
-  font-size: 11px;
+  font-size: 0.71875rem;
+  line-height: 1.4;
   font-weight: 500;
   transition:
     background 150ms ease,
@@ -247,7 +249,8 @@
   display: none;
   padding: 3px 9px;
   border-radius: 8px;
-  font-size: 11px;
+  font-size: 0.71875rem;
+  line-height: 1.4;
   font-weight: 600;
   white-space: nowrap;
   color: hsl(var(--foreground));
@@ -269,7 +272,8 @@
   overflow-y: auto;
   padding: 4px;
   border-radius: 10px;
-  font-size: 12px;
+  font-size: 0.84375rem;
+  line-height: 1.55;
   color: hsl(var(--foreground));
   background: hsl(var(--background) / 0.97);
   box-shadow:
@@ -292,7 +296,10 @@
 .nq-dock-menuitem:hover,
 .nq-dock-menuitem:focus-visible {
   background: hsl(var(--foreground) / 0.08);
-  outline: none;
+}
+.nq-dock-menuitem:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: -2px;
 }
 .nq-dock-menuitem[aria-disabled="true"] {
   opacity: 0.4;
@@ -312,4 +319,12 @@
   .nq-dock-sep::after {
     transition: none !important;
   }
+}
+
+/* Every target is at least 24 px in both directions. */
+.nq-dock-tab,
+.nq-dock-more,
+.nq-dock-strip {
+  min-width: 24px;
+  min-height: 24px;
 }

@@ -24,9 +24,9 @@ interface MenuProps {
   onClose?: () => void;
 }
 
-const sectionCls = "px-2 pb-1 pt-2 text-[11px] font-semibold text-muted-foreground/70";
+const sectionCls = "px-2 pb-1 pt-2 ui-meta font-semibold text-muted-foreground/70";
 const rowCls =
-  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-foreground/90 transition-colors hover:bg-foreground/[0.07] focus-visible:bg-foreground/[0.07] focus-visible:outline-none disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent";
+  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left ui-body text-foreground/90 transition-colors hover:bg-foreground/[0.07] ui-focus focus-visible:bg-foreground/[0.12] disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent";
 
 /** Layout menu content: presets with live schematics, saved layouts, panels, lock, reset. */
 export function LayoutMenu({ state, dispatch, panels, onClose }: MenuProps) {
@@ -44,8 +44,35 @@ export function LayoutMenu({ state, dispatch, panels, onClose }: MenuProps) {
     setName("");
   };
 
+  // Roving focus over the menu's buttons (Up, Down, Home, End) and typeahead, like src/ui Menu.
+  const typed = useRef({ text: "", at: 0 });
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const t = e.target as HTMLElement;
+    if (t.tagName === "INPUT" || e.ctrlKey || e.metaKey || e.altKey) return;
+    const items = [...e.currentTarget.querySelectorAll<HTMLElement>("button:not(:disabled)")];
+    const at = items.indexOf(t);
+    if (at < 0) return;
+    let to = -1;
+    if (e.key === "ArrowDown") to = (at + 1) % items.length;
+    else if (e.key === "ArrowUp") to = (at - 1 + items.length) % items.length;
+    else if (e.key === "Home") to = 0;
+    else if (e.key === "End") to = items.length - 1;
+    else if (e.key.length === 1 && e.key !== " ") {
+      const now = Date.now();
+      const text = (now - typed.current.at > 700 ? "" : typed.current.text) + e.key.toLowerCase();
+      typed.current = { text, at: now };
+      const ordered = [...items.slice(at + 1), ...items.slice(0, at + 1)];
+      const hit = ordered.find((b) => (b.textContent ?? "").trim().toLowerCase().startsWith(text));
+      if (hit) to = items.indexOf(hit);
+    }
+    if (to >= 0) {
+      e.preventDefault();
+      items[to].focus();
+    }
+  };
+
   return (
-    <div className="text-foreground" aria-label="Layout">
+    <div className="text-foreground" aria-label="Layout" onKeyDown={onKeyDown}>
       <div className={sectionCls}>Layouts</div>
       <div className="grid grid-cols-3 gap-1 px-1">
         {PRESET_IDS.map((id) => (
@@ -53,7 +80,7 @@ export function LayoutMenu({ state, dispatch, panels, onClose }: MenuProps) {
             key={id}
             type="button"
             disabled={locked}
-            className="flex flex-col items-center gap-1 rounded-md px-1 py-1.5 text-[11px] text-foreground/80 transition-colors hover:bg-foreground/[0.07] focus-visible:bg-foreground/[0.07] focus-visible:outline-none disabled:opacity-40"
+            className="flex flex-col items-center gap-1 rounded-md px-1 py-1.5 ui-meta text-foreground/80 transition-colors hover:bg-foreground/[0.07] ui-focus focus-visible:bg-foreground/[0.12] disabled:opacity-40"
             onClick={() => dispatch({ type: "preset", preset: id })}
           >
             <LayoutPreview layout={presetLayout(id, known)} />
@@ -71,7 +98,7 @@ export function LayoutMenu({ state, dispatch, panels, onClose }: MenuProps) {
               value={draft}
               maxLength={40}
               aria-label="Layout name"
-              className="min-w-0 flex-1 rounded-md border border-border/40 bg-transparent px-2 py-1 text-xs outline-none focus:border-primary/60"
+              className="min-w-0 flex-1 rounded-md border border-border/40 bg-transparent px-2 py-1 ui-body ui-focus focus:border-primary/60"
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
@@ -98,7 +125,7 @@ export function LayoutMenu({ state, dispatch, panels, onClose }: MenuProps) {
           <button
             type="button"
             aria-label={`Rename ${c.name}`}
-            className="rounded-md p-1.5 text-muted-foreground/70 hover:bg-foreground/[0.07] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/60"
+            className="rounded-md p-1.5 text-muted-foreground/70 hover:bg-foreground/[0.07] hover:text-foreground ui-focus"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => {
               setDraft(c.name);
@@ -110,7 +137,7 @@ export function LayoutMenu({ state, dispatch, panels, onClose }: MenuProps) {
           <button
             type="button"
             aria-label={`Delete ${c.name}`}
-            className="rounded-md p-1.5 text-muted-foreground/70 hover:bg-foreground/[0.07] hover:text-destructive focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/60"
+            className="rounded-md p-1.5 text-muted-foreground/70 hover:bg-foreground/[0.07] hover:text-destructive ui-focus"
             onClick={() => dispatch({ type: "deleteLayout", id: c.id })}
           >
             <Trash2 className="h-3 w-3" aria-hidden="true" />
@@ -130,13 +157,13 @@ export function LayoutMenu({ state, dispatch, panels, onClose }: MenuProps) {
           maxLength={40}
           placeholder="Save this layout as…"
           aria-label="Name for the new layout"
-          className="min-w-0 flex-1 rounded-md border border-border/30 bg-transparent px-2 py-1 text-xs outline-none placeholder:text-muted-foreground/50 focus:border-primary/60"
+          className="min-w-0 flex-1 rounded-md border border-border/30 bg-transparent px-2 py-1 ui-body ui-focus placeholder:text-muted-foreground/50 focus:border-primary/60"
           onChange={(e) => setName(e.target.value)}
         />
         <button
           type="submit"
           disabled={!name.trim()}
-          className="rounded-md px-2 py-1 text-xs font-medium text-foreground/90 hover:bg-foreground/[0.07] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/60 disabled:opacity-40"
+          className="rounded-md px-2 py-1 ui-body font-medium text-foreground/90 hover:bg-foreground/[0.07] ui-focus disabled:opacity-40"
         >
           Save
         </button>
@@ -204,6 +231,10 @@ interface ButtonProps extends MenuProps {
 export function LayoutMenuButton({ className, ...menu }: ButtonProps) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
+  // Opening the menu moves focus into it (the first layout), so arrows work at once.
+  useEffect(() => {
+    if (open) wrap.current?.querySelector<HTMLElement>('[role="dialog"] button:not(:disabled)')?.focus();
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -232,7 +263,7 @@ export function LayoutMenuButton({ className, ...menu }: ButtonProps) {
         aria-label="Layout"
         aria-haspopup="dialog"
         aria-expanded={open}
-        className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/[0.07] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/60"
+        className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/[0.07] hover:text-foreground ui-focus"
         onClick={() => setOpen((o) => !o)}
       >
         <LayoutDashboard className="h-3.5 w-3.5" aria-hidden="true" />
