@@ -47,7 +47,7 @@ export function WorkspaceHome({
 }: {
   starting: boolean;
   onStart: () => void;
-  onOpenMeeting: (meetingId: string) => void;
+  onOpenMeeting: (meetingId: string, atMs?: number | null) => void;
 }) {
   const box = useRef<HTMLDivElement | null>(null);
   const width = useElementWidth(box);

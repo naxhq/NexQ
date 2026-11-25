@@ -10,6 +10,7 @@ import type {
 import * as ipc from "../lib/ipc";
 import { onWorkspacesChanged } from "../lib/events";
 import { LIBRARY_DEFAULT, RAIL_DEFAULT } from "../workspace/layout";
+import type { DatabaseProblem } from "../workspace/databaseProblem";
 
 export const GENERAL_ID = "general";
 
@@ -100,6 +101,8 @@ interface WorkspaceState {
   loaded: boolean;
   /** Workspaces could not be read: the app runs on General alone. */
   unavailable: boolean;
+  /** The meetings file could not be used: the home is replaced by the recovery screen. */
+  database: DatabaseProblem | null;
   error: string | null;
   /** Bumped on every change, so lists that depend on it (meetings, library) reload. */
   revision: number;
@@ -154,6 +157,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   workspaces: [FALLBACK_GENERAL],
   loaded: false,
   unavailable: false,
+  database: null,
   error: null,
   revision: 0,
   openId: readPref(PREF_KEYS.open) || GENERAL_ID,
@@ -174,12 +178,23 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   refresh: async () => {
     try {
       // A failed upgrade leaves the app on General alone: say so, and don't ask for lists that can't come.
-      const status = await ipc.getWorkspacesStatus().catch(() => ({ available: true, error: null as string | null }));
+      const status = (await ipc.getWorkspacesStatus().catch(() => ({ available: true, error: null as string | null }))) as {
+        available: boolean;
+        error: string | null;
+        db?: DatabaseProblem | null;
+      };
+      const database = status.db ?? null;
+      if (database) {
+        // Nothing can be listed from a file that can't be opened.
+        set((s) => ({ workspaces: [FALLBACK_GENERAL], loaded: true, unavailable: true, database, error: status.error ?? database.message, revision: s.revision + 1 }));
+        return;
+      }
       if (!status.available) {
         set((s) => ({
           workspaces: [FALLBACK_GENERAL],
           loaded: true,
           unavailable: true,
+          database: null,
           error: status.error ?? "Workspaces could not be set up.",
           openId: GENERAL_ID,
           revision: s.revision + 1,
@@ -192,6 +207,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         workspaces,
         loaded: true,
         unavailable: false,
+        database: null,
         error: null,
         // An archived workspace stays open while it is being looked at; a deleted one does not.
         openId: workspaces.some((w) => w.id === s.openId) ? s.openId : defaultWorkspaceOf(workspaces).id,

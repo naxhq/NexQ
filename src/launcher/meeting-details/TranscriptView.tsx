@@ -1,6 +1,7 @@
 import { useRef, useEffect, useLayoutEffect, useMemo, useState, useCallback } from "react";
 import { formatShortcut } from "../../lib/shortcutLabel";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { focusAndMarkRow } from "./momentIndex";
 import type { TranscriptSegment, SpeakerIdentity, MeetingBookmark, TranslationResult, TranslationDisplayMode } from "../../lib/types";
 import type { TranscriptSearchState } from "../../hooks/useTranscriptSearch";
 import { useAudioPlayerStore } from "../../stores/audioPlayerStore";
@@ -251,10 +252,16 @@ export function TranscriptView({ segments, mergedSegments, isVisible = true, sea
       if (mergedIdx >= 0 && mergedIdx < mergedSegments.length) {
         scrollToMergedIndex(mergedIdx);
         setSelectedIndex(mergedIdx);
+        // Keyboard and screen reader users land on the line too, and it is marked for a moment.
+        if (scrollRef.current) stopFocus = focusAndMarkRow(scrollRef.current, mergedIdx);
       }
       onScrollHandled?.();
     });
-    return () => cancelAnimationFrame(frame);
+    let stopFocus: (() => void) | undefined;
+    return () => {
+      cancelAnimationFrame(frame);
+      stopFocus?.();
+    };
   }, [initialScrollToIndex, rawToMergedIndex, mergedSegments.length, scrollToMergedIndex, onScrollHandled]);
 
   // Search: scroll to match (remap raw index → merged index)

@@ -3,19 +3,18 @@ import { ClipboardPaste, FolderPlus, Library as LibraryIcon, Plus, Plug2 } from 
 import { ConfirmDialog, Menu, type MenuItemSpec, Button } from "../ui";
 import { FileUpload } from "../context/FileUpload";
 import {
-  getIndexStatus,
   rebuildFileIndex,
   removeWorkspaceItem,
   updateWorkspaceItem,
 } from "../lib/ipc";
-import { onWorkspaceIndexProgress } from "../lib/events";
 import { useConfigStore } from "../stores/configStore";
 import { useContextStore } from "../stores/contextStore";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useRagStore } from "../stores/ragStore";
 import { showToast } from "../stores/toastStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
-import type { WorkspaceItem } from "../lib/types";
+import type { SkippedFile, WorkspaceItem } from "../lib/types";
+import { skippedByFolder, useWorkspaceIndex } from "./indexStatus";
 import { addFolderToWorkspace } from "./addMaterial";
 import { ContextMeter } from "./ContextMeter";
 import { lazyNamed } from "../lib/lazyNamed";
@@ -27,34 +26,11 @@ import { InstructionsBlock } from "./InstructionsBlock";
 
 // Dialogs load when first asked for.
 const AddMcpServerDialog = lazyNamed(() => import("../sources/AddMcpServerDialog"), "AddMcpServerDialog");
+const SkippedFilesDialog = lazyNamed(() => import("./LibraryDialogs"), "SkippedFilesDialog");
 const PasteTextDialog = lazyNamed(() => import("./LibraryDialogs"), "PasteTextDialog");
 const FromLibraryDialog = lazyNamed(() => import("./LibraryDialogs"), "FromLibraryDialog");
 
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
-
-/** Index progress of one workspace, from `workspace_index_progress`. */
-function useIndexProgress(workspaceId: string): IndexProgress | null {
-  const [progress, setProgress] = useState<IndexProgress | null>(null);
-  useEffect(() => {
-    setProgress(null);
-    let stop: (() => void) | undefined;
-    let gone = false;
-    getIndexStatus(workspaceId)
-      .then((s) => !gone && s.state === "indexing" && setProgress({ done: s.done, total: s.total }))
-      .catch(() => {});
-    onWorkspaceIndexProgress((e) => {
-      if (e.workspace_id !== workspaceId) return;
-      setProgress(e.done >= e.total ? null : { done: e.done, total: e.total });
-    })
-      .then((fn) => (gone ? fn() : (stop = fn)))
-      .catch(() => {});
-    return () => {
-      gone = true;
-      stop?.();
-    };
-  }, [workspaceId]);
-  return progress;
-}
 
 /**
  * The right panel: what this workspace's AI can use. Documents, folders and
@@ -71,7 +47,8 @@ export function LibraryPanel({ workspaceId, inSheet = false }: { workspaceId: st
   const loadResources = useContextStore((s) => s.loadResources);
   const refreshIndexStatus = useRagStore((s) => s.refreshIndexStatus);
   const contextStrategy = useConfigStore((s) => s.contextStrategy);
-  const progress = useIndexProgress(workspaceId);
+  const { progress, skipped } = useWorkspaceIndex(workspaceId);
+  const [skippedOpen, setSkippedOpen] = useState<{ title: string; files: SkippedFile[] } | null>(null);
   const [dialog, setDialog] = useState<"paste" | "library" | "server" | null>(null);
   const [confirmLibraryRemove, setConfirmLibraryRemove] = useState<WorkspaceItem | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -106,6 +83,8 @@ export function LibraryPanel({ workspaceId, inSheet = false }: { workspaceId: st
       }),
     );
   }, [detail, resources]);
+
+  const { byFolder, other: otherSkipped } = useMemo(() => skippedByFolder(items.filter((i) => i.kind === "folder"), skipped), [items, skipped]);
 
   const act = (what: string, run: () => Promise<unknown>) =>
     run()
@@ -228,9 +207,21 @@ export function LibraryPanel({ workspaceId, inSheet = false }: { workspaceId: st
                   onOptIn={(on) => void act("change searching", () => updateWorkspaceItem(workspaceId, i.kind, i.ref_id, { index_opt_in: on }))}
                   onRemove={() => void removeHere(i)}
                   highlighted={focus?.kind === i.kind && focus.refId === i.ref_id}
+                  skipped={i.kind === "folder" ? byFolder.get(i.ref_id)?.length : undefined}
+                  onShowSkipped={() => setSkippedOpen({ title: itemTitle(i), files: byFolder.get(i.ref_id) ?? [] })}
                 />
               ))}
             </ul>
+          )}
+          {otherSkipped.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setSkippedOpen({ title: "your folders", files: otherSkipped })}
+              aria-haspopup="dialog"
+              className="ui-meta mt-2 rounded px-2 text-muted-foreground underline underline-offset-2 outline-none hover:text-foreground ui-focus ui-focus-sm"
+            >
+              {otherSkipped.length} {otherSkipped.length === 1 ? "file" : "files"} skipped
+            </button>
           )}
           <FileUpload workspaceId={workspaceId} className="mt-2" />
         </section>
@@ -245,9 +236,10 @@ export function LibraryPanel({ workspaceId, inSheet = false }: { workspaceId: st
         <ContextMeter workspaceId={workspaceId} />
       </div>
 
-      <LibraryFooter workspaceId={workspaceId} hasFolders={items.some((i) => i.kind === "folder")} />
+      <LibraryFooter workspaceId={workspaceId} hasFolders={items.some((i) => i.kind === "folder")} progress={progress} />
 
       <Suspense fallback={null}>
+        {skippedOpen && <SkippedFilesDialog folder={skippedOpen.title} files={skippedOpen.files} onClose={() => setSkippedOpen(null)} />}
         {dialog === "paste" && <PasteTextDialog workspaceId={workspaceId} open onClose={() => setDialog(null)} />}
         {dialog === "library" && <FromLibraryDialog workspaceId={workspaceId} open onClose={() => setDialog(null)} />}
         {dialog === "server" && (

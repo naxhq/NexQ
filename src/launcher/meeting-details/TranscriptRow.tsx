@@ -93,6 +93,7 @@ function TranscriptRowImpl({
       data-index={index}
       data-testid="transcript-row"
       data-segment-id={segment.id}
+      tabIndex={-1}
       data-active={isActive || undefined}
       onClick={() => onSeek(segment.id)}
       onContextMenu={onContextMenu ? (e) => onContextMenu(e, index) : undefined}

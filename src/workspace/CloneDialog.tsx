@@ -49,7 +49,7 @@ export function CloneDialog({
       open
       onClose={() => !busy && onClose()}
       title={`Clone ${workspace.name}`}
-      description="Copies its look, instructions, files and talking points. Meetings, chats and memory stay behind."
+      description="The copy starts as a twin of the setup, not of the history."
       size="sm"
       dismissible={!busy}
       initialFocusRef={input}
@@ -70,6 +70,20 @@ export function CloneDialog({
           void run();
         }}
       >
+        <div className="mb-4 space-y-3">
+          <section aria-label="What is copied">
+            <h3 className="ui-section text-foreground">Copied</h3>
+            <p className="ui-body text-muted-foreground">
+              Colour, description and instructions. Also use General, Keep separate and Starts as. The files, folders and tools you added, with your names and pins. Talking points.
+            </p>
+          </section>
+          <section aria-label="What is not copied">
+            <h3 className="ui-section text-foreground">Not copied</h3>
+            <p className="ui-body text-muted-foreground">
+              Meetings, chats and memory. Permission to search a folder's text: allow it again in the copy. It doesn't become the default.
+            </p>
+          </section>
+        </div>
         <label htmlFor="ws-clone-name" className={labelClass}>
           Name of the copy
         </label>

@@ -108,7 +108,7 @@ function SourceLink({ item }: { item: MemoryRow }) {
   return (
     <button
       type="button"
-      onClick={() => useMeetingStore.getState().setSelectedMeetingId(item.source_meeting)}
+      onClick={() => useMeetingStore.getState().openMeetingAt(item.source_meeting!, item.source_ms)}
       className="ui-meta rounded text-left text-muted-foreground underline underline-offset-2 outline-none hover:text-foreground ui-focus ui-focus-sm"
     >
       From {title}

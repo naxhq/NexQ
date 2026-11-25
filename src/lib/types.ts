@@ -1654,7 +1654,7 @@ export interface WorkspaceChatEndEvent extends WorkspaceChatEventBase {
   cancelled: boolean;
 }
 /** Why an answer failed, as the backend names it. Absent from older backends. */
-export type WorkspaceChatErrorKind = "no_key" | "rate_limited" | "unavailable" | "too_long" | "preempted" | "other" | "internal";
+export type WorkspaceChatErrorKind = "no_key" | "rate_limited" | "unavailable" | "too_long" | "preempted" | "access_changed" | "other" | "internal";
 
 export interface WorkspaceChatErrorEvent extends WorkspaceChatEventBase {
   error: string;
@@ -1809,8 +1809,8 @@ export interface BriefState {
   reason?: string | null;
 }
 
+/** Which model writes the brief. Whether it runs is the workspace's own switch (`brief_enabled`). */
 export interface BriefSettings {
-  enabled: boolean;
   provider: string | null;
   model: string | null;
   effort: string | null;
@@ -1895,4 +1895,29 @@ export interface StoreRecovery {
   file: string;
   kept_as: string | null;
   restored: boolean;
+}
+
+// ============================================================================
+// The database did not open (mirrors Rust `db::health`; `db` of `get_workspaces_status`)
+// ============================================================================
+
+export type DbProblemKind = "unreadable" | "newer" | "upgrade_failed" | "locked";
+
+/** A copy of the database NexQ opened read-only and checked before offering it. */
+export interface DbBackup {
+  /** A file name in NexQ's data folder (never a path). */
+  name: string;
+  /** Epoch ms. */
+  created_at: number;
+  bytes: number;
+  /** null when the copy can't say. */
+  meetings: number | null;
+}
+
+export interface DbProblem {
+  kind: DbProblemKind;
+  message: string;
+  /** Where the file is. */
+  path: string;
+  backups: DbBackup[];
 }

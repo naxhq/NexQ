@@ -9,13 +9,15 @@ import { useConfigStore } from "../stores/configStore";
 import { useContextStore } from "../stores/contextStore";
 import { useRagStore } from "../stores/ragStore";
 import { cn } from "../lib/utils";
+import { IndexingNote } from "./IndexingNote";
+import type { IndexProgress } from "./libraryStatus";
 
 /**
  * Knowledge base actions, as the old dashboard had them: build or update,
  * rebuild when settings changed, test a search, and the "indexing a file"
  * line. Only with the local knowledge base on. Plus a rescan of folders.
  */
-export function LibraryFooter({ workspaceId, hasFolders }: { workspaceId: string; hasFolders: boolean }) {
+export function LibraryFooter({ workspaceId, hasFolders, progress }: { workspaceId: string; hasFolders: boolean; progress?: IndexProgress | null }) {
   const contextStrategy = useConfigStore((s) => s.contextStrategy);
   const resources = useContextStore((s) => s.resources);
   const indexStatus = useRagStore((s) => s.indexStatus);
@@ -49,7 +51,7 @@ export function LibraryFooter({ workspaceId, hasFolders }: { workspaceId: string
   };
 
   const ragOn = resources.length > 0 && contextStrategy === "local_rag";
-  if (!ragOn && !hasFolders) return null;
+  if (!ragOn && !hasFolders && !progress) return null;
 
   const hasIndex = (indexStatus?.total_chunks ?? 0) > 0;
   const label = indexStale ? "Settings changed, rebuild the knowledge base" : !hasIndex ? "Build the knowledge base" : "Update the knowledge base";
@@ -57,6 +59,9 @@ export function LibraryFooter({ workspaceId, hasFolders }: { workspaceId: string
 
   return (
     <div className="space-y-1 border-t border-border px-3 py-2" role="group" aria-label="Knowledge base">
+      <div className="px-2.5">
+        <IndexingNote workspaceId={workspaceId} progress={progress ?? null} />
+      </div>
       {ragOn && rag === "idle" && (
         <Button variant="ghost" onClick={update} className={cn("w-full justify-start", indexStale && "text-warning hover:text-warning")}>
           <Icon className="h-3.5 w-3.5" aria-hidden="true" />

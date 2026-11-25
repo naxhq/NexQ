@@ -28,6 +28,8 @@ export function LibraryRow({
   onOptIn,
   onRemove,
   highlighted,
+  skipped,
+  onShowSkipped,
 }: {
   item: WorkspaceItem;
   progress?: IndexProgress | null;
@@ -39,6 +41,9 @@ export function LibraryRow({
   onRemove?: () => void;
   /** Asked for from elsewhere (a cited file): scrolled into view and marked for a moment. */
   highlighted?: boolean;
+  /** Files of this folder the index left out; the count opens the list with a reason for each. */
+  skipped?: number;
+  onShowSkipped?: () => void;
 }) {
   const li = useRef<HTMLLIElement | null>(null);
   useEffect(() => {
@@ -66,6 +71,16 @@ export function LibraryRow({
             {renamed && <span className="text-muted-foreground">{`, ${item.name}`}</span>}
             <span className="sr-only">. </span>
             <span className="ml-2 font-medium">{status.text}</span>
+            {!!skipped && onShowSkipped && (
+              <button
+                type="button"
+                onClick={onShowSkipped}
+                aria-haspopup="dialog"
+                className="ml-2 rounded px-1 font-medium underline underline-offset-2 outline-none hover:text-foreground ui-focus ui-focus-sm"
+              >
+                {skipped} {skipped === 1 ? "file" : "files"} skipped
+              </button>
+            )}
             {item.status === "missing" && onRemove && (
               <button
                 type="button"

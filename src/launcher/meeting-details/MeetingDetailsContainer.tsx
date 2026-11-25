@@ -22,6 +22,7 @@ import { useBookmarkStore } from "../../stores/bookmarkStore";
 import { useActionItemStore } from "../../stores/actionItemStore";
 import { useSpeakerStore } from "../../stores/speakerStore";
 import { MeetingHeader } from "./MeetingHeader";
+import { rawIndexAtMs } from "./momentIndex";
 import { MeetingTabBar, type MeetingTab } from "./MeetingTabBar";
 import { TranscriptView } from "./TranscriptView";
 import { SummaryView } from "./SummaryView";
@@ -381,6 +382,17 @@ export function MeetingDetails({ meetingId, onBack }: MeetingDetailsProps) {
   }, [meetingId, isDemoActive]);
 
   const handleScrollHandled = useCallback(() => setScrollToSegmentIndex(null), []);
+
+  // Opened from a citation or a memory source: the Transcript tab, at that moment (also when this meeting is already open).
+  const moment = useMeetingStore((s) => s.selectedMeetingMoment);
+  const handledMoment = useRef<number | null>(null);
+  useEffect(() => {
+    if (!moment || !meeting || meeting.id !== meetingId || handledMoment.current === moment.nonce) return;
+    handledMoment.current = moment.nonce;
+    setActiveTab("transcript");
+    const at = rawIndexAtMs(meeting.transcript, new Date(meeting.start_time).getTime(), moment.ms);
+    if (at !== null) setScrollToSegmentIndex(at);
+  }, [moment, meeting, meetingId]);
 
   const handleToggleTranslationVisibility = useCallback(() => setTranslationsVisible((v) => !v), []);
 

@@ -5,7 +5,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  BriefSettings, BriefSheet, ChatCapabilities, ItemPref, ChatItemPrefValue, ChatMeetingPref, DeleteWorkspaceMode, ContextReport, IndexStatus, LibraryItem, MeetingScope,
+  BriefSettings, BriefSheet, ChatCapabilities, DbProblem, ItemPref, ChatItemPrefValue, ChatMeetingPref, DeleteWorkspaceMode, ContextReport, IndexStatus, LibraryItem, MeetingScope,
   MemoryItem, MemorySettings, NoteDoc, NoteEdit, NotetakerSettings, Passage, PassageKind, PointProgress, PointSaid,
   TalkingPoint, TalkingPointPatch, WorkspaceChat, WorkspaceChatPatch, WorkspaceDetail, WorkspaceInput, WorkspaceItemKind,
   WorkspaceMeetingPage, WorkspaceMessage, WorkspacePatch, WorkspaceSummary,
@@ -1030,9 +1030,31 @@ export async function removeLibraryItem(kind: WorkspaceItemKind, refId: string):
 export interface WorkspacesStatus {
   available: boolean;
   error: string | null;
+  /** Set when the meetings file itself did not open: nothing was changed. */
+  db?: DbProblem | null;
 }
 export async function getWorkspacesStatus(): Promise<WorkspacesStatus> {
   return invoke<WorkspacesStatus>("get_workspaces_status");
+}
+
+// == IPC: the meetings file did not open ==
+// All of these refuse when it opened normally. None deletes a file: the damaged
+// ones are kept as nexq.db.damaged-<time>*. After a restore or a new start, call restartApp.
+
+/** Restore one of `db.backups` by name (never a path). */
+export async function restoreDatabaseCopy(name: string): Promise<void> {
+  return invoke("restore_database_copy", { name });
+}
+/** Put the unreadable file aside and start with an empty one on restart (only for `kind: "unreadable"`). */
+export async function startWithNewDatabase(): Promise<void> {
+  return invoke("start_with_new_database");
+}
+export async function openDataFolder(): Promise<void> {
+  return invoke("open_data_folder");
+}
+/** Refused while a meeting is active or a recording is saving. */
+export async function restartApp(): Promise<void> {
+  return invoke("restart_app");
 }
 
 /**

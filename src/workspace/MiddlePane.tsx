@@ -70,7 +70,7 @@ export function MiddlePane({
   workspace: WorkspaceSummary;
   starting: boolean;
   onStart: () => void;
-  onOpenMeeting: (id: string) => void;
+  onOpenMeeting: (id: string, atMs?: number | null) => void;
   showLibraryToggle: boolean;
   onToggleLibrary: () => void;
   /** A cited file or note was clicked: bring the Library into view. */
@@ -219,7 +219,7 @@ export function MiddlePane({
       )}
 
       <div className={compact ? "min-h-0 flex-1 overflow-hidden" : "min-h-0 flex-1 overflow-hidden border-t border-border"}>
-        <ChatPane workspaceId={workspace.id} onOpenMeeting={(id) => onOpenMeeting(id)} onOpenItem={(kind, refId, subRef) => void handleOpenRequest({ kind, ref_id: refId, sub_ref: subRef })} />
+        <ChatPane workspaceId={workspace.id} onOpenMeeting={(id, atMs) => onOpenMeeting(id, atMs)} onOpenItem={(kind, refId, subRef) => void handleOpenRequest({ kind, ref_id: refId, sub_ref: subRef })} />
       </div>
 
       <WorkspaceSwitcher open={switcherOpen} onClose={() => onSwitcherOpenChange(false)} />

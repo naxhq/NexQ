@@ -16,6 +16,7 @@ import { endMeetingFromThisWindow } from "../hooks/useUpdater";
 import { Dialog, Button } from "../ui";
 import { WorkspaceActionsProvider } from "../workspace/WorkspaceActions";
 import { WorkspaceHome } from "../workspace/WorkspaceHome";
+import { DatabaseProblemScreen } from "../workspace/DatabaseProblemScreen";
 import { handleOpenRequest, type OpenRequest } from "../workspace/openRequest";
 import type { AudioMode, AIScenario } from "../lib/types";
 import { Settings, Radio } from "lucide-react";
@@ -50,6 +51,7 @@ export function LauncherView() {
   const setSelectedMeetingId = useMeetingStore((s) => s.setSelectedMeetingId);
   const loadRecentMeetings = useMeetingStore((s) => s.loadRecentMeetings);
   const openId = useWorkspaceStore((s) => s.openId);
+  const database = useWorkspaceStore((s) => s.database);
 
   const [isStarting, setIsStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
@@ -148,12 +150,13 @@ export function LauncherView() {
   }, [startMeetingFlow]);
 
   const handleOpenMeeting = useCallback(
-    (meetingId: string) => {
+    (meetingId: string, atMs?: number | null) => {
       if (activeMeeting?.id === meetingId) {
         showMeetingOverlay().catch(() => {});
         return;
       }
-      setSelectedMeetingId(meetingId);
+      if (typeof atMs === "number") useMeetingStore.getState().openMeetingAt(meetingId, atMs);
+      else setSelectedMeetingId(meetingId);
     },
     [activeMeeting, setSelectedMeetingId],
   );
@@ -201,7 +204,10 @@ export function LauncherView() {
         )}
 
         <div className="min-h-0 flex-1 overflow-hidden">
-          {selectedMeetingId ? (
+          {database ? (
+            // The meetings file can't be used: nothing to list, ask or start from. Settings and the footer stay.
+            <DatabaseProblemScreen problem={database} />
+          ) : selectedMeetingId ? (
             <Suspense fallback={null}>
               <MeetingDetails meetingId={selectedMeetingId} onBack={() => setSelectedMeetingId(null)} />
             </Suspense>

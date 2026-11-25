@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Dialog, Button } from "../ui";
 import { addWorkspaceItem, listLibrary } from "../lib/ipc";
 import { useWorkspaceStore } from "../stores/workspaceStore";
-import type { LibraryItem } from "../lib/types";
+import type { LibraryItem, SkippedFile } from "../lib/types";
 import { addPastedText } from "./addMaterial";
 import { fieldClass, hintClass, labelClass } from "./styles";
 
@@ -179,6 +179,30 @@ export function FromLibraryDialog({ workspaceId, open, onClose }: { workspaceId:
           {error}
         </p>
       )}
+    </Dialog>
+  );
+}
+
+/** The files the index left out of a folder, each with its reason (too large, a secret-looking name, hidden, over the limit). */
+export function SkippedFilesDialog({ folder, files, onClose }: { folder: string; files: SkippedFile[]; onClose: () => void }) {
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Skipped in ${folder}`}
+      description="These files are not searched. Nothing was changed or removed."
+      footer={
+        <Button onClick={onClose}>Close</Button>
+      }
+    >
+      <ul aria-label="Skipped files" className="max-h-72 divide-y divide-border overflow-y-auto">
+        {files.map((f) => (
+          <li key={f.path} className="py-2">
+            <p className="ui-body break-all text-foreground">{f.path}</p>
+            <p className={hintClass}>{f.reason}</p>
+          </li>
+        ))}
+      </ul>
     </Dialog>
   );
 }

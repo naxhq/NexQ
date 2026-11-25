@@ -23,7 +23,9 @@ export async function handleOpenRequest(d: OpenRequest | undefined): Promise<voi
   const id = d?.ref_id ?? d?.refId ?? d?.meetingId;
   if (!d || !id) return;
   if (d.kind === "transcript" || d.kind === "meeting") {
-    useMeetingStore.getState().setSelectedMeetingId(id);
+    // A line of a transcript opens at its moment (0 ms is a moment); a meeting alone opens at the top.
+    const at = d.kind === "transcript" ? (d.start_ms ?? d.atMs ?? null) : null;
+    useMeetingStore.getState().openMeetingAt(id, at);
     return;
   }
   if (d.kind !== "document" && d.kind !== "folder" && d.kind !== "talking_point") return;

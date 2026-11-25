@@ -33,6 +33,7 @@ export function libraryEstimate(detail: Pick<WorkspaceDetail, "instructions" | "
   return bars;
 }
 import { hintClass } from "./styles";
+import { IndexingNote } from "./IndexingNote";
 
 /**
  * What an answer in this workspace would see, as the context wave (the old
@@ -74,6 +75,7 @@ export function ContextMeter({ workspaceId }: { workspaceId: string }) {
   return (
     <section aria-label="What the AI would see" className="space-y-2">
       <h3 className="ui-section text-foreground">Context</h3>
+      <IndexingNote workspaceId={workspaceId} />
       {state.error && <p className={`${hintClass} text-destructive`}>Couldn't estimate the context: {state.error}</p>}
       {!report && !state.error && !state.chat && (
         <>
