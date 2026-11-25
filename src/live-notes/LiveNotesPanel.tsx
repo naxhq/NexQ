@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Copy, MoreHorizontal, Pause, Play, RefreshCw, Undo2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { MoreHorizontal, Play, RefreshCw, Undo2 } from "lucide-react";
 import { Dialog, Kbd, Menu, Segmented, type MenuItemSpec, Button } from "../ui";
 import { cn } from "../lib/utils";
 import type { NotetakerSettings, NotetakerState } from "../lib/types";
@@ -23,13 +23,19 @@ export function statusWords(run: NotetakerState | null, settings: NotetakerSetti
 
 /** The live notes panel of the meeting window. Takes no props. */
 export function NotesPanel() {
-  const meetingId = useMeetingStore((s) => s.activeMeeting?.id ?? "");
+  const live = useMeetingStore((s) => s.activeMeeting?.id ?? "");
+  // After the meeting ends the notes stay on show, read as they were.
+  const last = useRef("");
+  if (live) last.current = live;
+  const meetingId = live || last.current;
+  const ended = !live && !!meetingId;
   const store = useLiveNotesStore;
   const entry = store((s) => s.entries[meetingId] ?? EMPTY_ENTRY);
   const { doc, fresh, arrivals, undoStack } = entry;
   const run = store((s) => s.runs[meetingId] ?? null);
   const settings = store((s) => s.settings);
   const error = store((s) => s.error);
+  const notice = store((s) => s.notice);
   const deadline = store((s) => s.deadlines[meetingId] ?? null);
   const automatic = useAutomaticModel(store((s) => s.settings?.provider ?? null)).model;
   const [dialog, setDialog] = useState(false);
@@ -94,20 +100,24 @@ export function NotesPanel() {
     return <div className="rs-root"><p className="rs-empty text-muted-foreground">Notes appear here once a meeting has started.</p></div>;
   }
 
-  const { word, note: baseNote } = statusWords(run, settings);
+  const stat = statusWords(run, settings);
+  const word = ended ? "Meeting ended" : stat.word;
+  const baseNote = ended ? undefined : stat.note;
   const waiting = run?.status === "waiting" || run?.status === "on";
   const note = baseNote ?? (deadline && waiting && settings?.update_mode !== "manual" ? <Countdown deadline={deadline} /> : undefined);
   const busy = inFlight(run);
   const colors = settings?.colors ?? true;
   const hasBlocks = (doc?.blocks.length ?? 0) > 0;
-  const enabled = !!settings?.enabled;
+  const enabled = !!settings?.enabled && !ended;
   const capped = run?.status === "capped" || (can(run, "keep_going") && run?.status !== "off");
   const failed = !capped && (run?.status === "error" || (run?.status === "paused" && !!run.reason));
   const missed = enabled ? notCovered(run?.reason) : null;
   const used = run?.tokens_used ?? 0;
-  const cap = run?.cap || settings?.cap || 0;
+  // The limit shown follows the setting at once; the run catches up from its own state.
+  const cap = settings?.cap || run?.cap || 0;
 
   const menu: MenuItemSpec[] = [
+    ...(enabled && can(run, "pause") ? [{ id: "pause", label: "Pause notes", onSelect: () => void store.getState().pause() }] : []),
     { id: "copy", label: "Copy all as Markdown", disabled: !hasBlocks, onSelect: () => void copyText(docToMarkdown(doc), "Notes copied") },
     {
       id: "mode",
@@ -129,12 +139,6 @@ export function NotesPanel() {
             <Kbd>N</Kbd>
           </button>
         )}
-        {enabled && can(run, "pause") && (
-          <button type="button" className="rs-tool" onClick={() => void store.getState().pause()}>
-            <Pause className="h-3 w-3" aria-hidden />
-            Pause
-          </button>
-        )}
         {enabled && can(run, "resume") && (
           <button type="button" className="rs-tool rs-tool-solid" onClick={() => void store.getState().resume()}>
             <Play className="h-3 w-3" aria-hidden />
@@ -144,12 +148,14 @@ export function NotesPanel() {
         {enabled && can(run, "start") && (
           <button type="button" className="rs-tool rs-tool-solid" onClick={() => void store.getState().start()}>
             <Play className="h-3 w-3" aria-hidden />
-            Start notes again
+            <span aria-hidden>Start again</span>
+            <span className="rs-sr">Start notes again</span>
           </button>
         )}
-        {hasBlocks && (
-          <button type="button" className="rs-tool" aria-label="Copy all as Markdown" onClick={() => void copyText(docToMarkdown(doc), "Notes copied")}>
-            <Copy className="h-3 w-3" aria-hidden />
+        {!ended && !(settings?.enabled) && settings && hasBlocks && (
+          <button type="button" className="rs-tool rs-tool-solid" onClick={() => void store.getState().turnOn(settings.scope)}>
+            <Play className="h-3 w-3" aria-hidden />
+            Turn on notes
           </button>
         )}
         <Menu
@@ -204,6 +210,16 @@ export function NotesPanel() {
               <button type="button" className="rs-tool rs-tool-solid" onClick={() => void store.getState().updateNow()}>Update notes</button>
             </div>
           )}
+        </div>
+      )}
+
+      {notice && (
+        <div className="rs-notice" role="status">
+          <div className="rs-notice-title">Not updated</div>
+          <p>{notice}</p>
+          <div className="rs-notice-actions">
+            <button type="button" className="rs-tool" onClick={() => store.getState().clearError()}>Dismiss</button>
+          </div>
         </div>
       )}
 

@@ -7,6 +7,7 @@ import { showToast } from "../../stores/toastStore";
 import { useWorkspaceStore } from "../../stores/workspaceStore";
 import { cn } from "../../lib/utils";
 import { ModelPicker, PickerCaret } from "./ModelPicker";
+import { DOCUMENT_CAP, INSTRUCTION_CAP, sanitizeInstructionText, sanitizePlainText } from "./instructionText";
 import type { ModelChoice } from "./models";
 
 
@@ -86,28 +87,41 @@ export function AnswerActions({
           Add to instructions
         </Button>
       </div>
-      {saving && <SaveDialog messageId={message.id} initial={titleFrom(question)} onClose={() => setSaving(false)} />}
+      {saving && <SaveDialog messageId={message.id} initial={titleFrom(question)} answer={message.content} onClose={() => setSaving(false)} />}
       <AddToInstructions open={addOpen} workspaceId={workspaceId} messageId={message.id} text={plainAnswer(message.content)} onClose={() => setAddOpen(false)} />
     </>
   );
 }
 
-function SaveDialog({ messageId, initial, onClose }: { messageId: number; initial: string; onClose: () => void }) {
+/**
+ * The document that is stored is the text in the box, read and editable here as plain text: no
+ * HTML, no link or image targets, no hidden characters. If something had to be removed, the box
+ * is cleaned and nothing is saved until it is read again. The backend refuses anything cleaning
+ * would change, so what was shown is what is stored.
+ */
+function SaveDialog({ messageId, initial, answer, onClose }: { messageId: number; initial: string; answer: string; onClose: () => void }) {
   const [title, setTitle] = useState(initial);
+  const [text, setText] = useState(() => sanitizePlainText(answer, DOCUMENT_CAP));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const input = useRef<HTMLInputElement | null>(null);
   const save = async () => {
     const name = title.trim();
-    if (!name || busy) return;
+    if (!name || !text.trim() || busy) return;
+    const clean = sanitizePlainText(text, DOCUMENT_CAP);
+    if (clean !== text) {
+      setText(clean);
+      setError("Some of it was removed: hidden characters, HTML, link targets or extra length. Read it again, then save.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      await saveAnswerToLibrary(messageId, name);
+      await saveAnswerToLibrary(messageId, name, text);
       showToast("Saved to the library as a document.", "success");
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(typeof e === "string" ? e : e instanceof Error ? e.message : String(e));
       setBusy(false);
     }
   };
@@ -116,7 +130,8 @@ function SaveDialog({ messageId, initial, onClose }: { messageId: number; initia
       open
       onClose={onClose}
       title="Save this answer to the library"
-      description="It becomes a Markdown document in this workspace, so later answers can use it."
+      description="It becomes a plain-text document in this workspace, so later answers can use it. What you see below is what is saved."
+      size="lg"
       initialFocusRef={input}
       dismissible={!busy}
       footer={
@@ -124,7 +139,7 @@ function SaveDialog({ messageId, initial, onClose }: { messageId: number; initia
           <Button onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button variant="primary" onClick={() => void save()} disabled={busy || !title.trim()}>
+          <Button variant="primary" onClick={() => void save()} disabled={busy || !title.trim() || !text.trim()}>
             {busy ? "Saving" : "Save"}
           </Button>
         </>
@@ -139,42 +154,38 @@ function SaveDialog({ messageId, initial, onClose }: { messageId: number; initia
         value={title}
         maxLength={120}
         onChange={(e) => setTitle(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            void save();
-          }
-        }}
         className="ui-body w-full rounded-lg border border-input bg-background px-3 py-2 text-foreground outline-none ui-focus ui-r-lg"
       />
+      <label className="ui-section mb-1.5 mt-3 block text-foreground" htmlFor="ws-save-text">
+        Text to save
+      </label>
+      <textarea
+        id="ws-save-text"
+        value={text}
+        rows={10}
+        onChange={(e) => {
+          setText(e.target.value);
+          setError(null);
+        }}
+        className="ui-body max-h-[45vh] w-full resize-y overflow-y-auto rounded-lg border border-input bg-background px-3 py-2 text-foreground outline-none ui-focus ui-r-lg"
+      />
+      <p className="ui-meta mt-1 text-right tabular-nums text-muted-foreground">
+        {text.length.toLocaleString()} characters. Plain text only: links, images and HTML are not kept.
+      </p>
       {error && (
         <p role="alert" className="ui-body mt-2 text-destructive">
-          Couldn't save it: {error}
+          {error}
         </p>
       )}
     </Dialog>
   );
 }
 
-export const INSTRUCTION_CAP = 4000;
+export { INSTRUCTION_CAP } from "./instructionText";
 
-/**
- * An answer as plain instruction text: no HTML, no link or image targets or titles, no reference
- * definitions, no hidden characters, no [S1] tags. What this returns is what the user then sees
- * and may edit, and it is stored exactly as shown.
- */
+/** An answer as plain instruction text (see `instructionText.ts`): what the dialog starts from. */
 export function plainInstructionText(markdown: string): string {
-  return plainAnswer(markdown)
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/<\/?[a-zA-Z][^>]*>/g, "")
-    .replace(/^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*\S.*$/gm, "")
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-    .replace(/\[([^\]]+)\]\[[^\]]*\]/g, "$1")
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF9-\uFFFB]/g, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim()
-    .slice(0, INSTRUCTION_CAP);
+  return sanitizeInstructionText(markdown);
 }
 
 function AddToInstructions({ open, workspaceId, messageId, text, onClose }: { open: boolean; workspaceId: string; messageId: number; text: string; onClose: () => void }) {
@@ -183,23 +194,31 @@ function AddToInstructions({ open, workspaceId, messageId, text, onClose }: { op
 }
 
 /**
- * The backend adds the saved answer itself (it checks, in one step, that nothing the answer used
- * has left the workspace), so the text is shown here to read, not to edit. It can be undone
- * right after: the instructions go back to what they were.
+ * The words the person reviews are the words that are stored: the box is editable, what is in it
+ * is sent as it is, and the backend refuses anything that cleaning would change. If the text has
+ * hidden characters, HTML or link targets (typed or pasted), the box is cleaned and nothing is
+ * sent until it is reviewed again. Undo puts the instructions back right after.
  */
 function AddToInstructionsDialog({ workspaceId, messageId, preview, onClose }: { workspaceId: string; messageId: number; preview: string; onClose: () => void }) {
+  const [text, setText] = useState(preview);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<{ before: string } | null>(null);
   const field = useRef<HTMLTextAreaElement | null>(null);
   const confirm = async () => {
-    if (busy) return;
+    if (busy || !text.trim()) return;
+    const clean = sanitizeInstructionText(text);
+    if (clean !== text) {
+      setText(clean);
+      setError("Some of it was removed: hidden characters, HTML, link targets or extra length. Read it again, then add it.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       const store = useWorkspaceStore.getState();
       const before = ((await store.loadDetail(workspaceId)) ?? store.details[workspaceId])?.instructions ?? "";
-      await addAnswerToInstructions(messageId);
+      await addAnswerToInstructions(messageId, text);
       void store.loadDetail(workspaceId);
       setDone({ before });
     } catch (e) {
@@ -227,7 +246,7 @@ function AddToInstructionsDialog({ workspaceId, messageId, preview, onClose }: {
       open
       onClose={onClose}
       title={done ? "Added to the instructions" : "Add this to the instructions?"}
-      description="These words become instructions the AI follows in every question of this workspace. Add it only if you want it to obey this."
+      description="These words become instructions the AI follows in every question of this workspace. Edit them, and keep only what you want it to obey."
       size="lg"
       initialFocusRef={field}
       dismissible={!busy}
@@ -246,7 +265,7 @@ function AddToInstructionsDialog({ workspaceId, messageId, preview, onClose }: {
             <Button onClick={onClose} disabled={busy}>
               Cancel
             </Button>
-            <Button variant="primary" onClick={() => void confirm()} disabled={busy}>
+            <Button variant="primary" onClick={() => void confirm()} disabled={busy || !text.trim()}>
               {busy ? "Adding" : "Add to instructions"}
             </Button>
           </>
@@ -254,17 +273,24 @@ function AddToInstructionsDialog({ workspaceId, messageId, preview, onClose }: {
       }
     >
       <label htmlFor="ws-add-instr" className="ui-section mb-1.5 block text-foreground">
-        The answer, as plain text
+        Text to add
       </label>
       <textarea
         id="ws-add-instr"
         ref={field}
-        value={preview}
-        readOnly
+        value={text}
+        readOnly={!!done}
+        maxLength={INSTRUCTION_CAP}
         rows={10}
+        onChange={(e) => {
+          setText(e.target.value);
+          setError(null);
+        }}
         className="ui-body max-h-[50vh] w-full resize-y overflow-y-auto rounded-lg border border-input bg-background px-3 py-2 text-foreground outline-none ui-focus ui-r-lg"
       />
-      <p className="ui-meta mt-1 text-muted-foreground">Added after what is already there, as plain text: links, images and HTML are left out.</p>
+      <p className="ui-meta mt-1 text-right tabular-nums text-muted-foreground">
+        {text.length.toLocaleString()} of {INSTRUCTION_CAP.toLocaleString()} characters. Plain text only: links, images and HTML are not kept.
+      </p>
       {error && (
         <p role="alert" className="ui-body mt-2 text-destructive">
           {error}

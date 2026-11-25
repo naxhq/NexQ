@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { getIndexStatus } from "../lib/ipc";
 import { Dialog, ColorSwatches, Select, Switch, Button } from "../ui";
 import { VoiceprintMark } from "../voiceprint";
 import { useMeetingScenarios } from "../stores/scenarioStore";
-import { useConfigStore } from "../stores/configStore";
+import { useAutomaticModel } from "../models/useAutomaticModel";
 import { GENERAL_ID, useWorkspaceStore } from "../stores/workspaceStore";
 import type { AIScenario, WorkspaceDetail, WorkspaceSummary } from "../lib/types";
 import { fieldClass, hintClass, labelClass } from "./styles";
@@ -28,9 +29,19 @@ export function generalCounts(general: Pick<WorkspaceSummary, "item_count"> | un
 
 const NO_SCENARIO = "__none";
 
-/** What the recaps switch sends and where a recap shows, in plain words. */
+/**
+ * What the recaps switch does, exactly as the backend does it: when it runs, how many, never in a
+ * meeting, which model, what is sent, and who reads a recap.
+ */
 export function recapsDescription(model: string): string {
-  return `Off by default. After each meeting here, one AI call to ${model} reads its transcript and writes a short recap. The transcript is sent to that model. Recaps are what chat reads first when it looks across many meetings, and they show as meeting bars in the context estimate.`;
+  return `Off by default. After a meeting here ends, and for up to 5 meetings without one when this workspace opens, one AI call writes a short recap from the transcript. It never runs during a meeting, uses the cheapest model you have set up (${model}), and sends that meeting's transcript to it. Meetings that already have a summary are left alone. Chat reads recaps first when it looks across many meetings.`;
+}
+
+/** "12 meetings have an AI recap": the count from the index, said plainly. */
+export function recapCountLine(count: number | null | undefined): string | null {
+  if (count === null || count === undefined) return null;
+  if (count === 0) return "No meeting here has an AI recap yet.";
+  return `${count} ${count === 1 ? "meeting has" : "meetings have"} an AI recap.`;
 }
 
 /**
@@ -49,8 +60,22 @@ export function WorkspaceDialog({
   onClose: (saved?: WorkspaceDetail) => void;
 }) {
   const unavailable = useWorkspaceStore((s) => s.unavailable);
-  const llmProvider = useConfigStore((s) => s.llmProvider);
-  const llmModel = useConfigStore((s) => s.llmModel);
+  const automatic = useAutomaticModel(null).model;
+  const [recapCount, setRecapCount] = useState<number | null>(null);
+  // How many meetings already have an AI recap (from the index; older backends do not say).
+  const editedId = workspace?.id;
+  useEffect(() => {
+    if (!open || !editedId) return;
+    let live = true;
+    setRecapCount(null);
+    getIndexStatus(editedId)
+      .then((s) => live && setRecapCount(typeof s?.ai_recaps === "number" ? s.ai_recaps : null))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [open, editedId]);
+  const recapLine = recapCountLine(recapCount);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const create = useWorkspaceStore((s) => s.create);
   const update = useWorkspaceStore((s) => s.update);
@@ -282,7 +307,12 @@ export function WorkspaceDialog({
               onChange={(c) => set("recaps_with_ai", c)}
               disabled={detailPending}
               label="Prepare recaps with AI"
-              description={recapsDescription(`${llmProvider}${llmModel ? ` ${llmModel}` : ""}`)}
+              description={
+                <>
+                  {recapsDescription(automatic?.label ?? "the cheapest model")}
+                  {recapLine && <span className="mt-1 block font-medium text-foreground">{recapLine}</span>}
+                </>
+              }
             />
           )}
           <Switch

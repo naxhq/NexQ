@@ -175,7 +175,7 @@ describe("never starting in an archived workspace", () => {
     seedWorkspaces([ws(), ws({ id: "old", name: "Old job", archived: true, is_default: false }), ws({ id: "acme", name: "Acme", is_default: false })], "old");
     const onStart = vi.fn();
     render(<MeetingSetupModal open workspaceId="old" onStart={onStart} onCancel={() => {}} />);
-    expect(screen.getByRole("note")).toHaveTextContent("Old job is archived, so this meeting goes to General.");
+    expect(screen.getByRole("note")).toHaveTextContent("\"Old job\" is archived, so this meeting goes to General.");
     expect(screen.getByRole("radio", { name: "General" })).toHaveAttribute("aria-checked", "true");
     expect(screen.queryByRole("radio", { name: "Old job" })).toBeNull();
     screen.getByRole("button", { name: "Start Meeting" }).click();

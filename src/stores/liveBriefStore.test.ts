@@ -157,8 +157,16 @@ describe("liveBriefStore", () => {
   it("says what failed", async () => {
     await useLiveBriefStore.getState().attach("m1");
     h.fail = "No model is set up";
-    await useLiveBriefStore.getState().refresh();
+    await useLiveBriefStore.getState().resume();
     expect(useLiveBriefStore.getState().error).toBe("No model is set up");
+  });
+
+  it("a refusal to refresh is a notice with the reason, not a failure", async () => {
+    await useLiveBriefStore.getState().attach("m1");
+    h.failOnly.add("refresh");
+    await useLiveBriefStore.getState().refresh();
+    expect(useLiveBriefStore.getState().notice).toBe("failed");
+    expect(useLiveBriefStore.getState().error).toBeNull();
   });
 
   it("reads seconds or milliseconds for the age", () => {

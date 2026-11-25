@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useAudioPlayerStore } from "@/stores/audioPlayerStore";
 import { findActiveSegmentIndex } from "@/lib/activeSegment";
+import { segmentsRel } from "@/lib/time";
 import type { TranscriptSegment } from "@/lib/types";
 
 const MANUAL_SCROLL_COOLDOWN_MS = 5000;
@@ -33,7 +34,7 @@ export function useAudioTranscriptSync(
 
   // Adjusted start time of each segment (ascending), for binary search.
   const startsMs = useMemo(
-    () => segments.map((s) => s.timestamp_ms - meetingStartMs - recordingOffsetMs),
+    () => segmentsRel(segments, meetingStartMs).map((t) => t - recordingOffsetMs),
     [segments, meetingStartMs, recordingOffsetMs]
   );
 

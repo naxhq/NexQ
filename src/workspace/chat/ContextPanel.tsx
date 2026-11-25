@@ -120,6 +120,7 @@ export function ContextPanel({
             ) : (
               <p className="ui-meta py-2 text-muted-foreground">{failed ? "The estimate isn't available right now." : estimating ? "Estimating what would be sent." : "Start typing to see what would be sent."}</p>
             )}
+            <PrefList prefs={itemPrefs} chatId={chatId} />
             {selection && (
               <Inspector
                 selection={selection}
@@ -147,6 +148,10 @@ export function openBar(openers: ChatOpeners, kind: string, ref: string, sub: st
   if (kind === "talking_point" || kind === "talking_points") return openItem(openers, "talking_point", ref, sub);
   if (kind === "folder" || kind === "folders") return openItem(openers, "folder", ref, sub);
   return openItem(openers, "document", ref, sub);
+}
+
+function saved_title(prefs: ItemPref[], kind: string, ref: string): string | undefined {
+  return prefs.find((p) => p.kind === kind && p.ref_id === ref)?.title;
 }
 
 const rowBtn =
@@ -190,7 +195,7 @@ function Inspector({
           const fixed = bar.layer === "instructions" || bar.layer === "conversation";
           return (
             <li key={bar.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-1.5">
-              <span className="ui-body min-w-0 flex-1 truncate text-foreground">{displayTitle(bar.title, bar.id)}</span>
+              <span className="ui-body min-w-0 flex-1 truncate text-foreground">{displayTitle(bar.title || saved_title(itemPrefs, kind, ref), bar.id)}</span>
               <span className="ui-meta tabular-nums text-muted-foreground">
                 {formatTokens(bar.tokens)} tokens{pinned ? ", pinned" : ""}{kept ? ", left out" : bar.included ? "" : ", didn't fit"}
               </span>
@@ -228,5 +233,30 @@ function Inspector({
       </ul>
       {selection.bars.length > shown.length && <p className="ui-meta mt-1 text-muted-foreground">{selection.bars.length - shown.length} more.</p>}
     </div>
+  );
+}
+
+/** The pins and exclusions saved for this chat, by name (never by id); each can be put back. */
+function PrefList({ prefs, chatId }: { prefs: ItemPref[]; chatId: string | null }) {
+  const set = prefs.filter((p) => p.pref === "pin" || p.pref === "exclude");
+  if (set.length === 0) return null;
+  return (
+    <ul aria-label="Pinned and left out" className="mt-2 space-y-0.5">
+      {set.map((p) => (
+        <li key={`${p.kind}:${p.ref_id}`} className="flex items-center gap-2">
+          <span className="ui-body min-w-0 flex-1 truncate text-foreground">{displayTitle(p.title, p.ref_id)}</span>
+          <span className="ui-meta text-muted-foreground">{p.pref === "pin" ? "Pinned" : "Left out"}</span>
+          {chatId && (
+            <button
+              type="button"
+              onClick={() => void useWorkspaceChatStore.getState().setItemPref(chatId, p.kind, p.ref_id, "default")}
+              className={rowBtn}
+            >
+              {p.pref === "pin" ? "Unpin" : "Use again"}
+            </button>
+          )}
+        </li>
+      ))}
+    </ul>
   );
 }

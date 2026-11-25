@@ -60,6 +60,8 @@ interface LiveBriefState {
   workspaceId: string | null;
   workspaceEnabled: boolean | null;
   error: string | null;
+  /** A refusal that is not a failure ("nothing new yet"), in the backend words. */
+  notice: string | null;
 
   attach: (meetingId: string, workspaceId?: string | null) => Promise<() => void>;
   watchSettings: () => Promise<() => void>;
@@ -128,6 +130,7 @@ export const useLiveBriefStore = create<LiveBriefState>((set, get) => {
     workspaceId: null,
     workspaceEnabled: null,
     error: null,
+    notice: null,
 
     attach: async (meetingId, workspaceId = null) => {
       if (get().meetingId !== meetingId) {
@@ -219,10 +222,19 @@ export const useLiveBriefStore = create<LiveBriefState>((set, get) => {
       set({ error: null });
       await briefStart(id);
     }),
-    refresh: onLive(async (id) => {
-      set({ error: null });
-      await briefRefresh(id);
-    }),
+    refresh: async () => {
+      const id = liveMeetingId();
+      if (!id) {
+        set({ error: "No meeting is running, so there is nothing to change." });
+        return;
+      }
+      set({ error: null, notice: null });
+      try {
+        await briefRefresh(id);
+      } catch (e) {
+        set({ notice: describeError(e) });
+      }
+    },
     keepGoing: onLive((id) => briefContinue(id)),
     patchSettings: async (patch) => {
       const before = get().settings;
@@ -235,6 +247,6 @@ export const useLiveBriefStore = create<LiveBriefState>((set, get) => {
         void get().loadSettings();
       }
     },
-    clearError: () => set({ error: null }),
+    clearError: () => set({ error: null, notice: null }),
   };
 });

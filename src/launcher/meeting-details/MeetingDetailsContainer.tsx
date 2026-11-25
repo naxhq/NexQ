@@ -22,6 +22,7 @@ import { useBookmarkStore } from "../../stores/bookmarkStore";
 import { useActionItemStore } from "../../stores/actionItemStore";
 import { useSpeakerStore } from "../../stores/speakerStore";
 import { MeetingHeader } from "./MeetingHeader";
+import { RecapBlock } from "./RecapBlock";
 import { rawIndexAtMs } from "./momentIndex";
 import { MeetingTabBar, type MeetingTab } from "./MeetingTabBar";
 import { TranscriptView } from "./TranscriptView";
@@ -488,7 +489,10 @@ export function MeetingDetails({ meetingId, onBack }: MeetingDetailsProps) {
           />
         </div>
         {activeTab === "summary" && (
-          <SummaryView meeting={meeting} generation={summaryGeneration} onExport={handleExport} />
+          <>
+            {!meeting.summary && <RecapBlock meetingId={meetingId} />}
+            <SummaryView meeting={meeting} generation={summaryGeneration} onExport={handleExport} />
+          </>
         )}
         {activeTab === "notes" && (
           <NotesTab

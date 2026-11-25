@@ -32,11 +32,26 @@ describe("answer_workspace_approval", () => {
   });
 });
 
+import askDeeper from "./fixtures/ask_workspace_deeper.json";
+import excludePref from "./fixtures/set_chat_item_pref_exclude.json";
+import { askWorkspace, setChatItemPref } from "../lib/ipc";
+
+describe("Search deeper and Leave out of this chat", () => {
+  it("search deeper asks with deeper: true", async () => {
+    await askWorkspace(askDeeper.chatId, askDeeper.question, askDeeper.requestId, true);
+    expect(invoke).toHaveBeenCalledWith("ask_workspace", askDeeper);
+  });
+  it("leave out sends pref exclude", async () => {
+    await setChatItemPref(excludePref.chatId, excludePref.kind, excludePref.refId, "exclude");
+    expect(invoke).toHaveBeenCalledWith("set_chat_item_pref", excludePref);
+  });
+});
+
 describe("add_answer_to_instructions", () => {
   it("sends exactly the arguments the backend's example has", async () => {
-    await addAnswerToInstructions(addAnswer.messageId);
+    await addAnswerToInstructions(addAnswer.messageId, addAnswer.text);
     expect(invoke).toHaveBeenCalledWith("add_answer_to_instructions", addAnswer);
-    expect(Object.keys(invoke.mock.calls[0][1] as object)).toEqual(["messageId"]);
+    expect(Object.keys(invoke.mock.calls[0][1] as object).sort()).toEqual(["messageId", "text"]);
   });
 });
 
@@ -52,6 +67,7 @@ const turnFor = (chatId: string, requestId: string): Turn => ({
   approvals: [],
   error: null,
   errorKind: null,
+  removedBecause: null,
   startedAt: Date.now(),
 });
 

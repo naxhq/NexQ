@@ -17,6 +17,7 @@ vi.mock("../lib/ipc", () => ({
 vi.mock("../lib/events", async () => {
   const hotkeys = await import("../lib/hotkeys");
   return {
+    onAutomaticModelUpdated: async () => () => {},
     onNotesUpdateRequested: (handler: () => void) => {
       window.addEventListener(hotkeys.NOTES_UPDATE_EVENT, handler);
       return () => window.removeEventListener(hotkeys.NOTES_UPDATE_EVENT, handler);

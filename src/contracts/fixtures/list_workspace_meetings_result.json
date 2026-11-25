@@ -1,0 +1,18 @@
+{
+  "meetings": [
+    {
+      "ai_scenario": "team_meeting",
+      "audio_mode": "online",
+      "duration_seconds": 1800,
+      "end_time": "2026-03-05T10:30:00Z",
+      "has_recap": true,
+      "has_summary": false,
+      "id": "m1",
+      "segment_count": 12,
+      "start_time": "2026-03-05T10:00:00Z",
+      "title": "Planning",
+      "workspace_id": "w1"
+    }
+  ],
+  "total": 1
+}

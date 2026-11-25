@@ -271,7 +271,7 @@ export function LiveTurn({ turn, ctx, onDismiss }: { turn: Turn; ctx: TurnContex
       {turn.status === "failed" && turn.error !== null && <ErrorBlock error={turn.error} turn={turn} ctx={ctx} />}
       {turn.status === "removed" && (
         <p role="status" className="ui-body mt-2 text-muted-foreground">
-          Something this answer used was moved out of this workspace, so it was stopped.
+          {turn.removedBecause === "deleted" ? "Something this answer used was deleted, so it was stopped." : "Something this answer used was moved out of this workspace, so it was stopped."}
         </p>
       )}
       {turn.status !== "failed" && turn.status !== "removed" && (

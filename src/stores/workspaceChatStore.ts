@@ -70,6 +70,8 @@ export interface Turn {
   error: string | null;
   /** The backend's name for the failure, when it gave one. */
   errorKind: WorkspaceChatErrorKind | null;
+  /** Why an answer was removed: what it used was deleted, or moved out of the workspace. */
+  removedBecause: "deleted" | "moved" | null;
   startedAt: number;
 }
 
@@ -343,7 +345,7 @@ export const useWorkspaceChatStore = create<ChatState>((set, get) => {
    * it named, its tool cards and the saved message (if it had already ended) are all dropped;
    * only the question is kept, so it can be asked again.
    */
-  const revokeAnswer = (chatId: string, requestId: string) => {
+  const revokeAnswer = (chatId: string, requestId: string, because: "deleted" | "moved" | null = null) => {
     const timer = flushTimers.get(requestId);
     if (timer) clearTimeout(timer);
     flushTimers.delete(requestId);
@@ -354,7 +356,7 @@ export const useWorkspaceChatStore = create<ChatState>((set, get) => {
     const live = turnOf(chatId, requestId);
     if (live) {
       settleApprovals(live.approvals);
-      patchTurn(chatId, requestId, () => ({ status: "removed", text: "", activity: [], report: null, approvals: [], error: null, errorKind: null, model: null }));
+      patchTurn(chatId, requestId, () => ({ status: "removed", text: "", activity: [], report: null, approvals: [], error: null, errorKind: null, removedBecause: because, model: null }));
       return;
     }
     const done = finished.get(requestId);
@@ -379,6 +381,7 @@ export const useWorkspaceChatStore = create<ChatState>((set, get) => {
           approvals: [],
           error: null,
           errorKind: null,
+          removedBecause: null,
           startedAt: Date.now(),
         },
       };
@@ -607,6 +610,7 @@ export const useWorkspaceChatStore = create<ChatState>((set, get) => {
           approvals: [],
           error: null,
           errorKind: null,
+          removedBecause: null,
           startedAt: Date.now(),
         },
       }));
@@ -842,7 +846,7 @@ function internal(
     flushTokens: (chatId: string, requestId: string) => void;
     finishOk: (chatId: string, requestId: string, message: WorkspaceMessage) => void;
     failTurn: (chatId: string, requestId: string, error: string, kind?: WorkspaceChatErrorKind | null) => void;
-    revokeAnswer: (chatId: string, requestId: string) => void;
+    revokeAnswer: (chatId: string, requestId: string, because?: "deleted" | "moved" | null) => void;
   },
 ) {
   handlers = {
@@ -880,7 +884,7 @@ function internal(
       h.finishOk(e.chat_id, e.request_id, e.message);
     },
     error: (e) => {
-      if (e.error_kind === "access_changed") return h.revokeAnswer(e.chat_id, e.request_id);
+      if (e.error_kind === "access_changed") return h.revokeAnswer(e.chat_id, e.request_id, e.error_detail === "deleted" || e.error_detail === "moved" ? e.error_detail : null);
       h.failTurn(e.chat_id, e.request_id, e.error, e.error_kind ?? null);
     },
     approvalRefused: (e) => {

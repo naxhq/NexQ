@@ -42,7 +42,7 @@ export function MeetingSetupModal({ open, onStart, onCancel, workspaceId }: Meet
   // Never start in an archived workspace: the default one is selected, and the dialog says so.
   const requested = workspaceById(workspaces, workspaceId);
   const startWorkspace = requested && !requested.archived ? requested.id : defaultWorkspaceOf(workspaces).id;
-  const archivedNote = requested?.archived ? `${requested.name} is archived, so this meeting goes to ${workspaceById(workspaces, startWorkspace)?.name ?? "General"}.` : null;
+  const archivedNote = requested?.archived ? `"${requested.name}" is archived, so this meeting goes to ${workspaceById(workspaces, startWorkspace)?.name ?? "General"}.` : null;
   const [homeId, setHomeId] = useState(startWorkspace);
   const [borrowed, setBorrowed] = useState<string[]>([]);
   // A scenario picked here beats the workspace's own; until then the workspace decides.

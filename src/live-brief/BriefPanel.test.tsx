@@ -112,7 +112,8 @@ describe("BriefPanel", () => {
     seed();
     const { unmount } = render(<BriefPanel />);
     await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
-    await userEvent.click(screen.getByRole("button", { name: "Pause the brief" }));
+    await userEvent.click(screen.getByRole("button", { name: "Brief options" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Pause the brief" }));
     expect(calls).toEqual(["refresh", "pause"]);
     unmount();
     calls.length = 0;

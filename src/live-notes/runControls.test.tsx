@@ -16,6 +16,7 @@ vi.mock("../lib/ipc", () => ({
 vi.mock("../lib/events", async () => {
   const hotkeys = await import("../lib/hotkeys");
   return {
+    onAutomaticModelUpdated: async () => () => {},
     onNotesUpdateRequested: (h: () => void) => {
       window.addEventListener(hotkeys.NOTES_UPDATE_EVENT, h);
       return () => window.removeEventListener(hotkeys.NOTES_UPDATE_EVENT, h);
@@ -68,10 +69,10 @@ describe("buttons come from `can`", () => {
     notes(run("on", ["update", "pause"], { tokens_used: 999_999 }));
     render(<NotesPanel />);
     expect(screen.getByRole("button", { name: /Update now/ })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
     expect(screen.queryByRole("group", { name: "Keep taking notes?" })).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: "Pause" }));
+    await userEvent.click(screen.getByRole("button", { name: "Notes options" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Pause notes" }));
     expect(calls).toEqual(["pause"]);
   });
 
@@ -219,7 +220,8 @@ describe("brief panel", () => {
   it("pauses and resumes without turning off", async () => {
     brief(run("on", ["update", "pause"]));
     const { unmount } = render(<BriefPanel />);
-    await userEvent.click(screen.getByRole("button", { name: "Pause the brief" }));
+    await userEvent.click(screen.getByRole("button", { name: "Brief options" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Pause the brief" }));
     expect(screen.getByText("Brief: On")).toBeInTheDocument();
     unmount();
     brief(run("paused", ["resume"]));
@@ -233,5 +235,40 @@ describe("brief panel", () => {
     render(<BriefPanel />);
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(calls).toEqual(["try_again"]);
+  });
+});
+
+describe("after Stop, at the end, and when the limit changes", () => {
+  it("with notes on the page and the notes off, offers Turn on notes", async () => {
+    notes(run("off", ["start"]), { enabled: false }, true);
+    const turnOn = vi.fn(async () => void calls.push("turn_on"));
+    useLiveNotesStore.setState({ turnOn: turnOn as never });
+    render(<NotesPanel />);
+    await userEvent.click(screen.getByRole("button", { name: "Turn on notes" }));
+    expect(turnOn).toHaveBeenCalledWith("meeting");
+  });
+
+  it("after the meeting ends, keeps the notes on show and offers no run controls", () => {
+    notes(run("finished", ["start", "update"]));
+    const { rerender } = render(<NotesPanel />);
+    act(() => useMeetingStore.setState({ activeMeeting: null as never }));
+    rerender(<NotesPanel />);
+    expect(screen.getByText("Live notes: Meeting ended")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Launch plan" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Update now|Start notes again/ })).toBeNull();
+  });
+
+  it("the footer follows a changed limit at once", () => {
+    notes(run("on", ["update"], { cap: 120000, tokens_used: 42000 }), { cap: 240000 });
+    render(<NotesPanel />);
+    expect(screen.getByText(/42k of 240k tokens/)).toBeInTheDocument();
+  });
+
+  it("shows the backend's reason when Update now has nothing new, as a notice", () => {
+    notes(run("on", ["update"]));
+    useLiveNotesStore.setState({ notice: "Nothing new to add yet." });
+    render(<NotesPanel />);
+    expect(screen.getByText("Nothing new to add yet.")).toBeInTheDocument();
+    expect(screen.getByText("Not updated")).toBeInTheDocument();
   });
 });

@@ -10,7 +10,7 @@ import { FromLibraryDialog, usedIn } from "./LibraryDialogs";
 import { readableName } from "./libraryStatus";
 import { skippedByFolder } from "./indexStatus";
 import { AGG_PREFIX, WAVE_SINGLES, waveMeetings } from "./waveMeetings";
-import { recapsDescription } from "./WorkspaceDialog";
+import { recapCountLine, recapsDescription } from "./WorkspaceDialog";
 import { useConfigStore } from "../stores/configStore";
 import { useContextStore } from "../stores/contextStore";
 import { useMeetingStore } from "../stores/meetingStore";
@@ -35,7 +35,7 @@ describe("F23 Prepare recaps with AI", () => {
     return <button onClick={() => a.edit("acme")}>edit</button>;
   }
   const open = async (detail = detailOf(ACME, [], "")) => {
-    const b = mockBackend({ get_workspace: detail, update_workspace: detail, list_workspaces: [GEN, ACME, BIO] });
+    const b = mockBackend({ get_workspace: detail, update_workspace: detail, list_workspaces: [GEN, ACME, BIO], get_automatic_model: { provider: "claude_cli", model: "haiku", effort: null, label: "Claude Haiku (cheapest)" } });
     render(
       <WorkspaceActionsProvider>
         <Opener />
@@ -51,10 +51,13 @@ describe("F23 Prepare recaps with AI", () => {
     const sw = within(dialog).getByRole("switch", { name: /Prepare recaps with AI/ });
     await waitFor(() => expect(sw).toBeEnabled());
     expect(sw).toHaveAttribute("aria-checked", "false");
-    expect(within(dialog).getByText(/one AI call to claude_cli sonnet reads its transcript/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/The transcript is sent to that model/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/Recaps are what chat reads first/)).toBeInTheDocument();
-    expect(recapsDescription("x")).toMatch(/context estimate/);
+    expect(await within(dialog).findByText(/one AI call writes a short recap from the transcript/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/for up to 5 meetings without one when this workspace opens/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/It never runs during a meeting, uses the cheapest model you have set up \(Claude Haiku \(cheapest\)\)/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/sends that meeting's transcript to it/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Meetings that already have a summary are left alone/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Chat reads recaps first/)).toBeInTheDocument();
+    expect(recapsDescription("x")).not.toMatch(/context estimate/);
   });
 
   it("turns on and is saved with the workspace, and shows on when it already was", async () => {
@@ -245,5 +248,42 @@ describe("the Start dialog keeps its buttons in view", () => {
     expect(screen.getByRole("group", { name: "Also use" }).querySelector(".max-h-28")).not.toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Start Meeting" }));
     expect(onStart).toHaveBeenCalledWith("online", expect.any(String), { workspaceId: "w17", borrowed: [] });
+  });
+});
+
+
+describe("the AI recap count in Edit workspace", () => {
+  function Opener() {
+    const a = useWorkspaceActions();
+    return <button onClick={() => a.edit("acme")}>edit</button>;
+  }
+  const open = async (status: Record<string, unknown>) => {
+    mockBackend({ get_workspace: detailOf(ACME, [], ""), list_workspaces: [GEN, ACME, BIO], get_index_status: status });
+    render(
+      <WorkspaceActionsProvider>
+        <Opener />
+      </WorkspaceActionsProvider>,
+    );
+    await userEvent.click(screen.getByText("edit"));
+    return screen.findByRole("dialog", { name: /Settings for Acme/ });
+  };
+  const base = { workspace_id: "acme", state: "idle", done: 0, total: 0, passages: 0, skipped: [], last_indexed_at: null };
+
+  it("says how many meetings have one, in the singular and the plural", async () => {
+    let dialog = await open({ ...base, ai_recaps: 12 });
+    expect(await within(dialog).findByText("12 meetings have an AI recap.")).toBeInTheDocument();
+    cleanup();
+    dialog = await open({ ...base, ai_recaps: 1 });
+    expect(await within(dialog).findByText("1 meeting has an AI recap.")).toBeInTheDocument();
+    cleanup();
+    dialog = await open({ ...base, ai_recaps: 0 });
+    expect(await within(dialog).findByText("No meeting here has an AI recap yet.")).toBeInTheDocument();
+  });
+
+  it("says nothing about a count an older backend does not give", async () => {
+    const dialog = await open(base);
+    await within(dialog).findByRole("switch", { name: /Prepare recaps with AI/ });
+    expect(within(dialog).queryByText(/AI recap\./)).toBeNull();
+    expect(recapCountLine(undefined)).toBeNull();
   });
 });

@@ -7,6 +7,7 @@ import { useConfigStore } from "../../stores/configStore";
 import { showToast } from "../../stores/toastStore";
 import { useAudioPlayerStore } from "../../stores/audioPlayerStore";
 import { formatTimestamp } from "../../lib/utils";
+import { relMs } from "../../lib/time";
 import { isCliAgent } from "../../lib/cliAgents";
 import {
   CheckSquare,
@@ -74,9 +75,7 @@ export function ActionItemRow({
     setEditing(false);
   };
 
-  const relativeMs = item.timestamp_ms > meetingStartMs
-    ? item.timestamp_ms - meetingStartMs
-    : 0;
+  const relativeMs = relMs(item.timestamp_ms, meetingStartMs);
   const hasTimestamp = relativeMs > 0;
   const hasAssignee = !!assignee;
   const showMeta = hasTimestamp || hasAssignee;

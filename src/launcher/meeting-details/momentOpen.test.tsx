@@ -11,7 +11,7 @@ vi.mock("./TranscriptView", () => ({
 }));
 
 import { MeetingDetails } from "./MeetingDetailsContainer";
-import { focusAndMarkRow, rawIndexAtMs } from "./momentIndex";
+import { focusAndMarkRow, rawIndexAtMs, relativeMs } from "./momentIndex";
 import { handleOpenRequest } from "../../workspace/openRequest";
 import { useMeetingStore } from "../../stores/meetingStore";
 import { mockBackend } from "../../workspace/testUtils";
@@ -35,6 +35,30 @@ describe("which line a moment lands on", () => {
   });
   it("is null with nothing to land on", () => {
     expect(rawIndexAtMs([], START, 5_000)).toBeNull();
+  });
+});
+
+describe("the time contract: ms since the meeting started, converted once", () => {
+  it("stamps that are already relative are used as they are", () => {
+    const rel = [seg(0, 0), seg(1, 0), seg(2, 0)].map((x, i) => ({ ...x, timestamp_ms: [2_000, 10_000, 30_000][i] }));
+    expect(rawIndexAtMs(rel, START, 10_000)).toBe(1);
+    expect(rawIndexAtMs(rel, START, 29_000)).toBe(1);
+    expect(rawIndexAtMs(rel, START, 30_000)).toBe(2);
+    expect(rawIndexAtMs(rel, 0, 5_000)).toBe(0);
+  });
+  it("clock times lose the start once; a meeting with no usable start uses the earliest clock time", () => {
+    expect(rawIndexAtMs(SEGS, START, 12_000)).toBe(1);
+    // No start: the first line (at START+2000) counts as 0, so the lines are at 0, 8000 and 28000.
+    expect(rawIndexAtMs(SEGS, 0, 7_999)).toBe(0);
+    expect(rawIndexAtMs(SEGS, 0, 8_000)).toBe(1);
+    expect(rawIndexAtMs(SEGS, 0, 28_000)).toBe(2);
+  });
+  it("a stamp before the start is 0, and nothing is converted when there is no base", () => {
+    expect(relativeMs(START - 5_000, START)).toBe(0);
+    expect(relativeMs(0, START)).toBe(0);
+    expect(relativeMs(7_000, START)).toBe(7_000);
+    expect(relativeMs(START + 7_000, null)).toBe(0);
+    expect(relativeMs(START + 7_000, START)).toBe(7_000);
   });
 });
 

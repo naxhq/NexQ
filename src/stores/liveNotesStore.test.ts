@@ -289,8 +289,27 @@ describe("turning off is never claimed unless true", () => {
 describe("errors", () => {
   it("reports a failed command in words", async () => {
     h.fail = "No provider is set up";
-    await S().updateNow();
+    await S().start();
     expect(S().error).toBe("No provider is set up");
+  });
+
+  it("Update now refused with a reason (nothing new yet) is a notice, not a failure", async () => {
+    h.failOnly.add("update_now");
+    await S().updateNow();
+    expect(S().notice).toBe("failed");
+    expect(S().error).toBeNull();
+    S().clearError();
+    expect(S().notice).toBeNull();
+  });
+
+  it("the Settings switch re-enables on every toggle, the second too", async () => {
+    await S().loadSettings();
+    for (const on of [false, true, false, true]) {
+      await S().patchSettings({ enabled: on });
+      expect(S().settings?.enabled).toBe(on);
+      expect(S().error).toBeNull();
+    }
+    expect(h.calls.filter((c) => c[0] === "set_settings").map((c) => (c[1][0] as { enabled: boolean }).enabled)).toEqual([false, true, false, true]);
   });
 
   it("forgets everything when a new meeting starts", async () => {

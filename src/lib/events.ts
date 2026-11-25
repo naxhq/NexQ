@@ -487,6 +487,10 @@ export function onNotetakerSettingsChanged(handler: (e: NotetakerSettings) => vo
 export function onBriefSettingsChanged(handler: (e: BriefSettings) => void): Promise<UnlistenFn> {
   return listen<BriefSettings>("brief_settings_changed", (e) => handler(e.payload));
 }
+/** `automatic_model_updated`: a provider's model list landed, so "Automatic" may name a different model. */
+export function onAutomaticModelUpdated(handler: (e: { provider: string }) => void): Promise<UnlistenFn> {
+  return listen<{ provider: string }>("automatic_model_updated", (e) => handler(e.payload));
+}
 export function onBriefSheet(handler: (e: BriefSheetEvent) => void): Promise<UnlistenFn> {
   return listen<BriefSheetEvent>("brief_sheet", (e) => handler(e.payload));
 }

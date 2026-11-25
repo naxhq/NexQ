@@ -82,6 +82,8 @@ interface LiveNotesState {
   settings: NotetakerSettings | null;
   /** The last thing that failed, in words. */
   error: string | null;
+  /** A refusal that is not a failure ("nothing new to add yet"), in the backend's words. */
+  notice: string | null;
 
   /** Load a meeting's notes and follow it. Never changes which meeting is live. */
   attach: (meetingId: string) => Promise<() => void>;
@@ -219,6 +221,7 @@ export const useLiveNotesStore = create<LiveNotesState>((set, get) => {
     deadlines: {},
     settings: null,
     error: null,
+    notice: null,
 
     attach: async (meetingId) => {
       if (!get().entries[meetingId]) patchEntry(meetingId, () => blank());
@@ -272,7 +275,7 @@ export const useLiveNotesStore = create<LiveNotesState>((set, get) => {
     reset: () => {
       for (const t of pruneTimers.values()) clearTimeout(t);
       pruneTimers.clear();
-      set({ entries: {}, runs: {}, deadlines: {}, error: null });
+      set({ entries: {}, runs: {}, deadlines: {}, error: null, notice: null });
     },
 
     turnOn: async (scope) => {
@@ -293,7 +296,17 @@ export const useLiveNotesStore = create<LiveNotesState>((set, get) => {
       if (!ok) set({ error: "Could not stop the notes. Try again." });
     },
     start: () => onLive((id) => notetakerStart(id)),
-    updateNow: () => onLive((id) => notetakerUpdateNow(id)),
+    updateNow: async () => {
+      const id = needLive();
+      if (!id) return;
+      set({ error: null, notice: null });
+      try {
+        await notetakerUpdateNow(id);
+      } catch (e) {
+        // "Nothing new yet" and other refusals come with a reason: say it, it is not a failure.
+        set({ notice: describeError(e) });
+      }
+    },
     pause: () => onLive((id) => notetakerPause(id)),
     resume: () => onLive((id) => notetakerResume(id)),
     tryAgain: () => onLive((id) => notetakerStart(id)),
@@ -382,6 +395,6 @@ export const useLiveNotesStore = create<LiveNotesState>((set, get) => {
         fail(e);
       }
     },
-    clearError: () => set({ error: null }),
+    clearError: () => set({ error: null, notice: null }),
   };
 });

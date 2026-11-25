@@ -487,3 +487,11 @@ describe("access changed", () => {
     expect(S().sessions.c2.turn?.status).toBe("waiting");
   });
 });
+
+describe("why an answer was removed", () => {
+  it.each([["deleted"], ["moved"], [undefined]])("keeps the detail %s on the removed turn", async (detail) => {
+    const { reqId } = await startAsk();
+    h().error({ chat_id: "c1", request_id: reqId, error: "x", error_kind: "access_changed" as never, error_detail: detail as never });
+    expect(S().sessions.c1.turn).toMatchObject({ status: "removed", removedBecause: detail ?? null });
+  });
+});

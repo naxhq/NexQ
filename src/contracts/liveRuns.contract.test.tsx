@@ -2,6 +2,7 @@
 // through the real wrappers, events, stores and panels. Nothing here is hand-written payload.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 import notetakerState from "./fixtures/notetaker_state.json";
 import briefState from "./fixtures/brief_state.json";
@@ -133,7 +134,7 @@ describe("what the backend sends goes through the real stores", () => {
 });
 
 describe("the panels offer exactly what `can` allows", () => {
-  const label = { update: /Update now|Refresh/, pause: /^Pause/, resume: /^Resume/, start: /^Start (notes|the brief) again/ } as const;
+  const label = { update: /Update now|Refresh/, resume: /^Resume/, start: /^Start (notes|the brief) again/ } as const;
 
   it("notes", async () => {
     await useLiveNotesStore.getState().attach("m1");
@@ -145,6 +146,9 @@ describe("the panels offer exactly what `can` allows", () => {
       expect({ action, found: screen.queryAllByRole("button", { name: re }).length > 0 }).toEqual({ action, found: has });
     }
     expect(screen.getByText(/next update in \d+ s/)).toBeInTheDocument();
+    // Pause lives in the options menu, and only when the backend allows it.
+    await userEvent.click(screen.getByRole("button", { name: "Notes options" }));
+    expect(!!screen.queryByRole("menuitem", { name: "Pause notes" })).toBe((notetakerState.can as string[]).includes("pause"));
   });
 
   it("brief, after a plan limit: Try again, and the reason in words", async () => {

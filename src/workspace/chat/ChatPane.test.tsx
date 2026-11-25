@@ -36,6 +36,7 @@ const ipc = vi.hoisted(() => ({
   listChatMeetingPrefs: vi.fn(),
   setChatItemPref: vi.fn(),
   getChatCapabilities: vi.fn(),
+  listChatItemPrefs: vi.fn(),
 }));
 vi.mock("../../lib/ipc", async (orig) => ({ ...(await orig<typeof import("../../lib/ipc")>()), ...ipc }));
 
@@ -265,7 +266,25 @@ describe("answers", () => {
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByLabelText("Document name")).toHaveValue("What is the plan?");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(ipc.saveAnswerToLibrary).toHaveBeenCalledWith(2, "What is the plan?"));
+    await waitFor(() => expect(ipc.saveAnswerToLibrary).toHaveBeenCalledWith(2, "What is the plan?", "The plan."));
+  });
+
+  it("shows the text that will be stored, cleans what must go, and stores exactly the reviewed text", async () => {
+    ipc.saveAnswerToLibrary.mockResolvedValue("doc1");
+    const zw = String.fromCharCode(0x200b);
+    setup({ chats: [chat("c1")], messages: [message(1, "user", "Plan?"), message(2, "assistant", "Plan" + zw + " <b>A</b> [x](https://evil.example) [S1]")] });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Save to library" }));
+    const dialog = await screen.findByRole("dialog");
+    const field = within(dialog).getByLabelText("Text to save") as HTMLTextAreaElement;
+    expect(field.value).toBe("Plan A x");
+    fireEvent.change(field, { target: { value: "Plan A x" + zw + "!" } });
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(ipc.saveAnswerToLibrary).not.toHaveBeenCalled();
+    expect(field.value).toBe("Plan A x!");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Some of it was removed");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(ipc.saveAnswerToLibrary).toHaveBeenCalledWith(2, "Plan?", "Plan A x!"));
   });
 });
 
@@ -540,28 +559,46 @@ describe("add to instructions", () => {
     await user.click(await screen.findByRole("button", { name: "Add to instructions" }));
     return screen.findByRole("dialog");
   };
+  const detail = (instructions: string) => useWorkspaceStore.setState({ loadDetail: (async () => ({ instructions })) as never });
 
-  it("shows the answer as plain text to read, adds it through the backend command, and can undo", async () => {
+  it("starts from the answer as plain text, sends exactly what was reviewed, and can undo", async () => {
     const update = vi.fn().mockResolvedValue(undefined);
-    useWorkspaceStore.setState({ update: update as never, loadDetail: (async () => ({ instructions: "Be brief." })) as never });
+    useWorkspaceStore.setState({ update: update as never });
+    detail("Be brief.");
     ipc.addAnswerToInstructions.mockResolvedValue(undefined);
     setup({ chats: [chat("c1")], messages: [message(1, "user", "Q"), message(2, "assistant", "Always cite [S1]. [x](https://evil.example/p " + '"t"' + ")")] });
     const user = userEvent.setup();
     const dialog = await open(user);
     expect(within(dialog).getByText(/instructions the AI follows/)).toBeInTheDocument();
-    const field = within(dialog).getByLabelText("The answer, as plain text") as HTMLTextAreaElement;
+    const field = within(dialog).getByLabelText("Text to add") as HTMLTextAreaElement;
     expect(field.value).toBe("Always cite. x");
-    expect(field.readOnly).toBe(true);
+    fireEvent.change(field, { target: { value: "Always cite sources." } });
     await user.click(within(dialog).getByRole("button", { name: "Add to instructions" }));
-    await waitFor(() => expect(ipc.addAnswerToInstructions).toHaveBeenCalledWith(2));
+    await waitFor(() => expect(ipc.addAnswerToInstructions).toHaveBeenCalledWith(2, "Always cite sources."));
     expect(update).not.toHaveBeenCalled();
     await user.click(await within(dialog).findByRole("button", { name: "Undo" }));
     await waitFor(() => expect(update).toHaveBeenCalledWith(WS, { instructions: "Be brief." }));
   });
 
+  it("cleans hidden characters, HTML and links that were typed or pasted, and sends nothing until it is read again", async () => {
+    detail("");
+    ipc.addAnswerToInstructions.mockResolvedValue(undefined);
+    setup({ chats: [chat("c1")], messages: [message(1, "user", "Q"), message(2, "assistant", "Text")] });
+    const user = userEvent.setup();
+    const dialog = await open(user);
+    const field = within(dialog).getByLabelText("Text to add") as HTMLTextAreaElement;
+    fireEvent.change(field, { target: { value: "Be kind" + String.fromCharCode(0x200b) + " <b>always</b> [x](https://evil.example)" } });
+    await user.click(within(dialog).getByRole("button", { name: "Add to instructions" }));
+    expect(ipc.addAnswerToInstructions).not.toHaveBeenCalled();
+    expect(field.value).toBe("Be kind always x");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Some of it was removed");
+    await user.click(within(dialog).getByRole("button", { name: "Add to instructions" }));
+    await waitFor(() => expect(ipc.addAnswerToInstructions).toHaveBeenCalledWith(2, "Be kind always x"));
+  });
+
   it("shows the backend's refusal in place and adds nothing", async () => {
-    useWorkspaceStore.setState({ loadDetail: (async () => ({ instructions: "" })) as never });
-    ipc.addAnswerToInstructions.mockRejectedValue("Something this answer used has left this workspace, so it can't be added.");
+    detail("");
+    ipc.addAnswerToInstructions.mockRejectedValue("Something this answer used has left this workspace, so it can't be saved.");
     setup({ chats: [chat("c1")], messages: [message(1, "user", "Q"), message(2, "assistant", "Text")] });
     const user = userEvent.setup();
     const dialog = await open(user);
@@ -708,5 +745,40 @@ describe("a turn ends only by its own request", () => {
     await screen.findByRole("button", { name: "Allow once" });
     emit("workspace_chat_approval_closed", { chat_id: "c1", approval_id: "t1", reason: "timed_out" });
     expect(await screen.findByText(/No answer in 60 seconds, so it was denied/)).toBeInTheDocument();
+  });
+});
+
+describe("removed answers and saved pins, in words", () => {
+  async function removed(detail?: "deleted" | "moved") {
+    setup();
+    const box = await typeQuestion("Q");
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(ipc.askWorkspace).toHaveBeenCalled());
+    const id = ipc.askWorkspace.mock.calls[0][2] as string;
+    emit("workspace_chat_error", { chat_id: "c1", request_id: id, error: "x", error_kind: "access_changed", error_detail: detail });
+  }
+  it("says deleted when what it used was deleted", async () => {
+    await removed("deleted");
+    expect(await screen.findByText("Something this answer used was deleted, so it was stopped.")).toBeInTheDocument();
+  });
+  it("says moved when it was moved or the reason is unknown", async () => {
+    await removed("moved");
+    expect(await screen.findByText(/was moved out of this workspace, so it was stopped/)).toBeInTheDocument();
+  });
+
+  it("lists pinned and left-out items by name, never by id, and puts them back", async () => {
+    ipc.setChatItemPref.mockResolvedValue(undefined);
+    ipc.listChatItemPrefs.mockResolvedValue([
+      { kind: "document", ref_id: "d1", pref: "pin", title: "Master agreement" },
+      { kind: "meeting", ref_id: "3f2b8c1e-9d4a-4c1b-8a55-0f1e2d3c4b5a", pref: "exclude", title: "" },
+    ]);
+    setup({ chats: [chat("c1")], messages: pairs(1) });
+    await userEvent.setup().click(await screen.findByRole("button", { name: /What the next answer will see/ }, { timeout: 2000 }));
+    const list = await screen.findByRole("list", { name: "Pinned and left out" });
+    expect(within(list).getByText("Master agreement")).toBeInTheDocument();
+    expect(within(list).getByText("Removed item")).toBeInTheDocument();
+    expect(list.textContent).not.toContain("3f2b8c1e");
+    await userEvent.setup().click(within(list).getByRole("button", { name: "Unpin" }));
+    await waitFor(() => expect(ipc.setChatItemPref).toHaveBeenCalledWith("c1", "document", "d1", "default"));
   });
 });

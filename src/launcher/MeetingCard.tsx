@@ -204,6 +204,7 @@ export function MeetingCard({
       <p className="ui-meta mt-0.5 flex flex-wrap items-center gap-x-2 text-muted-foreground">
         {isLive && <span className="font-semibold text-success">Live</span>}
         {meeting.has_summary && <span className="font-medium text-foreground/80">Summary</span>}
+        {!meeting.has_summary && meeting.has_recap && <span className="font-medium text-foreground/80">Recap</span>}
         {facts.map((f, i) => (
           <span key={i} className="tabular-nums">
             {f}

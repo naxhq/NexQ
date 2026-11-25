@@ -310,3 +310,10 @@ button.lb-chip:hover { color: hsl(var(--foreground)); background: hsl(var(--ui-f
   .ln-fresh, .ln-pill { animation: none; }
   .ln-more, .rs-tool { transition: none; }
 }
+
+/* Narrow panels: the shortcut hint goes first, so the header never clips. */
+@container ln (max-width: 339px) {
+  .rs-head .ui-kbd { display: none; }
+}
+.rs-head > * { min-width: 0; }
+.rs-tool { flex-shrink: 0; white-space: nowrap; }

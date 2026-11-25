@@ -134,6 +134,8 @@ export interface MeetingSummary {
   /** Home workspace ("general" when absent). */
   workspace_id?: string;
   speaker_count?: number;
+  /** An AI-written recap exists (workspace meeting lists only). */
+  has_recap?: boolean;
 }
 
 // == SPEAKER TYPES ==
@@ -1498,6 +1500,7 @@ export interface Passage {
   ref_id: string;
   sub_ref: string | null;
   title: string;
+  /** ms since the meeting started (see lib/time.ts). */
   start_ms: number | null;
   end_ms: number | null;
   text: string;
@@ -1529,6 +1532,8 @@ export interface IndexStatus {
   passages: number;
   skipped: SkippedFile[];
   last_indexed_at: number | null;
+  /** Meetings whose recap the AI wrote ("Prepare recaps with AI"); absent from older backends. */
+  ai_recaps?: number;
 }
 
 /** `workspace_index_progress` */
@@ -1669,6 +1674,8 @@ export type WorkspaceChatErrorKind = "no_key" | "rate_limited" | "unavailable" |
 export interface WorkspaceChatErrorEvent extends WorkspaceChatEventBase {
   error: string;
   error_kind?: WorkspaceChatErrorKind;
+  /** With `access_changed`: "deleted" (a meeting or file was deleted) or "moved" (taken out of this chat). */
+  error_detail?: "deleted" | "moved";
 }
 
 /** `workspace_chat_approval_refused`: a tool was not run and no question was asked (for example it can't be answered safely). */
@@ -1684,6 +1691,8 @@ export interface ItemPref {
   kind: string;
   ref_id: string;
   pref: ChatItemPrefValue;
+  /** The item's name; empty when it is gone. Absent from older backends. */
+  title?: string;
 }
 
 /** `get_chat_capabilities`: what this chat's model can do right now, and what is off and why. */
@@ -1726,7 +1735,7 @@ export interface NoteBlock {
   parent: string | null;
   /** Text with inline entities `{{p:Name}} {{l:Place}} {{o:Org}} {{d:Date}} {{n:Number}}`. */
   text: string;
-  /** Meeting time in ms the block belongs to. */
+  /** Meeting time the block belongs to: ms SINCE THE MEETING STARTED (see lib/time.ts). */
   t: number | null;
   /** The user edited it; the AI never changes or removes it. */
   edited: boolean;
@@ -1975,4 +1984,11 @@ export interface DbProblem {
   /** Where the file is. */
   path: string;
   backups: DbBackup[];
+}
+
+/** get_meeting_recap: the recap the AI wrote for a meeting; model is null when it was not recorded. */
+export interface MeetingRecap {
+  text: string;
+  model: string | null;
+  created_at: number;
 }

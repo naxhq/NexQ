@@ -5,7 +5,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  AutomaticModel, BriefSettings, BriefSheet, BriefState, NotetakerState, ChatCapabilities, DbIntegrityFinding, DbProblem, RetryOpenResult, ItemPref, ChatItemPrefValue, ChatMeetingPref, DeleteWorkspaceMode, ContextReport, IndexStatus, LibraryItem, MeetingScope,
+  AutomaticModel, BriefSettings, BriefSheet, BriefState, NotetakerState, ChatCapabilities, DbIntegrityFinding, DbProblem, RetryOpenResult, ItemPref, ChatItemPrefValue, ChatMeetingPref, DeleteWorkspaceMode, ContextReport, IndexStatus, MeetingRecap, LibraryItem, MeetingScope,
   MemoryItem, MemorySettings, NoteDoc, NoteEdit, NotetakerSettings, PointProgress, PointSaid,
   TalkingPoint, TalkingPointPatch, WorkspaceChat, WorkspaceChatPatch, WorkspaceDetail, WorkspaceInput, WorkspaceItemKind,
   WorkspaceMeetingPage, WorkspaceMessage, WorkspacePatch, WorkspaceSummary,
@@ -1177,6 +1177,12 @@ export async function listWorkspaceMeetings(
 ): Promise<WorkspaceMeetingPage> {
   return invoke<WorkspaceMeetingPage>("list_workspace_meetings", { id, query, limit, offset });
 }
+export async function getMeetingRecap(meetingId: string): Promise<MeetingRecap | null> {
+  return invoke<MeetingRecap | null>("get_meeting_recap", { meetingId });
+}
+export async function deleteMeetingRecap(meetingId: string): Promise<void> {
+  return invoke("delete_meeting_recap", { meetingId });
+}
 export async function getMeetingScope(meetingId: string): Promise<MeetingScope> {
   return invoke<MeetingScope>("get_meeting_scope", { meetingId });
 }
@@ -1260,12 +1266,16 @@ export async function askWorkspace(
 export async function cancelWorkspaceRequest(requestId: string): Promise<void> {
   return invoke("cancel_workspace_request", { requestId });
 }
-export async function saveAnswerToLibrary(messageId: number, title: string): Promise<string> {
-  return invoke<string>("save_answer_to_library", { messageId, title });
+/** Saves `text` (what the person reviewed) as a document; the backend refuses text that cleaning would change. */
+export async function saveAnswerToLibrary(messageId: number, title: string, text: string): Promise<string> {
+  return invoke<string>("save_answer_to_library", { messageId, title, text });
 }
-/** Appends a saved answer to the workspace's instructions; refuses it if something it used has left the workspace. */
-export async function addAnswerToInstructions(messageId: number): Promise<void> {
-  return invoke("add_answer_to_instructions", { messageId });
+/**
+ * Adds `text` (what the person reviewed) to the workspace's instructions. The backend refuses it if
+ * something the answer used has left the workspace, or if cleaning the text would change it.
+ */
+export async function addAnswerToInstructions(messageId: number, text: string): Promise<void> {
+  return invoke("add_answer_to_instructions", { messageId, text });
 }
 export async function answerWorkspaceApproval(approvalId: string, allow: boolean): Promise<void> {
   return invoke("answer_workspace_approval", { approvalId, allow });
