@@ -38,7 +38,7 @@ Click **Layout** in the header (the small grid icon) to open the menu. At the to
 | **Presenter** | **Talking points** and **Brief** as tabs on the left. **Assistant** and **Transcript** as tabs on the right |
 | **Everything** | Transcript, AI Call Log and Dev Log as tabs on the left. The assistant on top of live notes, brief, talking points, bookmarks and stats on the right |
 
-A layout only decides where panels go. Panels it doesn't use are hidden, not closed. They keep their state, and live notes keep taking notes while they are out of sight.
+A layout only decides where panels go. Panels it doesn't use are hidden, not closed. They keep their state, and live notes keep taking notes while the panel is out of sight (a hidden panel only stops drawing and polling: see [Hide, show and collapse](#hide-show-and-collapse)).
 
 ### Save your own
 
@@ -97,6 +97,8 @@ The menu says **Layout locked** while it is on. Click it again to unlock.
 ## Small windows
 
 In a narrow window the header keeps two rows instead of three. Below about 1040 pixels the view buttons move into one **More view options** menu: **Focus AI panel** (or **Focus Transcript**, or **Split view**), **Speaker stats** (`S`), **Bookmarks** (`K`), **AI call log**, **Dev log** (`Ctrl+Shift+L`) and **Transparency** (each press cycles it). The panels in the menu show a tick when they are on. The **Translate** button keeps only its icon.
+
+The model and speech pickers in the footer of the meeting window open above it, inside the window, so a narrow window never cuts them off.
 
 When the window is too small for the arrangement, NexQ doesn't squeeze panels until they are unreadable. It first lets a side-by-side pair stack on top of each other, and if that doesn't fit either, it merges the panels into one set of tabs. Your saved layout isn't changed, so making the window bigger brings it back. Classic is designed to look the same as before at 400, 500 and 900 pixels wide. While the panels are merged, dragging and moving are off.
 

@@ -14,7 +14,7 @@ They run on a model of their own, with their own limit, and they never slow down
 
 ## Show the panels
 
-Both are panels in the meeting window. They are hidden in the default layout. Choose **Layout > Panels > Live notes** (or **Brief**), or pick the **Notes** layout, which puts them side by side on the right ([Meeting window layout](meeting-layout.md)). A hidden panel keeps working.
+Both are panels in the meeting window. They are hidden in the default layout. Choose **Layout > Panels > Live notes** (or **Brief**), or pick the **Notes** layout, which puts them side by side on the right ([Meeting window layout](meeting-layout.md)). Hiding the panel doesn't stop the notes or the brief.
 
 ## Live notes
 
@@ -58,7 +58,9 @@ With **Updates** on **Automatic** (the default), NexQ updates the notes:
 
 Nothing runs on silence, and only one update runs at a time. If a live answer is being written, the notes wait.
 
-**Manual** (or **Update only when I ask** in the **...** menu) never runs unasked, and that includes the end of the meeting. If part of the call was never sent, the panel says so, for example **Not covered: 02:00 to 40:00**, and **Update notes** sends it.
+**Manual** (or **Update only when I ask** in the **...** menu) never runs unasked, and that includes the end of the meeting.
+
+**Not covered.** If part of the call never reached the notes (manual mode, or a final update that failed or ran out of time), NexQ saves that range with the notes. The panel and the **Notes** tab of the meeting say so, for example **Not covered: 2:00 to 40:00**, and **Update notes** sends it. After the meeting this runs on the saved transcript, once, for that part. It uses the same limit, and it says why when it can't run: another meeting is live, there are no notes, nothing new to add, the limit was reached, or the saved transcript has nothing in that part (the **Not updated** notice). Once the meeting is over the panel and the tab say how the notes ended: **Finished**, **Stopped early**, **Stopped at the limit**, **Stopped by an error**, **Paused when the meeting ended** or **Updating the notes**.
 
 The panel tells you what it is doing, in words:
 
@@ -86,7 +88,7 @@ In **Settings > Live Notes and Brief**, or **Model, detail and limit** in the pa
 | **Language of the notes** | **The meeting's language**, or one of 12 languages |
 | **Limit per meeting** | 30k, 60k, 120k, 240k or 500k tokens |
 
-**Automatic** works like this. With a subscription (Claude, Codex or Antigravity) it uses the CLI's fast tier. With OpenRouter it takes the first small model from a short list (a nano, Haiku or Flash-Lite model, for example) that OpenRouter's model list contains. With every other provider (OpenAI, Anthropic, Gemini, Groq, Ollama, LM Studio, a custom server) it uses your active model and says so ("active model"), so it is not cheaper there. To use a smaller model, pick one yourself. The brief and memory suggestions follow the same rule.
+**Automatic** works like this, and it is worked out again before every run, so a provider you switch to, or a model list that arrives later, applies to the next run (not to one already running). With a subscription (Claude, Codex or Antigravity) it uses the CLI's fast tier. With OpenAI, Anthropic, Gemini or Groq it takes the first small model from a short list (a nano, mini, Haiku, Flash or Llama 8B model, for example) that your provider's own model list contains. That list is fetched in the background, at most once a day, with your key, and never during a live answer. Until it arrives, or when nothing on the short list is offered, it uses your active model and says so ("active model"). With OpenRouter it uses the prices OpenRouter lists: among text chat models with at least 32k tokens of room, skipping free ones unless your active model is free, it takes the lowest-priced model of the short list, where reading counts four times as much as writing. With Ollama, LM Studio or a custom server it always uses your active model, so it is not cheaper there. The label says **(cheapest)** only when the pick is the first model of the short list (or, on OpenRouter, nothing eligible costs less), and **(small model)** otherwise. To use a particular model, pick it yourself. The brief, memory suggestions and AI recaps follow the same rule.
 
 If the model can't answer (no key, plan limit, server not running), NexQ doesn't switch to another one. A plan limit shows **Notes paused** with the reason and **Try again**. Three failures in a row show **Notes stopped** with the reason. Both offer **Change model**, and **Try again** or **Start notes again**. NexQ can also read notes from a small local model that answers in plain lines instead of structured output, and it drops anything it can't read.
 
@@ -163,7 +165,7 @@ The recent transcript, the passages found in the workspace for this topic and yo
 
 ## Tips
 
-- **Start with Automatic and Standard.** With a subscription that is the fast tier. With most API providers it is your active model, so pick a smaller model yourself if you want to spend less.
+- **Start with Automatic and Standard.** With a subscription that is the fast tier. With the main API providers it is a small model once your provider's list is known, and with local servers it is your active model. The panel names the model before you turn anything on, so you can see what it will cost.
 - **Use a local model for notes** if you don't want the conversation to leave your PC. It can be slower on a long meeting.
 - **Turn the brief on in the workspaces that have a lot of material**, such as a client you have talked to many times.
 - **Press N before the end** if you want the notes right up to the last minute. In automatic mode a final update runs anyway when you end the meeting. In manual mode it doesn't.

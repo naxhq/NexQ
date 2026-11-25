@@ -9,7 +9,7 @@ NexQ supports multiple STT and LLM providers, configurable audio devices, and lo
 The General settings panel controls app-wide behavior and preferences. Here you can configure:
 
 - **App behavior** -- startup options, system tray behavior, and window preferences
-- **Theme and appearance** -- light/dark mode and visual customization
+- **Theme and appearance** -- light/dark mode and visual customization. A theme change reaches the open meeting window at once. The default transcript and answer text colours follow the theme, so they stay readable in the light theme; a colour you picked yourself is used as chosen
 - **Language** -- interface language selection
 - **Update preferences** -- NexQ downloads updates quietly in the background and shows an "Update ready" button in the footer. Click it to see what's new and install when convenient, or it installs when you quit (never during a meeting). You always get the newest version, even if several came out since your last update. Turn this off under Settings > About > Automatic updates
 - **Data management** -- storage location and cleanup options

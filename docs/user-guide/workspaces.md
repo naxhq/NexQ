@@ -85,8 +85,6 @@ When you press **Start meeting** in the launcher, a setup dialog opens first. It
 
 When you have remembered settings, the dialog opens compact: a line of badges (audio mode, the workspace, the scenario) and a **Start Meeting** button, with **Change settings** to open the full list. The workspace badge says **Change**; clicking it opens the full list. The call detection prompt has a workspace button for the same reason.
 
-**A workspace that is gone.** If the workspace a meeting is asked to start in has been archived, deleted or can't be read, NexQ does not file the meeting somewhere else, because that would use material you didn't choose. The meeting starts **not filed in a workspace** and uses none of their material. A notice says so, and the workspace button in the meeting window reads **No workspace**. Pick one from that button to file it. Until then it can't also use other workspaces.
-
 The scenario comes from the first of these that applies:
 
 1. The one you picked for this meeting
@@ -96,6 +94,12 @@ The scenario comes from the first of these that applies:
 Nothing changes the scenario of a meeting that is already running.
 
 To change the default, choose **Make default** on another workspace. The default workspace can't be archived or deleted until another one takes its place.
+
+## Meetings in no workspace
+
+**A workspace that is gone.** If the workspace a meeting is asked to start in has been archived, deleted or can't be read, NexQ does not file the meeting somewhere else, because that would use material you didn't choose. The meeting starts **not filed in a workspace** and uses none of anyone's material. A notice says so, and the workspace button in the meeting window reads **No workspace**. Pick one from that button to file it. Until then it can't also use other workspaces.
+
+**Not filed.** Meetings in no workspace are gathered under **Not filed**: a row in the list on the left (with their number), and a row on the **All workspaces** page. Both only appear when there is at least one. The page lists them, newest first, with a search box once there are more than five. **File in...** on a meeting moves it to a workspace you pick, and **File all in...** moves all of them to one workspace. Filing is the normal move, so it follows [the rules for moving a meeting](#move-a-meeting).
 
 ## What is in a workspace
 
@@ -155,13 +159,23 @@ NexQ scans again every 10 minutes while a workspace is open. **Rescan folders** 
 
 While the index is being built, the Library says **Still indexing 312 of 540**, and the chat box and the context estimate say that results may leave out files that aren't indexed yet.
 
-This switch only controls NexQ's own search. With the Claude subscription, a chat or a meeting can also open files in the folders of the workspace itself (see [Personal sources](claude-subscription.md#personal-sources)), and that does not depend on this switch.
+This switch only controls NexQ's own search. With a subscription (Claude, Codex or Antigravity), a chat or a meeting can also read the files in the folders of the workspace itself (see [Personal sources](claude-subscription.md#personal-sources)), and that does not depend on this switch.
 
 ### Recaps with AI
 
-By default a meeting's recap is its saved summary, or a short extract NexQ makes on your PC. **Prepare recaps with AI** (in **Edit workspace**, off by default) lets NexQ write a short recap with a model for meetings that have no summary. The setting says the transcript is sent to that model. A recap is at most about 120 words and is made from at most the first 24,000 characters of the transcript. At most 5 are made each time, newest meetings first, never while a meeting is running, and only when you click **Rescan folders** in the Library (which is shown only when the workspace has a folder). Recaps are what [workspace chat](workspace-chat.md) reads first when it looks across many meetings.
+By default a meeting's recap is its saved summary, or a short extract that NexQ makes on your PC. **Prepare recaps with AI** (in **Edit workspace**, off by default) lets NexQ write a short recap with a model for meetings that have no summary. **The transcript of that meeting is sent to the model.** The setting says which model.
 
-The model is your subscription's fast tier, or else your active model, and not necessarily the one the setting names (see [how Automatic chooses](live-notes-and-brief.md#model-detail-and-language)).
+When it runs:
+
+- After each meeting in the workspace ends, for that meeting, a few seconds later once it is indexed
+- When you open the workspace, for up to 5 meetings that don't have a recap yet, newest first, once per opening
+- When you click **Rescan folders** in the Library (shown only when the workspace has a folder). This also lets recaps that failed try again
+
+It never runs while a meeting is running. NexQ checks that the switch is still on, the workspace isn't archived and the meeting is still there before each call, and drops the result if anything changed while the model was working.
+
+A recap is at most about 120 words. From a long transcript (over 24,000 characters) the model gets the first 12,000 and the last 12,000, with a note in the text saying the middle was left out. A recap that fails is not tried again for the same transcript, so there is no endless retrying. The Edit workspace dialog says how many meetings have a recap and shows the failures, for example **3 recaps failed: no key**. A meeting's recap shows as **AI recap** in its details, where **Delete** removes it and it is not written again. Recaps are what [workspace chat](workspace-chat.md) reads first when it looks across many meetings.
+
+The model is chosen like **Automatic** (see [how Automatic chooses](live-notes-and-brief.md#model-detail-and-language)). The switch names it: "uses the automatic model, ...".
 
 ### The knowledge base buttons
 
@@ -205,9 +219,9 @@ When a meeting leaves a workspace, that workspace forgets what it learned from i
 - Its chats stop using the meeting. Their condensed summaries are dropped, because they may quote it, and the sources that pointed to it lose their title and text
 - Borrows that no longer make sense end
 
-## Not in any workspace
+## Files, folders and tools in no workspace
 
-NexQ only fills General once, at the upgrade. After that, a document, folder or tool that reaches the library without being filed anywhere is shown as **not in any workspace**, and no meeting or chat uses it. Add it to a workspace with **Add > Files, folders and tools in the library**. Things you add from a workspace, or from Settings, are filed together with the add (from Settings they go to the default workspace).
+NexQ only fills General once, at the upgrade. After that, a document, folder or tool that reaches the library without being filed anywhere is listed as **not in any workspace** in **Add > Files, folders and tools in the library**, and no meeting or chat uses it. Add it to a workspace from that list. Things you add from a workspace, or from Settings, are filed together with the add (from Settings they go to the default workspace).
 
 ## Clone
 
@@ -247,7 +261,7 @@ NexQ never creates, upgrades or overwrites a database it can't use. Instead of t
 | **NexQ couldn't finish updating your data** | Bringing your meetings up to this version didn't complete | **Try again** (restarts NexQ), **Open data folder** |
 | **Your meetings are in use** | Another NexQ or program is using the file | **Try again** once you have closed the other program, **Open data folder** |
 
-**Copies.** For a damaged file, **Restore a copy** lists the copies NexQ can open and check, with the date, time, number of meetings and size. NexQ makes `nexq-before-workspaces.db` at the upgrade (kept 14 days); a restore also keeps the files it replaces, as `nexq.db.damaged-` and a number. A restore, and **Start with an empty database** (which asks first), put the old files aside under new names. They never delete anything, and NexQ asks you to restart afterwards. If the power goes out in the middle, the next start finishes the recovery. Neither works while a meeting or a recording is in progress.
+**Copies.** For a damaged file, **Restore a copy** lists the copies NexQ can open and check, with the date, time, number of meetings and size. NexQ makes `nexq-before-workspaces.db` at the upgrade (kept 14 days); a restore also keeps the files it replaces, as `nexq.db.damaged-` and a number. A restore, and **Start with an empty database** (which asks first), put the old files aside under new names. They never delete anything, and NexQ asks you to restart afterwards. If the power goes out in the middle, the next start undoes a recovery that had not put every old file aside, and leaves your file as it was. If every old file was already aside, it finishes the recovery. Neither works while a meeting or a recording is in progress.
 
 **A daily check.** About two minutes after NexQ starts, and then at most once a day (never during a meeting or while a recording is saved), NexQ checks the open file for damage without changing it. If it finds some, a notice says **Your meetings file has some damage**, that NexQ keeps working with it and has changed nothing, and where the copies of your meetings are. Closing the notice hides it until the next start, and it returns while the damage is there.
 

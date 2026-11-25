@@ -220,7 +220,7 @@ The daily check found damage in the open file. NexQ keeps working with it and ha
 
 ### A Meeting Says It Is Not Filed in a Workspace
 
-The workspace you started it in was archived, deleted or couldn't be read, so NexQ did not use another one. The meeting uses none of any workspace's material. Pick a workspace from the workspace button in the meeting window to file it ([details](workspaces.md#the-default-workspace)).
+The workspace you started it in was archived, deleted or couldn't be read, so NexQ did not use another one. The meeting uses none of any workspace's material. Pick a workspace from the workspace button in the meeting window to file it, or later from **Not filed** in the list of workspaces, one by one or all at once ([details](workspaces.md#meetings-in-no-workspace)).
 
 ### A Document or Folder Shows "Missing"
 
@@ -262,7 +262,7 @@ The panel says why when it is unavailable: an in-person meeting, a muted microph
 
 - **Keep taking notes?** or **Keep the brief going?** means the limit was reached. Choose **Keep going** or **Stop**. See [Live notes and the brief](live-notes-and-brief.md#cost-and-the-limit).
 - **Notes paused** or **Notes stopped** (and **The brief paused** or **The brief stopped**) with a reason means the model couldn't answer: a missing key, a plan limit or a server that isn't running. Click **Change model**, then **Try again** or **Start notes again**.
-- **Not covered: 02:00 to 40:00** means the notes were on manual and that part of the call was never sent. Click **Update notes**.
+- **Not covered: 2:00 to 40:00** means part of the call never reached the notes (the notes were on manual, or the last update failed or ran out of time). Click **Update notes**, in the panel or in the **Notes** tab of the meeting. If it says **Not updated**, the reason is given: another meeting is live, the limit was reached, or there is nothing new to add.
 - A button you expect, such as **Resume** or **Try again**, is only shown when it can do something in the current state.
 - The brief says **The brief is off in this workspace** when the workspace's switch is off. Turn it on in the Brief panel. That switch is the only one.
 

@@ -48,7 +48,7 @@ You can have years of meetings in a workspace, and the answer stays quick, becau
 - The folders you switched **Search its text** on for
 - Talking points that are marked **Use as AI context**
 
-It builds the index in the background at low priority, pauses while a meeting runs, and updates it when text changes. Old meetings are indexed newest first. Nothing is uploaded to build it, and it uses keyword search only: no embedding model is needed.
+It builds the index in the background at low priority, pauses while a meeting runs, and updates it when text changes. Old meetings are indexed newest first. Building it uploads nothing, and it uses keyword search only: no embedding model is needed. (The one exception is **Prepare recaps with AI**, if you turned it on: that sends a meeting's transcript to a model.)
 
 **The search.** Passages are ranked by how well they match your question. Recent meetings get a small boost that fades over a couple of months. No more than three passages come from the same source, so one long file doesn't crowd out the rest, and weak matches are dropped.
 
@@ -58,7 +58,7 @@ It builds the index in the background at low priority, pauses while a meeting ru
 2. Everything you included, when all of it fits. The context panel then says **Everything included fit.**
 3. Otherwise, a short recap of each meeting (the 10 newest, then the most relevant), the passages found for your question, and the recent conversation. The panel says **Picked the most relevant material.**
 
-A meeting's recap is its saved summary when it has one, or a short extract that NexQ makes on your PC. No AI call is made for it.
+A meeting's recap is its saved summary when it has one. Otherwise it is a short extract that NexQ makes on your PC (no AI call), or, only when the workspace has **Prepare recaps with AI** on, a short recap written by a model from that meeting's transcript ([how and when](workspaces.md#recaps-with-ai)).
 
 **The conversation.** The last 8 turns are sent as written. When older ones pass a quarter of the room, the chat's model condenses them, which costs one call. You see **Earlier messages condensed**, and **Show N originals** brings the originals back on screen. Nothing is deleted.
 
@@ -76,8 +76,9 @@ The same strip, for the workspace as a whole, is at the bottom of the Library.
 
 Sources appear as `[S1]`, `[S2]` tags in the answer. Click one, or open **N sources** under the answer, to see each source with its kind (**Meeting**, **Document**, **Folder file** or **Talking point**), its title, the moment in the meeting (for example "Weekly sync at 12:41") and a short snippet.
 
-- A meeting opens on its **Transcript** at that moment, and the line is marked for a moment. A source with no time opens the meeting at the top.
-- A document or folder file opens the Library and marks its row.
+- A meeting opens on its **Transcript** at the line that was being spoken at that moment (the nearest line that started at or before it), and the line is marked for a moment. A source with no time opens the meeting at the top.
+- A document opens the Library and marks its row.
+- A file in a folder opens a small box with its path and **Open folder**, which shows the file in your file manager (names with spaces, commas or accents work).
 - A talking point opens its editor.
 
 A tag can only point at something that was really sent to the model. NexQ removes any tag the model invents. Text from your meetings and files is handed to the model as data, and the model is told not to follow instructions that appear inside it.
@@ -92,8 +93,8 @@ Under each answer:
 
 - **Copy** copies the answer without its source tags
 - **Ask another model** asks the same question again with a model you pick
-- **Save to library** saves the answer as a Markdown document in this workspace, so later answers can use it
-- **Add to instructions** shows the answer in a box you can read but not edit. When you confirm, NexQ adds the saved answer after your instructions, separated by a line, and the dialog offers **Undo**, which puts the instructions back as they were. Think before you confirm: the AI follows instructions in every later answer
+- **Save to library** shows the answer in a box you can edit and saves it as a document in this workspace, so later answers can use it. It is kept as it is: code, links and HTML stay, and only hidden characters are removed (up to 100,000 characters). If anything had to be removed, the box is cleaned first, says how many hidden characters went, and nothing is saved until you read it and click **Save** again
+- **Add to instructions** shows the answer in a box you can edit (up to 4,000 characters) as plain text. Links, images, HTML and hidden characters are not kept. If anything had to be removed, the box is cleaned and says what, for example "Removed: 2 HTML tags, the link address https://...", and nothing is added until you read it and click **Add to instructions** again. NexQ adds exactly the text in the box after your instructions, separated by a line, and the dialog offers **Undo**, which puts the instructions back as they were. Think before you confirm: the AI follows instructions in every later answer
 
 Both **Save to library** and **Add to instructions** are refused with "This answer used material that is no longer part of this workspace, so it can't be saved. Ask again." when something the answer used has left the workspace.
 
@@ -137,12 +138,12 @@ Anything else asks. A card shows **The model wants to run** the tool on a server
 - **Allow once**, which runs that one call
 - **Deny**
 
-If you don't answer, the call is denied after **60 seconds** (the card says "No answer in 60 seconds, so it was denied."). There is no "always allow". A card belongs to the answer that asked: if no answer is being written when a tool asks (for example a stopped answer), the call is refused and nothing is asked. Values under names like `password` or `api_key` are hidden, and hidden characters are shown as `\u{...}`. If arguments were cut or hidden, the card says so, and **Deny** is the highlighted button.
+If you don't answer, the call is denied after **60 seconds** (the card says "No answer in 60 seconds, so it was denied."). There is no "always allow". A card belongs to the answer that asked: if no answer is being written when a tool asks (for example a stopped answer), the call is refused and nothing is asked. A refused call is named with the answer, for example "CRM: send_mail was not run: ..." with the reason. Values under names like `password` or `api_key` are hidden, and hidden characters are shown as `\u{...}`. If arguments were cut or hidden, the card says so, and **Deny** is the highlighted button.
 
 ## What leaves your PC
 
-- **Searching and indexing happen on your PC.** Adding a file, building the index and finding passages send nothing anywhere.
-- **When you ask,** NexQ sends the provider you chose for that chat: your question, the workspace instructions, saved memory, the passages, recaps or files picked for this answer, and the recent conversation. With Ollama or LM Studio on your PC, that stays on your PC. With a cloud provider, it goes to that provider. With a **Custom server**, it goes wherever that server runs.
+- **Searching and indexing happen on your PC.** Adding a file, building the index and finding passages send nothing anywhere. The one exception is **Prepare recaps with AI**, if you turned it on for the workspace: it sends one meeting's transcript at a time to a model ([Workspaces](workspaces.md#recaps-with-ai)).
+- **When you ask,** NexQ sends the provider you chose for that chat: your question, the workspace instructions, saved memory, the passages, recaps or files picked for this answer, and the recent conversation (once a conversation is long, its older turns also go to the same model to be condensed). With Ollama or LM Studio on your PC, that stays on your PC. With a cloud provider, it goes to that provider. With a **Custom server**, it goes wherever that server runs.
 - **With a subscription,** the CLI also sends what it reads itself to its provider: files from the workspace's folders, meeting files, and the results of tools you allowed.
 - **Folders you didn't allow** are not searched by NexQ. See **Search its text** in [Workspaces](workspaces.md#folder-text-search).
 - **Other workspaces** are never included: not their meetings, not their chats. Anything you left out of a chat stays out.
