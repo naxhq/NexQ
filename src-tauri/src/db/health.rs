@@ -7,7 +7,7 @@
 
 use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags};
@@ -30,7 +30,7 @@ pub enum ProblemKind {
 }
 
 /// A database copy the app can restore from (opened read-only and checked first).
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackupInfo {
     pub name: String,
     /// When the copy was made (epoch ms).
@@ -324,14 +324,10 @@ pub fn stamp_now() -> u64 {
     millis(std::time::SystemTime::now()).max(0) as u64
 }
 
-#[allow(dead_code)]
-fn data_path(dir: &Path) -> PathBuf {
-    dir.join(DB_NAME)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn dir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("nexq-health-{name}-{}", uuid::Uuid::new_v4()));

@@ -1,9 +1,13 @@
 pub mod context;
 pub mod health;
+pub mod integrity;
 pub mod meeting_chat;
 pub mod meetings;
 pub mod migrations;
 pub mod rag;
+pub mod readers;
+#[cfg(test)]
+mod load_tests;
 pub mod translation;
 pub mod workspace_migrations;
 

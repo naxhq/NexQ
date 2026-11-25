@@ -32,6 +32,7 @@ pub const STEPS: &[Step] = &[
     Step { version: 13, name: "talking_points", run: v13_talking_points },
     Step { version: 14, name: "brief", run: v14_brief },
     Step { version: 15, name: "memory", run: v15_memory },
+    Step { version: 16, name: "chat_provenance", run: crate::workspace_chat::migrate::migrate_provenance },
 ];
 
 const BACKUP_NAME: &str = "nexq-before-workspaces.db";
@@ -505,7 +506,7 @@ mod tests {
         for table in ["workspaces", "workspace_items", "meeting_borrowed", "talking_points", "meeting_briefs", "workspace_memory", "meeting_notes"] {
             assert!(table_exists(&conn, table), "{table} missing");
         }
-        assert_eq!(count(&conn, "PRAGMA user_version"), 15);
+        assert_eq!(count(&conn, "PRAGMA user_version"), 16);
         // General is the default and holds every existing document.
         assert_eq!(count(&conn, "SELECT COUNT(*) FROM workspaces WHERE id = 'general' AND is_default = 1"), 1);
         assert_eq!(count(&conn, "SELECT COUNT(*) FROM workspace_items WHERE workspace_id = 'general' AND kind = 'document'"), 2);

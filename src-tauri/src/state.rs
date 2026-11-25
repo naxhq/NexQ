@@ -63,6 +63,8 @@ impl Default for ActiveScenario {
 /// and then check/initialize the manager within.
 pub struct AppState {
     pub database: Option<Arc<Mutex<DatabaseManager>>>,
+    /// Read-only connections for reads that must not wait for the shared one (the live path, the rail).
+    pub readers: Option<Arc<crate::db::readers::ReaderPool>>,
     pub audio: Arc<Mutex<Option<AudioCaptureManager>>>,
     pub stt: Option<Arc<Mutex<STTRouter>>>,
     pub llm: Option<Arc<Mutex<LLMRouter>>>,
@@ -199,6 +201,7 @@ impl AppState {
         let cli_settings = Arc::new(CliSettings::new());
         Self {
             database: None,
+            readers: None,
             audio: Arc::new(Mutex::new(Some(AudioCaptureManager::new()))),
             stt: None,
             llm: None,
