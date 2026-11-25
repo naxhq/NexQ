@@ -649,15 +649,12 @@ function applySaved(l: Layout, saved: Layout): Layout {
   return next;
 }
 
-/** Actions that change the arrangement; blocked while locked. */
+/** Moving, resizing and re-arranging; blocked while locked. Showing, hiding and collapsing always work. */
 const STRUCTURAL = new Set<DockAction["type"]>([
   "dock",
   "reorder",
   "resize",
   "equalize",
-  "hide",
-  "show",
-  "collapse",
   "reset",
   "preset",
   "applyLayout",

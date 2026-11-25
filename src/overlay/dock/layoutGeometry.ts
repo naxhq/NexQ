@@ -207,7 +207,7 @@ function pushStack(
 function place(n: LayoutNode, r: Rect, ctx: Ctx, parent: SplitNode | null, eff: Dir | null): void {
   if (n.kind === "stack") {
     const strip = n.collapsed && parent !== null;
-    pushStack(ctx, n.id, r, n.panels, n.active, strip, strip ? (eff === "row" ? "x" : "y") : null, false);
+    pushStack(ctx, n.id, r, n.panels, n.active, strip, strip ? (eff === "row" ? "x" : "y") : null, n.id.startsWith("~"));
     return;
   }
   const k = n.children.length;
@@ -226,6 +226,33 @@ function place(n: LayoutNode, r: Rect, ctx: Ctx, parent: SplitNode | null, eff: 
   };
   const flip: Dir = n.dir === "row" ? "col" : "row";
   const dir: Dir | null = fits(n.dir) ? n.dir : fits(flip) ? flip : null;
+
+  if (dir === null && k > 2) {
+    // Too tight for every child: tab the two smallest neighbours together and try again,
+    // so a 3-panel window shows 2 areas (one of them tabbed) before it gives up to one stack.
+    let at = -1;
+    let best = Infinity;
+    for (let i = 0; i + 1 < k; i++) {
+      if (isStrip[i] || isStrip[i + 1]) continue;
+      const w = n.sizes[i] + n.sizes[i + 1];
+      if (w < best) {
+        best = w;
+        at = i;
+      }
+    }
+    if (at >= 0) {
+      const pair = [n.children[at], n.children[at + 1]];
+      const panels = pair.flatMap((c) => panelsOf(c));
+      const leafActive = (x: LayoutNode): PanelId => (x.kind === "stack" ? x.active : leafActive(x.children[0]));
+      const active = ctx.focus && panels.includes(ctx.focus) ? ctx.focus : leafActive(pair[0]);
+      const merged: LayoutNode = { kind: "stack", id: `~${n.id}.${at}`, panels, active, collapsed: false };
+      const children = [...n.children.slice(0, at), merged, ...n.children.slice(at + 2)];
+      const sizes = [...n.sizes.slice(0, at), best, ...n.sizes.slice(at + 2)];
+      ctx.out.compact = true;
+      place({ ...n, id: `~${n.id}~`, children, sizes }, r, ctx, parent, eff);
+      return;
+    }
+  }
 
   if (dir === null) {
     // merged tab stack

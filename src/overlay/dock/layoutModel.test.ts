@@ -206,10 +206,15 @@ describe("reducer", () => {
     expect([...after].sort()).toEqual([...before].sort());
   });
 
-  it("lock blocks structure but not activate or reveal", () => {
+  it("lock blocks moving and re-arranging but not showing, hiding, collapsing or revealing", () => {
     let s = dockReducer(start(), { type: "lock", locked: true });
-    expect(dockReducer(s, { type: "hide", panel: "transcript" })).toBe(s);
     expect(dockReducer(s, { type: "preset", preset: "focus" })).toBe(s);
+    expect(dockReducer(s, { type: "reset" })).toBe(s);
+    const hidden = dockReducer(s, { type: "hide", panel: "transcript" });
+    expect(hidden.layout.hidden).toContain("transcript");
+    expect(dockReducer(hidden, { type: "show", panel: "transcript" }).layout.hidden).not.toContain("transcript");
+    const c = dockReducer(s, { type: "collapse", stackId: stackId(s, "transcript"), collapsed: true });
+    expect(findStackOf(c.layout.root, "transcript")!.collapsed).toBe(true);
     s = dockReducer(s, { type: "reveal", panel: "notes" });
     expect(panelsOf(s.layout.root)).toContain("notes");
   });

@@ -150,17 +150,12 @@ export function OverlayView() {
     },
     [dockDispatch, rememberOpened],
   );
-  /** Escape: put away the panel opened last, one per press. The assistant is never one of them. */
+  /** Escape: put away every panel opened on the fly, as before. The assistant is never one of them. */
   const closeLastPanel = useCallback(() => {
-    const l = layoutRef.current;
-    while (openedRef.current.length) {
-      const panel = openedRef.current[openedRef.current.length - 1];
-      openedRef.current = openedRef.current.slice(0, -1);
-      if (!l.hidden.includes(panel) && AUXILIARY.includes(panel)) {
-        dockDispatch({ type: "hide", panel });
-        break;
-      }
+    for (const panel of openedRef.current) {
+      if (!layoutRef.current.hidden.includes(panel)) dockDispatch({ type: "hide", panel });
     }
+    openedRef.current = [];
     rememberOpened();
   }, [dockDispatch, rememberOpened]);
 

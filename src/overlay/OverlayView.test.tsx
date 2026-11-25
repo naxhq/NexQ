@@ -114,7 +114,7 @@ describe("OverlayView", () => {
     // split -> AI panel only -> transcript only
     fireEvent.click(screen.getByRole("button", { name: "Focus AI panel" }));
     fireEvent.click(screen.getByRole("button", { name: "Focus Transcript" }));
-    expect(screen.getByRole("button", { name: "Expand AI" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Expand AI panel" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^Ask/ })).toBeNull();
 
     const claimed: boolean[] = [];
@@ -124,7 +124,7 @@ describe("OverlayView", () => {
     window.removeEventListener(SCREENSHOT_EVENT, after);
 
     expect(claimed).toEqual([true]);
-    expect(screen.queryByRole("button", { name: "Expand AI" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Expand AI panel" })).toBeNull();
     // The Ask box mounted with the picture and took it.
     expect(await screen.findByRole("group", { name: "Attached images" })).toBeTruthy();
     discardPendingScreenshots();

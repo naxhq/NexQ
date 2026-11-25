@@ -736,7 +736,7 @@ export function Dock({
               data-dock-strip={s.id}
               data-thin={s.stripThin ?? "x"}
               className="nq-dock-strip"
-              aria-label={`Expand ${s.panels.map(title).join(", ")}`}
+              aria-label={`Expand ${s.panels.map(title).join(", ")} panel`}
               style={rectStyle(s.rect)}
               onClick={() => act({ type: "activate", panel: s.active }, `${title(s.active)} expanded`)}
             >

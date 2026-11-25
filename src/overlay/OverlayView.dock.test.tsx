@@ -133,18 +133,24 @@ describe("the meeting window's dock", () => {
     expect(shown("calllog")).toBe(false);
   });
 
-  it("Escape closes the panel opened last, one per press, and never the assistant", () => {
+  it("Escape closes every panel opened on the fly at once, and never the assistant", () => {
     renderOverlay();
     key("s");
     key("k");
     key("Escape");
     expect(shown("bookmarks")).toBe(false);
+    expect(shown("stats")).toBe(false);
+    expect(shown("assistant")).toBe(true);
+    expect(shown("transcript")).toBe(true);
+  });
+
+  it("a locked layout still opens and closes panels", () => {
+    useConfigStore.setState({ overlayDock: dockWith({ type: "lock", locked: true }) });
+    renderOverlay();
+    key("s");
     expect(shown("stats")).toBe(true);
     key("Escape");
     expect(shown("stats")).toBe(false);
-    key("Escape");
-    expect(shown("assistant")).toBe(true);
-    expect(shown("transcript")).toBe(true);
   });
 
   it("Escape leaves a panel the layout itself shows alone", () => {
@@ -158,10 +164,10 @@ describe("the meeting window's dock", () => {
   it("the old cycle button collapses a side to a strip and back", () => {
     renderOverlay();
     headerBtn("Focus AI panel");
-    expect(screen.getByRole("button", { name: "Expand Transcript" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Expand Transcript panel" })).toBeTruthy();
     headerBtn("Focus Transcript");
-    expect(screen.getByRole("button", { name: "Expand AI" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Expand Transcript" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Expand AI panel" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Expand Transcript panel" })).toBeNull();
     headerBtn("Split view");
     expect(screen.queryByRole("button", { name: /^Expand/ })).toBeNull();
   });
@@ -200,9 +206,9 @@ describe("the meeting window's dock", () => {
     renderOverlay();
     headerBtn("Focus AI panel");
     headerBtn("Focus Transcript");
-    expect(screen.getByRole("button", { name: "Expand AI" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Expand AI panel" })).toBeTruthy();
     act(() => void window.dispatchEvent(new Event(SCREENSHOT_EVENT, { cancelable: true })));
-    expect(screen.queryByRole("button", { name: "Expand AI" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Expand AI panel" })).toBeNull();
   });
 
   it("reading panels carry the reading backing, which stays at 85% when the window is nearly clear", () => {
