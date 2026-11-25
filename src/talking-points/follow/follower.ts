@@ -154,12 +154,9 @@ export class VoiceFollower {
   snapshot(): FollowSnapshot {
     const now = this.clock();
     const paused = this.lastInputAt > -Infinity && now - this.lastInputAt > this.pauseMs;
-    const sg = this.suggest;
-    const live = sg && this.stream.added <= sg.until && this.index.blocks.findIndex((b) => b.id === sg.blockId) !== this.blockAt(this.pos);
     const offer = this.offer.current(now, this.blockAt(Math.max(0, this.pos - 1)), this.blockAt(this.pos) + 1);
     let suggestion: FollowSnapshot["suggestion"];
     if (offer) suggestion = { blockId: this.index.blocks[offer.block].id, confidence: Math.min(1, offer.score) };
-    else if (live && sg) suggestion = { blockId: sg.blockId, confidence: sg.conf };
     // an offer never changes the state: scroll-follow depends on it, and an on-script speaker stays "following"
     const base = this.baseState;
     return {
@@ -309,6 +306,7 @@ export class VoiceFollower {
     if (c.g >= 3.5 && need <= 3) {
       this.pos = c.e;
       this.pending = null;
+      this.offer.clear();
       return true;
     }
     const pend = this.pending;
@@ -320,6 +318,7 @@ export class VoiceFollower {
         this.pos = c.e;
         this.pending = null;
         this.suggest = null;
+        this.offer.clear();
       } else {
         pend.e = c.e;
       }

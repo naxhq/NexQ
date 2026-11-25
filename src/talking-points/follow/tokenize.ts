@@ -593,6 +593,27 @@ function lenFactor(t: string, cjk: boolean, cw: number, acr: boolean): number {
   return 1;
 }
 
+/**
+ * Pronouns, quantifiers, auxiliaries and filler talk of the common languages: they carry no topic, so
+ * a note word like "every" or "everyone" never counts as content, however rare it is in the note.
+ */
+const FUNCTION_WORDS = new Set(
+  (
+    "every everyone everybody everything some someone somebody something any anyone anybody anything all each both many much more most " +
+    "other another same such only just also very really quite can could will would shall should may might must have has had been being " +
+    "were was are this that these those there here what which who whom whose when where why how they them their then than with without " +
+    "from into over under about after before again still even ever never always okay sorry please thanks thank yeah well right like going " +
+    "want need know think see say said let make take get got come look thing things time way " +
+    "todo todos toda todas algo alguien cada otro otra mismo muy solo pero como para con sin sobre entre desde hasta esto eso esta este " +
+    "estos aqui alli bien entonces tambien ahora siempre nunca tengo tiene vamos hay " +
+    "alle alles jeder jede jedes einige etwas jemand andere noch nur auch sehr aber oder wenn dann diese dieser dieses haben wird werden " +
+    "kann muss schon hier dort gut also mehr viel immer nie jetzt " +
+    "tout tous toute toutes chaque autre meme tres aussi mais avec sans dans pour sur cette cela ceci avoir etre faire nous vous ils elles " +
+    "alors encore toujours jamais maintenant " +
+    "alguem outro outra muito mas isto isso agora sempre entao ainda"
+  ).split(" "),
+);
+
 /** Builds the token index and idf weights from the note blocks. */
 export function buildNoteIndex(blocks: NoteBlock[]): NoteIndex {
   const tokens: Token[] = [];
@@ -648,6 +669,7 @@ export function buildNoteIndex(blocks: NoteBlock[]): NoteIndex {
     const idf = Math.log(1 + (units + 1) / (df[id] + 0.5)) / denom;
     const isC = CJK_TEST.test(vocab[id][0]);
     vocabW[id] = Math.max(0.05, idf * lenFactor(vocab[id], isC, vcw[id], vacr[id]));
+    if (FUNCTION_WORDS.has(vocab[id])) vocabW[id] = Math.min(vocabW[id], 0.1);
     vocabContent[id] = !isC || vcw[id] >= 0.6 ? 1 : 0;
     vocabNum[id] = /^[0-9]/.test(vocab[id]) || MONTHS.has(vocab[id]) ? 1 : 0;
   }

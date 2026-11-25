@@ -103,7 +103,8 @@ async function readUpTo(upto: number) {
   for (let i = 0; i <= upto; i++) await say(LINES[i], false);
   await tick(1500);
 }
-const scrollState = () => (screen.queryByText(/Following you|Listening/) as HTMLElement | null)?.textContent ?? "";
+const stateLabel = () => ["Following you", "Listening", "Lost your place. Scroll to show me.", "Waiting for you"].find((x) => (document.body.textContent ?? "").includes(x)) ?? "";
+const report: string[] = [];
 
 // [name, lines read before, said, 0-based line it points at]
 const CASES: Array<[string, number, string, number]> = [
@@ -144,6 +145,9 @@ describe("QA round 5: exact note, lines and timing through the real hook chain",
       await say(said);
       await tick(1000);
       const c = chip();
+      report.push(`${name}: chip=${c?.textContent ?? '-'} state=${stateLabel()}`);
+      // @ts-ignore
+      (globalThis as any).__r5 = report;
       const first = blocks[target].text.split(/\s+/).slice(0, 2).join(" ");
       if (c) {
         expect(c.textContent).toContain(first);
@@ -178,3 +182,7 @@ describe("QA round 5: exact note, lines and timing through the real hook chain",
     expect(chip()).toBeNull();
   });
 });
+// @ts-ignore
+import { writeFileSync as __w } from "node:fs";
+import { afterAll } from "vitest";
+afterAll(() => __w(".agent-logs/r5-report.txt", ((globalThis as any).__r5 ?? []).join("\n")));

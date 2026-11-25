@@ -18,6 +18,8 @@ const STABLE_MS = 300; // the panel adds its own second before it shows a chip
 const GAP_MS = 4000;
 const DROP_MISSES = 3;
 const EXPIRE_MS = 8000;
+/** A dismissed point can be offered again after this (a long way on, it may be wanted). */
+const DISMISS_MS = 20000;
 
 const CJK_CONTENT = /[\p{Script=Han}\p{Script=Katakana}\p{Script=Hangul}]/u;
 function isContent(w: string): boolean {
@@ -145,7 +147,10 @@ export class SuggestionScorer {
     const first = top.find((t) => t.block < skipLo || t.block > skipHi);
     if (!first) return null;
     if (first.score < SCORE_MIN) return null;
-    const others = top.filter((t) => t.block !== first.block);
+    // a bare heading and the block under it are one place, not rivals
+    const bare = (bi: number) => bi >= 0 && bi < this.index.blocks.length && this.index.blocks[bi].end - this.index.blocks[bi].first <= 2;
+    const partner = bare(first.block) ? first.block + 1 : bare(first.block - 1) ? first.block - 1 : -1;
+    const others = top.filter((t) => t.block !== first.block && t.block !== partner);
     const runner = others.length ? others[0].score : 0;
     if (first.score < runner * 1.25 || first.score < runner + 0.12) return null;
     if (first.score < here * 1.2 + 0.1) return null;
@@ -172,11 +177,18 @@ export class SuggestionOffer {
   private lastAt = -Infinity;
   private shown: { block: number; score: number } | null = null;
   private lastShownAt = -Infinity;
-  private dismissed = new Set<number>();
+  private lastShownScore = 0;
+  private dismissed = new Map<number, number>();
+  private clockNow = 0;
 
   observe(c: { block: number; score: number } | null, now: number): void {
     this.lastAt = now;
-    if (c && this.dismissed.has(c.block)) c = null;
+    this.clockNow = now;
+    const at = c ? this.dismissed.get(c.block) : undefined;
+    if (c && at !== undefined) {
+      if (now - at < DISMISS_MS) c = null;
+      else this.dismissed.delete(c.block);
+    }
     if (!c) {
       if (++this.misses >= DROP_MISSES) {
         this.cand = null;
@@ -186,8 +198,11 @@ export class SuggestionOffer {
     }
     this.misses = 0;
     if (!this.cand || this.cand.block !== c.block) {
-      this.cand = { block: c.block, since: now, score: c.score };
-      if (this.shown && this.shown.block !== c.block) this.shown = null;
+      // the offer moving to the neighbouring block (a heading and its text) is the same offer
+      const sameOffer = this.shown !== null && Math.abs(this.shown.block - c.block) <= 1;
+      this.cand = { block: c.block, since: sameOffer && this.cand ? this.cand.since : now, score: c.score };
+      if (sameOffer) this.shown = { block: c.block, score: c.score };
+      else if (this.shown && this.shown.block !== c.block) this.shown = null;
     } else this.cand.score = c.score;
   }
 
@@ -202,15 +217,17 @@ export class SuggestionOffer {
       this.shown = null;
       return null;
     }
-    if (!this.shown && now - c.since >= STABLE_MS && now - this.lastShownAt >= GAP_MS) {
+    // rate limited, unless this one is clearly better than what was shown a moment ago
+    if (!this.shown && now - c.since >= STABLE_MS && (now - this.lastShownAt >= GAP_MS || c.score >= this.lastShownScore * 1.3)) {
       this.shown = { block: c.block, score: c.score };
       this.lastShownAt = now;
+      this.lastShownScore = c.score;
     }
     return this.shown ? { block: this.shown.block, score: c.score } : null;
   }
 
   dismiss(block: number): void {
-    this.dismissed.add(block);
+    this.dismissed.set(block, this.clockNow);
     if (this.cand?.block === block) this.cand = null;
     if (this.shown?.block === block) this.shown = null;
   }
@@ -225,5 +242,6 @@ export class SuggestionOffer {
     this.clear();
     this.dismissed.clear();
     this.lastShownAt = -Infinity;
+    this.lastShownScore = 0;
   }
 }
