@@ -1092,3 +1092,88 @@ async fn random_scope_changes_never_leak_material_across_workspaces() {
     }
     assert!(answers_checked > 5, "the answers were really exercised ({answers_checked})");
 }
+
+#[tokio::test]
+async fn a_raised_cap_is_kept_across_stop_and_start_and_over_the_cap_never_runs() {
+    let h = harness();
+    h.rt.patch_notetaker(&json!({"enabled": true, "cap": 2_000})).unwrap();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    h.fake.push(Ok(LlmReply { text: r#"{"ops":[]}"#.into(), input_tokens: Some(20_000), cached_input_tokens: Some(0), output_tokens: Some(300) }));
+    h.speak("m1", 120, 1_000).await;
+    until("capped", || h.events.last_status("notetaker_state", "m1").map(|v| v["status"] == "capped").unwrap_or(false)).await;
+    h.rt.notetaker_continue("m1");
+    until("running again with the raised cap", || {
+        h.events.last_status("notetaker_state", "m1").map(|v| v["status"] != "capped" && v["cap"].as_u64().unwrap() > 20_000).unwrap_or(false)
+    })
+    .await;
+    let raised = h.events.last_status("notetaker_state", "m1").unwrap()["cap"].as_u64().unwrap();
+    // stop and start again (the same as pause and resume across a restart): the raised cap is still there
+    h.rt.notetaker_stop("m1");
+    until("actor ended", || h.rt.inner.lock().unwrap().notes.get("m1").is_none()).await;
+    let seen = h.events.of("notetaker_state").len();
+    h.rt.notetaker_start("m1").unwrap();
+    until("state again", || h.events.of("notetaker_state").len() > seen).await;
+    let st = h.events.last_status("notetaker_state", "m1").unwrap();
+    assert_eq!(st["cap"].as_u64().unwrap(), raised, "{st}");
+    assert!(st["tokens_used"].as_u64().unwrap() < raised, "it only shows running when it may run: {st}");
+    // more was used than the saved cap allows: it waits for Keep going
+    h.rt.notetaker_stop("m1");
+    until("actor ended again", || h.rt.inner.lock().unwrap().notes.get("m1").is_none()).await;
+    {
+        let c = h.conn.lock().unwrap();
+        c.execute("UPDATE meeting_notes SET tokens_used = cap + 10 WHERE meeting_id = 'm1'", []).unwrap();
+    }
+    h.rt.notetaker_start("m1").unwrap();
+    until("capped on start", || h.events.last_status("notetaker_state", "m1").map(|v| v["status"] == "capped").unwrap_or(false)).await;
+}
+
+#[tokio::test]
+async fn after_a_revoke_no_later_prompt_carries_anything_old() {
+    let h = harness();
+    let (a, b) = {
+        let c = h.conn.lock().unwrap();
+        let a = new_ws(&c, "A", false, false);
+        let b = new_ws(&c, "B", false, false);
+        c.execute("UPDATE workspaces SET brief_default = 1", []).unwrap();
+        add_memory(&c, &a, "old fact", "MEMCANARYA saved before", "saved", 1);
+        (a, b)
+    };
+    index_doc(&h, &a, "da", "A.pdf", "DOCCANARYA Acme pays 12 dollars per seat in the annual pricing plan renewal");
+    index_doc(&h, &b, "db", "B.pdf", "DOCCANARYB Acme pays 99 dollars per seat in the annual pricing plan renewal");
+    let m = make_meeting(&h, &a);
+    h.start_meeting(&m);
+    h.rt.patch_brief(&json!({"enabled": true})).unwrap();
+    h.rt.brief_start(&m).unwrap();
+    let old_line = "OLDLINEMARK we talk about the annual pricing plan and the Acme seat renewal";
+    for i in 0..8u64 {
+        h.clock.set(1_000 + i * 5_000);
+        h.rt.feed(&m, "Them", old_line, i * 5_000);
+        tokio::time::sleep(Duration::from_millis(15)).await;
+    }
+    until("a brief call under the old scope", || h.fake.count(AiPurpose::Brief) >= 1).await;
+    assert!(h.fake.prompts(AiPurpose::Brief)[0].contains("DOCCANARYA"));
+    // the revoke: the meeting leaves A (its material, memory and everything said so far)
+    h.conn.lock().unwrap().execute("UPDATE meetings SET workspace_id = ?2 WHERE id = ?1", [&m, &b]).unwrap();
+    h.rt.scope_changed(&m);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let mark = h.fake.calls.lock().unwrap().len();
+    let new_line = "now the annual pricing plan seat renewal is about the other team";
+    for i in 0..10u64 {
+        h.clock.set(100_000 + i * 5_000);
+        h.rt.feed(&m, "Them", new_line, 100_000 + i * 5_000);
+        tokio::time::sleep(Duration::from_millis(15)).await;
+    }
+    until("a brief call under the new scope", || h.fake.calls.lock().unwrap().len() > mark).await;
+    let calls = h.fake.calls.lock().unwrap().clone();
+    for (_, _, req) in calls.iter().skip(mark) {
+        let text = format!("{}\n{}", req.system, req.user);
+        for old in ["DOCCANARYA", "MEMCANARYA", "OLDLINEMARK", "A.pdf"] {
+            assert!(!text.contains(old), "a later prompt still carries {old}:\n{text}");
+        }
+    }
+    assert!(calls.iter().skip(mark).any(|(_, _, r)| r.user.contains("DOCCANARYB")), "the new scope's material is used");
+    if let Some(t) = h.rt.answer_extras(&m, "Assist", None) {
+        assert!(!t.contains("MEMCANARYA") && !t.contains("DOCCANARYA"));
+    }
+}

@@ -412,7 +412,7 @@ mod tests {
         t.request_manual();
         assert_eq!(t.poll(60_000), Decision::Wait, "cap blocks even manual runs");
         t.keep_going();
-        assert_eq!(t.guard.cap, 2_000);
+        assert_eq!(t.guard.cap, 2_200);
         assert_eq!(t.poll(60_000), Decision::Run(RunReason::Words));
     }
 

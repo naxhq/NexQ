@@ -320,7 +320,7 @@ mod tests {
         b.on_speech(60_000);
         assert_eq!(b.poll(0), BriefAction::Wait);
         b.keep_going();
-        assert_eq!(b.guard.cap, 2_000);
+        assert_eq!(b.guard.cap, 2_200);
         assert_eq!(b.poll(0), BriefAction::Search(SearchReason::Speech));
     }
 

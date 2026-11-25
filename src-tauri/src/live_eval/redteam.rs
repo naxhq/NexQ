@@ -184,7 +184,7 @@ fn ungrounded_claims_never_reach_a_live_answer() {
     }
     assert_eq!(s.facts.len(), 2, "{:?}", s.facts);
     assert_eq!(s.earlier, ["Acme intro"]);
-    assert_eq!(s.now, "");
+    assert!(!s.now.contains("Zorblax") && !s.now.contains("Paris"), "{}", s.now);
 }
 
 #[test]

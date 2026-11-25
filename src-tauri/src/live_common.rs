@@ -637,6 +637,8 @@ pub struct RunGuard {
     base_cap: u64,
     /// Closed while a live answer is generating.
     pub gate_open: bool,
+    /// The final pass may try once even after three failures.
+    final_retry: bool,
 }
 
 impl RunGuard {
@@ -650,6 +652,7 @@ impl RunGuard {
             cap,
             base_cap: cap,
             gate_open: true,
+            final_retry: false,
         }
     }
 
@@ -668,7 +671,24 @@ impl RunGuard {
 
     /// The final pass ignores the gate and the pause, but not stop or the cap.
     pub fn can_start_final(&self) -> bool {
-        !self.in_flight && matches!(self.state, RunState::Running | RunState::Paused(PauseReason::User))
+        !self.in_flight
+            && (matches!(self.state, RunState::Running | RunState::Paused(PauseReason::User))
+                || (self.final_retry && self.state == RunState::Paused(PauseReason::Failures)))
+    }
+
+    /// The end-of-meeting pass may try once more after errors (never after a plan limit or a missing key).
+    pub fn allow_final_retry(&mut self) {
+        self.final_retry = true;
+    }
+
+    /// Continuing from saved usage: a raised cap stays raised, and a run that
+    /// is over its cap waits for "Keep going" instead of showing as running.
+    pub fn restore(&mut self, used: u64, cap: u64) {
+        self.used = used;
+        self.cap = self.cap.max(cap);
+        if self.used >= self.cap && self.state == RunState::Running {
+            self.state = RunState::CapReached;
+        }
     }
 
     pub fn begin(&mut self) {
@@ -720,13 +740,18 @@ impl RunGuard {
                 self.failures = 0;
             }
             self.state = RunState::Running;
+            // over its cap a run never shows as running
+            if self.used >= self.cap {
+                self.state = RunState::CapReached;
+            }
         }
     }
 
     /// "Keep going": adds the same amount as the original cap.
     pub fn keep_going(&mut self) {
         if self.state == RunState::CapReached {
-            self.cap += self.base_cap;
+            // a fresh allotment on top of what was used (never less than the cap it had)
+            self.cap = self.cap.max(self.used) + self.base_cap;
             self.state = RunState::Running;
         }
     }
@@ -805,6 +830,38 @@ mod tests {
     }
 
     #[test]
+    fn a_raised_cap_survives_a_restart_and_over_the_cap_is_never_running() {
+        let mut g = RunGuard::new(100, 3);
+        g.begin();
+        assert!(g.end_ok(120));
+        g.keep_going();
+        assert_eq!((g.cap, g.state), (220, RunState::Running));
+        g.begin();
+        g.end_ok(50);
+        g.pause();
+        g.resume();
+        assert_eq!((g.cap, g.state), (220, RunState::Running), "pause and resume keep the raised cap");
+        // the app restarts: the saved cap (200) is bigger than the configured one (100)
+        let mut again = RunGuard::new(100, 3);
+        again.restore(170, 200);
+        assert_eq!((again.cap, again.state), (200, RunState::Running));
+        // more was used than the cap allows: it waits, it does not run
+        let mut over = RunGuard::new(100, 3);
+        over.restore(250, 200);
+        assert_eq!(over.state, RunState::CapReached);
+        over.keep_going();
+        assert_eq!((over.cap, over.state), (350, RunState::Running));
+        // resuming a pause over the cap does not make it run
+        let mut p = RunGuard::new(100, 3);
+        p.begin();
+        p.end_ok(50);
+        p.pause();
+        p.used = 500;
+        p.resume();
+        assert_eq!(p.state, RunState::CapReached);
+    }
+
+    #[test]
     fn guard_cap_failures_and_gate() {
         let mut g = RunGuard::new(100, 3);
         assert!(g.can_start());
@@ -819,7 +876,7 @@ mod tests {
         assert_eq!(g.state, RunState::CapReached);
         assert!(!g.can_start() && !g.can_start_manual() && !g.can_start_final());
         g.keep_going();
-        assert_eq!(g.cap, 200);
+        assert_eq!(g.cap, 220);
         assert_eq!(g.state, RunState::Running);
         for _ in 0..3 {
             g.begin();

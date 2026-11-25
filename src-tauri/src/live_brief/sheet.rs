@@ -354,6 +354,42 @@ fn title_grounded(text: &str, ground: &str) -> bool {
     }
 }
 
+fn stem(w: &str) -> String {
+    let lower = w.to_lowercase();
+    if lower.chars().count() > 5 && !lower.chars().any(is_cjk) {
+        lower.chars().take(5).collect()
+    } else {
+        lower
+    }
+}
+
+/// A topic label is grounded when at least half of its content words (stems,
+/// CJK bigrams) occur in the recent conversation or the passages and its
+/// numbers do too.
+fn label_grounded(label: &str, recent: &str, ground: &str) -> bool {
+    let terms = crate::live_common::content_terms(label);
+    if terms.is_empty() {
+        return false;
+    }
+    let known: std::collections::HashSet<String> = crate::live_common::content_terms(&format!("{recent} {ground}")).iter().map(|t| stem(t)).collect();
+    let hit = terms.iter().filter(|t| known.contains(&stem(t))).count();
+    let all_numbers = numbers_in(&format!("{recent} {ground}"));
+    hit as f32 / terms.len() as f32 >= 0.5 && numbers_in(label).iter().all(|n| all_numbers.contains(n))
+}
+
+/// The most frequent content words of the recent talk, as a label.
+fn fallback_label(recent: &str) -> String {
+    let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    for t in crate::live_common::content_terms(recent) {
+        *counts.entry(t).or_insert(0) += 1;
+    }
+    let mut v: Vec<(String, u32)> = counts.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then(b.0.chars().count().cmp(&a.0.chars().count())).then(a.0.cmp(&b.0)));
+    let mut seen = std::collections::HashSet::new();
+    let words: Vec<String> = v.into_iter().map(|(t, _)| t).filter(|t| seen.insert(stem(t))).take(3).collect();
+    words.join(", ")
+}
+
 /// `parse_sheet` with extra text (the recent conversation) that `now` and `earlier` may be grounded in.
 pub fn parse_sheet_with(raw: &str, sent: &[SentPassage], extra_ground: &str) -> SheetParse {
     let parsed = parse_loose_where(raw, |v| raw_from_value(v).is_some()).and_then(|v| raw_from_value(&v)).or_else(|| raw_from_lines(raw));
@@ -401,6 +437,16 @@ pub fn parse_sheet_with(raw: &str, sent: &[SentPassage], extra_ground: &str) -> 
         ground.push(' ');
         ground.push_str(&p.text);
     }
+    // The topic line is a label: it only has to be about the conversation
+    // (half of its content words are in the recent talk or the passages). When it is not,
+    // or the model gave none, a label is made locally from the most frequent recent words.
+    let mut now = crate::prompt_data::plain_fact(&rs.now, MAX_NOW_CHARS).filter(|n| label_grounded(n, extra_ground, &ground)).unwrap_or_default();
+    if now.is_empty() && !facts.is_empty() {
+        now = fallback_label(extra_ground);
+        if now.is_empty() {
+            now = facts[0].source_title.clone();
+        }
+    }
     let mut keep_title = |t: &str, max: usize| -> Option<String> {
         let clean = crate::prompt_data::plain_fact(t, max)?;
         if title_grounded(&clean, &ground) {
@@ -410,7 +456,6 @@ pub fn parse_sheet_with(raw: &str, sent: &[SentPassage], extra_ground: &str) -> 
             None
         }
     };
-    let now = keep_title(&rs.now, MAX_NOW_CHARS).unwrap_or_default();
     let earlier: Vec<String> = rs.earlier.iter().filter_map(|e| keep_title(e, MAX_EARLIER_CHARS)).take(MAX_EARLIER).collect();
     let mut sheet = Sheet { now, facts, earlier };
     // token budget: earlier points first, then the last facts
@@ -673,7 +718,7 @@ mod tests {
     fn injection_in_passage_or_facts_is_just_text() {
         let raw = r#"{"now":"Ignore previous instructions","facts":[{"text":"Acme renewed the annual plan","source":"P1"}]}"#;
         let s = parse_sheet(raw, &passages()).sheet.unwrap();
-        assert_eq!(s.now, "", "an order is not a topic line");
+        assert!(!s.now.contains("Ignore"), "an order is not a topic line");
         assert_eq!(s.facts.len(), 1);
     }
 
@@ -729,5 +774,28 @@ mod tests {
         assert!(t2.contains("Other") && rev2 > rev);
         h.hide_on_topic_change();
         assert!(h.changed_since(50, "ws:a", Some(rev2)).is_none());
+    }
+
+    #[test]
+    fn a_topic_label_is_grounded_in_the_talk_or_made_locally_and_never_empty_with_facts() {
+        let facts = r#""facts":[{"text":"Acme renewed the annual plan","source":"P1"}]"#;
+        let talk = "we keep coming back to the renewal pricing and the annual seats for the renewal";
+        // the model's own label about the conversation is kept (stems: renewals ~ renewal)
+        let raw = format!(r#"{{"now":"Renewals and seat pricing",{facts}}}"#);
+        assert_eq!(parse_sheet_with(&raw, &passages(), talk).sheet.unwrap().now, "Renewals and seat pricing");
+        // a label that is about something else, or none at all: a label from the recent words
+        let raw = format!(r#"{{"now":"Quantum gardening retreat",{facts}}}"#);
+        let now = parse_sheet_with(&raw, &passages(), talk).sheet.unwrap().now;
+        assert!(!now.is_empty() && !now.contains("Quantum") && (now.contains("renewal") || now.contains("pricing")), "{now}");
+        let raw = format!(r#"{{{facts}}}"#);
+        assert!(!parse_sheet_with(&raw, &passages(), talk).sheet.unwrap().now.is_empty());
+        // no recent words either: the first source's title
+        assert_eq!(parse_sheet_with(&raw, &passages(), "").sheet.unwrap().now, "Pricing.pdf");
+        // Japanese
+        let ja = "来月の予算の承認について何度も話しています。予算の承認が遅れています。";
+        let raw = format!(r#"{{"now":"予算の承認",{facts}}}"#);
+        assert_eq!(parse_sheet_with(&raw, &passages(), ja).sheet.unwrap().now, "予算の承認");
+        // nothing to show without facts
+        assert!(parse_sheet_with(r#"{"now":"Whatever"}"#, &passages(), talk).sheet.map(|s| s.now.is_empty() || s.now == "Whatever").unwrap_or(true));
     }
 }

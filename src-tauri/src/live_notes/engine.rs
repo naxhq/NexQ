@@ -7,7 +7,7 @@
 //! * `poll()` / `prepare()` / `complete()` let an actor keep feeding lines
 //!   while the call is in flight (lines queue, one run at a time).
 
-use crate::live_common::{estimate_tokens, speech_units_x2, Clock, LlmCall, LlmError, LlmErrorKind, LlmReply, LlmRequest, RunState};
+use crate::live_common::{PauseReason, estimate_tokens, speech_units_x2, Clock, LlmCall, LlmError, LlmErrorKind, LlmReply, LlmRequest, RunState};
 use crate::live_notes::doc::NoteDoc;
 use crate::live_notes::ops::{parse_ops, ParseMode};
 use crate::live_notes::prompts::{notes_system, notes_user, transcript_line, NotesPromptOptions};
@@ -135,6 +135,10 @@ pub struct NotesEngine<L: LlmCall, C: Clock> {
     sink: Arc<dyn NotesSink>,
     store: Arc<dyn NotesStore>,
     last_error: Option<String>,
+    /// The error code of the last failure (`no_key` ...).
+    last_code: &'static str,
+    /// What the end-of-meeting pass did, when it had to decide (shown in the state).
+    pub final_note: Option<String>,
     done: bool,
     /// Lines dropped because more than `MAX_PENDING_WORDS` were waiting (the
     /// oldest go first). Stays 0 in any normal meeting.
@@ -152,13 +156,13 @@ pub const MAX_PENDING_WORDS: usize = 40_000;
 impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
     pub fn new(llm: L, clock: C, cfg: NotesConfig, sink: Arc<dyn NotesSink>, store: Arc<dyn NotesStore>) -> Self {
         let trigger = NotesTrigger::new(cfg.trigger.clone());
-        Self { llm, clock, cfg, trigger, doc: NoteDoc::new(), pending: Vec::new(), sink, store, last_error: None, done: false, dropped_lines: 0, sent_tokens_total: 0, pending_words: 0, nonce: crate::prompt_data::new_nonce() }
+        Self { llm, clock, cfg, trigger, doc: NoteDoc::new(), pending: Vec::new(), sink, store, last_error: None, last_code: "", final_note: None, done: false, dropped_lines: 0, sent_tokens_total: 0, pending_words: 0, nonce: crate::prompt_data::new_nonce() }
     }
 
     /// Continue from saved notes (app restart, resumed meeting).
-    pub fn resume_from(&mut self, doc: NoteDoc, tokens_used: u64) {
+    pub fn resume_from(&mut self, doc: NoteDoc, tokens_used: u64, cap: u64) {
         self.doc = doc;
-        self.trigger.guard.used = tokens_used;
+        self.trigger.guard.restore(tokens_used, cap);
     }
 
     pub fn doc(&self) -> &NoteDoc {
@@ -358,6 +362,7 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
                 self.trigger.end_err(e.kind, p.taken, 0);
                 if e.kind != LlmErrorKind::Cancelled {
                     self.last_error = Some(e.message.clone());
+                    self.last_code = e.code;
                 }
                 self.restore(p.lines);
                 RunOutcome {
@@ -422,6 +427,22 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
     /// Meeting ended: one last pass over what is still unsent, bounded by
     /// `final_timeout`, then the notes are saved as done.
     pub async fn finish(&mut self) -> Option<RunOutcome> {
+        // After three failures one bounded last try is made, unless the cause
+        // cannot be fixed by trying (no key); a plan limit is not retried either.
+        let mut retried = false;
+        match self.trigger.guard.state {
+            RunState::Paused(PauseReason::Failures) if self.last_code != "no_key" => {
+                self.trigger.guard.allow_final_retry();
+                retried = true;
+            }
+            RunState::Paused(PauseReason::Failures) => {
+                self.final_note = Some("Not tried again at the end: the provider needs a key or a sign-in".into());
+            }
+            RunState::Paused(PauseReason::PlanLimit) => {
+                self.final_note = Some("Not tried again at the end: the plan's usage limit was reached".into());
+            }
+            _ => {}
+        }
         self.trigger.request_final();
         let mut outcome = None;
         if let Decision::Run(reason) = self.poll() {
@@ -432,6 +453,13 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
                 };
                 outcome = Some(self.complete(prepared, result));
             }
+        }
+        if retried {
+            self.final_note = Some(match &outcome {
+                Some(o) if o.ok => "Tried once more at the end after earlier errors: it worked".to_string(),
+                Some(o) => format!("Tried once more at the end after earlier errors: {}", o.error.clone().unwrap_or_else(|| "it failed".into())),
+                None => "Nothing was left to send at the end".to_string(),
+            });
         }
         self.done = true;
         self.trigger.stop();
@@ -658,7 +686,7 @@ mod tests {
         clock.set(60_000);
         assert!(e.tick().await.is_none());
         e.keep_going();
-        assert_eq!(e.status().cap, 100);
+        assert!(e.status().cap > 100);
         assert!(e.tick().await.is_some());
     }
 
@@ -722,5 +750,45 @@ mod tests {
         e.set_gate(true);
         assert!(e.tick().await.is_some());
         let _ = BlockKind::Topic;
+    }
+
+    #[tokio::test]
+    async fn the_final_pass_tries_once_after_errors_unless_the_cause_cannot_change() {
+        // three failures, then the end of the meeting: one bounded try, and the state says so
+        let (mut e, clock, _s, _st) = engine(vec![
+            Err(LlmError::failed("boom")),
+            Err(LlmError::failed("boom")),
+            Err(LlmError::failed("boom")),
+            reply(OPS1),
+        ]);
+        e.feed(line(0, &words(120)));
+        for i in 0..3 {
+            clock.set(5_000 + i * 25_000);
+            e.tick().await.unwrap();
+        }
+        assert!(matches!(e.state(), RunState::Paused(crate::live_common::PauseReason::Failures)));
+        let out = e.finish().await.expect("one last try");
+        assert!(out.ok && out.reason == RunReason::Final);
+        assert!(e.final_note.as_deref().unwrap().contains("it worked"), "{:?}", e.final_note);
+        assert_eq!(e.llm.requests.lock().unwrap().len(), 4);
+        // no key: not tried again, and it says why
+        let (mut k, clock, _s, _st) = engine(vec![]);
+        let no_key = || Err(LlmError { kind: LlmErrorKind::Failed, message: "no key".into(), code: "no_key" });
+        k.llm.replies.lock().unwrap().extend([no_key(), no_key(), no_key()]);
+        k.feed(line(0, &words(120)));
+        for i in 0..3 {
+            clock.set(5_000 + i * 25_000);
+            k.tick().await.unwrap();
+        }
+        assert!(k.finish().await.is_none());
+        assert!(k.final_note.as_deref().unwrap().contains("key"));
+        assert_eq!(k.llm.requests.lock().unwrap().len(), 3);
+        // plan limit: not tried again
+        let (mut p, clock, _s, _st) = engine(vec![Err(LlmError::plan_limit("limit"))]);
+        p.feed(line(0, &words(120)));
+        clock.set(5_000);
+        p.tick().await.unwrap();
+        assert!(p.finish().await.is_none());
+        assert!(p.final_note.as_deref().unwrap().contains("limit"));
     }
 }

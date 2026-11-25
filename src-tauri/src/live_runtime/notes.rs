@@ -161,9 +161,9 @@ impl NotesStore for DbStore {
     }
 }
 
-pub fn status_event(meeting_id: &str, st: &NotesStatus, total_tokens: u64, finished: bool, stopped_by_user: bool) -> Value {
+pub fn status_event(meeting_id: &str, st: &NotesStatus, total_tokens: u64, finished: bool, stopped_by_user: bool, final_note: Option<String>) -> Value {
     let (status, reason): (&str, Option<String>) = if finished {
-        ("finished", None)
+        ("finished", final_note)
     } else if stopped_by_user || st.state == RunState::Stopped {
         ("off", None)
     } else {
@@ -172,6 +172,8 @@ pub fn status_event(meeting_id: &str, st: &NotesStatus, total_tokens: u64, finis
             RunState::Paused(crate::live_common::PauseReason::User) => ("paused", None),
             RunState::Paused(crate::live_common::PauseReason::PlanLimit) => ("paused", Some(st.last_error.clone().unwrap_or_else(|| "The plan's usage limit was reached".into()))),
             RunState::Paused(crate::live_common::PauseReason::Failures) => ("error", Some(st.last_error.clone().map(|e| format!("Three runs in a row failed: {e}")).unwrap_or_else(|| "Three runs in a row failed".into()))),
+            // over its cap a run never shows as running
+            _ if st.tokens_used >= st.cap => ("capped", Some("The token cap for this meeting was reached".to_string())),
             _ => {
                 if st.in_flight || st.tokens_used > 0 {
                     ("running", st.last_error.clone())
@@ -236,7 +238,7 @@ async fn run(p: NotesParams, swap: Arc<SwapLlm>, mut rx: mpsc::UnboundedReceiver
     cfg.final_timeout = p.final_timeout;
     let mut engine = NotesEngine::new(swap.clone(), p.clock.clone(), cfg, sink, store);
     if let Some(r) = p.resume {
-        engine.resume_from(r.doc, r.tokens_used);
+        engine.resume_from(r.doc, r.tokens_used, r.cap);
     }
     let auto = p.settings.update_mode == "automatic";
     let mut last_state = Value::Null;
@@ -249,7 +251,7 @@ async fn run(p: NotesParams, swap: Arc<SwapLlm>, mut rx: mpsc::UnboundedReceiver
 
     macro_rules! emit_state {
         () => {{
-            let ev = status_event(&p.meeting_id, &engine.status(), engine.sent_tokens_total, done, user_stopped);
+            let ev = status_event(&p.meeting_id, &engine.status(), engine.sent_tokens_total, done, user_stopped, engine.final_note.clone());
             if ev != last_state {
                 p.emitter.emit("notetaker_state", ev.clone());
                 last_state = ev;
