@@ -191,31 +191,6 @@ export function LayoutMenu({ state, dispatch, panels, onClose }: MenuProps) {
         </button>
       </form>
 
-      <div className={sectionCls}>Panels</div>
-      <ul className="px-1" role="group" aria-label="Panels">
-        {known.map((p) => {
-          const on = docked.has(p);
-          const canHide = panels[p]?.canHide !== false;
-          return (
-            <li key={p}>
-              <button
-                type="button"
-                role="checkbox"
-                aria-checked={on}
-                disabled={on && !canHide}
-                className={rowCls}
-                onClick={() => dispatch({ type: on ? "hide" : "show", panel: p })}
-              >
-                <span className="flex h-3.5 w-3.5 items-center justify-center" aria-hidden="true">
-                  {on && <Check className="h-3 w-3" />}
-                </span>
-                <span>{panels[p]?.title ?? p}</span>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-
       <div className="my-1.5 h-px bg-border/30" />
       <div className="px-1 pb-1">
         <button
@@ -241,6 +216,31 @@ export function LayoutMenu({ state, dispatch, panels, onClose }: MenuProps) {
           <span>Reset to Classic</span>
         </button>
       </div>
+      <div className={sectionCls}>Panels</div>
+      <ul className="px-1" role="group" aria-label="Panels">
+        {known.map((p) => {
+          const on = docked.has(p);
+          const canHide = panels[p]?.canHide !== false;
+          return (
+            <li key={p}>
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={on}
+                disabled={on && !canHide}
+                className={rowCls}
+                onClick={() => dispatch({ type: on ? "hide" : "show", panel: p })}
+              >
+                <span className="flex h-3.5 w-3.5 items-center justify-center" aria-hidden="true">
+                  {on && <Check className="h-3 w-3" />}
+                </span>
+                <span>{panels[p]?.title ?? p}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+
     </div>
   );
 }

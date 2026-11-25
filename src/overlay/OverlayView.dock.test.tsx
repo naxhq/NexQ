@@ -272,6 +272,16 @@ describe("idle cost (a meeting open, nothing happening)", () => {
   });
 });
 
+describe("Settings from the header", () => {
+  it("gives focus back to the Settings button when the meeting view returns", () => {
+    const first = renderOverlay("settings-focus");
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    first.unmount();
+    renderOverlay("settings-focus");
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Settings" }));
+  });
+});
+
 describe("a narrow header", () => {
   it("moves the view toggles into one menu, all still reachable with their state and keys", () => {
     const w = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth")!;

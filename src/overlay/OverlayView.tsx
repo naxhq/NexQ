@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import { OVERLAY_MOTION_CSS } from "./overlayMotion";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useScenarioStore } from "../stores/scenarioStore";
 import { useTranslationStore } from "../stores/translationStore";
@@ -78,6 +79,8 @@ const AUXILIARY: PanelId[] = ["stats", "bookmarks", "calllog", "devlog"];
 const ASK_TOGGLE_EVENT = "nexq:toggle-ask-input";
 /** The meeting the dock was last set up for in this window, so a remount of the same meeting keeps its panels. */
 let lastDockMeeting: string | null = null;
+/** Settings opened from this header replaces the meeting view; when it closes, focus goes back to its button. */
+let returnFocusToSettings = false;
 
 // ════════════════════════════════════════════════════════════════
 export function OverlayView() {
@@ -88,6 +91,12 @@ export function OverlayView() {
   const setCurrentView = useMeetingStore((s) => s.setCurrentView);
   const scenarioName = useScenarioStore((s) => s.getActiveTemplate().name);
   const meetingId = activeMeeting?.id ?? "";
+
+  useEffect(() => {
+    if (!returnFocusToSettings) return;
+    returnFocusToSettings = false;
+    document.querySelector<HTMLElement>('button[aria-label="Settings"]')?.focus();
+  }, []);
 
   // ── Dock: every panel of the window lives in one dock, mounted once ──
   // Only the overlay window saves the layout; the launcher's demo mode shows the
@@ -380,6 +389,7 @@ export function OverlayView() {
   return (
     <div className="overlay-bg flex h-full flex-col rounded-xl border border-border/20 shadow-xl" style={{ background: `hsl(var(--background) / ${overlayOpacity})`, backdropFilter: overlayOpacity > 0.7 ? "blur(12px) saturate(1.1)" : "none" }}>
 
+      <style>{OVERLAY_MOTION_CSS}</style>
       {/* ═══ HEADER ═══ */}
       <div
         ref={headerRef}
@@ -481,7 +491,7 @@ export function OverlayView() {
             tooltip={`${stealthMode ? "Hidden from screen share — click to show" : "Visible in screen share — click to hide"} (${formatShortcut(stealthShortcut)})`}
           />
           {!compactHeader && <HeaderBtn icon={<Eye className="h-3.5 w-3.5" />} onClick={cycleOpacity} tooltip={`Transparency: ${Math.round(overlayOpacity * 100)}% (click to cycle)`} />}
-          <HeaderBtn icon={<Settings className="h-3.5 w-3.5" />} onClick={() => setCurrentView("settings")} tooltip="Settings" />
+          <HeaderBtn icon={<Settings className="h-3.5 w-3.5" />} onClick={() => { returnFocusToSettings = true; setCurrentView("settings"); }} tooltip="Settings" />
           <HeaderBtn icon={<Minus className="h-3.5 w-3.5" />} onClick={handleMinimizeToDashboard} tooltip={stealthHide ? `Hide to ${isMacPlatform() ? "menu bar" : "tray"} (${formatShortcut("CmdOrCtrl+B")} brings it back)` : `Minimize to Dashboard (${formatShortcut("CmdOrCtrl+B")} brings it back)`} />
 
           {/* Translation controls */}

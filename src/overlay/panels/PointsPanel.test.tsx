@@ -423,3 +423,66 @@ describe("edit in place", () => {
     expect(screen.getByRole("textbox", { name: "Edit Opening" })).toBeInTheDocument();
   });
 });
+
+describe("ticks belong to the meeting they were made in", () => {
+  it("reopening a meeting brings its ticks back; another meeting starts clean", async () => {
+    // a small backend for progress, keyed by meeting and note
+    const saved = new Map<string, unknown>();
+    ipc.savePointProgress.mockImplementation(async (m: string, p: string, said: unknown) => void saved.set(`${m}/${p}`, said));
+    ipc.getPointProgress.mockImplementation(async (m: string, p: string) => {
+      const said = saved.get(`${m}/${p}`);
+      return said ? { meeting_id: m, point_id: p, said } : null;
+    });
+
+    const first = render(<PointsPanel />);
+    const ticks = await screen.findAllByRole("button", { name: /^Said it:/ });
+    expect(screen.getByText("3 left to say")).toBeInTheDocument();
+    act(() => ticks[1].click());
+    expect(screen.getByText("2 left to say")).toBeInTheDocument();
+    first.unmount(); // closing the window saves what is waiting
+    await waitFor(() => expect(saved.has("m1/n1")).toBe(true));
+
+    // later: the same meeting opened again in a fresh window
+    __resetTalkingPointsForTests();
+    render(<PointsPanel />);
+    expect(await screen.findByText("2 left to say")).toBeInTheDocument();
+    const again = screen.getAllByRole("button", { name: /^Said it:/ });
+    expect(again[1]).toHaveAttribute("aria-pressed", "true");
+    expect(again[0]).toHaveAttribute("aria-pressed", "false");
+    cleanup();
+
+    // a different meeting does not inherit them
+    __resetTalkingPointsForTests();
+    startMeeting({ id: "m2" });
+    render(<PointsPanel />);
+    expect(await screen.findByText("3 left to say")).toBeInTheDocument();
+    expect(ipc.getPointProgress).toHaveBeenCalledWith("m2", "n1");
+  });
+});
+
+describe("a hostile note is only ever drawn as text", () => {
+  it("scripts, images, links and odd colours in a saved note do not become elements", async () => {
+    const hostile = {
+      type: "doc",
+      content: [
+        { type: "heading", attrs: { id: "h", level: 9 }, content: [{ type: "text", text: "<script>alert(1)</script>" }] },
+        { type: "image", attrs: { src: "https://evil.test/x.png" } },
+        {
+          type: "paragraph",
+          attrs: { id: "p" },
+          content: [
+            { type: "text", text: '<img src=x onerror="alert(2)">', marks: [{ type: "link", attrs: { href: "javascript:alert(3)" } }, { type: "tpColor", attrs: { name: "red;background:url(//evil.test)" } }] },
+          ],
+        },
+      ],
+    };
+    ipc.listTalkingPoints.mockResolvedValue([{ ...NOTES[0], doc_json: JSON.stringify(hostile), plain_text: "x" }]);
+    render(<PointsPanel />);
+    const region = await screen.findByRole("region", { name: /Opening/ });
+    expect(region.querySelector("img, script, a, iframe, style, [onerror], [href], [src]")).toBeNull();
+    expect(region.textContent).toContain("<script>alert(1)</script>");
+    expect(region.textContent).toContain('<img src=x onerror="alert(2)">');
+    expect(region.innerHTML).not.toMatch(/evil\.test|javascript:/);
+    expect(region.querySelector("h1, h2, h3")).not.toBeNull();
+  });
+});

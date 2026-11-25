@@ -266,12 +266,13 @@ export function Dock({
         act(o.action, o.action.type === "dock" ? describeDock(layout, o.action, title) : undefined);
       },
     }));
+    // Collapse and Hide come first, so they are reachable without scrolling a long list of moves.
+    const head: DockMenuItem[] = [];
     const st = leaves(layout.root).find((s) => s.panels.includes(panel));
     if (st && layout.root !== st) {
-      items.push({
+      head.push({
         id: "collapse",
         label: "Collapse to a strip",
-        divider: true,
         onSelect: () => {
           setMenu(null);
           act({ type: "collapse", stackId: st.id, collapsed: true }, `${title(panel)} collapsed`);
@@ -279,16 +280,17 @@ export function Dock({
       });
     }
     if (panels[panel]?.canHide !== false) {
-      items.push({
+      head.push({
         id: "hide",
         label: `Hide ${title(panel)}`,
-        divider: !(st && layout.root !== st),
         onSelect: () => {
           setMenu(null);
           act({ type: "hide", panel }, `${title(panel)} hidden`);
         },
       });
     }
+    if (head.length && items.length) items[0] = { ...items[0], divider: true };
+    items.unshift(...head);
     return items;
   };
 
