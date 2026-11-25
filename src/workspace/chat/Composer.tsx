@@ -114,7 +114,8 @@ export function Composer(p: ComposerProps) {
     }
     // A long draft never pushes Ask out of sight: the box may use about a fifth of the pane.
     const paneH = el.closest("[data-workspace-chat]")?.getBoundingClientRect().height || window.innerHeight;
-    const max = Math.max(60, Math.min(MAX_PX, Math.round(paneH * 0.2)));
+    const narrow = el.getBoundingClientRect().width < 380; // the controls wrap to more rows here
+    const max = Math.max(narrow ? 44 : 60, Math.min(MAX_PX, Math.round(paneH * (narrow ? 0.1 : 0.2))));
     el.style.height = "auto";
     const h = Math.min(Math.max(el.scrollHeight, floor), max);
     el.style.height = `${h}px`;

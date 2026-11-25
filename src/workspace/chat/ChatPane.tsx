@@ -171,8 +171,10 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
         </div>
       )}
 
+      {/* One body: on the start screen it scrolls as a whole, so nothing is ever squeezed or clipped. */}
+      <div className={cn("flex min-h-0 flex-1 flex-col", empty && "overflow-y-auto")} data-chat-body>
       {empty ? (
-        <div className="flex min-h-0 flex-[2] flex-col justify-end px-5">
+        <div className="flex shrink-0 grow-[2] basis-auto flex-col justify-end px-5 pt-4">
           <div className={cn(COLUMN, "flex items-end justify-between gap-4 pb-1")}>
             <StartHeading workspace={workspace} />
             {startAction && <div className="shrink-0 pb-4">{startAction}</div>}
@@ -201,7 +203,7 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
         <div className="flex-1" />
       )}
 
-      <div className="max-h-[42%] shrink-0 overflow-y-auto px-5 pb-3 pt-1">
+      <div className={cn("shrink-0 px-5 pb-3 pt-1", !empty && "max-h-[42%] overflow-y-auto")}>
         {!empty && (
           <ContextPanel
             report={report}
@@ -242,7 +244,7 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
       </div>
 
       {empty && (
-        <div className="min-h-0 flex-[3] px-5">
+        <div className="shrink-0 grow-[3] basis-auto px-5 pb-4">
           <ExampleQuestions
             questions={examples}
             onPick={(q) => {
@@ -252,6 +254,7 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
           />
         </div>
       )}
+      </div>
     </div>
   );
 }
