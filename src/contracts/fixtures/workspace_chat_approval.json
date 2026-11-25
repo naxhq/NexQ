@@ -1,0 +1,10 @@
+{
+  "approval_id": "ap-1",
+  "args": "{\n  \"value\": \"on\"\n}",
+  "chat_id": "c1",
+  "redacted": false,
+  "request_id": "ask-1",
+  "server": "notes",
+  "tool": "set_flag",
+  "truncated": false
+}

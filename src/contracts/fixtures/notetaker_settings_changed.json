@@ -1,0 +1,12 @@
+{
+  "cap": 120000,
+  "colors": true,
+  "detail": "standard",
+  "effort": null,
+  "enabled": false,
+  "language": "meeting",
+  "model": null,
+  "provider": null,
+  "scope": "meeting",
+  "update_mode": "automatic"
+}

@@ -1,0 +1,12 @@
+{
+  "input": {
+    "kind": "fact",
+    "source_meeting": "m1",
+    "source_ms": 12000,
+    "status": "suggested",
+    "text": "Launch is in May",
+    "title": "Launch",
+    "unsupported": false,
+    "workspace_id": "w1"
+  }
+}

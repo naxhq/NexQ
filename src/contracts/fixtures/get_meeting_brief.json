@@ -1,0 +1,23 @@
+{
+  "earlier": [
+    "Intro done"
+  ],
+  "facts": [
+    {
+      "passage_id": 3,
+      "source": "Pricing.pdf",
+      "sources": [
+        {
+          "kind": "document",
+          "ref_id": "d1",
+          "start_ms": null,
+          "sub_ref": null,
+          "title": "Pricing.pdf"
+        }
+      ],
+      "text": "Acme pays 12 dollars per seat"
+    }
+  ],
+  "generated_at": 1700000000000,
+  "now": "Acme pricing"
+}

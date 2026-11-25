@@ -1,0 +1,12 @@
+{
+  "can_ask": true,
+  "notes": [
+    "Tools that change things ask first."
+  ],
+  "tools_off": [
+    {
+      "reason": "Not allowed in a workspace chat",
+      "tool": "Bash"
+    }
+  ]
+}

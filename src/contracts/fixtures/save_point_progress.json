@@ -1,0 +1,11 @@
+{
+  "meetingId": "m1",
+  "pointId": "p1",
+  "said": [
+    {
+      "block_id": "b1",
+      "by": "voice",
+      "ticked": true
+    }
+  ]
+}

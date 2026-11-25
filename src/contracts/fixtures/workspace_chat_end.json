@@ -1,0 +1,124 @@
+{
+  "cancelled": false,
+  "chat_id": "c1",
+  "message": {
+    "chat_id": "c1",
+    "citations": [
+      {
+        "kind": "folder",
+        "ref_id": "f1",
+        "snippet": "the budget was agreed",
+        "start_ms": null,
+        "sub_ref": "notes/plan.md",
+        "tag": "S1",
+        "title": "A folder"
+      }
+    ],
+    "content": "It was agreed [S1].",
+    "context": {
+      "bars": [
+        {
+          "id": "meeting:m1",
+          "included": true,
+          "kind": "meeting",
+          "layer": "meetings",
+          "pinned": false,
+          "ref_id": "m1",
+          "relevance": 0.5,
+          "sub_ref": null,
+          "title": "A meeting",
+          "tokens": 120
+        },
+        {
+          "id": "document:d1",
+          "included": true,
+          "kind": "document",
+          "layer": "documents",
+          "pinned": true,
+          "ref_id": "d1",
+          "relevance": 0.5,
+          "sub_ref": null,
+          "title": "A document",
+          "tokens": 120
+        },
+        {
+          "id": "folder:f1",
+          "included": true,
+          "kind": "folder",
+          "layer": "folders",
+          "pinned": false,
+          "ref_id": "f1",
+          "relevance": 0.5,
+          "sub_ref": "notes/plan.md",
+          "title": "A folder",
+          "tokens": 120
+        },
+        {
+          "id": "talking_point:t1",
+          "included": true,
+          "kind": "talking_point",
+          "layer": "documents",
+          "pinned": false,
+          "ref_id": "t1",
+          "relevance": 0.5,
+          "sub_ref": null,
+          "title": "A talking_point",
+          "tokens": 120
+        },
+        {
+          "id": "memory:mem1",
+          "included": true,
+          "kind": "memory",
+          "layer": "instructions",
+          "pinned": false,
+          "ref_id": "mem1",
+          "relevance": 0.5,
+          "sub_ref": null,
+          "title": "A memory",
+          "tokens": 120
+        },
+        {
+          "id": "instructions:workspace",
+          "included": true,
+          "kind": "instructions",
+          "layer": "instructions",
+          "pinned": false,
+          "ref_id": "workspace",
+          "relevance": 0.5,
+          "sub_ref": null,
+          "title": "A instructions",
+          "tokens": 120
+        },
+        {
+          "id": "conversation:chat",
+          "included": true,
+          "kind": "conversation",
+          "layer": "conversation",
+          "pinned": false,
+          "ref_id": "chat",
+          "relevance": 0.5,
+          "sub_ref": null,
+          "title": "A conversation",
+          "tokens": 120
+        }
+      ],
+      "budget": 6000,
+      "depth": "balanced",
+      "estimate": true,
+      "notices": [
+        "This conversation continues in an earlier session; that session holds its context."
+      ],
+      "omitted": 2,
+      "strategy": "ladder",
+      "used": 480,
+      "window": 200000
+    },
+    "created_at": 1700000000000,
+    "id": 5,
+    "input_tokens": 900,
+    "model": "claude-sonnet",
+    "output_tokens": 120,
+    "role": "assistant"
+  },
+  "request_id": "ask-1"
+}

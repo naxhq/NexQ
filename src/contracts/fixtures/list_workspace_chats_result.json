@@ -1,0 +1,16 @@
+[
+  {
+    "condensed_upto": null,
+    "created_at": 1700000000000,
+    "depth": "balanced",
+    "effort": null,
+    "id": "c1",
+    "include_meetings": true,
+    "message_count": 2,
+    "model": "sonnet",
+    "provider": "claude_cli",
+    "title": "Budget",
+    "updated_at": 1700000100000,
+    "workspace_id": "w1"
+  }
+]

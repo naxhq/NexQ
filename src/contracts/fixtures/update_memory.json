@@ -1,0 +1,9 @@
+{
+  "id": "k1",
+  "patch": {
+    "kind": "decision",
+    "status": "saved",
+    "text": "X",
+    "title": "T"
+  }
+}

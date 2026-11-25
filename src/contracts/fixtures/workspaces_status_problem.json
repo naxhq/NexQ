@@ -1,0 +1,17 @@
+{
+  "available": false,
+  "db": {
+    "backups": [
+      {
+        "bytes": 1024,
+        "created_at": 1700000000000,
+        "meetings": 3,
+        "name": "nexq-before-workspaces.db"
+      }
+    ],
+    "kind": "unreadable",
+    "message": "A check of your meetings file found damage.",
+    "path": "C:/data/nexq.db"
+  },
+  "error": "The database did not open"
+}

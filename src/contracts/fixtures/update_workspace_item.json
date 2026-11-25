@@ -1,0 +1,10 @@
+{
+  "id": "w1",
+  "kind": "folder",
+  "patch": {
+    "index_opt_in": true,
+    "label": "Vault",
+    "pinned": true
+  },
+  "refId": "f1"
+}
