@@ -4,8 +4,8 @@ import { getLibraryFilePath, revealLibraryFile } from "../lib/ipc";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { TalkingPointsEditor } from "./slots";
 import { hintClass } from "./styles";
+import { messageOf } from "../lib/plainError";
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /** A file inside a Library folder: its path as the backend checked it, and a way to show it. */
 function FolderFileDialog({ folderId, subPath, onClose }: { folderId: string; subPath: string; onClose: () => void }) {

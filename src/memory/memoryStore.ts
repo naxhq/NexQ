@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { createMemory, type MemoryCreate, deleteMemory, listMemory, resolveMemory, suggestMemory, updateMemory } from "../lib/ipc";
 import { onMemoryChanged } from "../lib/events";
 import type { MemoryItem, MemoryKind } from "../lib/types";
+import { messageOf } from "../lib/plainError";
 
 /** A suggestion may carry a flag from the check against the transcript. */
 export type MemoryRow = MemoryItem;
@@ -36,7 +37,6 @@ interface MemoryState {
   clearSuggest: (workspaceId: string) => void;
 }
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /**
  * Exactly what `create_memory` takes (Rust `MemoryCreate`): every field of the struct is

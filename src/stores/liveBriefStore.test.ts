@@ -154,6 +154,14 @@ describe("liveBriefStore", () => {
     expect(useLiveBriefStore.getState().settings?.cap).toBe(120000);
   });
 
+  it("an unexpected state answer is a plain sentence, not a JavaScript error", async () => {
+    await useLiveBriefStore.getState().attach("m1");
+    await new Promise((r) => setTimeout(r, 20)); // the getter has answered
+    h.onState!(null as never);
+    expect(useLiveBriefStore.getState().error).toBe("The brief couldn't be read. Try again.");
+    expect(useLiveBriefStore.getState().run).toBeNull();
+  });
+
   it("says what failed", async () => {
     await useLiveBriefStore.getState().attach("m1");
     h.fail = "No model is set up";

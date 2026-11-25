@@ -9,6 +9,7 @@ import { cn } from "../../lib/utils";
 import { ModelPicker, PickerCaret } from "./ModelPicker";
 import { DOCUMENT_CAP, INSTRUCTION_CAP, describeRemoved, hiddenCount, sanitizeDocumentText, sanitizeInstructionText, stripHidden } from "./instructionText";
 import type { ModelChoice } from "./models";
+import { plainError } from "../../lib/plainError";
 
 
 /** The answer without its `[S1]` tags, for copying and for saving. */
@@ -126,7 +127,7 @@ function SaveDialog({ messageId, initial, answer, onClose }: { messageId: number
       showToast("Saved to the library as a document.", "success");
       onClose();
     } catch (e) {
-      setError(typeof e === "string" ? e : e instanceof Error ? e.message : String(e));
+      setError(plainError(e));
       setBusy(false);
     }
   };
@@ -229,7 +230,7 @@ function AddToInstructionsDialog({ workspaceId, messageId, preview, onClose }: {
       setDone({ before });
     } catch (e) {
       // The backend's own words, for example that something the answer used left this workspace.
-      setError(typeof e === "string" ? e : e instanceof Error ? e.message : String(e));
+      setError(plainError(e));
     } finally {
       setBusy(false);
     }
@@ -243,7 +244,7 @@ function AddToInstructionsDialog({ workspaceId, messageId, preview, onClose }: {
       showToast("Taken out of the instructions again.", "success");
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(plainError(e));
       setBusy(false);
     }
   };

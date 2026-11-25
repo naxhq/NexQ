@@ -11,6 +11,7 @@ import * as ipc from "../lib/ipc";
 import { onWorkspacesChanged } from "../lib/events";
 import { LIBRARY_DEFAULT, RAIL_DEFAULT } from "../workspace/layout";
 import type { DatabaseProblem } from "../workspace/databaseProblem";
+import { messageOf } from "../lib/plainError";
 
 export const GENERAL_ID = "general";
 /** A meeting started with a workspace that could not be used has the home `unfiled:<meeting id>` (it names no workspace). */
@@ -153,7 +154,6 @@ export function workspaceById(workspaces: WorkspaceSummary[], id: string | null 
   return workspaces.find((w) => w.id === (id || GENERAL_ID));
 }
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   workspaces: [FALLBACK_GENERAL],

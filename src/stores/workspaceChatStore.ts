@@ -24,6 +24,7 @@ import {
 } from "../lib/events";
 import { showToast } from "./toastStore";
 import { stripHidden } from "../workspace/chat/instructionText";
+import { plainError } from "../lib/plainError";
 
 // Workspace chat state. One store for the launcher window: streams are held here (not in a
 // component), so leaving the pane never cancels an answer, and two chats can run at once.
@@ -257,7 +258,7 @@ function titleFrom(question: string): string {
   return one.length > 48 ? `${one.slice(0, 47).trimEnd()}…` : one;
 }
 
-const asText = (e: unknown) => (e instanceof Error ? e.message : typeof e === "string" ? e : String(e));
+const asText = (e: unknown) => plainError(e);
 
 let handlers: Handlers;
 

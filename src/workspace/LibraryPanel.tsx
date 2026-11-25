@@ -24,6 +24,7 @@ import { LibraryRow } from "./LibraryRow";
 import { READING, itemTitle, sortItems, type IndexProgress } from "./libraryStatus";
 import { MemorySection, TalkingPointsSection } from "./slots";
 import { InstructionsBlock } from "./InstructionsBlock";
+import { messageOf } from "../lib/plainError";
 
 // Dialogs load when first asked for.
 const AddMcpServerDialog = lazyNamed(() => import("../sources/AddMcpServerDialog"), "AddMcpServerDialog");
@@ -31,7 +32,6 @@ const SkippedFilesDialog = lazyNamed(() => import("./LibraryDialogs"), "SkippedF
 const PasteTextDialog = lazyNamed(() => import("./LibraryDialogs"), "PasteTextDialog");
 const FromLibraryDialog = lazyNamed(() => import("./LibraryDialogs"), "FromLibraryDialog");
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /**
  * The right panel: what this workspace's AI can use. Documents, folders and

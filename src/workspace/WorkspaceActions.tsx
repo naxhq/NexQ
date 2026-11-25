@@ -10,6 +10,7 @@ const WorkspaceDialog = lazyNamed(() => import("./WorkspaceDialog"), "WorkspaceD
 const DeleteWorkspaceDialog = lazyNamed(() => import("./DeleteWorkspaceDialog"), "DeleteWorkspaceDialog");
 const CloneDialog = lazyNamed(() => import("./CloneDialog"), "CloneDialog");
 import { moveInOrder } from "./order";
+import { messageOf } from "../lib/plainError";
 
 export interface WorkspaceActions {
   create: () => void;
@@ -32,7 +33,6 @@ export function useWorkspaceActions(): WorkspaceActions {
   return v;
 }
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const fail = (what: string, e: unknown) => showToast(`Couldn't ${what}: ${messageOf(e)}`, "error");
 
 /** Owns the create/settings, clone and delete dialogs once, for the rail, the switcher and the All workspaces page. */

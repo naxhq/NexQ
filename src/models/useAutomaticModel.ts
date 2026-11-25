@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { AutomaticModel } from "../lib/types";
 import { getAutomaticModel } from "../lib/ipc";
+import { plainError } from "../lib/plainError";
 import { onAutomaticModelUpdated } from "../lib/events";
 import { useConfigStore } from "../stores/configStore";
 
@@ -35,7 +36,7 @@ export function useAutomaticModel(provider: string | null): { model: AutomaticMo
     let alive = true;
     getAutomaticModel(provider)
       .then((m) => alive && setState({ model: m, error: null }))
-      .catch((e) => alive && setState({ model: null, error: typeof e === "string" ? e : e instanceof Error ? e.message : "Could not look up the automatic model." }));
+      .catch((e) => alive && setState({ model: null, error: plainError(e, "Could not look up the automatic model.") }));
     return () => {
       alive = false;
     };

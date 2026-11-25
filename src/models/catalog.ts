@@ -7,6 +7,7 @@ import { getApiKey, listModels } from "../lib/ipc";
 import { useConfigStore } from "../stores/configStore";
 import { useAgentStore } from "../stores/agentStore";
 import { PROVIDER_LABELS, providerLabel } from "./labels";
+import { plainError } from "../lib/plainError";
 
 export type ProviderGroup = "subscription" | "cloud" | "local";
 /** What an answer can use: folders and tools (CLI agents) or only the passages found for it. */
@@ -93,7 +94,7 @@ async function loadApi(provider: string): Promise<void> {
         .map((m) => ({ provider, model: m.id, label: m.name || m.id, efforts: [], window: m.context_window ?? null }));
       apiCache.set(provider, { at: Date.now(), models, error: null });
     } catch (e) {
-      apiCache.set(provider, { at: Date.now(), models: [], error: e instanceof Error ? e.message : String(e) });
+      apiCache.set(provider, { at: Date.now(), models: [], error: plainError(e, "The list of models could not be read.") });
     } finally {
       inflight.delete(provider);
     }

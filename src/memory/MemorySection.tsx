@@ -12,8 +12,8 @@ import { MEMORY_KINDS, UNSUPPORTED_TEXT, groupSaved, useMemoryStore, type Memory
 import { ModelField, describeModel } from "../models/ModelField";
 import { useAutomaticModel } from "../models/useAutomaticModel";
 import { useMemoryModel } from "./useMemoryModel";
+import { messageOf } from "../lib/plainError";
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const kindName = (k: MemoryKind) => MEMORY_KINDS.find((x) => x.kind === k)?.singular ?? k;
 
 interface Draft {

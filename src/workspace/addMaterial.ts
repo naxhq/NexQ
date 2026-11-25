@@ -3,6 +3,7 @@ import { useConfigStore } from "../stores/configStore";
 import { useContextStore } from "../stores/contextStore";
 import { useRagStore } from "../stores/ragStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
+import { messageOf } from "../lib/plainError";
 
 export const SUPPORTED_EXTENSIONS = ["pdf", "txt", "md", "docx"] as const;
 
@@ -27,7 +28,6 @@ export interface AddResult {
   failed: Array<{ path: string; error: string }>;
 }
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /**
  * Adds documents to the library and to a workspace together (a workspace never

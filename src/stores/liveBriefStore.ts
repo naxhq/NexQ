@@ -16,6 +16,7 @@ import {
 } from "../lib/ipc";
 import { onBriefSettingsChanged, onBriefSheet, onBriefState } from "../lib/events";
 import { useMeetingStore } from "./meetingStore";
+import { plainError } from "../lib/plainError";
 
 export const DEFAULT_BRIEF_SETTINGS: BriefSettings = {
   provider: null,
@@ -79,10 +80,14 @@ interface LiveBriefState {
   clearError: () => void;
 }
 
+export const BRIEF_UNREADABLE = "The brief couldn't be read. Try again.";
+
+/** A backend sentence stays; a JavaScript error becomes a plain sentence. */
 function describeError(e: unknown): string {
-  const s = typeof e === "string" ? e : e instanceof Error ? e.message : "";
-  return s || "Something went wrong. Try again.";
+  return plainError(e, BRIEF_UNREADABLE);
 }
+
+const isRunState = (s: unknown): s is BriefState => !!s && typeof s === "object" && typeof (s as BriefState).meeting_id === "string" && typeof (s as BriefState).status === "string";
 
 const okSettings = (x: unknown): BriefSettings | null => (x && typeof x === "object" ? (x as BriefSettings) : null);
 
@@ -104,6 +109,10 @@ export const useLiveBriefStore = create<LiveBriefState>((set, get) => {
     return guard(() => fn(id));
   };
   const applyState = (s: BriefState) => {
+    if (!isRunState(s)) {
+      set({ error: BRIEF_UNREADABLE });
+      return;
+    }
     set({ run: s, deadline: typeof s.next_in_ms === "number" ? Date.now() + s.next_in_ms : null });
   };
 
@@ -141,10 +150,12 @@ export const useLiveBriefStore = create<LiveBriefState>((set, get) => {
       let alive = true;
       const [offState, offSheet] = await Promise.all([
         onBriefState((e) => {
-          if (alive && e.meeting_id === get().meetingId) applyState(e);
+          if (!alive) return;
+          if (!isRunState(e)) applyState(e);
+          else if (e.meeting_id === get().meetingId) applyState(e);
         }),
         onBriefSheet((e) => {
-          if (!alive || e.meeting_id !== get().meetingId) return;
+          if (!alive || !e || e.meeting_id !== get().meetingId) return;
           const next = cleanSheet(e.sheet);
           if (next) set({ sheet: next, hidden: false });
           else set((s) => ({ sheet: null, hidden: s.sheet !== null || s.hidden }));

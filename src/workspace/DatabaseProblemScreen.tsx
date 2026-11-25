@@ -4,6 +4,7 @@ import { formatFileSize } from "../lib/utils";
 import { openUpdateDialog } from "../hooks/useUpdater";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { showToast } from "../stores/toastStore";
+import { messageOf } from "../lib/plainError";
 import {
   PROBLEM_COPY,
   copyDate,
@@ -18,7 +19,6 @@ import {
   type DatabaseProblem,
 } from "./databaseProblem";
 
-const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 type Phase = { kind: "idle" } | { kind: "working"; what: string } | { kind: "restart"; what: string } | { kind: "error"; text: string } | { kind: "still" };
 

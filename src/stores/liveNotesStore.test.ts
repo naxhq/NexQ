@@ -286,6 +286,23 @@ describe("turning off is never claimed unless true", () => {
   });
 });
 
+describe("an unexpected answer is said in plain words", () => {
+  it("a null state from the backend is not a JavaScript error on screen", async () => {
+    h.stateFor.live1 = null;
+    await S().attach("live1");
+    await new Promise((r) => setTimeout(r, 20)); // the getter has answered
+    h.onState!(null as never);
+    expect(S().error).toBe("Live notes couldn't be read. Try again.");
+    expect(S().runs.live1).toBeUndefined();
+  });
+
+  it("a thrown TypeError becomes a sentence, a backend string stays", async () => {
+    h.fail = "No provider is set up";
+    await S().start();
+    expect(S().error).toBe("No provider is set up");
+  });
+});
+
 describe("errors", () => {
   it("reports a failed command in words", async () => {
     h.fail = "No provider is set up";

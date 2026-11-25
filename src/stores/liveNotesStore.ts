@@ -17,6 +17,7 @@ import { onNotetakerDoc, onNotetakerSettingsChanged, onNotetakerState } from "..
 import { applyEdit, invertEdit, newUserId, planDelete } from "../live-notes/edits";
 import { diffDocs } from "../live-notes/page";
 import { useMeetingStore } from "./meetingStore";
+import { plainError } from "../lib/plainError";
 
 /** How long a new or changed line keeps its margin tick. */
 export const FRESH_MS = 4000;
@@ -118,10 +119,15 @@ interface LiveNotesState {
 
 const pruneTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+export const NOTES_UNREADABLE = "Live notes couldn't be read. Try again.";
+
+/** A backend sentence stays; a JavaScript error becomes a plain sentence. */
 function describeError(e: unknown): string {
-  const s = typeof e === "string" ? e : e instanceof Error ? e.message : "";
-  return s || "Something went wrong. Try again.";
+  return plainError(e, NOTES_UNREADABLE);
 }
+
+/** A run state that is not one (null, an empty answer): said, never thrown. */
+const isRunState = (s: unknown): s is NotetakerState => !!s && typeof s === "object" && typeof (s as NotetakerState).meeting_id === "string" && typeof (s as NotetakerState).status === "string";
 
 export const useLiveNotesStore = create<LiveNotesState>((set, get) => {
   const entry = (id: string): NotesEntry => get().entries[id] ?? EMPTY_ENTRY;
@@ -174,6 +180,10 @@ export const useLiveNotesStore = create<LiveNotesState>((set, get) => {
   const fail = (e: unknown) => set({ error: describeError(e) });
 
   const applyState = (s: NotetakerState) => {
+    if (!isRunState(s)) {
+      set({ error: NOTES_UNREADABLE });
+      return;
+    }
     set((cur) => ({
       runs: { ...cur.runs, [s.meeting_id]: s },
       deadlines: { ...cur.deadlines, [s.meeting_id]: typeof s.next_in_ms === "number" ? Date.now() + s.next_in_ms : null },
@@ -229,10 +239,12 @@ export const useLiveNotesStore = create<LiveNotesState>((set, get) => {
       let alive = true;
       const [offState, offDoc] = await Promise.all([
         onNotetakerState((e) => {
-          if (alive && e.meeting_id === meetingId) applyState(e);
+          if (!alive) return;
+          if (!isRunState(e)) applyState(e);
+          else if (e.meeting_id === meetingId) applyState(e);
         }),
         onNotetakerDoc((e) => {
-          if (alive && e.meeting_id === meetingId) receiveDoc(meetingId, e.doc, e.version);
+          if (alive && e && e.meeting_id === meetingId) receiveDoc(meetingId, e.doc, e.version);
         }),
       ]);
       // A reopened window shows the true state, not the last event it happened to hear.
