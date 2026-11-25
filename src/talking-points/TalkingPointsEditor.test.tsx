@@ -362,3 +362,54 @@ describe("Markdown import", () => {
     expect(within(dlg).getByRole("button", { name: "Import as a new note" })).toBeDisabled();
   });
 });
+
+describe("Persian and pasted text", () => {
+  const ZWNJ = "‌";
+
+  it("typing after a half space with an autosave in the middle of the word keeps every character and the caret", async () => {
+    const user = userEvent.setup();
+    render(<TalkingPointsEditor workspaceId="w1" />);
+    const box = await screen.findByRole("textbox", { name: "Text of Opening" });
+    await user.click(box);
+    await user.keyboard(` می${ZWNJ}`);
+    await waitFor(() => expect(saveCalls()).toBeGreaterThan(0), { timeout: 3000 }); // the autosave fires mid-word
+    expect(lastSaved().plain_text).toContain(`می${ZWNJ}`);
+    // the backend tells every window about the save: it must not reload the editor
+    ipc.listTalkingPoints.mockImplementation(async () => [{ ...NOTES[0], ...rows.get("a")! }, NOTES[1], NOTES[2]].filter((n) => n.workspace_id === "w1"));
+    await act(async () => {
+      await useTalkingPointsStore.getState().syncFromBackend("w1");
+    });
+    expect(useTalkingPointsStore.getState().docRev.a ?? 0).toBe(0);
+    await user.keyboard("خواهم");
+    expect(box.textContent).toContain(`می${ZWNJ}خواهم`);
+    await waitFor(() => expect(lastSaved().plain_text).toContain(`می${ZWNJ}خواهم`), { timeout: 3000 });
+    expect(screen.queryByText(/Changed in another window/)).not.toBeInTheDocument();
+    expect(await screen.findByText("Saved")).toBeInTheDocument();
+  });
+
+  it("pasted web text loses hidden characters and keeps joiners", async () => {
+    // jsdom has no clipboard classes; ProseMirror builds a paste event from them
+    const g = globalThis as unknown as Record<string, unknown>;
+    g.DataTransfer ??= class {
+      private d = new Map<string, string>();
+      get types() { return [...this.d.keys()]; }
+      setData(t: string, v: string) { this.d.set(t, v); }
+      getData(t: string) { return this.d.get(t) ?? ""; }
+    };
+    g.ClipboardEvent ??= class extends Event {
+      clipboardData: unknown;
+      constructor(type: string, init?: { clipboardData?: unknown }) { super(type, { bubbles: true, cancelable: true }); this.clipboardData = init?.clipboardData; }
+    };
+    const user = userEvent.setup();
+    render(<TalkingPointsEditor workspaceId="w1" />);
+    const box = await screen.findByRole("textbox", { name: "Text of Opening" });
+    await user.click(box);
+    const html = `<p>a​b‮c﻿d&#8203;e&#x200B;f&ZeroWidthSpace;g می${ZWNJ}خواهم</p>`;
+    const view = (box as unknown as { editor?: { view: { pasteHTML: (h: string) => void } }; pmViewDesc?: { view?: { pasteHTML: (h: string) => void } } }).editor?.view ?? (box as unknown as { pmViewDesc?: { view?: { pasteHTML: (h: string) => void } } }).pmViewDesc?.view;
+    expect(view).toBeDefined();
+    act(() => view!.pasteHTML(html));
+    await waitFor(() => expect(box.textContent).toContain("abcdefg"));
+    expect(box.textContent).toContain(`می${ZWNJ}خواهم`);
+    expect(box.textContent).not.toMatch(/[​‮﻿]/);
+  });
+});

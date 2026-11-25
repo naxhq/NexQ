@@ -65,7 +65,9 @@ export const DISTINCT_W = 0.3;
 // ---------------------------------------------------------------------------
 
 const CJK_CLASS = "\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}\\u30FC\\u3005";
-const WORD_RE = /[\p{L}\p{M}\p{N}]+(?:['’][\p{L}]+)*(?:[.,]\p{N}+)*|%/gu;
+/** Joiners (ZWNJ, ZWJ) are part of a word in writing (Persian, Indic) but are never in speech: they match as part of a word and fold away. */
+const JOINERS = /[\u200c\u200d]/g;
+const WORD_RE = /[\p{L}\p{M}\p{N}\u200c\u200d]+(?:['’][\p{L}]+)*(?:[.,]\p{N}+)*|%/gu;
 const RUN_SRC = `[${CJK_CLASS}]+|[^${CJK_CLASS}]+`;
 const CJK_TEST = new RegExp(`[${CJK_CLASS}]`, "u");
 const MARKS_RE = /\p{M}/gu;
@@ -275,7 +277,8 @@ function rawTokens(text: string): RawToken[] {
         }
         continue;
       }
-      const norm = run.normalize("NFKC");
+      const norm = run.normalize("NFKC").replace(JOINERS, "");
+      if (!norm) continue;
       if (NUMERIC_RE.test(norm)) {
         out.push({ t: canonNumber(norm), start, end, cjk: false });
         continue;

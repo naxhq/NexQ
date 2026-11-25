@@ -11,7 +11,18 @@ import { EditorContent, useEditor } from "@tiptap/react";
 import type { Editor } from "@tiptap/core";
 import { createExtensions } from "./extensions";
 import { FloatingToolbar } from "./FloatingToolbar";
-import { countWords, DEFAULT_WPM, docPlainText, parseDoc, sanitizeDoc, speakingTime, type TpDoc } from "../doc/model";
+import {
+  countWords,
+  DEFAULT_WPM,
+  docPlainText,
+  parseDoc,
+  sanitizeDoc,
+  serializeDoc,
+  speakingTime,
+  stripHiddenHtml,
+  stripHiddenText,
+  type TpDoc,
+} from "../doc/model";
 import { markdownToDoc } from "../doc/markdown";
 import { cn } from "../../lib/utils";
 import "../talkingPoints.css";
@@ -74,11 +85,14 @@ export default function RichEditor({
         spellcheck: "true",
         class: "tp-doc tp-prose outline-none",
       },
+      // text from outside loses what nobody can see (zero-width spaces, bidi overrides); joiners stay
+      transformPastedHTML: (html) => stripHiddenHtml(html),
+      transformPastedText: (text) => stripHiddenText(text),
       handlePaste: (view, event) => {
         // Plain text that is Markdown becomes formatted blocks; HTML goes through the schema.
         const cd = event.clipboardData;
         if (!cd || cd.types.includes("text/html")) return false;
-        const text = cd.getData("text/plain");
+        const text = stripHiddenText(cd.getData("text/plain"));
         if (!text || !looksLikeMarkdown(text)) return false;
         const doc = markdownToDoc(text);
         const { state } = view;
@@ -99,9 +113,21 @@ export default function RichEditor({
   const lastKey = useRef(resetKey);
   useEffect(() => {
     if (!editor || lastKey.current === resetKey) return;
+    const prevNote = lastKey.current.split(":")[0];
     lastKey.current = resetKey;
-    editor.commands.setContent(parseDoc(docJson) as never, { emitUpdate: false });
-    setCounts(countWords(docPlainText(parseDoc(docJson))));
+    const incoming = parseDoc(docJson);
+    const sameNote = prevNote === resetKey.split(":")[0];
+    // the same text again (our own save coming back) is not a change: nothing moves under the caret
+    if (sameNote && serializeDoc(sanitizeDoc(editor.getJSON())) === serializeDoc(incoming)) return;
+    const { from, to } = editor.state.selection;
+    const hadFocus = editor.isFocused;
+    editor.commands.setContent(incoming as never, { emitUpdate: false });
+    if (sameNote && hadFocus) {
+      // a real change from elsewhere: keep the caret where it was, clamped to the new text
+      const max = editor.state.doc.content.size;
+      editor.commands.setTextSelection({ from: Math.min(from, max), to: Math.min(to, max) });
+    }
+    setCounts(countWords(docPlainText(incoming)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, resetKey]);
 

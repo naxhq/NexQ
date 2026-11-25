@@ -6,7 +6,6 @@ import { Switch } from "../../ui";
 interface Props {
   reading: ReadingSettings;
   onChange: (patch: Partial<ReadingSettings>) => void;
-  onClose: () => void;
   /** Said it needs your own voice; when it cannot work the switch says why. */
   saidItNote?: string | null;
   /** Honest word about the language being spoken (nothing for English and French). */
@@ -78,33 +77,20 @@ function Stepper({
 const r1 = (n: number) => Math.round(n * 10) / 10;
 
 /** How the note reads: size, spacing, speed, and whether lines are ticked as you say them. */
-export function ReadingSettingsPopover({ reading, onChange, onClose, saidItNote, languageNote }: Props) {
+export function ReadingSettingsPopover({ reading, onChange, saidItNote, languageNote }: Props) {
   const ref = useRef<HTMLDivElement | null>(null);
   const L = READING_LIMITS;
 
+  // placed, dismissed and refocused by the shared Popover around it
   useEffect(() => {
     ref.current?.querySelector<HTMLElement>("button")?.focus();
-    const away = (e: PointerEvent) => {
-      const t = e.target as Node;
-      if (ref.current && !ref.current.contains(t) && !(t as Element).closest?.("[data-reading-trigger]")) onClose();
-    };
-    document.addEventListener("pointerdown", away, true);
-    return () => document.removeEventListener("pointerdown", away, true);
-  }, [onClose]);
+  }, []);
 
   return (
     <div
       ref={ref}
-      role="dialog"
-      aria-label="Reading settings"
-      onKeyDown={(e) => {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          e.stopPropagation();
-          onClose();
-        } else e.stopPropagation();
-      }}
-      className="absolute right-1.5 top-full z-30 mt-1 w-[min(17rem,calc(100%-0.75rem))] space-y-3 rounded-xl border border-border bg-popover p-3 text-popover-foreground shadow-lg"
+      onKeyDown={(e) => e.stopPropagation()}
+      className="w-72 max-w-full space-y-3 p-3"
     >
       <Stepper
         label="Text size"

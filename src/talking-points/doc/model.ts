@@ -359,3 +359,27 @@ export function reidDoc(doc: TpDoc, gen: () => string = newBlockId): TpDoc {
   for (const b of clone.content) walk(b as never);
   return sanitizeDoc(clone, gen);
 }
+
+// -- hidden characters (paste from outside) -----------------------------------------------------
+
+/**
+ * Characters nobody can see that web pages and chat tools put in text: zero-width space, word joiner,
+ * byte order mark, bidi overrides and isolates, the soft hyphen, tag characters. The joiners ZWNJ (U+200C) and
+ * ZWJ (U+200D) are NOT here: Persian, Indic scripts and emoji need them.
+ */
+const HIDDEN_RE = /[\u00ad\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\u{e0000}-\u{e007f}]/gu;
+const HIDDEN_CODEPOINTS = [0xad, 0x200b, 0x200e, 0x200f, 0x2060, 0xfeff];
+
+export function stripHiddenText(text: string): string {
+  return text.replace(HIDDEN_RE, "");
+}
+
+/** Pasted HTML: the hidden characters as they are, and as numeric or named entities. */
+export function stripHiddenHtml(html: string): string {
+  let out = stripHiddenText(html);
+  out = out.replace(/&#(x[0-9a-f]+|\d+);/gi, (m, n: string) => {
+    const cp = n[0].toLowerCase() === "x" ? parseInt(n.slice(1), 16) : parseInt(n, 10);
+    return HIDDEN_CODEPOINTS.includes(cp) || (cp >= 0x202a && cp <= 0x202e) || (cp >= 0x2060 && cp <= 0x2064) || (cp >= 0x2066 && cp <= 0x2069) ? "" : m;
+  });
+  return out.replace(/&(ZeroWidthSpace|NoBreak|shy);/g, "");
+}

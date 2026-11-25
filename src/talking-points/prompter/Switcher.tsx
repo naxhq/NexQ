@@ -86,7 +86,7 @@ export function Switcher({ notes, recent, currentId, onPick, onClose }: Props) {
   };
 
   return (
-    <div className="absolute inset-x-1.5 top-full z-30 mt-1 overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-lg" onKeyDown={onKey}>
+    <div className="w-[min(22rem,90vw)] overflow-hidden" onKeyDown={onKey}>
       <div className="flex items-center gap-2 border-b border-border px-3">
         <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
         <input

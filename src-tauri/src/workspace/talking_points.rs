@@ -79,38 +79,6 @@ fn plain_from(doc_json: &str) -> String {
     serde_json::from_str::<Value>(doc_json).map(|d| plain_text_of_doc(&d)).unwrap_or_default()
 }
 
-/// Hidden characters out of a text (and nothing else: the writing is stored as written).
-fn clean_text(text: &str) -> String {
-    crate::prompt_data::strip_hidden(text)
-}
-
-fn strip_value(v: &mut Value, changed: &mut bool) {
-    match v {
-        Value::String(s) => {
-            let clean = clean_text(s);
-            if clean != *s {
-                *s = clean;
-                *changed = true;
-            }
-        }
-        Value::Array(items) => items.iter_mut().for_each(|x| strip_value(x, changed)),
-        Value::Object(map) => map.iter_mut().for_each(|(_, x)| strip_value(x, changed)),
-        _ => {}
-    }
-}
-
-/// The document with hidden characters taken out of its text; a document that has none is returned as it is.
-fn clean_doc(doc: &str) -> String {
-    match serde_json::from_str::<Value>(doc) {
-        Ok(mut value) => {
-            let mut changed = false;
-            strip_value(&mut value, &mut changed);
-            if changed { value.to_string() } else { doc.to_string() }
-        }
-        Err(_) => clean_text(doc),
-    }
-}
-
 fn insert_point(
     conn: &Connection,
     workspace_id: &str,
@@ -121,7 +89,8 @@ fn insert_point(
     in_context: bool,
 ) -> Result<TalkingPoint, String> {
     get_workspace(conn, workspace_id)?;
-    let (title, doc_json, markdown, plain_text) = (clean_text(title), clean_doc(doc_json), clean_text(markdown), clean_text(plain_text));
+    // A person's own note is stored exactly as typed (joiners, spacing and all). Hidden characters are taken out where text
+    // enters a prompt (`prompt_data`) and on paste from outside in the editor, never when saving.
     let id = uuid::Uuid::new_v4().to_string();
     let now = now_ms();
     let sort: i64 = conn
@@ -189,10 +158,10 @@ pub fn patch_talking_point(
          WHERE id = ?1",
         params![
             id,
-            clean_text(patch.title.as_deref().unwrap_or(&point.title)),
-            clean_doc(&doc),
-            clean_text(patch.markdown.as_deref().unwrap_or(&point.markdown)),
-            clean_text(&plain),
+            patch.title.as_deref().unwrap_or(&point.title),
+            doc,
+            patch.markdown.as_deref().unwrap_or(&point.markdown),
+            plain,
             patch.in_context.unwrap_or(point.in_context),
             // The version only moves with the content: a context toggle must not
             // make a save made on the old version look stale.
@@ -449,6 +418,27 @@ mod tests {
         assert!(!copy.in_context, "never on first and then off");
         let on = make(&conn, &a, "On", "text", true);
         assert!(copy_talking_point(&conn, &on.id, "general").unwrap().in_context);
+    }
+
+    #[test]
+    fn a_note_is_stored_exactly_as_typed_joiners_included() {
+        let conn = memory_db();
+        let a = new_ws(&conn, "A", false, false);
+        // Persian with a half space (ZWNJ), an invisible space and a bidi override: the owner's own text is theirs to keep
+        let typed = "می\u{200c}خواهم\u{200b} x\u{202e}y";
+        let made = make(&conn, &a, "T\u{200c}itle", typed, true);
+        assert!(made.doc_json.contains(typed), "the document is as typed");
+        assert_eq!(made.title, "T\u{200c}itle");
+        let patched = patch_talking_point(
+            &conn,
+            &made.id,
+            TalkingPointPatch { doc_json: Some(doc(typed).to_string()), plain_text: Some(typed.to_string()), markdown: Some(typed.to_string()), ..Default::default() },
+            None,
+        )
+        .unwrap();
+        assert!(patched.doc_json.contains(typed));
+        assert_eq!(patched.plain_text, typed);
+        assert_eq!(patched.markdown, typed);
     }
 
     #[test]
