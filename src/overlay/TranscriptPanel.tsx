@@ -249,7 +249,7 @@ export function TranscriptPanel({ onOpenDevLog, short = false }: { onOpenDevLog?
         onWheel={cancelScrollAnimation}
         onTouchMove={cancelScrollAnimation}
         data-scroll-container
-        className="absolute inset-0 overflow-y-auto px-1 pt-1 pb-8"
+        className="absolute inset-0 overflow-y-auto overflow-x-hidden px-1 pt-1 pb-8"
       >
         {filteredSegments.map((seg) => (
           <TranscriptLine
@@ -263,7 +263,7 @@ export function TranscriptPanel({ onOpenDevLog, short = false }: { onOpenDevLog?
       </div>
 
       {/* Typeset controls */}
-      <div className={`flex items-center gap-2 mx-1 mb-1 px-2.5 py-1 border-t border-border/10 ${short ? "hidden" : ""}`}>
+      <div className={`flex flex-wrap items-center gap-x-2 gap-y-1 mx-1 mb-1 px-2.5 py-1 border-t border-border/10 ${short ? "hidden" : ""}`}>
         <span className="text-[0.6rem] uppercase tracking-widest text-muted-foreground/40 font-medium">Text</span>
         <div className="flex items-center gap-0.5">
           <button onClick={() => setTranscriptFontSize(Math.max(10, transcriptFontSize - 1))} className="h-5 w-5 flex items-center justify-center rounded text-[0.6rem] text-muted-foreground/50 hover:bg-accent/40 transition-colors">A</button>

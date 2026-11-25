@@ -58,17 +58,21 @@ import {
   VolumeX,
   Columns2,
   PanelLeftClose,
+  MoreHorizontal,
   PanelRightClose,
   Eye,
   ScreenShare,
   ScreenShareOff,
 } from "lucide-react";
+import { Kbd, Menu, type MenuItemSpec } from "../ui";
 import { toggleStealthMode } from "../hooks/useGlobalShortcut";
 import { formatShortcut, isMacPlatform } from "../lib/shortcutLabel";
 import { formatDuration } from "../lib/utils";
 import { MeetingWorkspaceChip } from "../workspace/MeetingWorkspaceChip";
 
 /** Panels the header buttons and keys open on the fly; Escape closes the last of them. */
+/** Below this header width the view toggles collapse into one menu. */
+const COMPACT_HEADER_PX = 1040;
 const AUXILIARY: PanelId[] = ["stats", "bookmarks", "calllog", "devlog"];
 /** Raised by the Ask key (useGlobalShortcut): the Ask box must be on screen. */
 const ASK_TOGGLE_EVENT = "nexq:toggle-ask-input";
@@ -300,6 +304,19 @@ export function OverlayView() {
 
   const meetingTitle = activeMeeting?.title || "NexQ";
 
+  // A narrow window gives the header two rows, not three: the view toggles move into one menu
+  // (every one still reachable, with its key and state).
+  const [headerRef, headerSize] = useElementSize<HTMLDivElement>();
+  const compactHeader = headerSize.w > 0 && headerSize.w < COMPACT_HEADER_PX;
+  const moreItems: MenuItemSpec[] = [
+    { id: "focus", label: FOCUS_TOOLTIP[mode], onSelect: cycleLayout },
+    { id: "stats", label: "Speaker stats", hint: <Kbd>S</Kbd>, checked: statsOpen, separatorBefore: true, onSelect: () => togglePanel("stats") },
+    { id: "bookmarks", label: "Bookmarks", hint: <Kbd>K</Kbd>, checked: bookmarksOpen, onSelect: () => togglePanel("bookmarks") },
+    { id: "calllog", label: "AI call log", checked: logOpen, onSelect: () => togglePanel("calllog") },
+    { id: "devlog", label: "Dev log", hint: <Kbd>Ctrl+Shift+L</Kbd>, checked: devLogOpen, onSelect: () => togglePanel("devlog") },
+    { id: "opacity", label: `Transparency: ${Math.round(overlayOpacity * 100)}% (cycle)`, separatorBefore: true, onSelect: cycleOpacity },
+  ];
+
   // Each panel keeps its identity (a stable element at a stable place), so none of
   // them remounts when the layout changes.
   // A short area keeps the lines and drops the toolbars around them.
@@ -365,6 +382,7 @@ export function OverlayView() {
 
       {/* ═══ HEADER ═══ */}
       <div
+        ref={headerRef}
         className="no-select flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-2 cursor-move"
         data-tauri-drag-region
         style={{ borderBottom: "1px solid hsl(var(--border) / 0.12)" }}
@@ -427,24 +445,42 @@ export function OverlayView() {
             {mutedThem ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
           </button>
           <div className="w-px h-3.5 bg-border/20 mx-0.5" />
-          <HeaderBtn
+          {!compactHeader && <HeaderBtn
             icon={mode === "split" ? <Columns2 className="h-3.5 w-3.5" /> : mode === "ai" ? <PanelLeftClose className="h-3.5 w-3.5" /> : <PanelRightClose className="h-3.5 w-3.5" />}
             onClick={cycleLayout}
             tooltip={FOCUS_TOOLTIP[mode]}
-          />
+          />}
           <LayoutMenuButton state={dock} dispatch={dockDispatch} panels={menuPanels} />
           <div className="w-px h-3.5 bg-border/20 mx-0.5" />
+          {compactHeader ? (
+            <Menu
+              label="More view options"
+              align="end"
+              items={moreItems}
+              renderTrigger={(props, { open }) => (
+                <button
+                  {...props}
+                  type="button"
+                  aria-label="More view options"
+                  className={`rounded-lg p-2 transition-all duration-150 cursor-pointer ui-focus ${open ? "bg-primary/10 text-primary" : "text-muted-foreground/60 hover:bg-accent/60 hover:text-foreground"}`}
+                >
+                  <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              )}
+            />
+          ) : (<>
           <HeaderBtn icon={<BarChart3 className="h-3.5 w-3.5" />} active={statsOpen} onClick={() => togglePanel("stats")} tooltip="Speaker Stats (S)" />
           <HeaderBtn icon={<Bookmark className="h-3.5 w-3.5" />} active={bookmarksOpen} onClick={() => togglePanel("bookmarks")} tooltip="Bookmarks (K)" />
           <HeaderBtn icon={<Activity className="h-3.5 w-3.5" />} active={logOpen} onClick={() => togglePanel("calllog")} tooltip="AI Call Log" />
           <HeaderBtn icon={<Terminal className="h-3.5 w-3.5" />} active={devLogOpen} onClick={() => togglePanel("devlog")} tooltip="Dev Log (Ctrl+Shift+L)" />
+          </>)}
           <HeaderBtn
             icon={stealthMode ? <ScreenShareOff className="h-3.5 w-3.5" /> : <ScreenShare className="h-3.5 w-3.5" />}
             active={stealthMode}
             onClick={() => { toggleStealthMode().catch(() => {}); }}
             tooltip={`${stealthMode ? "Hidden from screen share — click to show" : "Visible in screen share — click to hide"} (${formatShortcut(stealthShortcut)})`}
           />
-          <HeaderBtn icon={<Eye className="h-3.5 w-3.5" />} onClick={cycleOpacity} tooltip={`Transparency: ${Math.round(overlayOpacity * 100)}% (click to cycle)`} />
+          {!compactHeader && <HeaderBtn icon={<Eye className="h-3.5 w-3.5" />} onClick={cycleOpacity} tooltip={`Transparency: ${Math.round(overlayOpacity * 100)}% (click to cycle)`} />}
           <HeaderBtn icon={<Settings className="h-3.5 w-3.5" />} onClick={() => setCurrentView("settings")} tooltip="Settings" />
           <HeaderBtn icon={<Minus className="h-3.5 w-3.5" />} onClick={handleMinimizeToDashboard} tooltip={stealthHide ? `Hide to ${isMacPlatform() ? "menu bar" : "tray"} (${formatShortcut("CmdOrCtrl+B")} brings it back)` : `Minimize to Dashboard (${formatShortcut("CmdOrCtrl+B")} brings it back)`} />
 
@@ -457,9 +493,10 @@ export function OverlayView() {
                 : "text-muted-foreground hover:bg-accent"
             }`}
             title="Toggle auto-translate"
+            aria-pressed={autoTranslateActive}
           >
-            <Globe className="h-3 w-3" />
-            Translate
+            <Globe className="h-3 w-3" aria-hidden="true" />
+            {compactHeader ? <span className="sr-only">Translate</span> : "Translate"}
           </button>
 
           {autoTranslateActive && (

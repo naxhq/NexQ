@@ -241,6 +241,20 @@ export function Dock({
 
   /* ---- move menu ---- */
   const menuItems = (panel: PanelId): DockMenuItem[] => {
+    // A locked layout says so on screen (not only to screen readers) and offers the way out.
+    if (layout.locked) {
+      return [
+        { id: "locked", label: "Layout is locked: panels can't move", disabled: true, onSelect: () => {} },
+        {
+          id: "unlock",
+          label: "Unlock layout",
+          onSelect: () => {
+            setMenu(null);
+            act({ type: "lock", locked: false }, "Layout unlocked");
+          },
+        },
+      ];
+    }
     const opts = moveOptions(layout, panel, title);
     const items: DockMenuItem[] = opts.map((o, i) => ({
       id: o.id,

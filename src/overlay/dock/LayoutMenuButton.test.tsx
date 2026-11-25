@@ -27,3 +27,23 @@ describe("Layout menu placement", () => {
     root.remove();
   });
 });
+
+import { LayoutMenu } from "./LayoutMenu";
+import { dockReducer, type DockState } from "./layoutModel";
+import { useState } from "react";
+
+function Menu() {
+  const [st, setSt] = useState<DockState>(() => dockReducer(initialDockState(DEFAULT_PANELS), { type: "saveLayout", name: "Mine" }));
+  return <LayoutMenu state={st} dispatch={(a) => setSt((s) => dockReducer(s, a))} panels={panels} />;
+}
+
+describe("deleting a saved layout", () => {
+  it("offers Undo that brings it back", () => {
+    render(<Menu />);
+    fireEvent.click(screen.getByRole("button", { name: "Delete Mine" }));
+    expect(screen.queryByRole("button", { name: "Delete Mine" })).toBeNull();
+    expect(screen.getByRole("status").textContent).toMatch(/Deleted "Mine"/);
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(screen.getByRole("button", { name: "Delete Mine" })).toBeTruthy();
+  });
+});

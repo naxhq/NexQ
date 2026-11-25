@@ -308,10 +308,7 @@ export function useDockInteractions(ctx: InteractionCtx) {
 
   /* ---- tab keyboard ---- */
   const openMenu = (panel: PanelId) => {
-    if (layout.locked) {
-      say("Layout is locked. Unlock it from the Layout menu to move panels.");
-      return;
-    }
+    // Locked: the menu opens anyway and says so, with an Unlock item.
     setMenu({ panel });
   };
 

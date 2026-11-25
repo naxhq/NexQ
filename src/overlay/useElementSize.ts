@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 /**
  * Width and height of an element, kept up to date. Zero until measured (and where there is
@@ -22,7 +22,6 @@ export function useElementSize<T extends HTMLElement>() {
       observer.current.observe(el);
     }
   }, []);
-  useEffect(() => () => observer.current?.disconnect(), []);
   return [ref, size] as const;
 }
 

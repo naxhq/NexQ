@@ -297,7 +297,7 @@ export function AIResponsePanel({ short = false }: { short?: boolean } = {}) {
       {/* Typeset controls */}
       <div className={`flex shrink-0 flex-col gap-1 border-t border-border/10 px-1 pt-1.5 ${short ? "hidden" : ""}`}>
         {/* Row 1: font size + color */}
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <span className="text-[0.6rem] uppercase tracking-widest text-muted-foreground/40 font-medium">AI Text</span>
           <div className="flex items-center gap-1">
             <button onClick={() => setAiResponseFontSize(Math.max(8, aiResponseFontSize - 1))} className="h-5 w-5 flex items-center justify-center rounded text-[0.6rem] text-muted-foreground/50 hover:bg-accent/40 hover:text-foreground/70 transition-colors" title="Smaller">A</button>
@@ -307,7 +307,7 @@ export function AIResponsePanel({ short = false }: { short?: boolean } = {}) {
           <ColorPickerButton value={aiResponseTextColor} onChange={setAiResponseTextColor} label="AI text color" />
         </div>
         {/* Row 2: line height + horizontal padding + text align */}
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           {/* Line height */}
           <div className="flex items-center gap-1">
             <span className="text-[0.6rem] text-muted-foreground/40">LH</span>

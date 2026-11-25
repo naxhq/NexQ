@@ -60,7 +60,7 @@ beforeAll(() => {
     },
   );
   Element.prototype.scrollTo = () => {};
-  Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 900 });
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 1200 });
   Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, get: () => 600 });
 });
 
@@ -268,6 +268,31 @@ describe("idle cost (a meeting open, nothing happening)", () => {
       expect(seen.filter((x) => x.includes("inert"))).toEqual([]);
     } finally {
       vi.useRealTimers();
+    }
+  });
+});
+
+describe("a narrow header", () => {
+  it("moves the view toggles into one menu, all still reachable with their state and keys", () => {
+    const w = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth")!;
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 500 });
+    try {
+      renderOverlay();
+      expect(screen.queryByRole("button", { name: "Speaker Stats (S)" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "More view options" }));
+      const items = screen.getAllByRole("menuitem").concat(screen.getAllByRole("menuitemcheckbox"));
+      const names = items.map((i) => i.textContent);
+      for (const n of ["Speaker stats", "Bookmarks", "AI call log", "Dev log", "Transparency", "Focus AI panel"]) {
+        expect(names.some((t) => t?.includes(n))).toBe(true);
+      }
+      fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Speaker stats/ }));
+      expect(shown("stats")).toBe(true);
+      // the always-needed controls stay out of the menu
+      for (const name of ["Mute mic (You)", "Layout", "Settings", "End meeting"]) {
+        expect(screen.getByRole("button", { name })).toBeTruthy();
+      }
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, "clientWidth", w);
     }
   });
 });

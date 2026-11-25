@@ -27,6 +27,7 @@ import { CLI_AGENTS, cliAgentInfo, cliTierLabel, isCliAgent } from "../lib/cliAg
 import { openUpdateDialog } from "../hooks/useUpdater";
 import { SideLanguagePicker } from "../overlay/SideLanguagePicker";
 import { useKeepInWindow } from "../ui/portal";
+import { useElementSize } from "../overlay/useElementSize";
 
 // ── Human-friendly provider labels ──
 const LLM_LABELS: Record<string, string> = {
@@ -239,8 +240,16 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
     setPickerOpen(null);
   }, [meetingAudioConfig, setMeetingAudioConfig]);
 
+  // In a narrow meeting window the bar stays on one row: the models move to the tooltips and the
+  // mute buttons (the header has them too) and dividers go.
+  const [barRef, bar] = useElementSize<HTMLDivElement>();
+  const narrow = compact && bar.w > 0 && bar.w < 640;
+
   return (
-    <div className={`flex flex-wrap items-center gap-2.5 ${compact ? "px-3 py-2" : "px-5 py-2.5"}`}>
+    <div
+      ref={barRef}
+      className={`flex items-center ${narrow ? "flex-nowrap gap-1.5 overflow-hidden" : "flex-wrap gap-2.5"} ${compact ? "px-3 py-2" : "px-5 py-2.5"}`}
+    >
       {/* LLM — always interactive */}
       <div className="relative">
         {isCliAgent(llmProvider) ? (
@@ -283,7 +292,7 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
         )}
       </div>
 
-      <Divider />
+      {!narrow && <Divider />}
 
       {audioMode === "in_person" ? (
         /* In-Person mode: single Room STT indicator + speaker count */
@@ -301,6 +310,7 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
               pickerOpen={pickerOpen === "them"}
               onClick={() => setPickerOpen(pickerOpen === "them" ? null : "them")}
               tooltip={`Room STT: ${themStt.provider}${themStt.model ? ` / ${themStt.model}` : ""}`}
+              hideModel={narrow}
             />
             {pickerOpen === "them" && (
               <STTPickerDropdown
@@ -337,6 +347,7 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
                 pickerOpen={pickerOpen === "you"}
                 onClick={() => setPickerOpen(pickerOpen === "you" ? null : "you")}
                 tooltip={`Your STT: ${youStt.provider}${youStt.model ? ` / ${youStt.model}` : ""}`}
+                hideModel={narrow}
               />
               {pickerOpen === "you" && (
                 <STTPickerDropdown
@@ -349,13 +360,13 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
                 />
               )}
             </div>
-            {isRecording && (
+            {isRecording && !narrow && (
               <MuteButton type="mic" muted={mutedYou} onToggle={toggleMuteYou} label="You" />
             )}
             {isRecording && compact && <SideLanguagePicker side="you" />}
           </div>
 
-          <Divider />
+          {!narrow && <Divider />}
 
           {/* Online mode: Them STT — interactive during recording */}
           <div className="flex items-center gap-1">
@@ -372,6 +383,7 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
                 pickerOpen={pickerOpen === "them"}
                 onClick={() => setPickerOpen(pickerOpen === "them" ? null : "them")}
                 tooltip={`Their STT: ${themStt.provider}${themStt.model ? ` / ${themStt.model}` : ""}`}
+                hideModel={narrow}
           />
           {pickerOpen === "them" && (
             <STTPickerDropdown
@@ -384,7 +396,7 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
             />
           )}
             </div>
-            {isRecording && (
+            {isRecording && !narrow && (
               <MuteButton type="speaker" muted={mutedThem} onToggle={toggleMuteThem} label="Them" />
             )}
             {isRecording && compact && <SideLanguagePicker side="them" />}
@@ -393,7 +405,7 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
       )}
 
       {/* Latency: live timer while an answer streams, then the last answer's time */}
-      <StreamLatency divider={<Divider />} />
+      <StreamLatency divider={narrow ? <span /> : <Divider />} />
 
       {/* Update ready — launcher footer only (the updater runs in the launcher) */}
       {!compact && <UpdatePill />}
@@ -535,7 +547,9 @@ function STTChip({
   pickerOpen,
   onClick,
   tooltip,
+  hideModel = false,
 }: {
+  hideModel?: boolean;
   icon: React.ReactNode;
   provider: string;
   model: string;
@@ -552,7 +566,7 @@ function STTChip({
 
   return (
     <div
-      className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 transition-all duration-200 ${
+      className={`flex min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 transition-all duration-200 ${
         muted
           ? "bg-destructive/5 border border-destructive/10"
           : active
@@ -593,7 +607,7 @@ function STTChip({
         }`}>
           {provider}
         </span>
-        {model && !muted && (
+        {model && !muted && !hideModel && (
           <span className={`text-meta truncate max-w-[70px] transition-colors duration-200 ${
             active ? "text-foreground/60" : "text-muted-foreground/60"
           }`}>

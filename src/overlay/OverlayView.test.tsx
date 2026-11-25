@@ -62,7 +62,7 @@ beforeAll(() => {
   );
   Element.prototype.scrollTo = () => {};
   // The dock lays itself out from its container's size, which jsdom reports as 0.
-  Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 900 });
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 1200 });
   Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, get: () => 600 });
 });
 

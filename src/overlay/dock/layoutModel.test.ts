@@ -340,4 +340,15 @@ describe("sanitize", () => {
     expect(s.custom).toHaveLength(1);
     expect(s.customSeq).toBe(2);
   });
+
+  it("a deleted saved layout comes back where it was (undo), once", () => {
+    let st = dockReducer(initialDockState(DEFAULT_PANELS), { type: "saveLayout", name: "A" });
+    st = dockReducer(st, { type: "saveLayout", name: "B" });
+    const first = st.custom[0];
+    const del = dockReducer(st, { type: "deleteLayout", id: first.id });
+    expect(del.custom.map((c) => c.name)).toEqual(["B"]);
+    const back = dockReducer(del, { type: "restoreLayout", saved: first, index: 0 });
+    expect(back.custom.map((c) => c.name)).toEqual(["A", "B"]);
+    expect(dockReducer(back, { type: "restoreLayout", saved: first, index: 0 })).toBe(back);
+  });
 });

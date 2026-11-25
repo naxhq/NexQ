@@ -1,4 +1,4 @@
-import { Dir, DockState, Layout, LayoutNode, MAX_CUSTOM, PanelId, Place, Side, Zone, allPanels, clone, findNode, findStackOf, leaves, newId, newStack, normalizeLayout, panelsOf, parentOf, replaceNode, violations } from "./layoutTree";
+import { Dir, DockState, Layout, LayoutNode, MAX_CUSTOM, PanelId, Place, SavedLayout, Side, Zone, allPanels, clone, findNode, findStackOf, leaves, newId, newStack, normalizeLayout, panelsOf, parentOf, replaceNode, violations } from "./layoutTree";
 import { PresetId, presetLayout } from "./layoutPresets";
 import { sanitizeLayout } from "./layoutSanitize";
 
@@ -21,6 +21,7 @@ export type DockAction =
   | { type: "saveLayout"; name: string }
   | { type: "renameLayout"; id: string; name: string }
   | { type: "deleteLayout"; id: string }
+  | { type: "restoreLayout"; saved: SavedLayout; index: number }
   | { type: "applyLayout"; id: string }
   | { type: "lock"; locked: boolean }
   | { type: "load"; state: DockState };
@@ -289,6 +290,13 @@ export function step(state: DockState, a: DockAction): DockState {
     case "deleteLayout":
       if (!custom.some((c) => c.id === a.id)) break;
       return { ...state, custom: custom.filter((c) => c.id !== a.id) };
+    case "restoreLayout": {
+      // Undo of a delete: back at its old place, unless it (or the room) is gone.
+      if (custom.some((c) => c.id === a.saved.id) || custom.length >= MAX_CUSTOM) break;
+      const next = [...custom];
+      next.splice(Math.max(0, Math.min(a.index, next.length)), 0, a.saved);
+      return { ...state, custom: next };
+    }
     case "applyLayout": {
       const saved = custom.find((c) => c.id === a.id);
       if (saved) {

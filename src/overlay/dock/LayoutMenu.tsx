@@ -9,6 +9,7 @@ import {
   presetLayout,
   type DockAction,
   type DockState,
+  type SavedLayout,
   type PanelId,
 } from "./layoutModel";
 
@@ -37,6 +38,8 @@ export function LayoutMenu({ state, dispatch, panels, onClose }: MenuProps) {
   const [name, setName] = useState("");
   const [renaming, setRenaming] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  // A deleted layout can be brought back until the menu closes or another one is deleted.
+  const [undo, setUndo] = useState<{ saved: SavedLayout; index: number } | null>(null);
   const docked = new Set(known.filter((p) => !layout.hidden.includes(p)));
 
   const save = () => {
@@ -90,6 +93,21 @@ export function LayoutMenu({ state, dispatch, panels, onClose }: MenuProps) {
         ))}
       </div>
 
+      {undo && (
+        <div role="status" className="mx-1 mt-1 flex items-center gap-2 rounded-md bg-foreground/[0.06] px-2 py-1.5 ui-body">
+          <span className="min-w-0 flex-1 truncate">Deleted "{undo.saved.name}"</span>
+          <button
+            type="button"
+            className="rounded-md px-2 py-0.5 font-medium text-primary hover:bg-foreground/[0.07] ui-focus"
+            onClick={() => {
+              dispatch({ type: "restoreLayout", saved: undo.saved, index: undo.index });
+              setUndo(null);
+            }}
+          >
+            Undo
+          </button>
+        </div>
+      )}
       {custom.length > 0 && <div className={sectionCls}>Your layouts</div>}
       {custom.map((c) => (
         <div key={c.id} className="flex items-center gap-1 px-1">
@@ -139,7 +157,10 @@ export function LayoutMenu({ state, dispatch, panels, onClose }: MenuProps) {
             type="button"
             aria-label={`Delete ${c.name}`}
             className="rounded-md p-1.5 text-muted-foreground/70 hover:bg-foreground/[0.07] hover:text-destructive ui-focus"
-            onClick={() => dispatch({ type: "deleteLayout", id: c.id })}
+            onClick={() => {
+              setUndo({ saved: c, index: custom.findIndex((x) => x.id === c.id) });
+              dispatch({ type: "deleteLayout", id: c.id });
+            }}
           >
             <Trash2 className="h-3 w-3" aria-hidden="true" />
           </button>

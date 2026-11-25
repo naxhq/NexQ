@@ -250,12 +250,14 @@ describe("Dock: tabs and the Move menu (keyboard alternative)", () => {
     expect(document.activeElement).toBe(tab);
   });
 
-  it("a locked layout refuses to open the menu and says why", () => {
+  it("a locked layout opens the menu to say why, on screen, with a way to unlock", () => {
     render(<Harness />);
     run({ type: "lock", locked: true });
-    fireEvent.keyDown(screen.getByRole("tab", { name: "Transcript" }), { key: "ContextMenu" });
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Transcript" }), { key: "F10", shiftKey: true });
+    const menu = screen.getByRole("menu");
+    expect(menu.textContent).toMatch(/locked/i);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Unlock layout" }));
     expect(screen.queryByRole("menu")).toBeNull();
-    expect(screen.getByRole("status").textContent).toMatch(/locked/i);
   });
 
   it("a collapsed stack becomes a button that expands it", () => {
