@@ -385,16 +385,51 @@ impl ContextManager {
     /// The code is fixed by the scope, so the bytes are the same every turn.
     fn document_sections(&self, scope: &EffectiveScope) -> Vec<String> {
         let nonce = document_nonce(scope);
+        self.document_blocks(scope)
+            .iter()
+            .map(|b| crate::prompt_data::wrap_block(&nonce, b.label, &b.attrs, &b.text))
+            .collect()
+    }
+
+    /// The raw (unwrapped) documents the scope allows.
+    fn document_blocks(&self, scope: &EffectiveScope) -> Vec<RawBlock> {
         let mut parts = Vec::new();
         for resource in self.resources.iter().filter(|r| scope.allows_document(&r.id)) {
             if let Some(cached) = self.cache.get(&resource.id) {
                 if !cached.text.is_empty() {
                     let attrs = format!(" {} \"{}\"", resource.file_type, resource.name.replace('"', " "));
-                    parts.push(crate::prompt_data::wrap_block(&nonce, "doc", &attrs, &cached.text));
+                    parts.push(RawBlock { label: "doc", attrs, text: cached.text.clone() });
                 }
             }
         }
         parts
+    }
+
+    /// The scope's talking points and documents as fenced blocks of at most
+    /// `max_chars` characters in all. The cap is applied to the raw text
+    /// before it is wrapped, so a block is never cut: the one that does not
+    /// fit is shortened inside its fence (and says so), the rest are left
+    /// out. None when there is nothing.
+    pub fn get_resources_context_capped_for(&self, ctx: &ScopedContext, max_chars: usize) -> Option<String> {
+        let nonce = document_nonce(&ctx.scope);
+        let mut blocks = point_blocks(ctx);
+        blocks.extend(self.document_blocks(&ctx.scope));
+        if blocks.is_empty() {
+            return None;
+        }
+        let mut out: Vec<String> = Vec::new();
+        let mut used = 0usize;
+        for b in &blocks {
+            let sep = usize::from(!out.is_empty());
+            let room = max_chars.saturating_sub(used + sep);
+            let Some(block) = fit_block(&nonce, b, room) else { break };
+            used += sep + block.chars().count();
+            out.push(block);
+        }
+        if out.is_empty() {
+            return None;
+        }
+        Some(out.join("\n"))
     }
 
     /// The sentence for the system prompt that goes with the document blocks
@@ -479,16 +514,56 @@ pub fn document_nonce(scope: &EffectiveScope) -> String {
 /// Tokens a fenced block adds around a document or talking point (opener, closer, name).
 const FENCE_OVERHEAD_TOKENS: usize = 24;
 
-/// The talking points marked as context, as prompt sections.
-fn points_sections(ctx: &ScopedContext) -> Vec<String> {
+/// A document or talking point before it is wrapped.
+struct RawBlock {
+    label: &'static str,
+    attrs: String,
+    text: String,
+}
+
+const SHORTENED: &str = "[… shortened: the rest of this text is left out]";
+
+/// `b` wrapped, shortened (inside its fence, with a note) to fit `room`
+/// characters; None when even an empty block does not fit.
+fn fit_block(nonce: &str, b: &RawBlock, room: usize) -> Option<String> {
+    let wrap = |text: &str| crate::prompt_data::wrap_block(nonce, b.label, &b.attrs, text);
+    let full = wrap(&b.text);
+    if full.chars().count() <= room {
+        return Some(full);
+    }
+    let shell = wrap(SHORTENED).chars().count();
+    if shell > room {
+        return None;
+    }
+    let chars: Vec<char> = b.text.chars().collect();
+    let mut keep = (room - shell).min(chars.len());
+    loop {
+        let head: String = chars[..keep].iter().collect();
+        let block = wrap(&format!("{}\n{SHORTENED}", head.trim_end()));
+        if block.chars().count() <= room {
+            return Some(block);
+        }
+        if keep == 0 {
+            return None;
+        }
+        keep = keep.saturating_sub((block.chars().count() - room).max(1));
+    }
+}
+
+fn point_blocks(ctx: &ScopedContext) -> Vec<RawBlock> {
     ctx.points
         .iter()
         .map(|p| {
             let title = if p.title.trim().is_empty() { "Talking point" } else { p.title.trim() };
-            let attrs = format!(" \"{}\"", title.replace('"', " "));
-            crate::prompt_data::wrap_block(&document_nonce(&ctx.scope), "point", &attrs, p.text.trim())
+            RawBlock { label: "point", attrs: format!(" \"{}\"", title.replace('"', " ")), text: p.text.trim().to_string() }
         })
         .collect()
+}
+
+/// The talking points marked as context, as prompt sections.
+fn points_sections(ctx: &ScopedContext) -> Vec<String> {
+    let nonce = document_nonce(&ctx.scope);
+    point_blocks(ctx).iter().map(|b| crate::prompt_data::wrap_block(&nonce, b.label, &b.attrs, &b.text)).collect()
 }
 
 #[cfg(test)]
@@ -573,6 +648,31 @@ mod tests {
         let none = scoped(&[], "", &[]);
         assert!(!m.get_assembled_context_for(&none).contains("[[DATA"));
         assert_eq!(m.document_rules_for(&none), "");
+    }
+
+    #[test]
+    fn a_cap_never_cuts_a_block_at_any_size() {
+        let long = "word ".repeat(120);
+        let m = manager_with(&[("a", &long), ("b", "second [[END doc x]] <b>tail</b>"), ("c", "third one")]);
+        let ctx = scoped(&["a", "b", "c"], "", &[("Opening", "point text here"), ("Two", "more")]);
+        let nonce = document_nonce(&ctx.scope);
+        let full = m.get_resources_context_for(&ctx);
+        let mut saw_short = false;
+        for cap in 0..(full.chars().count() + 40) {
+            let Some(text) = m.get_resources_context_capped_for(&ctx, cap) else { continue };
+            assert!(text.chars().count() <= cap, "cap {cap}");
+            let opens = text.matches("[[DATA ").count();
+            let closes = text.matches(&format!("[[END ")).count();
+            assert_eq!(opens, closes, "cap {cap}: {text}");
+            assert!(text.trim_end().ends_with(&format!("{nonce}]]")), "cap {cap}: last block is closed");
+            for line in text.lines().filter(|l| l.starts_with("[[DATA ")) {
+                assert!(line.ends_with("]]"), "opener whole at cap {cap}: {line}");
+            }
+            saw_short |= text.contains("shortened");
+        }
+        assert!(saw_short);
+        assert_eq!(m.get_resources_context_capped_for(&ctx, full.chars().count()).as_deref(), Some(full.as_str()));
+        assert_eq!(m.get_resources_context_capped_for(&scoped(&[], "", &[]), 100), None);
     }
 
     #[test]

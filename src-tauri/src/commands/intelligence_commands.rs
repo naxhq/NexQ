@@ -273,21 +273,7 @@ const DOC_FALLBACK_CHARS: usize = 32_000;
 /// The attached documents' text, capped at [`DOC_FALLBACK_CHARS`]; None when
 /// nothing is attached.
 fn attached_documents_fallback(state: &AppState, scoped: &crate::workspace::runtime::ScopedContext) -> Option<String> {
-    let text = state.context.as_ref()?.lock().ok()?.get_resources_context_for(scoped);
-    cap_document_text(&text, DOC_FALLBACK_CHARS)
-}
-
-fn cap_document_text(text: &str, max_chars: usize) -> Option<String> {
-    if text.trim().is_empty() {
-        return None;
-    }
-    if text.chars().count() <= max_chars {
-        return Some(text.to_string());
-    }
-    let head: String = text.chars().take(max_chars).collect();
-    Some(format!("{head}
-
-[… documents truncated — index them for full coverage]"))
+    state.context.as_ref()?.lock().ok()?.get_resources_context_capped_for(scoped, DOC_FALLBACK_CHARS)
 }
 
 fn tail_chars(text: &str, n: usize) -> String {
@@ -1628,17 +1614,6 @@ mod tests {
         for other in [ProviderType::AntigravityCli, ProviderType::CodexCli] {
             assert!(images_refusal(Some(&other)).starts_with("Images work only with Claude"));
         }
-    }
-
-    #[test]
-    fn document_fallback_is_capped() {
-        assert_eq!(cap_document_text("  
-", 10), None);
-        assert_eq!(cap_document_text("short doc", 10).as_deref(), Some("short doc"));
-        let capped = cap_document_text(&"é".repeat(25), 10).unwrap();
-        assert!(capped.starts_with(&"é".repeat(10)));
-        assert!(!capped.starts_with(&"é".repeat(11)));
-        assert!(capped.ends_with("index them for full coverage]"));
     }
 
     const SEGS: &str = r#"[

@@ -253,7 +253,7 @@ pub fn wrap_data(nonce: &str, label: &str, text: &str) -> String {
 /// neutralised, and a line that starts like a speaker label or a chat
 /// control token gets a backslash so it cannot pass for a turn.
 pub fn flatten(text: &str) -> String {
-    let clean = neutralise(text);
+    let clean = crate::prompt_data::escape_closers(&neutralise(text));
     clean
         .split('\n')
         .map(|line| {
