@@ -176,10 +176,7 @@ pub fn build_args(
 
 /// `%LOCALAPPDATA%\NexQ\agent-sandbox`: the empty cwd the agent runs in.
 pub fn sandbox_dir() -> PathBuf {
-    let base = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    base.join("NexQ").join("agent-sandbox")
+    crate::app_paths::local_root().join("agent-sandbox")
 }
 
 /// Apply cwd (created if missing), stripped env and CREATE_NO_WINDOW.

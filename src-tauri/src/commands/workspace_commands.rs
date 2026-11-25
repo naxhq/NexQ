@@ -792,7 +792,7 @@ pub async fn add_workspace_text(
         Ok(resource.id)
     })
     .inspect(|_| {
-        crate::workspace_chat::runtime::material_changed(&state.workspace_chat);
+        crate::workspace_chat::runtime::documents_changed(&state.workspace_chat);
         emit_changed(&app, Some(&id));
     })
 }
@@ -917,7 +917,7 @@ pub async fn create_talking_point(
     let point = change_and_restart(&state, &app, |_| Touch::ws_if(feeds_context, &workspace_id), || {
         with_conn(&state, |conn| talking_points::create_talking_point(conn, &workspace_id, title, content))
     })?;
-    crate::workspace_chat::runtime::material_changed(&state.workspace_chat);
+    crate::workspace_chat::runtime::talking_points_changed(&state.workspace_chat);
     emit_changed(&app, Some(&point.workspace_id));
     Ok(point)
 }
@@ -938,7 +938,7 @@ pub async fn patch_talking_point(
     let point = change_and_restart(&state, &app, |conn| context_point(conn, &id), || {
         with_conn(&state, |conn| talking_points::patch_talking_point(conn, &id, patch, expected_updated_at))
     })?;
-    crate::workspace_chat::runtime::material_changed(&state.workspace_chat);
+    crate::workspace_chat::runtime::talking_points_changed(&state.workspace_chat);
     emit_changed(&app, Some(&point.workspace_id));
     Ok(point)
 }
@@ -949,7 +949,7 @@ pub async fn delete_talking_point(id: String, state: State<'_, AppState>, app: A
     change_and_restart(&state, &app, |conn| context_point(conn, &id), || {
         with_conn(&state, |conn| talking_points::delete_talking_point(conn, &id))
     })?;
-    crate::workspace_chat::runtime::material_changed(&state.workspace_chat);
+    crate::workspace_chat::runtime::talking_points_changed(&state.workspace_chat);
     emit_changed(&app, workspace.as_deref());
     Ok(())
 }

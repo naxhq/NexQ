@@ -127,6 +127,8 @@ pub struct AppState {
     pub gemini_cache: Arc<Mutex<Option<ScopedCache>>>,
     /// The app handle, set once at startup (for events from code that has none).
     pub app_handle: std::sync::OnceLock<tauri::AppHandle>,
+    /// Settings files that could not be read at start (shown to the user once).
+    pub store_findings: Mutex<Vec<crate::store_guard::StoreRecovery>>,
     /// Restarts caused by grants wait and coalesce (see `workspace::restart`).
     pub restarts: Arc<crate::workspace::restart::Restarts>,
     /// Meetings (or "default") the user was already told their workspace
@@ -221,6 +223,7 @@ impl AppState {
             openrouter_cache: Arc::new(Mutex::new(None)),
             tray_manager: Arc::new(Mutex::new(None)),
             gemini_cache: Arc::new(Mutex::new(None)),
+            store_findings: Mutex::new(Vec::new()),
             restarts: Arc::new(Default::default()),
             app_handle: std::sync::OnceLock::new(),
             material_warned: Mutex::new(std::collections::HashSet::new()),

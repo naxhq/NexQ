@@ -1,5 +1,7 @@
 pub mod ai_runs;
+pub mod app_paths;
 pub mod audio;
+pub mod store_guard;
 pub mod commands;
 pub mod context;
 pub mod credentials;
@@ -167,6 +169,33 @@ fn read_documents_in_background(
     }
 }
 
+/// Set once the app state is managed (end of the state's construction in setup).
+static STATE_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Commands the page sends before the state exists wait for it instead of
+/// failing with "state not managed": the window shows at once, and the call
+/// runs when setup has managed the state (at most a minute; after that it runs
+/// and fails as it always did).
+fn startup_gate<R: tauri::Runtime>(
+    handler: impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static,
+) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
+    let handler = std::sync::Arc::new(handler);
+    move |invoke| {
+        if STATE_READY.load(std::sync::atomic::Ordering::SeqCst) {
+            return handler(invoke);
+        }
+        let handler = handler.clone();
+        tauri::async_runtime::spawn(async move {
+            let started = std::time::Instant::now();
+            while !STATE_READY.load(std::sync::atomic::Ordering::SeqCst) && started.elapsed() < std::time::Duration::from_secs(60) {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            handler(invoke);
+        });
+        true
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Relaunched by the installer of an update installed on quit: the user
@@ -179,6 +208,20 @@ pub fn run() {
     // App log: stderr plus a rotating file (opened in setup, once the log
     // folder is known). Without a logger every log statement is a no-op.
     logging::init();
+
+    // Where this build keeps its files comes from its own identifier, and the
+    // settings files are checked before the store plugin can load (and replace)
+    // one that can't be read.
+    let context = tauri::generate_context!();
+    let identifier = context.config().identifier.clone();
+    let data_dir = app_paths::data_dir_for(&identifier);
+    app_paths::init(data_dir.clone(), &identifier);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let store_findings = store_guard::guard(&data_dir, now_ms);
+    store_guard::refresh_backups(&data_dir, std::time::SystemTime::now());
 
     tauri::Builder::default()
         .manage(stt::azure_mai_streaming::MaiBridge::default())
@@ -202,7 +245,8 @@ pub fn run() {
         .on_page_load(|webview, _payload| {
             stealth_commands::apply_to_new_window(&webview.window());
         })
-        .setup(|app| {
+        .setup(move |app| {
+            let setup_started = std::time::Instant::now();
             log_commands::start(app.handle());
             // Private mcp-config files a crashed run left behind hold secrets.
             let stale = sources::private_files::cleanup_leftovers(&sources::private_files::private_dir());
@@ -217,6 +261,7 @@ pub fn run() {
                 log::info!("Removed {stale} leftover chat transcript folder(s)");
             }
             let mut app_state = AppState::new();
+            app_state.store_findings = std::sync::Mutex::new(store_findings.clone());
 
             // -- Initialize DatabaseManager --
             let app_data_dir = app
@@ -389,6 +434,21 @@ pub fn run() {
                 live_runtime::init(rt);
             }
             app.manage(app_state);
+            // Commands that arrived while the state was being built run now.
+            STATE_READY.store(true, std::sync::atomic::Ordering::SeqCst);
+            if !store_findings.is_empty() {
+                use tauri::Emitter;
+                let _ = app.emit("store_recovered", &store_findings);
+            }
+            // A good copy of the settings files, at most every ten minutes.
+            let backup_dir = data_dir.clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(store_guard::BACKUP_EVERY).await;
+                    let dir = backup_dir.clone();
+                    let _ = tokio::task::spawn_blocking(move || store_guard::refresh_backups(&dir, std::time::SystemTime::now())).await;
+                }
+            });
             workspace_chat::runtime::attach(app.handle());
 
             // -- Auto-detect first Ollama model in background --
@@ -605,10 +665,10 @@ pub fn run() {
                 stealth_commands::float_over_full_screen(&overlay.as_ref().window());
             }
 
-            log::info!("NexQ initialized successfully");
+            log::info!("NexQ initialized successfully (setup took {} ms)", setup_started.elapsed().as_millis());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(startup_gate(tauri::generate_handler![
             // == COMMANDS: audio ==
             audio_commands::list_audio_devices,
             audio_commands::start_capture,
@@ -870,8 +930,9 @@ pub fn run() {
             workspace_commands::resolve_memory,
             sources_commands::set_personal_sources,
             claude_cli_commands::open_claude_login_terminal,
-        ])
-        .build(tauri::generate_context!())
+            settings_commands::take_store_recovery,
+        ]))
+        .build(context)
         .expect("error while building NexQ")
         .run(|app, event| {
             // How NexQ ends up quitting, for bug reports (a window closing,

@@ -20,10 +20,7 @@ const SUFFIX: &str = ".json";
 
 /// `%LOCALAPPDATA%\NexQ\agent-private`.
 pub fn private_dir() -> PathBuf {
-    let base = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    base.join("NexQ").join("agent-private")
+    crate::app_paths::local_root().join("agent-private")
 }
 
 /// Write `content` to a new, uniquely named file in `dir` (created if missing).

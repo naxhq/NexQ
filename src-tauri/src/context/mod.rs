@@ -76,19 +76,8 @@ impl ContextManager {
 
     /// Get the context storage directory path.
     fn get_context_dir() -> PathBuf {
-        if let Some(appdata) = std::env::var_os("APPDATA") {
-            PathBuf::from(appdata)
-                .join("com.nexq.app")
-                .join("context")
-        } else {
-            // Fallback for non-Windows or if APPDATA is not set
-            let home = std::env::var("HOME")
-                .or_else(|_| std::env::var("USERPROFILE"))
-                .unwrap_or_else(|_| ".".to_string());
-            PathBuf::from(home)
-                .join(".nexq")
-                .join("context")
-        }
+        // From the app's identifier (see `app_paths`).
+        crate::app_paths::context_dir()
     }
 
     /// Load a file into the context manager.

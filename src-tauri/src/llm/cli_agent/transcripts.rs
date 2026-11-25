@@ -22,10 +22,7 @@ use std::sync::{Mutex, OnceLock};
 
 /// `%LOCALAPPDATA%\NexQ\chat-transcripts`.
 pub fn default_root() -> PathBuf {
-    let base = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    base.join("NexQ").join("chat-transcripts")
+    crate::app_paths::local_root().join("chat-transcripts")
 }
 
 /// The app-wide root (`default_root`).

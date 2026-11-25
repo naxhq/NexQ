@@ -162,7 +162,8 @@ pub fn delete_files_inside(dir: &Path, paths: &[PathBuf]) -> usize {
 
 /// NexQ's recordings folder (where the recorder writes).
 pub fn recordings_dir() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(PathBuf::from).map(|p| p.join("com.nexq.app").join("recordings"))
+    // The recorder's own folder: the one function both use.
+    Some(crate::app_paths::recordings_dir())
 }
 
 /// A workspace's chats move to another workspace (their summaries are dropped).

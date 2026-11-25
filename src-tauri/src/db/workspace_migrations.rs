@@ -627,6 +627,61 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// How long a start takes on the database side: the upgrade of a database with
+    /// 60 meetings (the copy included), then a start on the upgraded one.
+    #[test]
+    fn starting_with_sixty_meetings_is_fast_on_the_first_upgrade_and_after() {
+        let dir = temp_dir("timing");
+        let path = dir.join("nexq.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            migrations::run(&conn).unwrap();
+            let tx = conn.unchecked_transaction().unwrap();
+            for m in 0..60 {
+                tx.execute(
+                    "INSERT INTO meetings (id, title, start_time, transcript, summary) VALUES (?1, ?2, '2026-01-01T10:00:00Z', '[]', 'a summary')",
+                    params![format!("m{m}"), format!("Meeting {m}")],
+                )
+                .unwrap();
+                for i in 0..400 {
+                    tx.execute(
+                        "INSERT INTO transcript_segments (id, meeting_id, text, speaker, timestamp_ms, is_final, created_at)
+                         VALUES (?1, ?2, 'we talked about the quarterly budget and the hiring plan for next year', 'Them', ?3, 1, 'x')",
+                        params![format!("s{m}-{i}"), format!("m{m}"), i * 1000],
+                    )
+                    .unwrap();
+                }
+            }
+            for d in 0..10 {
+                tx.execute("INSERT INTO context_resources (id, name, file_type, file_path, loaded_at) VALUES (?1, ?1, 'txt', 'x', 'now')", params![format!("d{d}")]).unwrap();
+            }
+            tx.commit().unwrap();
+        }
+        // The first start after the upgrade: open, v1 to v8, the copy, v9 to v15.
+        let first = std::time::Instant::now();
+        let conn = Connection::open(&path).unwrap();
+        migrations::run(&conn).unwrap();
+        cleanup_old_backup(&path);
+        run_steps(&conn, Some(&path), STEPS).unwrap();
+        let upgrade = first.elapsed();
+        assert!(backup_path(&path).exists());
+        drop(conn);
+        // The next start: nothing pending.
+        let second = std::time::Instant::now();
+        let conn = Connection::open(&path).unwrap();
+        migrations::run(&conn).unwrap();
+        cleanup_old_backup(&path);
+        run_steps(&conn, Some(&path), STEPS).unwrap();
+        let again = second.elapsed();
+        let (meetings, segments): (i64, i64) =
+            (count(&conn, "SELECT COUNT(*) FROM meetings"), count(&conn, "SELECT COUNT(*) FROM transcript_segments"));
+        println!("startup timing: upgrade of {meetings} meetings / {segments} segments {upgrade:?}, next start {again:?}");
+        assert_eq!((meetings, segments), (60, 24_000));
+        assert!(upgrade < Duration::from_secs(10), "the upgrade took {upgrade:?}");
+        assert!(again < Duration::from_secs(2), "the next start took {again:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn a_fresh_database_makes_no_copy() {
         let dir = temp_dir("fresh");

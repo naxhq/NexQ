@@ -57,7 +57,7 @@ fn load_context_file_now(file_path: &str, workspace_id: Option<&str>, state: &Ap
         }
     }
 
-    crate::workspace_chat::runtime::material_changed(&state.workspace_chat);
+    crate::workspace_chat::runtime::documents_changed(&state.workspace_chat);
     serde_json::to_string(&resource)
         .map_err(|e| format!("Failed to serialize resource: {}", e))
 }
@@ -72,12 +72,14 @@ pub async fn remove_context_file(
 ) -> Result<(), String> {
     use crate::commands::workspace_commands::{change_and_restart, holders_of};
     use crate::workspace::types::ItemKind;
-    change_and_restart(
+    let removed = change_and_restart(
         &state,
         &app,
         |conn| holders_of(conn, ItemKind::Document, &resource_id),
         || remove_context_file_now(&resource_id, &state),
-    )
+    );
+    crate::workspace_chat::runtime::documents_changed(&state.workspace_chat);
+    removed
 }
 
 fn remove_context_file_now(resource_id: &str, state: &AppState) -> Result<(), String> {
