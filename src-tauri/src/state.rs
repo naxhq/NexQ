@@ -13,7 +13,7 @@ use crate::llm::cli_agent::manager::{AgentSessionManager, NoopStatusSink};
 use crate::llm::cli_agent::settings::CliSettings;
 use crate::llm::cli_agent::spawner::CliSpawner;
 use crate::llm::cli_agent::routing::{CachedFallback, HealthTracker, MeetingSessions};
-use crate::llm::gemini_cache::CachedContent;
+use crate::llm::gemini_cache::ScopedCache;
 use crate::llm::openrouter_models::OpenRouterModelCache;
 use crate::llm::LLMRouter;
 use crate::rag::RagManager;
@@ -121,11 +121,17 @@ pub struct AppState {
     pub tray_manager: Arc<Mutex<Option<TrayManager>>>,
     /// Active Gemini context cache for the current meeting session.
     /// Set when the user creates a cache; cleared on delete or meeting end.
-    pub gemini_cache: Arc<Mutex<Option<CachedContent>>>,
-    /// The scope fingerprint the Gemini cache was built from. The cache is
-    /// used only by a request whose scope has the same fingerprint, so a cache
+    /// The cache and the scope fingerprint it was built from, in one value: a
+    /// request uses it only when its scope has the same fingerprint, so a cache
     /// built from one workspace's documents never answers for another.
-    pub gemini_cache_scope: Arc<Mutex<Option<String>>>,
+    pub gemini_cache: Arc<Mutex<Option<ScopedCache>>>,
+    /// The app handle, set once at startup (for events from code that has none).
+    pub app_handle: std::sync::OnceLock<tauri::AppHandle>,
+    /// Restarts caused by grants wait and coalesce (see `workspace::restart`).
+    pub restarts: Arc<crate::workspace::restart::Restarts>,
+    /// Meetings (or "default") the user was already told their workspace
+    /// material could not be read for: told once per meeting.
+    pub material_warned: Mutex<std::collections::HashSet<String>>,
     /// Downloaded update waiting to be installed (on Restart or on quit).
     pub pending_update: Arc<Mutex<Option<PendingUpdate>>>,
     /// True while `download_update` is running; prevents parallel downloads.
@@ -215,7 +221,9 @@ impl AppState {
             openrouter_cache: Arc::new(Mutex::new(None)),
             tray_manager: Arc::new(Mutex::new(None)),
             gemini_cache: Arc::new(Mutex::new(None)),
-            gemini_cache_scope: Arc::new(Mutex::new(None)),
+            restarts: Arc::new(Default::default()),
+            app_handle: std::sync::OnceLock::new(),
+            material_warned: Mutex::new(std::collections::HashSet::new()),
             pending_update: Arc::new(Mutex::new(None)),
             update_downloading: Arc::new(AtomicBool::new(false)),
             meeting_active: Arc::new(AtomicBool::new(false)),

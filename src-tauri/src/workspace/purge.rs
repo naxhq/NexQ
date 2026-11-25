@@ -40,7 +40,8 @@ pub fn purge_meeting(conn: &Connection, meeting_id: &str) -> Result<Vec<PathBuf>
     run_if_table(conn, "meeting_notes", "DELETE FROM meeting_notes WHERE meeting_id = ?1", &[id])?;
     run_if_table(conn, "meeting_cards", "DELETE FROM meeting_cards WHERE meeting_id = ?1", &[id])?;
     run_if_table(conn, "workspace_meeting_prefs", "DELETE FROM workspace_meeting_prefs WHERE meeting_id = ?1", &[id])?;
-    purge_search_rows(conn, meeting_id)?;
+    purge_search_rows(conn, "transcript", meeting_id)?;
+    purge_transcript_chunks(conn, meeting_id)?;
     crate::workspace_chat::store::redact_deleted_meeting(conn, meeting_id)?;
     if let Some(home) = home {
         detach_from_workspace(conn, meeting_id, &home)?;
@@ -49,18 +50,46 @@ pub fn purge_meeting(conn: &Connection, meeting_id: &str) -> Result<Vec<PathBuf>
     Ok(files)
 }
 
-/// The search index of the meeting's transcript.
-fn purge_search_rows(conn: &Connection, meeting_id: &str) -> Result<(), String> {
-    let id = &meeting_id as &dyn ToSql;
+/// Deletes the live transcript chunks (and their embeddings) of `meeting_id`
+/// from the RAG index. Another meeting's chunks are left alone.
+pub fn purge_transcript_chunks(conn: &Connection, meeting_id: &str) -> Result<(), String> {
+    let pattern = crate::rag::transcript_indexer::file_id_pattern(meeting_id);
+    let p = &pattern as &dyn ToSql;
+    run_if_table(
+        conn,
+        "rag_embeddings",
+        "DELETE FROM rag_embeddings WHERE chunk_id IN
+            (SELECT chunk_id FROM rag_chunks WHERE source_type = 'transcript' AND file_id LIKE ?1 ESCAPE '\\')",
+        &[p],
+    )?;
+    run_if_table(
+        conn,
+        "rag_chunks",
+        "DELETE FROM rag_chunks WHERE source_type = 'transcript' AND file_id LIKE ?1 ESCAPE '\\'",
+        &[p],
+    )
+}
+
+/// Everything indexed for one reference (`kind` is `transcript`, `document`,
+/// `folder` or `talking_point`; `ref_id` the meeting, document, folder or point):
+/// its passages and their embeddings, its source rows (every sub reference),
+/// and a meeting's card. The one place that does it: a document, a folder, a
+/// talking point or a meeting that goes uses this and nothing else.
+pub fn purge_search_rows(conn: &Connection, kind: &str, ref_id: &str) -> Result<(), String> {
+    let (k, r) = (&kind as &dyn ToSql, &ref_id as &dyn ToSql);
     run_if_table(
         conn,
         "search_embeddings",
         "DELETE FROM search_embeddings WHERE passage_id IN
-            (SELECT id FROM search_passages WHERE kind = 'transcript' AND ref_id = ?1)",
-        &[id],
+            (SELECT id FROM search_passages WHERE kind = ?1 AND ref_id = ?2)",
+        &[k, r],
     )?;
-    run_if_table(conn, "search_passages", "DELETE FROM search_passages WHERE kind = 'transcript' AND ref_id = ?1", &[id])?;
-    run_if_table(conn, "search_sources", "DELETE FROM search_sources WHERE kind = 'transcript' AND ref_id = ?1", &[id])
+    run_if_table(conn, "search_passages", "DELETE FROM search_passages WHERE kind = ?1 AND ref_id = ?2", &[k, r])?;
+    run_if_table(conn, "search_sources", "DELETE FROM search_sources WHERE kind = ?1 AND ref_id = ?2", &[k, r])?;
+    if kind == "transcript" {
+        run_if_table(conn, "meeting_cards", "DELETE FROM meeting_cards WHERE meeting_id = ?1", &[r])?;
+    }
+    Ok(())
 }
 
 /// What the workspace the meeting leaves (or is deleted from) still holds of
@@ -151,12 +180,14 @@ pub fn move_chats(conn: &Connection, from: &str, to: &str) -> Result<(), String>
 /// A workspace's chats and their messages are deleted.
 pub fn delete_chats(conn: &Connection, workspace_id: &str) -> Result<(), String> {
     let w = &workspace_id as &dyn ToSql;
-    run_if_table(
-        conn,
-        "workspace_messages",
-        "DELETE FROM workspace_messages WHERE chat_id IN (SELECT id FROM workspace_chats WHERE workspace_id = ?1)",
-        &[w],
-    )?;
+    for table in ["workspace_messages", "workspace_chat_item_prefs", "workspace_meeting_prefs"] {
+        run_if_table(
+            conn,
+            table,
+            &format!("DELETE FROM {table} WHERE chat_id IN (SELECT id FROM workspace_chats WHERE workspace_id = ?1)"),
+            &[w],
+        )?;
+    }
     run_if_table(conn, "workspace_chats", "DELETE FROM workspace_chats WHERE workspace_id = ?1", &[w])?;
     run_if_table(conn, "workspace_meeting_prefs", "DELETE FROM workspace_meeting_prefs WHERE workspace_id = ?1", &[w])
 }
@@ -389,5 +420,200 @@ mod tests {
         assert_eq!(home, "general");
         let ws: String = conn.query_row("SELECT workspace_id FROM talking_points WHERE id = 'tp'", [], |r| r.get(0)).unwrap();
         assert_eq!(ws, "general");
+    }
+
+    // ── every table with an owner column is emptied when its owner goes ──────
+
+    /// The first literal of `CHECK(<column> IN ('a', ...))` in a table's SQL.
+    fn first_check_literal(sql: &str, column: &str) -> Option<String> {
+        let at = sql.find(&format!("CHECK({column} IN ("))?;
+        let rest = &sql[at..];
+        let start = rest.find('\'')? + 1;
+        let end = rest[start..].find('\'')? + start;
+        Some(rest[start..end].to_string())
+    }
+
+    /// Inserts one row into `table` with `owner_col` = `owner`, filling every other
+    /// column that needs a value with a plain one. False when it could not.
+    fn insert_owned_row(conn: &Connection, table: &str, owner_col: &str, owner: &str) -> bool {
+        let sql: String = conn
+            .query_row("SELECT sql FROM sqlite_master WHERE name = ?1", params![table], |r| r.get(0))
+            .unwrap_or_default();
+        let mut stmt = conn.prepare(&format!("SELECT name, type, \"notnull\", dflt_value, pk FROM pragma_table_info('{table}')")).unwrap();
+        let columns: Vec<(String, String, bool, bool, bool)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)? != 0, r.get::<_, Option<String>>(3)?.is_some(), r.get::<_, i64>(4)? != 0)))
+            .unwrap()
+            .map(Result::unwrap)
+            .map(|(n, t, nn, d, pk)| (n, t, nn, d, pk))
+            .collect();
+        let mut names = Vec::new();
+        let mut values: Vec<String> = Vec::new();
+        for (name, ty, not_null, has_default, pk) in &columns {
+            let is_owner = name == owner_col;
+            if !is_owner && (!*not_null || *has_default) {
+                continue;
+            }
+            if !is_owner && *pk && ty.to_uppercase().starts_with("INT") {
+                continue; // rowid alias: let it number itself
+            }
+            let value = if is_owner {
+                format!("'{owner}'")
+            } else if let Some(first) = first_check_literal(&sql, name) {
+                format!("'{first}'")
+            } else if ty.to_uppercase().starts_with("INT") {
+                "0".to_string()
+            } else if ty.to_uppercase().starts_with("BLOB") {
+                "x'00'".to_string()
+            } else {
+                "'x'".to_string()
+            };
+            names.push(name.clone());
+            values.push(value);
+        }
+        conn.execute(&format!("INSERT INTO {table} ({}) VALUES ({})", names.join(", "), values.join(", ")), []).is_ok()
+    }
+
+    /// (table, owner column) for every table that keeps rows for a meeting, workspace or chat.
+    fn owned_tables(conn: &Connection) -> Vec<(String, String)> {
+        let virtuals: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL%'").unwrap();
+            stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+        };
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+            .unwrap();
+        let tables: Vec<String> = stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        let mut out = Vec::new();
+        for table in tables {
+            if virtuals.iter().any(|v| table == *v || table.starts_with(&format!("{v}_"))) {
+                continue; // a full-text index and its shadow tables follow their content table
+            }
+            let mut cols = conn.prepare(&format!("SELECT name FROM pragma_table_info('{table}')")).unwrap();
+            let names: Vec<String> = cols.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+            for owner in ["meeting_id", "workspace_id", "chat_id"] {
+                if names.iter().any(|n| n == owner) {
+                    out.push((table.clone(), owner.to_string()));
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn no_table_keeps_rows_for_an_owner_that_was_deleted() {
+        let probe = memory_db();
+        let owned = owned_tables(&probe);
+        assert!(owned.len() > 10, "the survey found the tables: {owned:?}");
+        let mut not_exercised = Vec::new();
+        let mut left_behind = Vec::new();
+        for (table, column) in owned {
+            let conn = memory_db();
+            let w = new_ws(&conn, "Owner", false, false);
+            conn.execute("INSERT INTO meetings (id, title, start_time, workspace_id) VALUES ('mt', 't', 'x', ?1)", params![w]).unwrap();
+            conn.execute(
+                "INSERT INTO workspace_chats (id, workspace_id, created_at, updated_at) VALUES ('ct', ?1, 0, 0)",
+                params![w],
+            )
+            .unwrap();
+            let owner = match column.as_str() {
+                "meeting_id" => "mt",
+                "chat_id" => "ct",
+                _ => w.as_str(),
+            };
+            // `meetings` and `workspace_chats` are the owners themselves: their row is the one made above.
+            if (table == "meetings" && column == "workspace_id") || (table == "workspace_chats" && column == "workspace_id") {
+                // already holds a row of this owner
+            } else if !insert_owned_row(&conn, &table, &column, owner) {
+                not_exercised.push(format!("{table}.{column}"));
+                continue;
+            }
+            // The owner goes: a meeting by its own purge, a workspace (with its chats) by its deletion.
+            match column.as_str() {
+                "meeting_id" => {
+                    purge_meeting(&conn, "mt").unwrap();
+                }
+                _ => {
+                    crate::workspace::store::delete_workspace(&conn, &w, crate::workspace::types::DeleteMode::Delete).unwrap();
+                }
+            }
+            let left: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table} WHERE {column} = ?1"), params![owner], |r| r.get(0))
+                .unwrap();
+            if left > 0 {
+                left_behind.push(format!("{table}.{column}"));
+            }
+        }
+        assert!(left_behind.is_empty(), "rows left behind after their owner was deleted: {left_behind:?}");
+        assert!(not_exercised.is_empty(), "tables the test could not fill (teach it how): {not_exercised:?}");
+    }
+
+    #[test]
+    fn a_document_a_folder_and_a_talking_point_leave_no_index_rows_behind() {
+        let conn = memory_db();
+        for (kind, id) in [("document", "d1"), ("folder", "f1"), ("talking_point", "p1"), ("transcript", "m1")] {
+            conn.execute(
+                "INSERT INTO search_passages (kind, ref_id, sub_ref, text) VALUES (?1, ?2, 'sub', 'CANARY')",
+                params![kind, id],
+            )
+            .unwrap();
+            let passage: i64 = conn.query_row("SELECT MAX(id) FROM search_passages", [], |r| r.get(0)).unwrap();
+            conn.execute("INSERT INTO search_embeddings (passage_id, model, dims, vec) VALUES (?1, 'm', 1, x'00')", params![passage]).unwrap();
+            conn.execute("INSERT INTO search_sources (kind, ref_id, sub_ref) VALUES (?1, ?2, 'sub')", params![kind, id]).unwrap();
+        }
+        conn.execute("INSERT INTO meeting_cards (meeting_id, origin) VALUES ('m1', 'ai')", []).unwrap();
+        for (kind, id) in [("document", "d1"), ("folder", "f1"), ("talking_point", "p1"), ("transcript", "m1")] {
+            purge_search_rows(&conn, kind, id).unwrap();
+        }
+        for table in ["search_passages", "search_sources", "search_embeddings", "meeting_cards"] {
+            let n: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0)).unwrap();
+            assert_eq!(n, 0, "{table}");
+        }
+        // Another reference's rows are untouched.
+        conn.execute("INSERT INTO search_passages (kind, ref_id, text) VALUES ('document', 'keep', 'x')", []).unwrap();
+        purge_search_rows(&conn, "document", "d1").unwrap();
+        let kept: i64 = conn.query_row("SELECT COUNT(*) FROM search_passages WHERE ref_id = 'keep'", [], |r| r.get(0)).unwrap();
+        assert_eq!(kept, 1);
+    }
+
+    #[test]
+    fn removing_a_document_or_a_talking_point_purges_its_index_rows() {
+        let conn = memory_db();
+        let w = new_ws(&conn, "W", false, false);
+        conn.execute("INSERT INTO context_resources (id, name, file_type, file_path, loaded_at) VALUES ('d', 'd', 'txt', 'x', 'now')", []).unwrap();
+        conn.execute("INSERT INTO talking_points (id, workspace_id, title, created_at, updated_at) VALUES ('tp', ?1, 't', 0, 0)", params![w]).unwrap();
+        for (kind, id) in [("document", "d"), ("talking_point", "tp")] {
+            conn.execute("INSERT INTO search_passages (kind, ref_id, text) VALUES (?1, ?2, 'CANARY')", params![kind, id]).unwrap();
+        }
+        crate::workspace::documents::remove_document(&conn, "d").unwrap();
+        crate::workspace::talking_points::delete_talking_point(&conn, "tp").unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM search_passages", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
+        // And a workspace deleted with its points leaves none either.
+        conn.execute("INSERT INTO talking_points (id, workspace_id, title, created_at, updated_at) VALUES ('tp2', ?1, 't', 0, 0)", params![w]).unwrap();
+        conn.execute("INSERT INTO search_passages (kind, ref_id, text) VALUES ('talking_point', 'tp2', 'CANARY')", []).unwrap();
+        crate::workspace::store::delete_workspace(&conn, &w, crate::workspace::types::DeleteMode::Delete).unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM search_passages", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn a_meeting_purge_removes_only_its_own_live_transcript_chunks() {
+        let conn = memory_db();
+        conn.execute("INSERT INTO meetings (id, title, start_time) VALUES ('m_1', 't', 'x'), ('m21', 't', 'x')", []).unwrap();
+        for (chunk, file) in [("c1", "transcript_m_1_aaa"), ("c2", "transcript_m21_bbb"), ("c3", "doc-file")] {
+            conn.execute(
+                "INSERT INTO rag_chunks (chunk_id, file_id, chunk_index, text, token_count, source_type, created_at)
+                 VALUES (?1, ?2, 0, 'CANARY', 1, ?3, 'now')",
+                params![chunk, file, if file.starts_with("transcript") { "transcript" } else { "file" }],
+            )
+            .unwrap();
+            conn.execute("INSERT INTO rag_embeddings (chunk_id, embedding) VALUES (?1, x'00')", params![chunk]).unwrap();
+        }
+        purge_meeting(&conn, "m_1").unwrap();
+        let left: Vec<String> = conn.prepare("SELECT chunk_id FROM rag_chunks ORDER BY chunk_id").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        // `_` is a literal in the pattern: "m_1" never matches "m21".
+        assert_eq!(left, vec!["c2", "c3"]);
+        let emb: i64 = conn.query_row("SELECT COUNT(*) FROM rag_embeddings", [], |r| r.get(0)).unwrap();
+        assert_eq!(emb, 2);
     }
 }

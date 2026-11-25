@@ -88,9 +88,14 @@ impl RagManager {
         self.config = config;
     }
 
-    /// The file id of the running transcript's chunks, when the transcript is indexed.
-    pub fn transcript_file_id(&self) -> Option<String> {
-        self.transcript_indexer.as_ref().map(|t| t.file_id().to_string())
+    /// The file id of the running transcript's chunks, but only for the meeting
+    /// that owns them: another meeting, a past one or a request outside any
+    /// meeting never gets it.
+    pub fn transcript_file_id_for(&self, meeting_id: &str) -> Option<String> {
+        self.transcript_indexer
+            .as_ref()
+            .filter(|t| t.owner() == Some(meeting_id))
+            .map(|t| t.file_id().to_string())
     }
 
     /// Get a mutable reference to the transcript indexer, if enabled.

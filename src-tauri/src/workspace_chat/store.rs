@@ -414,10 +414,104 @@ pub fn redact_meeting_in_workspace(conn: &Connection, meeting_id: &str, workspac
     redact_text_of(conn, meeting_id, Some(workspace_id))
 }
 
+/// Material (kind, ref id) a workspace no longer uses: its chats' citations and
+/// context bars of it lose their title, text and place, and say why in plain
+/// words. Returns how many messages changed.
+pub fn redact_material_in_workspace(conn: &Connection, workspace_id: &str, refs: &[(String, String)], why: &str) -> Result<usize, String> {
+    const REMOVED: &str = "Removed source";
+    if refs.is_empty() {
+        return Ok(0);
+    }
+    let has_tables: i64 = conn
+        .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('workspace_messages', 'workspace_chats')", [], |r| r.get(0))
+        .unwrap_or(0);
+    if has_tables < 2 {
+        return Ok(0);
+    }
+    let gone = |kind: &str, ref_id: &str| refs.iter().any(|(k, r)| r == ref_id && (kind.is_empty() || k == kind));
+    let mut stmt = conn
+        .prepare(
+            "SELECT m.id, m.citations_json, m.context_json FROM workspace_messages m
+             JOIN workspace_chats c ON c.id = m.chat_id WHERE c.workspace_id = ?1",
+        )
+        .map_err(|e| err("Couldn't clean up the chats", e))?;
+    let rows: Vec<(i64, String, Option<String>)> = stmt
+        .query_map(params![workspace_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .map_err(|e| err("Couldn't clean up the chats", e))?
+        .filter_map(|r| r.ok())
+        .collect();
+    let mut changed_messages = 0;
+    for (id, cites, ctx) in rows {
+        let mut citations: Vec<WorkspaceCitation> = serde_json::from_str(&cites).unwrap_or_default();
+        let mut changed = false;
+        for c in citations.iter_mut().filter(|c| !c.ref_id.is_empty() && gone(&c.kind, &c.ref_id)) {
+            c.ref_id = String::new();
+            c.sub_ref = None;
+            c.title = REMOVED.to_string();
+            c.start_ms = None;
+            c.snippet = why.to_string();
+            changed = true;
+        }
+        let mut context = ctx.as_deref().and_then(|c| serde_json::from_str::<ContextReport>(c).ok());
+        if let Some(r) = context.as_mut() {
+            for b in r.bars.iter_mut() {
+                let mut parts = b.id.split(':');
+                let (_, ref_id) = (parts.next(), parts.next().unwrap_or(""));
+                if !ref_id.is_empty() && gone("", ref_id) {
+                    b.id = "removed:".to_string();
+                    b.title = format!("{REMOVED}. {why}");
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            conn.execute(
+                "UPDATE workspace_messages SET citations_json = ?2, context_json = ?3 WHERE id = ?1",
+                params![
+                    id,
+                    serde_json::to_string(&citations).unwrap_or_else(|_| "[]".into()),
+                    context.as_ref().and_then(|c| serde_json::to_string(c).ok())
+                ],
+            )
+            .map_err(|e| err("Couldn't clean up the chats", e))?;
+            changed_messages += 1;
+        }
+    }
+    Ok(changed_messages)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::workspace::test_support::*;
+
+    #[test]
+    fn material_a_workspace_no_longer_uses_is_redacted_in_its_chats_only_and_says_why() {
+        let conn = memory_db();
+        let a = new_ws(&conn, "A", true, false);
+        let b = new_ws(&conn, "B", true, false);
+        let (ca, cb) = (create_chat(&conn, &a, None, None, None).unwrap(), create_chat(&conn, &b, None, None, None).unwrap());
+        let doc = |id: &str, tag: &str| WorkspaceCitation { tag: tag.into(), kind: "document".into(), ref_id: id.into(), sub_ref: None, title: format!("Title of {id}"), start_ms: None, snippet: format!("CANARY text of {id}") };
+        let r = ContextReport {
+            bars: vec![ContextBar { id: "document:general_doc".into(), layer: "documents".into(), title: "Title of general_doc".into(), tokens: 5, relevance: 0.5, pinned: false, included: true }],
+            ..report()
+        };
+        for c in [&ca, &cb] {
+            save_answer(&conn, &c.id, Answer { question: "q", text: "a", model: "x", citations: &[doc("general_doc", "S1"), doc("own_doc", "S2")], context: &r, input_tokens: 0, output_tokens: 0 }).unwrap();
+        }
+        let why = "General is no longer used by this workspace";
+        let n = redact_material_in_workspace(&conn, &a, &[("document".to_string(), "general_doc".to_string())], why).unwrap();
+        assert_eq!(n, 1);
+        let m = &list_messages(&conn, &ca.id).unwrap()[1];
+        assert_eq!((m.citations[0].title.as_str(), m.citations[0].snippet.as_str(), m.citations[0].ref_id.as_str()), ("Removed source", why, ""));
+        assert_eq!(m.citations[1].ref_id, "own_doc", "what is still used stays");
+        assert!(m.context.as_ref().unwrap().bars[0].title.contains(why));
+        let raw: String = conn.query_row("SELECT citations_json || context_json FROM workspace_messages WHERE chat_id = ?1 AND role = 'assistant'", [&ca.id], |r| r.get(0)).unwrap();
+        assert!(!raw.contains("CANARY text of general_doc") && !raw.contains("Title of general_doc"));
+        // Another workspace's chats keep theirs.
+        assert_eq!(list_messages(&conn, &cb.id).unwrap()[1].citations[0].title, "Title of general_doc");
+        assert_eq!(redact_material_in_workspace(&conn, &a, &[], why).unwrap(), 0);
+    }
 
     fn report() -> ContextReport {
         ContextReport {

@@ -125,18 +125,8 @@ pub fn replace_source(
 /// (every sub reference), and a meeting's card. Used when a meeting,
 /// document, folder or talking point is deleted.
 pub fn remove_ref(conn: &Connection, kind: PassageKind, ref_id: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        "DELETE FROM search_passages WHERE kind = ?1 AND ref_id = ?2",
-        params![kind.as_str(), ref_id],
-    )?;
-    conn.execute(
-        "DELETE FROM search_sources WHERE kind = ?1 AND ref_id = ?2",
-        params![kind.as_str(), ref_id],
-    )?;
-    if kind == PassageKind::Transcript {
-        conn.execute("DELETE FROM meeting_cards WHERE meeting_id = ?1", params![ref_id])?;
-    }
-    Ok(())
+    // The one purge (passages, embeddings, source rows, a meeting's card).
+    crate::workspace::purge::purge_search_rows(conn, kind.as_str(), ref_id).map_err(rusqlite::Error::InvalidParameterName)
 }
 
 /// Public hook for `delete_meeting`: passages, source rows and the card.

@@ -132,6 +132,14 @@ fn count_total_segments(segments_json: &str) -> usize {
         .unwrap_or(0)
 }
 
+/// The meeting a scope belongs to when it is the running (live) one.
+fn live_owner(scope: &SessionScope) -> Option<&str> {
+    match scope {
+        SessionScope::Live(id) => Some(id.as_str()),
+        _ => None,
+    }
+}
+
 /// Document excerpts found by RAG retrieval for one request, plus the
 /// metadata the AI Log shows.
 #[derive(Default)]
@@ -152,6 +160,7 @@ async fn retrieve_rag(
     transcript_excerpt: String,
     top_k: usize,
     scope: &crate::workspace::EffectiveScope,
+    live_meeting: Option<&str>,
 ) -> Result<RagRetrieval, String> {
     let mut out = RagRetrieval::default();
 
@@ -181,7 +190,8 @@ async fn retrieve_rag(
 
     let (mut config, embedder_url, embedding_model, transcript_file) = {
         let rag_guard = rag_arc.lock().map_err(|e| e.to_string())?;
-        let transcript_file = rag_guard.transcript_file_id();
+        // The live transcript is searched only by the meeting that owns it.
+        let transcript_file = live_meeting.and_then(|m| rag_guard.transcript_file_id_for(m));
         (rag_guard.config().clone(), rag_guard.embedder_url(), rag_guard.embedding_model(), transcript_file)
     };
     config.top_k = top_k;
@@ -335,14 +345,22 @@ pub(crate) fn request_with_sources(
     scope: &SessionScope,
     toggles: Option<SourceToggles>,
 ) -> bool {
-    let last = state.meeting_sessions.last_answer_with_sources(scope);
-    routing::wants_sources(mode, toggles, last) && scope_has_sources(state, scope)
+    request_with_sources_for(state, mode, scope, toggles, || crate::workspace::runtime::for_session_scope(state, scope))
 }
 
-/// Whether anything is enabled that the scope of `scope`'s meeting may use.
-pub(crate) fn scope_has_sources(state: &AppState, scope: &SessionScope) -> bool {
-    let scoped = crate::workspace::runtime::for_session_scope(state, scope);
-    crate::workspace::runtime::sources_for(state, &scoped.scope).map(|c| c.has_enabled()).unwrap_or(false)
+/// [`request_with_sources`] with the request's scope given: a live request
+/// resolves its scope once and passes it on. `scoped` runs only when the pills
+/// ask for sources at all.
+pub(crate) fn request_with_sources_for(
+    state: &AppState,
+    mode: &str,
+    scope: &SessionScope,
+    toggles: Option<SourceToggles>,
+    scoped: impl FnOnce() -> crate::workspace::runtime::ScopedContext,
+) -> bool {
+    let last = state.meeting_sessions.last_answer_with_sources(scope);
+    routing::wants_sources(mode, toggles, last)
+        && crate::workspace::runtime::sources_for(state, &scoped().scope).map(|c| c.has_enabled()).unwrap_or(false)
 }
 
 /// The chips of tool calls still running, by tool use id: a call leaves its
@@ -485,6 +503,9 @@ pub(crate) struct SessionAssist<'a> {
     /// What the sources note tells a with-sources session this answer may use
     /// (all off when the pills are not known, as for Shorten and FollowUp).
     pub sources: Option<SourceToggles>,
+    /// The scope the request already resolved (None: resolved when needed). A
+    /// live request resolves it once and everything below uses that one.
+    pub workspace: Option<&'a crate::workspace::runtime::ScopedContext>,
 }
 
 /// A request a Claude session answered: what was sent, which model
@@ -606,7 +627,15 @@ pub(crate) async fn session_assist(state: &AppState, app: &AppHandle, req: Sessi
             .map(|s| format!("{}: {}", s.speaker, s.text))
             .collect::<Vec<_>>()
             .join("\n");
-        match retrieve_rag(state, question_text, tail_chars(&recent, 500), req.rag_top_k, &crate::workspace::runtime::for_session_scope(state, &key.scope).scope).await {
+        let resolved;
+        let req_scope = match req.workspace {
+            Some(scoped) => scoped,
+            None => {
+                resolved = crate::workspace::runtime::for_session_scope(state, &key.scope);
+                &resolved
+            }
+        };
+        match retrieve_rag(state, question_text, tail_chars(&recent, 500), req.rag_top_k, &req_scope.scope, live_owner(&key.scope)).await {
             Ok(found) => rag = found,
             Err(e) => log::warn!("RAG retrieval for the Claude session failed: {e}"),
         }
@@ -1016,7 +1045,7 @@ pub async fn generate_assist(
         crate::workspace::runtime::instructions_with_workspace(&composed_instructions, &scoped.scope);
     // Only an answer the user asked for, with a pill on, may use sources (no
     // `sources` at all means automatic: Auto-Answer, summaries, background tasks).
-    let with_sources = request_with_sources(&state, &mode, &scope, sources);
+    let with_sources = request_with_sources_for(&state, &mode, &scope, sources, || scoped.clone());
     let mut route = request_route(&state, &mode, &scope, with_sources);
     // Only a Claude session carries images: the other CLI agents' requests with
     // images take the stateless path, which says so.
@@ -1069,6 +1098,7 @@ pub async fn generate_assist(
             cancel: cancel_token.clone(),
             images: &images,
             sources: Some(sources.unwrap_or_default()),
+            workspace: Some(&scoped),
         };
         match run_session_assist(&state, &app_handle, key.clone(), make_req).await {
             SessionOutcome::Done(result) => {
@@ -1217,15 +1247,12 @@ pub async fn generate_assist(
     // Check for active Gemini context cache — only applies when Gemini is the provider
     // and only for a request whose scope is the one the cache was built from.
     let active_cache_name = if provider_type == Some(ProviderType::Gemini) {
-        let built_for = state.gemini_cache_scope.lock().ok().and_then(|s| s.clone());
-        if built_for.as_deref() == Some(scoped.scope.fingerprint().as_str()) {
-            state.gemini_cache
-                .lock()
-                .ok()
-                .and_then(|slot| slot.as_ref().map(|c| c.name.clone()))
-        } else {
-            None
-        }
+        // One lock: the name and the scope it was built for are read together.
+        let fingerprint = scoped.scope.fingerprint();
+        state.gemini_cache
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().and_then(|c| c.name_for(&fingerprint).map(str::to_string)))
     } else {
         None
     };
@@ -1260,7 +1287,7 @@ pub async fn generate_assist(
             .filter(|q| !q.is_empty())
             .map(|q| q.to_string())
             .or_else(|| effective_question.as_ref().map(|q| q.text.clone()));
-        retrieve_rag(&state, question_text, tail_chars(&transcript_text, 500), rag_top_k, &scoped.scope).await?
+        retrieve_rag(&state, question_text, tail_chars(&transcript_text, 500), rag_top_k, &scoped.scope, live_owner(&scope)).await?
     } else {
         RagRetrieval::default()
     };
@@ -1688,6 +1715,40 @@ mod tests {
             "Claude Code 2.1.206 is too old for NexQ. Update it to 2.1.259 or newer.".into()
         )));
         assert!(!is_sources_start_failure(&AgentError::Cancelled));
+    }
+
+    #[test]
+    fn only_a_live_scope_may_search_the_live_transcript() {
+        assert_eq!(live_owner(&SessionScope::Live("m".into())), Some("m"));
+        for scope in [SessionScope::Past("m".into()), SessionScope::Utility, SessionScope::Workspace("c".into())] {
+            assert_eq!(live_owner(&scope), None);
+        }
+    }
+
+    #[test]
+    fn a_request_resolves_its_scope_once_and_only_when_the_pills_ask_for_sources() {
+        use crate::sources::config::NotesFolder;
+        use crate::workspace::runtime::ScopedContext;
+        use crate::workspace::EffectiveScope;
+        use std::cell::Cell;
+        let state = AppState::new();
+        state.personal_sources.write().unwrap().notes_folders =
+            vec![NotesFolder { id: "f".into(), label: "V".into(), path: "D:/v".into(), enabled: true }];
+        let live = SessionScope::Live("m".into());
+        let calls = Cell::new(0);
+        let with = |ids: &[&str]| ScopedContext {
+            scope: EffectiveScope { folder_ids: ids.iter().map(|s| s.to_string()).collect(), ..Default::default() },
+            points: Vec::new(),
+        };
+        let on = Some(SourceToggles { notes: true, tools: false });
+        // Pills off: the scope is never resolved.
+        assert!(!request_with_sources_for(&state, "Assist", &live, None, || { calls.set(calls.get() + 1); with(&["f"]) }));
+        assert_eq!(calls.get(), 0);
+        // On: resolved once, and the given scope decides.
+        assert!(request_with_sources_for(&state, "Assist", &live, on, || { calls.set(calls.get() + 1); with(&["f"]) }));
+        assert!(!request_with_sources_for(&state, "Assist", &live, on, || { calls.set(calls.get() + 1); with(&[]) }));
+        assert_eq!(calls.get(), 2, "one resolution per request");
+        let _ = ScopedContext::unrestricted();
     }
 
     #[test]

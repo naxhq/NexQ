@@ -2,11 +2,14 @@
 //! (documents, folders, MCP servers) exists once; workspaces point to it, and
 //! [`scope::scope_for`] decides what each meeting or chat may use.
 
+pub mod access;
+pub mod derived;
 pub mod documents;
 pub mod library;
 pub mod memory;
 pub mod meetings;
 pub mod purge;
+pub mod restart;
 pub mod reveal;
 pub mod rules;
 pub mod runtime;

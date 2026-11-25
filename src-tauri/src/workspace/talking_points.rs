@@ -181,6 +181,7 @@ pub fn delete_talking_point(conn: &Connection, id: &str) -> Result<(), String> {
     ] {
         tx.execute(sql, params![id]).map_err(|e| err("Couldn't delete the talking point", e))?;
     }
+    super::purge::purge_search_rows(&tx, "talking_point", id)?;
     tx.commit().map_err(|e| err("Couldn't delete the talking point", e))
 }
 
@@ -223,6 +224,9 @@ pub fn move_all(conn: &Connection, from: &str, to: &str) -> Result<(), String> {
 
 /// Deletes every point of a workspace with its edits and progress.
 pub fn delete_all(conn: &Connection, workspace_id: &str) -> Result<(), String> {
+    for point in list_talking_points(conn, workspace_id)? {
+        super::purge::purge_search_rows(conn, "talking_point", &point.id)?;
+    }
     for sql in [
         "DELETE FROM talking_point_edits WHERE point_id IN (SELECT id FROM talking_points WHERE workspace_id = ?1)",
         "DELETE FROM talking_point_progress WHERE point_id IN (SELECT id FROM talking_points WHERE workspace_id = ?1)",

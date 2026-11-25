@@ -86,10 +86,7 @@ pub async fn create_gemini_context_cache(
             .gemini_cache
             .lock()
             .map_err(|e| format!("Cache state lock failed: {}", e))?;
-        *cache_slot = Some(cached.clone());
-    }
-    if let Ok(mut scope_slot) = state.gemini_cache_scope.lock() {
-        *scope_slot = Some(scope_fingerprint);
+        *cache_slot = Some(crate::llm::gemini_cache::ScopedCache { content: cached.clone(), scope: scope_fingerprint });
     }
 
     serde_json::to_string(&cached).map_err(|e| format!("Serialize failed: {}", e))
@@ -105,7 +102,7 @@ pub async fn delete_gemini_context_cache(
             .gemini_cache
             .lock()
             .map_err(|e| format!("Cache state lock failed: {}", e))?;
-        slot.as_ref().map(|c| c.name.clone())
+        slot.as_ref().map(|c| c.content.name.clone())
     };
 
     let Some(name) = cache_name else {
@@ -140,9 +137,6 @@ pub async fn delete_gemini_context_cache(
             .map_err(|e| format!("Cache state lock failed: {}", e))?;
         *slot = None;
     }
-    if let Ok(mut scope_slot) = state.gemini_cache_scope.lock() {
-        *scope_slot = None;
-    }
 
     log::info!("Gemini context cache deleted: {}", name);
     Ok(())
@@ -161,7 +155,7 @@ pub async fn get_gemini_cache_status(
     match slot.as_ref() {
         None => Ok(None),
         Some(c) => {
-            let json = serde_json::to_string(c)
+            let json = serde_json::to_string(&c.content)
                 .map_err(|e| format!("Serialize failed: {}", e))?;
             Ok(Some(json))
         }

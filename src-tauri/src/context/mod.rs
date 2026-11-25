@@ -330,33 +330,6 @@ impl ContextManager {
         self.resources.clone()
     }
 
-    /// Get the assembled context text (concatenation of all resources' text).
-    pub fn get_assembled_context(&self) -> String {
-        let mut parts: Vec<String> = Vec::new();
-
-        // Add custom instructions first if present
-        if !self.custom_instructions.is_empty() {
-            parts.push(format!(
-                "## Custom Instructions\n{}\n",
-                self.custom_instructions
-            ));
-        }
-
-        // Add each resource's text
-        for resource in &self.resources {
-            if let Some(cached) = self.cache.get(&resource.id) {
-                if !cached.text.is_empty() {
-                    parts.push(format!(
-                        "## {} ({})\n{}\n",
-                        resource.name, resource.file_type, cached.text
-                    ));
-                }
-            }
-        }
-
-        parts.join("\n")
-    }
-
     /// Get only the attached resources' text (without custom instructions).
     /// Used for the context-stuffing fallback so attached documents reach the
     /// LLM even when the RAG index is empty or the embedding server is down.

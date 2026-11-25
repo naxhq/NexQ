@@ -629,12 +629,8 @@ pub async fn start_meeting(
     } else {
         None
     };
-    let mut meeting = meetings::create_meeting(db.connection(), &title)
-        .map_err(|e| format!("Failed to create meeting: {}", e))?;
-    if let Some(home) = home {
-        crate::workspace::meetings::set_home(db.connection(), &meeting.id, &home)?;
-        meeting.workspace_id = home;
-    }
+    // The meeting and its home are created in one transaction: no orphan row.
+    let meeting = crate::workspace::meetings::create_meeting_in(db.connection(), &title, home.as_deref())?;
     state.meeting_active.store(true, Ordering::SeqCst);
 
     // Clear per-meeting state so the new meeting starts fresh.
@@ -650,6 +646,7 @@ pub async fn start_meeting(
     if let Some(rag_arc) = state.rag.as_ref() {
         if let Ok(mut rag_mgr) = rag_arc.lock() {
             if let Some(indexer) = rag_mgr.transcript_indexer_mut() {
+                indexer.set_owner(Some(meeting.id.clone()));
                 indexer.reset();
             }
         }
@@ -699,6 +696,26 @@ pub async fn end_meeting(
         }
     }
     close_scope_in_background(&state, SessionScope::Live(meeting_id.clone()));
+    // The live transcript chunks belong to the meeting that just ended: no later
+    // request may search them, and they are not kept.
+    if let Some(rag_arc) = state.rag.as_ref() {
+        if let Ok(mut rag_mgr) = rag_arc.lock() {
+            if let Some(indexer) = rag_mgr.transcript_indexer_mut() {
+                if indexer.owner() == Some(meeting_id.as_str()) {
+                    indexer.set_owner(None);
+                }
+            }
+        }
+    }
+    if let Some(db) = state.database.as_ref() {
+        if let Ok(db) = db.lock() {
+            let _ = crate::workspace::purge::purge_transcript_chunks(db.connection(), &meeting_id);
+        }
+    }
+    if let Ok(mut warned) = state.material_warned.lock() {
+        warned.remove(&meeting_id);
+    }
+    state.restarts.forget(&format!("meeting:{meeting_id}"));
     // Its notes and brief sessions end after the turn they are in.
     if let Some(ai) = state.ai_runs.clone() {
         let id = meeting_id.clone();

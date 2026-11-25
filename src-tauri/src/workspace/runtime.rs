@@ -36,28 +36,77 @@ enum Who<'a> {
     DefaultWorkspace,
 }
 
+/// What to do for a request, from whether workspaces are available and whether
+/// their tables exist.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Policy {
+    /// Resolve the scope.
+    Normal,
+    /// Workspaces were never set up: as before they existed.
+    Unrestricted,
+    /// The tables exist but can't be used: no workspace material at all.
+    FailClosed,
+}
+
+pub(crate) fn policy(available: bool, tables_exist: bool) -> Policy {
+    match (available, tables_exist) {
+        (true, _) => Policy::Normal,
+        (false, true) => Policy::FailClosed,
+        (false, false) => Policy::Unrestricted,
+    }
+}
+
+/// The text shown when a request can't use a workspace's material.
+pub const MATERIAL_UNAVAILABLE: &str = "NexQ couldn't read this workspace's material, so answers don't use it";
+
+/// Event `workspace_material_unavailable` `{ meeting_id: string | null, message: string }`.
+#[derive(serde::Serialize, Clone)]
+struct MaterialUnavailable {
+    meeting_id: Option<String>,
+    message: &'static str,
+}
+
+/// Nothing is used, and the user is told, once per meeting.
+fn fail_closed(state: &AppState, meeting: Option<&str>, why: &str) -> ScopedContext {
+    log::warn!("Workspace material is not used: {why}");
+    let key = meeting.unwrap_or("default").to_string();
+    let first = state.material_warned.lock().map(|mut w| w.insert(key)).unwrap_or(false);
+    if first {
+        if let Some(app) = state.app_handle.get() {
+            use tauri::Emitter;
+            let _ = app.emit(
+                "workspace_material_unavailable",
+                MaterialUnavailable { meeting_id: meeting.map(str::to_string), message: MATERIAL_UNAVAILABLE },
+            );
+        }
+    }
+    ScopedContext::nothing()
+}
+
 fn resolve(state: &AppState, who: Who<'_>) -> ScopedContext {
-    if !super::available() {
-        return ScopedContext::unrestricted();
+    let meeting = match &who {
+        Who::Meeting(id) => Some(*id),
+        Who::DefaultWorkspace => None,
+    };
+    match policy(super::available(), crate::db::workspace_migrations::workspaces_exist()) {
+        Policy::Unrestricted => return ScopedContext::unrestricted(),
+        Policy::FailClosed => return fail_closed(state, meeting, "the workspace upgrade did not finish"),
+        Policy::Normal => {}
     }
     let Some(db) = state.database.as_ref() else {
         return ScopedContext::unrestricted();
     };
     let Ok(guard) = db.lock() else {
-        log::warn!("Couldn't lock the database to resolve the scope; using no material");
-        return ScopedContext::nothing();
+        return fail_closed(state, meeting, "the database is locked");
     };
     let conn = guard.connection();
-    let (scope, meeting) = match who {
-        Who::Meeting(id) => (scope_for(conn, ScopeOwner::Meeting(id)), Some(id)),
-        Who::DefaultWorkspace => (scope_for_home(conn, &store::default_workspace_id(conn), &[]), None),
+    let scope = match who {
+        Who::Meeting(id) => scope_for(conn, ScopeOwner::Meeting(id)),
+        Who::DefaultWorkspace => scope_for_home(conn, &store::default_workspace_id(conn), &[]),
     };
     match scope.and_then(|scope| context_texts(conn, meeting, &scope).map(|points| ScopedContext { scope, points })) {
         Ok(ctx) => ctx,
-        Err(e) => {
-            log::warn!("Couldn't resolve the scope ({e}); using no material");
-            ScopedContext::nothing()
-        }
+        Err(e) => fail_closed(state, meeting, &format!("the scope could not be read ({e})")),
     }
 }
 
@@ -198,6 +247,26 @@ mod tests {
         let none = build_sources_launch(&scoped_sources(&cfg, &EffectiveScope::default()), &|_| None).unwrap();
         assert!(none.is_none());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn unrestricted_only_when_the_workspace_tables_never_existed() {
+        assert_eq!(policy(true, true), Policy::Normal);
+        assert_eq!(policy(false, false), Policy::Unrestricted, "v9 never ran: as before workspaces");
+        assert_eq!(policy(false, true), Policy::FailClosed, "tables exist but unusable: nothing, never everything");
+    }
+
+    #[test]
+    fn a_request_that_cannot_resolve_gets_no_material_and_is_told_once_per_meeting() {
+        // An app state whose database is gone behind a poisoned lock is not easy to build;
+        // the single decision point is `fail_closed`, which never returns material.
+        let state = AppState::new();
+        let first = fail_closed(&state, Some("m1"), "test");
+        assert!(!first.scope.unrestricted && first.scope.document_ids.is_empty() && first.points.is_empty());
+        assert!(state.material_warned.lock().unwrap().contains("m1"));
+        fail_closed(&state, Some("m1"), "again");
+        fail_closed(&state, None, "default");
+        assert_eq!(state.material_warned.lock().unwrap().len(), 2, "one entry per meeting, not per request");
     }
 
     #[test]

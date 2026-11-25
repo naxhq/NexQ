@@ -892,6 +892,7 @@ fn forget_stale_hints(saved: &PersonalSourcesConfig, incoming: &mut PersonalSour
 pub fn set_personal_sources(
     config: PersonalSourcesConfig,
     filing: Option<crate::workspace::sources_seed::Filing>,
+    loaded: Option<bool>,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
@@ -899,12 +900,13 @@ pub fn set_personal_sources(
     // What is filed is part of a workspace's material: the sessions that use
     // that workspace start again (the sources' own restart is below).
     let touched = filing.as_ref().map(|f| Touch::ws(&f.workspace_id)).unwrap_or_default();
-    change_and_restart(&state, &app, |_| touched.clone(), || set_personal_sources_now(config, filing, &state, &app))
+    change_and_restart(&state, &app, |_| touched.clone(), || set_personal_sources_now(config, filing, loaded.unwrap_or(false), &state, &app))
 }
 
 fn set_personal_sources_now(
     mut config: PersonalSourcesConfig,
     filing: Option<crate::workspace::sources_seed::Filing>,
+    loaded: bool,
     state: &AppState,
     app: &AppHandle,
 ) -> Result<(), String> {
@@ -925,7 +927,7 @@ fn set_personal_sources_now(
     if crate::workspace::available() {
         if let Some(db) = state.database.as_ref() {
             if let Ok(db) = db.lock() {
-                if let Err(e) = crate::workspace::sources_seed::sync_with_config(db.connection(), &config) {
+                if let Err(e) = crate::workspace::sources_seed::sync_with_config(db.connection(), &config, loaded) {
                     log::warn!("Couldn't update the workspaces for the new sources: {e}");
                 }
             }

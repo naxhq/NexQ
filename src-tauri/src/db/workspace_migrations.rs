@@ -39,11 +39,26 @@ const BACKUP_KEEP: Duration = Duration::from_secs(14 * 24 * 3600);
 const ERROR_KEY: &str = "workspace_migration_error";
 
 static AVAILABLE: AtomicBool = AtomicBool::new(false);
+static TABLES_EXIST: AtomicBool = AtomicBool::new(false);
 static LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
 
 /// Whether the workspace tables are in place in this run.
 pub fn available() -> bool {
     AVAILABLE.load(Ordering::SeqCst)
+}
+
+/// Whether the workspaces table is in the database, whatever happened to the
+/// last migration. When it is but workspaces are unavailable, nothing that
+/// depends on a scope may be treated as unrestricted.
+pub fn workspaces_exist() -> bool {
+    TABLES_EXIST.load(Ordering::SeqCst)
+}
+
+/// Whether the workspaces table exists in `conn`.
+pub fn tables_present(conn: &Connection) -> bool {
+    conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'workspaces'", [], |r| r.get::<_, i64>(0))
+        .map(|n| n > 0)
+        .unwrap_or(false)
 }
 
 /// Why the last migration failed, if it did.
@@ -56,6 +71,7 @@ pub fn last_error() -> Option<String> {
 pub fn run(conn: &Connection, db_path: Option<&Path>) -> Result<(), String> {
     let result = run_steps(conn, db_path, STEPS);
     AVAILABLE.store(result.is_ok(), Ordering::SeqCst);
+    TABLES_EXIST.store(tables_present(conn), Ordering::SeqCst);
     if let Ok(mut slot) = LAST_ERROR.lock() {
         *slot = result.as_ref().err().cloned();
     }
@@ -515,6 +531,24 @@ mod tests {
         conn.execute("DELETE FROM schema_steps", []).unwrap();
         run_steps(&conn, Some(&path), STEPS).unwrap();
         assert_eq!(std::fs::metadata(&backup).unwrap().modified().unwrap(), stamp);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_tables_are_found_after_v9_even_if_a_later_step_fails() {
+        let dir = temp_dir("present");
+        let (conn, path) = v8_database(&dir);
+        assert!(!tables_present(&conn), "before v9 there are none");
+        run_steps(&conn, Some(&path), STEPS).unwrap();
+        assert!(tables_present(&conn));
+        // A step added later fails: the earlier ones stay, and the tables are still there.
+        let steps: Vec<Step> = STEPS
+            .iter()
+            .map(|s| Step { version: s.version, name: s.name, run: s.run })
+            .chain([Step { version: 40, name: "broken", run: failing_step }])
+            .collect();
+        assert!(run_steps(&conn, Some(&path), &steps).is_err());
+        assert!(tables_present(&conn));
         let _ = std::fs::remove_dir_all(dir);
     }
 

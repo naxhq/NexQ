@@ -9,6 +9,21 @@ pub struct GeminiCacheClient {
     base_url: String,
 }
 
+/// The active cache with the fingerprint of the scope it was built from, kept
+/// together so one can never be read without the other.
+#[derive(Debug, Clone)]
+pub struct ScopedCache {
+    pub content: CachedContent,
+    pub scope: String,
+}
+
+impl ScopedCache {
+    /// The cache's name when it was built for `scope` (else None: it is not used).
+    pub fn name_for(&self, scope: &str) -> Option<&str> {
+        (self.scope == scope).then_some(self.content.name.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedContent {
     /// Full resource name, e.g. "cachedContents/abc123xyz"

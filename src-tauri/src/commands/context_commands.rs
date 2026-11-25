@@ -147,22 +147,6 @@ pub async fn set_custom_instructions(
 }
 
 #[command]
-pub async fn get_assembled_context(
-    state: State<'_, AppState>,
-) -> Result<String, String> {
-    let ctx_mgr = state
-        .context
-        .as_ref()
-        .ok_or_else(|| "Context manager not initialized".to_string())?;
-
-    let ctx = ctx_mgr
-        .lock()
-        .map_err(|e| format!("Failed to lock context manager: {}", e))?;
-
-    Ok(ctx.get_assembled_context())
-}
-
-#[command]
 pub async fn get_token_budget(
     state: State<'_, AppState>,
 ) -> Result<String, String> {

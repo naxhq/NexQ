@@ -57,6 +57,7 @@ pub fn remove_document(conn: &Connection, id: &str) -> Result<(), String> {
     crate::db::rag::delete_chunks_by_file(&tx, id)?;
     tx.execute("DELETE FROM document_text WHERE resource_id = ?1", params![id]).map_err(|e| err("Couldn't remove the document", e))?;
     store::remove_memberships(&tx, ItemKind::Document, id)?;
+    super::purge::purge_search_rows(&tx, "document", id)?;
     tx.commit().map_err(|e| err("Couldn't remove the document", e))
 }
 

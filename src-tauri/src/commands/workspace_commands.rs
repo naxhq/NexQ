@@ -6,6 +6,8 @@
 //! restarts the sessions of both (so revoking access reaches the sessions that
 //! had it). A test lists the mutating commands and fails if one does not.
 
+use std::collections::BTreeMap;
+
 use rusqlite::Connection;
 use serde::Serialize;
 use tauri::{command, AppHandle, Emitter, State};
@@ -14,7 +16,8 @@ use crate::commands::meeting_commands;
 use crate::state::AppState;
 use crate::workspace::library::{self, LibrarySnapshot};
 use crate::workspace::types::*;
-use crate::workspace::{documents, meetings, memory, purge, scope, sources_seed, store, talking_points};
+use crate::workspace::access::{self, AccessView, Kind};
+use crate::workspace::{documents, meetings, memory, purge, restart, scope, sources_seed, store, talking_points};
 
 #[derive(Serialize, Clone)]
 struct WorkspacesChanged {
@@ -194,31 +197,172 @@ fn dependents_for(state: &AppState, touch: &Touch) -> Dependents {
     all
 }
 
-/// Starts the dependents' sessions again from their new scope.
-pub(crate) fn restart_dependents(app: &AppHandle, deps: Dependents) {
-    for id in deps.meetings {
-        meeting_commands::restart_meeting_sessions(app, &id);
-    }
-    meeting_commands::restart_chat_sessions(app, deps.chats);
+/// What a meeting or chat to restart is.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Target {
+    Meeting(String),
+    Chat(String),
 }
 
-/// THE way to change workspace data. `touched` says what the change reaches (it
-/// is read before and after, so a revoked link is seen by the "before" read and
-/// a granted one by the "after" read); `change` does it. The sessions of the
-/// union restart, also when the change failed part way. Nothing outside this
-/// function decides which sessions restart.
+impl Target {
+    fn key(&self) -> String {
+        match self {
+            Target::Meeting(id) => format!("meeting:{id}"),
+            Target::Chat(id) => format!("chat:{id}"),
+        }
+    }
+}
+
+/// What each dependent could use at one moment.
+#[derive(Debug, Default)]
+pub(crate) struct Pending {
+    deps: Dependents,
+    views: BTreeMap<Target, AccessView>,
+}
+
+/// What each of `deps` may use now (one that no longer exists is left out).
+fn views_of(state: &AppState, deps: &Dependents) -> BTreeMap<Target, AccessView> {
+    with_conn(state, |conn| {
+        let mut out = BTreeMap::new();
+        for id in &deps.meetings {
+            if let Some(v) = access::view_of_meeting(conn, id) {
+                out.insert(Target::Meeting(id.clone()), v);
+            }
+        }
+        for id in &deps.chats {
+            if let Some(v) = access::view_of_chat(conn, id) {
+                out.insert(Target::Chat(id.clone()), v);
+            }
+        }
+        Ok(out)
+    })
+    .unwrap_or_default()
+}
+
+/// First half of a change: who depends on what it touches, and what they may use now.
+pub(crate) fn begin_change(state: &AppState, touched: &dyn Fn(&Connection) -> Touch) -> Pending {
+    let touch = with_conn(state, |conn| Ok(touched(conn))).unwrap_or_default();
+    let deps = dependents_for(state, &touch);
+    let views = views_of(state, &deps);
+    Pending { deps, views }
+}
+
+/// What to restart, and how, once a change is done: for every dependent from
+/// before or after, a revocation when anything it could use is gone (or the
+/// change failed part way, which is treated as one), a grant otherwise.
+/// Pure, so the rule is tested without an app.
+pub(crate) fn decisions(
+    before: &BTreeMap<Target, AccessView>,
+    after: &BTreeMap<Target, AccessView>,
+    ok: bool,
+) -> Vec<(Target, Kind)> {
+    let mut out = Vec::new();
+    for (target, now) in after {
+        let was = before.get(target).cloned().unwrap_or_default();
+        let kind = if ok { access::kind_of(&was, now) } else { Kind::Revoke };
+        out.push((target.clone(), kind));
+    }
+    out
+}
+
+/// Second half: reads the dependents again, decides and restarts.
+pub(crate) fn finish_change(state: &AppState, app: &AppHandle, touched: &dyn Fn(&Connection) -> Touch, before: Pending, ok: bool) {
+    let touch = with_conn(state, |conn| Ok(touched(conn))).unwrap_or_default();
+    let mut deps = dependents_for(state, &touch);
+    deps.merge(before.deps);
+    let after = views_of(state, &deps);
+    for (target, kind) in decisions(&before.views, &after, ok) {
+        apply_restart(app, target, kind);
+    }
+}
+
+fn restart_now(app: &AppHandle, target: &Target) {
+    match target {
+        Target::Meeting(id) => meeting_commands::restart_meeting_sessions(app, id),
+        Target::Chat(id) => meeting_commands::restart_chat_sessions(app, vec![id.clone()]),
+    }
+}
+
+/// A live answer is running for this meeting (a grant waits for it to finish).
+fn answering(target: &Target) -> bool {
+    matches!(target, Target::Meeting(_)) && crate::ai_runs::LiveGate::global().is_busy()
+}
+
+/// Restarts a session after a change: at once for a revocation; for a grant at
+/// most once per 30 s per meeting or chat, and never while a live answer runs.
+pub(crate) fn apply_restart(app: &AppHandle, target: Target, kind: Kind) {
+    use std::time::Instant;
+    use tauri::Manager;
+    let restarts = app.state::<AppState>().restarts.clone();
+    let key = target.key();
+    match kind {
+        Kind::Revoke => {
+            restart_now(app, &target);
+            restarts.restarted(&key, Instant::now());
+        }
+        Kind::Grant => match restarts.decide(&key, Instant::now(), answering(&target)) {
+            restart::Action::Now => {
+                restart_now(app, &target);
+                restarts.restarted(&key, Instant::now());
+            }
+            restart::Action::Later(wait) => {
+                if !restarts.mark_pending(&key) {
+                    return; // a restart already waits and covers this one
+                }
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut wait = wait;
+                    loop {
+                        tokio::time::sleep(wait).await;
+                        if !restarts.is_pending(&key) {
+                            break; // a revocation restarted it meanwhile
+                        }
+                        match restarts.decide(&key, Instant::now(), answering(&target)) {
+                            restart::Action::Now => {
+                                restart_now(&app, &target);
+                                restarts.restarted(&key, Instant::now());
+                                break;
+                            }
+                            restart::Action::Later(next) => wait = next,
+                        }
+                    }
+                });
+            }
+        },
+    }
+}
+
+/// THE way to change workspace data. `touched` says what the change reaches
+/// (read before and after, so a revoked link is seen by the first read and a
+/// granted one by the second); `change` does it. Each dependent's restart is a
+/// revocation or a grant by comparing what it could use before and after (see
+/// [`decisions`]), never by what the caller says. Nothing outside this module
+/// decides which sessions restart.
 pub(crate) fn change_and_restart<T>(
     state: &AppState,
     app: &AppHandle,
     touched: impl Fn(&Connection) -> Touch,
     change: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
-    let read = || with_conn(state, |conn| Ok(touched(conn))).unwrap_or_default();
-    let before = dependents_for(state, &read());
+    let before = begin_change(state, &touched);
     let result = change();
-    let mut after = dependents_for(state, &read());
-    after.merge(before);
-    restart_dependents(app, after);
+    finish_change(state, app, &touched, before, result.is_ok());
+    result
+}
+
+/// [`change_and_restart`] for a change that has to wait (a blocking job).
+pub(crate) async fn change_and_restart_async<T, F>(
+    state: &AppState,
+    app: &AppHandle,
+    touched: impl Fn(&Connection) -> Touch,
+    change: F,
+) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    let before = begin_change(state, &touched);
+    let result = change.await;
+    finish_change(state, app, &touched, before, result.is_ok());
     result
 }
 
@@ -252,6 +396,20 @@ pub async fn create_workspace(
     detail_of(&state, &ws.id)
 }
 
+/// Whether a patch changes what answers can use: the instructions, General, or
+/// keeping the workspace separate, and only when the value really changes.
+pub(crate) fn workspace_patch_matters(current: &Workspace, patch: &WorkspacePatch) -> bool {
+    patch.instructions.as_ref().is_some_and(|v| *v != current.instructions)
+        || patch.include_general.is_some_and(|v| v != current.include_general)
+        || patch.keep_separate.is_some_and(|v| v != current.keep_separate)
+}
+
+/// Whether an item patch changes what answers can use: the folder index opt-in.
+/// A label or a pin never does.
+pub(crate) fn item_patch_matters(patch: &ItemPatch) -> bool {
+    patch.index_opt_in.is_some()
+}
+
 #[command]
 pub async fn update_workspace(
     id: String,
@@ -259,7 +417,10 @@ pub async fn update_workspace(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<WorkspaceDetail, String> {
-    change_and_restart(&state, &app, |_| Touch::ws(&id), || {
+    // A name, colour, description, default scenario, recaps or memory switch, pin
+    // or brief switch is cosmetic: it never touches a running session.
+    let matters = with_conn(&state, |conn| store::get_workspace(conn, &id)).map_or(true, |cur| workspace_patch_matters(&cur, &patch));
+    change_and_restart(&state, &app, |_| Touch::ws_if(matters, &id), || {
         with_conn(&state, |conn| store::update_workspace(conn, &id, patch).map(|_| ()))
     })?;
     emit_changed(&app, Some(&id));
@@ -318,6 +479,41 @@ pub async fn delete_workspace(id: String, mode: DeleteMode, state: State<'_, App
     Ok(())
 }
 
+/// Each meeting in its own transaction, then its recording files (only inside
+/// NexQ's recordings folder). A failure is reported and the next meeting goes on.
+fn delete_meetings_blocking(
+    db: &std::sync::Arc<std::sync::Mutex<crate::db::DatabaseManager>>,
+    ids: &[String],
+    running: Option<&str>,
+) -> DeleteMeetingsReport {
+    let mut report = DeleteMeetingsReport { deleted: 0, failed: Vec::new() };
+    for meeting in ids {
+        if running == Some(meeting.as_str()) {
+            report.failed.push(FailedMeeting { id: meeting.clone(), reason: "This meeting is running. End it first".to_string() });
+            continue;
+        }
+        let purged = db
+            .lock()
+            .map_err(|e| format!("Failed to lock database: {e}"))
+            .and_then(|guard| {
+                let tx = guard.connection().unchecked_transaction().map_err(|e| e.to_string())?;
+                let files = purge::purge_meeting(&tx, meeting)?;
+                tx.commit().map_err(|e| e.to_string())?;
+                Ok(files)
+            });
+        match purged {
+            Ok(files) => {
+                if let Some(dir) = purge::recordings_dir() {
+                    purge::delete_files_inside(&dir, &files);
+                }
+                report.deleted += 1;
+            }
+            Err(reason) => report.failed.push(FailedMeeting { id: meeting.clone(), reason }),
+        }
+    }
+    report
+}
+
 /// Deletes every meeting of a workspace, one at a time and each in its own
 /// transaction (rows, cached data and recordings on disk), so a failure or an
 /// interruption leaves the others done and the rest untouched. The running
@@ -332,32 +528,17 @@ pub async fn delete_workspace_meetings(id: String, state: State<'_, AppState>, a
         Ok(rows.filter_map(Result::ok).collect())
     })?;
     let running = live_meeting_id(&state);
+    let db = state.database.clone().ok_or_else(|| "Database not initialized".to_string())?;
     let touched = |_: &Connection| ids.iter().fold(Touch::ws(&id), |t, m| t.also(Touch::meeting(m)));
-    let report = change_and_restart(&state, &app, touched, || {
-        let mut report = DeleteMeetingsReport { deleted: 0, failed: Vec::new() };
-        for meeting in &ids {
-            if running.as_deref() == Some(meeting.as_str()) {
-                report.failed.push(FailedMeeting { id: meeting.clone(), reason: "This meeting is running. End it first".to_string() });
-                continue;
-            }
-            let files = with_conn(&state, |conn| {
-                let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-                let files = purge::purge_meeting(&tx, meeting)?;
-                tx.commit().map_err(|e| e.to_string())?;
-                Ok(files)
-            });
-            match files {
-                Ok(files) => {
-                    if let Some(dir) = purge::recordings_dir() {
-                        purge::delete_files_inside(&dir, &files);
-                    }
-                    report.deleted += 1;
-                }
-                Err(reason) => report.failed.push(FailedMeeting { id: meeting.clone(), reason }),
-            }
-        }
-        Ok(report)
-    })?;
+    // The purges and the files on disk take a while: not on the async runtime's threads.
+    let job = {
+        let ids = ids.clone();
+        tauri::async_runtime::spawn_blocking(move || delete_meetings_blocking(&db, &ids, running.as_deref()))
+    };
+    let report = change_and_restart_async(&state, &app, touched, async {
+        job.await.map_err(|e| format!("The deletion was interrupted: {e}"))
+    })
+    .await?;
     emit_changed(&app, Some(&id));
     Ok(report)
 }
@@ -409,7 +590,8 @@ pub async fn update_workspace_item(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
-    change_and_restart(&state, &app, |_| Touch::ws(&id), || {
+    let matters = item_patch_matters(&patch);
+    change_and_restart(&state, &app, |_| Touch::ws_if(matters, &id), || {
         with_conn(&state, |conn| store::update_item(conn, &id, kind, &ref_id, patch))
     })?;
     crate::workspace_chat::runtime::folder_opt_out_check(&state, kind == ItemKind::Folder, &ref_id);
@@ -728,10 +910,10 @@ pub async fn save_meeting_point_edit(
 
 // ── Memory ───────────────────────────────────────────────────────────────────
 
-/// A memory item's workspace (memory reaches chats).
+/// A memory item's workspace (memory reaches the chats and the live answers of its scope).
 fn memory_chats(conn: &Connection, id: &str) -> Touch {
     match memory::get_memory(conn, id) {
-        Ok(Some(m)) => Touch::chats(&m.workspace_id),
+        Ok(Some(m)) => Touch::ws(&m.workspace_id),
         _ => Touch::none(),
     }
 }
@@ -745,7 +927,7 @@ pub async fn list_memory(workspace_id: String, state: State<'_, AppState>) -> Re
 #[command]
 pub async fn create_memory(input: MemoryCreate, state: State<'_, AppState>, app: AppHandle) -> Result<MemoryItem, String> {
     let ws = input.workspace_id.clone();
-    let item = change_and_restart(&state, &app, |_| Touch::chats(&ws), || {
+    let item = change_and_restart(&state, &app, |_| Touch::ws(&ws), || {
         with_conn(&state, |conn| memory::create_memory(conn, input))
     })?;
     emit_memory(&app, &item.workspace_id);
@@ -858,7 +1040,10 @@ mod tests {
         for (file, code, mutating) in files() {
             for name in mutating {
                 let text = body(&code, name).unwrap_or_else(|| panic!("{file}: no command {name}"));
-                assert!(text.contains("change_and_restart("), "{file}: {name} changes data but does not use change_and_restart");
+                assert!(
+                    text.contains("change_and_restart(") || text.contains("change_and_restart_async("),
+                    "{file}: {name} changes data but does not use change_and_restart"
+                );
             }
         }
     }
@@ -890,6 +1075,67 @@ mod tests {
         for name in MUTATING {
             assert!(lib.contains(&format!("workspace_commands::{name},")), "{name} is not registered in lib.rs");
         }
+    }
+
+    fn view(items: &[&str], memory: &[&str]) -> AccessView {
+        AccessView {
+            material: ["general".to_string()].into_iter().collect(),
+            items: items.iter().map(|s| s.to_string()).collect(),
+            memory: memory.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn a_change_is_a_revocation_exactly_when_something_a_dependent_had_is_gone() {
+        let m = |id: &str| Target::Meeting(id.into());
+        let before: BTreeMap<Target, AccessView> =
+            [(m("a"), view(&["document:d1"], &["mem1"])), (m("b"), view(&["document:d1"], &[])), (m("c"), view(&[], &[]))].into();
+        let after: BTreeMap<Target, AccessView> = [
+            (m("a"), view(&["document:d1"], &[])),             // memory forgotten
+            (m("b"), view(&["document:d1", "document:d2"], &[])), // a document added
+            (m("c"), view(&["folder:f"], &[])),                // new access
+            (m("d"), view(&["document:d1"], &[])),             // became a dependent
+        ]
+        .into();
+        let kinds: BTreeMap<Target, Kind> = decisions(&before, &after, true).into_iter().collect();
+        assert_eq!(kinds[&m("a")], Kind::Revoke);
+        assert_eq!(kinds[&m("b")], Kind::Grant);
+        assert_eq!(kinds[&m("c")], Kind::Grant);
+        assert_eq!(kinds[&m("d")], Kind::Grant);
+        // A change that failed part way restarts at once, whatever it was.
+        assert!(decisions(&before, &after, false).iter().all(|(_, k)| *k == Kind::Revoke));
+        // A dependent that is gone (its meeting was deleted) is not restarted.
+        let gone: BTreeMap<Target, AccessView> = BTreeMap::new();
+        assert!(decisions(&before, &gone, true).is_empty());
+    }
+
+    #[test]
+    fn only_a_change_to_instructions_general_or_separation_restarts_for_a_workspace_edit() {
+        let conn = crate::workspace::test_support::memory_db();
+        let ws = store::get_workspace(&conn, "general").unwrap();
+        let ws = Workspace { id: "w".into(), include_general: true, keep_separate: false, instructions: "be brief".into(), ..ws };
+        let patch = |json: &str| serde_json::from_str::<WorkspacePatch>(json).unwrap();
+        // Cosmetic: never.
+        for json in [
+            r#"{"name":"New name"}"#,
+            r##"{"color":"#123456"}"##,
+            r#"{"description":"d"}"#,
+            r#"{"default_scenario":null}"#,
+            r#"{"recaps_with_ai":true}"#,
+            r#"{"suggest_memory":true}"#,
+            r#"{"pinned":true}"#,
+            r#"{"brief_enabled":true}"#,
+            r#"{"instructions":"be brief"}"#,
+            r#"{"include_general":true}"#,
+            r#"{"keep_separate":false}"#,
+        ] {
+            assert!(!workspace_patch_matters(&ws, &patch(json)), "{json} is cosmetic");
+        }
+        for json in [r#"{"instructions":"be long"}"#, r#"{"include_general":false}"#, r#"{"keep_separate":true}"#] {
+            assert!(workspace_patch_matters(&ws, &patch(json)), "{json} changes access");
+        }
+        assert!(!item_patch_matters(&ItemPatch { pinned: Some(true), label: Some(Some("x".into())), ..Default::default() }));
+        assert!(item_patch_matters(&ItemPatch { index_opt_in: Some(false), ..Default::default() }));
     }
 
     #[test]

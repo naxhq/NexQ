@@ -376,6 +376,7 @@ pub fn run() {
                 app.handle().clone(),
             ));
 
+            let _ = app_state.app_handle.set(app.handle().clone());
             app.manage(app_state);
             workspace_chat::runtime::attach(app.handle());
 
@@ -654,7 +655,6 @@ pub fn run() {
             context_commands::remove_context_file,
             context_commands::list_context_resources,
             context_commands::set_custom_instructions,
-            context_commands::get_assembled_context,
             context_commands::get_token_budget,
             // == COMMANDS: credentials ==
             credential_commands::store_api_key,

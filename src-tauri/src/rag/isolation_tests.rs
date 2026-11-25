@@ -105,3 +105,22 @@ fn live_transcript_chunks_pass_only_when_their_file_is_allowed() {
     let with_transcript = files(&["doc-a", "transcript_abc"]);
     assert_eq!(fts_store::search_keywords(&conn, "budget", 5, Some(&with_transcript)).unwrap().len(), 1);
 }
+
+#[test]
+fn the_live_transcript_is_found_only_by_the_meeting_that_owns_it() {
+    use super::RagManager;
+    let mut rag = RagManager::new(RagConfig { include_transcript: true, ..RagConfig::default() });
+    // Nobody owns it yet: no meeting finds it.
+    assert_eq!(rag.transcript_file_id_for("m1"), None);
+    rag.transcript_indexer_mut().unwrap().set_owner(Some("m1".to_string()));
+    let id = rag.transcript_file_id_for("m1").expect("the owner finds it");
+    assert!(id.starts_with("transcript_m1_"), "{id}");
+    assert_eq!(rag.transcript_file_id_for("m2"), None, "another meeting never does");
+    assert_eq!(rag.transcript_file_id_for(""), None);
+    // The meeting ends: nobody does.
+    rag.transcript_indexer_mut().unwrap().set_owner(None);
+    assert_eq!(rag.transcript_file_id_for("m1"), None);
+    // A pattern matches one meeting's file ids only (`_` and `%` are literal).
+    let pattern = super::transcript_indexer::file_id_pattern("m_1");
+    assert_eq!(pattern, r"transcript\_m\_1\_%");
+}

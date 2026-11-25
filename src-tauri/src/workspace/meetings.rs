@@ -12,6 +12,20 @@ fn err(what: &str, e: rusqlite::Error) -> String {
     format!("{what}: {e}")
 }
 
+/// Creates a meeting and files it in `home` in one transaction: if filing
+/// fails, no meeting row is left behind. `None`: workspaces are unavailable and
+/// the meeting is created as before.
+pub fn create_meeting_in(conn: &Connection, title: &str, home: Option<&str>) -> Result<crate::db::meetings::Meeting, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| err("Couldn't start the meeting", e))?;
+    let mut meeting = crate::db::meetings::create_meeting(&tx, title).map_err(|e| format!("Failed to create meeting: {e}"))?;
+    if let Some(home) = home {
+        set_home(&tx, &meeting.id, home)?;
+        meeting.workspace_id = home.to_string();
+    }
+    tx.commit().map_err(|e| err("Couldn't start the meeting", e))?;
+    Ok(meeting)
+}
+
 /// Files a new meeting in `home`.
 pub fn set_home(conn: &Connection, meeting_id: &str, home: &str) -> Result<(), String> {
     conn.execute("UPDATE meetings SET workspace_id = ?2 WHERE id = ?1", params![meeting_id, home])
@@ -49,6 +63,7 @@ pub fn set_meeting_scope(conn: &Connection, meeting_id: &str, borrowed: &[String
     }
     let current = borrowed_of(conn, meeting_id)?;
     let now = now_ms();
+    let before = super::derived::snapshot(conn, &[meeting_id.to_string()]);
     let tx = conn.unchecked_transaction().map_err(|e| err("Couldn't save the scope", e))?;
     for id in current.iter().filter(|id| !wanted.contains(id)) {
         tx.execute(
@@ -66,6 +81,8 @@ pub fn set_meeting_scope(conn: &Connection, meeting_id: &str, borrowed: &[String
         .map_err(|e| err("Couldn't save the scope", e))?;
     }
     tx.commit().map_err(|e| err("Couldn't save the scope", e))?;
+    // What came from a workspace that is no longer borrowed goes with it.
+    super::derived::prune_after(conn, &before)?;
     get_meeting_scope(conn, meeting_id)
 }
 
@@ -97,6 +114,7 @@ pub fn move_meeting(conn: &Connection, meeting_id: &str, workspace_id: &str) -> 
     if old == workspace_id {
         return Ok(());
     }
+    let before = super::derived::snapshot(conn, &[meeting_id.to_string()]);
     set_home(conn, meeting_id, workspace_id)?;
     // A borrow that is now the home, or that the new home may not have, ends.
     for id in borrowed_of(conn, meeting_id)? {
@@ -110,6 +128,8 @@ pub fn move_meeting(conn: &Connection, meeting_id: &str, workspace_id: &str) -> 
         }
     }
     super::purge::detach_from_workspace(conn, meeting_id, &old)?;
+    // The brief, own versions and ticks that came from the old home's material go.
+    super::derived::prune_after(conn, &before)?;
     store::touch(conn, &old);
     store::touch(conn, workspace_id);
     Ok(())
@@ -186,6 +206,27 @@ mod tests {
             params![id, home],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn a_meeting_and_its_home_are_made_together_or_not_at_all() {
+        let conn = memory_db();
+        let a = new_ws(&conn, "A", false, false);
+        let made = create_meeting_in(&conn, "Call", Some(&a)).unwrap();
+        assert_eq!(made.workspace_id, a);
+        assert_eq!(home_of(&conn, &made.id).unwrap().unwrap(), a);
+        // Filing fails: no orphan row stays in General.
+        conn.execute_batch(
+            "CREATE TRIGGER refuse_filing BEFORE UPDATE OF workspace_id ON meetings BEGIN SELECT RAISE(ABORT, 'no'); END;",
+        )
+        .unwrap();
+        let before: i64 = conn.query_row("SELECT COUNT(*) FROM meetings", [], |r| r.get(0)).unwrap();
+        assert!(create_meeting_in(&conn, "Second", Some(&a)).is_err());
+        let after: i64 = conn.query_row("SELECT COUNT(*) FROM meetings", [], |r| r.get(0)).unwrap();
+        assert_eq!(before, after);
+        // Without workspaces it is created as before.
+        conn.execute_batch("DROP TRIGGER refuse_filing").unwrap();
+        assert_eq!(create_meeting_in(&conn, "Plain", None).unwrap().workspace_id, "general");
     }
 
     #[test]

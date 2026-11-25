@@ -227,6 +227,7 @@ pub async fn ask_meeting(
             params: params.clone(),
             cancel: cancel.clone(),
             images: &[],
+            workspace: None,
             sources: Some(sources.unwrap_or_default()),
         };
         match run_session_assist(&state, &app_handle, key.clone(), make_req).await {

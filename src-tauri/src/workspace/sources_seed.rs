@@ -25,14 +25,18 @@ fn tx_err(e: impl std::fmt::Display) -> String {
     err("Couldn't update the workspaces", e)
 }
 
-/// Seeds General once (marker) from the first pushed config. Nothing else
+/// Seeds General once (marker) from the first push that is real: one with
+/// something in it, or one the webview says came after its store finished
+/// loading (`loaded`). A default or failed-load push (empty, not loaded) sets
+/// nothing, so the real config that follows is still seeded. Nothing else
 /// happens on a push: memberships are never removed here.
-pub fn sync_with_config(conn: &Connection, cfg: &PersonalSourcesConfig) -> Result<(), String> {
+pub fn sync_with_config(conn: &Connection, cfg: &PersonalSourcesConfig, loaded: bool) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(tx_err)?;
     let seeded: bool = tx
         .query_row("SELECT EXISTS(SELECT 1 FROM app_state WHERE key = ?1)", params![MARKER], |row| row.get(0))
         .map_err(tx_err)?;
-    if !seeded {
+    let real = loaded || !config_ids(cfg).is_empty();
+    if !seeded && real {
         let now = now_ms();
         for (kind, id) in config_ids(cfg) {
             tx.execute(
@@ -115,7 +119,12 @@ pub fn remove_item_everywhere(
     if kind != ItemKind::Document && is_configured(cfg, kind, ref_id) {
         return Err("This item is still in your sources".to_string());
     }
-    super::store::remove_memberships(conn, kind, ref_id)
+    super::store::remove_memberships(conn, kind, ref_id)?;
+    // What was indexed from a folder that is gone goes with it.
+    if kind == ItemKind::Folder {
+        super::purge::purge_search_rows(conn, "folder", ref_id)?;
+    }
+    Ok(())
 }
 
 /// Whether a folder or server is known by a workspace's items (used by the
@@ -150,31 +159,53 @@ mod tests {
     #[test]
     fn the_first_push_seeds_general_once_and_later_items_stay_unfiled() {
         let conn = memory_db();
-        sync_with_config(&conn, &cfg(&["f1"], &["s1"])).unwrap();
+        sync_with_config(&conn, &cfg(&["f1"], &["s1"]), false).unwrap();
         assert_eq!(members(&conn).len(), 2);
-        sync_with_config(&conn, &cfg(&["f1", "f2"], &["s1"])).unwrap();
+        sync_with_config(&conn, &cfg(&["f1", "f2"], &["s1"]), true).unwrap();
         assert_eq!(members(&conn).len(), 2, "f2 is not filed on its own");
+    }
+
+    #[test]
+    fn a_default_push_before_the_store_loaded_seeds_nothing_and_the_real_one_still_does() {
+        let conn = memory_db();
+        // The webview's default (empty, not loaded): no marker, nothing filed.
+        sync_with_config(&conn, &PersonalSourcesConfig::default(), false).unwrap();
+        assert!(members(&conn).is_empty());
+        // The loaded config arrives: General is seeded once.
+        sync_with_config(&conn, &cfg(&["f1"], &["s1"]), true).unwrap();
+        assert_eq!(members(&conn).len(), 2);
+        // After the marker, a loaded empty push seeds nothing more.
+        sync_with_config(&conn, &cfg(&["f1", "f2"], &["s1"]), true).unwrap();
+        assert_eq!(members(&conn).len(), 2);
+    }
+
+    #[test]
+    fn a_loaded_empty_config_sets_the_marker_so_later_items_stay_unfiled() {
+        let conn = memory_db();
+        sync_with_config(&conn, &PersonalSourcesConfig::default(), true).unwrap();
+        sync_with_config(&conn, &cfg(&["f1"], &[]), true).unwrap();
+        assert!(members(&conn).is_empty(), "an item added after the first loaded push is not seeded");
     }
 
     #[test]
     fn an_empty_push_then_the_real_one_leaves_every_membership_intact() {
         let conn = memory_db();
         let real = cfg(&["f1"], &["s1"]);
-        sync_with_config(&conn, &real).unwrap();
+        sync_with_config(&conn, &real, true).unwrap();
         let a = new_ws(&conn, "A", false, false);
         file(&conn, &a, "folder", "f1");
         let before = members(&conn);
         // A webview default or a failed load pushes nothing, then the real config comes.
-        sync_with_config(&conn, &PersonalSourcesConfig::default()).unwrap();
+        sync_with_config(&conn, &PersonalSourcesConfig::default(), false).unwrap();
         assert_eq!(members(&conn), before);
-        sync_with_config(&conn, &real).unwrap();
+        sync_with_config(&conn, &real, true).unwrap();
         assert_eq!(members(&conn), before);
     }
 
     #[test]
     fn only_an_explicit_removal_deletes_memberships_and_only_for_an_item_gone_from_the_config() {
         let conn = memory_db();
-        sync_with_config(&conn, &cfg(&["f1", "f2"], &[])).unwrap();
+        sync_with_config(&conn, &cfg(&["f1", "f2"], &[]), true).unwrap();
         // Still configured: refused.
         assert!(remove_item_everywhere(&conn, &cfg(&["f1", "f2"], &[]), ItemKind::Folder, "f1").is_err());
         assert_eq!(members(&conn).len(), 2);
@@ -191,7 +222,7 @@ mod tests {
         let conn = memory_db();
         let a = new_ws(&conn, "A", false, false);
         // f1 is seeded into General; f2, s1 are new; "ghost" is not configured; a document is ignored.
-        sync_with_config(&conn, &cfg(&["f1"], &[])).unwrap();
+        sync_with_config(&conn, &cfg(&["f1"], &[]), true).unwrap();
         let config = cfg(&["f1", "f2"], &["s1"]);
         let filing = Filing {
             workspace_id: a.clone(),
@@ -244,7 +275,7 @@ mod tests {
     fn documents_are_not_touched_by_a_push() {
         let conn = memory_db();
         file(&conn, "general", "document", "d");
-        sync_with_config(&conn, &cfg(&[], &[])).unwrap();
+        sync_with_config(&conn, &cfg(&[], &[]), true).unwrap();
         assert_eq!(members(&conn).len(), 1);
     }
 }
