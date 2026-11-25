@@ -262,8 +262,10 @@ The panel says why when it is unavailable: an in-person meeting, a muted microph
 
 - **Keep taking notes?** or **Keep the brief going?** means the limit was reached. Choose **Keep going** or **Stop**. See [Live notes and the brief](live-notes-and-brief.md#cost-and-the-limit).
 - **Notes paused** or **Notes stopped** (and **The brief paused** or **The brief stopped**) with a reason means the model couldn't answer: a missing key, a plan limit or a server that isn't running. Click **Change model**, then **Try again** or **Start notes again**.
-- **Not covered: 2:00 to 40:00** means part of the call never reached the notes (the notes were on manual, or the last update failed or ran out of time). Click **Update notes**, in the panel or in the **Notes** tab of the meeting. If it says **Not updated**, the reason is given: another meeting is live, the limit was reached, or there is nothing new to add.
+- **Not covered: 2:00 to 40:00** means part of the call never reached the notes (the notes were on manual, or the last update failed or ran out of time). Click **Update notes**, in the panel or in the **Notes** tab of the meeting: one press covers all of it, within the limit. If the notes stopped at the limit, **Keep going** raises it and covers the rest. If it says **Not updated**, the reason is given: another meeting is live, the limit was reached, or there is nothing new to add. The notes' heading (for example **Stopped by a usage limit**) says how they ended.
 - A button you expect, such as **Resume** or **Try again**, is only shown when it can do something in the current state.
+- **Notes now use (provider) (online)** means your Automatic model moved from a model on your PC (Ollama) to an online provider, so the transcript now goes online. Dismiss it, or choose the model yourself in **Settings > Live Notes and Brief**.
+- **3 recaps failed: no key** in a workspace's settings or at the bottom of its Library: fix the cause, then click **Try again**.
 - The brief says **The brief is off in this workspace** when the workspace's switch is off. Turn it on in the Brief panel. That switch is the only one.
 
 ## Overlay Issues

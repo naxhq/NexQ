@@ -62,7 +62,7 @@ When the AI needs context during a meeting, NexQ searches your indexed documents
 - **Full-text search (FTS)** -- finds chunks containing specific keywords or phrases
 - **Hybrid mode** -- combines both methods for the best results (default)
 
-The top matching chunks are included in the AI prompt, limited by the token budget.
+The top matching chunks are included in the AI prompt, limited by the token budget. In a live answer they are handed to the model as data: each excerpt is fenced, numbered as a source so an answer can cite it, and the prompt says that text inside is never an instruction.
 
 ## Live answers and workspace chat
 

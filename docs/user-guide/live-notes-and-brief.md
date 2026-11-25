@@ -60,7 +60,22 @@ Nothing runs on silence, and only one update runs at a time. If a live answer is
 
 **Manual** (or **Update only when I ask** in the **...** menu) never runs unasked, and that includes the end of the meeting.
 
-**Not covered.** If part of the call never reached the notes (manual mode, or a final update that failed or ran out of time), NexQ saves that range with the notes. The panel and the **Notes** tab of the meeting say so, for example **Not covered: 2:00 to 40:00**, and **Update notes** sends it. After the meeting this runs on the saved transcript, once, for that part. It uses the same limit, and it says why when it can't run: another meeting is live, there are no notes, nothing new to add, the limit was reached, or the saved transcript has nothing in that part (the **Not updated** notice). Once the meeting is over the panel and the tab say how the notes ended: **Finished**, **Stopped early**, **Stopped at the limit**, **Stopped by an error**, **Paused when the meeting ended** or **Updating the notes**.
+**How the notes ended.** When the meeting is over, the panel and the **Notes** tab of the meeting say how the notes ended, with a heading and one sentence:
+
+| Heading | Sentence |
+|---------|----------|
+| **Finished** | The notes cover the whole call. |
+| **Stopped at the limit** | The notes stopped at the limit you set. |
+| **Stopped by an error** | The notes stopped because of an error (the error follows). |
+| **Stopped by a usage limit** | The notes stopped because your plan's usage limit was reached. |
+| **Paused** | The notes were paused when the meeting ended. |
+| **Not updated automatically** | The notes were on manual, so they were not updated by themselves. |
+| **Stopped early** | The last update ran out of time. |
+| **Stopped** | You stopped the notes. |
+
+**Not covered.** NexQ works out which part of the call never reached the notes from what was saved, so it is known whatever ended them (even if NexQ was closed in the middle). The panel and the tab say so, for example **Not covered: 2:00 to 40:00**.
+
+**Update notes** covers it. One press makes as many updates over the saved transcript as it takes, until everything is covered, the limit is reached or an update fails (at most about 10 minutes in all). If the notes ended at the limit, **Keep going** raises the limit by the amount in your settings and then covers the rest in the same press. These two buttons also show up after the meeting, in the **Notes** tab. It says why it can't run when that is so: another meeting is live (it never competes with a live meeting, and an update stops at once when a new meeting starts), there are no notes, nothing new to add, the limit was reached, or the saved transcript has nothing in that part (the **Not updated** notice). Deleting the meeting, or stopping the notes, stops an update that is running. At the end of a live meeting, after three failures NexQ makes one last bounded try, unless the cause can't change by trying (no key) or it is a plan limit.
 
 The panel tells you what it is doing, in words:
 
@@ -89,6 +104,8 @@ In **Settings > Live Notes and Brief**, or **Model, detail and limit** in the pa
 | **Limit per meeting** | 30k, 60k, 120k, 240k or 500k tokens |
 
 **Automatic** works like this, and it is worked out again before every run, so a provider you switch to, or a model list that arrives later, applies to the next run (not to one already running). With a subscription (Claude, Codex or Antigravity) it uses the CLI's fast tier. With OpenAI, Anthropic, Gemini or Groq it takes the first small model from a short list (a nano, mini, Haiku, Flash or Llama 8B model, for example) that your provider's own model list contains. That list is fetched in the background, at most once a day, with your key, and never during a live answer. Until it arrives, or when nothing on the short list is offered, it uses your active model and says so ("active model"). With OpenRouter it uses the prices OpenRouter lists: among text chat models with at least 32k tokens of room, skipping free ones unless your active model is free, it takes the lowest-priced model of the short list, where reading counts four times as much as writing. With Ollama, LM Studio or a custom server it always uses your active model, so it is not cheaper there. The label says **(cheapest)** only when the pick is the first model of the short list (or, on OpenRouter, nothing eligible costs less), and **(small model)** otherwise. To use a particular model, pick it yourself. The brief, memory suggestions and AI recaps follow the same rule.
+
+If your Automatic model moves from Ollama or LM Studio (a model on your PC) to an online provider, for example because you switched provider in Settings, a line says **Notes now use (provider) (online).** with **Dismiss**, so you know the transcript now leaves your PC. The brief says the same. It shows once per move, until you dismiss it.
 
 If the model can't answer (no key, plan limit, server not running), NexQ doesn't switch to another one. A plan limit shows **Notes paused** with the reason and **Try again**. Three failures in a row show **Notes stopped** with the reason. Both offer **Change model**, and **Try again** or **Start notes again**. NexQ can also read notes from a small local model that answers in plain lines instead of structured output, and it drops anything it can't read.
 

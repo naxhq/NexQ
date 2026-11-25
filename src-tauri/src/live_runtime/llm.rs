@@ -61,7 +61,19 @@ pub trait LlmFactory: Send + Sync {
 
 /// Models that run on this computer: Automatic moving from one of these to anything else is shown to the person.
 pub fn is_local_provider(provider: &str) -> bool {
-    matches!(provider, "ollama" | "lmstudio")
+    use crate::llm::ProviderType;
+    // By the app's own ids, so a misspelt one can't silence the notice.
+    matches!(ProviderType::from_str(provider), Ok(ProviderType::Ollama | ProviderType::LmStudio))
+}
+
+#[cfg(test)]
+mod local_provider_tests {
+    #[test]
+    fn the_local_providers_are_the_apps_own_ids() {
+        for (id, local) in [("ollama", true), ("lm_studio", true), ("lmstudio", false), ("openai", false), ("claude_cli", false), ("custom", false)] {
+            assert_eq!(super::is_local_provider(id), local, "{id}");
+        }
+    }
 }
 
 pub fn map_error(e: AiRunError) -> LlmError {

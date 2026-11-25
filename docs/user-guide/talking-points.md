@@ -23,7 +23,7 @@ For each note:
 - The **...** menu in the list has **Duplicate**, **Copy to another workspace**, **Move up**, **Move down** and **Delete**. Drag the grip beside a note, or focus it and press an arrow key, to reorder.
 - **More for this note** has **Export as Markdown** and **Copy Markdown**.
 
-If you edit the same note in two windows, NexQ asks which to keep: **Keep mine** or **Use theirs**. If saving fails, it says **Not saved** and keeps trying, and **Try now** tries at once.
+If the same note is changed in two windows, nothing is overwritten. NexQ says **Changed in another window** and asks which to keep: **Keep mine** or **Use theirs**. **See both** shows the other version's text. A change always says which version it started from, so an older save can't replace a newer one. If saving fails, it says **Not saved** and keeps trying, and **Try now** tries at once.
 
 Your notes belong to a workspace. A meeting can read the notes of its own workspace, of General when the workspace uses it, and of any workspace you chose to also use for that meeting. Notes from another workspace show the workspace's name in the list.
 
@@ -70,6 +70,8 @@ Click **Edit this note**. Change what you need, then choose:
 - **Only this meeting**. The note in the workspace stays as it was. The title shows **edited for this meeting**.
 - **Save to workspace**. Every later meeting gets the change too.
 - **Cancel**
+
+If the note was changed in another window since you started the edit, saving says "The note was changed in another window since you started this edit. Nothing was overwritten." and offers **Keep mine**, **Use theirs** and **See both**, whichever way you were saving.
 
 ## Follow my voice
 
@@ -125,7 +127,7 @@ A workspace can also keep **Memory**: short facts that you approved, such as a p
 
 **Add a fact** with **+**. Choose a kind (**Person**, **Decision**, **Open item**, **Fact** or **Preference**), give it a short title and write what to remember. Saved items are grouped by kind. **Edit** changes one and **Forget** deletes it (it asks first). With more than four items, a search box appears. An item that came from a meeting has a **From (meeting)** link that opens the meeting at that moment.
 
-**Let NexQ suggest.** In a past meeting, click **Suggest from this meeting**. A meeting that is not filed in a workspace has nowhere to keep memory, so it says so and asks you to file it first. One AI call reads the transcript and proposes up to 8 items, each with the time in the meeting it came from. Nothing is kept until you approve it: each suggestion has **Dismiss**, **Edit** and **Save**, a **Reviewed** tick, and **Save all reviewed**. A suggestion that isn't backed by the transcript says **Not found in the transcript**. To have suggestions made after every meeting, turn on **Suggest after meetings** in the Memory section. It is off by default. **Model for memory suggestions** (in the Memory section, and behind the **Model** button next to **Suggest from this meeting**) picks the model. **Automatic**, the default, names the model it will use ([how Automatic chooses](live-notes-and-brief.md#model-detail-and-language)). If NexQ can't read or save the choice, it says so.
+**Let NexQ suggest.** In a past meeting, click **Suggest from this meeting**. A meeting that is not filed in a workspace has nowhere to keep memory, so it says so and asks you to file it first. NexQ sends the transcript in chunks of about 10,000 tokens, one AI call each, at most 4 calls (a longer meeting keeps its start and end and drops the middle), and proposes up to 8 items in all, each with the time in the meeting it came from. Nothing is kept until you approve it: each suggestion has **Dismiss**, **Edit** and **Save**, a **Reviewed** tick, and **Save all reviewed**. A suggestion that isn't backed by the transcript says **Not found in the transcript**. To have suggestions made after every meeting, turn on **Suggest after meetings** in the Memory section. It is off by default. **Model for memory suggestions** (in the Memory section, and behind the **Model** button next to **Suggest from this meeting**) picks the model. **Automatic**, the default, names the model it will use ([how Automatic chooses](live-notes-and-brief.md#model-detail-and-language)). If NexQ can't read or save the choice, it says so.
 
 Memory is used as background facts, never as instructions. It is used in the workspace's chat and in live answers, and it reaches another workspace only if that workspace is borrowed or General is included. Meeting suggestions are made by the model you pick, so the transcript goes to that provider.
 

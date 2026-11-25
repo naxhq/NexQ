@@ -169,6 +169,7 @@ When it runs:
 
 - After each meeting in the workspace ends, for that meeting, a few seconds later once it is indexed
 - When you open the workspace, for up to 5 meetings that don't have a recap yet, newest first, once per opening
+- When you click **Try again** beside a recap failure, in **Edit workspace** or at the bottom of the Library. It runs the way opening the workspace does (never in a meeting) and says what came of it: **All recaps are written.**, **2 written, 1 still failed.** or **They failed again.**
 - When you click **Rescan folders** in the Library (shown only when the workspace has a folder). This also lets recaps that failed try again
 
 It never runs while a meeting is running. NexQ checks that the switch is still on, the workspace isn't archived and the meeting is still there before each call, and drops the result if anything changed while the model was working.
