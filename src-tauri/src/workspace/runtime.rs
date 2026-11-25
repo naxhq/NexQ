@@ -62,12 +62,17 @@ pub const MATERIAL_UNAVAILABLE: &str = "NexQ couldn't read this workspace's mate
 
 /// Event `workspace_material_unavailable` `{ meeting_id: string | null, message: string }`.
 #[derive(serde::Serialize, Clone)]
-struct MaterialUnavailable {
-    meeting_id: Option<String>,
-    message: &'static str,
+pub struct MaterialUnavailable {
+    pub meeting_id: Option<String>,
+    pub message: &'static str,
 }
 
 /// Nothing is used, and the user is told, once per meeting.
+/// The event payload, built in one place so the contract test sees the real thing.
+pub fn unavailable_payload(meeting: Option<&str>) -> MaterialUnavailable {
+    MaterialUnavailable { meeting_id: meeting.map(str::to_string), message: MATERIAL_UNAVAILABLE }
+}
+
 fn fail_closed(state: &AppState, meeting: Option<&str>, why: &str) -> ScopedContext {
     log::warn!("Workspace material is not used: {why}");
     let key = meeting.unwrap_or("default").to_string();
@@ -77,7 +82,7 @@ fn fail_closed(state: &AppState, meeting: Option<&str>, why: &str) -> ScopedCont
             use tauri::Emitter;
             let _ = app.emit(
                 "workspace_material_unavailable",
-                MaterialUnavailable { meeting_id: meeting.map(str::to_string), message: MATERIAL_UNAVAILABLE },
+                unavailable_payload(meeting),
             );
         }
     }

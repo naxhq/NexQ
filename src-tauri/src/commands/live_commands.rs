@@ -26,14 +26,41 @@ pub async fn notetaker_stop(meeting_id: String) -> Result<(), String> {
 
 #[command]
 pub async fn notetaker_update_now(meeting_id: String) -> Result<(), String> {
-    rt()?.notetaker_update_now(&meeting_id);
-    Ok(())
+    rt()?.notetaker_update_now(&meeting_id)
+}
+
+/// Pause the automatic runs (the meeting goes on). Refused with a reason when notes are not running.
+#[command]
+pub async fn notetaker_pause(meeting_id: String) -> Result<(), String> {
+    rt()?.notetaker_pause(&meeting_id)
+}
+
+/// Run again from any state: a paused or failed actor resumes with the current settings, a stopped one starts.
+#[command]
+pub async fn notetaker_resume(meeting_id: String) -> Result<(), String> {
+    rt()?.notetaker_resume(&meeting_id)
+}
+
+/// The state the panel shows (same payload as the `notetaker_state` event).
+#[command]
+pub async fn get_notetaker_state(meeting_id: String) -> Result<Value, String> {
+    Ok(rt()?.notetaker_state(&meeting_id).await)
+}
+
+#[command]
+pub async fn get_brief_state(meeting_id: String) -> Result<Value, String> {
+    Ok(rt()?.brief_state(&meeting_id).await)
+}
+
+/// What "Automatic" means (the cheapest good-enough model) for a provider, or for the active one.
+#[command]
+pub async fn get_automatic_model(provider: Option<String>) -> Result<Option<crate::live_runtime::cheapest::CheapestChoice>, String> {
+    Ok(rt()?.automatic_model(provider.as_deref()))
 }
 
 #[command]
 pub async fn notetaker_continue(meeting_id: String) -> Result<(), String> {
-    rt()?.notetaker_continue(&meeting_id);
-    Ok(())
+    rt()?.notetaker_continue(&meeting_id)
 }
 
 #[command]
@@ -75,14 +102,22 @@ pub async fn brief_stop(meeting_id: String) -> Result<(), String> {
 
 #[command]
 pub async fn brief_refresh(meeting_id: String) -> Result<(), String> {
-    rt()?.brief_refresh(&meeting_id);
-    Ok(())
+    rt()?.brief_refresh(&meeting_id)
+}
+
+#[command]
+pub async fn brief_pause(meeting_id: String) -> Result<(), String> {
+    rt()?.brief_pause(&meeting_id)
+}
+
+#[command]
+pub async fn brief_resume(meeting_id: String) -> Result<(), String> {
+    rt()?.brief_resume(&meeting_id)
 }
 
 #[command]
 pub async fn brief_continue(meeting_id: String) -> Result<(), String> {
-    rt()?.brief_continue(&meeting_id);
-    Ok(())
+    rt()?.brief_continue(&meeting_id)
 }
 
 #[command]

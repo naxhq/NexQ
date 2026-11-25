@@ -2,54 +2,20 @@
 
 use tauri::{command, AppHandle, Emitter, State};
 
-use crate::commands::workspace_commands::{change_and_restart, with_conn, Touch};
+use crate::commands::workspace_commands::{change_and_restart, with_conn, with_reader, Touch};
 use crate::state::AppState;
 use crate::workspace::store as wstore;
 use crate::workspace_chat::types::*;
 use crate::workspace_chat::{engine, ops, runtime, store};
-use crate::workspace_search::Passage;
 
 // ── search and index ─────────────────────────────────────────────────────────
-
-#[command]
-pub async fn search_workspace(
-    id: String,
-    query: String,
-    kinds: Option<Vec<String>>,
-    limit: Option<usize>,
-    state: State<'_, AppState>,
-) -> Result<Vec<Passage>, String> {
-    let path = with_conn(&state, |c| Ok(c.path().map(std::path::PathBuf::from)))?
-        .ok_or_else(|| "Database not initialized".to_string())?;
-    let conn = ops::reader(&path)?;
-    ops::search_workspace(&conn, &id, &query, kinds, limit.unwrap_or(10))
-}
-
-/// Search with a note while the index is still catching up.
-#[command]
-pub async fn search_workspace_page(
-    id: String,
-    query: String,
-    kinds: Option<Vec<String>>,
-    limit: Option<usize>,
-    state: State<'_, AppState>,
-) -> Result<SearchPage, String> {
-    let path = with_conn(&state, |c| Ok(c.path().map(std::path::PathBuf::from)))?
-        .ok_or_else(|| "Database not initialized".to_string())?;
-    let conn = ops::reader(&path)?;
-    let page = ops::search_workspace_page(&conn, &id, &query, kinds, limit.unwrap_or(10))?;
-    if page.indexing.is_some() {
-        runtime::material_changed(&state.workspace_chat); // starts the indexer now if it is not running
-    }
-    Ok(page)
-}
 
 #[command]
 pub async fn get_index_status(id: String, state: State<'_, AppState>) -> Result<IndexStatus, String> {
     let active = state.meeting_active.load(std::sync::atomic::Ordering::SeqCst);
     let hub = state.workspace_chat.clone();
     hub.set_open_workspace(Some(id.clone()));
-    let status = with_conn(&state, |conn| ops::index_status(conn, &hub, &id, active))?;
+    let status = with_reader(&state, |conn| ops::index_status(conn, &hub, &id, active))?;
     // a backlog with no indexer yet (just after an upgrade): start it now, not after the start delay
     if status.state == "indexing" && hub.indexer().is_none() {
         runtime::material_changed(&hub);
@@ -70,9 +36,8 @@ pub async fn rescan_workspace(id: String, state: State<'_, AppState>, app: AppHa
         let token = std::sync::Arc::new(crate::llm::provider::CancelToken::new());
         hub.set_recap_cancel(Some(token.clone()));
         tauri::async_runtime::spawn(async move {
-            // the first pass writes the cards the recaps hang on
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            let made = ops::recap_missing(&deps, &id, token).await;
+            // waits for the first pass (it writes the cards the recaps hang on)
+            let made = ops::recaps_when_ready(&deps, &id, token).await;
             if made > 0 {
                 (deps.emit)("workspaces_changed", serde_json::json!({ "workspace_id": id }));
             }

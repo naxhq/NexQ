@@ -248,7 +248,8 @@ fn core_memory(conn: &Connection, scope: &EffectiveScope) -> Result<String, Stri
 /// The live parts of a scope. Any read that fails is an error: nothing here
 /// falls back to "empty", which would look like a smaller scope.
 pub fn live_parts_from(conn: &Connection, scope: &EffectiveScope, meeting_id: &str) -> Result<LiveParts, String> {
-    let brief_enabled = super::store::get_workspace(conn, &scope.home)?.brief_default;
+    // A meeting filed nowhere has no workspace to say the brief is on.
+    let brief_enabled = if super::types::is_unfiled(&scope.home) { false } else { super::store::get_workspace(conn, &scope.home)?.brief_default };
     let mut folders = crate::workspace_chat::scope_adapter::opted_in_folders(conn, scope)?;
     folders.sort();
     let mut excluded = vec![meeting_id.to_string()];

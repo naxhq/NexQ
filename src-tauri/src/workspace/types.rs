@@ -6,6 +6,20 @@ use serde::{Deserialize, Deserializer, Serialize};
 /// The id of the workspace that always exists.
 pub const GENERAL_ID: &str = "general";
 
+/// The home of a meeting that was asked to start in a workspace that could not be used:
+/// `unfiled:<meeting id>`. It names no workspace, so the meeting has no workspace material
+/// and sees no other meeting (each one's home is its own). Filing it in a workspace later is
+/// an ordinary move.
+const UNFILED_PREFIX: &str = "unfiled:";
+
+pub fn unfiled_home(meeting_id: &str) -> String {
+    format!("{UNFILED_PREFIX}{meeting_id}")
+}
+
+pub fn is_unfiled(home: &str) -> bool {
+    home.starts_with(UNFILED_PREFIX)
+}
+
 /// What a workspace points to in the library.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -317,6 +331,8 @@ pub struct MemoryCreate {
     /// `saved` when absent (the user typed it).
     pub status: Option<String>,
     /// A suggestion whose names or numbers are not in the transcript near its source.
+    /// Absent from what a person types (the webview sends none).
+    #[serde(default)]
     pub unsupported: bool,
 }
 

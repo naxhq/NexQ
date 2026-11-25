@@ -14,12 +14,15 @@ pub async fn load_context_file(
 ) -> Result<String, String> {
     use crate::commands::workspace_commands::{change_and_restart, Touch};
     let ws = workspace_id.clone();
-    change_and_restart(
-        &state,
-        &app,
-        |_| ws.as_deref().map(Touch::ws).unwrap_or_default(),
-        || load_context_file_now(&file_path, workspace_id.as_deref(), &state),
-    )
+    // Reading and parsing a PDF or Word file takes a while: off the async runtime's threads.
+    tokio::task::block_in_place(|| {
+        change_and_restart(
+            &state,
+            &app,
+            |_| ws.as_deref().map(Touch::ws).unwrap_or_default(),
+            || load_context_file_now(&file_path, workspace_id.as_deref(), &state),
+        )
+    })
 }
 
 fn load_context_file_now(file_path: &str, workspace_id: Option<&str>, state: &AppState) -> Result<String, String> {

@@ -26,6 +26,17 @@ pub fn create_meeting_in(conn: &Connection, title: &str, home: Option<&str>) -> 
     Ok(meeting)
 }
 
+/// A new meeting filed in no workspace (see [`super::types::unfiled_home`]).
+pub fn create_meeting_unfiled(conn: &Connection, title: &str) -> Result<crate::db::meetings::Meeting, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| err("Couldn't start the meeting", e))?;
+    let mut meeting = crate::db::meetings::create_meeting(&tx, title).map_err(|e| format!("Failed to create meeting: {e}"))?;
+    let home = super::types::unfiled_home(&meeting.id);
+    set_home(&tx, &meeting.id, &home)?;
+    meeting.workspace_id = home;
+    tx.commit().map_err(|e| err("Couldn't start the meeting", e))?;
+    Ok(meeting)
+}
+
 /// Files a new meeting in `home`.
 pub fn set_home(conn: &Connection, meeting_id: &str, home: &str) -> Result<(), String> {
     conn.execute("UPDATE meetings SET workspace_id = ?2 WHERE id = ?1", params![meeting_id, home])
@@ -51,6 +62,12 @@ pub fn get_meeting_scope(conn: &Connection, meeting_id: &str) -> Result<MeetingS
 /// where either side is kept separate, saying which.
 pub fn set_meeting_scope(conn: &Connection, meeting_id: &str, borrowed: &[String]) -> Result<MeetingScope, String> {
     let home_id = home_of(conn, meeting_id)?.ok_or_else(|| "This meeting no longer exists".to_string())?;
+    if super::types::is_unfiled(&home_id) {
+        if !borrowed.is_empty() {
+            return Err("File this meeting in a workspace first. Until then it uses none of them".to_string());
+        }
+        return get_meeting_scope(conn, meeting_id);
+    }
     let home = get_workspace(conn, &home_id)?;
     let mut wanted: Vec<String> = Vec::new();
     for id in borrowed {

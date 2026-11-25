@@ -72,18 +72,11 @@ pub fn purge_transcript_chunks(conn: &Connection, meeting_id: &str) -> Result<()
 
 /// Everything indexed for one reference (`kind` is `transcript`, `document`,
 /// `folder` or `talking_point`; `ref_id` the meeting, document, folder or point):
-/// its passages and their embeddings, its source rows (every sub reference),
+/// its passages, its source rows (every sub reference),
 /// and a meeting's card. The one place that does it: a document, a folder, a
 /// talking point or a meeting that goes uses this and nothing else.
 pub fn purge_search_rows(conn: &Connection, kind: &str, ref_id: &str) -> Result<(), String> {
     let (k, r) = (&kind as &dyn ToSql, &ref_id as &dyn ToSql);
-    run_if_table(
-        conn,
-        "search_embeddings",
-        "DELETE FROM search_embeddings WHERE passage_id IN
-            (SELECT id FROM search_passages WHERE kind = ?1 AND ref_id = ?2)",
-        &[k, r],
-    )?;
     run_if_table(conn, "search_passages", "DELETE FROM search_passages WHERE kind = ?1 AND ref_id = ?2", &[k, r])?;
     run_if_table(conn, "search_sources", "DELETE FROM search_sources WHERE kind = ?1 AND ref_id = ?2", &[k, r])?;
     if kind == "transcript" {
@@ -181,7 +174,7 @@ pub fn move_chats(conn: &Connection, from: &str, to: &str) -> Result<(), String>
 /// A workspace's chats and their messages are deleted.
 pub fn delete_chats(conn: &Connection, workspace_id: &str) -> Result<(), String> {
     let w = &workspace_id as &dyn ToSql;
-    for table in ["workspace_messages", "workspace_chat_item_prefs", "workspace_meeting_prefs"] {
+    for table in ["workspace_messages", "workspace_provenance", "workspace_chat_item_prefs", "workspace_meeting_prefs"] {
         run_if_table(
             conn,
             table,
@@ -193,14 +186,12 @@ pub fn delete_chats(conn: &Connection, workspace_id: &str) -> Result<(), String>
     run_if_table(conn, "workspace_meeting_prefs", "DELETE FROM workspace_meeting_prefs WHERE workspace_id = ?1", &[w])
 }
 
-/// The workspace's own rows: itself, its items, its memory, the borrows of it,
-/// and its digests.
+/// The workspace's own rows: itself, its items, its memory and the borrows of it.
 pub fn delete_workspace_rows(conn: &Connection, workspace_id: &str) -> Result<(), String> {
     let w = &workspace_id as &dyn ToSql;
     run_if_table(conn, "workspace_items", "DELETE FROM workspace_items WHERE workspace_id = ?1", &[w])?;
     run_if_table(conn, "workspace_memory", "DELETE FROM workspace_memory WHERE workspace_id = ?1", &[w])?;
     run_if_table(conn, "meeting_borrowed", "DELETE FROM meeting_borrowed WHERE workspace_id = ?1", &[w])?;
-    run_if_table(conn, "period_digests", "DELETE FROM period_digests WHERE workspace_id = ?1", &[w])?;
     run_if_table(conn, "workspaces", "DELETE FROM workspaces WHERE id = ?1", &[w])
 }
 
@@ -373,15 +364,12 @@ mod tests {
         conn.execute("INSERT INTO meetings (id, title, start_time) VALUES ('m2', 't', 'x')", []).unwrap();
         conn.execute_batch(
             "INSERT INTO search_passages (id, kind, ref_id, text) VALUES (1, 'transcript', 'm2', 'a'), (2, 'document', 'm2', 'b'), (3, 'transcript', 'other', 'c');
-             INSERT INTO search_embeddings (passage_id, model, dims, vec) VALUES (1, 'm', 1, x'00'), (3, 'm', 1, x'00');
              INSERT INTO meeting_cards (meeting_id, recap, origin) VALUES ('m2', 'r', 'extract');",
         )
         .unwrap();
         purge_meeting(&conn, "m2").unwrap();
         let passages: Vec<i64> = conn.prepare("SELECT id FROM search_passages ORDER BY id").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
         assert_eq!(passages, vec![2, 3]);
-        let embeddings: i64 = conn.query_row("SELECT COUNT(*) FROM search_embeddings", [], |r| r.get(0)).unwrap();
-        assert_eq!(embeddings, 1);
         let cards: i64 = conn.query_row("SELECT COUNT(*) FROM meeting_cards", [], |r| r.get(0)).unwrap();
         assert_eq!(cards, 0);
     }
@@ -557,15 +545,13 @@ mod tests {
                 params![kind, id],
             )
             .unwrap();
-            let passage: i64 = conn.query_row("SELECT MAX(id) FROM search_passages", [], |r| r.get(0)).unwrap();
-            conn.execute("INSERT INTO search_embeddings (passage_id, model, dims, vec) VALUES (?1, 'm', 1, x'00')", params![passage]).unwrap();
             conn.execute("INSERT INTO search_sources (kind, ref_id, sub_ref) VALUES (?1, ?2, 'sub')", params![kind, id]).unwrap();
         }
         conn.execute("INSERT INTO meeting_cards (meeting_id, origin) VALUES ('m1', 'ai')", []).unwrap();
         for (kind, id) in [("document", "d1"), ("folder", "f1"), ("talking_point", "p1"), ("transcript", "m1")] {
             purge_search_rows(&conn, kind, id).unwrap();
         }
-        for table in ["search_passages", "search_sources", "search_embeddings", "meeting_cards"] {
+        for table in ["search_passages", "search_sources", "meeting_cards"] {
             let n: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0)).unwrap();
             assert_eq!(n, 0, "{table}");
         }

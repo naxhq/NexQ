@@ -65,17 +65,6 @@ pub fn default_workspace_id(conn: &Connection) -> String {
     .unwrap_or_else(|_| GENERAL_ID.to_string())
 }
 
-/// Where a new meeting is filed: `requested` when it exists and is not
-/// archived, else the default workspace.
-pub fn resolve_home(conn: &Connection, requested: Option<&str>) -> String {
-    requested
-        .filter(|id| !id.is_empty())
-        .and_then(|id| find_workspace(conn, id).ok().flatten())
-        .filter(|w| !w.archived)
-        .map(|w| w.id)
-        .unwrap_or_else(|| default_workspace_id(conn))
-}
-
 fn table_exists(conn: &Connection, name: &str) -> bool {
     conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1", params![name], |r| r.get::<_, i64>(0))
         .map(|n| n > 0)
@@ -125,18 +114,35 @@ fn summarize(w: Workspace, meetings: i64, items: i64, latest_meeting: Option<Str
     }
 }
 
-/// Where a meeting asked to start is filed. No id (or an empty one) means the
-/// default workspace; an id that is unknown or archived is refused, never
-/// replaced by another workspace.
-pub fn requested_home(conn: &Connection, requested: Option<&str>) -> Result<String, String> {
-    let Some(id) = requested.filter(|id| !id.is_empty()) else {
-        return Ok(default_workspace_id(conn));
+/// Where a meeting asked to start is filed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartHome {
+    /// In this workspace.
+    Home(String),
+    /// A workspace was asked for and cannot be used: the meeting starts filed nowhere (no workspace material).
+    Unfiled,
+}
+
+/// Where a meeting asked to start is filed, and a sentence when that is not where it was asked for.
+/// No id means the default workspace (General when none is usable). An id that is unknown,
+/// archived or unreadable is never swapped for another workspace, whose material the person did
+/// not choose: the meeting starts unfiled and the sentence says so.
+pub fn home_for_start(conn: &Connection, requested: Option<&str>) -> (StartHome, Option<String>) {
+    let Some(asked) = requested.filter(|id| !id.is_empty()) else {
+        return (StartHome::Home(default_workspace_id(conn)), None);
     };
-    let ws = find_workspace(conn, id)?.ok_or_else(|| "That workspace no longer exists".to_string())?;
-    if ws.archived {
-        return Err(format!("\"{}\" is archived. Restore it or pick another workspace", ws.name));
+    let unfiled = |why: String| {
+        (
+            StartHome::Unfiled,
+            Some(format!("{why}, so this meeting is not filed in a workspace and uses none of their material. Pick one from the island to file it")),
+        )
+    };
+    match find_workspace(conn, asked) {
+        Ok(Some(ws)) if !ws.archived => (StartHome::Home(ws.id), None),
+        Ok(Some(ws)) => unfiled(format!("\"{}\" is archived", ws.name)),
+        Ok(None) => unfiled("That workspace is no longer available".to_string()),
+        Err(_) => unfiled("That workspace couldn't be read".to_string()),
     }
-    Ok(ws.id)
 }
 
 /// Every workspace with counts and last activity, in the user's order.
@@ -624,15 +630,40 @@ mod tests {
     }
 
     #[test]
-    fn a_meeting_asked_for_a_missing_archived_or_unknown_workspace_is_refused_and_only_no_id_means_the_default() {
+    fn a_meeting_asked_for_an_unusable_workspace_is_unfiled_and_never_given_another_ones_material() {
         let conn = memory_db();
         let a = new_ws(&conn, "Old", false, false);
-        assert_eq!(requested_home(&conn, None).unwrap(), "general");
-        assert_eq!(requested_home(&conn, Some("")).unwrap(), "general");
-        assert_eq!(requested_home(&conn, Some(&a)).unwrap(), a);
-        assert!(requested_home(&conn, Some("nope")).unwrap_err().contains("no longer exists"));
+        let home = |id: Option<&str>| home_for_start(&conn, id);
+        assert_eq!(home(None), (StartHome::Home("general".into()), None));
+        assert_eq!(home(Some("")), (StartHome::Home("general".into()), None));
+        assert_eq!(home(Some(&a)), (StartHome::Home(a.clone()), None));
+        let (h, notice) = home(Some("nope"));
+        assert_eq!(h, StartHome::Unfiled);
+        let notice = notice.unwrap();
+        assert!(notice.contains("no longer available") && notice.contains("island"), "{notice}");
         archive_workspace(&conn, &a, true).unwrap();
-        assert!(requested_home(&conn, Some(&a)).unwrap_err().contains("archived"));
+        let (h, notice) = home(Some(&a));
+        assert_eq!(h, StartHome::Unfiled);
+        assert!(notice.unwrap().contains("\"Old\" is archived"));
+    }
+
+    #[test]
+    fn an_unreadable_workspace_table_is_unfiled_not_general_and_no_id_still_gives_general() {
+        let conn = Connection::open_in_memory().unwrap();
+        let (h, notice) = home_for_start(&conn, Some("x"));
+        assert_eq!(h, StartHome::Unfiled);
+        assert!(notice.unwrap().contains("couldn't be read"));
+        assert_eq!(home_for_start(&conn, None), (StartHome::Home("general".into()), None));
+    }
+
+    #[test]
+    fn with_no_id_an_archived_default_gives_general() {
+        let conn = memory_db();
+        let a = new_ws(&conn, "Main", false, false);
+        set_default_workspace(&conn, &a).unwrap();
+        assert_eq!(home_for_start(&conn, None).0, StartHome::Home(a.clone()));
+        conn.execute("UPDATE workspaces SET archived = 1 WHERE id = ?1", params![a]).unwrap();
+        assert_eq!(home_for_start(&conn, None), (StartHome::Home("general".into()), None));
     }
 
     #[test]
@@ -750,9 +781,7 @@ mod tests {
         set_default_workspace(&conn, "general").unwrap();
         archive_workspace(&conn, &a, true).unwrap();
         // An archived workspace is not a home for a new meeting.
-        assert_eq!(resolve_home(&conn, Some(&a)), "general");
-        assert_eq!(resolve_home(&conn, Some("nope")), "general");
-        assert_eq!(resolve_home(&conn, None), "general");
+        assert_eq!(home_for_start(&conn, Some(&a)).0, StartHome::Unfiled);
     }
 
     #[test]

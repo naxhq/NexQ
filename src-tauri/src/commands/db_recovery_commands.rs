@@ -41,7 +41,9 @@ pub async fn restore_database_copy(name: String, state: State<'_, AppState>) -> 
     let kind = recovery_allowed(&state)?;
     check_kind_for_restore(kind)?;
     let dir = crate::app_paths::data_dir();
-    health::restore_copy(&dir, &name, health::stamp_now())
+    health::restore_copy(&dir, &name, health::stamp_now())?;
+    crate::db::integrity::forget(&dir);
+    Ok(())
 }
 
 /// Puts the unreadable database aside and starts with an empty one on restart.
@@ -53,7 +55,50 @@ pub async fn start_with_new_database(state: State<'_, AppState>) -> Result<(), S
         return Err("Starting with a new database is only offered when the file can't be read".to_string());
     }
     let dir = crate::app_paths::data_dir();
-    health::start_new(&dir, health::stamp_now())
+    health::start_new(&dir, health::stamp_now())?;
+    crate::db::integrity::forget(&dir);
+    Ok(())
+}
+
+/// What `retry_open_database` found.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RetryOpenResult {
+    /// The file can be opened now.
+    pub ok: bool,
+    /// The open database cannot be swapped into the running app (every part of it was
+    /// started against "no database"), so NexQ must restart to use the file.
+    pub needs_restart: bool,
+}
+
+/// Looks at the file again, read-only. `Ok` with `ok: false` while another program still
+/// holds it; an error (in words) when it is now damaged or newer, which a retry cannot fix.
+fn retry_probe(dir: &std::path::Path) -> Result<RetryOpenResult, String> {
+    match health::probe(&dir.join(health::DB_NAME)) {
+        Ok(()) => Ok(RetryOpenResult { ok: true, needs_restart: true }),
+        Err((ProblemKind::Locked, _)) => Ok(RetryOpenResult { ok: false, needs_restart: false }),
+        Err((_, why)) => Err(why),
+    }
+}
+
+/// The locked case's "Try again": looks at the file again and says whether NexQ can use it
+/// now. The running app has no database slot to fill after start (`AppState` is built once),
+/// so a file that opens is reported with `needs_restart` and nothing is initialised halfway.
+#[command]
+pub async fn retry_open_database(state: State<'_, AppState>) -> Result<RetryOpenResult, String> {
+    let kind = recovery_allowed(&state)?;
+    if kind != ProblemKind::Locked {
+        return Err("Only a file that was in use can be opened again".to_string());
+    }
+    let dir = crate::app_paths::data_dir();
+    // The look waits for a busy file for a moment: keep it off the async runtime.
+    tokio::task::spawn_blocking(move || retry_probe(&dir)).await.map_err(|e| e.to_string())?
+}
+
+/// The damage the background check of the open database found, if any (see `db::integrity`).
+/// The launcher shows a calm notice for it; nothing is changed automatically.
+#[command]
+pub async fn get_db_integrity() -> Option<crate::db::integrity::IntegrityFinding> {
+    crate::db::integrity::current()
 }
 
 /// Opens NexQ's data folder in the file manager.
@@ -101,6 +146,49 @@ mod tests {
         state.meeting_active.store(false, std::sync::atomic::Ordering::SeqCst);
         state.recording_jobs.store(1, std::sync::atomic::Ordering::SeqCst);
         assert!(recovery_allowed(&state).is_err());
+    }
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("nexq-retry-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn a_file_that_opens_again_needs_a_restart_and_is_not_touched() {
+        let d = temp_dir("free");
+        let path = d.join(health::DB_NAME);
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch("CREATE TABLE meetings (id TEXT); INSERT INTO meetings VALUES ('m1');").unwrap();
+        drop(conn);
+        let before = std::fs::read(&path).unwrap();
+        assert_eq!(retry_probe(&d), Ok(RetryOpenResult { ok: true, needs_restart: true }));
+        assert_eq!(std::fs::read(&path).unwrap(), before, "a retry only looks");
+        crate::assert_contract!("retry_open_database_result", retry_probe(&d).unwrap());
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn a_file_another_program_still_holds_is_reported_as_in_use() {
+        let d = temp_dir("held");
+        let path = d.join(health::DB_NAME);
+        let holder = rusqlite::Connection::open(&path).unwrap();
+        holder.execute_batch("PRAGMA journal_mode=DELETE; CREATE TABLE meetings (id TEXT);").unwrap();
+        holder.execute_batch("BEGIN EXCLUSIVE; INSERT INTO meetings VALUES ('m1');").unwrap();
+        assert_eq!(retry_probe(&d), Ok(RetryOpenResult { ok: false, needs_restart: false }));
+        holder.execute_batch("COMMIT;").unwrap();
+        drop(holder);
+        assert_eq!(retry_probe(&d), Ok(RetryOpenResult { ok: true, needs_restart: true }), "once released it opens");
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn a_file_that_is_now_damaged_is_an_error_in_words_not_a_silent_failure() {
+        let d = temp_dir("damaged");
+        std::fs::write(d.join(health::DB_NAME), vec![7u8; 6000]).unwrap();
+        assert!(retry_probe(&d).is_err());
+        let _ = std::fs::remove_dir_all(d);
     }
 
     #[test]

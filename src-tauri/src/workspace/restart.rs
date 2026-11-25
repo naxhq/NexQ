@@ -1,7 +1,8 @@
 //! When a session restarts after a change. Taking access away restarts at
-//! once. Adding or editing material (a note saved every 800 ms, a document, a
-//! memory item) is coalesced: at most one restart per 30 s for each meeting or
-//! chat, and a meeting's never while a live answer is running.
+//! once. Adding material (a document, a memory item) is coalesced: at most one
+//! restart per 30 s for each meeting or chat. Editing what a session already used
+//! (a note saved every 800 ms) restarts it only after 30 s without a further edit,
+//! never once per autosave. A meeting's restart never happens while a live answer runs.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -11,8 +12,8 @@ use tokio::sync::Notify;
 
 /// The least time between two restarts caused by grants.
 pub const GRANT_COALESCE: Duration = Duration::from_secs(30);
-/// The least time between two restarts caused by edits of what a session already used.
-pub const EDIT_GAP: Duration = Duration::from_secs(5);
+/// Edits of what a session already used restart it after this long without another edit.
+pub const EDIT_QUIET: Duration = Duration::from_secs(30);
 /// A waiting restart happens after this long even while a live answer runs.
 pub const MAX_DEFER: Duration = Duration::from_secs(60);
 /// How often a waiting restart looks again while a live answer is running.
@@ -33,6 +34,9 @@ struct Slot {
     /// The least time since the last restart that the waiting restart needs:
     /// the strictest (smallest) of the requests that joined it.
     gap: Duration,
+    /// The waiting restart comes from edits only: it waits for `EDIT_QUIET` after the last one.
+    quiet: bool,
+    last_edit: Option<Instant>,
     /// Wakes the waiter when the gap shortens or the restart is done.
     wake: Arc<Notify>,
 }
@@ -75,6 +79,8 @@ impl Restarts {
         slot.last = Some(now);
         slot.pending = false;
         slot.waiting_since = None;
+        slot.quiet = false;
+        slot.last_edit = None;
         slot.wake.notify_one();
     }
 
@@ -90,6 +96,13 @@ impl Restarts {
         let mut slots = self.slots.lock().unwrap();
         let slot = slots.entry(key.to_string()).or_default();
         if slot.pending {
+            if slot.quiet {
+                // a grant joins a wait for quiet: it follows the grant's own rule
+                slot.quiet = false;
+                slot.gap = gap;
+                slot.wake.notify_one();
+                return false;
+            }
             if gap < slot.gap {
                 slot.gap = gap;
                 slot.wake.notify_one();
@@ -99,6 +112,24 @@ impl Restarts {
         slot.pending = true;
         slot.waiting_since = Some(now);
         slot.gap = gap;
+        slot.quiet = false;
+        true
+    }
+
+    /// An edit of what the session already used happened at `now`. True when this call
+    /// made a restart wait (the caller starts the waiter); otherwise the one already waiting
+    /// now waits 30 s from this edit.
+    pub fn edit_at(&self, key: &str, now: Instant) -> bool {
+        let mut slots = self.slots.lock().unwrap();
+        let slot = slots.entry(key.to_string()).or_default();
+        slot.last_edit = Some(now);
+        if slot.pending {
+            return false;
+        }
+        slot.pending = true;
+        slot.waiting_since = Some(now);
+        slot.gap = Duration::ZERO;
+        slot.quiet = true;
         true
     }
 
@@ -109,6 +140,14 @@ impl Restarts {
         let Some(slot) = slots.get(key).filter(|s| s.pending) else {
             return Step::Cancelled;
         };
+        if slot.quiet {
+            if let Some(edit) = slot.last_edit {
+                let quiet_for = now.saturating_duration_since(edit);
+                if quiet_for < EDIT_QUIET {
+                    return Step::Sleep(EDIT_QUIET - quiet_for);
+                }
+            }
+        }
         match decide_in(Some(slot), now, busy, slot.gap) {
             Action::Now => Step::Restart,
             Action::Later(d) => Step::Sleep(d),
@@ -150,6 +189,9 @@ fn decide_in(slot: Option<&Slot>, now: Instant, busy: bool, gap: Duration) -> Ac
 mod tests {
     use super::*;
 
+    /// A shorter gap than a grant's, for the strictest-gap tests.
+    const EDIT_GAP: Duration = Duration::from_secs(5);
+
     #[test]
     fn the_first_grant_restarts_at_once_and_the_next_ones_wait_for_the_30_second_mark() {
         let r = Restarts::default();
@@ -165,17 +207,44 @@ mod tests {
     }
 
     #[test]
-    fn an_edit_waits_five_seconds_and_a_busy_wait_ends_after_a_minute() {
+    fn typing_never_restarts_and_30_quiet_seconds_do() {
         let r = Restarts::default();
         let t0 = Instant::now();
-        r.restarted("meeting:m", t0);
-        assert_eq!(r.decide_gap("meeting:m", t0 + Duration::from_secs(1), false, EDIT_GAP), Action::Later(Duration::from_secs(4)));
-        assert_eq!(r.decide_gap("meeting:m", t0 + Duration::from_secs(5), false, EDIT_GAP), Action::Now);
-        // a restart that waits while answers keep running is let through after MAX_DEFER
-        assert!(r.mark_pending("meeting:m", EDIT_GAP));
+        assert!(r.edit_at("meeting:m", t0), "the first edit starts the wait");
+        // an autosave every 800 ms: always "wait for what is left of 30 s"
+        let mut now = t0;
+        for _ in 0..10 {
+            now += Duration::from_millis(800);
+            assert!(!r.edit_at("meeting:m", now));
+            assert_eq!(r.step("meeting:m", now, false), Step::Sleep(EDIT_QUIET));
+        }
+        assert_eq!(r.step("meeting:m", now + Duration::from_secs(29), false), Step::Sleep(Duration::from_secs(1)));
+        assert_eq!(r.step("meeting:m", now + EDIT_QUIET, false), Step::Restart);
+        // a live answer still holds it back, for at most MAX_DEFER
+        assert_eq!(r.step("meeting:m", now + EDIT_QUIET, true), Step::Sleep(BUSY_RECHECK));
+        assert_eq!(r.step("meeting:m", t0 + MAX_DEFER + EDIT_QUIET + Duration::from_secs(60), true), Step::Restart);
+        r.restarted("meeting:m", now + EDIT_QUIET);
+        assert!(!r.is_pending("meeting:m"));
+        assert!(r.edit_at("meeting:m", now + EDIT_QUIET + Duration::from_secs(1)), "a later edit starts a new wait");
+    }
+
+    #[test]
+    fn a_grant_joining_a_wait_for_quiet_follows_its_own_rule() {
+        let r = Restarts::default();
+        let t0 = Instant::now();
+        assert!(r.edit_at("chat:c", t0));
+        assert!(!r.mark_pending_at("chat:c", GRANT_COALESCE, t0));
+        // no restart happened before, so the grant is not held for the typing
+        assert_eq!(r.step("chat:c", t0 + Duration::from_secs(1), false), Step::Restart);
+    }
+
+    #[test]
+    fn a_busy_wait_ends_after_a_minute() {
+        let r = Restarts::default();
+        assert!(r.mark_pending("meeting:m", GRANT_COALESCE));
         let t1 = Instant::now();
-        assert_eq!(r.decide_gap("meeting:m", t1 + Duration::from_secs(30), true, EDIT_GAP), Action::Later(BUSY_RECHECK));
-        assert_eq!(r.decide_gap("meeting:m", t1 + MAX_DEFER + Duration::from_millis(5), true, EDIT_GAP), Action::Now);
+        assert_eq!(r.decide_gap("meeting:m", t1 + Duration::from_secs(30), true, GRANT_COALESCE), Action::Later(BUSY_RECHECK));
+        assert_eq!(r.decide_gap("meeting:m", t1 + MAX_DEFER + Duration::from_millis(5), true, GRANT_COALESCE), Action::Now);
     }
 
     #[test]

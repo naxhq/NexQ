@@ -108,6 +108,10 @@ pub fn scope_for(conn: &Connection, owner: ScopeOwner<'_>) -> Result<EffectiveSc
 
 /// The scope of work filed in `home` that also uses `borrowed`.
 pub fn scope_for_home(conn: &Connection, home_id: &str, borrowed_ids: &[String]) -> Result<EffectiveScope, String> {
+    // A meeting filed nowhere uses nothing: no material, no instructions, no borrowed workspace.
+    if super::types::is_unfiled(home_id) {
+        return Ok(EffectiveScope { home: home_id.to_string(), ..EffectiveScope::default() });
+    }
     let home = store::find_workspace(conn, home_id)?
         .map(Ok)
         .unwrap_or_else(|| store::get_workspace(conn, GENERAL_ID))?;

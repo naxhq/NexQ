@@ -463,6 +463,8 @@ pub(crate) fn restart_meeting_sessions(app: &AppHandle, meeting_id: &str) {
     // The brief drops its sheet and looks the new scope up now.
     if let Some(rt) = crate::live_runtime::global() {
         rt.scope_changed(meeting_id);
+        // Its sessions start again: they get the brief and memory again.
+        rt.forget_sessions(meeting_id);
     }
     let is_live = live_meeting_is(&state, meeting_id);
     state.meeting_sessions.remove_scope(&live_scope);
@@ -656,16 +658,10 @@ pub async fn start_meeting(
         )
     });
 
-    // A requested workspace that is unknown or archived is refused with a clear
-    // message (only no id at all means the default workspace), before anything
-    // is created.
-    let home = if crate::workspace::available() {
-        Some(crate::workspace::store::requested_home(db.connection(), workspace_id.as_deref())?)
-    } else {
-        None
-    };
-    // The meeting and its home are created in one transaction: no orphan row.
-    let meeting = crate::workspace::meetings::create_meeting_in(db.connection(), &title, home.as_deref())?;
+    // A requested workspace that is unknown or archived falls back to the default one, and
+    // the response says so (`workspace_notice`): a meeting always starts when the database
+    // is open. The meeting and its home are created in one transaction: no orphan row.
+    let (meeting, workspace_notice) = create_meeting_filed(db.connection(), &title, workspace_id.as_deref(), crate::workspace::available())?;
     state.meeting_active.store(true, Ordering::SeqCst);
 
     // Clear per-meeting state so the new meeting starts fresh.
@@ -719,7 +715,58 @@ pub async fn start_meeting(
         }
     }
 
-    serde_json::to_string(&meeting).map_err(|e| format!("Failed to serialize meeting: {}", e))
+    meeting_response(&meeting, workspace_notice)
+}
+
+/// Creates the meeting in the workspace asked for. With no workspace asked for it goes to the
+/// default one (General when that fails too, and with no home at all as the last resort). A
+/// workspace that was asked for and cannot be used never turns into another one: the meeting
+/// starts filed nowhere, and the sentence says so.
+fn create_meeting_filed(
+    conn: &rusqlite::Connection,
+    title: &str,
+    requested: Option<&str>,
+    workspaces: bool,
+) -> Result<(meetings::Meeting, Option<String>), String> {
+    use crate::workspace::meetings as ws_meetings;
+    use crate::workspace::store::StartHome;
+    if !workspaces {
+        return ws_meetings::create_meeting_in(conn, title, None).map(|m| (m, None));
+    }
+    let asked = requested.filter(|id| !id.is_empty()).is_some();
+    let (home, notice) = crate::workspace::store::home_for_start(conn, requested);
+    let home = match home {
+        StartHome::Unfiled => return ws_meetings::create_meeting_unfiled(conn, title).map(|m| (m, notice)),
+        StartHome::Home(h) => h,
+    };
+    match ws_meetings::create_meeting_in(conn, title, Some(&home)) {
+        Ok(m) => Ok((m, notice)),
+        Err(first) => {
+            log::warn!("The meeting could not be filed in {home}: {first}");
+            if asked {
+                let note = "That workspace couldn't be used, so this meeting is not filed in a workspace and uses none of their material. Pick one from the island to file it";
+                return ws_meetings::create_meeting_unfiled(conn, title).map(|m| (m, Some(note.to_string()))).map_err(|_| first);
+            }
+            let general = crate::workspace::types::GENERAL_ID;
+            let last_resorts: &[Option<&str>] = if home == general { &[None] } else { &[Some(general), None] };
+            for next in last_resorts {
+                if let Ok(m) = ws_meetings::create_meeting_in(conn, title, *next) {
+                    return Ok((m, None));
+                }
+            }
+            Err(first)
+        }
+    }
+}
+
+/// The JSON `start_meeting` answers with: the meeting, plus `workspace_notice` only when it
+/// was filed somewhere other than asked.
+fn meeting_response(meeting: &meetings::Meeting, notice: Option<String>) -> Result<String, String> {
+    let mut value = serde_json::to_value(meeting).map_err(|e| format!("Failed to serialize meeting: {}", e))?;
+    if let (Some(text), Some(obj)) = (notice, value.as_object_mut()) {
+        obj.insert("workspace_notice".to_string(), serde_json::Value::String(text));
+    }
+    serde_json::to_string(&value).map_err(|e| format!("Failed to serialize meeting: {}", e))
 }
 
 #[command]
@@ -1331,5 +1378,60 @@ mod tests {
         let names: HashMap<String, String> = [("speaker_0".to_string(), "Dana".to_string())].into_iter().collect();
         let labels: Vec<String> = past_transcript(&transcript, &names, 0).into_iter().map(|s| s.speaker).collect();
         assert_eq!(labels, vec!["You", "Speaker 1", "Speaker 2", "Them", "Dana"]);
+    }
+
+    #[test]
+    fn a_meeting_asked_for_an_unusable_workspace_starts_unfiled_with_an_empty_scope_and_says_so() {
+        use crate::workspace::scope::{scope_for, ScopeOwner};
+        use crate::workspace::test_support::{memory_db, new_ws};
+        let conn = memory_db();
+        let ok = new_ws(&conn, "Sales", false, false);
+        let (m, notice) = create_meeting_filed(&conn, "A", Some(&ok), true).unwrap();
+        assert_eq!((m.workspace_id.as_str(), notice), (ok.as_str(), None));
+        for (title, asked) in [("B", "gone".to_string()), ("C", ok.clone())] {
+            if title == "C" {
+                crate::workspace::store::archive_workspace(&conn, &ok, true).unwrap();
+            }
+            let (m, notice) = create_meeting_filed(&conn, title, Some(&asked), true).unwrap();
+            assert!(crate::workspace::types::is_unfiled(&m.workspace_id), "{title}: {}", m.workspace_id);
+            let notice = notice.unwrap();
+            assert!(notice.contains("not filed in a workspace") && notice.contains("island"), "{notice}");
+            let scope = scope_for(&conn, ScopeOwner::Meeting(&m.id)).unwrap();
+            assert!(scope.material_workspaces.is_empty() && scope.document_ids.is_empty() && scope.folder_ids.is_empty());
+            assert!(scope.talking_point_ids.is_empty() && scope.instructions.is_empty() && !scope.unrestricted);
+            // The island's picker: an ordinary move gives it a home and its material.
+            crate::workspace::meetings::move_meeting_atomic(&conn, &m.id, "general").unwrap();
+            assert_eq!(crate::workspace::store::home_of(&conn, &m.id).unwrap().as_deref(), Some("general"));
+            assert!(scope_for(&conn, ScopeOwner::Meeting(&m.id)).unwrap().material_workspaces.contains(&"general".to_string()));
+        }
+        // No id: the default workspace, no sentence.
+        let (m, notice) = create_meeting_filed(&conn, "D", None, true).unwrap();
+        assert_eq!((m.workspace_id.as_str(), notice), ("general", None));
+        // Where the response carries the field, and only then.
+        let json: serde_json::Value = serde_json::from_str(&meeting_response(&m, Some("x".into())).unwrap()).unwrap();
+        assert_eq!(json["workspace_notice"], "x");
+        let json: serde_json::Value = serde_json::from_str(&meeting_response(&m, None).unwrap()).unwrap();
+        assert!(json.get("workspace_notice").is_none());
+    }
+
+    #[test]
+    fn two_unfiled_meetings_do_not_share_a_home_and_cannot_borrow_until_filed() {
+        use crate::workspace::test_support::memory_db;
+        let conn = memory_db();
+        let (a, _) = create_meeting_filed(&conn, "A", Some("gone"), true).unwrap();
+        let (b, _) = create_meeting_filed(&conn, "B", Some("gone"), true).unwrap();
+        assert_ne!(a.workspace_id, b.workspace_id);
+        let err = crate::workspace::meetings::set_meeting_scope(&conn, &a.id, &["general".to_string()]).unwrap_err();
+        assert!(err.contains("File this meeting in a workspace first"));
+        assert!(crate::workspace::meetings::set_meeting_scope(&conn, &a.id, &[]).is_ok());
+        assert!(crate::workspace::access::live_parts(&conn, &a.id).is_some(), "a live meeting without a home can still run its notes");
+    }
+
+    #[test]
+    fn a_meeting_still_starts_when_workspaces_are_off() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrations::run(&conn).unwrap();
+        // Workspaces are off for this run: the meeting is created without a home.
+        assert!(create_meeting_filed(&conn, "F", Some("x"), false).is_ok());
     }
 }

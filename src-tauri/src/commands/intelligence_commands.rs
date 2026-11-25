@@ -646,10 +646,14 @@ pub(crate) async fn session_assist(state: &AppState, app: &AppHandle, req: Sessi
     let session_key = routing::session_key_label(key);
     let rag_context = rag.context_text.clone();
     // The brief and core memory, only when this session has not had them yet.
-    let live_extras = match &key.scope {
-        SessionScope::Live(id) => crate::live_runtime::global().and_then(|rt| rt.answer_extras(id, mode, Some(&session_key))).unwrap_or_default(),
-        _ => String::new(),
+    // The session key carries its generation: a restarted session is a new one
+    // and gets them again. They count as given only once the turn succeeded.
+    let session_key = format!("{session_key}#{}", state.agent_sessions.generation_for(key));
+    let extras_sent = match &key.scope {
+        SessionScope::Live(id) => crate::live_runtime::global().and_then(|rt| rt.session_extras(id, mode, &session_key)),
+        _ => None,
     };
+    let live_extras = extras_sent.as_ref().map(|e| e.text.clone()).unwrap_or_default();
     // The user's scope rides along as a short note (no section for the default).
     let scope_note = context_scope::session_scope_note(req.scope, live_start_ms).unwrap_or_default();
     let scope_label = ResolvedScope::label_of(req.scope);
@@ -771,6 +775,9 @@ pub(crate) async fn session_assist(state: &AppState, app: &AppHandle, req: Sessi
         // A stopped stream already got its end from `cancel_generation`.
         _ if cancel.is_cancelled() => SessionOutcome::Done(Ok(None)),
         Ok(turn) => {
+            if let (Some(extras), Some(rt)) = (&extras_sent, crate::live_runtime::global()) {
+                rt.mark_session_sent(extras);
+            }
             state.claude_health.record_success();
             let total = turn.prompt_tokens() + turn.output_tokens;
             let usage = crate::llm::cli_agent::provider::stream_usage(&turn, timing.first_token_ms());

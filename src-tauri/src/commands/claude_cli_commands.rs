@@ -69,7 +69,8 @@ pub async fn open_claude_login_terminal() -> Result<(), String> {
 /// to approve: nothing a model or a tool says reaches the broker.
 #[command]
 pub fn answer_workspace_approval(approval_id: String, allow: bool) -> bool {
-    crate::llm::cli_agent::approval::WorkspaceApprovals::global().answer(&approval_id, allow)
+    let args = crate::llm::cli_agent::approval::AnswerApprovalArgs { approval_id, allow };
+    crate::llm::cli_agent::approval::WorkspaceApprovals::global().answer(&args.approval_id, args.allow)
 }
 
 #[cfg(test)]

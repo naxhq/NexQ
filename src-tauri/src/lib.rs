@@ -3,6 +3,8 @@ pub mod app_paths;
 pub mod audio;
 pub mod store_guard;
 pub mod commands;
+#[cfg(test)]
+mod contract;
 pub mod context;
 pub mod credentials;
 pub mod db;
@@ -22,6 +24,7 @@ pub mod nav_guard;
 pub mod notes_mcp;
 pub mod ort_runtime;
 pub mod state;
+pub mod text_kit;
 pub mod stt;
 pub mod translation;
 pub mod tray;
@@ -272,6 +275,7 @@ pub fn run() {
                 .expect("Failed to resolve app data directory");
             match db::open_or_problem(app_data_dir.clone()) {
                 Ok(db_mgr) => {
+                    app_state.readers = Some(Arc::new(db::readers::ReaderPool::new(db_mgr.path().to_path_buf())));
                     app_state.database = Some(Arc::new(Mutex::new(db_mgr)));
                     log::info!("Database initialized successfully");
                 }
@@ -428,6 +432,20 @@ pub fn run() {
                 app_state.agent_sessions.clone(),
                 app_state.credentials.clone(),
             )));
+            // A chat's tool questions and activity lines carry the id of the answer being written.
+            if let Some(runs) = &app_state.ai_runs {
+                use tauri::Emitter;
+                let hub = app_state.workspace_chat.clone();
+                let handle = app.handle().clone();
+                ai_runs::chat_events::wire(
+                    runs,
+                    &llm::cli_agent::approval::WorkspaceApprovals::global(),
+                    Arc::new(move |chat| hub.request_of(chat)),
+                    Arc::new(move |event, payload| {
+                        let _ = handle.emit(event, payload);
+                    }),
+                );
+            }
             // Re-probe an unavailable CLI agent every 60 s (no model call).
             tauri::async_runtime::spawn(llm::cli_agent::routing::run_health_probe(
                 app.handle().clone(),
@@ -454,6 +472,23 @@ pub fn run() {
                 }
             });
             workspace_chat::runtime::attach(app.handle());
+            // A quiet read-only check of the meetings file, once a day, never during a meeting.
+            if app.state::<AppState>().database.is_some() {
+                let busy_app = app.handle().clone();
+                let announce = app.handle().clone();
+                db::integrity::spawn(
+                    data_dir.clone(),
+                    move || {
+                        let state = busy_app.state::<AppState>();
+                        state.meeting_active.load(std::sync::atomic::Ordering::SeqCst)
+                            || state.recording_jobs.load(std::sync::atomic::Ordering::SeqCst) > 0
+                    },
+                    move |finding| {
+                        use tauri::Emitter;
+                        let _ = announce.emit("db_integrity_problem", finding);
+                    },
+                );
+            }
 
             // -- Auto-detect first Ollama model in background --
             let auto_detect_app = app.handle().clone();
@@ -862,6 +897,8 @@ pub fn run() {
             db_recovery_commands::start_with_new_database,
             db_recovery_commands::open_data_folder,
             db_recovery_commands::restart_app,
+            db_recovery_commands::retry_open_database,
+            db_recovery_commands::get_db_integrity,
             live_commands::notetaker_start,
             live_commands::notetaker_stop,
             live_commands::notetaker_update_now,
@@ -878,6 +915,13 @@ pub fn run() {
             live_commands::get_brief_settings,
             live_commands::set_brief_settings,
             live_commands::get_memory_settings,
+            live_commands::notetaker_pause,
+            live_commands::notetaker_resume,
+            live_commands::get_notetaker_state,
+            live_commands::get_brief_state,
+            live_commands::get_automatic_model,
+            live_commands::brief_pause,
+            live_commands::brief_resume,
             live_commands::set_memory_settings,
             live_commands::suggest_memory,
             workspace_commands::list_workspaces,
@@ -903,7 +947,6 @@ pub fn run() {
             workspace_commands::get_meeting_scope,
             workspace_commands::set_meeting_scope,
             workspace_commands::list_talking_points,
-            workspace_commands::get_talking_point,
             workspace_commands::create_talking_point,
             workspace_commands::patch_talking_point,
             workspace_commands::delete_talking_point,
@@ -916,9 +959,7 @@ pub fn run() {
             workspace_commands::list_memory,
             workspace_commands::create_memory,
             workspace_commands::update_memory,
-            workspace_chat_commands::search_workspace,
             workspace_chat_commands::get_index_status,
-            workspace_chat_commands::search_workspace_page,
             workspace_chat_commands::rescan_workspace,
             workspace_chat_commands::list_workspace_chats,
             workspace_chat_commands::create_workspace_chat,

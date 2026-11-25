@@ -7,6 +7,7 @@
 //! had it). A test lists the mutating commands and fails if one does not.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use rusqlite::Connection;
 use serde::Serialize;
@@ -17,17 +18,17 @@ use crate::state::AppState;
 use crate::workspace::library::{self, LibrarySnapshot};
 use crate::workspace::types::*;
 use crate::workspace::access::ViewState;
-use crate::workspace::access::{self, AccessView, Kind};
+use crate::workspace::access::{self, Kind};
 use crate::workspace::{documents, meetings, memory, purge, restart, scope, sources_seed, store, talking_points};
 
 #[derive(Serialize, Clone)]
-struct WorkspacesChanged {
-    workspace_id: Option<String>,
+pub(crate) struct WorkspacesChanged {
+    pub(crate) workspace_id: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
-struct MemoryChanged {
-    workspace_id: String,
+pub(crate) struct MemoryChanged {
+    pub(crate) workspace_id: String,
 }
 
 fn emit_changed(app: &AppHandle, workspace_id: Option<&str>) {
@@ -54,6 +55,19 @@ pub(crate) fn with_conn<T>(state: &AppState, f: impl FnOnce(&Connection) -> Resu
     let db = state.database.as_ref().ok_or_else(|| "Database not initialized".to_string())?;
     let guard = db.lock().map_err(|e| format!("Failed to lock database: {e}"))?;
     f(guard.connection())
+}
+
+/// Runs a read on a read-only connection of its own: it never waits for the shared one
+/// (which the transcript writer holds), so the rail and change views stay quick during a
+/// meeting. Falls back to the shared connection only when no reader can be opened.
+pub(crate) fn with_reader<T>(state: &AppState, f: impl Fn(&Connection) -> Result<T, String>) -> Result<T, String> {
+    if !crate::workspace::available() {
+        return Err(unavailable());
+    }
+    match state.readers.as_ref().map(|r| r.with(&f)) {
+        Some(Ok(out)) => out,
+        _ => with_conn(state, |c| f(c)),
+    }
 }
 
 /// What the library holds right now (documents loaded, folders and servers saved).
@@ -167,6 +181,18 @@ fn chats_using(conn: &Connection, workspace_id: &str) -> Vec<String> {
     rows.filter_map(Result::ok).collect()
 }
 
+/// Chats that have a session or a running answer: the only ones a change can affect
+/// now. A chat with neither looks its scope up afresh when it next asks.
+fn chats_in_use(state: &AppState, chats: Vec<String>) -> Vec<String> {
+    let mut live: std::collections::HashSet<String> = state.agent_sessions.snapshot().into_iter().filter_map(|s| s.chat_id).collect();
+    for scope in state.meeting_sessions.scopes() {
+        if let crate::llm::cli_agent::manager::SessionScope::Workspace(id) = scope {
+            live.insert(id);
+        }
+    }
+    chats.into_iter().filter(|c| live.contains(c) || state.workspace_chat.running_for(c)).collect()
+}
+
 /// The meetings (running, open in a view, or with a session record) and chats
 /// whose scope includes `workspace_id` right now.
 pub(crate) fn dependents_of(state: &AppState, workspace_id: &str) -> Dependents {
@@ -182,7 +208,7 @@ pub(crate) fn dependents_of(state: &AppState, workspace_id: &str) -> Dependents 
             candidates.push(id);
         }
     }
-    with_conn(state, |conn| {
+    with_reader(state, |conn| {
         let meetings: Vec<String> = candidates
             .iter()
             .filter(|m| {
@@ -190,7 +216,7 @@ pub(crate) fn dependents_of(state: &AppState, workspace_id: &str) -> Dependents 
             })
             .cloned()
             .collect();
-        Ok(Dependents { meetings, chats: chats_using(conn, workspace_id) })
+        Ok(Dependents { meetings, chats: chats_in_use(state, chats_using(conn, workspace_id)) })
     })
     .unwrap_or_default()
 }
@@ -218,7 +244,7 @@ fn dependents_for(state: &AppState, touch: &Touch) -> Dependents {
         all.merge(dependents_of(state, ws));
     }
     for ws in &touch.chats_of {
-        let chats = with_conn(state, |conn| Ok(chats_using(conn, ws))).unwrap_or_default();
+        let chats = with_reader(state, |conn| Ok(chats_in_use(state, chats_using(conn, ws)))).unwrap_or_default();
         all.merge(Dependents { meetings: Vec::new(), chats });
     }
     all
@@ -257,7 +283,7 @@ fn views_of(state: &AppState, deps: &Dependents) -> BTreeMap<Target, ViewState> 
         .map(|m| Target::Meeting(m.clone()))
         .chain(deps.chats.iter().map(|c| Target::Chat(c.clone())))
         .collect();
-    with_conn(state, |conn| {
+    with_reader(state, |conn| {
         Ok(targets
             .iter()
             .map(|t| {
@@ -274,7 +300,7 @@ fn views_of(state: &AppState, deps: &Dependents) -> BTreeMap<Target, ViewState> 
 
 /// First half of a change: who depends on what it touches, and what they may use now.
 pub(crate) fn begin_change(state: &AppState, touched: &dyn Fn(&Connection) -> Touch) -> Pending {
-    let touch = with_conn(state, |conn| Ok(touched(conn))).unwrap_or_default();
+    let touch = with_reader(state, |conn| Ok(touched(conn))).unwrap_or_default();
     let deps = dependents_for(state, &touch);
     let views = views_of(state, &deps);
     Pending { deps, views, forced: touch.revoke }
@@ -321,7 +347,7 @@ pub(crate) fn decisions(
 
 /// Second half: reads the dependents again, decides and restarts.
 pub(crate) fn finish_change(state: &AppState, app: &AppHandle, touched: &dyn Fn(&Connection) -> Touch, before: Pending, ok: bool) {
-    let touch = with_conn(state, |conn| Ok(touched(conn))).unwrap_or_default();
+    let touch = with_reader(state, |conn| Ok(touched(conn))).unwrap_or_default();
     let forced = before.forced || touch.revoke;
     let mut deps = dependents_for(state, &touch);
     deps.merge(before.deps);
@@ -377,46 +403,54 @@ pub(crate) fn apply_restart(app: &AppHandle, target: Target, kind: Kind) {
             restart_now(app, &target);
             restarts.restarted(&key, Instant::now());
         }
-        Kind::Grant | Kind::Edit => {
-            // grants wait for the 30 s mark, edits of what it already used for 5 s;
-            // both wait out a live answer, but never longer than a minute
-            let gap = if kind == Kind::Edit { restart::EDIT_GAP } else { restart::GRANT_COALESCE };
+        Kind::Edit => {
+            // A note saved every 800 ms must not restart a live session each time: one
+            // restart, 30 s after the last edit (and never while a live answer runs).
+            if restarts.edit_at(&key, Instant::now()) {
+                spawn_waiter(app.clone(), target, restarts, key, restart::EDIT_QUIET);
+            }
+        }
+        Kind::Grant => {
+            let gap = restart::GRANT_COALESCE;
             match restarts.decide_gap(&key, Instant::now(), answering(&target), gap) {
                 restart::Action::Now => {
                     restart_now(app, &target);
                     restarts.restarted(&key, Instant::now());
                 }
                 restart::Action::Later(wait) => {
-                    // One waiter per meeting or chat. A request that joins it keeps
-                    // the strictest gap (an edit shortens a grant's wait and wakes
-                    // the waiter); a revocation restarts at once and cancels it.
-                    if !restarts.mark_pending(&key, gap) {
-                        return;
+                    // One waiter per meeting or chat. A grant that joins a wait for quiet
+                    // takes the grant's rule; a revocation restarts at once and cancels it.
+                    if restarts.mark_pending(&key, gap) {
+                        spawn_waiter(app.clone(), target, restarts, key, wait);
                     }
-                    let app = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let wake = restarts.waker(&key);
-                        let mut wait = wait;
-                        loop {
-                            tokio::select! {
-                                _ = tokio::time::sleep(wait) => {}
-                                _ = wake.notified() => {}
-                            }
-                            match restarts.step(&key, Instant::now(), answering(&target)) {
-                                restart::Step::Cancelled => break,
-                                restart::Step::Restart => {
-                                    restart_now(&app, &target);
-                                    restarts.restarted(&key, Instant::now());
-                                    break;
-                                }
-                                restart::Step::Sleep(next) => wait = next,
-                            }
-                        }
-                    });
                 }
             }
         }
     }
+}
+
+/// The one waiter of a meeting or chat: looks again whenever woken or after `wait`.
+fn spawn_waiter(app: AppHandle, target: Target, restarts: Arc<restart::Restarts>, key: String, wait: std::time::Duration) {
+    use std::time::Instant;
+    tauri::async_runtime::spawn(async move {
+        let wake = restarts.waker(&key);
+        let mut wait = wait;
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep(wait) => {}
+                _ = wake.notified() => {}
+            }
+            match restarts.step(&key, Instant::now(), answering(&target)) {
+                restart::Step::Cancelled => break,
+                restart::Step::Restart => {
+                    restart_now(&app, &target);
+                    restarts.restarted(&key, Instant::now());
+                    break;
+                }
+                restart::Step::Sleep(next) => wait = next,
+            }
+        }
+    });
 }
 
 /// THE way to change workspace data. `touched` says what the change reaches
@@ -466,7 +500,7 @@ pub async fn get_workspaces_status(state: State<'_, AppState>) -> Result<Workspa
 
 #[command]
 pub async fn list_workspaces(state: State<'_, AppState>) -> Result<Vec<WorkspaceSummary>, String> {
-    with_conn(&state, store::list_summaries)
+    with_reader(&state, store::list_summaries)
 }
 
 #[command]
@@ -578,11 +612,14 @@ pub async fn delete_workspace(id: String, mode: DeleteMode, state: State<'_, App
             }
         }
     }
-    let deleted = change_and_restart(&state, &app, touched, || {
-        with_conn(&state, |conn| store::delete_workspace(conn, &id, mode))
+    // Rows, cached data and recording files go: off the async runtime's threads.
+    let deleted = tokio::task::block_in_place(|| {
+        change_and_restart(&state, &app, touched, || {
+            with_conn(&state, |conn| store::delete_workspace(conn, &id, mode))
+        })
     })?;
     if let Some(dir) = purge::recordings_dir() {
-        purge::delete_files_inside(&dir, &deleted.files);
+        tokio::task::block_in_place(|| purge::delete_files_inside(&dir, &deleted.files));
     }
     emit_changed(&app, None);
     emit_memory(&app, &id);
@@ -647,14 +684,16 @@ pub async fn delete_workspace_meetings(id: String, state: State<'_, AppState>, a
         }
     }
     // The purges and the files on disk take a while: not on the async runtime's threads.
+    // Started only once the change has begun (access revoked first), not before.
     let job = {
         let ids = ids.clone();
-        tauri::async_runtime::spawn_blocking(move || delete_meetings_blocking(&db, &ids, running.as_deref()))
+        async move {
+            tauri::async_runtime::spawn_blocking(move || delete_meetings_blocking(&db, &ids, running.as_deref()))
+                .await
+                .map_err(|e| format!("The deletion was interrupted: {e}"))
+        }
     };
-    let report = change_and_restart_async(&state, &app, touched, async {
-        job.await.map_err(|e| format!("The deletion was interrupted: {e}"))
-    })
-    .await?;
+    let report = change_and_restart_async(&state, &app, touched, job).await?;
     emit_changed(&app, Some(&id));
     Ok(report)
 }
@@ -776,24 +815,26 @@ pub async fn add_workspace_text(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<String, String> {
-    change_and_restart(&state, &app, |_| Touch::ws(&id), || {
-        with_conn(&state, |conn| store::get_workspace(conn, &id).map(|_| ()))?;
-        let resource = {
-            let ctx = state.context.as_ref().ok_or_else(|| "Context manager not initialized".to_string())?;
-            let mut ctx = ctx.lock().map_err(|e| format!("Failed to lock context manager: {e}"))?;
-            ctx.add_text(&title, &markdown)?
-        };
-        let saved = with_conn(&state, |conn| documents::add_document(conn, &resource, &markdown, Some(&id)));
-        if let Err(e) = saved {
-            // Don't leave a document the database doesn't know.
-            if let Some(ctx) = state.context.as_ref() {
-                if let Ok(mut ctx) = ctx.lock() {
-                    let _ = ctx.remove_file(&resource.id);
+    tokio::task::block_in_place(|| {
+        change_and_restart(&state, &app, |_| Touch::ws(&id), || {
+            with_conn(&state, |conn| store::get_workspace(conn, &id).map(|_| ()))?;
+            let resource = {
+                let ctx = state.context.as_ref().ok_or_else(|| "Context manager not initialized".to_string())?;
+                let mut ctx = ctx.lock().map_err(|e| format!("Failed to lock context manager: {e}"))?;
+                ctx.add_text(&title, &markdown)?
+            };
+            let saved = with_conn(&state, |conn| documents::add_document(conn, &resource, &markdown, Some(&id)));
+            if let Err(e) = saved {
+                // Don't leave a document the database doesn't know.
+                if let Some(ctx) = state.context.as_ref() {
+                    if let Ok(mut ctx) = ctx.lock() {
+                        let _ = ctx.remove_file(&resource.id);
+                    }
                 }
+                return Err(e);
             }
-            return Err(e);
-        }
-        Ok(resource.id)
+            Ok(resource.id)
+        })
     })
     .inspect(|_| {
         crate::workspace_chat::runtime::documents_changed(&state.workspace_chat);
@@ -844,12 +885,12 @@ pub async fn list_workspace_meetings(
     offset: u32,
     state: State<'_, AppState>,
 ) -> Result<WorkspaceMeetingPage, String> {
-    with_conn(&state, |conn| meetings::list_workspace_meetings(conn, &id, query.as_deref(), limit, offset))
+    with_reader(&state, |conn| meetings::list_workspace_meetings(conn, &id, query.as_deref(), limit, offset))
 }
 
 #[command]
 pub async fn get_meeting_scope(meeting_id: String, state: State<'_, AppState>) -> Result<MeetingScope, String> {
-    with_conn(&state, |conn| meetings::get_meeting_scope(conn, &meeting_id))
+    with_reader(&state, |conn| meetings::get_meeting_scope(conn, &meeting_id))
 }
 
 #[command]
@@ -918,12 +959,7 @@ fn context_point(conn: &Connection, id: &str) -> Touch {
 
 #[command]
 pub async fn list_talking_points(workspace_id: String, state: State<'_, AppState>) -> Result<Vec<TalkingPoint>, String> {
-    with_conn(&state, |conn| talking_points::list_talking_points(conn, &workspace_id))
-}
-
-#[command]
-pub async fn get_talking_point(id: String, state: State<'_, AppState>) -> Result<Option<TalkingPoint>, String> {
-    with_conn(&state, |conn| talking_points::get_talking_point(conn, &id))
+    with_reader(&state, |conn| talking_points::list_talking_points(conn, &workspace_id))
 }
 
 /// A new talking point with a new id, created whole in one step: `content`
@@ -952,7 +988,7 @@ pub async fn create_talking_point(
 
 /// Changes the fields present of a point that exists: `not_found` when it was
 /// deleted, `conflict` when a content change is made on a version older than
-/// `expected_updated_at` (read the row with `get_talking_point`). `in_context`
+/// `expected_updated_at` (the `updated_at` of the row in `list_talking_points`). `in_context`
 /// changes only when present; the sessions restart whenever the old or the new
 /// value is "use as AI context".
 #[command]
@@ -1006,7 +1042,7 @@ pub async fn reorder_talking_points(workspace_id: String, ids: Vec<String>, stat
 
 #[command]
 pub async fn get_point_progress(meeting_id: String, point_id: String, state: State<'_, AppState>) -> Result<Option<PointProgress>, String> {
-    with_conn(&state, |conn| talking_points::get_point_progress(conn, &meeting_id, &point_id))
+    with_reader(&state, |conn| talking_points::get_point_progress(conn, &meeting_id, &point_id))
 }
 
 /// What was said is the user's own record: no session sees it.
@@ -1060,7 +1096,7 @@ fn memory_chats(conn: &Connection, id: &str) -> Touch {
 
 #[command]
 pub async fn list_memory(workspace_id: String, state: State<'_, AppState>) -> Result<Vec<MemoryItem>, String> {
-    with_conn(&state, |conn| memory::list_memory(conn, &workspace_id))
+    with_reader(&state, |conn| memory::list_memory(conn, &workspace_id))
 }
 
 /// A new memory item under a new id.
@@ -1119,6 +1155,7 @@ mod tests {
     //! the helper, fails here.
 
     use super::*;
+    use crate::workspace::access::AccessView;
 
     /// (source file, its text without the tests, the mutating commands in it)
     fn files() -> Vec<(&'static str, String, &'static [&'static str])> {
@@ -1150,7 +1187,7 @@ mod tests {
     /// Commands that only read.
     const READ_ONLY: &[&str] = &[
         "get_workspaces_status", "list_workspaces", "get_workspace", "list_library", "list_workspace_meetings",
-        "get_meeting_scope", "list_talking_points", "get_talking_point", "get_point_progress",
+        "get_meeting_scope", "list_talking_points", "get_point_progress",
         "get_meeting_point_edit", "list_memory", "get_library_file_path", "reveal_library_file",
     ];
 
@@ -1315,7 +1352,8 @@ mod tests {
         "notetaker_start", "notetaker_stop", "notetaker_update_now", "notetaker_continue", "get_notetaker_settings",
         "set_notetaker_settings", "get_meeting_notes", "save_meeting_notes_edit", "get_meeting_brief", "brief_start",
         "brief_stop", "brief_refresh", "brief_continue", "get_brief_settings", "set_brief_settings",
-        "get_memory_settings", "set_memory_settings", "suggest_memory",
+        "get_memory_settings", "set_memory_settings", "suggest_memory", "notetaker_pause", "notetaker_resume",
+        "get_notetaker_state", "get_brief_state", "get_automatic_model", "brief_pause", "brief_resume",
     ];
 
     #[test]
@@ -1387,8 +1425,6 @@ mod tests {
         ("sources_commands", "check_mcp_server", Read),
         ("sources_commands", "delete_mcp_secrets", Exempt("secrets only; the sources restart follows their revision")),
         ("sources_commands", "set_personal_sources", Must),
-        ("workspace_chat_commands", "search_workspace", Read),
-        ("workspace_chat_commands", "search_workspace_page", Read),
         ("workspace_chat_commands", "get_index_status", Read),
         ("workspace_chat_commands", "rescan_workspace", Exempt("re-indexes what is already in scope")),
         ("workspace_chat_commands", "list_workspace_chats", Read),
