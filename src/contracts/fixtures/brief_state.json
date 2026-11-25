@@ -3,9 +3,11 @@
     "try_again"
   ],
   "cap": 120000,
+  "ended": null,
   "error_kind": "plan_limit",
   "meeting_id": "m1",
   "model": null,
+  "moved_online": null,
   "next_in_ms": null,
   "not_covered": null,
   "reason": "Usage limit reached, resets at 5pm",

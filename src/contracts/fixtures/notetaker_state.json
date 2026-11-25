@@ -4,12 +4,17 @@
     "pause"
   ],
   "cap": 120000,
+  "ended": null,
   "error_kind": null,
   "meeting_id": "m1",
   "model": {
     "label": "OpenAI · gpt-5-nano (cheapest)",
     "model": "gpt-5-nano",
     "provider": "openai"
+  },
+  "moved_online": {
+    "from": "ollama",
+    "to": "openai"
   },
   "next_in_ms": 30000,
   "not_covered": null,

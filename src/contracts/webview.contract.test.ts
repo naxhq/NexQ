@@ -94,7 +94,7 @@ const PENDING_COMMANDS: string[] = [];
 
 // ---- reading the TS sources
 
-type Wrapper = { fn: string; params: string[]; pairs: Array<[string, string]> };
+type Wrapper = { fn: string; params: string[]; required: string[]; pairs: Array<[string, string]>; optionalKeys: string[] };
 
 function splitTop(text: string): string[] {
   const out: string[] = [];
@@ -127,19 +127,41 @@ function wrappers(): Map<string, Wrapper> {
     }
     heads.push({ fn: m[1], at: m.index, end: i - 1 });
   }
-  const call = /invoke(?:<[^(]*?>)?\(\s*"(\w+)"\s*(?:,\s*(\{[^}]*\}))?\s*\)/g;
+  const call = /invoke(?:<[^(]*?>)?\(\s*"(\w+)"\s*(,\s*)?/g;
   for (let m = call.exec(ipcSource); m; m = call.exec(ipcSource)) {
     const owner = [...heads].reverse().find((h) => h.at < m!.index);
     if (!owner) continue;
     const sig = ipcSource.slice(ipcSource.indexOf("(", owner.at) + 1, owner.end);
-    const params = splitTop(sig).map((p) => p.replace(/^\.\.\./, "").split(/[?:=]/)[0].trim());
-    const pairs: Array<[string, string]> = m[2]
-      ? splitTop(m[2].slice(1, -1)).map((p) => {
-          const [k, v] = p.split(":").map((s) => s.trim());
-          return [k, v ?? k] as [string, string];
-        })
-      : [];
-    if (!out.has(m[1])) out.set(m[1], { fn: owner.fn, params, pairs });
+    const sigParts = splitTop(sig).map((p) => p.replace(/^\.\.\./, ""));
+    const params = sigParts.map((p) => p.split(/[?:=]/)[0].trim());
+    // a parameter with `?` or a default may be left out of a fixture
+    const required = sigParts.filter((p) => !/^\w+\s*\?/.test(p) && !/=/.test(p)).map((p) => p.split(/[?:=]/)[0].trim());
+    // the invoke object, read with its braces balanced (it may hold a spread of an optional key)
+    let object = "";
+    if (m[2] && ipcSource[m.index + m[0].length] === "{") {
+      let depth = 0;
+      for (let k = m.index + m[0].length; k < ipcSource.length; k++) {
+        if (ipcSource[k] === "{") depth++;
+        if (ipcSource[k] === "}" && --depth === 0) {
+          object = ipcSource.slice(m.index + m[0].length + 1, k);
+          break;
+        }
+      }
+    }
+    const pairs: Array<[string, string]> = [];
+    const optionalKeys: string[] = [];
+    for (const item of object ? splitTop(object) : []) {
+      if (item.startsWith("...")) {
+        for (const inner of item.matchAll(/\{\s*(\w+)\s*\}/g)) {
+          pairs.push([inner[1], inner[1]]);
+          optionalKeys.push(inner[1]);
+        }
+        continue;
+      }
+      const [k, v] = item.split(":").map((s) => s.trim());
+      pairs.push([k, v ?? k]);
+    }
+    if (!out.has(m[1])) out.set(m[1], { fn: owner.fn, params, required, pairs, optionalKeys });
   }
   return out;
 }
@@ -247,6 +269,13 @@ describe("command fixtures: the real wrapper sends exactly these arguments", () 
       const args = loadFixture<Record<string, unknown>>(name);
       // the invoke object's key for each parameter (`{ id, kind }` or `{ workspaceId: id }`)
       const keyOf = (param: string) => w.pairs.find(([, v]) => v === param)?.[0] ?? param;
+      // The fixture must name every argument the wrapper needs, and only ones it sends: an
+      // argument missing here would otherwise pass (`undefined` is not sent, so nothing differs).
+      const sentKeys = w.pairs.map(([k]) => k);
+      for (const p of w.required) expect(Object.keys(args), `${name}: the wrapper needs \`${p}\` and the fixture lacks it`).toContain(keyOf(p));
+      for (const k of Object.keys(args)) expect(sentKeys, `${name}: \`${k}\` is not an argument the wrapper sends`).toContain(k);
+      // start_meeting answers with the meeting as JSON text
+      if (command === "start_meeting") invoke.mockResolvedValue(JSON.stringify(loadFixture("start_meeting_result")));
       const call = w.params.map((p) => args[keyOf(p)]);
       await (ipc as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[w.fn](...call);
       expect(invoke).toHaveBeenCalledTimes(1);

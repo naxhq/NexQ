@@ -17,6 +17,8 @@ import notetakerPause from "./fixtures/notetaker_pause.json";
 import notetakerResume from "./fixtures/notetaker_resume.json";
 import briefPause from "./fixtures/brief_pause.json";
 import briefResume from "./fixtures/brief_resume.json";
+import notetakerDismiss from "./fixtures/notetaker_dismiss_moved.json";
+import briefDismiss from "./fixtures/brief_dismiss_moved.json";
 import saveEdit from "./fixtures/save_meeting_notes_edit.json";
 import saveEditAdd from "./fixtures/save_meeting_notes_edit_add.json";
 import saveEditDelete from "./fixtures/save_meeting_notes_edit_delete.json";
@@ -28,7 +30,7 @@ import setMemorySettingsArgs from "./fixtures/set_memory_settings.json";
 // Every fixture this suite relies on. A missing file fails the imports above and this list.
 const REQUIRED = [
   "notetaker_state", "brief_state", "notetaker_doc", "notetaker_settings_changed", "brief_settings_changed", "memory_settings_changed",
-  "get_notetaker_state", "get_brief_state", "get_automatic_model", "notetaker_pause", "notetaker_resume", "brief_pause", "brief_resume",
+  "get_notetaker_state", "get_brief_state", "get_automatic_model", "notetaker_pause", "notetaker_resume", "brief_pause", "brief_resume", "notetaker_dismiss_moved", "brief_dismiss_moved",
   "save_meeting_notes_edit", "save_meeting_notes_edit_add", "save_meeting_notes_edit_delete", "notetaker_state_finished", "set_notetaker_settings", "set_brief_settings", "set_memory_settings",
 ];
 const present = Object.keys(import.meta.glob("./fixtures/*.json")).map((k) => k.replace("./fixtures/", "").replace(".json", ""));
@@ -94,6 +96,8 @@ describe("arguments the wrappers send equal the backend's own", () => {
     ["notetaker_resume", () => ipc.notetakerResume("m1"), notetakerResume],
     ["brief_pause", () => ipc.briefPause("m1"), briefPause],
     ["brief_resume", () => ipc.briefResume("m1"), briefResume],
+    ["notetaker_dismiss_moved", () => ipc.notetakerDismissMoved("m1"), notetakerDismiss],
+    ["brief_dismiss_moved", () => ipc.briefDismissMoved("m1"), briefDismiss],
     ["set_notetaker_settings", () => ipc.setNotetakerSettings(setNotetakerSettingsArgs.patch as Partial<NotetakerSettings>), setNotetakerSettingsArgs],
     ["set_brief_settings", () => ipc.setBriefSettings(setBriefSettingsArgs.patch), setBriefSettingsArgs],
     ["set_memory_settings", () => ipc.setMemorySettings(setMemorySettingsArgs.patch), setMemorySettingsArgs],

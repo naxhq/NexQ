@@ -3,6 +3,10 @@
     "update"
   ],
   "cap": 120000,
+  "ended": {
+    "detail": null,
+    "kind": "out_of_time"
+  },
   "error_kind": null,
   "meeting_id": "m1",
   "model": {
@@ -10,6 +14,7 @@
     "model": "gpt-5-nano",
     "provider": "openai"
   },
+  "moved_online": null,
   "next_in_ms": null,
   "not_covered": {
     "from_ms": 120000,
