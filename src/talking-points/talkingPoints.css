@@ -135,3 +135,33 @@
 }
 .tp-back { position: absolute; left: 50%; transform: translateX(-50%); bottom: 0.75rem; animation: tp-chip-in 200ms cubic-bezier(0.22, 1, 0.36, 1) both; }
 @media (prefers-reduced-motion: reduce) { .tp-back { animation: none; } }
+
+/* Polish: ticks are quiet. A paragraph's circle shows on hover, focus or when ticked; a bullet's
+   circle takes the dot's place, small and faint; headings have none. Nothing looks like a form. */
+.tp-read .tp-tick { opacity: 0; }
+.tp-read [data-block-id]:hover .tp-tick,
+.tp-read [data-block-id]:focus-within .tp-tick,
+.tp-read .tp-tick:focus-visible,
+.tp-read .tp-tick[aria-pressed="true"] { opacity: 1; }
+.tp-read.tp-ticks ul { list-style: none; }
+.tp-read.tp-ticks ul > li::marker { content: ""; }
+.tp-read.tp-ticks p[data-list="bullet"] > .tp-tick {
+  left: -1.2em;
+  top: 0.55em;
+  width: 0.62em;
+  height: 0.62em;
+  opacity: 0.38;
+  border-width: 1px;
+}
+.tp-read.tp-ticks p[data-list="bullet"] > .tp-tick > svg { width: 0.5em; height: 0.5em; }
+.tp-read.tp-ticks p[data-list="bullet"]:hover > .tp-tick,
+.tp-read.tp-ticks p[data-list="bullet"]:focus-within > .tp-tick,
+.tp-read.tp-ticks p[data-list="bullet"] > .tp-tick[aria-pressed="true"] { opacity: 1; }
+
+/* Reading emphasis: full on the current phrase, about 62 percent ahead and 40 percent behind; Manual is all full */
+.tp-read[data-dim="on"] [data-state="ahead"] { opacity: 0.62; }
+.tp-read[data-dim="on"] [data-state="past"] { opacity: 0.4; }
+.tp-read[data-dim="off"] [data-state="ahead"], .tp-read[data-dim="off"] [data-state="past"] { opacity: 1; }
+
+/* The focus marker: a 2 px rule the height of a line, in the gutter */
+.tp-focus-mark { width: 2px; border-radius: 1px; left: 0; opacity: 1; }

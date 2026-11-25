@@ -554,7 +554,9 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
   const states = useMemo(() => {
     const m = new Map<string, BlockState>();
     const s = said.current!;
-    blocks.forEach((b, i) => m.set(b.id, stateOf(i, b.id, curBlock, reading.saidIt, (id) => s.isSaid(id), (id) => s.marks()[id] === "auto")));
+    blocks.forEach((b, i) =>
+      m.set(b.id, stateOf(i, b.id, curBlock, reading.saidIt && b.kind !== "heading", (id) => s.isSaid(id), (id) => s.marks()[id] === "auto")),
+    );
     return m;
     // `rev` is the said tracker's change counter
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -595,14 +597,20 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     return { blockId: suggestBlock, text, edge: i < curBlock ? "top" : "bottom" };
   }, [suggestBlock, wantVoice, followState, blocks, curBlock]);
 
-  const leftToSay = useMemo(() => (said.current ? said.current.leftToSay() : 0), [rev, blocks, index]);
+  // headings are structure, not things to say: they never count and are never ticked
+  const leftToSay = useMemo(() => {
+    const s = said.current;
+    if (!s) return 0;
+    return index.blocks.reduce((n, b, i) => (blocks[i]?.kind !== "heading" && b.end > b.first && !s.isSaid(b.id) ? n + 1 : n), 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rev, blocks, index]);
 
   return {
     index,
     states,
     currentBlockId: blocks[curBlock]?.id ?? null,
     leftToSay,
-    totalBlocks: index.blocks.filter((b) => b.end > b.first).length,
+    totalBlocks: index.blocks.filter((b, i) => b.end > b.first && blocks[i]?.kind !== "heading").length,
     followState: wantVoice ? followState : "off",
     yielding,
     playing,

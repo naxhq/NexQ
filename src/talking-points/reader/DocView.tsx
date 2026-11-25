@@ -19,6 +19,8 @@ export interface DocViewProps {
   states?: ReadonlyMap<string, BlockState>;
   /** Draws the "said it" tick in the gutter. */
   ticks?: boolean;
+  /** Current line full, ahead and behind dimmed (Auto and My voice). Manual reads at full contrast. */
+  focusDim?: boolean;
   onToggleSaid?: (blockId: string) => void;
   className?: string;
 }
@@ -49,21 +51,24 @@ interface BlockProps {
   depth: number;
   state: BlockState;
   ticks: boolean;
+  /** Which kind of list the paragraph is in (a bullet's tick replaces its dot). */
+  list?: "bullet" | "ordered";
   onToggleSaid?: (id: string) => void;
 }
 
-const Block = memo(function Block({ block, depth, state, ticks, onToggleSaid }: BlockProps) {
+const Block = memo(function Block({ block, depth, state, ticks, list, onToggleSaid }: BlockProps) {
   const id = block.attrs.id;
   const auto = state === "autosaid";
   const said = state === "said" || auto;
   const common = {
     "data-block-id": id,
     "data-state": state,
+    "data-list": list,
     style: { "--d": depth } as React.CSSProperties,
   };
   const body = (
     <>
-      {ticks && (
+      {ticks && block.type !== "heading" && (
         <button
           type="button"
           data-tp-skip=""
@@ -96,7 +101,7 @@ function renderList(
     <li key={i}>
       {li.content.map((c, k) =>
         c.type === "paragraph" ? (
-          <Block key={c.attrs.id} block={c} depth={depth} state={p.states?.get(c.attrs.id) ?? "ahead"} ticks={p.ticks} onToggleSaid={p.onToggleSaid} />
+          <Block key={c.attrs.id} block={c} depth={depth} list={list.type === "bulletList" ? "bullet" : "ordered"} state={p.states?.get(c.attrs.id) ?? "ahead"} ticks={p.ticks} onToggleSaid={p.onToggleSaid} />
         ) : (
           <Fragment key={k}>{renderList(c, depth + 1, p)}</Fragment>
         ),
@@ -110,11 +115,11 @@ function renderList(
   );
 }
 
-export const DocView = memo(function DocView({ doc, states, ticks = false, onToggleSaid, className }: DocViewProps) {
+export const DocView = memo(function DocView({ doc, states, ticks = false, focusDim = true, onToggleSaid, className }: DocViewProps) {
   // A document that did not come through the sanitiser is cleaned here, never trusted.
   const safe = useMemo(() => sanitizeDoc(doc, undefined), [doc]);
   return (
-    <div className={cn("tp-doc tp-read", className)}>
+    <div className={cn("tp-doc tp-read", ticks && "tp-ticks", className)} data-dim={focusDim ? "on" : "off"}>
       {safe.content.map((b) =>
         b.type === "paragraph" || b.type === "heading" ? (
           <Block key={b.attrs.id} block={b} depth={0} state={states?.get(b.attrs.id) ?? "ahead"} ticks={ticks} onToggleSaid={onToggleSaid} />

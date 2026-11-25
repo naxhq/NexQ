@@ -5,7 +5,7 @@
  * It reads the note with our own renderer (the editor loads only when you edit).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Pause, Pencil, Play, RotateCcw, SlidersHorizontal } from "lucide-react";
+import { ChevronDown, Pause, Pencil, Play, RotateCcw, SlidersHorizontal } from "lucide-react";
 import { useMeetingStore } from "../../stores/meetingStore";
 import { useConfigStore } from "../../stores/configStore";
 import { useTalkingPointsStore } from "../../stores/talkingPointsStore";
@@ -288,10 +288,11 @@ export function PointsPanel() {
               setSettings(false);
               setSwitcher((v) => !v);
             }}
-            className="ui-section min-w-0 flex-1 truncate rounded-lg px-2.5 py-1.5 text-left outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60"
+            className="ui-section flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-left outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60"
           >
-            {note?.title ?? "Untitled note"}
-            {meetingOnly !== undefined && <span className="ui-meta ml-2 font-normal text-muted-foreground">edited for this meeting</span>}
+            <span className="min-w-0 truncate">{note?.title ?? "Untitled note"}</span>
+            {meetingOnly !== undefined && <span className="ui-meta shrink-0 font-normal text-muted-foreground">edited for this meeting</span>}
+            <ChevronDown className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150", switcher && "rotate-180")} aria-hidden />
           </button>
           <Tooltip content={<span className="inline-flex items-center gap-2">Edit this note</span>}>
             <button
@@ -426,13 +427,13 @@ export function PointsPanel() {
             style={{ fontSize: reading.fontSize, lineHeight: reading.lineSpacing }}
           >
             <div ref={contentRef} className="pt-3">
-              {doc && <DocView doc={doc} states={p.states} ticks={reading.saidIt} onToggleSaid={p.toggleSaid} />}
+              {doc && <DocView doc={doc} states={p.states} ticks={reading.saidIt} focusDim={reading.mode !== "manual"} onToggleSaid={p.toggleSaid} />}
             </div>
           </div>
           <span id="tp-reader-help" className="sr-only">
             Enter ticks the current line, or goes to the suggested point. Backspace returns after a big jump. Plus and minus change the text size. Space plays or pauses auto-scroll.
           </span>
-          <span aria-hidden className="tp-focus-mark" style={{ top: `calc(${FOCUS_RATIO * 100}% - 1px)` }} />
+          <span aria-hidden className="tp-focus-mark" style={{ top: `calc(${FOCUS_RATIO * 100}% - ${(reading.fontSize * reading.lineSpacing) / 2}px)`, height: reading.fontSize * reading.lineSpacing }} />
           <div aria-live="polite" className="sr-only">
             {p.suggestion ? `Go to: ${p.suggestion.text}` : ""}
           </div>
