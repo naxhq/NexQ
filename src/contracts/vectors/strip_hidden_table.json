@@ -1,0 +1,1 @@
+{ "hash": "69baf9e4", "contexts": 6, "note": "FNV-1a over strip_hidden of every code point (surrogates excluded) in six contexts; written by the Rust and TypeScript tests, which must agree" }

@@ -51,6 +51,13 @@ pub fn fold_char(c: char) -> Option<char> {
 // (`workspace/chat/instructionText.ts`); both are checked against
 // `src/contracts/vectors/instruction_text.json`.
 
+/// Everything invisible that this pass removes: control characters, the Unicode default-ignorable and
+/// format (Cf) characters, the tag block, noncharacters. Kept on purpose: the Arabic number signs
+/// (U+0600-0605, 06DD, 070F, 0890-0891, 08E2, 110BD, 110CD), which print a visible mark, and private-use
+/// characters (they print in some fonts). Line and paragraph separators (U+2028, U+2029) are not removed
+/// but become a newline (see `strip_hidden`). Unpaired surrogates exist only in JavaScript strings and
+/// are removed there. The same table is in `workspace/chat/instructionText.ts`; the test
+/// `every_code_point_agrees_with_the_dialog` checks both against `strip_hidden_table.json`.
 fn hidden_always(cp: u32) -> bool {
     cp <= 0x08
         || cp == 0x0b
@@ -68,15 +75,20 @@ fn hidden_always(cp: u32) -> bool {
         || cp == 0x200b
         || cp == 0x200e
         || cp == 0x200f
-        || cp == 0x2028
-        || cp == 0x2029
         || (0x202a..=0x202e).contains(&cp)
         || (0x2060..=0x206f).contains(&cp)
         || cp == 0x3164
+        || (0xfdd0..=0xfdef).contains(&cp)
         || cp == 0xfeff
         || cp == 0xffa0
-        || (0xfff9..=0xfffb).contains(&cp)
-        || (0xe0000..=0xe007f).contains(&cp)
+        || (0xfff0..=0xfffb).contains(&cp)
+        || (0x13430..=0x1345f).contains(&cp)
+        || (0x1bca0..=0x1bca3).contains(&cp)
+        || (0x1d173..=0x1d17a).contains(&cp)
+        || (0xe0000..=0xe00ff).contains(&cp)
+        || (0xe01f0..=0xe0fff).contains(&cp)
+        || (cp & 0xfffe) == 0xfffe
+        || (0xd800..=0xdfff).contains(&cp)
 }
 
 fn is_selector(cp: u32) -> bool {
@@ -159,6 +171,12 @@ pub fn strip_hidden(text: &str) -> String {
     for (i, &c) in chars.iter().enumerate() {
         let cp = c as u32;
         if hidden_always(cp) {
+            continue;
+        }
+        if cp == 0x2028 || cp == 0x2029 {
+            out.push('\n');
+            base = 0x0a;
+            last = Last::Other;
             continue;
         }
         let next = chars.get(i + 1).map_or(0, |n| *n as u32);
@@ -491,5 +509,48 @@ mod strip_hidden_tests {
     fn the_prompt_fold_keeps_a_persian_word_whole_and_still_drops_hidden_text() {
         assert_eq!(fold("\u{645}\u{6cc}\u{200c}\u{62e}"), "\u{645}\u{6cc}\u{200c}\u{62e}");
         assert_eq!(fold("ig\u{200b}nore"), "ignore");
+    }
+}
+
+#[cfg(test)]
+mod strip_hidden_table_tests {
+    use super::*;
+
+    /// Every code point (surrogates apart) in six contexts, hashed (FNV-1a over values) and compared with
+    /// the hash the TypeScript test checks (`src/contracts/vectors/strip_hidden_table.json`).
+    #[test]
+    fn every_code_point_agrees_with_the_dialog() {
+        let contexts: [(&[u32], &[u32]); 6] = [
+            (&[], &[]),
+            (&[0x61], &[0x61]),
+            (&[0x6cc], &[0x62e]),
+            (&[0x8fbb], &[]),
+            (&[0x2764], &[0x1f525]),
+            (&[0x31], &[0x20e3]),
+        ];
+        let mut h: u32 = 2166136261;
+        let mut mix = |v: u32| h = (h ^ v).wrapping_mul(16777619);
+        for (pre, post) in contexts {
+            for cp in 0..=0x10ffffu32 {
+                let Some(c) = char::from_u32(cp) else { continue };
+                let text: String = pre.iter().chain([&cp]).chain(post.iter()).map(|&v| char::from_u32(v).unwrap_or(c)).collect();
+                mix(cp);
+                for o in strip_hidden(&text).chars() {
+                    mix(o as u32 + 1);
+                }
+                mix(0x7fff_ffff);
+            }
+        }
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("src").join("contracts").join("vectors").join("strip_hidden_table.json");
+        let table: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(format!("{h:08x}"), table["hash"].as_str().unwrap());
+    }
+
+    #[test]
+    fn private_use_arabic_number_signs_and_separators_follow_the_documented_choices() {
+        assert_eq!(strip_hidden("a\u{e000}b"), "a\u{e000}b");
+        assert_eq!(strip_hidden("\u{600}123"), "\u{600}123");
+        assert_eq!(strip_hidden("a\u{2028}b\u{2029}c"), "a\nb\nc");
+        assert_eq!(strip_hidden("a\u{fffe}b\u{1ffff}c\u{fdd0}d"), "abcd");
     }
 }

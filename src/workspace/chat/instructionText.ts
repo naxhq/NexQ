@@ -12,6 +12,14 @@ export const INSTRUCTION_CAP = 4000;
 // stray variation selectors go; joiners inside the scripts that use them, emoji sequences and the
 // glyph-choice selectors after Han characters and symbols stay.
 
+/**
+ * Everything invisible that this pass removes: control characters, the Unicode default-ignorable and
+ * format (Cf) characters, the tag block, noncharacters and unpaired surrogates. Kept on purpose: the
+ * Arabic number signs (U+0600-0605, 06DD, 070F, 0890-0891, 08E2, 110BD, 110CD), which print a visible
+ * mark, and private-use characters (they print in some fonts). U+2028 and U+2029 become a newline.
+ * The same table is `hidden_always` in prompt_data.rs; the test `every code point agrees` checks both
+ * against `strip_hidden_table.json`.
+ */
 function hiddenAlways(cp: number): boolean {
   return (
     cp <= 0x08 ||
@@ -30,15 +38,20 @@ function hiddenAlways(cp: number): boolean {
     cp === 0x200b ||
     cp === 0x200e ||
     cp === 0x200f ||
-    cp === 0x2028 ||
-    cp === 0x2029 ||
     (cp >= 0x202a && cp <= 0x202e) ||
     (cp >= 0x2060 && cp <= 0x206f) ||
     cp === 0x3164 ||
+    (cp >= 0xfdd0 && cp <= 0xfdef) ||
     cp === 0xfeff ||
     cp === 0xffa0 ||
-    (cp >= 0xfff9 && cp <= 0xfffb) ||
-    (cp >= 0xe0000 && cp <= 0xe007f)
+    (cp >= 0xfff0 && cp <= 0xfffb) ||
+    (cp >= 0x13430 && cp <= 0x1345f) ||
+    (cp >= 0x1bca0 && cp <= 0x1bca3) ||
+    (cp >= 0x1d173 && cp <= 0x1d17a) ||
+    (cp >= 0xe0000 && cp <= 0xe00ff) ||
+    (cp >= 0xe01f0 && cp <= 0xe0fff) ||
+    (cp & 0xfffe) === 0xfffe ||
+    (cp >= 0xd800 && cp <= 0xdfff)
   );
 }
 
@@ -101,6 +114,12 @@ export function stripHidden(text: string): string {
     const c = chars[i];
     const cp = c.codePointAt(0)!;
     if (hiddenAlways(cp)) continue;
+    if (cp === 0x2028 || cp === 0x2029) {
+      out.push("\n");
+      base = 0x0a;
+      last = "other";
+      continue;
+    }
     const next = i + 1 < chars.length ? chars[i + 1].codePointAt(0)! : 0;
     if (cp === 0x200c || cp === 0x200d) {
       if (last === "joiner" || !joinerOk(cp, base, next)) continue;
