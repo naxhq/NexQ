@@ -7,6 +7,7 @@ import { Tooltip } from "../../ui";
 import { cn } from "../../lib/utils";
 import { displayTitle } from "./titles";
 import { stripHidden } from "./instructionText";
+import { rehypeStripHidden } from "./stripHiddenRehype";
 import { CITE_SCHEME, citationKindName, citationWhere, findCitation, linkCitations } from "./citations";
 
 export type OpenCitation = (citation: WorkspaceCitation) => void;
@@ -145,7 +146,7 @@ export const Prose = memo(function Prose({
   const components = useMemo(() => buildComponents(citations, live, onOpenCitation), [citations, live, onOpenCitation]);
   return (
     <div className={cn("ui-body ui-measure break-words text-foreground [&>*+*]:mt-3", className)}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} urlTransform={urlTransform}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeStripHidden]} components={components} urlTransform={urlTransform}>
         {source}
       </ReactMarkdown>
     </div>

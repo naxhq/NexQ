@@ -855,3 +855,36 @@ describe("hidden characters and screen readers", () => {
     expect(screen.queryByText(/was moved out of this workspace/)).toBeNull();
   });
 });
+
+describe("entities and the question itself", () => {
+  const RLO = String.fromCharCode(0x202e);
+  const ZW = String.fromCharCode(0x200b);
+
+  it("does not draw characters that Markdown entities decode to, in text, inline code, code blocks or alt text", async () => {
+    const md = ["Pay&#x202e; now&#8203;", "", "`co&#x202e;de`", "", "```", "block&#8203;", "```", "", "![al&#x202e;t](https://evil.example/x.png)"].join(String.fromCharCode(10));
+    setup({ chats: [chat("c1")], messages: [message(1, "user", "Q"), message(2, "assistant", md)] });
+    await screen.findByText(/Pay now/);
+    const text = document.body.textContent ?? "";
+    expect(text).not.toContain(RLO);
+    expect(text).not.toContain(ZW);
+    // code spans and fences show entities as written (they are not decoded), so nothing hidden appears there either
+    expect(text).toContain("co&#x202e;de");
+    expect(text).toContain("[Image: alt]");
+  });
+
+  it("sends the question as it was shown, without hidden characters, and refuses one that is only hidden characters", async () => {
+    setup();
+    const box = await typeQuestion("Kestrel" + ZW + " budget" + RLO + "?");
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(ipc.askWorkspace).toHaveBeenCalled());
+    expect(ipc.askWorkspace.mock.calls[0][1]).toBe("Kestrel budget?");
+  });
+
+  it("a question of only hidden characters is not sent", async () => {
+    setup();
+    const box = await typeQuestion(ZW + RLO);
+    fireEvent.keyDown(box, { key: "Enter" });
+    await new Promise((r) => setTimeout(r, 60));
+    expect(ipc.askWorkspace).not.toHaveBeenCalled();
+  });
+});

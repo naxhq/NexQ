@@ -2809,3 +2809,21 @@ async fn after_a_meeting_only_that_meeting_gets_its_recap_and_hidden_characters_
         assert!(text.contains("evil") && text.contains("done"), "{what}: the visible words stay: {text:?}");
     }
 }
+
+#[tokio::test]
+async fn the_question_that_is_stored_titled_and_sent_is_the_one_the_person_saw() {
+    let rig = Rig::new();
+    let chat = rig.chat();
+    rig.api.push(Step::Text(all_labels("KESTREL")));
+    rig.ask(&chat, "Kestrel\u{200B} budget\u{202E}?").await;
+    let stored = store::list_messages(&rig.conn(), &chat).unwrap();
+    assert_eq!(stored[0].content, "Kestrel budget?");
+    // what the model got has no hidden characters either
+    assert!(rig.api.calls().iter().all(|(msgs, _)| msgs.iter().all(|m| !m.content.contains('\u{202E}') && !m.content.contains('\u{200B}'))));
+    assert_eq!(store::title_from("Kestrel\u{200B} budget\u{202E}?"), "Kestrel budget?");
+    // nothing but hidden characters is not a question
+    assert_eq!(engine::clean_question(" \u{200B}\u{202E} "), "");
+    assert!(engine::start_ask(rig.deps.clone(), &chat, "\u{200B}\u{202E}", "r1", false).is_err());
+    // a Persian half-space is spelling, not hidden
+    assert_eq!(engine::clean_question("\u{645}\u{6cc}\u{200c}\u{62e}"), "\u{645}\u{6cc}\u{200c}\u{62e}");
+}

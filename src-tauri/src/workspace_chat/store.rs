@@ -234,6 +234,7 @@ pub fn save_answer_in_tx(conn: &Connection, chat_id: &str, a: Answer) -> Result<
 
 /// A short title from a first question (no AI): its first line, cut at a word.
 pub fn title_from(question: &str) -> String {
+    let question = &crate::prompt_data::strip_hidden(question);
     let line = question.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("New chat");
     let flat: String = line.chars().filter(|c| !c.is_control()).collect();
     if flat.chars().count() <= 60 {

@@ -23,6 +23,7 @@ import {
   onWorkspaceChatToken,
 } from "../lib/events";
 import { showToast } from "./toastStore";
+import { stripHidden } from "../workspace/chat/instructionText";
 
 // Workspace chat state. One store for the launcher window: streams are held here (not in a
 // component), so leaving the pane never cancels an answer, and two chats can run at once.
@@ -591,7 +592,8 @@ export const useWorkspaceChatStore = create<ChatState>((set, get) => {
     },
 
     ask: async (chatId, raw, opts = {}) => {
-      const question = raw.trim();
+      // Shown, stored and sent are the same words: hidden characters never get past here (the backend cleans too).
+      const question = stripHidden(raw).trim();
       if (!question) return false;
       if (hasPendingWrites(chatId) && !(await get().settleWrites(chatId))) return false;
       if (isBusy(get().sessions[chatId]?.turn)) return false;

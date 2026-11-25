@@ -444,6 +444,11 @@ pub async fn build_blocking(
 }
 
 /// The estimate shown before sending.
+/// The question as the person sees it: hidden characters out, outer space trimmed.
+pub fn clean_question(question: &str) -> String {
+    crate::prompt_data::strip_hidden(question).trim().to_string()
+}
+
 pub async fn preview(deps: &Arc<ChatDeps>, chat_id: &str, question: Option<&str>) -> Result<ContextReport, String> {
     let (selection, depth) = {
         let conn = deps.conn()?;
@@ -455,7 +460,8 @@ pub async fn preview(deps: &Arc<ChatDeps>, chat_id: &str, question: Option<&str>
         None => None,
     };
     let _ = depth;
-    let a = build_blocking(deps, chat_id, question.unwrap_or(""), false, window, &[], true).await?;
+    let cleaned = question.map(clean_question);
+    let a = build_blocking(deps, chat_id, cleaned.as_deref().unwrap_or(""), false, window, &[], true).await?;
     Ok(a.report)
 }
 
@@ -669,7 +675,8 @@ pub fn start_ask(
     request_id: &str,
     deeper: bool,
 ) -> Result<tokio::task::JoinHandle<()>, String> {
-    let question = question.trim().to_string();
+    // What is shown is what is stored and sent: hidden characters never reach the stored question, the title or the model.
+    let question = clean_question(question);
     if question.is_empty() {
         return Err("Type a question first.".into());
     }
