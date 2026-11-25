@@ -56,3 +56,24 @@ CREATE TABLE IF NOT EXISTS workspace_meeting_prefs (
 pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(SCHEMA)
 }
+
+/// v16: what every answer rests on, and what the condensed history rests on.
+pub fn migrate_provenance(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS workspace_provenance (
+            message_id INTEGER PRIMARY KEY,
+            chat_id    TEXT NOT NULL,
+            prov_json  TEXT NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS idx_workspace_provenance_chat ON workspace_provenance(chat_id);",
+    )?;
+    let has: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('workspace_chats') WHERE name = 'condensed_prov'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has == 0 {
+        conn.execute_batch("ALTER TABLE workspace_chats ADD COLUMN condensed_prov TEXT NULL;")?;
+    }
+    Ok(())
+}

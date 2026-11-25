@@ -53,9 +53,18 @@ pub struct WorkspaceCitation {
     pub snippet: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ContextBar {
     pub id: String,
+    /// What the UI needs to open the item: its kind (meeting, document, folder,
+    /// talking_point, memory, instructions, conversation), its id and, for a
+    /// file of a folder, the path inside the folder.
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub ref_id: String,
+    #[serde(default)]
+    pub sub_ref: Option<String>,
     pub layer: String,
     pub title: String,
     pub tokens: usize,
@@ -109,6 +118,9 @@ pub struct ItemPref {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SkippedFile {
+    /// The folder the file is in (the library row to open).
+    #[serde(default)]
+    pub folder_id: String,
     pub path: String,
     pub reason: String,
 }
@@ -123,23 +135,6 @@ pub struct IndexStatus {
     pub passages: i64,
     pub skipped: Vec<SkippedFile>,
     pub last_indexed_at: Option<i64>,
-}
-
-/// What a search result page says about the index it searched.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct IndexingNote {
-    /// Meetings of the workspace the index holds.
-    pub done: usize,
-    pub total: usize,
-    /// "Still indexing: 120 of 300 meetings are searchable ..." for the UI to show.
-    pub note: String,
-}
-
-/// `search_workspace_page`: the hits and, while the index is catching up, a note.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct SearchPage {
-    pub passages: Vec<crate::workspace_search::Passage>,
-    pub indexing: Option<IndexingNote>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

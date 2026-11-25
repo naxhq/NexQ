@@ -14,12 +14,16 @@ use crate::ai_runs::{AiPurpose, AiRunRequest};
 use crate::llm::provider::CancelToken;
 use crate::workspace_search::cards::{get_card, put_card, Card, CardOrigin};
 use crate::workspace_search::context_plan::{flatten, new_nonce, wrap_data};
-use crate::workspace_search::{search, store as sstore, Passage, PassageKind};
+use crate::workspace_search::{store as sstore, PassageKind};
+#[cfg(test)]
+use crate::workspace_search::{search, Passage};
 
 /// Most results one search returns.
+#[cfg(test)]
 pub const MAX_RESULTS: usize = 50;
 
-/// Search one workspace (its own meetings, its material).
+/// Search one workspace (its own meetings, its material). Tests only: the app searches through the chat and the live panels.
+#[cfg(test)]
 pub fn search_workspace(
     conn: &Connection,
     workspace_id: &str,
@@ -30,28 +34,6 @@ pub fn search_workspace(
     let scope = scope_adapter::workspace_search_scope(conn, workspace_id)?;
     let kinds: Vec<PassageKind> = kinds.unwrap_or_default().iter().filter_map(|k| PassageKind::parse(k)).collect();
     search::search(conn, &scope, query, &kinds, limit.clamp(1, MAX_RESULTS))
-}
-
-/// The note for a workspace whose meetings are not all indexed yet.
-pub fn indexing_note(conn: &Connection, workspace_id: &str) -> Result<Option<IndexingNote>, String> {
-    let meetings = scope_adapter::home_meetings(conn, workspace_id)?;
-    let (done, total) = scope_adapter::meeting_backlog(conn, &meetings);
-    Ok((done < total).then(|| IndexingNote {
-        done,
-        total,
-        note: format!("Still indexing: {done} of {total} meetings are searchable. The newest come first, so older ones may be missing for now."),
-    }))
-}
-
-/// Search with what the index knows about itself: hits plus the note.
-pub fn search_workspace_page(
-    conn: &Connection,
-    workspace_id: &str,
-    query: &str,
-    kinds: Option<Vec<String>>,
-    limit: usize,
-) -> Result<SearchPage, String> {
-    Ok(SearchPage { passages: search_workspace(conn, workspace_id, query, kinds, limit)?, indexing: indexing_note(conn, workspace_id)? })
 }
 
 /// What the library page shows about the index of a workspace.
@@ -76,7 +58,7 @@ pub fn index_status(conn: &Connection, hub: &ChatHub, workspace_id: &str, meetin
     let mut skipped = Vec::new();
     for f in &scope.folder_ids {
         for p in sstore::list_problem_sources(conn, PassageKind::Folder, f).map_err(|e| e.to_string())? {
-            skipped.push(SkippedFile { path: p.sub_ref, reason: p.error.unwrap_or(p.status) });
+            skipped.push(SkippedFile { folder_id: f.clone(), path: p.sub_ref, reason: p.error.unwrap_or(p.status) });
         }
     }
     let last: Option<i64> = conn.query_row("SELECT MAX(indexed_at) FROM search_sources", [], |r| r.get(0)).unwrap_or(None);
@@ -206,7 +188,7 @@ pub async fn recap_missing(deps: &ChatDeps, workspace_id: &str, cancel: Arc<Canc
         }
         out
     };
-    let Some(selection) = (deps.default_selection)() else { return 0 };
+    let Some(selection) = (deps.recap_selection)() else { return 0 };
     let mut made = 0;
     for (id, title, text, card) in todo {
         if cancel.is_cancelled() || (deps.meeting_active)() {
@@ -248,6 +230,28 @@ pub async fn recap_missing(deps: &ChatDeps, workspace_id: &str, cancel: Arc<Canc
         }
     }
     made
+}
+
+/// Recaps once the first indexing pass has the workspace's meetings in (their
+/// cards are what the recaps hang on). Waits up to two minutes, gives up when
+/// cancelled, and never works during a meeting.
+pub async fn recaps_when_ready(deps: &ChatDeps, workspace_id: &str, cancel: Arc<CancelToken>) -> usize {
+    let started = std::time::Instant::now();
+    loop {
+        if cancel.is_cancelled() || started.elapsed() > std::time::Duration::from_secs(120) {
+            return 0;
+        }
+        let ready = deps
+            .conn()
+            .ok()
+            .and_then(|c| scope_adapter::home_meetings(&c, workspace_id).ok().map(|m| scope_adapter::meeting_backlog(&c, &m)))
+            .map_or(false, |(done, total)| done >= total);
+        if ready {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    recap_missing(deps, workspace_id, cancel).await
 }
 
 /// The database path as a reader would open it (for callers without `ChatDeps`).

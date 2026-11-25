@@ -1,41 +1,7 @@
 //! Script-aware text helpers: CJK detection, unit counting (Latin words and
 //! CJK characters), token estimates and sentence splitting.
 
-/// Han, Hiragana, Katakana (incl. extensions and half-width forms). Hangul
-/// is written with spaces, so it is handled as ordinary words.
-pub fn is_cjk(c: char) -> bool {
-    matches!(c as u32,
-        0x3040..=0x30FF
-        | 0x31F0..=0x31FF
-        | 0x3400..=0x4DBF
-        | 0x4E00..=0x9FFF
-        | 0xF900..=0xFAFF
-        | 0xFF66..=0xFF9F
-        | 0x20000..=0x2FA1F)
-}
-
-/// Share of CJK characters among all letters and digits (0 for no letters).
-pub fn cjk_ratio(text: &str) -> f32 {
-    let (mut cjk, mut other) = (0usize, 0usize);
-    for c in text.chars() {
-        if is_cjk(c) {
-            cjk += 1;
-        } else if c.is_alphanumeric() {
-            other += 1;
-        }
-    }
-    let total = cjk + other;
-    if total == 0 {
-        0.0
-    } else {
-        cjk as f32 / total as f32
-    }
-}
-
-/// True when the text is mostly CJK (the trigram index is used for it).
-pub fn is_mostly_cjk(text: &str) -> bool {
-    cjk_ratio(text) >= 0.30
-}
+pub use crate::text_kit::{cjk_ratio, estimate_tokens, is_cjk, is_mostly_cjk};
 
 /// The text cut to at most `max_chars` characters (on a character boundary).
 pub fn truncate_chars(text: &str, max_chars: usize) -> String {
@@ -97,19 +63,6 @@ pub fn atoms(text: &str) -> Vec<(usize, usize, bool)> {
 /// triggers use this.
 pub fn unit_count(text: &str) -> usize {
     atoms(text).iter().filter(|a| a.2).count()
-}
-
-/// Token estimate: chars/4 for most text, chars/1.5 for CJK characters.
-pub fn estimate_tokens(text: &str) -> usize {
-    let (mut cjk, mut other) = (0usize, 0usize);
-    for c in text.chars() {
-        if is_cjk(c) {
-            cjk += 1;
-        } else {
-            other += 1;
-        }
-    }
-    ((other as f64 / 4.0) + (cjk as f64 / 1.5)).ceil() as usize
 }
 
 /// Split into pieces of at most `max_units` units, cutting between atoms.

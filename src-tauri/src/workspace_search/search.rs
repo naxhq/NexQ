@@ -10,19 +10,8 @@ use super::{now_ms, MeetingScope, Passage, PassageKind, SearchScope};
 use rusqlite::{types::Value, Connection, ToSql};
 use std::collections::{HashMap, HashSet};
 
-const STOPWORDS: &[&str] = &[
-    "a", "an", "the", "and", "or", "but", "if", "of", "to", "in", "on", "at", "by", "for", "with",
-    "about", "as", "is", "are", "was", "were", "be", "been", "being", "am", "do", "does", "did",
-    "done", "have", "has", "had", "it", "its", "this", "that", "these", "those", "i", "me", "my",
-    "we", "our", "us", "you", "your", "he", "she", "they", "them", "their", "what", "which",
-    "who", "whom", "when", "where", "why", "how", "can", "could", "would", "should", "will",
-    "shall", "may", "might", "must", "not", "no", "so", "than", "then", "there", "from", "into",
-    "over", "any", "some", "all", "up", "out", "just", "also", "tell", "say", "said", "talk",
-    "talked", "discuss", "discussed", "please",
-];
-
 pub fn is_stopword(w: &str) -> bool {
-    STOPWORDS.contains(&w)
+    crate::text_kit::is_stopword(w)
 }
 
 const MAX_WORDS: usize = 24;
@@ -51,7 +40,7 @@ pub fn parse_query(q: &str) -> ParsedQuery {
         let w = std::mem::take(word).to_lowercase();
         let n = w.chars().count();
         let digits = w.chars().all(|c| c.is_ascii_digit());
-        if n <= MAX_WORD_CHARS && (n >= 2 || digits) && !STOPWORDS.contains(&w.as_str()) && !words.contains(&w) {
+        if n <= MAX_WORD_CHARS && (n >= 2 || digits) && !words.contains(&w) {
             words.push(w);
         }
     };
@@ -78,6 +67,15 @@ pub fn parse_query(q: &str) -> ParsedQuery {
     }
     flush_word(&mut word, &mut words);
     flush_run(&mut run, &mut runs);
+    // A long question is thinned of very common words (English, German, Spanish and
+    // French); a short query keeps every word, so a word that is common in one
+    // language and meaningful in another is never lost from a keyword search.
+    if words.len() >= 4 {
+        let content: Vec<String> = words.iter().filter(|w| !crate::text_kit::is_stopword(w)).cloned().collect();
+        if !content.is_empty() {
+            words = content;
+        }
+    }
     words.truncate(MAX_WORDS);
     runs.truncate(MAX_CJK_RUNS);
     ParsedQuery { words, cjk_runs: runs }
@@ -243,6 +241,9 @@ fn run_query(
 
 fn stem(w: &str) -> String {
     let mut s = w.to_string();
+    if !w.is_ascii() {
+        return s; // the suffix rules are English: other languages are matched as written
+    }
     for suf in ["ing", "ed", "es", "ly", "s", "e", "d"] {
         if s.len() > suf.len() + 2 && s.ends_with(suf) {
             s.truncate(s.len() - suf.len());
@@ -677,7 +678,7 @@ mod tests {
         let conn = corpus();
         assert!(search(&conn, &SearchScope::default(), "pricing", &[], 5).unwrap().is_empty());
         assert!(search(&conn, &all_scope(), "   ", &[], 5).unwrap().is_empty());
-        assert!(search(&conn, &all_scope(), "the of and", &[], 5).unwrap().is_empty());
+        assert!(search(&conn, &all_scope(), "the of and", &[], 5).is_ok(), "a short query keeps every word");
         assert!(search(&conn, &all_scope(), "pricing", &[], 0).unwrap().is_empty());
     }
 

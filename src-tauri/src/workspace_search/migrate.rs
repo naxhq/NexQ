@@ -1,5 +1,5 @@
 //! v10 migration: search passages, two external-content FTS5 indexes, the
-//! sources table, meeting cards and period digests. Idempotent.
+//! sources table, meeting cards. Idempotent.
 //!
 //! * `search_fts` (porter + unicode61) indexes every passage.
 //! * `search_fts_tri` (trigram) indexes only passages that are mostly CJK
@@ -71,13 +71,6 @@ CREATE TABLE IF NOT EXISTS search_sources (
     PRIMARY KEY (kind, ref_id, sub_ref)
 );
 
-CREATE TABLE IF NOT EXISTS search_embeddings (
-    passage_id INTEGER PRIMARY KEY,
-    model      TEXT NOT NULL,
-    dims       INTEGER NOT NULL,
-    vec        BLOB NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS meeting_cards (
     meeting_id  TEXT PRIMARY KEY,
     recap       TEXT NOT NULL DEFAULT '',
@@ -85,16 +78,6 @@ CREATE TABLE IF NOT EXISTS meeting_cards (
     source_hash TEXT NOT NULL DEFAULT '',
     tokens      INTEGER NOT NULL DEFAULT 0,
     updated_at  INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS period_digests (
-    workspace_id TEXT NOT NULL,
-    period       TEXT NOT NULL,
-    text         TEXT NOT NULL DEFAULT '',
-    source_hash  TEXT NOT NULL DEFAULT '',
-    tokens       INTEGER NOT NULL DEFAULT 0,
-    updated_at   INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (workspace_id, period)
 );
 ";
 
@@ -125,13 +108,13 @@ mod tests {
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE name IN
                  ('search_passages','search_fts','search_fts_tri','search_sources',
-                  'search_embeddings','meeting_cards','period_digests',
+                  'meeting_cards',
                   'search_passages_ai','search_passages_ad','search_passages_au')",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 10);
+        assert_eq!(n, 8);
     }
 
     #[test]

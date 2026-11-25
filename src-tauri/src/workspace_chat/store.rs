@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
+use super::provenance::Provenance;
 use super::types::*;
 use crate::db::workspace_migrations::now_ms;
 
@@ -16,12 +17,15 @@ fn err(what: &str, e: impl std::fmt::Display) -> String {
 pub struct ChatRow {
     pub chat: WorkspaceChat,
     pub condensed: Option<String>,
+    /// What the condensed history rests on.
+    pub condensed_prov: Option<Provenance>,
     /// The chat's own marker token for retrieved text (see `context_plan`).
     pub nonce: String,
 }
 
 const CHAT_COLS: &str = "id, workspace_id, title, provider, model, effort, depth, include_meetings, condensed, condensed_upto, nonce, created_at, updated_at,
-    (SELECT COUNT(*) FROM workspace_messages m WHERE m.chat_id = workspace_chats.id)";
+    (SELECT COUNT(*) FROM workspace_messages m WHERE m.chat_id = workspace_chats.id),
+    condensed_prov";
 
 fn read_chat(row: &rusqlite::Row) -> rusqlite::Result<ChatRow> {
     Ok(ChatRow {
@@ -40,6 +44,7 @@ fn read_chat(row: &rusqlite::Row) -> rusqlite::Result<ChatRow> {
             updated_at: row.get(12)?,
         },
         condensed: row.get(8)?,
+        condensed_prov: row.get::<_, Option<String>>(14)?.and_then(|j| serde_json::from_str(&j).ok()),
         nonce: row.get(10)?,
     })
 }
@@ -121,6 +126,7 @@ pub fn update_chat(conn: &Connection, id: &str, patch: WorkspaceChatPatch) -> Re
 /// Delete a chat with its messages and its meeting choices.
 pub fn delete_chat(conn: &Connection, id: &str) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| err("Couldn't delete the chat", e))?;
+    tx.execute("DELETE FROM workspace_provenance WHERE chat_id = ?1", params![id]).map_err(|e| err("Couldn't delete the chat", e))?;
     tx.execute("DELETE FROM workspace_messages WHERE chat_id = ?1", params![id]).map_err(|e| err("Couldn't delete the chat", e))?;
     tx.execute("DELETE FROM workspace_meeting_prefs WHERE chat_id = ?1", params![id]).map_err(|e| err("Couldn't delete the chat", e))?;
     tx.execute("DELETE FROM workspace_chat_item_prefs WHERE chat_id = ?1", params![id]).map_err(|e| err("Couldn't delete the chat", e))?;
@@ -170,6 +176,8 @@ pub struct Answer<'a> {
     pub context: &'a ContextReport,
     pub input_tokens: i64,
     pub output_tokens: i64,
+    /// What the answer rests on (none: an answer that uses nothing).
+    pub provenance: Option<&'a Provenance>,
 }
 
 /// An answered pair, saved in one transaction of its own.
@@ -205,6 +213,12 @@ pub fn save_answer_in_tx(conn: &Connection, chat_id: &str, a: Answer) -> Result<
     )
     .map_err(|e| err("Couldn't save the answer", e))?;
     let id = conn.last_insert_rowid();
+    let prov = a.provenance.cloned().unwrap_or_default();
+    conn.execute(
+        "INSERT INTO workspace_provenance (message_id, chat_id, prov_json) VALUES (?1, ?2, ?3)",
+        params![id, chat_id, serde_json::to_string(&prov).map_err(|e| err("Couldn't save the answer", e))?],
+    )
+    .map_err(|e| err("Couldn't save the answer", e))?;
     // the title comes from the first question, locally
     let title: String = conn
         .query_row("SELECT title FROM workspace_chats WHERE id = ?1", params![chat_id], |r| r.get(0))
@@ -232,17 +246,37 @@ pub fn title_from(question: &str) -> String {
     }
 }
 
+/// The provenance of every answer of a chat, by message id.
+pub fn provenance_of_chat(conn: &Connection, chat_id: &str) -> Result<HashMap<i64, Provenance>, String> {
+    let mut stmt = conn
+        .prepare("SELECT message_id, prov_json FROM workspace_provenance WHERE chat_id = ?1")
+        .map_err(|e| err("Couldn't read what the answers rest on", e))?;
+    let rows = stmt
+        .query_map(params![chat_id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| err("Couldn't read what the answers rest on", e))?;
+    let mut out = HashMap::new();
+    for r in rows {
+        let (id, json) = r.map_err(|e| err("Couldn't read what the answers rest on", e))?;
+        // a record that can't be read is left out: the answer then has none and is not reused
+        if let Ok(p) = serde_json::from_str::<Provenance>(&json) {
+            out.insert(id, p);
+        }
+    }
+    Ok(out)
+}
+
 /// Forget the condensed history (what it was made from changed).
 pub fn clear_condensed(conn: &Connection, chat_id: &str) -> Result<(), String> {
-    conn.execute("UPDATE workspace_chats SET condensed = NULL, condensed_upto = NULL WHERE id = ?1", params![chat_id])
+    conn.execute("UPDATE workspace_chats SET condensed = NULL, condensed_upto = NULL, condensed_prov = NULL WHERE id = ?1", params![chat_id])
         .map(|_| ())
         .map_err(|e| err("Couldn't clear the condensed history", e))
 }
 
-pub fn set_condensed(conn: &Connection, chat_id: &str, text: &str, upto: i64) -> Result<(), String> {
+pub fn set_condensed(conn: &Connection, chat_id: &str, text: &str, upto: i64, prov: Option<&Provenance>) -> Result<(), String> {
+    let prov_json = serde_json::to_string(&prov.cloned().unwrap_or_default()).map_err(|e| err("Couldn't save the condensed history", e))?;
     conn.execute(
-        "UPDATE workspace_chats SET condensed = ?2, condensed_upto = ?3 WHERE id = ?1",
-        params![chat_id, text, upto],
+        "UPDATE workspace_chats SET condensed = ?2, condensed_upto = ?3, condensed_prov = ?4 WHERE id = ?1",
+        params![chat_id, text, upto, prov_json],
     )
     .map(|_| ())
     .map_err(|e| err("Couldn't save the condensed history", e))
@@ -508,11 +542,11 @@ mod tests {
         let (ca, cb) = (create_chat(&conn, &a, None, None, None).unwrap(), create_chat(&conn, &b, None, None, None).unwrap());
         let doc = |id: &str, tag: &str| WorkspaceCitation { tag: tag.into(), kind: "document".into(), ref_id: id.into(), sub_ref: None, title: format!("Title of {id}"), start_ms: None, snippet: format!("CANARY text of {id}") };
         let r = ContextReport {
-            bars: vec![ContextBar { id: "document:general_doc".into(), layer: "documents".into(), title: "Title of general_doc".into(), tokens: 5, relevance: 0.5, pinned: false, included: true }],
+            bars: vec![ContextBar { id: "document:general_doc".into(), layer: "documents".into(), title: "Title of general_doc".into(), tokens: 5, relevance: 0.5, pinned: false, included: true, ..Default::default() }],
             ..report()
         };
         for c in [&ca, &cb] {
-            save_answer(&conn, &c.id, Answer { question: "q", text: "a", model: "x", citations: &[doc("general_doc", "S1"), doc("own_doc", "S2")], context: &r, input_tokens: 0, output_tokens: 0 }).unwrap();
+            save_answer(&conn, &c.id, Answer { question: "q", text: "a", model: "x", citations: &[doc("general_doc", "S1"), doc("own_doc", "S2")], context: &r, input_tokens: 0, output_tokens: 0, provenance: None }).unwrap();
         }
         let why = "General is no longer used by this workspace";
         let n = redact_material_in_workspace(&conn, &a, &[("document".to_string(), "general_doc".to_string())], why).unwrap();
@@ -535,7 +569,7 @@ mod tests {
             budget: 100,
             window: 1000,
             used: 10,
-            bars: vec![ContextBar { id: "meeting:m1".into(), layer: "meetings".into(), title: "Budget talk".into(), tokens: 5, relevance: 0.5, pinned: false, included: true }],
+            bars: vec![ContextBar { id: "meeting:m1".into(), layer: "meetings".into(), title: "Budget talk".into(), tokens: 5, relevance: 0.5, pinned: false, included: true, ..Default::default() }],
             omitted: 0,
             notices: vec![],
             estimate: false,
@@ -554,7 +588,7 @@ mod tests {
         assert_eq!(c.depth, "balanced");
         assert!(create_chat(&conn, "nope", None, None, None).is_err());
         let r = report();
-        let m = save_answer(&conn, &c.id, Answer { question: "What was decided about the very long budget topic that keeps going on and on and on?", text: "5k [S1]", model: "gpt", citations: &[cite("m1")], context: &r, input_tokens: 10, output_tokens: 3 }).unwrap();
+        let m = save_answer(&conn, &c.id, Answer { question: "What was decided about the very long budget topic that keeps going on and on and on?", text: "5k [S1]", model: "gpt", citations: &[cite("m1")], context: &r, input_tokens: 10, output_tokens: 3, provenance: None }).unwrap();
         assert_eq!(m.role, "assistant");
         assert_eq!(m.citations.len(), 1);
         assert_eq!(m.context.as_ref().unwrap().used, 10);
@@ -578,7 +612,7 @@ mod tests {
         let c = create_chat(&conn, &ws, None, None, None).unwrap();
         update_chat(&conn, &c.id, WorkspaceChatPatch { title: Some("My plan".into()), ..Default::default() }).unwrap();
         let r = report();
-        save_answer(&conn, &c.id, Answer { question: "something else entirely", text: "a", model: "x", citations: &[], context: &r, input_tokens: 0, output_tokens: 0 }).unwrap();
+        save_answer(&conn, &c.id, Answer { question: "something else entirely", text: "a", model: "x", citations: &[], context: &r, input_tokens: 0, output_tokens: 0, provenance: None }).unwrap();
         assert_eq!(get_chat(&conn, &c.id).unwrap().unwrap().chat.title, "My plan");
     }
 
@@ -614,7 +648,7 @@ mod tests {
         let old_used = create_chat(&conn, &ws, None, None, None).unwrap();
         let fresh = create_chat(&conn, &ws, None, None, None).unwrap();
         let r = report();
-        save_answer(&conn, &old_used.id, Answer { question: "q", text: "a", model: "x", citations: &[], context: &r, input_tokens: 0, output_tokens: 0 }).unwrap();
+        save_answer(&conn, &old_used.id, Answer { question: "q", text: "a", model: "x", citations: &[], context: &r, input_tokens: 0, output_tokens: 0, provenance: None }).unwrap();
         conn.execute("UPDATE workspace_chats SET updated_at = 1 WHERE id IN (?1, ?2)", params![old_empty.id, old_used.id]).unwrap();
         assert_eq!(prune_empty_chats(&conn, 24 * 3600 * 1000).unwrap(), 1);
         assert!(get_chat(&conn, &old_empty.id).unwrap().is_none());
@@ -649,7 +683,7 @@ mod tests {
         let ws = new_ws(&conn, "W", false, false);
         let c = create_chat(&conn, &ws, None, None, None).unwrap();
         let r = report();
-        let m = save_answer(&conn, &c.id, Answer { question: "q", text: "a [S1]", model: "x", citations: &[cite("m1"), WorkspaceCitation { ref_id: "m2".into(), tag: "S2".into(), title: "Other".into(), snippet: "other text".into(), ..cite("m2") }], context: &r, input_tokens: 0, output_tokens: 0 }).unwrap();
+        let m = save_answer(&conn, &c.id, Answer { question: "q", text: "a [S1]", model: "x", citations: &[cite("m1"), WorkspaceCitation { ref_id: "m2".into(), tag: "S2".into(), title: "Other".into(), snippet: "other text".into(), ..cite("m2") }], context: &r, input_tokens: 0, output_tokens: 0, provenance: None }).unwrap();
         redact_deleted_meeting(&conn, "m1").unwrap();
         let after = get_message(&conn, m.id).unwrap().unwrap();
         assert_eq!(after.citations[0].title, "Deleted meeting");
@@ -671,7 +705,7 @@ mod tests {
         let cb = create_chat(&conn, &b, None, None, None).unwrap();
         let r = report();
         for c in [&ca, &cb] {
-            save_answer(&conn, &c.id, Answer { question: "q", text: "a", model: "x", citations: &[cite("m1")], context: &r, input_tokens: 0, output_tokens: 0 }).unwrap();
+            save_answer(&conn, &c.id, Answer { question: "q", text: "a", model: "x", citations: &[cite("m1")], context: &r, input_tokens: 0, output_tokens: 0, provenance: None }).unwrap();
         }
         redact_meeting_in_workspace(&conn, "m1", &a).unwrap();
         assert_eq!(list_messages(&conn, &ca.id).unwrap()[1].citations[0].title, "Deleted meeting");

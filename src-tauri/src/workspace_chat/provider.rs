@@ -1,6 +1,7 @@
 //! The indexer's inputs from the workspace data: documents (their saved
 //! text), folders the user opted in to index, talking points marked as AI
-//! context. Each call reads the database fresh through its own connection.
+//! context. Each call reads the database fresh through its own connection. A
+//! read that fails is an error (the pass then leaves the index as it is).
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -16,38 +17,42 @@ pub struct WorkspaceIndexProvider {
 }
 
 impl WorkspaceIndexProvider {
-    fn conn(&self) -> Option<Connection> {
-        crate::db::open_reader(&self.db_path).ok()
+    fn conn(&self) -> Result<Connection, String> {
+        crate::db::open_reader(&self.db_path).map_err(|e| format!("Couldn't open the database: {e}"))
     }
 }
 
+fn read_err(what: &str, e: rusqlite::Error) -> String {
+    format!("Couldn't read {what}: {e}")
+}
+
 impl IndexProvider for WorkspaceIndexProvider {
-    fn documents(&self) -> Vec<DocInput> {
-        let Some(conn) = self.conn() else { return Vec::new() };
-        let Ok(mut stmt) = conn.prepare(
-            "SELECT r.id, r.name, t.text FROM context_resources r
-             JOIN document_text t ON t.resource_id = r.id WHERE t.status = 'ready'",
-        ) else {
-            return Vec::new();
-        };
-        let rows = stmt.query_map([], |r| Ok(DocInput { id: r.get(0)?, name: r.get(1)?, text: r.get(2)? }));
-        match rows {
-            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-            Err(_) => Vec::new(),
-        }
+    fn documents(&self) -> Result<Vec<DocInput>, String> {
+        let conn = self.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT r.id, r.name, t.text FROM context_resources r
+                 JOIN document_text t ON t.resource_id = r.id WHERE t.status = 'ready'",
+            )
+            .map_err(|e| read_err("the documents", e))?;
+        let rows = stmt
+            .query_map([], |r| Ok(DocInput { id: r.get(0)?, name: r.get(1)?, text: r.get(2)? }))
+            .map_err(|e| read_err("the documents", e))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| read_err("the documents", e))
     }
 
-    fn folders(&self) -> Vec<FolderInput> {
-        let Some(conn) = self.conn() else { return Vec::new() };
-        let opted: std::collections::HashSet<String> = conn
-            .prepare("SELECT DISTINCT ref_id FROM workspace_items WHERE kind = 'folder' AND index_opt_in = 1")
-            .ok()
-            .map(|mut s| {
-                s.query_map([], |r| r.get::<_, String>(0)).map(|rows| rows.filter_map(|r| r.ok()).collect()).unwrap_or_default()
-            })
-            .unwrap_or_default();
-        let cfg = self.sources.read().map(|c| c.clone()).unwrap_or_default();
-        cfg.notes_folders
+    fn folders(&self) -> Result<Vec<FolderInput>, String> {
+        let conn = self.conn()?;
+        let opted: std::collections::HashSet<String> = {
+            let mut stmt = conn
+                .prepare("SELECT DISTINCT ref_id FROM workspace_items WHERE kind = 'folder' AND index_opt_in = 1")
+                .map_err(|e| read_err("the folders", e))?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(|e| read_err("the folders", e))?;
+            rows.collect::<Result<_, _>>().map_err(|e| read_err("the folders", e))?
+        };
+        let cfg = self.sources.read().map_err(|_| "Couldn't read your sources".to_string())?.clone();
+        Ok(cfg
+            .notes_folders
             .iter()
             .map(|f| FolderInput {
                 id: f.id.clone(),
@@ -55,20 +60,19 @@ impl IndexProvider for WorkspaceIndexProvider {
                 // a folder that is switched off in Settings stays off
                 index_enabled: f.enabled && opted.contains(&f.id),
             })
-            .collect()
+            .collect())
     }
 
-    fn talking_points(&self) -> Vec<TalkingPointInput> {
-        let Some(conn) = self.conn() else { return Vec::new() };
-        let Ok(mut stmt) = conn.prepare("SELECT id, title, plain_text, in_context FROM talking_points") else {
-            return Vec::new();
-        };
-        let rows = stmt.query_map([], |r| {
-            Ok(TalkingPointInput { id: r.get(0)?, title: r.get(1)?, plain_text: r.get(2)?, in_context: r.get::<_, i64>(3)? != 0 })
-        });
-        match rows {
-            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-            Err(_) => Vec::new(),
-        }
+    fn talking_points(&self) -> Result<Vec<TalkingPointInput>, String> {
+        let conn = self.conn()?;
+        let mut stmt = conn
+            .prepare("SELECT id, title, plain_text, in_context FROM talking_points")
+            .map_err(|e| read_err("the talking points", e))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(TalkingPointInput { id: r.get(0)?, title: r.get(1)?, plain_text: r.get(2)?, in_context: r.get::<_, i64>(3)? != 0 })
+            })
+            .map_err(|e| read_err("the talking points", e))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| read_err("the talking points", e))
     }
 }

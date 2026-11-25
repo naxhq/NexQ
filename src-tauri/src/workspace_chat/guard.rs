@@ -1,64 +1,69 @@
-//! Access that is checked while an answer runs. An answer is built from a
-//! set of meetings, documents, folders, talking points and memory items; if
-//! any of them stops being part of the chat's scope (a meeting moved out or
-//! deleted, an item taken off the workspace, a folder opted out, a memory item
-//! forgotten) the run stops and nothing is shown or saved from then on.
-//!
-//! The guard looks at the database itself, so it does not depend on which
-//! command made the change or on whether the chat has a CLI session. A full
-//! check is cheap and runs only when another connection committed since the
-//! last look (`PRAGMA data_version`), so it can run for every streamed token.
+//! Access that is checked while an answer runs and when a stored answer is
+//! reused. Both use [`provenance::allowed`]: the run stops, and old answers are
+//! left out, as soon as anything they rest on stops being part of the chat's
+//! scope (a meeting moved, deleted or switched off, a source taken off the
+//! workspace, a folder opted out, a memory item forgotten, a server removed,
+//! General turned off ...). The check reads the database itself, so it does not
+//! depend on which command made the change or on whether the chat has a CLI
+//! session. A full check is cheap and runs only when another connection
+//! committed since the last look (`PRAGMA data_version`), so it can run for
+//! every streamed token. Any read that fails counts as "not allowed".
 
-use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use rusqlite::Connection;
 
-use super::scope_adapter;
+use super::provenance::{allowed, Provenance, Universe};
+use super::scope_adapter::{self, ChatScope};
 use super::store;
-use crate::workspace_search::context_plan::ContextPlan;
+use super::types::WorkspaceMessage;
 
-/// What one answer was built from.
-#[derive(Debug, Clone, Default)]
-pub struct Used {
-    /// MCP servers the session may call (a CLI chat).
-    pub servers: BTreeSet<String>,
-    /// Folders the session may read (a CLI chat), whether or not they are indexed.
-    pub launch_folders: BTreeSet<String>,
-    pub meetings: BTreeSet<String>,
-    pub documents: BTreeSet<String>,
-    pub folders: BTreeSet<String>,
-    pub points: BTreeSet<String>,
-    pub memory: BTreeSet<String>,
+/// The chat's current scope as a set of entries, or None when it can't be read.
+pub fn universe_now(conn: &Connection, chat_id: &str) -> Option<(ChatScope, Universe)> {
+    let row = store::get_chat(conn, chat_id).ok()??;
+    let scope = scope_adapter::chat_scope(conn, &row).ok()?;
+    let memory = crate::workspace::memory::saved_for_scope(conn, &scope.eff).ok()?;
+    let universe = Universe::of(&scope, memory.into_iter().map(|m| m.id));
+    Some((scope, universe))
 }
 
-impl Used {
-    /// What a CLI session can reach beyond the prompt: the transcripts of every
-    /// included meeting, the scope's notes folders and its MCP servers. Any
-    /// of them leaving the scope during the run counts as a revocation.
-    pub fn expose(&mut self, meetings: impl IntoIterator<Item = String>, folders: impl IntoIterator<Item = String>, servers: impl IntoIterator<Item = String>) {
-        self.meetings.extend(meetings);
-        self.launch_folders.extend(folders);
-        self.servers.extend(servers);
+fn still_allowed(conn: &Connection, chat_id: &str, prov: &Provenance) -> bool {
+    universe_now(conn, chat_id).map_or(false, |(_, u)| allowed(prov, &u))
+}
+
+/// Stored answers checked against one reading of the scope.
+pub struct Reuse {
+    universe: Universe,
+    prov: HashMap<i64, Provenance>,
+}
+
+impl Reuse {
+    pub fn new(conn: &Connection, chat_id: &str) -> Result<Reuse, String> {
+        let (_, universe) = universe_now(conn, chat_id).ok_or_else(|| "Couldn't read what this chat may use".to_string())?;
+        Ok(Reuse { universe, prov: store::provenance_of_chat(conn, chat_id)? })
     }
 
-    pub fn of_plan(plan: &ContextPlan) -> Used {
-        let mut u = Used::default();
-        for it in &plan.items {
-            let set = match it.kind.as_str() {
-                "transcript" | "meeting" => &mut u.meetings,
-                "document" => &mut u.documents,
-                "folder" => &mut u.folders,
-                "talking_point" => &mut u.points,
-                _ => continue,
-            };
-            set.insert(it.ref_id.clone());
+    /// An assistant answer may be sent again (or saved) only with a record
+    /// that is still allowed. Questions are the user's own words.
+    pub fn reusable(&self, m: &WorkspaceMessage) -> bool {
+        if m.role != "assistant" {
+            return true;
         }
-        for m in &plan.memory {
-            u.memory.insert(m.id.clone());
-        }
-        u
+        self.prov.get(&m.id).map_or(false, |p| allowed(p, &self.universe))
+    }
+
+    pub fn provenance(&self, id: i64) -> Option<&Provenance> {
+        self.prov.get(&id)
+    }
+
+    pub fn allows(&self, p: &Provenance) -> bool {
+        allowed(p, &self.universe)
+    }
+
+    pub fn universe(&self) -> &Universe {
+        &self.universe
     }
 }
 
@@ -69,98 +74,13 @@ struct Inner {
 
 pub struct AccessGuard {
     chat_id: String,
-    used: Used,
+    prov: Provenance,
     inner: Mutex<Inner>,
     revoked: AtomicBool,
 }
 
 fn data_version(conn: &Connection) -> Option<i64> {
     conn.query_row("PRAGMA data_version", [], |r| r.get::<_, i64>(0)).ok()
-}
-
-/// Everything the answer used is still part of the chat's scope. A read that
-/// fails counts as "no": an unreadable scope never lets anything through.
-fn still_allowed(conn: &Connection, chat_id: &str, used: &Used) -> bool {
-    let Ok(Some(row)) = store::get_chat(conn, chat_id) else { return false };
-    let Ok(scope) = scope_adapter::chat_scope(conn, &row) else { return false };
-    let meetings: BTreeSet<&str> = scope.meetings.iter().map(|m| m.id.as_str()).collect();
-    if !used.meetings.iter().all(|m| meetings.contains(m.as_str())) {
-        return false;
-    }
-    if !used.documents.iter().all(|d| scope.eff.document_ids.contains(d)) {
-        return false;
-    }
-    if !used.folders.iter().all(|f| scope.folder_ids.contains(f)) {
-        return false;
-    }
-    if !used.points.iter().all(|p| scope.eff.talking_point_ids.contains(p)) {
-        return false;
-    }
-    if !used.launch_folders.iter().all(|f| scope.eff.folder_ids.contains(f)) {
-        return false;
-    }
-    if !used.servers.iter().all(|s| scope.eff.server_ids.contains(s)) {
-        return false;
-    }
-    if !used.memory.is_empty() {
-        let Ok(saved) = crate::workspace::memory::saved_for_scope(conn, &scope.eff) else { return false };
-        let saved: BTreeSet<&str> = saved.iter().map(|m| m.id.as_str()).collect();
-        if !used.memory.iter().all(|m| saved.contains(m.as_str())) {
-            return false;
-        }
-    }
-    true
-}
-
-impl AccessGuard {
-    pub fn new(conn: Connection, chat_id: &str, used: Used) -> Self {
-        AccessGuard {
-            chat_id: chat_id.to_string(),
-            used,
-            inner: Mutex::new(Inner { conn, last_version: None }),
-            revoked: AtomicBool::new(false),
-        }
-    }
-
-    /// Write something the answer produced, only if everything it used is still
-    /// allowed at the moment of writing (one transaction, see [`atomically`]).
-    pub fn check_and_write<T>(&self, write: impl FnOnce(&Connection) -> Result<T, String>) -> Result<T, WriteError> {
-        let inner = self.inner.lock().map_err(|_| WriteError::Failed("busy".into()))?;
-        let r = atomically(&inner.conn, |c| still_allowed(c, &self.chat_id, &self.used), write);
-        if matches!(r, Err(WriteError::Revoked)) {
-            self.revoked.store(true, Ordering::SeqCst);
-        }
-        r
-    }
-
-    /// True while everything the answer used is still allowed. Once false it
-    /// stays false.
-    pub fn ok(&self) -> bool {
-        if self.revoked.load(Ordering::SeqCst) {
-            return false;
-        }
-        let mut inner = match self.inner.lock() {
-            Ok(i) => i,
-            Err(_) => {
-                self.revoked.store(true, Ordering::SeqCst);
-                return false;
-            }
-        };
-        let version = data_version(&inner.conn);
-        if version.is_some() && version == inner.last_version {
-            return true; // nothing was committed by anyone else since the last look
-        }
-        let ok = still_allowed(&inner.conn, &self.chat_id, &self.used);
-        inner.last_version = version;
-        if !ok {
-            self.revoked.store(true, Ordering::SeqCst);
-        }
-        ok
-    }
-
-    pub fn revoked(&self) -> bool {
-        self.revoked.load(Ordering::SeqCst)
-    }
 }
 
 /// Why a guarded write did not happen.
@@ -199,41 +119,64 @@ pub fn atomically<T>(
     }
 }
 
-/// Whether a stored answer still rests only on material the chat may use.
-pub fn message_tainted(m: &crate::workspace_chat::types::WorkspaceMessage, scope: &scope_adapter::ChatScope) -> bool {
-    if m.role != "assistant" {
-        return false;
-    }
-    let meetings: BTreeSet<&str> = scope.meetings.iter().map(|x| x.id.as_str()).collect();
-    let has = |kind: &str, id: &str| match kind {
-        "meeting" | "transcript" => !id.is_empty() && meetings.contains(id),
-        "document" => scope.eff.document_ids.iter().any(|d| d == id),
-        "folder" => scope.eff.folder_ids.iter().any(|d| d == id),
-        "talking_point" => scope.eff.talking_point_ids.iter().any(|d| d == id),
-        _ => true,
-    };
-    if m.citations.iter().any(|c| !has(&c.kind, &c.ref_id)) {
-        return true;
-    }
-    match &m.context {
-        Some(ctx) => ctx.bars.iter().filter(|b| b.included).any(|b| {
-            let (kind, rest) = b.id.split_once(':').unwrap_or((b.id.as_str(), ""));
-            let id = rest.split(':').next().unwrap_or("");
-            match kind {
-                "meeting" | "document" | "folder" | "talking_point" => !has(kind, id),
-                _ => false,
-            }
-        }),
-        None => false,
+/// An answer that may be reused or saved: it has a record and everything in it
+/// is still allowed.
+pub fn answer_is_clean(conn: &Connection, m: &WorkspaceMessage) -> bool {
+    match Reuse::new(conn, &m.chat_id) {
+        Ok(r) => r.reusable(m),
+        Err(_) => false,
     }
 }
 
-/// An answer that may not be reused any more (it rests on material the chat no
-/// longer has), or one that cannot be checked.
-pub fn answer_is_clean(conn: &Connection, m: &crate::workspace_chat::types::WorkspaceMessage) -> bool {
-    let Ok(Some(row)) = store::get_chat(conn, &m.chat_id) else { return false };
-    let Ok(scope) = scope_adapter::chat_scope(conn, &row) else { return false };
-    !message_tainted(m, &scope)
+impl AccessGuard {
+    pub fn new(conn: Connection, chat_id: &str, prov: Provenance) -> Self {
+        AccessGuard {
+            chat_id: chat_id.to_string(),
+            prov,
+            inner: Mutex::new(Inner { conn, last_version: None }),
+            revoked: AtomicBool::new(false),
+        }
+    }
+
+    /// Write something the answer produced, only if everything it used is still
+    /// allowed at the moment of writing (one transaction, see [`atomically`]).
+    pub fn check_and_write<T>(&self, write: impl FnOnce(&Connection) -> Result<T, String>) -> Result<T, WriteError> {
+        let inner = self.inner.lock().map_err(|_| WriteError::Failed("busy".into()))?;
+        let r = atomically(&inner.conn, |c| still_allowed(c, &self.chat_id, &self.prov), write);
+        if matches!(r, Err(WriteError::Revoked)) {
+            self.revoked.store(true, Ordering::SeqCst);
+        }
+        r
+    }
+
+    /// True while everything the answer used is still allowed. Once false it
+    /// stays false.
+    pub fn ok(&self) -> bool {
+        if self.revoked.load(Ordering::SeqCst) {
+            return false;
+        }
+        let mut inner = match self.inner.lock() {
+            Ok(i) => i,
+            Err(_) => {
+                self.revoked.store(true, Ordering::SeqCst);
+                return false;
+            }
+        };
+        let version = data_version(&inner.conn);
+        if version.is_some() && version == inner.last_version {
+            return true; // nothing was committed by anyone else since the last look
+        }
+        let ok = still_allowed(&inner.conn, &self.chat_id, &self.prov);
+        inner.last_version = version;
+        if !ok {
+            self.revoked.store(true, Ordering::SeqCst);
+        }
+        ok
+    }
+
+    pub fn revoked(&self) -> bool {
+        self.revoked.load(Ordering::SeqCst)
+    }
 }
 
 /// The message shown when an answer was stopped for this reason.

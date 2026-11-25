@@ -6,7 +6,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::json;
 use tauri::{AppHandle, Emitter};
 
 use super::engine::ChatDeps;
@@ -61,6 +60,7 @@ pub fn build_deps(app: &AppHandle, state: &AppState) -> Result<Arc<ChatDeps>, St
     };
     let flag = state.meeting_active.clone();
     let llm = state.llm.clone();
+    let (llm2, cli_settings) = (state.llm.clone(), state.cli_settings.clone());
     let app2 = app.clone();
     Ok(Arc::new(ChatDeps {
         db_path: db_path(state)?,
@@ -74,6 +74,23 @@ pub fn build_deps(app: &AppHandle, state: &AppState) -> Result<Arc<ChatDeps>, St
         }),
         transcripts: crate::llm::cli_agent::transcripts::global(),
         tools,
+        recap_selection: Arc::new(move || {
+            // the same rule as notes, the brief and memory: the cheapest good-enough model
+            use crate::live_runtime::cheapest::{cheapest, CheapestInput};
+            let (provider, model) = {
+                let router = llm2.as_ref()?.lock().ok()?;
+                (router.active_provider_type()?.as_str().to_string(), router.active_model().to_string())
+            };
+            let kind = crate::llm::ProviderType::from_str(&provider).ok().and_then(|p| p.cli_agent_kind());
+            let fast = kind.map(|k| cli_settings.config(k));
+            let c = cheapest(&CheapestInput {
+                provider: &provider,
+                active_model: &model,
+                available: &[],
+                cli_fast: fast.as_ref().map(|c| (c.fast_model.as_str(), c.fast_effort.as_str())),
+            });
+            Some(ModelSelection::new(&c.provider, &c.model, c.effort.as_deref()))
+        }),
         default_selection: Arc::new(move || {
             let router = llm.as_ref()?.lock().ok()?;
             let provider = router.active_provider_type()?;
@@ -104,13 +121,13 @@ pub fn ensure_indexer(app: &AppHandle, state: &AppState) -> Result<(), String> {
             let workspace_id = ws.or_else(|| hub2.open_workspace()).unwrap_or_else(|| crate::workspace::GENERAL_ID.to_string());
             let _ = app2.emit(
                 "workspace_index_progress",
-                json!({
-                    "workspace_id": workspace_id,
-                    "done": p.done,
-                    "total": p.total,
-                    "current": if p.current.is_empty() { serde_json::Value::Null } else { json!(p.current) },
-                    "skipped": p.skipped,
-                }),
+                super::types::IndexProgressEvent {
+                    workspace_id,
+                    done: p.done,
+                    total: p.total,
+                    current: if p.current.is_empty() { None } else { Some(p.current.clone()) },
+                    skipped: p.skipped,
+                },
             );
         }),
         true,

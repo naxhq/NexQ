@@ -198,6 +198,11 @@ pub struct MemoryUsed {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ContextPlan {
+    /// Index in `ContextInput::conversation` of the first turn that was sent
+    /// (every later one is in `turns`).
+    pub history_from: usize,
+    /// The condensed summary is part of the prompt.
+    pub condensed_used: bool,
     /// Tokens of the workspace instructions alone.
     pub instructions_tokens: usize,
     /// The saved memory items that fit (most relevant first).
@@ -389,8 +394,17 @@ pub fn build_context(input: &ContextInput, env: &ContextEnv) -> ContextPlan {
     }
 
     // 2. memory, most relevant first, at most 1,500 tokens
-    let mut ranked: Vec<(usize, usize, &MemoryItem)> =
-        input.memory.iter().enumerate().map(|(i, m)| (memory_rank(&input.question, m), i, m)).collect();
+    // When all of it fits the order is fixed (the stable prefix must not change with the
+    // question); only when it does not fit are the most relevant ones chosen, and then
+    // they go in the part that changes with the question.
+    let memory_all: usize = input.memory.iter().map(|m| tok(&format!("- {}: {}", clean_label(&m.title), m.text.trim())) + 1).sum();
+    let memory_stable = memory_all <= MEMORY_TOKEN_CAP;
+    let mut ranked: Vec<(usize, usize, &MemoryItem)> = input
+        .memory
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (if memory_stable { 0 } else { memory_rank(&input.question, m) }, i, m))
+        .collect();
     ranked.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
     let mut memory_lines: Vec<String> = Vec::new();
     let mut memory_used: Vec<MemoryUsed> = Vec::new();
@@ -762,7 +776,7 @@ pub fn build_context(input: &ContextInput, env: &ContextEnv) -> ContextPlan {
         parts.push(PromptPart {
             name: "memory".into(),
             text: wrap(&nonce, "memory", "memory", "Saved facts for this workspace", None, &memory_lines.join("\n")),
-            stable: true,
+            stable: memory_stable,
         });
     }
     if !pinned_blocks.is_empty() {
@@ -777,7 +791,9 @@ pub fn build_context(input: &ContextInput, env: &ContextEnv) -> ContextPlan {
     }
     if !body_blocks.is_empty() {
         let name = if strategy == Strategy::Full { "material" } else { "passages" };
-        parts.push(PromptPart { name: name.into(), text: body_blocks.join("\n\n"), stable: false });
+        // Everything of a workspace that fits is the same for every question: it belongs
+        // to the cached prefix (and to a CLI session's own system prompt).
+        parts.push(PromptPart { name: name.into(), text: body_blocks.join("\n\n"), stable: strategy == Strategy::Full });
     }
     if let Some(c) = condensed_text {
         parts.push(PromptPart {
@@ -820,6 +836,8 @@ pub fn build_context(input: &ContextInput, env: &ContextEnv) -> ContextPlan {
     }
 
     ContextPlan {
+        history_from: verbatim_start,
+        condensed_used: condensed_text.is_some(),
         instructions_tokens: tok(&instructions),
         memory: memory_used,
         strategy,
@@ -1244,5 +1262,47 @@ mod tests {
         // unicode safe
         let v = validate_citations("契約は三月です[S77]。", &plan);
         assert_eq!(v.text, "契約は三月です。");
+    }
+
+    #[test]
+    fn memory_that_fits_keeps_a_fixed_order_whatever_the_question() {
+        let mut i = base_input();
+        i.memory = vec![
+            MemoryItem { id: "a".into(), title: "Alpha".into(), text: "about apples".into() },
+            MemoryItem { id: "b".into(), title: "Beta".into(), text: "about bananas".into() },
+        ];
+        i.question = "tell me about bananas".into();
+        let p1 = build_context(&i, &env(&no_search, &load_text));
+        i.question = "tell me about apples".into();
+        let p2 = build_context(&i, &env(&no_search, &load_text));
+        let mem = |p: &ContextPlan| p.prompt_parts.iter().find(|x| x.name == "memory").unwrap().clone();
+        assert!(mem(&p1).stable && mem(&p2).stable);
+        assert_eq!(mem(&p1).text, mem(&p2).text, "same bytes for both questions");
+        assert!(mem(&p1).text.find("Alpha").unwrap() < mem(&p1).text.find("Beta").unwrap());
+        let stable = |p: &ContextPlan| p.prompt_parts.iter().filter(|x| x.stable).map(|x| x.text.clone()).collect::<Vec<_>>();
+        assert_eq!(stable(&p1), stable(&p2));
+    }
+
+    #[test]
+    fn memory_that_does_not_fit_is_ranked_and_leaves_the_stable_part() {
+        let mut i = base_input();
+        i.memory = (0..40).map(|n| MemoryItem { id: format!("k{n}"), title: format!("Fact {n}"), text: if n == 39 { "kestrel budget".into() } else { "filler ".repeat(60) } }).collect();
+        let p = build_context(&i, &env(&no_search, &load_text));
+        let mem = p.prompt_parts.iter().find(|x| x.name == "memory").unwrap();
+        assert!(!mem.stable, "ranked for this question: not part of the cached prefix");
+        assert!(mem.text.contains("kestrel budget"));
+    }
+
+    #[test]
+    fn the_whole_workspace_when_it_fits_is_part_of_the_stable_prefix() {
+        let mut i = base_input();
+        i.meetings = vec![meeting("m1", "Kickoff", 10, "recap", 300)];
+        let a = build_context(&i, &env(&no_search, &load_text));
+        i.question = "something else entirely".into();
+        let b = build_context(&i, &env(&no_search, &load_text));
+        assert_eq!(a.strategy, Strategy::Full);
+        let mat = |p: &ContextPlan| p.prompt_parts.iter().find(|x| x.name == "material").unwrap().clone();
+        assert!(mat(&a).stable);
+        assert_eq!(mat(&a).text, mat(&b).text);
     }
 }

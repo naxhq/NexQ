@@ -53,15 +53,18 @@ pub struct TalkingPointInput {
 
 /// What the indexer needs besides meetings (which it reads from the database
 /// itself). Implemented by the workspaces layer.
+///
+/// A read that fails is an `Err`, never an empty list: an empty list means
+/// "there is nothing" and would delete what was indexed.
 pub trait IndexProvider: Send + Sync {
-    fn documents(&self) -> Vec<DocInput> {
-        Vec::new()
+    fn documents(&self) -> Result<Vec<DocInput>, String> {
+        Ok(Vec::new())
     }
-    fn folders(&self) -> Vec<FolderInput> {
-        Vec::new()
+    fn folders(&self) -> Result<Vec<FolderInput>, String> {
+        Ok(Vec::new())
     }
-    fn talking_points(&self) -> Vec<TalkingPointInput> {
-        Vec::new()
+    fn talking_points(&self) -> Result<Vec<TalkingPointInput>, String> {
+        Ok(Vec::new())
     }
 }
 
@@ -601,6 +604,9 @@ pub fn run_pass_scoped(
     scope: &PassScope,
 ) -> PassReport {
     let mut rep = PassReport::default();
+    // Each list is read; one that can't be read is reported and its part of the
+    // pass is skipped, including the removal of what is indexed for it.
+    let mut meetings_ok = scope.meetings;
     let meetings = if !scope.meetings {
         Vec::new()
     } else {
@@ -608,20 +614,51 @@ pub fn run_pass_scoped(
             Ok(m) => m,
             Err(e) => {
                 rep.errors.push(format!("list meetings: {e}"));
+                meetings_ok = false;
                 Vec::new()
             }
         }
     };
-    let docs = if scope.documents { provider.documents() } else { Vec::new() };
-    let points: Vec<TalkingPointInput> = if scope.points {
-        provider.talking_points().into_iter().filter(|p| p.in_context).collect()
+    let mut docs_ok = scope.documents;
+    let docs = if scope.documents {
+        match provider.documents() {
+            Ok(d) => d,
+            Err(e) => {
+                rep.errors.push(format!("documents: {e}"));
+                docs_ok = false;
+                Vec::new()
+            }
+        }
     } else {
         Vec::new()
     };
+    let mut points_ok = scope.points;
+    let points: Vec<TalkingPointInput> = if scope.points {
+        match provider.talking_points() {
+            Ok(p) => p.into_iter().filter(|p| p.in_context).collect(),
+            Err(e) => {
+                rep.errors.push(format!("talking points: {e}"));
+                points_ok = false;
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    let mut folders_ok = !matches!(scope.folders, FolderSel::None);
     let folders: Vec<FolderInput> = match &scope.folders {
-        FolderSel::All => provider.folders(),
         FolderSel::None => Vec::new(),
-        FolderSel::One(id) => provider.folders().into_iter().filter(|f| &f.id == id).collect(),
+        sel => match provider.folders() {
+            Ok(all) => match sel {
+                FolderSel::One(id) => all.into_iter().filter(|f| &f.id == id).collect(),
+                _ => all,
+            },
+            Err(e) => {
+                rep.errors.push(format!("folders: {e}"));
+                folders_ok = false;
+                Vec::new()
+            }
+        },
     };
 
     let mut done = 0usize;
@@ -631,52 +668,55 @@ pub fn run_pass_scoped(
         progress(IndexProgress { done, total, current: current.to_string(), skipped });
     };
 
-    // stale sources
-    if scope.meetings {
+    // stale sources: only when the list they are compared with was read
+    let stale = |conn: &Connection, kind: PassageKind, keep: &HashSet<&str>| -> Vec<String> {
+        match store::list_refs(conn, kind) {
+            Ok(refs) => refs.into_iter().filter(|r| !keep.contains(r.as_str())).collect(),
+            Err(_) => Vec::new(),
+        }
+    };
+    if meetings_ok {
         let live: HashSet<&str> = meetings.iter().map(|m| m.id.as_str()).collect();
-        let gone: Vec<String> = store::list_refs(conn, PassageKind::Transcript)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|r| !live.contains(r.as_str()))
-            .collect();
-        for g in gone {
+        for g in stale(conn, PassageKind::Transcript, &live) {
             if store::remove_meeting(conn, &g).is_ok() {
                 rep.removed += 1;
             }
         }
     }
-    if scope.documents {
+    if docs_ok {
         let doc_ids: HashSet<&str> = docs.iter().map(|d| d.id.as_str()).collect();
-        for g in store::list_refs(conn, PassageKind::Document).unwrap_or_default().into_iter().filter(|r| !doc_ids.contains(r.as_str())) {
+        for g in stale(conn, PassageKind::Document, &doc_ids) {
             if store::remove_ref(conn, PassageKind::Document, &g).is_ok() {
                 rep.removed += 1;
             }
         }
     }
-    if scope.points {
+    if points_ok {
         let point_ids: HashSet<&str> = points.iter().map(|d| d.id.as_str()).collect();
-        for g in store::list_refs(conn, PassageKind::TalkingPoint).unwrap_or_default().into_iter().filter(|r| !point_ids.contains(r.as_str())) {
+        for g in stale(conn, PassageKind::TalkingPoint, &point_ids) {
             if store::remove_ref(conn, PassageKind::TalkingPoint, &g).is_ok() {
                 rep.removed += 1;
             }
         }
     }
     let folder_ids: HashSet<&str> = folders.iter().filter(|f| f.index_enabled).map(|f| f.id.as_str()).collect();
-    match &scope.folders {
-        FolderSel::All => {
-            for g in store::list_refs(conn, PassageKind::Folder).unwrap_or_default().into_iter().filter(|r| !folder_ids.contains(r.as_str())) {
-                if store::remove_ref(conn, PassageKind::Folder, &g).is_ok() {
+    if folders_ok {
+        match &scope.folders {
+            FolderSel::All => {
+                for g in stale(conn, PassageKind::Folder, &folder_ids) {
+                    if store::remove_ref(conn, PassageKind::Folder, &g).is_ok() {
+                        rep.removed += 1;
+                    }
+                }
+            }
+            FolderSel::One(id) => {
+                // opted out, switched off or gone: its passages go now
+                if !folder_ids.contains(id.as_str()) && store::remove_ref(conn, PassageKind::Folder, id).is_ok() {
                     rep.removed += 1;
                 }
             }
+            FolderSel::None => {}
         }
-        FolderSel::One(id) => {
-            // opted out, switched off or gone: its passages go now
-            if !folder_ids.contains(id.as_str()) && store::remove_ref(conn, PassageKind::Folder, id).is_ok() {
-                rep.removed += 1;
-            }
-        }
-        FolderSel::None => {}
     }
 
     // meetings, newest first
@@ -1025,21 +1065,32 @@ mod tests {
         docs: Mutex<Vec<DocInput>>,
         folders: Mutex<Vec<FolderInput>>,
         points: Mutex<Vec<TalkingPointInput>>,
+        /// Reads fail (the database could not be read).
+        fail: AtomicBool,
     }
     impl Prov {
         fn new() -> Arc<Self> {
-            Arc::new(Prov { docs: Mutex::new(vec![]), folders: Mutex::new(vec![]), points: Mutex::new(vec![]) })
+            Arc::new(Prov { docs: Mutex::new(vec![]), folders: Mutex::new(vec![]), points: Mutex::new(vec![]), fail: AtomicBool::new(false) })
         }
     }
     impl IndexProvider for Prov {
-        fn documents(&self) -> Vec<DocInput> {
-            self.docs.lock().unwrap().clone()
+        fn documents(&self) -> Result<Vec<DocInput>, String> {
+            if self.fail.load(Ordering::SeqCst) {
+                return Err("the database is busy".into());
+            }
+            Ok(self.docs.lock().unwrap().clone())
         }
-        fn folders(&self) -> Vec<FolderInput> {
-            self.folders.lock().unwrap().clone()
+        fn folders(&self) -> Result<Vec<FolderInput>, String> {
+            if self.fail.load(Ordering::SeqCst) {
+                return Err("the database is busy".into());
+            }
+            Ok(self.folders.lock().unwrap().clone())
         }
-        fn talking_points(&self) -> Vec<TalkingPointInput> {
-            self.points.lock().unwrap().clone()
+        fn talking_points(&self) -> Result<Vec<TalkingPointInput>, String> {
+            if self.fail.load(Ordering::SeqCst) {
+                return Err("the database is busy".into());
+            }
+            Ok(self.points.lock().unwrap().clone())
         }
     }
 
@@ -1729,5 +1780,44 @@ mod tests {
         svc.shutdown();
         fs::remove_dir_all(&root).ok();
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_read_that_fails_never_deletes_what_is_indexed() {
+        let (root, prov) = folder_fixture("idx-readfail");
+        prov.docs.lock().unwrap().push(DocInput { id: "d1".into(), name: "G".into(), text: "The numbat guide".into() });
+        prov.points.lock().unwrap().push(TalkingPointInput { id: "t1".into(), title: "T".into(), plain_text: "Greet the ocelot".into(), in_context: true });
+        let mut conn = mem_db();
+        add_meeting(&conn, "m1", "T", "2026-01-05T10:00:00Z", None, &[("You", "The marmot report", 0)]);
+        run(&mut conn, prov.as_ref());
+        let all = SearchScope {
+            meetings: MeetingScope::Ids(vec!["m1".into()]),
+            document_ids: vec!["d1".into()],
+            folder_ids: vec!["f1".into()],
+            talking_point_ids: vec!["t1".into()],
+            ..Default::default()
+        };
+        for word in ["marmot", "numbat", "ocelot", "ibex"] {
+            assert!(!q(&conn, &all, word).is_empty(), "{word} is indexed");
+        }
+        // the provider can't read: errors are reported, nothing is removed
+        prov.fail.store(true, Ordering::SeqCst);
+        let r = run(&mut conn, prov.as_ref());
+        assert!(r.errors.len() >= 3, "{:?}", r.errors);
+        assert_eq!(r.removed, 0);
+        for word in ["marmot", "numbat", "ocelot", "ibex"] {
+            assert!(!q(&conn, &all, word).is_empty(), "{word} survives a failed read");
+        }
+        // a targeted pass over one folder behaves the same
+        let r = run_pass_scoped(&mut conn, prov.as_ref(), &RunControl::idle(), &|_| {}, &PassScope::folder("f1"));
+        assert!(!r.errors.is_empty() && r.removed == 0);
+        assert!(!q(&conn, &all, "ibex").is_empty());
+        // and once it can read again, a really removed document goes
+        prov.fail.store(false, Ordering::SeqCst);
+        prov.docs.lock().unwrap().clear();
+        let r = run(&mut conn, prov.as_ref());
+        assert_eq!(r.removed, 1);
+        assert!(q(&conn, &all, "numbat").is_empty());
+        fs::remove_dir_all(&root).ok();
     }
 }

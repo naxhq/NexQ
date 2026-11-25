@@ -13,7 +13,8 @@ use serde_json::json;
 
 use super::errors::describe;
 use super::files::meeting_files;
-use super::guard::{atomically, message_tainted, AccessGuard, Used, WriteError};
+use super::guard::{atomically, AccessGuard, Reuse, WriteError};
+use super::provenance::Provenance;
 use super::hub::{ChatHub, Permit, ToolContext, ToolPolicy};
 use super::scope_adapter::{self, ChatScope};
 use super::store::{self, ChatRow};
@@ -48,6 +49,8 @@ pub struct ChatDeps {
     pub tools: Arc<dyn ToolPolicy>,
     /// The model for a chat that has none chosen (the active provider's).
     pub default_selection: Arc<dyn Fn() -> Option<ModelSelection> + Send + Sync>,
+    /// The model for AI recaps: the cheapest good-enough one (see `live_runtime::cheapest`).
+    pub recap_selection: Arc<dyn Fn() -> Option<ModelSelection> + Send + Sync>,
 }
 
 impl ChatDeps {
@@ -62,6 +65,8 @@ impl ChatDeps {
 // ── building the context ──────────────────────────────────────────────────────
 
 pub struct Assembled {
+    /// Everything this answer rests on (see `provenance`).
+    pub provenance: Provenance,
     pub plan: ContextPlan,
     pub selection: ModelSelection,
     pub chat: ChatRow,
@@ -109,6 +114,16 @@ fn bar_kind(kind: &str) -> &'static str {
 /// The ladder's bars: instructions, then one bar per saved memory item (all
 /// in the instructions layer), then the sources.
 
+/// The name a person knows an item by (not its id).
+fn title_of(conn: &rusqlite::Connection, kind: &str, id: &str) -> String {
+    let (sql, fallback) = match kind {
+        "document" => ("SELECT name FROM context_resources WHERE id = ?1", id),
+        "talking_point" => ("SELECT title FROM talking_points WHERE id = ?1", id),
+        _ => return id.to_string(),
+    };
+    conn.query_row(sql, [id], |r| r.get::<_, String>(0)).ok().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| fallback.to_string())
+}
+
 /// The contract's report of a plan (five layers). Bar ids are
 /// `<kind>:<ref_id>[:<sub_ref>]` with kind in meeting, document, folder,
 /// talking_point, memory, instructions or conversation; several passages of
@@ -116,10 +131,10 @@ fn bar_kind(kind: &str) -> &'static str {
 pub fn report_of(plan: &ContextPlan, depth: &str, estimate: bool, extra_notices: &[String]) -> ContextReport {
     let mut bars: Vec<ContextBar> = Vec::new();
     if plan.instructions_tokens > 0 {
-        bars.push(ContextBar { id: "instructions:workspace".into(), layer: "instructions".into(), title: "Instructions".into(), tokens: plan.instructions_tokens, relevance: 1.0, pinned: true, included: true });
+        bars.push(ContextBar { id: "instructions:workspace".into(), kind: "instructions".into(), ref_id: "workspace".into(), sub_ref: None, layer: "instructions".into(), title: "Instructions".into(), tokens: plan.instructions_tokens, relevance: 1.0, pinned: true, included: true });
     }
     for m in &plan.memory {
-        bars.push(ContextBar { id: format!("memory:{}", m.id), layer: "instructions".into(), title: m.title.clone(), tokens: m.tokens, relevance: 1.0, pinned: false, included: true });
+        bars.push(ContextBar { id: format!("memory:{}", m.id), kind: "memory".into(), ref_id: m.id.clone(), sub_ref: None, layer: "instructions".into(), title: m.title.clone(), tokens: m.tokens, relevance: 1.0, pinned: false, included: true });
     }
     let mut index: HashMap<String, usize> = HashMap::new();
     for it in &plan.items {
@@ -135,6 +150,9 @@ pub fn report_of(plan: &ContextPlan, depth: &str, estimate: bool, extra_notices:
                 index.insert(id.clone(), bars.len());
                 bars.push(ContextBar {
                     id,
+                    kind: bar_kind(&it.kind).into(),
+                    ref_id: it.ref_id.clone(),
+                    sub_ref: it.sub_ref.clone(),
                     layer: layer_of_bar(&it.layer, &it.kind).into(),
                     title: it.title.clone(),
                     tokens: it.tokens,
@@ -146,14 +164,14 @@ pub fn report_of(plan: &ContextPlan, depth: &str, estimate: bool, extra_notices:
         }
     }
     if let Some(s) = plan.segments.iter().find(|s| s.layer == "conversation") {
-        bars.push(ContextBar { id: "conversation:chat".into(), layer: "conversation".into(), title: "Conversation".into(), tokens: s.tokens, relevance: 1.0, pinned: false, included: true });
+        bars.push(ContextBar { id: "conversation:chat".into(), kind: "conversation".into(), ref_id: "chat".into(), sub_ref: None, layer: "conversation".into(), title: "Conversation".into(), tokens: s.tokens, relevance: 1.0, pinned: false, included: true });
     }
     for d in plan.dropped.iter().take(40) {
         let id = format!("{}:{}", bar_kind(&d.kind), d.ref_id);
         if bars.iter().any(|b| b.id == id) {
             continue;
         }
-        bars.push(ContextBar { id, layer: layer_of_bar(&d.kind, &d.kind).into(), title: d.title.clone(), tokens: 0, relevance: 0.0, pinned: false, included: false });
+        bars.push(ContextBar { id, kind: bar_kind(&d.kind).into(), ref_id: d.ref_id.clone(), sub_ref: None, layer: layer_of_bar(&d.kind, &d.kind).into(), title: d.title.clone(), tokens: 0, relevance: 0.0, pinned: false, included: false });
     }
     let mut notices = plan.notices.clone();
     notices.extend(extra_notices.iter().cloned());
@@ -234,7 +252,7 @@ pub fn build(
         match kind.as_str() {
             "document" if scope.eff.allows_document(id) => {
                 if let Some(t) = crate::workspace::documents::saved_text(&conn, id)?.filter(|t| t.status == "ready") {
-                    pinned.push(PinnedItem { kind: "document".into(), ref_id: id.clone(), sub_ref: None, title: id.clone(), text: t.text });
+                    pinned.push(PinnedItem { kind: "document".into(), ref_id: id.clone(), sub_ref: None, title: title_of(&conn, "document", id), text: t.text });
                 }
             }
             "meeting" => {
@@ -245,7 +263,7 @@ pub fn build(
             }
             "talking_point" if scope.eff.talking_point_ids.contains(id) => {
                 if let Some(text) = scope_adapter::indexed_text(&conn, "talking_point", id, None) {
-                    pinned.push(PinnedItem { kind: "talking_point".into(), ref_id: id.clone(), sub_ref: None, title: id.clone(), text });
+                    pinned.push(PinnedItem { kind: "talking_point".into(), ref_id: id.clone(), sub_ref: None, title: title_of(&conn, "talking_point", id), text });
                 }
             }
             _ => {}
@@ -265,13 +283,15 @@ pub fn build(
                     kind: "document".into(),
                     ref_id: item.ref_id.clone(),
                     sub_ref: None,
-                    title: item.label.clone().unwrap_or_else(|| item.ref_id.clone()),
+                    title: item.label.clone().filter(|l| !l.trim().is_empty()).unwrap_or_else(|| title_of(&conn, "document", &item.ref_id)),
                     text: t.text,
                 });
             }
         }
     }
-    let (messages, dropped_pairs, condensed_ok) = clean_history(&conn, &row, &scope)?;
+    let reuse = Reuse::new(&conn, chat_id)?;
+    let history_clean = clean_history(&conn, &row, &reuse)?;
+    let (messages, dropped_pairs, condensed_ok) = (history_clean.kept.clone(), history_clean.dropped, history_clean.condensed_ok);
     if !condensed_ok {
         store::clear_condensed(&conn, chat_id)?;
     }
@@ -296,9 +316,19 @@ pub fn build(
         condensed: if condensed_ok { row.condensed.clone() } else { None },
         nonce: Some(row.nonce.clone()),
     };
-    let search_fn = |q: &str, n: usize| search(&conn, &scope.search, q, &[], n).unwrap_or_default();
+    let search_error: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
+    let search_fn = |q: &str, n: usize| match search(&conn, &scope.search, q, &[], n) {
+        Ok(found) => found,
+        Err(e) => {
+            *search_error.borrow_mut() = Some(e);
+            Vec::new()
+        }
+    };
     let load_fn = |kind: &str, id: &str, sub: Option<&str>| scope_adapter::indexed_text(&conn, kind, id, sub);
     let plan = build_context(&input, &ContextEnv { search: &search_fn, load_full: &load_fn });
+    if let Some(e) = search_error.borrow_mut().take() {
+        return Err(format!("Couldn't search this workspace: {e}"));
+    }
 
     let system = plan.prompt_parts.iter().filter(|p| p.stable).map(|p| p.text.as_str()).collect::<Vec<_>>().join("\n\n");
     let volatile = plan.prompt_parts.iter().filter(|p| !p.stable).map(|p| p.text.as_str()).collect::<Vec<_>>().join("\n\n");
@@ -321,38 +351,100 @@ pub fn build(
         .as_bytes(),
     );
     let report = report_of(&plan, &depth_name, estimate, &extra_notices);
-    Ok(Assembled { plan, selection, chat: row, scope, system, user_text, history, report, fingerprint, cards: sizes.cards })
-}
-
-/// The chat's messages minus the answers (and their questions) that rest on
-/// material the chat no longer has, how many pairs that is, and whether the
-/// condensed history is still good (it is not when anything it covers was left out).
-fn clean_history(conn: &rusqlite::Connection, row: &ChatRow, scope: &ChatScope) -> Result<(Vec<WorkspaceMessage>, usize, bool), String> {
-    let all = store::list_messages(conn, &row.chat.id)?;
-    let mut kept: Vec<WorkspaceMessage> = Vec::new();
-    let (mut dropped, mut condensed_ok) = (0usize, true);
-    let upto = row.chat.condensed_upto.unwrap_or(0);
-    for m in all {
-        if message_tainted(&m, scope) {
-            if kept.last().map_or(false, |p| p.role == "user") {
-                let q = kept.pop().unwrap();
-                if q.id <= upto {
-                    condensed_ok = false;
-                }
+    // Everything this answer could use, and what the history it was sent rests on.
+    let mut provenance = Provenance::new();
+    for it in &plan.items {
+        provenance.add(&it.kind, &it.ref_id);
+    }
+    for m in &plan.memory {
+        provenance.add("memory", &m.id);
+    }
+    if is_cli(&selection) {
+        // a CLI session can also read the transcripts folder, the scope's folders and call its servers
+        let scoped = ws_runtime::scoped_sources(&sources_cfg, &scope.eff);
+        if row.chat.include_meetings {
+            for m in &scope.meetings {
+                provenance.add("meeting", &m.id);
             }
-            if m.id <= upto {
-                condensed_ok = false;
-            }
-            dropped += 1;
-        } else {
-            kept.push(m);
+        }
+        for f in &scoped.notes_folders {
+            provenance.add("launch_folder", &f.id);
+        }
+        for s in &scoped.mcp_servers {
+            provenance.add("server", &s.id);
         }
     }
-    Ok((kept, dropped, condensed_ok))
+    // The history exactly as the plan used it: the turns it included and, when it
+    // was used, the condensed summary.
+    for m in history_clean.kept.iter().skip(plan.history_from).filter(|m| m.role == "assistant") {
+        match reuse.provenance(m.id) {
+            Some(p) => provenance.merge(p),
+            None => provenance.bad.push(format!("message:{}", m.id)),
+        }
+    }
+    if plan.condensed_used {
+        match &row.condensed_prov {
+            Some(p) => provenance.merge(p),
+            None => provenance.bad.push("condensed".into()),
+        }
+    }
+    // A CLI session keeps its earlier turns: what it was given before still counts.
+    if is_cli(&selection) {
+        if let Some(held) = deps.hub.session_provenance(chat_id) {
+            provenance.merge(&held);
+        }
+    }
+    provenance.seal(reuse.universe());
+    Ok(Assembled { provenance, plan, selection, chat: row, scope, system, user_text, history, report, fingerprint, cards: sizes.cards })
+}
+
+struct History {
+    kept: Vec<WorkspaceMessage>,
+    dropped: usize,
+    condensed_ok: bool,
+}
+
+/// The chat's messages minus the answers (and their questions) whose record is
+/// no longer allowed or missing, how many pairs that is, whether the condensed
+/// history is still good (its own record must be allowed), and the union of
+/// what the history that is sent rests on.
+fn clean_history(conn: &rusqlite::Connection, row: &ChatRow, reuse: &Reuse) -> Result<History, String> {
+    let all = store::list_messages(conn, &row.chat.id)?;
+    let mut kept: Vec<WorkspaceMessage> = Vec::new();
+    let mut dropped = 0usize;
+    for m in all {
+        if reuse.reusable(&m) {
+            kept.push(m);
+        } else {
+            if kept.last().map_or(false, |p| p.role == "user") {
+                kept.pop();
+            }
+            dropped += 1;
+        }
+    }
+    let condensed_ok = row.condensed.is_none() || row.condensed_prov.as_ref().map_or(false, |p| reuse.allows(p));
+    let _ = conn;
+    Ok(History { kept, dropped, condensed_ok })
+}
+
+/// [`build`] off the async workers (it reads the database and the index).
+pub async fn build_blocking(
+    deps: &Arc<ChatDeps>,
+    chat_id: &str,
+    question: &str,
+    deeper: bool,
+    window: Option<usize>,
+    extra_notices: &[String],
+    estimate: bool,
+) -> Result<Assembled, String> {
+    let (deps, chat_id, question, notices) = (deps.clone(), chat_id.to_string(), question.to_string(), extra_notices.to_vec());
+    tokio::task::spawn_blocking(move || build(&deps, &chat_id, &question, deeper, window, &notices, estimate))
+        .await
+        .map_err(|e| format!("The chat could not prepare this question: {e}"))?
 }
 
 /// The estimate shown before sending.
-pub async fn preview(deps: &ChatDeps, chat_id: &str, question: Option<&str>) -> Result<ContextReport, String> {
+pub async fn preview(deps: &Arc<ChatDeps>, chat_id: &str, question: Option<&str>) -> Result<ContextReport, String> {
     let (selection, depth) = {
         let conn = deps.conn()?;
         let row = store::require_chat(&conn, chat_id)?;
@@ -363,7 +455,7 @@ pub async fn preview(deps: &ChatDeps, chat_id: &str, question: Option<&str>) -> 
         None => None,
     };
     let _ = depth;
-    let a = build(deps, chat_id, question.unwrap_or(""), false, window, &[], true)?;
+    let a = build_blocking(deps, chat_id, question.unwrap_or(""), false, window, &[], true).await?;
     Ok(a.report)
 }
 
@@ -378,14 +470,16 @@ enum Condensed {
 
 async fn maybe_condense(deps: &ChatDeps, chat_id: &str, selection: &ModelSelection, window: Option<usize>, cancel: &Arc<CancelToken>) -> Condensed {
     // 1. is it needed, and what would be condensed (no await while the connection lives)
-    let (prompt, upto, nonce) = {
+    let (prompt, upto, nonce, covered, prev_prov) = {
         let Ok(conn) = deps.conn() else { return Condensed::Nothing };
         let Ok(row) = store::require_chat(&conn, chat_id) else { return Condensed::Nothing };
-        let Ok(scope) = scope_adapter::chat_scope(&conn, &row) else { return Condensed::Nothing };
-        let Ok((messages, _, condensed_ok)) = clean_history(&conn, &row, &scope) else { return Condensed::Nothing };
-        let row = if condensed_ok { row } else { ChatRow { condensed: None, ..row } };
+        let Ok(reuse) = Reuse::new(&conn, chat_id) else { return Condensed::Nothing };
+        let Ok(h) = clean_history(&conn, &row, &reuse) else { return Condensed::Nothing };
+        let messages = h.kept;
+        let prev_ok = h.condensed_ok;
+        let row = if prev_ok { row } else { ChatRow { condensed: None, condensed_prov: None, ..row } };
         let older_end = messages.len().saturating_sub(VERBATIM_TURNS);
-        let from = row.chat.condensed_upto.unwrap_or(0);
+        let from = if prev_ok { row.chat.condensed_upto.unwrap_or(0) } else { 0 };
         let older: Vec<&WorkspaceMessage> = messages[..older_end].iter().filter(|m| m.id > from).collect();
         let turns: Vec<ChatTurn> = older.iter().map(|m| ChatTurn { role: m.role.clone(), content: m.content.clone() }).collect();
         let win = window.unwrap_or(if is_cli(selection) { 200_000 } else { 128_000 });
@@ -400,7 +494,8 @@ async fn maybe_condense(deps: &ChatDeps, chat_id: &str, selection: &ModelSelecti
         for t in &turns {
             text.push_str(&format!("{}: {}\n", if t.role == "assistant" { "Assistant" } else { "User" }, flatten(&t.content).replace('\n', " ")));
         }
-        (text, older.last().map(|m| m.id).unwrap_or(from), row.nonce)
+        let covered: Vec<i64> = older.iter().filter(|m| m.role == "assistant").map(|m| m.id).collect();
+        (text, older.last().map(|m| m.id).unwrap_or(from), row.nonce, covered, row.condensed_prov)
     };
     // 2. one run with the chat's own model, no fallback
     let mut req = AiRunRequest::new(
@@ -415,17 +510,25 @@ async fn maybe_condense(deps: &ChatDeps, chat_id: &str, selection: &ModelSelecti
     match deps.ai.run(req, None).await {
         Ok(res) if !res.text.trim().is_empty() => {
             let Ok(conn) = deps.conn() else { return Condensed::Nothing };
-            // written only if nothing it covers has become unusable since it was made
+            // Written only if everything it covers is still allowed at the moment of writing;
+            // it carries what it was made from (the old summary and the turns it covers).
             let written = atomically(
                 &conn,
+                |c| Reuse::new(c, chat_id).map_or(false, |r| covered.iter().all(|id| r.provenance(*id).map_or(false, |p| r.allows(p))) && prev_prov.as_ref().map_or(true, |p| r.allows(p))),
                 |c| {
-                    let Ok(Some(row)) = store::get_chat(c, chat_id) else { return false };
-                    let Ok(scope) = scope_adapter::chat_scope(c, &row) else { return false };
-                    store::list_messages(c, chat_id)
-                        .map(|ms| ms.iter().filter(|m| m.id <= upto).all(|m| !message_tainted(m, &scope)))
-                        .unwrap_or(false)
+                    let r = Reuse::new(c, chat_id)?;
+                    let mut prov = Provenance::new();
+                    for id in &covered {
+                        if let Some(p) = r.provenance(*id) {
+                            prov.merge(p);
+                        }
+                    }
+                    if let Some(p) = &prev_prov {
+                        prov.merge(p);
+                    }
+                    prov.seal(r.universe());
+                    store::set_condensed(c, chat_id, res.text.trim(), upto, Some(&prov))
                 },
-                |c| store::set_condensed(c, chat_id, res.text.trim(), upto),
             );
             match written {
                 Ok(()) => Condensed::Done,
@@ -674,28 +777,25 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
         } else {
             (None, None)
         };
-        let mut a = match build(deps, chat_id, question, deeper, window, &notices, false) {
+        let mut a = match build_blocking(deps, chat_id, question, deeper, window, &notices, false).await {
             Ok(a) => a,
             Err(e) => return fail(e),
         };
         // From here on, what this answer was built from is watched.
-        let mut used = Used::of_plan(&a.plan);
-        if cli {
-            // a CLI session can also read the transcripts folder, the scope's folders and call its servers
-            let cfg = deps.sources.read().map(|c| c.clone()).unwrap_or_default();
-            let scoped = ws_runtime::scoped_sources(&cfg, &a.scope.eff);
-            used.expose(
-                a.chat.chat.include_meetings.then(|| a.scope.meetings.iter().map(|m| m.id.clone()).collect::<Vec<_>>()).unwrap_or_default(),
-                scoped.notes_folders.iter().map(|f| f.id.clone()),
-                scoped.mcp_servers.iter().map(|s| s.id.clone()),
-            );
-        }
         let guard = match deps.conn() {
-            Ok(c) => Arc::new(AccessGuard::new(c, chat_id, used)),
+            Ok(c) => Arc::new(AccessGuard::new(c, chat_id, a.provenance.clone())),
             Err(e) => return fail(e),
         };
         // a session built from something that changed starts again
-        if cli && deps.hub.fingerprint_changed(chat_id, &a.fingerprint) {
+        let seen = if cli { deps.hub.fingerprint_status(chat_id, &a.fingerprint) } else { super::hub::Seen::First };
+        if seen == super::hub::Seen::Same {
+            // the session already holds the stable part; this turn sends only what is new
+            let held = crate::workspace_search::cjk::estimate_tokens(&a.system);
+            a.report.notices.push(format!(
+                "This chat's session already holds {held} tokens (instructions, pinned items and the material that fits); only your question and what is new goes in this turn."
+            ));
+        }
+        if seen == super::hub::Seen::Changed {
             // the session ends, which moves the generation: read it and build again
             // from there (this is not one of the two tries)
             close_chat_session(deps, chat_id).await;
@@ -711,7 +811,19 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
         req.est_input_tokens = Some(a.plan.tokens as u64 + 200);
         let mut capability_notes: Vec<String> = Vec::new();
         if cli {
-            let (launch, notes) = cli_launch(deps, &a, chat_id);
+            let (launch, notes, a_back) = {
+                let (d, chat) = (deps.clone(), chat_id.to_string());
+                match tokio::task::spawn_blocking(move || {
+                    let (l, n) = cli_launch(&d, &a, &chat);
+                    (l, n, a)
+                })
+                .await
+                {
+                    Ok(t) => t,
+                    Err(e) => return fail(format!("The chat could not prepare its session: {e}")),
+                }
+            };
+            a = a_back;
             capability_notes = notes;
             let (key, expected) = match &launch {
                 Some(_) => (SessionKey::sources(scope_key.clone(), Tier::Fast), gen_sources),
@@ -735,6 +847,10 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
                 continue;
             }
             return Outcome::Revoked;
+        }
+        if cli {
+            // the session receives this turn: from now on it holds what it rests on
+            deps.hub.hold_in_session(chat_id, &a.provenance);
         }
         if !started {
             started = true;
@@ -828,6 +944,7 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
                         context: &report,
                         input_tokens: res.usage.prompt_tokens() as i64,
                         output_tokens: res.usage.output_tokens as i64,
+                        provenance: Some(&a.provenance),
                     },
                 )
             });
@@ -849,6 +966,7 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
 }
 
 async fn close_chat_session(deps: &Arc<ChatDeps>, chat_id: &str) {
+    deps.hub.reset_session(chat_id);
     deps.ai.close_chat(chat_id).await;
     deps.transcripts.remove(chat_id);
 }

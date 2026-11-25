@@ -5,7 +5,6 @@
 //! passes the scope as a plain [`SearchScope`] and the indexer reads its
 //! inputs through [`indexer::IndexProvider`]. Search and indexing use their
 //! own SQLite connections (WAL, busy timeout), never the shared locked one.
-#![allow(dead_code)]
 
 pub mod cards;
 pub mod cjk;
@@ -24,6 +23,8 @@ pub(crate) mod test_support;
 mod tests_bench;
 #[cfg(test)]
 mod tests_eval;
+#[cfg(test)]
+mod tests_eval_lang;
 #[cfg(test)]
 mod tests_redteam;
 
