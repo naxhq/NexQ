@@ -8,6 +8,7 @@ import { useWorkspaceChatStore } from "../stores/workspaceChatStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import type { WorkspaceSummary } from "../lib/types";
 import { ChatPane } from "./chat/ChatPane";
+import { handleOpenRequest } from "./openRequest";
 import { useWorkspaceMeetings } from "./useWorkspaceMeetings";
 import { WorkspaceSwitcher, SWITCHER_SHORTCUT } from "./WorkspaceSwitcher";
 import { useWorkspaceActions } from "./WorkspaceActions";
@@ -189,7 +190,7 @@ export function MiddlePane({
       )}
 
       <div className={compact ? "min-h-0 flex-1 overflow-hidden" : "min-h-0 flex-1 overflow-hidden border-t border-border"}>
-        <ChatPane workspaceId={workspace.id} onOpenMeeting={(id) => onOpenMeeting(id)} onOpenItem={onShowLibrary} />
+        <ChatPane workspaceId={workspace.id} onOpenMeeting={(id) => onOpenMeeting(id)} onOpenItem={(kind, refId, subRef) => void handleOpenRequest({ kind, ref_id: refId, sub_ref: subRef })} />
       </div>
 
       <WorkspaceSwitcher open={switcherOpen} onClose={() => onSwitcherOpenChange(false)} />

@@ -23,6 +23,7 @@ import { MiddlePane } from "./MiddlePane";
 import { ResizeHandle } from "./ResizeHandle";
 import { useWorkspaceActions } from "./WorkspaceActions";
 import { WorkspaceRail } from "./WorkspaceRail";
+import { OpenFocusLayer } from "./OpenFocusLayer";
 
 /** Keys that are free in the launcher (Ctrl+M, B, comma, Shift+L and Shift+D are taken elsewhere). */
 export const HOME_SHORTCUTS = {
@@ -192,6 +193,8 @@ export function WorkspaceHome({
           </div>
         </SlideOver>
       )}
+
+      <OpenFocusLayer />
 
       {dragging && (
         <div

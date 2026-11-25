@@ -18,10 +18,12 @@ import "./talkingPoints.css";
 
 export interface TalkingPointsEditorProps {
   workspaceId: string;
+  /** Open on this note instead of the first. */
+  initialId?: string | null;
   className?: string;
 }
 
-export function TalkingPointsEditor({ workspaceId, className }: TalkingPointsEditorProps) {
+export function TalkingPointsEditor({ workspaceId, className, initialId = null }: TalkingPointsEditorProps) {
   const store = useTalkingPointsStore;
   const notes = store((s) => s.byWorkspace[workspaceId]);
   const loading = store((s) => s.loading[workspaceId]);
@@ -37,7 +39,7 @@ export function TalkingPointsEditor({ workspaceId, className }: TalkingPointsEdi
 
   useEffect(() => {
     void store.getState().load(workspaceId);
-    setSelectedId(null);
+    setSelectedId(initialId);
     return () => {
       void store.getState().flushAll();
     };

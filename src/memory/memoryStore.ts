@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { deleteMemory, listMemory, resolveMemory, saveMemory, suggestMemory } from "../lib/ipc";
+import { createMemory, deleteMemory, listMemory, resolveMemory, suggestMemory, updateMemory } from "../lib/ipc";
 import { onMemoryChanged } from "../lib/events";
 import type { MemoryItem, MemoryKind } from "../lib/types";
 
@@ -37,7 +37,6 @@ interface MemoryState {
 }
 
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
-const newId = () => (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `mem-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 
 export const useMemoryStore = create<MemoryState>((set, get) => ({
   byWorkspace: {},
@@ -57,29 +56,18 @@ export const useMemoryStore = create<MemoryState>((set, get) => ({
   },
 
   add: async (workspaceId, draft) => {
-    const now = Date.now();
-    await saveMemory({
-      id: newId(),
-      workspace_id: workspaceId,
-      kind: draft.kind,
-      title: draft.title.trim(),
-      text: draft.text.trim(),
-      source_meeting: null,
-      source_ms: null,
-      status: "saved",
-      created_at: now,
-      updated_at: now,
-    });
+    await createMemory({ workspace_id: workspaceId, kind: draft.kind, title: draft.title.trim(), text: draft.text.trim(), status: "saved" });
     await get().load(workspaceId);
   },
 
   edit: async (item, patch) => {
-    // A saved id that was forgotten meanwhile must not come back through an edit.
-    const fresh = await listMemory(item.workspace_id);
-    const current = (Array.isArray(fresh) ? fresh : []).find((m) => m.id === item.id);
-    // The list catches up through `memory_changed`; the form stays to say why nothing was saved.
-    if (!current) throw new Error("This was forgotten in the meantime, so it was not saved again.");
-    await saveMemory({ ...current, kind: patch.kind, title: patch.title.trim(), text: patch.text.trim(), updated_at: Date.now() });
+    try {
+      await updateMemory(item.id, { kind: patch.kind, title: patch.title.trim(), text: patch.text.trim() });
+    } catch (e) {
+      // A forgotten id fails instead of coming back; the list catches up through `memory_changed`.
+      if (/not_found/i.test(messageOf(e))) throw new Error("This was forgotten in the meantime, so it was not saved again.");
+      throw e;
+    }
     await get().load(item.workspace_id);
   },
 

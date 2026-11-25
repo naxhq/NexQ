@@ -189,11 +189,11 @@ export function MeetingWave({ meetings, onOpen, hue = null, height = 32, classNa
               </button>
             ))}
           </div>
-          <div aria-hidden className="relative h-4" style={{ width: ordered.length * PITCH }}>
+          <div aria-hidden className="relative h-5" style={{ width: ordered.length * PITCH }}>
             {ticks.map((t) => (
               <span
                 key={t.index}
-                className="ui-meta absolute top-1 whitespace-nowrap text-muted-foreground/80"
+                className="ui-meta absolute top-0.5 whitespace-nowrap text-muted-foreground/80"
                 style={{ left: t.index * PITCH + (PITCH - BAR) / 2 }}
               >
                 {t.label}

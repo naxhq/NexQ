@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { File as FileIcon, Folder, MoreHorizontal, Pin, Plug2 } from "lucide-react";
 import { InlineEdit, Menu, Switch, Tooltip, type MenuItemSpec } from "../ui";
 import { cn } from "../lib/utils";
@@ -27,6 +28,7 @@ export function LibraryRow({
   onTogglePin,
   onOptIn,
   onRemove,
+  highlighted,
 }: {
   item: WorkspaceItem;
   progress?: IndexProgress | null;
@@ -36,14 +38,20 @@ export function LibraryRow({
   onOptIn: (on: boolean) => void;
   /** Shown beside a missing item, so the next step is in view. */
   onRemove?: () => void;
+  /** Asked for from elsewhere (a cited file): scrolled into view and marked for a moment. */
+  highlighted?: boolean;
 }) {
+  const li = useRef<HTMLLIElement | null>(null);
+  useEffect(() => {
+    if (highlighted) li.current?.scrollIntoView?.({ block: "nearest" });
+  }, [highlighted]);
   const status = itemStatus(item, progress);
   const title = itemTitle(item);
   const Icon = item.kind === "folder" ? Folder : item.kind === "server" ? Plug2 : FileIcon;
   const renamed = !!item.label && item.label !== item.name;
 
   return (
-    <li className="group rounded-lg px-2 py-2 transition-colors hover:bg-accent/50">
+    <li ref={li} data-highlighted={highlighted ? "true" : undefined} className={cn("group rounded-lg px-2 py-2 transition-colors hover:bg-accent/50", highlighted && "bg-accent ring-2 ring-ring/60")}>
       <div className="flex items-start gap-2">
         <Icon className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         <div className="min-w-0 flex-1">

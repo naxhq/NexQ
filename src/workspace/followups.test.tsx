@@ -83,7 +83,7 @@ describe("delete all counts honestly", () => {
   });
 
   it("uses the backend's one call when it exists", async () => {
-    const b = mockBackend({ delete_workspace_meetings: { deleted: 7, failed: 1 } });
+    const b = mockBackend({ delete_workspace_meetings: { deleted: 7, failed: [{ id: "x", reason: "running" }] } });
     const r = await deleteAllInWorkspace("acme", 8);
     expect(r).toEqual({ deleted: 7, failed: 1, expected: 8 });
     expect(b.called("list_workspace_meetings")).toHaveLength(0);

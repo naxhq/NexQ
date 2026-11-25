@@ -71,6 +71,16 @@ export function LibraryPanel({ workspaceId }: { workspaceId: string }) {
   const [dialog, setDialog] = useState<"paste" | "library" | "server" | null>(null);
   const [confirmLibraryRemove, setConfirmLibraryRemove] = useState<WorkspaceItem | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  const focus = useWorkspaceStore((s) => s.focus);
+  const nonce = focus?.nonce;
+  // A requested row stays marked for a moment, then goes back to normal.
+  useEffect(() => {
+    if (!nonce) return;
+    const t = setTimeout(() => {
+      if (useWorkspaceStore.getState().focus?.nonce === nonce) useWorkspaceStore.setState({ focus: null });
+    }, 3500);
+    return () => clearTimeout(t);
+  }, [nonce]);
 
   useEffect(() => {
     void loadDetail(workspaceId);
@@ -208,6 +218,7 @@ export function LibraryPanel({ workspaceId }: { workspaceId: string }) {
                   onTogglePin={() => void act("change the pin", () => updateWorkspaceItem(workspaceId, i.kind, i.ref_id, { pinned: !i.pinned }))}
                   onOptIn={(on) => void act("change searching", () => updateWorkspaceItem(workspaceId, i.kind, i.ref_id, { index_opt_in: on }))}
                   onRemove={() => void removeHere(i)}
+                  highlighted={focus?.kind === i.kind && focus.refId === i.ref_id}
                 />
               ))}
             </ul>

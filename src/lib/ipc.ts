@@ -1126,7 +1126,7 @@ export async function listLibrary(): Promise<LibraryItem[]> {
   return invoke<LibraryItem[]>("list_library");
 }
 /** Deletes every meeting of a workspace in one call; what went and what did not. */
-export async function deleteWorkspaceMeetings(id: string): Promise<{ deleted: number; failed: number }> {
+export async function deleteWorkspaceMeetings(id: string): Promise<{ deleted: number; failed: Array<{ id: string; reason: string }> }> {
   return invoke("delete_workspace_meetings", { id });
 }
 export async function moveMeeting(meetingId: string, workspaceId: string): Promise<void> {
@@ -1285,8 +1285,25 @@ export async function setBriefSettings(patch: Partial<BriefSettings>): Promise<B
 export async function listMemory(workspaceId: string): Promise<MemoryItem[]> {
   return invoke<MemoryItem[]>("list_memory", { workspaceId });
 }
-export async function saveMemory(item: MemoryItem): Promise<MemoryItem> {
-  return invoke<MemoryItem>("save_memory", { item });
+/** A new item under a new id; `status` is "saved" when absent (the person typed it). */
+export interface MemoryCreate {
+  workspace_id: string;
+  kind: MemoryItem["kind"];
+  title: string;
+  text: string;
+  source_meeting?: string | null;
+  source_ms?: number | null;
+  status?: MemoryItem["status"];
+}
+export async function createMemory(input: MemoryCreate): Promise<MemoryItem> {
+  return invoke<MemoryItem>("create_memory", { input });
+}
+/** Changes an item that exists; a forgotten id rejects with "not_found". */
+export async function updateMemory(
+  id: string,
+  patch: Partial<Pick<MemoryItem, "kind" | "title" | "text" | "status">>,
+): Promise<MemoryItem> {
+  return invoke<MemoryItem>("update_memory", { id, patch });
 }
 export async function deleteMemory(id: string): Promise<void> {
   return invoke("delete_memory", { id });

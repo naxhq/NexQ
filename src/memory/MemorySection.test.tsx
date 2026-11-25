@@ -72,13 +72,18 @@ describe("MemorySection", () => {
     await userEvent.type(screen.getByRole("textbox", { name: "Title" }), "Kickoff");
     await userEvent.type(screen.getByRole("textbox", { name: "What to remember" }), "Starts on the 3rd");
     await userEvent.click(screen.getByRole("button", { name: "Add" }));
-    await waitFor(() => expect(b.called("save_memory")).toHaveLength(1));
-    expect((b.called("save_memory")[0].args.item as MemoryRow)).toMatchObject({ workspace_id: "acme", kind: "fact", title: "Kickoff", status: "saved" });
+    await waitFor(() => expect(b.called("create_memory")).toHaveLength(1));
+    expect(b.called("create_memory")[0].args.input).toMatchObject({ workspace_id: "acme", kind: "fact", title: "Kickoff", status: "saved" });
   });
 
   it("edits in place, and refuses to bring back what was forgotten meanwhile", async () => {
     let list = [row()];
-    const b = mockBackend({ list_memory: () => list, save_memory: (a: Record<string, unknown>) => a.item });
+    const b = mockBackend({
+      list_memory: () => list,
+      update_memory: () => {
+        throw "not_found";
+      },
+    });
     render(<MemorySection workspaceId="acme" />);
     await userEvent.click(await screen.findByRole("button", { name: "Edit Budget cap" }));
     const text = screen.getByRole("textbox", { name: "What to remember" });
@@ -87,7 +92,8 @@ describe("MemorySection", () => {
     list = []; // forgotten in another window
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/forgotten in the meantime/);
-    expect(b.called("save_memory")).toHaveLength(0);
+    expect(b.called("update_memory")).toHaveLength(1);
+    expect(b.called("create_memory")).toHaveLength(0);
   });
 
   it("forgets after a second click", async () => {

@@ -56,8 +56,8 @@ export async function deleteAllInWorkspace(workspaceId: string, expected: number
   try {
     const r = await deleteWorkspaceMeetings(workspaceId);
     // Anything that is not the agreed answer is no answer: use the paging path.
-    if (typeof r?.deleted !== "number" || typeof r?.failed !== "number") throw new Error("not found");
-    return { deleted: r.deleted, failed: r.failed, expected: Math.max(expected, r.deleted + r.failed) };
+    if (typeof r?.deleted !== "number" || !Array.isArray(r?.failed)) throw new Error("not found");
+    return { deleted: r.deleted, failed: r.failed.length, expected: Math.max(expected, r.deleted + r.failed.length) };
   } catch (e) {
     if (!isMissingCommand(e)) throw e;
   }

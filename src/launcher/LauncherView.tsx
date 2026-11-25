@@ -13,6 +13,7 @@ import { endMeetingFromThisWindow } from "../hooks/useUpdater";
 import { Dialog, buttonClass } from "../ui";
 import { WorkspaceActionsProvider } from "../workspace/WorkspaceActions";
 import { WorkspaceHome } from "../workspace/WorkspaceHome";
+import { handleOpenRequest, type OpenRequest } from "../workspace/openRequest";
 import type { AudioMode, AIScenario } from "../lib/types";
 import { Settings, Radio } from "lucide-react";
 import { LauncherStealthButton } from "./LauncherStealthButton";
@@ -56,16 +57,13 @@ export function LauncherView() {
 
   // A brief source asks to open a meeting (raised in this window or the meeting window).
   useEffect(() => {
-    const open = (d: { kind?: string; ref_id?: string; meetingId?: string } | undefined) => {
-      const id = d?.ref_id ?? d?.meetingId;
-      if (id && (d?.kind === "transcript" || d?.kind === "meeting")) useMeetingStore.getState().setSelectedMeetingId(id);
-    };
+    const open = (d: OpenRequest | undefined) => void handleOpenRequest(d);
     const local = (e: Event) => open((e as CustomEvent).detail);
     window.addEventListener("nexq:workspace_open", local);
     let off: (() => void) | undefined;
     let gone = false;
     void import("@tauri-apps/api/event")
-      .then(({ listen }) => listen<{ kind?: string; ref_id?: string }>("nexq:workspace_open", (e) => open(e.payload)))
+      .then(({ listen }) => listen<OpenRequest>("nexq:workspace_open", (e) => open(e.payload)))
       .then((u) => (gone ? u() : (off = u)))
       .catch(() => {});
     return () => {
