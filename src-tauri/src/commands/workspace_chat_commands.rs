@@ -4,7 +4,7 @@ use tauri::{command, AppHandle, Emitter, State};
 
 use crate::commands::workspace_commands::{change_and_restart, with_conn, Touch};
 use crate::state::AppState;
-use crate::workspace::{documents, store as wstore};
+use crate::workspace::store as wstore;
 use crate::workspace_chat::types::*;
 use crate::workspace_chat::{engine, ops, runtime, store};
 use crate::workspace_search::Passage;
@@ -89,14 +89,8 @@ pub async fn update_workspace_chat(id: String, patch: WorkspaceChatPatch, state:
 
 #[command]
 pub async fn delete_workspace_chat(id: String, state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
-    if state.workspace_chat.running_for(&id) {
-        return Err("This chat is answering. Stop it first.".into());
-    }
-    with_conn(&state, |conn| store::delete_chat(conn, &id))?;
-    if let Ok(deps) = runtime::build_deps(&app, &state) {
-        engine::close_chat(&deps, &id).await;
-    }
-    Ok(())
+    let deps = runtime::build_deps(&app, &state)?;
+    engine::delete_chat(&deps, &id).await
 }
 
 #[command]
@@ -199,55 +193,27 @@ pub async fn cancel_workspace_request(request_id: String, state: State<'_, AppSt
 
 // ── answers into the library ─────────────────────────────────────────────────
 
-fn answer_of(state: &AppState, message_id: i64) -> Result<(WorkspaceMessage, String), String> {
-    with_conn(state, |conn| {
-        let m = store::get_message(conn, message_id)?.ok_or_else(|| "That answer no longer exists".to_string())?;
-        if m.role != "assistant" {
-            return Err("Only an answer can be saved".to_string());
-        }
-        let chat = store::require_chat(conn, &m.chat_id)?;
-        Ok((m, chat.chat.workspace_id))
-    })
-}
-
 /// "Save to library": the answer becomes a Markdown document of the workspace.
 #[command]
 pub async fn save_answer_to_library(message_id: i64, title: String, state: State<'_, AppState>, app: AppHandle) -> Result<String, String> {
-    let (message, workspace_id) = answer_of(&state, message_id)?;
-    let title = if title.trim().is_empty() { "Chat answer".to_string() } else { title.trim().to_string() };
-    let resource = {
+    let (_, workspace_id) = with_conn(&state, |conn| ops::answer_of(conn, message_id))?;
+    let id = change_and_restart(&state, &app, |_| Touch::ws(&workspace_id), || {
         let ctx = state.context.as_ref().ok_or_else(|| "Context manager not initialized".to_string())?;
         let mut ctx = ctx.lock().map_err(|e| format!("Failed to lock context manager: {e}"))?;
-        ctx.add_text(&title, &message.content)?
-    };
-    let saved = change_and_restart(&state, &app, |_| Touch::ws(&workspace_id), || {
-        with_conn(&state, |conn| documents::add_document(conn, &resource, &message.content, Some(&workspace_id)))
-    });
-    if let Err(e) = saved {
-        if let Some(ctx) = state.context.as_ref() {
-            if let Ok(mut ctx) = ctx.lock() {
-                let _ = ctx.remove_file(&resource.id);
-            }
-        }
-        return Err(e);
-    }
-    runtime::material_changed(&state.workspace_chat);
+        with_conn(&state, |conn| ops::save_answer_as_document(conn, &mut ctx, message_id, &title))
+    })?;
+    runtime::documents_changed(&state.workspace_chat);
     let _ = app.emit("workspaces_changed", serde_json::json!({ "workspace_id": workspace_id }));
-    Ok(resource.id)
+    Ok(id)
 }
 
 /// "Add to instructions": the answer is appended to the workspace's
 /// instructions after a separator.
 #[command]
 pub async fn add_answer_to_instructions(message_id: i64, state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
-    let (message, workspace_id) = answer_of(&state, message_id)?;
+    let (_, workspace_id) = with_conn(&state, |conn| ops::answer_of(conn, message_id))?;
     change_and_restart(&state, &app, |_| Touch::ws(&workspace_id), || {
-        with_conn(&state, |conn| {
-            let ws = wstore::get_workspace(conn, &workspace_id)?;
-            let text = engine::append_to_instructions(&ws.instructions, &message.content);
-            wstore::update_workspace(conn, &workspace_id, crate::workspace::types::WorkspacePatch { instructions: Some(text), ..Default::default() })
-                .map(|_| ())
-        })
+        with_conn(&state, |conn| ops::add_answer_to_instructions(conn, message_id).map(|_| ()))
     })?;
     let _ = app.emit("workspaces_changed", serde_json::json!({ "workspace_id": workspace_id }));
     Ok(())

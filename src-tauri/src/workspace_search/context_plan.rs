@@ -517,7 +517,8 @@ pub fn build_context(input: &ContextInput, env: &ContextEnv) -> ContextPlan {
                     ref_id: m.meeting_id.clone(),
                     sub_ref: None,
                     title: m.title.clone(),
-                    start_ms: None,
+                    // a whole transcript is cited from its start: 0 is a time, not "none"
+                    start_ms: Some(0),
                     tokens: tok(&text) + WRAP_OVERHEAD_TOKENS,
                     relevance: None,
                     citation: None,

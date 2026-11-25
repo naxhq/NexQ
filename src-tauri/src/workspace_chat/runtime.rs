@@ -10,7 +10,7 @@ use serde_json::json;
 use tauri::{AppHandle, Emitter};
 
 use super::engine::ChatDeps;
-use super::hub::ChatHub;
+use super::hub::{ChatHub, Wake};
 use super::provider::WorkspaceIndexProvider;
 use crate::ai_runs::{AiRuns, ModelSelection};
 use crate::state::AppState;
@@ -120,6 +120,17 @@ pub fn ensure_indexer(app: &AppHandle, state: &AppState) -> Result<(), String> {
 /// One line in app setup: the indexer starts once startup has settled.
 pub fn attach(app: &AppHandle) {
     let app = app.clone();
+    // a change that arrives before the start delay starts the indexer at once
+    {
+        let state = tauri::Manager::state::<AppState>(&app);
+        let app2 = app.clone();
+        state.workspace_chat.set_starter(Arc::new(move || {
+            let state = tauri::Manager::state::<AppState>(&app2);
+            if let Err(e) = ensure_indexer(&app2, &state) {
+                log::warn!("Couldn't start the search indexer: {e}");
+            }
+        }));
+    }
     // chats run on the app's one AiRuns
     {
         let state = tauri::Manager::state::<AppState>(&app);
@@ -140,24 +151,33 @@ pub fn attach(app: &AppHandle) {
 
 /// A meeting ended (its transcript is saved): index it.
 pub fn meeting_ended(hub: &ChatHub, meeting_id: &str) {
-    if let Some(i) = hub.indexer() {
-        i.index_meeting(meeting_id);
-    }
+    hub.wake(Wake::Meeting(meeting_id.to_string()));
 }
 
 /// A meeting was deleted: drop it from the index (the delete itself already
 /// removed its rows; this stops a pass in flight from keeping them).
 pub fn meeting_deleted(hub: &ChatHub, meeting_id: &str) {
-    if let Some(i) = hub.indexer() {
-        i.remove_meeting(meeting_id);
-    }
+    hub.wake(Wake::RemoveMeeting(meeting_id.to_string()));
 }
 
 /// A document, talking point, folder or opt-in changed: scan again soon.
 pub fn material_changed(hub: &ChatHub) {
-    if let Some(i) = hub.indexer() {
-        i.rescan();
-    }
+    hub.wake(Wake::Rescan);
+}
+
+/// A document was added, changed or removed: only documents are looked at.
+pub fn documents_changed(hub: &ChatHub) {
+    hub.wake(Wake::Documents);
+}
+
+/// A talking point was saved or deleted: only talking points are looked at.
+pub fn talking_points_changed(hub: &ChatHub) {
+    hub.wake(Wake::Points);
+}
+
+/// A folder was opted in: it is indexed now.
+pub fn folder_opted_in(hub: &ChatHub, folder_id: &str) {
+    hub.wake(Wake::Folder(folder_id.to_string()));
 }
 
 /// A folder item changed or was removed: when no workspace opts it in any
@@ -174,12 +194,12 @@ pub fn folder_opt_out_check(state: &AppState, is_folder: bool, folder_id: &str) 
     if still == 0 {
         let _ = crate::workspace_search::indexer::remove_folder_index(&conn, folder_id);
         folder_unindexed(&state.workspace_chat, folder_id);
+    } else {
+        folder_opted_in(&state.workspace_chat, folder_id);
     }
 }
 
 /// A folder was opted out of or removed: its passages go at once.
 pub fn folder_unindexed(hub: &ChatHub, folder_id: &str) {
-    if let Some(i) = hub.indexer() {
-        i.remove_folder(folder_id);
-    }
+    hub.wake(Wake::RemoveFolder(folder_id.to_string()));
 }

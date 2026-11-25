@@ -467,6 +467,17 @@ pub fn chat_capabilities(deps: &ChatDeps, chat_id: &str) -> Result<crate::worksp
     Ok(deps.tools.describe(&ToolContext { chat_id, kind, server_ids: &servers }, &dirs))
 }
 
+/// Delete a chat: refused while it answers; its messages and choices go, its
+/// session ends and its private transcripts folder is removed.
+pub async fn delete_chat(deps: &ChatDeps, chat_id: &str) -> Result<(), String> {
+    if deps.hub.running_for(chat_id) {
+        return Err("This chat is answering. Stop it first.".into());
+    }
+    store::delete_chat(&deps.conn()?, chat_id)?;
+    close_chat(deps, chat_id).await;
+    Ok(())
+}
+
 /// Close a chat's session and folder (chat deleted, or its setup changed).
 pub async fn close_chat(deps: &ChatDeps, chat_id: &str) {
     deps.ai.close_chat(chat_id).await;

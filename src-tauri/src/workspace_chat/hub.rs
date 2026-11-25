@@ -67,6 +67,33 @@ pub struct ToolOff {
 pub struct ReadOnlyPolicy;
 impl ToolPolicy for ReadOnlyPolicy {}
 
+// ── wakes for the indexer ─────────────────────────────────────────────────────
+
+/// What changed that the index should follow. A wake is never lost: while the
+/// indexer is not running yet it waits here and is delivered when it starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Wake {
+    Rescan,
+    Meeting(String),
+    RemoveMeeting(String),
+    Folder(String),
+    RemoveFolder(String),
+    Documents,
+    Points,
+}
+
+fn deliver(i: &IndexerService, w: Wake) {
+    match w {
+        Wake::Rescan => i.rescan(),
+        Wake::Meeting(id) => i.index_meeting(&id),
+        Wake::RemoveMeeting(id) => i.remove_meeting(&id),
+        Wake::Folder(id) => i.index_folder(&id),
+        Wake::RemoveFolder(id) => i.remove_folder(&id),
+        Wake::Documents => i.index_documents(),
+        Wake::Points => i.index_talking_points(),
+    }
+}
+
 // ── the guard ──────────────────────────────────────────────────────────────
 
 struct Active {
@@ -106,6 +133,8 @@ pub struct ChatHub {
     open_workspace: Mutex<Option<String>>,
     recap_cancel: Mutex<Option<Arc<CancelToken>>>,
     tools: OnceLock<Arc<dyn ToolPolicy>>,
+    pending: Mutex<Vec<Wake>>,
+    starter: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl ChatHub {
@@ -196,6 +225,7 @@ impl ChatHub {
         if slot.is_some() {
             return Ok(());
         }
+        // wakes that came while it was not running are delivered below, once it is
         let hub = self.clone();
         let hub2 = self.clone();
         let svc = IndexerService::start(IndexerConfig {
@@ -213,8 +243,50 @@ impl ChatHub {
             initial_scan,
             timer_enabled: Some(Arc::new(move || hub2.open_workspace.lock().map(|w| w.is_some()).unwrap_or(false))),
         })?;
-        *slot = Some(Arc::new(svc));
+        let svc = Arc::new(svc);
+        // under the same lock `wake` uses: no wake falls between "not started" and "started"
+        let waiting: Vec<Wake> = self.pending.lock().map(|mut p| std::mem::take(&mut *p)).unwrap_or_default();
+        for w in waiting {
+            deliver(&svc, w);
+        }
+        *slot = Some(svc);
         Ok(())
+    }
+
+    /// How the indexer is started on demand (by the app's wiring).
+    pub fn set_starter(&self, f: Arc<dyn Fn() + Send + Sync>) {
+        if let Ok(mut s) = self.starter.lock() {
+            *s = Some(f);
+        }
+    }
+
+    /// Tell the indexer something changed. Delivered at once when it runs;
+    /// otherwise kept and the indexer is started now (not after its start
+    /// delay), which then delivers it.
+    pub fn wake(&self, w: Wake) {
+        let start = {
+            let slot = match self.indexer.lock() {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            match slot.as_ref() {
+                Some(i) => {
+                    deliver(i, w);
+                    return;
+                }
+                None => {
+                    if let Ok(mut p) = self.pending.lock() {
+                        if !p.contains(&w) {
+                            p.push(w);
+                        }
+                    }
+                    self.starter.lock().ok().and_then(|s| s.clone())
+                }
+            }
+        };
+        if let Some(f) = start {
+            f();
+        }
     }
 
     pub fn indexer(&self) -> Option<Arc<IndexerService>> {

@@ -1036,3 +1036,205 @@ async fn saved_memory_items_are_bars_of_the_core_layer() {
     rig.ask(&chat, "Kestrel budget?").await;
     assert!(rig.api.calls()[0].0[0].content.contains("Dana owns the Kestrel budget"));
 }
+
+// ── wakes, library, instructions, delete, open-citation data ─────────────────
+
+#[tokio::test]
+async fn a_change_before_the_indexer_runs_is_kept_and_starts_it_at_once() {
+    use super::hub::Wake;
+    let rig = Rig::new();
+    let folder = rig.dir.join("notes");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("a.md"), "# Plan\nThe ibex migration.").unwrap();
+    *rig.sources.write().unwrap() = PersonalSourcesConfig {
+        notes_folders: vec![NotesFolder { id: "f1".into(), label: "Notes".into(), path: folder.to_string_lossy().into(), enabled: true }],
+        ..Default::default()
+    };
+    {
+        let conn = rig.conn();
+        crate::workspace::store::add_item(&conn, &rig.ws, crate::workspace::types::ItemKind::Folder, "f1", None).unwrap();
+        crate::workspace::store::update_item(
+            &conn, &rig.ws, crate::workspace::types::ItemKind::Folder, "f1",
+            crate::workspace::types::ItemPatch { index_opt_in: Some(true), ..Default::default() },
+        ).unwrap();
+    }
+    let hub = rig.deps.hub.clone();
+    let (h2, path, sources) = (hub.clone(), rig.deps.db_path.clone(), rig.sources.clone());
+    hub.set_starter(Arc::new(move || {
+        let provider = Arc::new(super::provider::WorkspaceIndexProvider { db_path: path.clone(), sources: sources.clone() });
+        let _ = h2.start_indexer(path.clone(), provider, Arc::new(|| false), Arc::new(|_, _| {}), false);
+    }));
+    assert!(hub.indexer().is_none());
+    let t = Instant::now();
+    hub.wake(Wake::Folder("f1".into())); // no indexer yet: it is started now and the wake delivered
+    assert!(hub.indexer().is_some());
+    let reader = ops::reader(&rig.deps.db_path).unwrap();
+    while ops::search_workspace(&reader, &rig.ws, "ibex migration", None, 5).unwrap().is_empty() {
+        assert!(t.elapsed() < Duration::from_secs(5), "not indexed");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
+    hub.shutdown_indexer();
+}
+
+#[tokio::test]
+async fn save_to_library_makes_a_document_of_the_workspace_and_add_to_instructions_appends() {
+    let rig = Rig::new();
+    rig.meeting("m1", "Kestrel planning", 5, &budget_lines());
+    rig.index();
+    let chat = rig.chat();
+    rig.ask(&chat, "Kestrel budget?").await;
+    let message = store::list_messages(&rig.conn(), &chat).unwrap().remove(1);
+    // not a user message
+    let user = store::list_messages(&rig.conn(), &chat).unwrap().remove(0);
+    let mut ctx = crate::context::ContextManager::new();
+    assert!(ops::save_answer_as_document(&rig.conn(), &mut ctx, user.id, "x").is_err());
+    let id = ops::save_answer_as_document(&rig.conn(), &mut ctx, message.id, "  Budget answer ").unwrap();
+    let conn = rig.conn();
+    let name: String = conn.query_row("SELECT name FROM context_resources WHERE id = ?1", [&id], |r| r.get(0)).unwrap();
+    assert!(name.contains("Budget answer") || name.contains("Budget_answer") || name.contains("budget"), "{name}");
+    let text = crate::workspace::documents::saved_text(&conn, &id).unwrap().unwrap();
+    assert_eq!(text.text, message.content);
+    let member: i64 = conn
+        .query_row("SELECT COUNT(*) FROM workspace_items WHERE workspace_id = ?1 AND kind = 'document' AND ref_id = ?2", rusqlite::params![rig.ws, id], |r| r.get(0))
+        .unwrap();
+    assert_eq!(member, 1, "filed in the chat's workspace");
+    // an empty title gets a default
+    let id2 = ops::save_answer_as_document(&conn, &mut ctx, message.id, "   ").unwrap();
+    assert_ne!(id, id2);
+    // the new document is found by the next question once indexed
+    rig.index();
+    let reader = ops::reader(&rig.deps.db_path).unwrap();
+    assert!(!ops::search_workspace(&reader, &rig.ws, "budget", Some(vec!["document".into()]), 5).unwrap().is_empty());
+
+    // add to instructions: after a separator, and again after the existing text
+    let ws = ops::add_answer_to_instructions(&conn, message.id).unwrap();
+    assert_eq!(ws, rig.ws);
+    let first = crate::workspace::store::get_workspace(&conn, &rig.ws).unwrap().instructions;
+    assert_eq!(first, message.content.trim());
+    ops::add_answer_to_instructions(&conn, message.id).unwrap();
+    let second = crate::workspace::store::get_workspace(&conn, &rig.ws).unwrap().instructions;
+    assert_eq!(second, format!("{}\n\n---\n\n{}", first, message.content.trim()));
+    // the next question carries them as instructions (stable part)
+    rig.ask(&chat, "Kestrel budget again?").await;
+    assert!(rig.api.calls()[1].0[0].content.contains(message.content.trim()));
+    assert!(ops::answer_of(&conn, 999_999).is_err());
+}
+
+#[tokio::test]
+async fn deleting_a_chat_removes_its_messages_choices_session_and_transcripts_folder() {
+    let rig = Rig::new();
+    rig.meeting("m1", "Kestrel planning", 5, &budget_lines());
+    rig.index();
+    *rig.selection.lock().unwrap() = ModelSelection::new("claude_cli", "", None);
+    let chat = store::create_chat(&rig.conn(), &rig.ws, Some("claude_cli"), None, None).unwrap().id;
+    store::set_item_pref(&rig.conn(), &chat, "meeting", "m-x", Some("exclude")).unwrap();
+    rig.ask(&chat, "Kestrel budget?").await;
+    let dir = rig.deps.transcripts.dir_for(&chat).expect("a folder while the chat lives");
+    assert!(dir.exists());
+    let session = rig.spawner.spawned.lock().unwrap()[0].1.clone();
+    assert!(!session.closed.load(Ordering::SeqCst));
+    engine::delete_chat(&rig.deps, &chat).await.unwrap();
+    assert!(store::get_chat(&rig.conn(), &chat).unwrap().is_none());
+    assert!(store::list_messages(&rig.conn(), &chat).unwrap().is_empty());
+    assert!(store::list_item_prefs(&rig.conn(), &chat).unwrap().is_empty());
+    assert!(rig.deps.transcripts.dir_for(&chat).is_none());
+    assert!(!dir.exists(), "the transcripts folder is gone");
+    // it can't be deleted while it answers
+    let chat2 = rig.chat();
+    rig.api.push(Step::UntilCancelled);
+    let h = engine::start_ask(rig.deps.clone(), &chat2, "q", "req-del", false).unwrap();
+    let t = Instant::now();
+    while rig.api.calls().is_empty() && t.elapsed() < Duration::from_secs(5) {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(engine::delete_chat(&rig.deps, &chat2).await.unwrap_err().contains("Stop it first"));
+    rig.deps.hub.cancel("req-del");
+    h.await.unwrap();
+    engine::delete_chat(&rig.deps, &chat2).await.unwrap();
+}
+
+#[tokio::test]
+async fn citations_carry_what_the_ui_needs_to_open_each_source() {
+    let rig = Rig::new();
+    // 1. a meeting whose passage starts at 0 ms, 2. a document, 3. a folder file, 4. a talking point
+    rig.meeting("m1", "Kestrel planning", 5, &budget_lines());
+    let folder = rig.dir.join("notes");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("plan.md"), "# Plan\nThe ibex migration starts in May.").unwrap();
+    *rig.sources.write().unwrap() = PersonalSourcesConfig {
+        notes_folders: vec![NotesFolder { id: "f1".into(), label: "Notes".into(), path: folder.to_string_lossy().into(), enabled: true }],
+        ..Default::default()
+    };
+    let point_id = {
+        let conn = rig.conn();
+        let res = crate::context::ContextResource {
+            id: "d1".into(), name: "guide.txt".into(), file_type: "txt".into(), file_path: "x".into(), size_bytes: 3,
+            token_count: 2, preview: "p".into(), loaded_at: "now".into(), status: "ready".into(),
+        };
+        crate::workspace::documents::add_document(&conn, &res, "Guide about quokkas", Some(&rig.ws)).unwrap();
+        crate::workspace::store::add_item(&conn, &rig.ws, crate::workspace::types::ItemKind::Folder, "f1", None).unwrap();
+        crate::workspace::store::update_item(
+            &conn, &rig.ws, crate::workspace::types::ItemKind::Folder, "f1",
+            crate::workspace::types::ItemPatch { index_opt_in: Some(true), ..Default::default() },
+        ).unwrap();
+        crate::workspace::talking_points::create_talking_point(
+            &conn, &rig.ws, Some("Opening".into()),
+            crate::workspace::types::TalkingContent { doc_json: None, markdown: None, plain_text: Some("Greet the aardvark".into()), in_context: true },
+        ).unwrap().id
+    };
+    rig.index();
+    let chat = rig.chat();
+    rig.api.push(Step::Text("Facts [S1] [S2] [S3] [S4] [S5].".into()));
+    rig.ask(&chat, "Kestrel budget?").await;
+    let end = &rig.events_named("workspace_chat_end")[0];
+    assert_eq!(end["message"]["context"]["strategy"], "full");
+    let cites = end["message"]["citations"].as_array().unwrap();
+    let find = |kind: &str| cites.iter().find(|c| c["kind"] == kind).unwrap_or_else(|| panic!("no {kind} citation in {cites:?}"));
+    let tr = find("transcript");
+    assert_eq!(tr["ref_id"], "m1");
+    assert_eq!(tr["start_ms"], 0, "0 ms is a time, not 'none'");
+    assert_eq!(tr["title"], "Kestrel planning");
+    let doc = find("document");
+    assert_eq!((doc["ref_id"].as_str(), doc["sub_ref"].is_null()), (Some("d1"), true));
+    let file = find("folder");
+    assert_eq!((file["ref_id"].as_str(), file["sub_ref"].as_str()), (Some("f1"), Some("plan.md")));
+    let point = find("talking_point");
+    assert_eq!(point["ref_id"].as_str(), Some(point_id.as_str()));
+    assert!(cites.iter().all(|c| c["tag"].as_str().unwrap().starts_with('S') && !c["title"].as_str().unwrap().is_empty()));
+    // stored the same way
+    let stored = store::list_messages(&rig.conn(), &chat).unwrap().remove(1);
+    assert_eq!(stored.citations.iter().find(|c| c.kind == "transcript").unwrap().start_ms, Some(0));
+}
+
+#[tokio::test]
+async fn a_passage_at_zero_milliseconds_keeps_its_time_in_the_ladder_too() {
+    let rig = Rig::new();
+    for i in 0..30u32 {
+        let fact = format!("Meeting {i} settled the quasar{i} budget at {} thousand.", 10 + i);
+        rig.meeting(&format!("m{i:02}"), &format!("Review {i}"), 1 + i % 28, &[fact.as_str(), "We closed the meeting soon after that."]);
+    }
+    // enough material to leave the full strategy
+    {
+        let conn = rig.conn();
+        let big = "word ".repeat(30_000);
+        let res = crate::context::ContextResource {
+            id: "dbig".into(), name: "big.txt".into(), file_type: "txt".into(), file_path: "x".into(), size_bytes: 3,
+            token_count: 2, preview: "p".into(), loaded_at: "now".into(), status: "ready".into(),
+        };
+        crate::workspace::documents::add_document(&conn, &res, &big, Some(&rig.ws)).unwrap();
+    }
+    rig.index();
+    let chat = rig.chat();
+    let all: String = (1..=60).map(|n| format!("[S{n}]")).collect::<Vec<_>>().join(" ");
+    rig.api.push(Step::Text(format!("It was settled {all}.")));
+    rig.ask(&chat, "What was the quasar7 budget?").await;
+    let end = &rig.events_named("workspace_chat_end")[0];
+    assert_eq!(end["message"]["context"]["strategy"], "ladder");
+    let cites = end["message"]["citations"].as_array().unwrap();
+    // the meeting is cited twice: its recap (no time) and the passage found in it (0 ms)
+    let of_m07: Vec<_> = cites.iter().filter(|c| c["kind"] == "transcript" && c["ref_id"] == "m07").collect();
+    assert!(of_m07.len() >= 2, "{of_m07:?}");
+    assert!(of_m07.iter().any(|c| c["start_ms"] == 0), "the passage at 0 ms keeps its time: {of_m07:?}");
+    assert!(of_m07.iter().any(|c| c["start_ms"].is_null()), "the recap card has no time");
+}

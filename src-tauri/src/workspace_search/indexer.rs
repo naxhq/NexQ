@@ -84,6 +84,10 @@ pub struct RunControl {
     stop: Arc<AtomicBool>,
     pass_cancel: Arc<AtomicBool>,
     meeting_active: Arc<dyn Fn() -> bool + Send + Sync>,
+    /// Set when a targeted request is waiting: a full pass in flight stops at
+    /// its next unit (it is resumable) so the request runs within moments.
+    priority: Arc<AtomicBool>,
+    honor_priority: bool,
     /// Pause between units so the pass stays out of the way.
     pub pace: Duration,
 }
@@ -94,8 +98,23 @@ impl RunControl {
             stop: Arc::new(AtomicBool::new(false)),
             pass_cancel: Arc::new(AtomicBool::new(false)),
             meeting_active,
+            priority: Arc::new(AtomicBool::new(false)),
+            honor_priority: false,
             pace: Duration::ZERO,
         }
+    }
+    /// The control a full pass runs under: it gives way to targeted requests.
+    pub fn for_full_pass(&self) -> RunControl {
+        RunControl { honor_priority: true, ..self.clone() }
+    }
+    pub fn request_priority(&self) {
+        self.priority.store(true, Ordering::SeqCst);
+    }
+    pub fn clear_priority(&self) {
+        self.priority.store(false, Ordering::SeqCst);
+    }
+    pub fn priority_requested(&self) -> bool {
+        self.priority.load(Ordering::SeqCst)
     }
     pub fn idle() -> Self {
         Self::new(Arc::new(|| false))
@@ -122,6 +141,9 @@ impl RunControl {
         }
         if !self.pace.is_zero() {
             std::thread::sleep(self.pace);
+        }
+        if self.honor_priority && self.priority_requested() {
+            return false;
         }
         !self.cancelled()
     }
@@ -526,6 +548,38 @@ pub struct PassReport {
     pub cancelled: bool,
 }
 
+/// Which folders a pass covers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FolderSel {
+    All,
+    None,
+    One(String),
+}
+
+/// What a pass covers: everything, or one kind of source (a targeted pass).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PassScope {
+    pub meetings: bool,
+    pub documents: bool,
+    pub points: bool,
+    pub folders: FolderSel,
+}
+
+impl PassScope {
+    pub fn all() -> Self {
+        PassScope { meetings: true, documents: true, points: true, folders: FolderSel::All }
+    }
+    pub fn documents() -> Self {
+        PassScope { meetings: false, documents: true, points: false, folders: FolderSel::None }
+    }
+    pub fn points() -> Self {
+        PassScope { meetings: false, documents: false, points: true, folders: FolderSel::None }
+    }
+    pub fn folder(id: &str) -> Self {
+        PassScope { meetings: false, documents: false, points: false, folders: FolderSel::One(id.to_string()) }
+    }
+}
+
 /// One full pass: meetings (newest first), documents, talking points, then
 /// folders. Safe to run again at any time; interrupted passes resume because
 /// every source is recorded as it completes.
@@ -535,17 +589,40 @@ pub fn run_pass(
     ctl: &RunControl,
     progress: &dyn Fn(IndexProgress),
 ) -> PassReport {
+    run_pass_scoped(conn, provider, ctl, progress, &PassScope::all())
+}
+
+/// A pass over part of the sources (the rest is left exactly as it is).
+pub fn run_pass_scoped(
+    conn: &mut Connection,
+    provider: &dyn IndexProvider,
+    ctl: &RunControl,
+    progress: &dyn Fn(IndexProgress),
+    scope: &PassScope,
+) -> PassReport {
     let mut rep = PassReport::default();
-    let meetings = match list_meetings(conn) {
-        Ok(m) => m,
-        Err(e) => {
-            rep.errors.push(format!("list meetings: {e}"));
-            Vec::new()
+    let meetings = if !scope.meetings {
+        Vec::new()
+    } else {
+        match list_meetings(conn) {
+            Ok(m) => m,
+            Err(e) => {
+                rep.errors.push(format!("list meetings: {e}"));
+                Vec::new()
+            }
         }
     };
-    let docs = provider.documents();
-    let points: Vec<TalkingPointInput> = provider.talking_points().into_iter().filter(|p| p.in_context).collect();
-    let folders = provider.folders();
+    let docs = if scope.documents { provider.documents() } else { Vec::new() };
+    let points: Vec<TalkingPointInput> = if scope.points {
+        provider.talking_points().into_iter().filter(|p| p.in_context).collect()
+    } else {
+        Vec::new()
+    };
+    let folders: Vec<FolderInput> = match &scope.folders {
+        FolderSel::All => provider.folders(),
+        FolderSel::None => Vec::new(),
+        FolderSel::One(id) => provider.folders().into_iter().filter(|f| &f.id == id).collect(),
+    };
 
     let mut done = 0usize;
     let mut total = meetings.len() + docs.len() + points.len() + folders.len();
@@ -555,34 +632,51 @@ pub fn run_pass(
     };
 
     // stale sources
-    let live: HashSet<&str> = meetings.iter().map(|m| m.id.as_str()).collect();
-    let gone: Vec<String> = store::list_refs(conn, PassageKind::Transcript)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|r| !live.contains(r.as_str()))
-        .collect();
-    for g in gone {
-        if store::remove_meeting(conn, &g).is_ok() {
-            rep.removed += 1;
+    if scope.meetings {
+        let live: HashSet<&str> = meetings.iter().map(|m| m.id.as_str()).collect();
+        let gone: Vec<String> = store::list_refs(conn, PassageKind::Transcript)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| !live.contains(r.as_str()))
+            .collect();
+        for g in gone {
+            if store::remove_meeting(conn, &g).is_ok() {
+                rep.removed += 1;
+            }
         }
     }
-    let doc_ids: HashSet<&str> = docs.iter().map(|d| d.id.as_str()).collect();
-    for g in store::list_refs(conn, PassageKind::Document).unwrap_or_default().into_iter().filter(|r| !doc_ids.contains(r.as_str())) {
-        if store::remove_ref(conn, PassageKind::Document, &g).is_ok() {
-            rep.removed += 1;
+    if scope.documents {
+        let doc_ids: HashSet<&str> = docs.iter().map(|d| d.id.as_str()).collect();
+        for g in store::list_refs(conn, PassageKind::Document).unwrap_or_default().into_iter().filter(|r| !doc_ids.contains(r.as_str())) {
+            if store::remove_ref(conn, PassageKind::Document, &g).is_ok() {
+                rep.removed += 1;
+            }
         }
     }
-    let point_ids: HashSet<&str> = points.iter().map(|d| d.id.as_str()).collect();
-    for g in store::list_refs(conn, PassageKind::TalkingPoint).unwrap_or_default().into_iter().filter(|r| !point_ids.contains(r.as_str())) {
-        if store::remove_ref(conn, PassageKind::TalkingPoint, &g).is_ok() {
-            rep.removed += 1;
+    if scope.points {
+        let point_ids: HashSet<&str> = points.iter().map(|d| d.id.as_str()).collect();
+        for g in store::list_refs(conn, PassageKind::TalkingPoint).unwrap_or_default().into_iter().filter(|r| !point_ids.contains(r.as_str())) {
+            if store::remove_ref(conn, PassageKind::TalkingPoint, &g).is_ok() {
+                rep.removed += 1;
+            }
         }
     }
     let folder_ids: HashSet<&str> = folders.iter().filter(|f| f.index_enabled).map(|f| f.id.as_str()).collect();
-    for g in store::list_refs(conn, PassageKind::Folder).unwrap_or_default().into_iter().filter(|r| !folder_ids.contains(r.as_str())) {
-        if store::remove_ref(conn, PassageKind::Folder, &g).is_ok() {
-            rep.removed += 1;
+    match &scope.folders {
+        FolderSel::All => {
+            for g in store::list_refs(conn, PassageKind::Folder).unwrap_or_default().into_iter().filter(|r| !folder_ids.contains(r.as_str())) {
+                if store::remove_ref(conn, PassageKind::Folder, &g).is_ok() {
+                    rep.removed += 1;
+                }
+            }
         }
+        FolderSel::One(id) => {
+            // opted out, switched off or gone: its passages go now
+            if !folder_ids.contains(id.as_str()) && store::remove_ref(conn, PassageKind::Folder, id).is_ok() {
+                rep.removed += 1;
+            }
+        }
+        FolderSel::None => {}
     }
 
     // meetings, newest first
@@ -687,11 +781,44 @@ pub fn text_units(text: &str) -> usize {
 
 // ── service ─────────────────────────────────────────────────────────────────
 
+/// One targeted request. Runs under the plain control (it waits out a
+/// meeting, never gives way to another request).
+fn run_command(conn: &mut Connection, provider: &dyn IndexProvider, ctl: &RunControl, progress: &dyn Fn(IndexProgress), cmd: Cmd) {
+    let log_errors = |r: PassReport| {
+        for e in &r.errors {
+            log::warn!("search indexer: {e}");
+        }
+    };
+    match cmd {
+        Cmd::Meeting(id) => {
+            if ctl.checkpoint() {
+                if let Err(e) = catch_unwind(AssertUnwindSafe(|| index_meeting(conn, &id))).unwrap_or_else(|_| Err("panicked".into())) {
+                    log::warn!("search indexer: meeting {id}: {e}");
+                }
+            }
+        }
+        Cmd::RemoveMeeting(id) => {
+            let _ = store::remove_meeting(conn, &id);
+        }
+        Cmd::RemoveFolder(id) => {
+            let _ = remove_folder_index(conn, &id);
+        }
+        Cmd::Folder(id) => log_errors(run_pass_scoped(conn, provider, ctl, progress, &PassScope::folder(&id))),
+        Cmd::Documents => log_errors(run_pass_scoped(conn, provider, ctl, progress, &PassScope::documents())),
+        Cmd::Points => log_errors(run_pass_scoped(conn, provider, ctl, progress, &PassScope::points())),
+        Cmd::Rescan | Cmd::Stop => {}
+    }
+}
+
 enum Cmd {
     Rescan,
     Meeting(String),
     RemoveMeeting(String),
     RemoveFolder(String),
+    /// Index (or drop) one folder now.
+    Folder(String),
+    Documents,
+    Points,
     Stop,
 }
 
@@ -712,6 +839,7 @@ pub struct IndexerService {
     tx: mpsc::Sender<Cmd>,
     ctl: RunControl,
     passes: Arc<AtomicU64>,
+    commands: Arc<AtomicU64>,
     handle: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
@@ -721,57 +849,117 @@ impl IndexerService {
         let ctl = RunControl { pace: Duration::from_millis(2), ..RunControl::new(cfg.meeting_active.clone()) };
         let (tx, rx) = mpsc::channel::<Cmd>();
         let passes = Arc::new(AtomicU64::new(0));
-        let (ctl2, passes2) = (ctl.clone(), passes.clone());
+        let commands = Arc::new(AtomicU64::new(0));
+        let (ctl2, passes2, commands2) = (ctl.clone(), passes.clone(), commands.clone());
         let handle = std::thread::Builder::new()
             .name("nexq-search-indexer".into())
             .spawn(move || {
-                let pass = |conn: &mut Connection| {
-                    ctl2.reset_cancel();
-                    let r = run_pass(conn, cfg.provider.as_ref(), &ctl2, &*cfg.on_progress);
-                    for e in &r.errors {
-                        log::warn!("search indexer: {e}");
-                    }
-                    passes2.fetch_add(1, Ordering::SeqCst);
-                };
-                if cfg.initial_scan {
-                    pass(&mut conn);
-                }
+                use std::collections::VecDeque;
+                let full_ctl = ctl2.for_full_pass();
+                let mut backlog: VecDeque<Cmd> = VecDeque::new();
+                let mut full_pending = cfg.initial_scan;
                 loop {
                     if ctl2.stop.load(Ordering::SeqCst) {
                         break;
                     }
+                    // Everything sent so far is taken in; nothing is dropped. Repeated
+                    // rescans collapse into one, every other request is kept in order.
+                    let take = |c: Cmd, backlog: &mut VecDeque<Cmd>, full_pending: &mut bool| -> bool {
+                        match c {
+                            Cmd::Stop => return true,
+                            Cmd::Rescan => *full_pending = true,
+                            other => backlog.push_back(other),
+                        }
+                        false
+                    };
+                    while let Ok(c) = rx.try_recv() {
+                        if take(c, &mut backlog, &mut full_pending) {
+                            return;
+                        }
+                    }
+                    if let Some(cmd) = backlog.pop_front() {
+                        run_command(&mut conn, cfg.provider.as_ref(), &ctl2, &*cfg.on_progress, cmd);
+                        commands2.fetch_add(1, Ordering::SeqCst);
+                        continue;
+                    }
+                    // Nothing targeted is waiting. Clear the flag first and look again, so a
+                    // request that arrives after this line either is seen now or raises it again.
+                    ctl2.clear_priority();
+                    let mut late = false;
+                    while let Ok(c) = rx.try_recv() {
+                        if take(c, &mut backlog, &mut full_pending) {
+                            return;
+                        }
+                        late = true;
+                    }
+                    if late {
+                        continue;
+                    }
+                    if full_pending {
+                        full_pending = false;
+                        full_ctl.reset_cancel();
+                        let r = run_pass(&mut conn, cfg.provider.as_ref(), &full_ctl, &*cfg.on_progress);
+                        for e in &r.errors {
+                            log::warn!("search indexer: {e}");
+                        }
+                        if r.cancelled && ctl2.priority_requested() && !ctl2.cancelled() {
+                            full_pending = true; // gave way to a request: finish afterwards
+                        } else {
+                            passes2.fetch_add(1, Ordering::SeqCst);
+                        }
+                        continue;
+                    }
                     match rx.recv_timeout(cfg.rescan_interval) {
-                        Ok(Cmd::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                        Err(mpsc::RecvTimeoutError::Timeout) if !cfg.timer_enabled.as_ref().map_or(true, |f| f()) => {}
-                        Ok(Cmd::Rescan) | Err(mpsc::RecvTimeoutError::Timeout) => {
-                            // collapse a burst of rescan requests
-                            while let Ok(c) = rx.try_recv() {
-                                if let Cmd::Stop = c {
-                                    return;
-                                }
-                            }
-                            pass(&mut conn);
-                        }
-                        Ok(Cmd::Meeting(id)) => {
-                            if ctl2.checkpoint() {
-                                if let Err(e) = catch_unwind(AssertUnwindSafe(|| index_meeting(&mut conn, &id)))
-                                    .unwrap_or_else(|_| Err("panicked".into()))
-                                {
-                                    log::warn!("search indexer: meeting {id}: {e}");
-                                }
+                        Ok(c) => {
+                            if take(c, &mut backlog, &mut full_pending) {
+                                return;
                             }
                         }
-                        Ok(Cmd::RemoveMeeting(id)) => {
-                            let _ = store::remove_meeting(&conn, &id);
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            if cfg.timer_enabled.as_ref().map_or(true, |f| f()) {
+                                full_pending = true;
+                            }
                         }
-                        Ok(Cmd::RemoveFolder(id)) => {
-                            let _ = remove_folder_index(&conn, &id);
-                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     }
                 }
             })
             .map_err(|e| format!("start indexer: {e}"))?;
-        Ok(IndexerService { tx, ctl, passes, handle: std::sync::Mutex::new(Some(handle)) })
+        Ok(IndexerService { tx, ctl, passes, commands, handle: std::sync::Mutex::new(Some(handle)) })
+    }
+
+    /// Queue a request and raise the flag that makes a full pass in flight
+    /// give way (send first, then flag: see the loop).
+    fn send_priority(&self, c: Cmd) {
+        let _ = self.tx.send(c);
+        self.ctl.request_priority();
+    }
+
+    /// Index one folder now (the user opted in, or it changed).
+    pub fn index_folder(&self, id: &str) {
+        self.send_priority(Cmd::Folder(id.to_string()));
+    }
+    /// Documents were added, changed or removed.
+    pub fn index_documents(&self) {
+        self.send_priority(Cmd::Documents);
+    }
+    /// A talking point was saved.
+    pub fn index_talking_points(&self) {
+        self.send_priority(Cmd::Points);
+    }
+    /// Requests handled so far (targeted ones; for tests and status).
+    pub fn commands_completed(&self) -> u64 {
+        self.commands.load(Ordering::SeqCst)
+    }
+    pub fn wait_for_commands(&self, n: u64, timeout: Duration) -> bool {
+        let t = Instant::now();
+        while t.elapsed() < timeout {
+            if self.commands_completed() >= n {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        false
     }
 
     /// Ask for a full pass (collapses with others queued).
@@ -780,15 +968,15 @@ impl IndexerService {
     }
     /// Index one meeting (e.g. right after it ended).
     pub fn index_meeting(&self, id: &str) {
-        let _ = self.tx.send(Cmd::Meeting(id.to_string()));
+        self.send_priority(Cmd::Meeting(id.to_string()));
     }
     /// Drop a deleted meeting from the index.
     pub fn remove_meeting(&self, id: &str) {
-        let _ = self.tx.send(Cmd::RemoveMeeting(id.to_string()));
+        self.send_priority(Cmd::RemoveMeeting(id.to_string()));
     }
     /// Delete a folder's passages now (the user opted out or removed it).
     pub fn remove_folder(&self, id: &str) {
-        let _ = self.tx.send(Cmd::RemoveFolder(id.to_string()));
+        self.send_priority(Cmd::RemoveFolder(id.to_string()));
     }
     /// Abort the pass in flight; the service keeps running.
     pub fn cancel_pass(&self) {
@@ -1400,6 +1588,146 @@ mod tests {
         open.store(true, Ordering::SeqCst);
         assert!(svc.wait_for_passes(1, Duration::from_secs(5)));
         svc.shutdown();
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    fn service(db: &std::path::Path, prov: Arc<Prov>, initial_scan: bool) -> IndexerService {
+        IndexerService::start(IndexerConfig {
+            db_path: db.to_path_buf(),
+            provider: prov,
+            meeting_active: Arc::new(|| false),
+            on_progress: Arc::new(|_| {}),
+            rescan_interval: Duration::from_secs(600),
+            initial_scan,
+            timer_enabled: None,
+        })
+        .unwrap()
+    }
+
+    fn wait_until(what: &str, secs: u64, f: impl Fn() -> bool) -> Duration {
+        let t = Instant::now();
+        while !f() {
+            assert!(t.elapsed() < Duration::from_secs(secs), "timed out waiting for {what}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        t.elapsed()
+    }
+
+    #[test]
+    fn an_opt_in_is_indexed_within_two_seconds_while_a_long_pass_is_running() {
+        let dir = temp_dir("idx-prio");
+        let db = file_db(&dir);
+        {
+            let c = Connection::open(&db).unwrap();
+            for i in 0..900 {
+                add_meeting(&c, &format!("m{i}"), "T", &format!("2026-01-{:02}T10:00:00Z", 1 + i % 28), None, &[("You", "some words about things", 0)]);
+            }
+        }
+        let (root, prov) = folder_fixture("idx-prio-f");
+        prov.folders.lock().unwrap()[0].index_enabled = false;
+        let svc = service(&db, prov.clone(), true); // the first full pass starts at once
+        std::thread::sleep(Duration::from_millis(150)); // it is under way
+        assert_eq!(svc.passes_completed(), 0);
+        // the user opts the folder in
+        prov.folders.lock().unwrap()[0].index_enabled = true;
+        let reader = open_search_connection(&db).unwrap();
+        let scope = SearchScope { folder_ids: vec!["f1".into()], ..Default::default() };
+        svc.index_folder("f1");
+        let took = wait_until("the folder", 20, || !q(&reader, &scope, "ibex").is_empty());
+        assert!(took < Duration::from_secs(2), "took {took:?}");
+        assert_eq!(svc.passes_completed(), 0, "the long pass was still running: the request did not wait for it");
+        // the interrupted pass resumes and finishes: every meeting is indexed
+        assert!(svc.wait_for_passes(1, Duration::from_secs(120)));
+        let n: i64 = reader.query_row("SELECT COUNT(DISTINCT ref_id) FROM search_sources WHERE kind = 'transcript'", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 900);
+        svc.shutdown();
+        fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn when_idle_every_kind_of_change_is_followed_within_two_seconds() {
+        let dir = temp_dir("idx-idle");
+        let db = file_db(&dir);
+        let (root, prov) = folder_fixture("idx-idle-f");
+        prov.folders.lock().unwrap()[0].index_enabled = false;
+        let svc = service(&db, prov.clone(), false);
+        let reader = open_search_connection(&db).unwrap();
+        let writer = Connection::open(&db).unwrap();
+        let all = SearchScope {
+            meetings: MeetingScope::Ids(vec!["m-new".into()]),
+            document_ids: vec!["d1".into()],
+            folder_ids: vec!["f1".into()],
+            talking_point_ids: vec!["t1".into()],
+            ..Default::default()
+        };
+        // opt-in
+        prov.folders.lock().unwrap()[0].index_enabled = true;
+        svc.index_folder("f1");
+        assert!(wait_until("folder", 5, || !q(&reader, &all, "ibex").is_empty()) < Duration::from_secs(2));
+        // document add
+        prov.docs.lock().unwrap().push(DocInput { id: "d1".into(), name: "Guide".into(), text: "The quokka handbook".into() });
+        svc.index_documents();
+        assert!(wait_until("document", 5, || !q(&reader, &all, "quokka").is_empty()) < Duration::from_secs(2));
+        // talking point save
+        prov.points.lock().unwrap().push(TalkingPointInput { id: "t1".into(), title: "Open".into(), plain_text: "Greet the aardvark".into(), in_context: true });
+        svc.index_talking_points();
+        assert!(wait_until("point", 5, || !q(&reader, &all, "aardvark").is_empty()) < Duration::from_secs(2));
+        // meeting end
+        add_meeting(&writer, "m-new", "New", "2026-02-02T10:00:00Z", None, &[("You", "The lynx launch is ready", 0)]);
+        svc.index_meeting("m-new");
+        assert!(wait_until("meeting", 5, || !q(&reader, &all, "lynx").is_empty()) < Duration::from_secs(2));
+        // opt-out
+        prov.folders.lock().unwrap()[0].index_enabled = false;
+        svc.index_folder("f1");
+        assert!(wait_until("opt-out", 5, || q(&reader, &all, "ibex").is_empty()) < Duration::from_secs(2));
+        svc.shutdown();
+        fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_burst_of_requests_loses_none_and_rescans_collapse() {
+        let dir = temp_dir("idx-burst");
+        let db = file_db(&dir);
+        {
+            let c = Connection::open(&db).unwrap();
+            for i in 0..300 {
+                add_meeting(&c, &format!("m{i}"), "T", "2026-01-05T10:00:00Z", None, &[("You", "plain words", 0)]);
+            }
+            add_meeting(&c, "m-late", "Late", "2026-03-01T10:00:00Z", None, &[("You", "The marmot report", 0)]);
+        }
+        let (root, prov) = folder_fixture("idx-burst-f");
+        prov.docs.lock().unwrap().push(DocInput { id: "d1".into(), name: "G".into(), text: "The numbat guide".into() });
+        prov.points.lock().unwrap().push(TalkingPointInput { id: "t1".into(), title: "T".into(), plain_text: "Greet the ocelot".into(), in_context: true });
+        let svc = service(&db, prov.clone(), true);
+        // everything at once, while the first pass is running
+        for _ in 0..3 {
+            svc.rescan();
+        }
+        svc.index_documents();
+        svc.index_talking_points();
+        svc.index_folder("f1");
+        svc.index_meeting("m-late");
+        svc.rescan();
+        svc.index_documents();
+        let reader = open_search_connection(&db).unwrap();
+        let all = SearchScope {
+            meetings: MeetingScope::Ids(vec!["m-late".into()]),
+            document_ids: vec!["d1".into()],
+            folder_ids: vec!["f1".into()],
+            talking_point_ids: vec!["t1".into()],
+            ..Default::default()
+        };
+        for word in ["marmot", "numbat", "ocelot", "ibex"] {
+            wait_until(word, 30, || !q(&reader, &all, word).is_empty());
+        }
+        assert!(svc.wait_for_commands(4, Duration::from_secs(30)), "the requests are all handled");
+        assert!(svc.wait_for_passes(1, Duration::from_secs(120)));
+        // the repeated rescans did not queue a pass each
+        assert!(svc.passes_completed() <= 3, "{}", svc.passes_completed());
+        svc.shutdown();
+        fs::remove_dir_all(&root).ok();
         fs::remove_dir_all(&dir).ok();
     }
 }

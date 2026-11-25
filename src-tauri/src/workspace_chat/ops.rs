@@ -68,6 +68,51 @@ pub fn index_status(conn: &Connection, hub: &ChatHub, workspace_id: &str, meetin
     Ok(IndexStatus { workspace_id: workspace_id.into(), state: state.into(), done: p.done, total: p.total, passages, skipped, last_indexed_at: last })
 }
 
+// ── answers into the library and the instructions ───────────────────────────
+
+/// The answer a message holds and the workspace its chat belongs to.
+pub fn answer_of(conn: &Connection, message_id: i64) -> Result<(WorkspaceMessage, String), String> {
+    let m = super::store::get_message(conn, message_id)?.ok_or_else(|| "That answer no longer exists".to_string())?;
+    if m.role != "assistant" {
+        return Err("Only an answer can be saved".to_string());
+    }
+    let chat = super::store::require_chat(conn, &m.chat_id)?;
+    Ok((m, chat.chat.workspace_id))
+}
+
+/// "Save to library": the answer becomes a Markdown document of the chat's
+/// workspace. Returns the document id. The document is not left half made: a
+/// failed save removes it again.
+pub fn save_answer_as_document(
+    conn: &Connection,
+    context: &mut crate::context::ContextManager,
+    message_id: i64,
+    title: &str,
+) -> Result<String, String> {
+    let (message, workspace_id) = answer_of(conn, message_id)?;
+    let title = if title.trim().is_empty() { "Chat answer".to_string() } else { title.trim().to_string() };
+    let resource = context.add_text(&title, &message.content)?;
+    if let Err(e) = crate::workspace::documents::add_document(conn, &resource, &message.content, Some(&workspace_id)) {
+        let _ = context.remove_file(&resource.id);
+        return Err(e);
+    }
+    Ok(resource.id)
+}
+
+/// "Add to instructions": the answer is appended to the workspace's
+/// instructions after a separator. Returns the workspace id.
+pub fn add_answer_to_instructions(conn: &Connection, message_id: i64) -> Result<String, String> {
+    let (message, workspace_id) = answer_of(conn, message_id)?;
+    let ws = crate::workspace::store::get_workspace(conn, &workspace_id)?;
+    let text = super::engine::append_to_instructions(&ws.instructions, &message.content);
+    crate::workspace::store::update_workspace(
+        conn,
+        &workspace_id,
+        crate::workspace::types::WorkspacePatch { instructions: Some(text), ..Default::default() },
+    )?;
+    Ok(workspace_id)
+}
+
 // ── AI recaps ────────────────────────────────────────────────────────────────
 
 /// Most recaps made each time a workspace is opened.
