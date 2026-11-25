@@ -1521,6 +1521,7 @@ async fn extras_are_sent_again_after_a_session_restart_and_counted_only_after_su
 async fn automatic_memory_runs_stay_under_the_cap_and_say_so() {
     let h = harness();
     let ws = { let c = h.conn.lock().unwrap(); new_ws(&c, "Cap", false, false) };
+    set_suggest(&h, &ws, true); // an automatic run needs the switch
     let m = make_meeting(&h, &ws);
     {
         let c = h.conn.lock().unwrap();
@@ -1537,6 +1538,53 @@ async fn automatic_memory_runs_stay_under_the_cap_and_say_so() {
     assert_eq!(h.fake.count(AiPurpose::Memory), 0, "nothing was sent over the cap");
     assert!(super::memory::suggest(h.rt.deps(), &ws, &m, Some(100_000)).await.is_ok());
     assert_eq!(h.fake.count(AiPurpose::Memory), 1);
+}
+
+fn set_suggest(h: &H, ws: &str, on: bool) {
+    let c = h.conn.lock().unwrap();
+    crate::workspace::store::update_workspace(&c, ws, crate::workspace::types::WorkspacePatch { suggest_memory: Some(on), ..Default::default() }).unwrap();
+}
+
+fn talk(h: &H, m: &str) {
+    let c = h.conn.lock().unwrap();
+    for i in 0..6 {
+        c.execute(
+            "INSERT INTO transcript_segments (id, meeting_id, text, speaker, timestamp_ms, is_final, created_at) VALUES (?1,?2,?3,'Them',?4,1,'t')",
+            rusqlite::params![format!("s{i}"), m, "Acme pays 12 dollars per seat and the price may change", 5_000 + i * 1_000],
+        )
+        .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn automatic_memory_suggestions_need_the_switch_when_sent_and_when_saved() {
+    // off from the start: nothing is sent
+    let h = harness();
+    let ws = { let c = h.conn.lock().unwrap(); new_ws(&c, "Off", false, false) };
+    let m = make_meeting(&h, &ws);
+    talk(&h, &m);
+    assert!(super::memory::suggest(h.rt.deps(), &ws, &m, Some(100_000)).await.unwrap().is_empty());
+    assert_eq!(h.fake.count(AiPurpose::Memory), 0);
+    // a person asking is not an automatic run: the switch is not needed
+    assert!(super::memory::suggest(h.rt.deps(), &ws, &m, None).await.is_ok());
+    assert_eq!(h.fake.count(AiPurpose::Memory), 1);
+
+    // turned off while the call works: the result is dropped, nothing is saved
+    let h = harness();
+    let ws = { let c = h.conn.lock().unwrap(); new_ws(&c, "Mid", false, false) };
+    set_suggest(&h, &ws, true);
+    let m = make_meeting(&h, &ws);
+    talk(&h, &m);
+    *h.fake.delay.lock().unwrap() = Duration::from_millis(500);
+    let flip = async {
+        until("the call is in flight", || h.fake.inflight.load(Ordering::SeqCst) == 1).await;
+        set_suggest(&h, &ws, false);
+    };
+    let (out, _) = tokio::join!(super::memory::suggest(h.rt.deps(), &ws, &m, Some(100_000)), flip);
+    let out = out.unwrap();
+    assert!(out.is_empty(), "{out:?}");
+    let n: i64 = h.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM workspace_memory WHERE workspace_id = ?1", [&ws], |r| r.get(0)).unwrap_or(0);
+    assert_eq!(n, 0);
 }
 
 #[test]

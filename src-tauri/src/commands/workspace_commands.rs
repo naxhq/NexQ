@@ -552,6 +552,9 @@ pub async fn update_workspace(
 ) -> Result<WorkspaceDetail, String> {
     // A name, colour, description, default scenario, recaps or memory switch, pin
     // or brief switch is cosmetic: it never touches a running session.
+    if patch.recaps_with_ai == Some(false) {
+        state.workspace_chat.cancel_recaps(); // a recap in flight must not outlive this change
+    }
     let matters = with_conn(&state, |conn| store::get_workspace(conn, &id)).map_or(true, |cur| workspace_patch_matters(&cur, &patch));
     change_and_restart(&state, &app, |_| Touch::ws_if(matters, &id), || {
         with_conn(&state, |conn| store::update_workspace(conn, &id, patch).map(|_| ()))
@@ -571,6 +574,7 @@ pub async fn clone_workspace(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<WorkspaceDetail, String> {
+    state.workspace_chat.cancel_recaps(); // a recap in flight must not outlive this change
     let copy = change_and_restart(&state, &app, |_| Touch::none(), || {
         with_conn(&state, |conn| store::clone_workspace(conn, &id, &name, new_id))
     })?;
@@ -580,6 +584,7 @@ pub async fn clone_workspace(
 
 #[command]
 pub async fn archive_workspace(id: String, archived: bool, state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+    state.workspace_chat.cancel_recaps(); // a recap in flight must not outlive this change
     change_and_restart(&state, &app, |_| Touch::ws(&id), || {
         with_conn(&state, |conn| store::archive_workspace(conn, &id, archived).map(|_| ()))
     })?;
@@ -589,6 +594,7 @@ pub async fn archive_workspace(id: String, archived: bool, state: State<'_, AppS
 
 #[command]
 pub async fn delete_workspace(id: String, mode: DeleteMode, state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+    state.workspace_chat.cancel_recaps(); // a recap in flight must not outlive this change
     if let Some(live) = live_meeting_id(&state) {
         let home = with_conn(&state, |conn| store::home_of(conn, &live)).unwrap_or(None);
         if home.as_deref() == Some(id.as_str()) {
@@ -643,7 +649,7 @@ fn delete_meetings_blocking(
             .lock()
             .map_err(|e| format!("Failed to lock database: {e}"))
             .and_then(|guard| {
-                let tx = guard.connection().unchecked_transaction().map_err(|e| e.to_string())?;
+                let tx = crate::db::immediate_tx(guard.connection()).map_err(|e| e.to_string())?;
                 let files = purge::purge_meeting(&tx, meeting)?;
                 tx.commit().map_err(|e| e.to_string())?;
                 Ok(files)
@@ -667,6 +673,7 @@ fn delete_meetings_blocking(
 /// meeting is refused and reported, not deleted.
 #[command]
 pub async fn delete_workspace_meetings(id: String, state: State<'_, AppState>, app: AppHandle) -> Result<DeleteMeetingsReport, String> {
+    state.workspace_chat.cancel_recaps(); // a recap in flight must not outlive this change
     let ids: Vec<String> = with_conn(&state, |conn| {
         let mut stmt = conn
             .prepare("SELECT id FROM meetings WHERE workspace_id = ?1 ORDER BY start_time")
@@ -866,6 +873,7 @@ pub(crate) fn delete_touch(conn: &Connection, meeting_id: &str) -> Touch {
 
 #[command]
 pub async fn move_meeting(meeting_id: String, workspace_id: String, state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+    state.workspace_chat.cancel_recaps(); // a recap in flight must not outlive this change
     // The meeting's own sessions, and the chats of the workspace it leaves (read
     // before the change) and of the one it joins (read after): the meeting
     // leaves the first chats' meetings, which is a revocation for them.

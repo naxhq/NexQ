@@ -962,7 +962,7 @@ async fn deleting_a_meeting_redacts_citations_in_stored_chats() {
     assert!(before[1].context.as_ref().unwrap().bars.iter().any(|b| b.id == "meeting:m1"));
     {
         let conn = rig.conn();
-        let tx = conn.unchecked_transaction().unwrap();
+        let tx = crate::db::immediate_tx(&conn).unwrap();
         crate::workspace::purge::purge_meeting(&tx, "m1").unwrap();
         tx.commit().unwrap();
     }
@@ -1340,7 +1340,7 @@ impl Rig {
                     crate::workspace::meetings::move_meeting_atomic(&conn, "m-secret", &other).unwrap();
                 }
                 Revoke::DeleteMeeting => {
-                    let tx = conn.unchecked_transaction().unwrap();
+                    let tx = crate::db::immediate_tx(&conn).unwrap();
                     crate::workspace::purge::purge_meeting(&tx, "m-secret").unwrap();
                     tx.commit().unwrap();
                 }
@@ -2535,5 +2535,71 @@ async fn every_streamed_token_names_its_chat_and_its_request() {
         assert_eq!(t["request_id"], rid.as_str(), "{t}");
         assert_eq!(t["chat_id"], chat.as_str(), "{t}");
         assert!(t["token"].is_string(), "{t}");
+    }
+}
+
+#[tokio::test]
+async fn a_recap_is_dropped_when_consent_ends_before_it_is_written_and_never_started_after() {
+    #[derive(Debug, Clone, Copy)]
+    enum Change {
+        SwitchOff,
+        Archived,
+        MeetingMoved,
+        MeetingDeleted,
+        RecapDeclined,
+        MeetingStarted,
+        Cancelled,
+    }
+    for change in [Change::SwitchOff, Change::Archived, Change::MeetingMoved, Change::MeetingDeleted, Change::RecapDeclined, Change::MeetingStarted, Change::Cancelled] {
+        let rig = Rig::new();
+        rig.meeting("m1", "Newest", 9, &["The lynx programme budget was agreed.", "Owners were named."]);
+        rig.meeting("m0", "Older", 2, &["The ibex migration starts in May.", "Owners were named."]);
+        rig.index();
+        crate::workspace::store::update_workspace(&rig.conn(), &rig.ws, crate::workspace::types::WorkspacePatch { recaps_with_ai: Some(true), ..Default::default() }).unwrap();
+        let token = Arc::new(CancelToken::new());
+        let (path, ws, flag, t2) = (rig.deps.db_path.clone(), rig.ws.clone(), rig.meeting_active.clone(), token.clone());
+        let hook: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let conn = crate::db::open_writer(&path).unwrap();
+            match change {
+                Change::SwitchOff => {
+                    crate::workspace::store::update_workspace(&conn, &ws, crate::workspace::types::WorkspacePatch { recaps_with_ai: Some(false), ..Default::default() }).unwrap();
+                }
+                Change::Archived => {
+                    crate::workspace::store::archive_workspace(&conn, &ws, true).unwrap();
+                }
+                Change::MeetingMoved => {
+                    let other = new_ws(&conn, "Elsewhere", false, false);
+                    crate::workspace::meetings::move_meeting_atomic(&conn, "m1", &other).unwrap();
+                }
+                Change::MeetingDeleted => {
+                    let tx = crate::db::immediate_tx(&conn).unwrap();
+                    crate::workspace::purge::purge_meeting(&tx, "m1").unwrap();
+                    tx.commit().unwrap();
+                }
+                Change::RecapDeclined => crate::workspace_search::cards::decline_recap(&conn, "m1").unwrap(),
+                Change::MeetingStarted => flag.store(true, Ordering::SeqCst),
+                Change::Cancelled => t2.cancel(),
+            }
+        });
+        rig.api.push(Step::Hooked { tokens: vec!["A ", "recap ", "of ", "it."], after: 2, hook });
+        rig.api.push(Step::Text("A second recap.".into()));
+        let made = ops::recap_missing(&rig.deps, &rig.ws, token).await;
+        let ai: Vec<String> = rig
+            .conn()
+            .prepare("SELECT meeting_id FROM meeting_cards WHERE origin = 'ai'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        let calls = rig.api.calls().len();
+        match change {
+            // only that meeting's consent ended: the other one still gets its recap
+            Change::MeetingMoved | Change::MeetingDeleted | Change::RecapDeclined => {
+                assert_eq!((made, ai.as_slice(), calls), (1, &["m0".to_string()][..], 2), "{change:?}");
+            }
+            // the whole workspace's consent ended: nothing written, no second call
+            _ => assert_eq!((made, ai.len(), calls), (0, 0, 1), "{change:?}"),
+        }
     }
 }

@@ -77,6 +77,12 @@ pub async fn suggest(deps: &Deps, workspace_id: &str, meeting_id: &str, cap: Opt
     if deps.db.meeting_home(meeting_id).as_deref() != Some(workspace_id) {
         return Err("This meeting does not belong to that workspace".into());
     }
+    // A run nobody asked for (`cap` is set) needs the workspace's switch on when each
+    // call is sent and again when its result is saved; a person asking is consent enough.
+    let automatic = cap.is_some();
+    if automatic && !deps.db.suggest_flag(workspace_id) {
+        return Ok(Vec::new());
+    }
     let (lines, len_ms) = deps.db.meeting_lines(meeting_id);
     if lines.is_empty() {
         return Ok(Vec::new());
@@ -99,6 +105,13 @@ pub async fn suggest(deps: &Deps, workspace_id: &str, meeting_id: &str, cap: Opt
             }
         }
         sent += chunk_tokens;
+        if automatic
+            && (!deps.db.suggest_flag(workspace_id)
+                || deps.db.meeting_home(meeting_id).as_deref() != Some(workspace_id)
+                || deps.deleted.lock().unwrap().contains(meeting_id))
+        {
+            return Ok(Vec::new()); // consent ended: nothing more is sent
+        }
         let input = MemoryInput {
             lines: chunk,
             meeting_len_ms: len_ms,
@@ -135,7 +148,7 @@ pub async fn suggest(deps: &Deps, workspace_id: &str, meeting_id: &str, cap: Opt
         })
         .collect();
     // one transaction that re-checks the meeting and its home
-    let stored = deps.db.save_suggestions(meeting_id, workspace_id, items);
+    let stored = deps.db.save_suggestions(meeting_id, workspace_id, items, automatic);
     if !stored.is_empty() {
         deps.emitter.emit("memory_changed", json!({"workspace_id": workspace_id}));
     }

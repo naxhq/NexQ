@@ -114,6 +114,14 @@ pub fn open_reader(path: &Path) -> Result<Connection, DatabaseError> {
     Ok(conn)
 }
 
+/// A write transaction that takes the write lock when it starts. A plain (deferred)
+/// transaction that reads first and writes later fails at once with "database is
+/// locked" when another connection commits in between; this one waits for its turn
+/// (the busy timeout) instead, and nothing it reads can go stale before it writes.
+pub fn immediate_tx(conn: &Connection) -> rusqlite::Result<rusqlite::Transaction<'_>> {
+    rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+}
+
 /// A read-write connection to the database file at `path` (WAL, busy timeout).
 pub fn open_writer(path: &Path) -> Result<Connection, DatabaseError> {
     let conn = Connection::open_with_flags(

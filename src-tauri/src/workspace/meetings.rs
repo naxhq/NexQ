@@ -16,7 +16,7 @@ fn err(what: &str, e: rusqlite::Error) -> String {
 /// fails, no meeting row is left behind. `None`: workspaces are unavailable and
 /// the meeting is created as before.
 pub fn create_meeting_in(conn: &Connection, title: &str, home: Option<&str>) -> Result<crate::db::meetings::Meeting, String> {
-    let tx = conn.unchecked_transaction().map_err(|e| err("Couldn't start the meeting", e))?;
+    let tx = crate::db::immediate_tx(conn).map_err(|e| err("Couldn't start the meeting", e))?;
     let mut meeting = crate::db::meetings::create_meeting(&tx, title).map_err(|e| format!("Failed to create meeting: {e}"))?;
     if let Some(home) = home {
         set_home(&tx, &meeting.id, home)?;
@@ -28,7 +28,7 @@ pub fn create_meeting_in(conn: &Connection, title: &str, home: Option<&str>) -> 
 
 /// A new meeting filed in no workspace (see [`super::types::unfiled_home`]).
 pub fn create_meeting_unfiled(conn: &Connection, title: &str) -> Result<crate::db::meetings::Meeting, String> {
-    let tx = conn.unchecked_transaction().map_err(|e| err("Couldn't start the meeting", e))?;
+    let tx = crate::db::immediate_tx(conn).map_err(|e| err("Couldn't start the meeting", e))?;
     let mut meeting = crate::db::meetings::create_meeting(&tx, title).map_err(|e| format!("Failed to create meeting: {e}"))?;
     let home = super::types::unfiled_home(&meeting.id);
     set_home(&tx, &meeting.id, &home)?;
@@ -81,7 +81,7 @@ pub fn set_meeting_scope(conn: &Connection, meeting_id: &str, borrowed: &[String
     let current = borrowed_of(conn, meeting_id)?;
     let now = now_ms();
     // The change and what it takes away go together or not at all.
-    let tx = conn.unchecked_transaction().map_err(|e| err("Couldn't save the scope", e))?;
+    let tx = crate::db::immediate_tx(conn).map_err(|e| err("Couldn't save the scope", e))?;
     let before = super::derived::snapshot(&tx, &[meeting_id.to_string()])?;
     for id in current.iter().filter(|id| !wanted.contains(id)) {
         tx.execute(
@@ -155,7 +155,7 @@ pub fn move_meeting(conn: &Connection, meeting_id: &str, workspace_id: &str) -> 
 
 /// [`move_meeting`] in its own transaction.
 pub fn move_meeting_atomic(conn: &Connection, meeting_id: &str, workspace_id: &str) -> Result<(), String> {
-    let tx = conn.unchecked_transaction().map_err(|e| err("Couldn't move the meeting", e))?;
+    let tx = crate::db::immediate_tx(conn).map_err(|e| err("Couldn't move the meeting", e))?;
     move_meeting(&tx, meeting_id, workspace_id)?;
     tx.commit().map_err(|e| err("Couldn't move the meeting", e))
 }

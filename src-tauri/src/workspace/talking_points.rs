@@ -206,7 +206,7 @@ pub fn patch_talking_point(
 
 /// Deletes a talking point with its per-meeting edits and progress.
 pub fn delete_talking_point(conn: &Connection, id: &str) -> Result<(), String> {
-    let tx = conn.unchecked_transaction().map_err(|e| err("Couldn't delete", e))?;
+    let tx = crate::db::immediate_tx(conn).map_err(|e| err("Couldn't delete", e))?;
     for sql in [
         "DELETE FROM talking_point_edits WHERE point_id = ?1",
         "DELETE FROM talking_point_progress WHERE point_id = ?1",
@@ -226,7 +226,7 @@ pub fn copy_talking_point(conn: &Connection, id: &str, workspace_id: &str) -> Re
 
 /// Puts a workspace's points in the order of `ids`.
 pub fn reorder_talking_points(conn: &Connection, workspace_id: &str, ids: &[String]) -> Result<(), String> {
-    let tx = conn.unchecked_transaction().map_err(|e| err("Couldn't reorder", e))?;
+    let tx = crate::db::immediate_tx(conn).map_err(|e| err("Couldn't reorder", e))?;
     let mut order = ids.to_vec();
     for point in list_talking_points(&tx, workspace_id)? {
         if !order.contains(&point.id) {

@@ -245,7 +245,7 @@ pub fn create_workspace(conn: &Connection, input: CreateWorkspaceInput) -> Resul
 /// borrow that involves it.
 pub fn update_workspace(conn: &Connection, id: &str, patch: WorkspacePatch) -> Result<Workspace, String> {
     // The change and the cleanup of what it takes away are one transaction.
-    let tx = conn.unchecked_transaction().map_err(|e| db_err("Couldn't save the workspace", e))?;
+    let tx = crate::db::immediate_tx(conn).map_err(|e| db_err("Couldn't save the workspace", e))?;
     let updated = update_workspace_in(&tx, id, patch)?;
     tx.commit().map_err(|e| db_err("Couldn't save the workspace", e))?;
     Ok(updated)
@@ -340,7 +340,7 @@ fn update_workspace_in(conn: &Connection, id: &str, patch: WorkspacePatch) -> Re
 /// talking points; not the meetings, chats, memory or secrets.
 pub fn clone_workspace(conn: &Connection, id: &str, name: &str, new_id: Option<String>) -> Result<Workspace, String> {
     let source = get_workspace(conn, id)?;
-    let tx = conn.unchecked_transaction().map_err(|e| db_err("Couldn't copy the workspace", e))?;
+    let tx = crate::db::immediate_tx(conn).map_err(|e| db_err("Couldn't copy the workspace", e))?;
     let copy = create_workspace(
         &tx,
         CreateWorkspaceInput {
@@ -386,7 +386,7 @@ pub fn set_default_workspace(conn: &Connection, id: &str) -> Result<(), String> 
     if ws.archived {
         return Err("An archived workspace can't be the default".to_string());
     }
-    let tx = conn.unchecked_transaction().map_err(|e| db_err("Couldn't set the default", e))?;
+    let tx = crate::db::immediate_tx(conn).map_err(|e| db_err("Couldn't set the default", e))?;
     tx.execute("UPDATE workspaces SET is_default = (id = ?1)", params![id])
         .map_err(|e| db_err("Couldn't set the default", e))?;
     tx.commit().map_err(|e| db_err("Couldn't set the default", e))
@@ -394,7 +394,7 @@ pub fn set_default_workspace(conn: &Connection, id: &str) -> Result<(), String> 
 
 /// Puts the workspaces in the order of `ids`; any not listed follow in their old order.
 pub fn reorder_workspaces(conn: &Connection, ids: &[String]) -> Result<(), String> {
-    let tx = conn.unchecked_transaction().map_err(|e| db_err("Couldn't reorder", e))?;
+    let tx = crate::db::immediate_tx(conn).map_err(|e| db_err("Couldn't reorder", e))?;
     let mut order: Vec<String> = ids.to_vec();
     let rest: Vec<String> = {
         let mut stmt = tx.prepare("SELECT id FROM workspaces ORDER BY sort, created_at").map_err(|e| db_err("Couldn't reorder", e))?;
@@ -428,7 +428,7 @@ pub fn delete_workspace(conn: &Connection, id: &str, mode: DeleteMode) -> Result
     if ws.is_default {
         return Err("This is the default workspace. Make another one the default first".to_string());
     }
-    let tx = conn.unchecked_transaction().map_err(|e| db_err("Couldn't delete the workspace", e))?;
+    let tx = crate::db::immediate_tx(conn).map_err(|e| db_err("Couldn't delete the workspace", e))?;
     let meeting_ids: Vec<String> = {
         let mut stmt = tx.prepare("SELECT id FROM meetings WHERE workspace_id = ?1").map_err(|e| db_err("Couldn't delete", e))?;
         let rows = stmt.query_map(params![id], |row| row.get::<_, String>(0)).map_err(|e| db_err("Couldn't delete", e))?;

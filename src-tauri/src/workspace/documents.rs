@@ -41,7 +41,7 @@ pub fn db_row(resource: &ContextResource) -> context_db::ContextResource {
 /// Saves a loaded document: its row and its text. With `workspace_id` it also
 /// joins that workspace in the same step; without, it is unfiled.
 pub fn add_document(conn: &Connection, resource: &ContextResource, text: &str, workspace_id: Option<&str>) -> Result<(), String> {
-    let tx = conn.unchecked_transaction().map_err(|e| err("Couldn't save the document", e))?;
+    let tx = crate::db::immediate_tx(conn).map_err(|e| err("Couldn't save the document", e))?;
     context_db::add_context_resource(&tx, &db_row(resource)).map_err(|e| err("Couldn't save the document", e))?;
     store_text(&tx, &resource.id, text, resource.token_count as i64)?;
     if let Some(ws) = workspace_id {
@@ -52,7 +52,7 @@ pub fn add_document(conn: &Connection, resource: &ContextResource, text: &str, w
 
 /// Removes a document everywhere: row, text, index chunks and every membership.
 pub fn remove_document(conn: &Connection, id: &str) -> Result<(), String> {
-    let tx = conn.unchecked_transaction().map_err(|e| err("Couldn't remove the document", e))?;
+    let tx = crate::db::immediate_tx(conn).map_err(|e| err("Couldn't remove the document", e))?;
     let _ = context_db::delete_context_resource(&tx, id);
     crate::db::rag::delete_chunks_by_file(&tx, id)?;
     tx.execute("DELETE FROM document_text WHERE resource_id = ?1", params![id]).map_err(|e| err("Couldn't remove the document", e))?;

@@ -125,7 +125,7 @@ pub fn update_chat(conn: &Connection, id: &str, patch: WorkspaceChatPatch) -> Re
 
 /// Delete a chat with its messages and its meeting choices.
 pub fn delete_chat(conn: &Connection, id: &str) -> Result<(), String> {
-    let tx = conn.unchecked_transaction().map_err(|e| err("Couldn't delete the chat", e))?;
+    let tx = crate::db::immediate_tx(conn).map_err(|e| err("Couldn't delete the chat", e))?;
     tx.execute("DELETE FROM workspace_provenance WHERE chat_id = ?1", params![id]).map_err(|e| err("Couldn't delete the chat", e))?;
     tx.execute("DELETE FROM workspace_messages WHERE chat_id = ?1", params![id]).map_err(|e| err("Couldn't delete the chat", e))?;
     tx.execute("DELETE FROM workspace_meeting_prefs WHERE chat_id = ?1", params![id]).map_err(|e| err("Couldn't delete the chat", e))?;
@@ -182,7 +182,7 @@ pub struct Answer<'a> {
 
 /// An answered pair, saved in one transaction of its own.
 pub fn save_answer(conn: &Connection, chat_id: &str, a: Answer) -> Result<WorkspaceMessage, String> {
-    let tx = conn.unchecked_transaction().map_err(|e| err("Couldn't save the answer", e))?;
+    let tx = crate::db::immediate_tx(conn).map_err(|e| err("Couldn't save the answer", e))?;
     let saved = save_answer_in_tx(&tx, chat_id, a)?;
     tx.commit().map_err(|e| err("Couldn't save the answer", e))?;
     Ok(saved)

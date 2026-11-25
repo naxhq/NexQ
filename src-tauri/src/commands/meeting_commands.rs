@@ -966,6 +966,7 @@ pub async fn delete_meeting(
     app: AppHandle,
 ) -> Result<(), String> {
     use crate::commands::workspace_commands::{change_and_restart, delete_touch};
+    state.workspace_chat.cancel_recaps(); // a recap in flight must not outlive this change
     let db = state
         .database
         .as_ref()

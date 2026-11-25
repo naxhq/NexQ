@@ -31,7 +31,7 @@ fn tx_err(e: impl std::fmt::Display) -> String {
 /// nothing, so the real config that follows is still seeded. Nothing else
 /// happens on a push: memberships are never removed here.
 pub fn sync_with_config(conn: &Connection, cfg: &PersonalSourcesConfig, loaded: bool) -> Result<(), String> {
-    let tx = conn.unchecked_transaction().map_err(tx_err)?;
+    let tx = crate::db::immediate_tx(conn).map_err(tx_err)?;
     let seeded: bool = tx
         .query_row("SELECT EXISTS(SELECT 1 FROM app_state WHERE key = ?1)", params![MARKER], |row| row.get(0))
         .map_err(tx_err)?;

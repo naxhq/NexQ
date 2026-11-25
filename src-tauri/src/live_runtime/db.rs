@@ -246,7 +246,7 @@ impl LiveDb {
     }
 
     pub fn suggest_flag(&self, workspace_id: &str) -> bool {
-        self.read(|c| store::get_workspace(c, workspace_id).map(|w| w.suggest_memory).unwrap_or(false)).unwrap_or(false)
+        self.read(|c| store::get_workspace(c, workspace_id).map(|w| w.suggest_memory && !w.archived).unwrap_or(false)).unwrap_or(false)
     }
 
     /// When the meeting started (epoch ms), if its row has a usable start time.
@@ -294,11 +294,15 @@ impl LiveDb {
     /// Stores proposals as `suggested`, in one transaction that first checks
     /// the meeting still exists and is still filed in `workspace_id`: a
     /// meeting that moved or went while the model worked gets nothing saved.
-    pub fn save_suggestions(&self, meeting_id: &str, workspace_id: &str, items: Vec<MemoryCreate>) -> Vec<MemoryItem> {
+    pub fn save_suggestions(&self, meeting_id: &str, workspace_id: &str, items: Vec<MemoryCreate>, require_switch: bool) -> Vec<MemoryItem> {
         self.with(|c| {
-            let Ok(tx) = c.unchecked_transaction() else { return Vec::new() };
+            let Ok(tx) = crate::db::immediate_tx(c) else { return Vec::new() };
             let home: Option<String> = tx.query_row("SELECT workspace_id FROM meetings WHERE id = ?1", params![meeting_id], |r| r.get(0)).ok();
             if home.as_deref() != Some(workspace_id) {
+                return Vec::new();
+            }
+            // an automatic run saves only while the workspace still has its switch on
+            if require_switch && !store::get_workspace(&tx, workspace_id).map(|w| w.suggest_memory && !w.archived).unwrap_or(false) {
                 return Vec::new();
             }
             let saved: Vec<MemoryItem> = items
