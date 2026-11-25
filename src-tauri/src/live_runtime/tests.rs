@@ -2062,3 +2062,23 @@ fn coverage_is_the_last_line_folded_in_against_the_transcript() {
     d.covered_to = None;
     assert_eq!(d.uncovered_in(&[1_000, 5_000, 6_000]), Some((5_000, 6_000)));
 }
+
+
+#[tokio::test]
+async fn a_run_still_in_flight_when_the_meeting_ends_is_bounded_by_the_final_timeout() {
+    let h = harness();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    *h.fake.delay.lock().unwrap() = Duration::from_secs(5);
+    say(&h, "m1", 120, 10_000, 1_000).await;
+    until("a run in flight", || h.fake.inflight.load(Ordering::SeqCst) == 1).await;
+    let ended = std::time::Instant::now();
+    h.rt.on_meeting_end("m1");
+    *h.live.lock().unwrap() = None;
+    until("finished", || status_of(&h, "notetaker_state", "m1") == "finished").await;
+    assert!(ended.elapsed() < Duration::from_secs(3), "the in-flight run was waited for ({:?})", ended.elapsed());
+    let st = h.events.last_status("notetaker_state", "m1").unwrap();
+    assert_eq!(st["not_covered"]["from_ms"], 10_000, "{st}");
+    assert!(can_of(&st).contains(&"update".to_string()), "{st}");
+}

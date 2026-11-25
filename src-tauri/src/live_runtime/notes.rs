@@ -238,6 +238,8 @@ struct Actor {
     /// The update of an ended meeting: one run on the saved lines, then done.
     one_shot: bool,
     ran: bool,
+    /// Set when the meeting ended while a run was in flight: that run gets `final_timeout`, not forever.
+    finish_deadline: Option<tokio::time::Instant>,
 }
 
 impl Actor {
@@ -285,6 +287,7 @@ impl Actor {
             interrupted: false,
             one_shot,
             ran: false,
+            finish_deadline: None,
         }
     }
 
@@ -383,6 +386,7 @@ impl Actor {
             NotesCmd::Finish => {
                 if self.auto() {
                     self.finishing = true;
+                    self.finish_deadline = Some(tokio::time::Instant::now() + self.p.final_timeout);
                 } else {
                     // manual: nothing runs unasked; what was never sent stays one "Update now" away
                     self.ended_waiting = true;
@@ -445,13 +449,26 @@ impl Actor {
         let swap = self.swap.clone();
         let fut = swap.call(&req);
         tokio::pin!(fut);
+        let mut timed_out = false;
         let result = loop {
+            // a run still going when the meeting ended is given `final_timeout` and then cancelled:
+            // its lines go back and the end says which minutes are not covered
+            let deadline = if timed_out { None } else { self.finish_deadline };
             tokio::select! {
                 r = &mut fut => break r,
                 cmd = rx.recv() => match cmd {
                     Some(c) => self.handle(c),
                     None => { self.swap.cancel(); self.quitting = true; }
                 },
+                _ = async move {
+                    match deadline {
+                        Some(d) => tokio::time::sleep_until(d).await,
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {
+                    timed_out = true;
+                    self.swap.cancel();
+                }
             }
         };
         if self.discarded.load(Ordering::SeqCst) || (self.p.generation)(&self.p.meeting_id, false) != gen0 {
