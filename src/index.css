@@ -624,3 +624,86 @@ select option {
 .toggle-switch[data-checked="false"] {
   @apply bg-muted;
 }
+
+/* ============================================================================
+   NEXQ UI KIT (src/ui, src/voiceprint) - workspaces design
+   Tokens, type scale and motion for the shared primitives. Quiet surfaces,
+   spring-decel motion that answers an action, never decorates.
+   ============================================================================ */
+
+@layer base {
+  :root {
+    /* Workspace hues: none of blue, green, amber or red (those carry meaning).
+       Each reaches 4.5:1 on the light and dark backgrounds, cards included. */
+    --hue-violet: 262 52% 48%;
+    --hue-orchid: 290 48% 44%;
+    --hue-magenta: 318 56% 43%;
+    --hue-rose: 342 60% 45%;
+    --hue-clay: 22 45% 40%;
+    --hue-teal: 184 80% 26%;
+    --hue-moss: 78 60% 26%;
+    --hue-stone: 215 16% 40%;
+
+    /* Context layers (labelled in the UI, so colour is never the only cue). */
+    --layer-instructions: var(--foreground);
+    --layer-meetings: var(--hue-violet);
+    --layer-documents: var(--hue-teal);
+    --layer-folders: var(--hue-moss);
+    --layer-conversation: var(--hue-clay);
+
+    --ui-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .dark {
+    --hue-violet: 262 80% 76%;
+    --hue-orchid: 290 70% 74%;
+    --hue-magenta: 318 72% 72%;
+    --hue-rose: 342 78% 74%;
+    --hue-clay: 22 55% 66%;
+    --hue-teal: 184 60% 58%;
+    --hue-moss: 78 48% 58%;
+    --hue-stone: 215 18% 68%;
+  }
+}
+
+@layer utilities {
+  /* Type scale: page title 22/600, section 13/600, body 13.5/1.55, meta 11.5. */
+  .ui-title { font-size: 1.375rem; line-height: 1.25; font-weight: 600; letter-spacing: -0.012em; }
+  .ui-section { font-size: 0.8125rem; line-height: 1.4; font-weight: 600; }
+  .ui-body { font-size: 0.84375rem; line-height: 1.55; }
+  .ui-meta { font-size: 0.71875rem; line-height: 1.4; }
+  .ui-measure { max-width: 72ch; }
+  .ui-kbd {
+    font-family: inherit;
+    font-size: 0.71875rem;
+    line-height: 1;
+    font-weight: 500;
+  }
+}
+
+@keyframes ui-pop-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes ui-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes ui-sheet-in-right {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes ui-sheet-in-left {
+  from { transform: translateX(-24px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+.ui-pop-in { animation: ui-pop-in 160ms var(--ui-ease) both; }
+.ui-fade-in { animation: ui-fade-in 140ms var(--ui-ease) both; }
+.ui-sheet-in-right { animation: ui-sheet-in-right 240ms var(--ui-ease) both; }
+.ui-sheet-in-left { animation: ui-sheet-in-left 240ms var(--ui-ease) both; }
+
+/* A bar changes only when its data does: transform and opacity, nothing on first paint. */
+.ui-wave-bar {
+  transform-origin: center;
+  transition: transform 280ms var(--ui-ease), opacity 200ms var(--ui-ease);
+}

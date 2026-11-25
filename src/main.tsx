@@ -11,7 +11,16 @@ const view = params.get("view");
 
 installFrontendLogging();
 
-if (view === "meeting-prompt") {
+if (import.meta.env.DEV && view === "ui-gallery") {
+  // Review page for the UI kit. Dev builds only: the branch is removed from release bundles.
+  import("./ui/gallery").then(({ default: UiGallery }) => {
+    ReactDOM.createRoot(document.getElementById("root")!).render(
+      <React.StrictMode>
+        <UiGallery />
+      </React.StrictMode>
+    );
+  });
+} else if (view === "meeting-prompt") {
   // Meeting detection prompt: its own tiny root, none of the app's hooks
   // (global shortcuts, config sync) run in this window.
   import("./meeting-prompt/MeetingPrompt").then(({ MeetingPromptWindow }) => {

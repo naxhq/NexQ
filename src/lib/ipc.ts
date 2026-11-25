@@ -5,6 +5,12 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  BriefSettings, BriefSheet, DeleteWorkspaceMode, ContextReport, IndexStatus, LibraryItem, MeetingScope,
+  MemoryItem, NoteDoc, NoteEdit, NotetakerSettings, Passage, PassageKind, PointProgress, PointSaid,
+  TalkingPoint, WorkspaceChat, WorkspaceChatPatch, WorkspaceDetail, WorkspaceInput, WorkspaceItemKind,
+  WorkspaceMeetingPage, WorkspaceMessage, WorkspacePatch, WorkspaceSummary,
+} from "./types";
+import type {
   MeetingDetectionConfig,
   MeetingPromptInfo,
   StealthSupport,
@@ -376,9 +382,10 @@ export async function hasApiKey(provider: string): Promise<boolean> {
 // == IPC: Meetings (Sub-PRD 1/8) ==
 
 export async function startMeeting(
-  title?: string
+  title?: string,
+  workspaceId?: string,
 ): Promise<Meeting> {
-  const result = await invoke<string>("start_meeting", { title });
+  const result = await invoke<string>("start_meeting", { title, ...(workspaceId ? { workspaceId } : {}) });
   return JSON.parse(result);
 }
 
@@ -1042,4 +1049,256 @@ export async function askMeeting(
 /** The meeting's saved "Ask this meeting" chat, oldest first. */
 export async function listMeetingChat(meetingId: string): Promise<MeetingChatMessage[]> {
   return invoke<MeetingChatMessage[]>("list_meeting_chat", { meetingId });
+}
+
+// == IPC: Workspaces (spec section 9). Rust params are snake_case, Tauri takes camelCase ==
+
+export async function listWorkspaces(): Promise<WorkspaceSummary[]> {
+  return invoke<WorkspaceSummary[]>("list_workspaces");
+}
+export async function getWorkspace(id: string): Promise<WorkspaceDetail> {
+  return invoke<WorkspaceDetail>("get_workspace", { id });
+}
+export async function createWorkspace(input: WorkspaceInput): Promise<WorkspaceDetail> {
+  return invoke<WorkspaceDetail>("create_workspace", { input });
+}
+export async function updateWorkspace(id: string, patch: WorkspacePatch): Promise<WorkspaceDetail> {
+  return invoke<WorkspaceDetail>("update_workspace", { id, patch });
+}
+/** Copies name, look, instructions, library memberships and talking points; not meetings, chats, memory or secrets. */
+export async function cloneWorkspace(id: string, name: string): Promise<WorkspaceDetail> {
+  return invoke<WorkspaceDetail>("clone_workspace", { id, name });
+}
+export async function archiveWorkspace(id: string, archived: boolean): Promise<void> {
+  return invoke("archive_workspace", { id, archived });
+}
+export async function deleteWorkspace(id: string, mode: DeleteWorkspaceMode): Promise<void> {
+  return invoke("delete_workspace", { id, mode });
+}
+export async function setDefaultWorkspace(id: string): Promise<void> {
+  return invoke("set_default_workspace", { id });
+}
+export async function reorderWorkspaces(ids: string[]): Promise<void> {
+  return invoke("reorder_workspaces", { ids });
+}
+export async function addWorkspaceItem(
+  id: string,
+  kind: WorkspaceItemKind,
+  refId: string,
+  label?: string,
+): Promise<void> {
+  return invoke("add_workspace_item", { id, kind, refId, label });
+}
+export async function updateWorkspaceItem(
+  id: string,
+  kind: WorkspaceItemKind,
+  refId: string,
+  patch: { label?: string | null; pinned?: boolean; index_opt_in?: boolean },
+): Promise<void> {
+  return invoke("update_workspace_item", { id, kind, refId, patch });
+}
+export async function removeWorkspaceItem(id: string, kind: WorkspaceItemKind, refId: string): Promise<void> {
+  return invoke("remove_workspace_item", { id, kind, refId });
+}
+export async function listLibrary(): Promise<LibraryItem[]> {
+  return invoke<LibraryItem[]>("list_library");
+}
+export async function moveMeeting(meetingId: string, workspaceId: string): Promise<void> {
+  return invoke("move_meeting", { meetingId, workspaceId });
+}
+export async function listWorkspaceMeetings(
+  id: string,
+  query: string | null,
+  limit: number,
+  offset: number,
+): Promise<WorkspaceMeetingPage> {
+  return invoke<WorkspaceMeetingPage>("list_workspace_meetings", { id, query, limit, offset });
+}
+export async function getMeetingScope(meetingId: string): Promise<MeetingScope> {
+  return invoke<MeetingScope>("get_meeting_scope", { meetingId });
+}
+/** Refuses keep-separate combinations with a clear message (the promise rejects with it). */
+export async function setMeetingScope(meetingId: string, borrowed: string[]): Promise<MeetingScope> {
+  return invoke<MeetingScope>("set_meeting_scope", { meetingId, borrowed });
+}
+/** Saves Markdown as a document in the workspace; resolves to the document id. */
+export async function addWorkspaceText(id: string, title: string, markdown: string): Promise<string> {
+  return invoke<string>("add_workspace_text", { id, title, markdown });
+}
+
+// == IPC: Workspace search and index ==
+
+export async function searchWorkspace(
+  id: string,
+  query: string,
+  kinds: PassageKind[] | null,
+  limit: number,
+): Promise<Passage[]> {
+  return invoke<Passage[]>("search_workspace", { id, query, kinds, limit });
+}
+export async function getIndexStatus(id: string): Promise<IndexStatus> {
+  return invoke<IndexStatus>("get_index_status", { id });
+}
+export async function rescanWorkspace(id: string): Promise<void> {
+  return invoke("rescan_workspace", { id });
+}
+
+// == IPC: Workspace chat ==
+
+export async function listWorkspaceChats(workspaceId: string): Promise<WorkspaceChat[]> {
+  return invoke<WorkspaceChat[]>("list_workspace_chats", { workspaceId });
+}
+export async function createWorkspaceChat(workspaceId: string): Promise<WorkspaceChat> {
+  return invoke<WorkspaceChat>("create_workspace_chat", { workspaceId });
+}
+export async function updateWorkspaceChat(id: string, patch: WorkspaceChatPatch): Promise<WorkspaceChat> {
+  return invoke<WorkspaceChat>("update_workspace_chat", { id, patch });
+}
+export async function deleteWorkspaceChat(id: string): Promise<void> {
+  return invoke("delete_workspace_chat", { id });
+}
+export async function listWorkspaceMessages(chatId: string): Promise<WorkspaceMessage[]> {
+  return invoke<WorkspaceMessage[]>("list_workspace_messages", { chatId });
+}
+/** `chatId` null = the workspace default for new chats. */
+export async function setChatMeetingIncluded(
+  workspaceId: string,
+  chatId: string | null,
+  meetingId: string,
+  included: boolean,
+): Promise<void> {
+  return invoke("set_chat_meeting_included", { workspaceId, chatId, meetingId, included });
+}
+/** The estimate shown before sending. */
+export async function previewChatContext(chatId: string, question?: string): Promise<ContextReport> {
+  return invoke<ContextReport>("preview_chat_context", { chatId, question });
+}
+/** Resolves once the answer is saved; `deeper` re-asks with the deep budget ("Search deeper"). */
+export async function askWorkspace(
+  chatId: string,
+  question: string,
+  requestId: string,
+  deeper = false,
+): Promise<void> {
+  return invoke("ask_workspace", { chatId, question, requestId, deeper });
+}
+export async function cancelWorkspaceRequest(requestId: string): Promise<void> {
+  return invoke("cancel_workspace_request", { requestId });
+}
+export async function saveAnswerToLibrary(messageId: number, title: string): Promise<string> {
+  return invoke<string>("save_answer_to_library", { messageId, title });
+}
+export async function answerWorkspaceApproval(approvalId: string, allow: boolean): Promise<void> {
+  return invoke("answer_workspace_approval", { approvalId, allow });
+}
+
+// == IPC: Live notes ==
+
+export async function getMeetingNotes(meetingId: string): Promise<NoteDoc | null> {
+  return invoke<NoteDoc | null>("get_meeting_notes", { meetingId });
+}
+export async function saveMeetingNotesEdit(meetingId: string, edit: NoteEdit): Promise<NoteDoc> {
+  return invoke<NoteDoc>("save_meeting_notes_edit", { meetingId, edit });
+}
+export async function notetakerStart(meetingId: string): Promise<void> {
+  return invoke("notetaker_start", { meetingId });
+}
+export async function notetakerStop(meetingId: string): Promise<void> {
+  return invoke("notetaker_stop", { meetingId });
+}
+export async function notetakerUpdateNow(meetingId: string): Promise<void> {
+  return invoke("notetaker_update_now", { meetingId });
+}
+/** "Keep going": adds the same amount to the cap. */
+export async function notetakerContinue(meetingId: string): Promise<void> {
+  return invoke("notetaker_continue", { meetingId });
+}
+export async function getNotetakerSettings(): Promise<NotetakerSettings> {
+  return invoke<NotetakerSettings>("get_notetaker_settings");
+}
+export async function setNotetakerSettings(settings: NotetakerSettings): Promise<void> {
+  return invoke("set_notetaker_settings", { settings });
+}
+
+// == IPC: Brief ==
+
+export async function getMeetingBrief(meetingId: string): Promise<BriefSheet | null> {
+  return invoke<BriefSheet | null>("get_meeting_brief", { meetingId });
+}
+export async function briefStart(meetingId: string): Promise<void> {
+  return invoke("brief_start", { meetingId });
+}
+export async function briefStop(meetingId: string): Promise<void> {
+  return invoke("brief_stop", { meetingId });
+}
+export async function briefRefresh(meetingId: string): Promise<void> {
+  return invoke("brief_refresh", { meetingId });
+}
+export async function briefContinue(meetingId: string): Promise<void> {
+  return invoke("brief_continue", { meetingId });
+}
+export async function getBriefSettings(): Promise<BriefSettings> {
+  return invoke<BriefSettings>("get_brief_settings");
+}
+export async function setBriefSettings(settings: BriefSettings): Promise<void> {
+  return invoke("set_brief_settings", { settings });
+}
+
+// == IPC: Workspace memory ==
+
+export async function listMemory(workspaceId: string): Promise<MemoryItem[]> {
+  return invoke<MemoryItem[]>("list_memory", { workspaceId });
+}
+export async function saveMemory(item: MemoryItem): Promise<MemoryItem> {
+  return invoke<MemoryItem>("save_memory", { item });
+}
+export async function deleteMemory(id: string): Promise<void> {
+  return invoke("delete_memory", { id });
+}
+/** One AI call proposing up to 8 items (status "suggested"); nothing is saved until resolved. */
+export async function suggestMemory(workspaceId: string, meetingId: string): Promise<MemoryItem[]> {
+  return invoke<MemoryItem[]>("suggest_memory", { workspaceId, meetingId });
+}
+export async function resolveMemory(
+  id: string,
+  action: "save" | "dismiss",
+  patch?: Partial<Pick<MemoryItem, "kind" | "title" | "text">>,
+): Promise<void> {
+  return invoke("resolve_memory", { id, action, patch });
+}
+
+// == IPC: Talking points ==
+
+export async function listTalkingPoints(workspaceId: string): Promise<TalkingPoint[]> {
+  return invoke<TalkingPoint[]>("list_talking_points", { workspaceId });
+}
+export async function saveTalkingPoint(point: TalkingPoint): Promise<TalkingPoint> {
+  return invoke<TalkingPoint>("save_talking_point", { point });
+}
+export async function deleteTalkingPoint(id: string): Promise<void> {
+  return invoke("delete_talking_point", { id });
+}
+export async function copyTalkingPoint(id: string, workspaceId: string): Promise<TalkingPoint> {
+  return invoke<TalkingPoint>("copy_talking_point", { id, workspaceId });
+}
+export async function reorderTalkingPoints(workspaceId: string, ids: string[]): Promise<void> {
+  return invoke("reorder_talking_points", { workspaceId, ids });
+}
+export async function getPointProgress(meetingId: string, pointId: string): Promise<PointProgress | null> {
+  return invoke<PointProgress | null>("get_point_progress", { meetingId, pointId });
+}
+export async function savePointProgress(meetingId: string, pointId: string, said: PointSaid[]): Promise<void> {
+  return invoke("save_point_progress", { meetingId, pointId, said });
+}
+/** The "only this meeting" copy of a note's document (TipTap JSON text), or null. */
+export async function getMeetingPointEdit(meetingId: string, pointId: string): Promise<string | null> {
+  return invoke<string | null>("get_meeting_point_edit", { meetingId, pointId });
+}
+/** `doc` null removes the meeting-only copy. */
+export async function saveMeetingPointEdit(
+  meetingId: string,
+  pointId: string,
+  doc: string | null,
+): Promise<void> {
+  return invoke("save_meeting_point_edit", { meetingId, pointId, doc });
 }

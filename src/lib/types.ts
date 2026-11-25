@@ -88,6 +88,8 @@ export interface Meeting {
   config_snapshot: MeetingConfig | null;
   audio_mode?: AudioMode;
   ai_scenario?: AIScenario;
+  /** Home workspace of the meeting ("general" when absent). */
+  workspace_id?: string;
   speakers?: SpeakerIdentity[];
   bookmarks?: MeetingBookmark[];
   topic_sections?: TopicSection[];
@@ -127,6 +129,8 @@ export interface MeetingSummary {
   has_summary: boolean;
   audio_mode?: AudioMode;
   ai_scenario?: AIScenario;
+  /** Home workspace ("general" when absent). */
+  workspace_id?: string;
   speaker_count?: number;
 }
 
@@ -1349,4 +1353,447 @@ export interface SourceActivity {
 export interface StreamActivityEvent {
   request_id: string | null;
   activity: SourceActivity;
+}
+
+// ============================================================================
+// Workspaces (mirrors Rust `workspace/types.rs`; spec 2026-11-24-workspaces-design.md)
+// Timestamps are Unix epoch milliseconds unless a field says otherwise.
+// ============================================================================
+
+/** What a workspace points at in the library. */
+export type WorkspaceItemKind = "document" | "folder" | "server";
+
+/** Library row health: `missing` = file gone (row is kept), `off` = switched off globally in Settings. */
+export type LibraryStatus = "ready" | "indexing" | "missing" | "off" | "error";
+
+/** A workspace in the rail: counts and last activity included. */
+export interface WorkspaceSummary {
+  id: string;
+  name: string;
+  /** Optional emoji or icon key; the voiceprint is the real mark. */
+  icon: string | null;
+  /** One of the `WORKSPACE_HUES` ids (src/ui/hues), null = neutral. */
+  color: string | null;
+  description: string;
+  include_general: boolean;
+  keep_separate: boolean;
+  default_scenario: AIScenario | null;
+  /** The workspace new meetings start in (exactly one). */
+  is_default: boolean;
+  pinned: boolean;
+  archived: boolean;
+  sort: number;
+  meeting_count: number;
+  chat_count: number;
+  item_count: number;
+  /** Newest meeting, chat or edit; null when empty. */
+  last_activity: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/** One library entry as a workspace sees it (name, health and size resolved). */
+export interface WorkspaceItem {
+  workspace_id: string;
+  kind: WorkspaceItemKind;
+  ref_id: string;
+  /** User label override; null = use `name`. */
+  label: string | null;
+  /** Resolved display name (file name, folder path, server name). */
+  name: string;
+  pinned: boolean;
+  status: LibraryStatus;
+  /** Why it is missing/off/errored, for the row's second line. */
+  detail: string | null;
+  tokens: number | null;
+  /** Folders only: the user allowed indexing the folder text. */
+  index_opt_in?: boolean;
+  added_at: number;
+}
+
+/** A workspace with everything its settings and Library panel need. */
+export interface WorkspaceDetail extends WorkspaceSummary {
+  /** Added to the AI instructions after the custom instructions. */
+  instructions: string;
+  /** "Prepare recaps with AI" (off by default). */
+  recaps_with_ai: boolean;
+  /** "Suggest after meetings" for memory (off by default). */
+  suggest_memory: boolean;
+  items: WorkspaceItem[];
+}
+
+export interface WorkspaceInput {
+  name: string;
+  icon?: string | null;
+  color?: string | null;
+  description?: string;
+  instructions?: string;
+  /** New workspaces start with false. */
+  include_general?: boolean;
+  keep_separate?: boolean;
+  default_scenario?: AIScenario | null;
+}
+
+export type WorkspacePatch = Partial<WorkspaceInput> & {
+  pinned?: boolean;
+  recaps_with_ai?: boolean;
+  suggest_memory?: boolean;
+};
+
+/** Deleting a workspace: move its meetings, chats and talking points to General, or delete them. */
+export type DeleteWorkspaceMode = "move" | "delete";
+
+/** A document, folder or MCP server, once, with the workspaces that use it. */
+export interface LibraryItem {
+  kind: WorkspaceItemKind;
+  ref_id: string;
+  name: string;
+  status: LibraryStatus;
+  detail: string | null;
+  tokens: number | null;
+  workspace_ids: string[];
+  /** In no workspace (never added anywhere on its own). */
+  unfiled: boolean;
+}
+
+/** Where a meeting's material comes from. `effective` is computed by Rust `scope_for` only. */
+export interface MeetingScope {
+  meeting_id: string;
+  home: string;
+  borrowed: string[];
+  /** Workspaces whose material is used: home + borrowed + General when allowed. */
+  effective: string[];
+}
+
+export interface WorkspaceMeetingPage {
+  meetings: MeetingSummary[];
+  total: number;
+}
+
+/** `workspaces_changed` */
+export interface WorkspacesChangedEvent {
+  workspace_id?: string | null;
+}
+
+// -- Search and index --------------------------------------------------------
+
+export type PassageKind = "transcript" | "document" | "folder" | "talking_point";
+
+export interface Passage {
+  id: number;
+  kind: PassageKind;
+  ref_id: string;
+  sub_ref: string | null;
+  title: string;
+  start_ms: number | null;
+  end_ms: number | null;
+  text: string;
+  tokens: number;
+  occurred_at: number | null;
+  /** Fused rank, higher is better. */
+  score: number;
+}
+
+export interface SkippedFile {
+  path: string;
+  /** "too large", "secret-looking name", "hidden", "limit reached" ... */
+  reason: string;
+}
+
+export interface IndexStatus {
+  workspace_id: string;
+  state: "idle" | "indexing" | "paused";
+  done: number;
+  total: number;
+  passages: number;
+  skipped: SkippedFile[];
+  last_indexed_at: number | null;
+}
+
+/** `workspace_index_progress` */
+export interface WorkspaceIndexProgressEvent {
+  workspace_id: string;
+  done: number;
+  total: number;
+  current: string | null;
+  skipped: number;
+}
+
+// -- Context ladder ------------------------------------------------------------
+
+/** The five layers of what an answer saw, in drawing order. */
+export type ContextLayer = "instructions" | "meetings" | "documents" | "folders" | "conversation";
+
+/** One item of the context: bar width is `tokens`, height is `relevance`. */
+export interface ContextBar {
+  id: string;
+  layer: ContextLayer;
+  title: string;
+  tokens: number;
+  /** 0..1 */
+  relevance: number;
+  pinned: boolean;
+  /** false = found but cut by the budget. */
+  included: boolean;
+}
+
+export type ContextDepth = "lean" | "balanced" | "deep";
+
+/** What was (or would be) sent for a question. Stored with every answer. */
+export interface ContextReport {
+  strategy: "full" | "ladder";
+  depth: ContextDepth;
+  /** Token budget used for this report: min(depth budget, 60% of window). */
+  budget: number;
+  /** The model's real context window in tokens. */
+  window: number;
+  used: number;
+  bars: ContextBar[];
+  /** Items left out (not drawn individually when small). */
+  omitted: number;
+  /** "Earlier messages condensed", window under 8k, pinned cut ... */
+  notices: string[];
+  /** true = estimate before sending, false = what was sent. */
+  estimate: boolean;
+}
+
+// -- Workspace chat ----------------------------------------------------------------
+
+export interface WorkspaceChat {
+  id: string;
+  workspace_id: string;
+  title: string;
+  provider: string | null;
+  model: string | null;
+  effort: string | null;
+  depth: ContextDepth;
+  include_meetings: boolean;
+  /** Messages up to this id are condensed (shows "Earlier messages condensed"). */
+  condensed_upto: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export type WorkspaceChatPatch = Partial<
+  Pick<WorkspaceChat, "title" | "provider" | "model" | "effort" | "depth" | "include_meetings">
+>;
+
+/** `[S1]` in the answer text points at one of these. */
+export interface WorkspaceCitation {
+  /** "S1" without brackets. */
+  tag: string;
+  kind: PassageKind;
+  ref_id: string;
+  sub_ref: string | null;
+  title: string;
+  start_ms: number | null;
+  snippet: string;
+}
+
+export interface WorkspaceMessage {
+  id: number;
+  chat_id: string;
+  role: "user" | "assistant";
+  content: string;
+  model: string | null;
+  citations: WorkspaceCitation[];
+  context: ContextReport | null;
+  input_tokens: number;
+  output_tokens: number;
+  created_at: number;
+}
+
+/** Common to every `workspace_chat_*` event. */
+interface WorkspaceChatEventBase {
+  chat_id: string;
+  request_id: string;
+}
+export interface WorkspaceChatStartEvent extends WorkspaceChatEventBase {
+  model: string | null;
+}
+export interface WorkspaceChatTokenEvent extends WorkspaceChatEventBase {
+  token: string;
+}
+export interface WorkspaceChatActivityEvent extends WorkspaceChatEventBase {
+  activity: SourceActivity;
+}
+export interface WorkspaceChatContextEvent extends WorkspaceChatEventBase {
+  report: ContextReport;
+}
+export interface WorkspaceChatEndEvent extends WorkspaceChatEventBase {
+  message: WorkspaceMessage;
+  cancelled: boolean;
+}
+export interface WorkspaceChatErrorEvent extends WorkspaceChatEventBase {
+  error: string;
+}
+
+/** `workspace_chat_approval`: a tool that is not read-only asks first (auto-denied after 60 s). */
+export interface WorkspaceChatApprovalEvent extends WorkspaceChatEventBase {
+  approval_id: string;
+  server: string;
+  tool: string;
+  args: unknown;
+}
+
+// -- Live notes ---------------------------------------------------------------------
+
+export type NoteBlockType = "topic" | "summary" | "bullet" | "decision" | "task" | "question";
+
+/** Stable id for the life of the meeting (talking-point "said it" and edits rely on it). */
+export interface NoteBlock {
+  id: string;
+  type: NoteBlockType;
+  /** Parent topic id, null for topics. */
+  parent: string | null;
+  /** Text with inline entities `{{p:Name}} {{l:Place}} {{o:Org}} {{d:Date}} {{n:Number}}`. */
+  text: string;
+  /** Meeting time in ms the block belongs to. */
+  t: number | null;
+  /** The user edited it; the AI never changes or removes it. */
+  edited: boolean;
+  pinned: boolean;
+}
+
+export interface NoteDoc {
+  version: number;
+  blocks: NoteBlock[];
+}
+
+export type NotetakerStatus = "off" | "idle" | "running" | "paused" | "capped" | "error" | "finished";
+
+export interface NotetakerSettings {
+  enabled: boolean;
+  /** "This meeting" or "Every meeting" when turning on. */
+  scope: "meeting" | "every";
+  provider: string | null;
+  model: string | null;
+  effort: string | null;
+  update_mode: "automatic" | "manual";
+  detail: "brief" | "standard" | "detailed";
+  /** "meeting" follows the meeting language. */
+  language: string;
+  /** Tokens per meeting (default 120000). */
+  cap: number;
+  colors: boolean;
+}
+
+/** `notetaker_state` */
+export interface NotetakerState {
+  meeting_id: string;
+  status: NotetakerStatus;
+  tokens_used: number;
+  cap: number;
+  next_in_ms?: number | null;
+  /** Why it paused (plan limit, three failures ...). */
+  reason?: string | null;
+}
+
+/** `notetaker_doc` */
+export interface NotetakerDocEvent {
+  meeting_id: string;
+  version: number;
+  doc: NoteDoc;
+}
+
+/** A user edit of the saved notes (ids are the block ids). */
+export type NoteEdit =
+  | { op: "update"; id: string; text?: string; type?: NoteBlockType; pinned?: boolean }
+  | { op: "add"; id: string; type: NoteBlockType; parent: string | null; text: string; after?: string | null }
+  | { op: "delete"; id: string };
+
+// -- Brief ---------------------------------------------------------------------------
+
+export interface BriefFact {
+  text: string;
+  /** Title of the cited passage (chip label). */
+  source: string;
+  passage_id?: number | null;
+}
+
+/** A short sheet of facts about what is being discussed now. */
+export interface BriefSheet {
+  now: string;
+  facts: BriefFact[];
+  earlier: string[];
+  generated_at: number;
+}
+
+export type BriefStatus = "off" | "idle" | "running" | "paused" | "capped" | "error";
+
+export interface BriefState {
+  meeting_id: string;
+  status: BriefStatus;
+  tokens_used: number;
+  cap: number;
+  reason?: string | null;
+}
+
+export interface BriefSettings {
+  enabled: boolean;
+  provider: string | null;
+  model: string | null;
+  effort: string | null;
+  cap: number;
+}
+
+/** `brief_sheet`: `sheet` is null when a topic change hid the old one. */
+export interface BriefSheetEvent {
+  meeting_id: string;
+  sheet: BriefSheet | null;
+}
+
+// -- Memory ------------------------------------------------------------------------------
+
+export type MemoryKind = "person" | "decision" | "open_item" | "fact" | "preference";
+export type MemoryStatus = "suggested" | "saved" | "dismissed";
+
+export interface MemoryItem {
+  id: string;
+  workspace_id: string;
+  kind: MemoryKind;
+  title: string;
+  text: string;
+  source_meeting: string | null;
+  source_ms: number | null;
+  status: MemoryStatus;
+  created_at: number;
+  updated_at: number;
+}
+
+/** `memory_changed` */
+export interface MemoryChangedEvent {
+  workspace_id: string;
+}
+
+// -- Talking points ---------------------------------------------------------------------------
+
+export interface TalkingPoint {
+  id: string;
+  workspace_id: string;
+  title: string;
+  /** TipTap document as JSON text. */
+  doc_json: string;
+  markdown: string;
+  plain_text: string;
+  /** "Use as AI context". */
+  in_context: boolean;
+  sort: number;
+  created_at: number;
+  updated_at: number;
+}
+
+/** One block (by stable id) the user has said or ticked. */
+export interface PointSaid {
+  block_id: string;
+  /** "voice" = detected, "manual" = the user's own choice (wins over voice). */
+  by: "voice" | "manual";
+  ticked: boolean;
+}
+
+/** "Said it" state of one note in one meeting. */
+export interface PointProgress {
+  meeting_id: string;
+  point_id: string;
+  said: PointSaid[];
 }
