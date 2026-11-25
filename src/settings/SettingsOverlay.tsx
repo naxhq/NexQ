@@ -209,8 +209,8 @@ export function SettingsOverlay({ isModal = false }: SettingsOverlayProps) {
         onClick={handleBackdropClick}
         className={`fixed inset-0 z-50 flex items-center justify-center transition-all duration-150 ${
           isVisible
-            ? "bg-black/60 backdrop-blur-sm"
-            : "bg-black/0 backdrop-blur-none"
+            ? "bg-background/70"
+            : "bg-background/0"
         }`}
       >
         <div

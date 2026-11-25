@@ -109,6 +109,9 @@ export function useWindowPlacement(label: string, opts: { enabled?: boolean; pau
     };
     window.addEventListener("pagehide", flush);
     window.addEventListener("blur", flush);
+    // Coming back to a window: a monitor change or a pending maximise is looked at now, not at the next poll.
+    const recheck = () => void controller.check();
+    window.addEventListener("focus", recheck);
     document.addEventListener("visibilitychange", onHidden);
     const unlisten: Array<() => void> = [];
     let gone = false;
@@ -123,6 +126,7 @@ export function useWindowPlacement(label: string, opts: { enabled?: boolean; pau
       if (active === controller) active = null;
       window.removeEventListener("pagehide", flush);
       window.removeEventListener("blur", flush);
+      window.removeEventListener("focus", recheck);
       document.removeEventListener("visibilitychange", onHidden);
       unlisten.forEach((fn) => fn());
     };

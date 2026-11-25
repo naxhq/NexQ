@@ -72,7 +72,7 @@ vi.mock("@tauri-apps/api/window", () => {
 
 import { useWindowPlacement, flushWindowPlacement, resetPlacementMemory } from "./useWindowPlacement";
 import { useConfigStore } from "../stores/configStore";
-import { setupKey, areaOf } from "../lib/windowPlacement";
+import { setupKey, areaOf, sanitizeSetups } from "../lib/windowPlacement";
 
 const saved = vi.fn();
 const keyOf = (ms: FakeMonitor[]) => setupKey(ms.map((m) => areaOf(m as never)));
@@ -307,7 +307,7 @@ describe("useWindowPlacement", () => {
     await settle();
     expect(win.pos).toEqual({ x: 50, y: 60 });
     world.monitors = docked;
-    await settle(5000);
+    await settle(16000);
     expect(win.pos).toEqual({ x: 2200, y: 90 });
   });
 
@@ -328,8 +328,79 @@ describe("useWindowPlacement", () => {
       await settle(250);
     }
     expect(win.pos).toEqual({ x: 700, y: 300 });
-    await settle(8000);
+    await settle(16000);
     expect(win.pos).toEqual({ x: 2200, y: 90 });
+  });
+
+  it("moves nothing when only a work area changes (captions bar, taskbar auto-hide, a docked bar)", async () => {
+    useConfigStore.setState({ overlayPlacement: { x: 300, y: 200, w: 500, h: 700, scale: 1 } });
+    renderHook(() => useWindowPlacement("overlay"));
+    await settle();
+    const calls = win.setPosition.mock.calls.length;
+    const shapes = [
+      { ...mon(0, 0, 1920, 1080), workArea: { position: { x: 0, y: 80 }, size: { width: 1920, height: 920 } } },
+      { ...mon(0, 0, 1920, 1080), workArea: { position: { x: 0, y: 0 }, size: { width: 1920, height: 1080 } } },
+      { ...mon(0, 0, 1920, 1080), workArea: { position: { x: 120, y: 0 }, size: { width: 1800, height: 1040 } } },
+    ];
+    for (const m of shapes) {
+      world.monitors = [m];
+      win.pos = { x: 10, y: 10 }; // even the OS shuffling it
+      await settle(16000);
+    }
+    expect(win.setPosition.mock.calls.length).toBe(calls);
+    expect(saved).not.toHaveBeenCalled();
+  });
+
+  it("a monitor change with no saved place for it leaves a visible window where it is", async () => {
+    useConfigStore.setState({ overlayPlacement: { x: 300, y: 200, w: 500, h: 700, scale: 1 } });
+    renderHook(() => useWindowPlacement("overlay"));
+    await settle();
+    const calls = win.setPosition.mock.calls.length;
+    world.monitors = [mon(0, 0, 1920, 1080), mon(1920, 0, 1920, 1080)];
+    win.pos = { x: 2300, y: 120 };
+    await settle(16000);
+    expect(win.setPosition.mock.calls.length).toBe(calls);
+    expect(win.pos).toEqual({ x: 2300, y: 120 });
+  });
+
+  it("a place saved under the older work-area key is still used", async () => {
+    const m = world.monitors as FakeMonitor[];
+    const legacyKey = setupKey(m.map((x) => ({ ...areaOf(x as never), mon: undefined })));
+    useConfigStore.setState({ overlaySetups: [{ key: legacyKey, placement: { x: 222, y: 111, w: 500, h: 700, scale: 1 }, area: null, at: 1 }] });
+    renderHook(() => useWindowPlacement("overlay"));
+    await settle();
+    expect(win.pos).toEqual({ x: 222, y: 111 });
+  });
+
+  it("after a reset the other window hears it: its next save writes only the new place", async () => {
+    useConfigStore.setState({
+      overlaySetups: [
+        { key: "old-a", placement: { x: 1, y: 1, w: 500, h: 700, scale: 1 }, area: null, at: 1 },
+        { key: "old-b", placement: { x: 2, y: 2, w: 500, h: 700, scale: 1 }, area: null, at: 2 },
+      ],
+    });
+    renderHook(() => useWindowPlacement("overlay"));
+    await settle();
+    // What the store does when the launcher clears the keys (onKeyChange with null).
+    useConfigStore.setState({ overlaySetups: sanitizeSetups(null), overlayPlacement: null });
+    await settle(1600);
+    win.pos = { x: 640, y: 320 };
+    await moved();
+    const entries = saved.mock.calls[saved.mock.calls.length - 1][1];
+    expect(entries).toHaveLength(1);
+    expect(entries[0].placement).toMatchObject({ x: 640, y: 320 });
+  });
+
+  it("maximises a hidden overlay only once it is shown", async () => {
+    const m = world.monitors as FakeMonitor[];
+    useConfigStore.setState({ overlaySetups: [{ key: setupKey(m.map((x) => areaOf(x as never))), placement: { x: 200, y: 100, w: 500, h: 700, scale: 1, maximized: true }, area: null, at: 1 }] });
+    win.visible = false;
+    renderHook(() => useWindowPlacement("overlay"));
+    await settle();
+    expect(win.maximize).not.toHaveBeenCalled();
+    win.visible = true;
+    await settle(16000);
+    expect(win.maximize).toHaveBeenCalled();
   });
 
   it("does nothing in demo mode, before the config is loaded, or in another window", async () => {

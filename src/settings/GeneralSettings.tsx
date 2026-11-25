@@ -154,6 +154,9 @@ export function GeneralSettings() {
               <p className="mt-0.5 text-xs text-muted-foreground">
                 How transparent the overlay background is
               </p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                The window keeps enough backing to stay readable: about 82 to 85% on panels, header and footer.
+              </p>
             </div>
           </div>
           <span className="text-xs font-mono text-muted-foreground w-10 text-right">
@@ -180,7 +183,7 @@ export function GeneralSettings() {
         <div className="mb-3">
           <label className="text-sm font-medium text-foreground">Window positions</label>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            NexQ remembers where each window was for every monitor setup. If a window ended up out of reach, put both back on this screen.
+            NexQ remembers where each window was for every monitor setup. If a window ended up out of reach, put both back on your main screen.
           </p>
         </div>
         <button

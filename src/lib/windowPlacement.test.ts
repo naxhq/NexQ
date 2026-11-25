@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_SETUPS,
+  entryMatches,
+  legacySetupKey,
+  planOnChange,
   applyRect,
   areaOf,
   planRestore,
@@ -153,7 +156,7 @@ describe("misc", () => {
   });
   it("reads the work area, falling back to the full monitor", () => {
     const m = { scaleFactor: 2, position: { x: 0, y: 0 }, size: { width: 100, height: 50 } };
-    expect(areaOf(m)).toEqual({ x: 0, y: 0, w: 100, h: 50, scale: 2 });
+    expect(areaOf(m)).toMatchObject({ x: 0, y: 0, w: 100, h: 50, scale: 2, mon: { x: 0, y: 0, w: 100, h: 50 } });
     expect(areaOf({ ...m, workArea: { position: { x: 0, y: 0 }, size: { width: 90, height: 40 } } }).w).toBe(90);
   });
 });
@@ -321,5 +324,51 @@ describe("applyRect", () => {
     };
     expect(await applyRect(win, { x: 10, y: 20, w: 500, h: 600 })).toBe(false);
     expect(n).toBe(4);
+  });
+});
+
+describe("the setup key follows the monitors, not the work areas", () => {
+  const mon = (x: number, y: number, w: number, h: number, scaleFactor = 1, bar = 0) => ({
+    scaleFactor,
+    position: { x, y },
+    size: { width: w, height: h },
+    workArea: { position: { x, y: y + bar }, size: { width: w, height: h - 40 - bar } },
+  });
+  const solo = [mon(0, 0, 1920, 1080)].map(areaOf);
+
+  it("is the same with a smaller work area: captions bar on top, taskbar toggled", () => {
+    const withBar = [mon(0, 0, 1920, 1080, 1, 60)].map(areaOf);
+    const noTaskbar = [{ ...mon(0, 0, 1920, 1080), workArea: { position: { x: 0, y: 0 }, size: { width: 1920, height: 1080 } } }].map(areaOf);
+    expect(setupKey(withBar)).toBe(setupKey(solo));
+    expect(setupKey(noTaskbar)).toBe(setupKey(solo));
+  });
+
+  it("changes with a monitor, a resolution or a scale", () => {
+    expect(setupKey([...solo, ...[mon(1920, 0, 1920, 1080)].map(areaOf)])).not.toBe(setupKey(solo));
+    expect(setupKey([mon(0, 0, 2560, 1440)].map(areaOf))).not.toBe(setupKey(solo));
+    expect(setupKey([mon(0, 0, 1920, 1080, 1.5)].map(areaOf))).not.toBe(setupKey(solo));
+  });
+
+  it("still finds a place saved under the older work-area key, and a save replaces it", () => {
+    const legacy: SetupEntry = { key: legacySetupKey(solo), placement: { x: 40, y: 40, w: 800, h: 600, scale: 1 }, area: solo[0], at: 1 };
+    expect(entryMatches(legacy, solo)).toBe(true);
+    expect(planRestore([legacy], null, solo, solo[0], solo[0], OPTS)!.known).toBe(true);
+  });
+});
+
+describe("planOnChange", () => {
+  const A = [{ x: 0, y: 0, w: 1920, h: 1040, scale: 1 }];
+  const B = [A[0], { x: 1920, y: 0, w: 1920, h: 1040, scale: 1 }];
+  const win = { x: 2300, y: 100, w: 500, h: 700 };
+  it("leaves a window where it is on a setup it has not seen, while it can still be reached", () => {
+    expect(planOnChange([], B, win, B[0], OPTS)).toBeNull();
+  });
+  it("brings an unreachable window back inside a screen, on an unseen setup", () => {
+    const plan = planOnChange([], A, win, A[0], OPTS)!;
+    expect(inside(plan.rect, A[0])).toBe(true);
+  });
+  it("goes to the saved place of a setup it has seen", () => {
+    const e: SetupEntry = { key: setupKey(A), placement: { x: 60, y: 70, w: 500, h: 700, scale: 1 }, area: A[0], at: 1 };
+    expect(planOnChange([e], A, { x: 900, y: 100, w: 500, h: 700 }, A[0], OPTS)!.rect).toMatchObject({ x: 60, y: 70 });
   });
 });

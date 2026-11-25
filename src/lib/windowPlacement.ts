@@ -27,6 +27,8 @@ export interface Rect {
 /** A monitor's usable area (taskbar excluded), physical, with its DPI factor. */
 export interface WorkArea extends Rect {
   scale: number;
+  /** The monitor itself (taskbar included): what tells one monitor setup from another. */
+  mon?: Rect;
 }
 
 export interface PlacementOptions {
@@ -164,7 +166,14 @@ export interface MonitorLike {
 
 export function areaOf(m: MonitorLike): WorkArea {
   const wa = m.workArea ?? { position: m.position, size: m.size };
-  return { x: wa.position.x, y: wa.position.y, w: wa.size.width, h: wa.size.height, scale: m.scaleFactor || 1 };
+  return {
+    x: wa.position.x,
+    y: wa.position.y,
+    w: wa.size.width,
+    h: wa.size.height,
+    scale: m.scaleFactor || 1,
+    mon: { x: m.position.x, y: m.position.y, w: m.size.width, h: m.size.height },
+  };
 }
 
 // == Monitor setups ==
@@ -183,12 +192,30 @@ export interface SetupEntry {
   at: number;
 }
 
-/** A stable name for a set of monitors: work areas and scales, in a fixed order (plug order does not matter). */
+const keyPart = (r: Rect, scale: number) => `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.w)}x${Math.round(r.h)}@${Math.round(scale * 100) / 100}`;
+
+/**
+ * A stable name for a set of monitors: each monitor's bounds and scale (physical), in a fixed order, so
+ * plug order does not matter. The taskbar, a docked bar or the captions bar change a work area, never this.
+ */
 export function setupKey(areas: WorkArea[]): string {
   return areas
-    .map((a) => `${Math.round(a.x)},${Math.round(a.y)},${Math.round(a.w)}x${Math.round(a.h)}@${Math.round(a.scale * 100) / 100}`)
+    .map((a) => keyPart(a.mon ?? a, a.scale))
     .sort()
     .join("|");
+}
+
+/** The key earlier dev builds saved (work areas instead of monitor bounds); still matched, then replaced. */
+export function legacySetupKey(areas: WorkArea[]): string {
+  return areas
+    .map((a) => keyPart(a, a.scale))
+    .sort()
+    .join("|");
+}
+
+/** Whether a saved entry belongs to the monitors connected now (by the current or the older key). */
+export function entryMatches(e: SetupEntry, areas: WorkArea[]): boolean {
+  return e.key === setupKey(areas) || e.key === legacySetupKey(areas);
 }
 
 function sanitizeArea(v: unknown): WorkArea | null {
@@ -241,9 +268,8 @@ export function planRestore(
   o: PlacementOptions,
 ): RestorePlan | null {
   if (areas.length === 0) return null;
-  const key = setupKey(areas);
   const fallback = current ?? primary ?? areas[0];
-  const exact = entries.find((e) => e.key === key);
+  const exact = entries.find((e) => entryMatches(e, areas));
   if (exact) {
     const rect = resolvePlacement(exact.placement, areas, fallback, o);
     return rect ? { rect, maximized: !!exact.placement.maximized, known: true } : null;
@@ -296,4 +322,34 @@ export async function applyRect(win: MovableWindow, rect: Rect, tolerance = 2): 
   };
   if (await attempt()) return true;
   return attempt();
+}
+
+/**
+ * What to do with a window that is on screen when the monitors change. A setup with a saved place: go
+ * there. Anything else (a setup never seen): stay where it is, and only when its title bar could no longer
+ * be reached, bring it back inside a screen. Null means leave it alone.
+ */
+export function planOnChange(
+  entries: SetupEntry[],
+  areas: WorkArea[],
+  window: Rect,
+  primary: WorkArea | null,
+  o: PlacementOptions,
+): RestorePlan | null {
+  if (areas.length === 0) return null;
+  const exact = entries.find((e) => entryMatches(e, areas));
+  const fallback = primary ?? areas[0];
+  if (exact) {
+    const rect = resolvePlacement(exact.placement, areas, fallback, o);
+    return rect ? { rect, maximized: !!exact.placement.maximized, known: true } : null;
+  }
+  // Reachable: enough of the window is on a screen to find and drag it.
+  if (pickArea(areas, window)) return null;
+  const rect = resolvePlacement(
+    { x: window.x, y: window.y, w: window.w, h: window.h, scale: fallback.scale },
+    areas,
+    fallback,
+    o,
+  );
+  return rect ? { rect, maximized: false, known: false } : null;
 }

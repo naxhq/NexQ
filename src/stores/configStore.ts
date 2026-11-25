@@ -1482,6 +1482,12 @@ export const useConfigStore = create<ConfigState>((set) => ({
       store.onKeyChange<unknown>("overlayDock", (val) => {
         set({ overlayDock: val ?? null });
       });
+      // Window places: the other window clears them in "Reset window positions"; this one must hear it
+      // (a null included), or its next save writes its old list back.
+      store.onKeyChange<unknown>("launcherSetups", (val) => set({ launcherSetups: sanitizeSetups(val) }));
+      store.onKeyChange<unknown>("overlaySetups", (val) => set({ overlaySetups: sanitizeSetups(val) }));
+      store.onKeyChange<unknown>("launcherPlacement", (val) => set({ launcherPlacement: sanitizePlacement(val) }));
+      store.onKeyChange<unknown>("overlayPlacement", (val) => set({ overlayPlacement: sanitizePlacement(val) }));
       store.onKeyChange<string>("customLlmBaseUrl", (val) => {
         if (val != null) set({ customLlmBaseUrl: val });
       });

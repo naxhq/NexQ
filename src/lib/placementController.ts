@@ -3,7 +3,9 @@ import {
   applyRect,
   defaultLauncherRect,
   pickArea,
+  planOnChange,
   planRestore,
+  entryMatches,
   rememberSetup,
   setupKey,
   snapshotPlacement,
@@ -47,6 +49,8 @@ export interface PlacementController {
   ready: Promise<void>;
   /** Save what was last seen now (close, quit, update, meeting end). */
   flush(): Promise<void>;
+  /** Look now for a changed monitor setup, or a maximise that was waiting for the window to be shown. */
+  check(): Promise<void>;
   stop(): void;
 }
 
@@ -79,7 +83,7 @@ export interface ControllerOptions {
 export function startPlacement(c: ControllerOptions): PlacementController {
   const { label, win, store, options } = c;
   const saveDelay = c.saveDelayMs ?? 600;
-  const pollMs = c.pollMs ?? 4000;
+  const pollMs = c.pollMs ?? 15000;
   const dragQuiet = c.dragQuietMs ?? 1500;
   const now = c.now ?? Date.now;
 
@@ -93,6 +97,7 @@ export function startPlacement(c: ControllerOptions): PlacementController {
   let poll: ReturnType<typeof setInterval> | undefined;
   let busyRestoring = false;
   let setupChanged = false;
+  let pendingMaximize = false;
   const unlisten: Array<() => void> = [];
 
   const readAreas = async () => {
@@ -121,7 +126,12 @@ export function startPlacement(c: ControllerOptions): PlacementController {
       if (await win.isMinimized().catch(() => false)) return;
       quietUntil = now() + 1500;
       await applyRect(win, plan.rect);
-      if (plan.maximized) await win.maximize().catch(() => {});
+      // A hidden window is maximised only by its style (it then does not fill the work area), so wait until
+      // it is on screen.
+      if (plan.maximized) {
+        if (await win.isVisible().catch(() => false)) await win.maximize().catch(() => {});
+        else pendingMaximize = true;
+      }
       quietUntil = now() + 800;
     } catch (e) {
       console.warn(`[placement] could not restore the ${label} window:`, e);
@@ -163,14 +173,17 @@ export function startPlacement(c: ControllerOptions): PlacementController {
       if (key !== currentKey) {
         // The monitors changed under the window: this place is the OS's doing, not a user move.
         setupChanged = true;
+        void checkSetup();
         return;
       }
       const home = pickArea(areas, item.placement);
       if (!home) return;
-      const existing = store.entries().find((e) => e.key === key);
-      if (existing && samePlacement(existing.placement, item.placement)) return;
+      const existing = store.entries().find((e) => entryMatches(e, areas));
+      if (existing && existing.key === key && samePlacement(existing.placement, item.placement)) return;
       const entry: SetupEntry = { key, placement: item.placement, area: home, at: now() };
-      store.save(rememberSetup(store.entries(), entry), item.placement);
+      // An entry saved under the older (work area) key for these monitors is replaced by this one.
+      const rest = store.entries().filter((e) => !entryMatches(e, areas));
+      store.save(rememberSetup(rest, entry), item.placement);
     } catch {
       /* storage or a closing window: the next change saves again */
     }
@@ -184,9 +197,28 @@ export function startPlacement(c: ControllerOptions): PlacementController {
     saveTimer = setTimeout(() => void commit(), saveDelay);
   };
 
+  /** The monitors changed: a setup with a saved place gets its window there; any other leaves it where it is. */
+  async function moveForNewSetup(areas: ReturnType<typeof areaOf>[]): Promise<void> {
+    currentKey = setupKey(areas);
+    setupChanged = false;
+    if (await win.isMinimized().catch(() => false)) return;
+    const [pos, size] = await Promise.all([win.outerPosition(), win.innerSize()]);
+    const primaryM = await win.primary().catch(() => null);
+    const plan = planOnChange(store.entries(), areas, { x: pos.x, y: pos.y, w: size.w, h: size.h }, primaryM ? areaOf(primaryM) : null, options);
+    if (!plan) return;
+    quietUntil = now() + 1500;
+    await applyRect(win, plan.rect);
+    if (plan.maximized && (await win.isVisible().catch(() => false))) await win.maximize().catch(() => {});
+    quietUntil = now() + 800;
+  }
+
   async function checkSetup(): Promise<void> {
     if (stopped || busyRestoring) return;
     try {
+      if (pendingMaximize && (await win.isVisible().catch(() => false))) {
+        pendingMaximize = false;
+        await win.maximize().catch(() => {});
+      }
       const areas = await readAreas();
       if (areas.length === 0) return;
       if (!setupChanged && setupKey(areas) === currentKey) return;
@@ -196,7 +228,7 @@ export function startPlacement(c: ControllerOptions): PlacementController {
       if (saveTimer) clearTimeout(saveTimer);
       saveTimer = undefined;
       pending = null;
-      await restore();
+      await moveForNewSetup(areas);
     } catch {
       /* try again at the next look */
     }
@@ -205,7 +237,13 @@ export function startPlacement(c: ControllerOptions): PlacementController {
   const ready = (async () => {
     if (c.restoreFirst === false) currentKey = setupKey(await readAreas().catch(() => []));
     else await restore();
-    if (c.showAfterRestore && !stopped) await win.show().catch(() => {});
+    if (c.showAfterRestore && !stopped) {
+      await win.show().catch(() => {});
+      if (pendingMaximize) {
+        pendingMaximize = false;
+        await win.maximize().catch(() => {});
+      }
+    }
     if (stopped) return;
     for (const sub of [win.onMoved(onUserChange), win.onResized(onUserChange), win.onScaleChanged(() => void checkSetup())]) {
       sub.then((fn) => (stopped ? fn() : unlisten.push(fn))).catch(() => {});
@@ -221,6 +259,7 @@ export function startPlacement(c: ControllerOptions): PlacementController {
 
   return {
     ready,
+    check: checkSetup,
     async flush() {
       if (stopped) return;
       if (saveTimer) clearTimeout(saveTimer);
