@@ -793,6 +793,8 @@ pub fn run() {
             workspace_commands::update_workspace_item,
             workspace_commands::remove_workspace_item,
             workspace_commands::list_library,
+            workspace_commands::get_library_file_path,
+            workspace_commands::reveal_library_file,
             workspace_commands::remove_library_item,
             workspace_commands::add_workspace_text,
             workspace_commands::move_meeting,

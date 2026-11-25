@@ -539,6 +539,46 @@ pub async fn set_meeting_scope(
     Ok(scope)
 }
 
+// ── Showing a library file ───────────────────────────────────────────────────
+
+/// The real path of `sub_path` below a saved folder: the folder must be
+/// enabled and in at least one workspace, and the result must stay inside the
+/// folder's real root (see `workspace::reveal`).
+fn library_file_path(state: &AppState, folder_id: &str, sub_path: Option<&str>) -> Result<std::path::PathBuf, String> {
+    let folder = state
+        .personal_sources
+        .read()
+        .map_err(|_| "Couldn't read your sources".to_string())?
+        .notes_folders
+        .iter()
+        .find(|f| f.id == folder_id)
+        .cloned()
+        .ok_or_else(|| "This folder is no longer in your sources".to_string())?;
+    if !folder.enabled {
+        return Err("This folder is switched off".to_string());
+    }
+    let filed = with_conn(state, |conn| Ok(!holders_of(conn, ItemKind::Folder, folder_id).workspaces.is_empty()))?;
+    if !filed {
+        return Err("This folder is not in any workspace".to_string());
+    }
+    crate::workspace::reveal::resolve_in_folder(std::path::Path::new(&folder.path), sub_path.unwrap_or(""))
+}
+
+/// The path of a file of a library folder as the user knows it, after the
+/// same checks as `reveal_library_file`.
+#[command]
+pub async fn get_library_file_path(folder_id: String, sub_path: Option<String>, state: State<'_, AppState>) -> Result<String, String> {
+    library_file_path(&state, &folder_id, sub_path.as_deref()).map(|p| crate::workspace::reveal::display_path(&p))
+}
+
+/// Shows a file of a library folder in the file manager (selected; never
+/// opened or run).
+#[command]
+pub async fn reveal_library_file(folder_id: String, sub_path: Option<String>, state: State<'_, AppState>) -> Result<(), String> {
+    let path = library_file_path(&state, &folder_id, sub_path.as_deref())?;
+    crate::workspace::reveal::reveal(&path)
+}
+
 // ── Talking points ───────────────────────────────────────────────────────────
 
 /// A talking point's workspace when it is used as AI context.
@@ -776,7 +816,7 @@ mod tests {
     const READ_ONLY: &[&str] = &[
         "get_workspaces_status", "list_workspaces", "get_workspace", "list_library", "list_workspace_meetings",
         "get_meeting_scope", "list_talking_points", "get_talking_point", "get_point_progress",
-        "get_meeting_point_edit", "list_memory",
+        "get_meeting_point_edit", "list_memory", "get_library_file_path", "reveal_library_file",
     ];
 
     /// The text of command `name`: from its `fn` to the next `#[command]`

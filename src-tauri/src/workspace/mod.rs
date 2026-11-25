@@ -7,6 +7,7 @@ pub mod library;
 pub mod memory;
 pub mod meetings;
 pub mod purge;
+pub mod reveal;
 pub mod rules;
 pub mod runtime;
 pub mod scope;
