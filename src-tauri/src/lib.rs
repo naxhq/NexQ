@@ -18,6 +18,7 @@ pub mod stt;
 pub mod translation;
 pub mod tray;
 pub mod workspace;
+pub mod workspace_search;
 
 use state::AppState;
 use std::sync::{Arc, Mutex};
