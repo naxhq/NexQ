@@ -35,7 +35,7 @@ function corrupt(text: string, wer: number, r: () => number): string {
 }
 
 interface Check { sc: string; lang: string; step: number; text: string; exp: number; pos: number; state: string; diff: number; ok: boolean; confWrong: boolean; off: boolean; neg: boolean }
-interface Relock { sc: string; lang: string; words: number | null; safe: boolean }
+interface Relock { sc: string; lang: string; words: number | null; safe: boolean; suggested: boolean }
 interface SaidRes { sc: string; lang: string; tp: number; fp: number; fn: number; wrongIds: string[] }
 
 export function evaluate(scenarios: Scenario[], label: string): string[] {
@@ -65,22 +65,24 @@ export function evaluate(scenarios: Scenario[], label: string): string[] {
       const jump = st.t === "say" && !!st.jump;
       let relockDone = false;
       const total = u.length;
-      const probe = (snap: { position: number; state: string }, wordsSoFar: number) => {
+      let suggested = false;
+      const targetId = st.t === "say" ? sc.blocks[st.b].id : "";
+      const probe = (snap: { position: number; state: string; suggestion?: { blockId: string } }, wordsSoFar: number) => {
+        t.setPlace(snap.position);
+        if (jump && snap.suggestion?.blockId === targetId) suggested = true;
         if (jump && !relockDone) {
           const e = start + (end - start) * Math.min(1, wordsSoFar / total);
-          if (Math.abs(snap.position - e) <= TOL && snap.state === "following") { relockDone = true; relocks.push({ sc: sc.name, lang: sc.lang, words: wordsSoFar, safe: true }); }
+          if (Math.abs(snap.position - e) <= TOL && snap.state === "following") { relockDone = true; relocks.push({ sc: sc.name, lang: sc.lang, words: wordsSoFar, safe: true, suggested }); }
         }
       };
       feeds.forEach((ft, k) => {
         const w = st.t === "say" && st.interims ? units(ft).length : Math.min(total, 3 * (k + 1));
         now += 400 * Math.max(1, w - spent); spent = w;
-        const snap = f.onInterim(ft, segId); t.onInterim(ft, segId);
-        probe(snap, w);
+        const snap = f.onInterim(ft, segId); probe(snap, w); t.onInterim(ft, segId);
       });
       now += 400 * Math.max(0, total - spent);
-      const snap = f.onFinal(text, segId); t.onFinal(text, segId);
-      probe(snap, total);
-      if (jump && !relockDone) relocks.push({ sc: sc.name, lang: sc.lang, words: null, safe: snap.state !== "following" });
+      const snap = f.onFinal(text, segId); probe(snap, total); t.onFinal(text, segId);
+      if (jump && !relockDone) relocks.push({ sc: sc.name, lang: sc.lang, words: null, safe: snap.state !== "following", suggested });
       const diff = Math.abs(snap.position - end);
       checks.push({ sc: sc.name, lang: sc.lang, step: si, text, exp: end, pos: snap.position, state: snap.state, diff, ok: diff <= TOL || snap.state !== "following", confWrong: snap.state === "following" && diff > TOL, off: st.t === "off", neg: !!sc.neg });
       prevExp = end;
@@ -106,9 +108,10 @@ export function evaluate(scenarios: Scenario[], label: string): string[] {
   const on = agg(checks.filter((c) => !c.neg && !c.off)), ng = agg(checks.filter((c) => c.neg)), of = agg(checks.filter((c) => c.off && !c.neg));
   L.push(`on-script ok=${pct(on.ok, on.n)} cw=${pct(on.cw, on.n)} | negatives safe=${pct(ng.ok, ng.n)} (n=${ng.n}) | off-script-in-talk safe=${pct(of.ok, of.n)} (n=${of.n}, cw=${of.cw})`);
   const got = relocks.filter((x) => x.words != null).map((x) => x.words as number).sort((a, b) => a - b);
-  const safe = relocks.filter((x) => x.words == null && x.safe).length;
-  const bad = relocks.filter((x) => x.words == null && !x.safe);
-  L.push(`jumps n=${relocks.length}: re-locked=${got.length} (median ${got.length ? got[Math.floor(got.length / 2)] : "n/a"} words, max ${got.length ? got[got.length - 1] : "n/a"}), not-following=${safe}, stuck-wrong=${bad.length}${bad.length ? " [" + bad.map((x) => x.sc).join(",") + "]" : ""}`);
+  const sug = relocks.filter((x) => x.words == null && x.suggested).length;
+  const safe = relocks.filter((x) => x.words == null && !x.suggested && x.safe).length;
+  const bad = relocks.filter((x) => x.words == null && !x.suggested && !x.safe);
+  L.push(`jumps n=${relocks.length}: re-locked=${got.length} (median ${got.length ? got[Math.floor(got.length / 2)] : "n/a"} words, max ${got.length ? got[got.length - 1] : "n/a"}), suggested-correct=${sug}, not-following=${safe}, stuck-wrong=${bad.length}${bad.length ? " [" + bad.map((x) => x.sc).join(",") + "]" : ""}`);
   const tp = saidRes.reduce((x, y) => x + y.tp, 0), fp = saidRes.reduce((x, y) => x + y.fp, 0), fn = saidRes.reduce((x, y) => x + y.fn, 0);
   L.push(`said overall P=${pct(tp, tp + fp)} R=${pct(tp, tp + fn)} (tp=${tp} fp=${fp} fn=${fn})`);
   for (const l of [...new Set(scenarios.map((s) => s.lang))]) {

@@ -254,6 +254,7 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     const snap = f.snapshot();
     setFollowState((prev) => (prev === snap.state ? prev : snap.state));
     setFollowPosition(snap.position);
+    said.current!.setPlace(snap.position);
     const sg = snap.state === "unsure" ? snap.suggestion : null;
     if (!sg || !optsRef.current.suggest) {
       rawSuggest.current = null;
