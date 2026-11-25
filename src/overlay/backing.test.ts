@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ACCENT_TEXT } from "./overlayMotion";
-import { ICON_RATIO, TEXT_RATIO, backingFor, hslVarToRgb, surfaceAlphaFor, worstContrast, type ThemeColours } from "./backing";
+import { ACCENT_TOKENS, ICON_RATIO, TEXT_RATIO, backingFor, hslVarToRgb, surfaceAlphaFor, worstContrast, type ThemeColours } from "./backing";
 
 // The real colours: parsed from index.css, not copied.
 async function tokens(): Promise<Record<"light" | "dark", ThemeColours>> {
@@ -18,7 +17,7 @@ async function tokens(): Promise<Record<"light" | "dark", ThemeColours>> {
       background: get(b, "--background"),
       foreground: get(b, "--foreground"),
       mutedForeground: get(b, "--muted-foreground"),
-      accents: Object.values(ACCENT_TEXT[sel === ":root" ? "light" : "dark"]).map(hslVarToRgb),
+      accents: ACCENT_TOKENS.map((n) => get(b, n)),
     };
   };
   return { light: make(":root"), dark: make(".dark") };

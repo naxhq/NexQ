@@ -134,7 +134,7 @@ export function AskMeetingTab({ chat, meetingId = null, unavailableReason = null
               aria-label="Ask about this meeting"
               disabled={!!unavailableReason}
               maxLength={4000}
-              className="max-h-36 min-h-[28px] flex-1 resize-none bg-transparent py-1 text-sm leading-relaxed text-foreground/90 outline-none placeholder:text-muted-foreground/45 disabled:cursor-not-allowed"
+              className="max-h-36 min-h-[28px] flex-1 resize-none bg-transparent py-1 text-sm leading-relaxed text-foreground/90 outline-none focus-visible:outline-none placeholder:text-muted-foreground/45 disabled:cursor-not-allowed"
             />
             {isAsking ? (
               <button

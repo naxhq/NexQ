@@ -214,7 +214,7 @@ export function TranscriptPanel({ onOpenDevLog, short = false }: { onOpenDevLog?
     <div className="flex flex-1 min-h-0 flex-col">
       <NoTranscriptBanner onOpenDevLog={onOpenDevLog} />
       {/* Search bar (shown when there's a search query or toggled) */}
-      <div className="flex items-center gap-2 rounded-lg bg-muted/20 mx-1 mt-1 mb-1.5 px-2.5 py-1.5">
+      <div className="flex items-center gap-2 rounded-lg border border-input bg-muted/20 mx-1 mt-1 mb-1.5 px-2.5 py-1.5">
         <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
         <input
           type="text"

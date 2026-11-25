@@ -289,8 +289,8 @@ export function ContextScopePicker() {
                             }
                           }}
                           aria-label={`Custom minutes (${MIN_MINUTES} to ${MAX_MINUTES})`}
-                          className={`h-5 w-9 rounded-md border bg-transparent px-1 text-center text-meta tabular-nums text-foreground/80 outline-none transition-colors duration-150 placeholder:text-muted-foreground/40 focus:border-primary/40 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none ${
-                            scope.kind === "minutes" && isCustomMinutes ? "border-primary/30" : "border-border/30"
+                          className={`h-5 w-9 rounded-md border bg-transparent px-1 text-center text-meta tabular-nums text-foreground/80 outline-none transition-colors duration-150 placeholder:text-muted-foreground/40 ui-focus [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none ${
+                            scope.kind === "minutes" && isCustomMinutes ? "border-primary" : "border-input"
                           }`}
                         />
                         <span className="text-meta text-muted-foreground/40">min</span>

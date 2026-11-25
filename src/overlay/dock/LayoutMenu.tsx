@@ -28,7 +28,7 @@ interface MenuProps {
 
 const sectionCls = "px-2 pb-1 pt-2 ui-meta font-semibold text-muted-foreground/70";
 const rowCls =
-  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left ui-body text-foreground/90 transition-colors hover:bg-foreground/[0.07] ui-focus focus-visible:bg-foreground/[0.12] disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent";
+  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left ui-body text-foreground/90 transition-colors hover:bg-foreground/[0.07] ui-focus focus-visible:bg-foreground/[0.12] disabled:cursor-default disabled:text-muted-foreground disabled:hover:bg-transparent";
 
 /** Layout menu content: presets with live schematics, saved layouts, panels, lock, reset. */
 export function LayoutMenu({ state, dispatch, panels, onClose }: MenuProps) {
@@ -118,7 +118,7 @@ export function LayoutMenu({ state, dispatch, panels, onClose }: MenuProps) {
               value={draft}
               maxLength={40}
               aria-label="Layout name"
-              className="min-w-0 flex-1 rounded-md border border-border/40 bg-transparent px-2 py-1 ui-body ui-focus focus:border-primary/60"
+              className="min-w-0 flex-1 rounded-md border border-input bg-transparent px-2 py-1 ui-body ui-focus"
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
@@ -180,13 +180,13 @@ export function LayoutMenu({ state, dispatch, panels, onClose }: MenuProps) {
           maxLength={40}
           placeholder="Save this layout as…"
           aria-label="Name for the new layout"
-          className="min-w-0 flex-1 rounded-md border border-border/30 bg-transparent px-2 py-1 ui-body ui-focus placeholder:text-muted-foreground/50 focus:border-primary/60"
+          className="min-w-0 flex-1 rounded-md border border-input bg-transparent px-2 py-1 ui-body ui-focus placeholder:text-muted-foreground"
           onChange={(e) => setName(e.target.value)}
         />
         <button
           type="submit"
           disabled={!name.trim()}
-          className="rounded-md px-2 py-1 ui-body font-medium text-foreground/90 hover:bg-foreground/[0.07] ui-focus disabled:opacity-40"
+          className="rounded-md px-2 py-1 ui-body font-medium text-foreground/90 hover:bg-foreground/[0.07] ui-focus disabled:text-muted-foreground"
         >
           Save
         </button>
@@ -196,8 +196,7 @@ export function LayoutMenu({ state, dispatch, panels, onClose }: MenuProps) {
       <div className="px-1 pb-1">
         <button
           type="button"
-          role="switch"
-          aria-checked={locked}
+          aria-pressed={locked}
           className={rowCls}
           onClick={() => dispatch({ type: "lock", locked: !locked })}
         >

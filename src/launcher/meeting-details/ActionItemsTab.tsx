@@ -87,7 +87,7 @@ export function ActionItemRow({
       onDragStart={(e) => onDragStart(e, item.id)}
       onDragEnd={onDragEnd}
       className={`group flex items-start gap-1.5 rounded-xl px-2 py-2.5 transition-colors hover:bg-secondary/20 ${
-        item.completed ? "opacity-50" : ""
+        ""
       } ${isDragTarget ? "border-t-2 border-primary/40" : "border-t-2 border-transparent"}`}
     >
       {/* Drag handle */}

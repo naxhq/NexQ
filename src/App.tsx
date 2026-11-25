@@ -24,6 +24,7 @@ import { showToast } from "./stores/toastStore";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { UpdateReadyToast } from "./components/UpdateToast";
 import { StoreRecoveryNotice } from "./components/StoreRecoveryNotice";
+import { NoticeStack } from "./components/NoticeStack";
 import { DatabaseDamageNotice } from "./components/DatabaseDamageNotice";
 import { useTheme } from "./hooks/useTheme";
 import { useGlobalShortcut } from "./hooks/useGlobalShortcut";
@@ -552,8 +553,12 @@ function App() {
 
       {/* One-time "update ready" notice (the footer pill stays) */}
       <UpdateReadyToast />
-      {windowLabel === "launcher" && <StoreRecoveryNotice />}
-      {windowLabel === "launcher" && <DatabaseDamageNotice />}
+      {windowLabel === "launcher" && (
+        <NoticeStack>
+          <StoreRecoveryNotice />
+          <DatabaseDamageNotice />
+        </NoticeStack>
+      )}
       <Quiet>
         <UpdateDialog />
 

@@ -57,7 +57,7 @@
 .tp-read [data-state="current"] { opacity: 1; }
 .tp-read [data-state="ahead"] { opacity: 0.74; }
 .tp-read [data-state="past"] { opacity: 0.5; }
-.tp-read [data-state="said"] { opacity: 0.36; }
+.tp-read [data-state="said"] { opacity: 0.46; }
 .tp-read h1, .tp-read h2, .tp-read h3 { margin-block: 0.9em 0.3em; }
 
 .tp-tick {
@@ -70,7 +70,8 @@
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  border: 1.5px solid hsl(var(--muted-foreground) / 0.5);
+  /* the edge of a control reads at 3:1 (the --input token) */
+  border: 1.5px solid hsl(var(--input));
   color: transparent;
   background: transparent;
   font-size: max(11px, 0.6em);

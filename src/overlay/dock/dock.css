@@ -379,7 +379,7 @@
   transition: transform 140ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 .nq-dock-tab[aria-selected="true"] .nq-dock-grip {
-  opacity: 0.85;
+  opacity: 1;
 }
 .nq-dock-tab:hover .nq-dock-grip,
 .nq-dock-tab:focus-visible .nq-dock-grip {

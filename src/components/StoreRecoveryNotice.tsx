@@ -43,11 +43,11 @@ export function StoreRecoveryNotice() {
   const text = recoveryText(items);
   if (!text) return null;
   return (
-    <div className="fixed bottom-14 left-4 z-50">
+    <div>
       <div
         role="status"
         aria-live="polite"
-        className="flex w-[340px] items-start gap-3 rounded-xl border border-border/20 bg-card px-4 py-3 shadow-lg"
+        className="flex w-full items-start gap-3 rounded-xl border border-border/20 bg-card px-4 py-3 shadow-lg"
       >
         <FileWarning className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
         <div className="min-w-0 flex-1">

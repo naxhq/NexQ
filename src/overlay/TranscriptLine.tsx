@@ -86,6 +86,12 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
     ? "#6b7280"
     : (speaker?.color ?? (remoteKey && segment.speaker_tag ? remoteSpeakerColor(segment.speaker_tag) : "#6b7280"));
 
+  // The two default speaker colours have theme-aware text tokens, so the
+  // transparency backing accounts for them; custom colours are adjusted instead.
+  const tagColor = speakerHex.toLowerCase() === "#22c55e" ? "hsl(var(--success-text))"
+    : speakerHex.toLowerCase() === "#f97316" ? "hsl(var(--speaker-interviewer-text))"
+    : readableOn(speakerHex, isLight ? "light" : "dark");
+
   // Convert epoch timestamp to elapsed time since meeting start
   const elapsedMs = meetingStartTime
     ? Math.max(0, segment.timestamp_ms - meetingStartTime)
@@ -281,12 +287,12 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
           }}
           maxLength={40}
           className="mt-[2px] shrink-0 w-20 rounded bg-white/5 border border-purple-400/30 px-1 py-0 text-[0.6875rem] font-semibold outline-none"
-          style={{ color: readableOn(speakerHex, isLight ? "light" : "dark") }}
+          style={{ color: tagColor }}
         />
       ) : (
         <span
           className={`mt-[3px] shrink-0 text-[0.6875rem] font-semibold tracking-tight ${canRename ? "cursor-pointer hover:underline" : ""} ${isPending ? "animate-pulse" : ""}`}
-          style={{ color: readableOn(speakerHex, isLight ? "light" : "dark") }}
+          style={{ color: tagColor }}
           onClick={startEditing}
           aria-label={canRename ? "Click to rename" : undefined}
         >

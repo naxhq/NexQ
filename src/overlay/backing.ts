@@ -73,6 +73,7 @@ export interface Backing {
 
 export const TEXT_RATIO = 4.5;
 export const ICON_RATIO = 3;
+const TRANSPARENT_MARGIN = 0.6;
 
 /**
  * The least change that guarantees the ratios at window opacity `opacity` (0 to 1).
@@ -80,11 +81,13 @@ export const ICON_RATIO = 3;
  */
 export function backingFor(c: ThemeColours, opacity: number, textRatio = TEXT_RATIO): Backing {
   const a0 = Math.min(1, Math.max(0, opacity));
+  // Chips tint their own background (bg-white/5), so see-through windows aim a little above the minimum.
+  const target = a0 < 1 ? textRatio + TRANSPARENT_MARGIN : textRatio;
   const mutedAt = (t: number) => mix(c.mutedForeground, c.foreground, t);
   const ok = (alpha: number, t: number) =>
-    worstContrast(mutedAt(t), c.background, alpha) >= textRatio &&
-    worstContrast(c.foreground, c.background, alpha) >= textRatio &&
-    (c.accents ?? []).every((a) => worstContrast(a, c.background, alpha) >= textRatio);
+    worstContrast(mutedAt(t), c.background, alpha) >= target &&
+    worstContrast(c.foreground, c.background, alpha) >= target &&
+    (c.accents ?? []).every((a) => worstContrast(a, c.background, alpha) >= target);
   // 1. stronger muted text only
   for (let t = 0; t <= 1.0001; t += 0.05) if (ok(a0, t)) return { alpha: a0, muted: t, mutedRgb: mutedAt(t) };
   // 2. the foreground colour itself needs more backing: the smallest that makes everything read
@@ -102,10 +105,26 @@ export function surfaceAlphaFor(windowAlpha: number, total: number, base = 0.2):
 }
 
 /** The theme's colours as the page has them now (the CSS variables on the root element). */
-export function readThemeColours(accents?: Rgb[]): ThemeColours {
+export const ACCENT_TOKENS = [
+  "--primary-text",
+  "--destructive-text",
+  "--success-text",
+  "--warning-text",
+  "--info-text",
+  "--speaker-user-text",
+  "--speaker-interviewer-text",
+] as const;
+
+export function readThemeColours(): ThemeColours {
   const cs = getComputedStyle(document.documentElement);
   const get = (n: string) => hslVarToRgb(cs.getPropertyValue(n));
-  return { background: get("--background"), foreground: get("--foreground"), mutedForeground: get("--muted-foreground"), accents };
+  return {
+    background: get("--background"),
+    foreground: get("--foreground"),
+    mutedForeground: get("--muted-foreground"),
+    // The coloured text of the chrome (End, badges, labels) comes from the theme's -text tokens.
+    accents: ACCENT_TOKENS.filter((n) => cs.getPropertyValue(n).trim()).map(get),
+  };
 }
 
 /** rgb to the "H S% L%" form of the theme's CSS variables. */

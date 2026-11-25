@@ -384,7 +384,7 @@ describe("LayoutMenu", () => {
     expect((screen.getByRole("checkbox", { name: "Assistant" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole("checkbox", { name: "Brief" }));
     expect(calls[calls.length - 1]).toEqual({ type: "show", panel: "brief" });
-    fireEvent.click(screen.getByRole("switch"));
+    fireEvent.click(screen.getByRole("button", { name: /lock layout/i }));
     expect(calls[calls.length - 1]).toEqual({ type: "lock", locked: true });
     fireEvent.change(screen.getByLabelText("Name for the new layout"), { target: { value: "Interview" } });
     fireEvent.click(screen.getByText("Save"));
