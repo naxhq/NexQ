@@ -658,7 +658,12 @@ impl RunGuard {
 
     /// True when a scheduled (automatic) run may start now.
     pub fn can_start(&self) -> bool {
-        self.state == RunState::Running && !self.in_flight && self.gate_open
+        self.state == RunState::Running && !self.in_flight && self.gate_open && self.under_cap()
+    }
+
+    /// Tokens left under the cap. No path starts a run without them.
+    pub fn under_cap(&self) -> bool {
+        self.used < self.cap
     }
 
     /// Manual "Update now" works while paused, but never over the cap, after
@@ -666,12 +671,14 @@ impl RunGuard {
     pub fn can_start_manual(&self) -> bool {
         !self.in_flight
             && self.gate_open
+            && self.under_cap()
             && matches!(self.state, RunState::Running | RunState::Paused(_))
     }
 
     /// The final pass ignores the gate and the pause, but not stop or the cap.
     pub fn can_start_final(&self) -> bool {
         !self.in_flight
+            && self.under_cap()
             && (matches!(self.state, RunState::Running | RunState::Paused(PauseReason::User))
                 || (self.final_retry && self.state == RunState::Paused(PauseReason::Failures)))
     }
@@ -712,8 +719,13 @@ impl RunGuard {
         self.in_flight = false;
         self.used += counted_tokens;
         self.failures += 1;
-        if self.failures >= self.max_failures && self.state == RunState::Running {
-            self.state = RunState::Paused(PauseReason::Failures);
+        if self.state == RunState::Running {
+            if self.failures >= self.max_failures {
+                // the error is what the user sees; the cap still holds (see `under_cap`)
+                self.state = RunState::Paused(PauseReason::Failures);
+            } else if self.used >= self.cap {
+                self.state = RunState::CapReached;
+            }
         }
     }
 
@@ -859,6 +871,56 @@ mod tests {
         p.used = 500;
         p.resume();
         assert_eq!(p.state, RunState::CapReached);
+    }
+
+    #[test]
+    fn no_path_starts_a_run_over_the_cap() {
+        let over = |state: RunState| {
+            let mut g = RunGuard::new(100, 3);
+            g.used = 150;
+            g.state = state;
+            g
+        };
+        // every start, whatever the state says
+        for st in [RunState::Running, RunState::Paused(PauseReason::User), RunState::Paused(PauseReason::Failures), RunState::Paused(PauseReason::PlanLimit)] {
+            let mut g = over(st);
+            g.allow_final_retry();
+            assert!(!g.can_start() && !g.can_start_manual() && !g.can_start_final(), "{st:?}");
+        }
+        // a failed run that used tokens and passed the cap ends capped, not running
+        let mut g = RunGuard::new(100, 3);
+        g.begin();
+        g.end_failed(150);
+        assert_eq!(g.state, RunState::CapReached);
+        assert!(!g.can_start() && !g.can_start_manual() && !g.can_start_final());
+        // the third failure over the cap shows the error (that is what to fix), and the cap still holds
+        let mut f = RunGuard::new(100, 3);
+        for _ in 0..2 {
+            f.begin();
+            f.end_failed(10);
+        }
+        f.begin();
+        f.end_failed(100);
+        assert_eq!(f.state, RunState::Paused(PauseReason::Failures));
+        f.allow_final_retry();
+        assert!(!f.can_start_final() && !f.can_start_manual());
+        // a plan limit stays what the user sees; so does a later pause
+        let mut p = RunGuard::new(100, 3);
+        p.begin();
+        p.end_plan_limit();
+        p.used = 500;
+        assert_eq!(p.state, RunState::Paused(PauseReason::PlanLimit));
+        p.resume();
+        assert_eq!(p.state, RunState::CapReached, "resuming over the cap waits for Keep going");
+        p.keep_going();
+        assert!(p.under_cap() && p.can_start() && p.state == RunState::Running);
+        // a manual run in a user pause that goes over: resume does not run
+        let mut m = RunGuard::new(100, 3);
+        m.pause();
+        m.begin();
+        m.end_ok(150);
+        m.resume();
+        assert_eq!(m.state, RunState::CapReached);
     }
 
     #[test]

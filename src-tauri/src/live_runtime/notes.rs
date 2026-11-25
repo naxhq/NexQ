@@ -172,8 +172,6 @@ pub fn status_event(meeting_id: &str, st: &NotesStatus, total_tokens: u64, finis
             RunState::Paused(crate::live_common::PauseReason::User) => ("paused", None),
             RunState::Paused(crate::live_common::PauseReason::PlanLimit) => ("paused", Some(st.last_error.clone().unwrap_or_else(|| "The plan's usage limit was reached".into()))),
             RunState::Paused(crate::live_common::PauseReason::Failures) => ("error", Some(st.last_error.clone().map(|e| format!("Three runs in a row failed: {e}")).unwrap_or_else(|| "Three runs in a row failed".into()))),
-            // over its cap a run never shows as running
-            _ if st.tokens_used >= st.cap => ("capped", Some("The token cap for this meeting was reached".to_string())),
             _ => {
                 if st.in_flight || st.tokens_used > 0 {
                     ("running", st.last_error.clone())

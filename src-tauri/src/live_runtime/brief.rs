@@ -147,8 +147,6 @@ pub fn status_event(meeting_id: &str, st: &BriefStatus, stopped: bool) -> Value 
             RunState::Paused(PauseReason::User) => ("paused", None),
             RunState::Paused(PauseReason::PlanLimit) => ("paused", Some(st.last_error.clone().unwrap_or_else(|| "The plan's usage limit was reached".into()))),
             RunState::Paused(PauseReason::Failures) => ("error", Some(st.last_error.clone().map(|e| format!("Three runs in a row failed: {e}")).unwrap_or_else(|| "Three runs in a row failed".into()))),
-            // over its cap a run never shows as running
-            RunState::Running if st.tokens_used >= st.cap => ("capped", Some("The token cap for this meeting was reached".into())),
             RunState::Running => {
                 if st.in_flight || st.tokens_used > 0 {
                     ("running", st.last_error.clone())

@@ -791,4 +791,24 @@ mod tests {
         assert!(p.finish().await.is_none());
         assert!(p.final_note.as_deref().unwrap().contains("limit"));
     }
+
+    #[tokio::test]
+    async fn a_failed_run_that_passes_the_cap_stops_everything_including_the_final_pass() {
+        let clock = FakeClock::new(0);
+        let mut cfg = NotesConfig::default();
+        cfg.trigger.cap_tokens = 50;
+        let bad = |_: u8| Ok(LlmReply { text: "I cannot help".into(), input_tokens: Some(5_000), output_tokens: Some(100), cached_input_tokens: Some(0) });
+        let llm = MockLlm::new(vec![bad(0), bad(1), bad(2), reply(OPS1)]);
+        let mut e = NotesEngine::new(llm, clock.clone(), cfg, Arc::new(NullSink), Arc::new(NullStore));
+        e.feed(line(0, &words(120)));
+        clock.set(5_000);
+        let out = e.tick().await.unwrap();
+        assert!(!out.ok);
+        assert_eq!(e.state(), RunState::CapReached, "an unreadable answer that used tokens passed the cap");
+        e.request_manual();
+        clock.set(60_000);
+        assert!(e.tick().await.is_none());
+        assert!(e.finish().await.is_none(), "not even the end-of-meeting pass");
+        assert_eq!(e.llm.requests.lock().unwrap().len(), 1);
+    }
 }
