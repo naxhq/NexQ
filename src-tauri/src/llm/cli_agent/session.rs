@@ -359,14 +359,14 @@ impl ClaudeAsk {
         self.open.fetch_add(1, Ordering::SeqCst);
         let me = self.clone();
         tokio::spawn(async move {
-            let allow = me.approvals.decide(&q.request_id, &q.tool_name, &q.input).await;
+            let (allow, why) = me.approvals.decide_with_reason(&q.request_id, &q.tool_name, &q.input).await;
             me.open_ids.lock().unwrap().remove(&q.request_id);
             // The turn this was asked in is over: whatever was clicked, it is a refusal.
             let allow = allow && me.turn.load(Ordering::SeqCst) == turn && !me.refuse.load(Ordering::SeqCst);
             me.send(if allow {
                 permission_allow(&q.request_id, &q.input)
             } else {
-                permission_deny(&q.request_id, "The user did not allow this tool call.")
+                permission_deny(&q.request_id, why.as_deref().unwrap_or("The user did not allow this tool call."))
             });
             me.open.fetch_sub(1, Ordering::SeqCst);
         });

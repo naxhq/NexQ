@@ -146,6 +146,7 @@ pub struct ChatHub {
     /// What each CLI chat's live session has been given so far (it keeps its
     /// earlier turns), so a revocation of any of it ends that session.
     session_prov: Mutex<HashMap<String, Provenance>>,
+    last_kick: Mutex<Option<std::time::Instant>>,
     /// The session generation (plain, with sources) a chat's session had when it last received a turn.
     session_gen: Mutex<HashMap<String, (Option<u64>, Option<u64>)>>,
     starter: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
@@ -364,6 +365,29 @@ impl ChatHub {
 
     pub fn open_workspace(&self) -> Option<String> {
         self.open_workspace.lock().ok().and_then(|w| w.clone())
+    }
+
+    /// True at most once in `every`: a rescan asked for because a backlog sits with no pass
+    /// running (a missed wake) must not become one pass per status poll.
+    pub fn should_kick(&self, every: std::time::Duration) -> bool {
+        let mut last = self.last_kick.lock().unwrap();
+        if last.map_or(true, |t| t.elapsed() >= every) {
+            *last = Some(std::time::Instant::now());
+            true
+        } else {
+            false
+        }
+    }
+
+    #[cfg(test)]
+    pub fn set_progress_for_tests(&self, done: usize, total: usize) {
+        *self.progress.lock().unwrap() = IndexProgress { done, total, current: String::new(), skipped: 0 };
+    }
+
+    /// True while an indexing pass has work left (a pass that finished is not running).
+    pub fn pass_running(&self) -> bool {
+        let p = self.progress();
+        p.total > 0 && p.done < p.total
     }
 
     pub fn progress(&self) -> IndexProgress {

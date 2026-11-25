@@ -2911,3 +2911,95 @@ async fn a_preempted_recap_is_not_a_failure_and_a_retry_forgets_the_real_ones() 
     rig.api.push(Step::Text("A recap.".into()));
     assert_eq!(ops::recap_missing(&rig.deps, &rig.ws, Arc::new(CancelToken::new())).await, 1);
 }
+
+fn backlog_of(rig: &Rig) -> (usize, usize) {
+    let conn = rig.conn();
+    let m = super::scope_adapter::home_meetings(&conn, &rig.ws).unwrap();
+    super::scope_adapter::meeting_backlog(&conn, &m)
+}
+
+#[test]
+fn every_shape_of_meeting_ends_up_counted_as_indexed() {
+    let rig = Rig::new();
+    rig.meeting("normal", "Normal", 5, &["We agreed the budget today.", "Owners were named."]);
+    rig.meeting("empty", "No words", 6, &[]); // an empty transcript
+    {
+        // no end time, no duration, an odd start time: a meeting that never properly ended
+        let conn = rig.conn();
+        conn.execute("INSERT INTO meetings (id, title, start_time, workspace_id) VALUES ('open', 'Never ended', 'not-a-date', ?1)", [&rig.ws]).unwrap();
+        conn.execute("INSERT INTO transcript_segments (id, meeting_id, text, speaker, timestamp_ms, is_final, created_at) VALUES ('o1', 'open', 'A line.', 'You', 1000, 1, 't')", []).unwrap();
+        // only unfinished segments
+        conn.execute("INSERT INTO meetings (id, title, start_time, workspace_id) VALUES ('partial', 'Only partials', '2026-03-07T10:00:00Z', ?1)", [&rig.ws]).unwrap();
+        conn.execute("INSERT INTO transcript_segments (id, meeting_id, text, speaker, timestamp_ms, is_final, created_at) VALUES ('p1', 'partial', 'half a li', 'You', 1000, 0, 't')", []).unwrap();
+    }
+    rig.index();
+    let (done, total) = backlog_of(&rig);
+    assert_eq!((done, total), (4, 4), "every meeting is counted, whatever its shape");
+}
+
+#[test]
+fn a_meeting_that_fails_or_panics_is_recorded_as_failed_and_counted() {
+    let rig = Rig::new();
+    rig.meeting("m1", "One", 5, &["We agreed the budget today.", "Owners were named."]);
+    // what the pass writes when indexing a meeting fails or panics (both paths use the same row)
+    crate::workspace_search::store::upsert_source(&rig.conn(), crate::workspace_search::PassageKind::Transcript, "m1", "", "", -1, -1, "error", Some("indexing failed unexpectedly")).unwrap();
+    assert_eq!(backlog_of(&rig), (1, 1), "a failed meeting no longer holds the count at n-1");
+}
+
+#[tokio::test]
+async fn a_recap_waits_only_for_its_own_meeting_and_not_for_ever() {
+    let rig = Rig::new();
+    rig.meeting("old", "Old", 2, &["The ibex migration starts in May.", "Owners were named."]);
+    rig.meeting("new", "Just ended", 9, &["The lynx programme budget was agreed.", "Owners were named."]);
+    rig.index();
+    crate::workspace::store::update_workspace(&rig.conn(), &rig.ws, crate::workspace::types::WorkspacePatch { recaps_with_ai: Some(true), ..Default::default() }).unwrap();
+    // a stuck backlog: another meeting that no pass ever records
+    rig.conn().execute("INSERT INTO meetings (id, title, start_time, workspace_id) VALUES ('stuck', 'Stuck', '2026-03-10T10:00:00Z', ?1)", [&rig.ws]).unwrap();
+    assert_eq!(backlog_of(&rig), (2, 3));
+    // the meeting that ended is indexed: its recap does not wait for the stuck one
+    rig.api.push(Step::Text("A recap.".into()));
+    let made = tokio::time::timeout(
+        Duration::from_secs(10),
+        ops::recaps_when_ready_within(&rig.deps, &rig.ws, Arc::new(CancelToken::new()), Some("new"), Duration::from_secs(30)),
+    )
+    .await
+    .expect("does not wait for the backlog");
+    assert_eq!(made, 1);
+
+    // a missed wake: the meeting that ended was never indexed; after the bounded wait it is indexed here and recapped
+    rig.meeting("late", "Missed wake", 11, &["The osprey contract renews in June.", "Owners were named."]);
+    assert!(rig.conn().query_row("SELECT 1 FROM search_sources WHERE ref_id = 'late'", [], |_| Ok(())).is_err());
+    rig.api.push(Step::Text("Another recap.".into()));
+    let made = tokio::time::timeout(
+        Duration::from_secs(10),
+        ops::recaps_when_ready_within(&rig.deps, &rig.ws, Arc::new(CancelToken::new()), Some("late"), Duration::from_millis(600)),
+    )
+    .await
+    .expect("goes ahead after the bounded wait");
+    assert_eq!(made, 1, "indexed on the spot, then recapped");
+    // the opening pass over the workspace also goes ahead after the bounded wait (the stuck meeting never gets an entry)
+    rig.api.push(Step::Text("A third.".into()));
+    let made = tokio::time::timeout(
+        Duration::from_secs(10),
+        ops::recaps_when_ready_within(&rig.deps, &rig.ws, Arc::new(CancelToken::new()), None, Duration::from_millis(600)),
+    )
+    .await
+    .expect("goes ahead after the bounded wait");
+    assert_eq!(made, 1, "the remaining indexed meeting is recapped");
+}
+
+#[test]
+fn still_indexing_is_not_claimed_once_a_pass_has_finished() {
+    let rig = Rig::new();
+    rig.meeting("m1", "One", 5, &["We agreed the budget today.", "Owners were named."]);
+    rig.conn().execute("INSERT INTO meetings (id, title, start_time, workspace_id) VALUES ('stuck', 'Stuck', '2026-03-10T10:00:00Z', ?1)", [&rig.ws]).unwrap();
+    // before any pass ran (just after an upgrade): the backlog is shown
+    assert_eq!(ops::index_status(&rig.conn(), &rig.deps.hub, &rig.ws, false).unwrap().state, "indexing");
+    // a pass ran and finished, the backlog remains (a missed wake): no longer claimed
+    rig.index();
+    rig.deps.hub.set_progress_for_tests(2, 2);
+    let st = ops::index_status(&rig.conn(), &rig.deps.hub, &rig.ws, false).unwrap();
+    assert_eq!(st.state, "idle", "{st:?}");
+    assert!(!rig.deps.hub.pass_running());
+    assert!(rig.deps.hub.should_kick(Duration::from_secs(30)) && !rig.deps.hub.should_kick(Duration::from_secs(30)), "restarted at most once in a while");
+}

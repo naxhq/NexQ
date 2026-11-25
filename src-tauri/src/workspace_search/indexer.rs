@@ -743,7 +743,11 @@ pub fn run_pass_scoped(
                 rep.errors.push(format!("meeting {}: {e}", m.id));
                 let _ = store::upsert_source(conn, PassageKind::Transcript, &m.id, "", "", -1, -1, "error", Some(&e));
             }
-            Err(_) => rep.errors.push(format!("meeting {}: indexing panicked", m.id)),
+            Err(_) => {
+                // a meeting that panics every time still counts as done, with its reason
+                rep.errors.push(format!("meeting {}: indexing panicked", m.id));
+                let _ = store::upsert_source(conn, PassageKind::Transcript, &m.id, "", "", -1, -1, "error", Some("indexing failed unexpectedly"));
+            }
         }
         done += 1;
         tick(done, total, &m.title, skipped);

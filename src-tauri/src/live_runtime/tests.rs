@@ -2538,3 +2538,63 @@ async fn a_three_pass_update_reports_running_until_it_is_done() {
         assert!(can_of(v).is_empty(), "nothing to press while it works: {v}");
     }
 }
+
+// ---------------------------------------------------------------- QA round 8: notes that wrote nothing
+
+#[tokio::test]
+async fn notes_that_read_everything_and_found_nothing_say_so() {
+    let h = harness();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    h.fake.push(Ok(LlmReply { text: r#"{"ops":[]}"#.into(), input_tokens: Some(900), cached_input_tokens: Some(0), output_tokens: Some(10) }));
+    say(&h, "m1", 120, 10_000, 1_000).await;
+    add_segment(&h, "m1", "s0", 10_000);
+    until("the run", || h.fake.count(AiPurpose::Notes) == 1).await;
+    h.rt.on_meeting_end("m1");
+    *h.live.lock().unwrap() = None;
+    until("finished", || status_of(&h, "notetaker_state", "m1") == "finished").await;
+    let st = h.events.last_status("notetaker_state", "m1").unwrap();
+    assert_eq!(st["ended"]["kind"], "nothing_to_note", "{st}");
+    let h2 = harness_on(h.conn.clone());
+    assert_eq!(h2.rt.notetaker_state("m1").await["ended"]["kind"], "nothing_to_note");
+}
+
+#[tokio::test]
+async fn a_meeting_with_no_speech_has_no_ended_box() {
+    let h = harness();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    h.rt.on_meeting_end("m1");
+    *h.live.lock().unwrap() = None;
+    until("the actor is gone", || h.rt.inner.lock().unwrap().notes.get("m1").is_none()).await;
+    let st = h.rt.notetaker_state("m1").await;
+    assert!(st["ended"].is_null() && st["not_covered"].is_null() && can_of(&st).is_empty(), "{st}");
+    assert_eq!(st["status"], "off", "{st}");
+}
+
+#[tokio::test]
+async fn notes_that_never_took_a_line_offer_the_whole_transcript() {
+    let h = harness();
+    let m = seed_ended(&h, 40);
+    // the notes row exists, empty and untouched
+    let mut doc = crate::live_notes::doc::NoteDoc::new();
+    doc.started_at = None;
+    h.rt.deps().db.save_notes(&m, &doc, "done", 0, 120_000).unwrap();
+    let st = h.rt.notetaker_state(&m).await;
+    assert!(!st["not_covered"].is_null() && can_of(&st).contains(&"update".to_string()), "{st}");
+}
+
+#[tokio::test]
+async fn one_press_of_update_covers_about_nine_thousand_tokens_in_automatic_mode_too() {
+    let h = harness();
+    let m = seed_ended(&h, 450);
+    assert_eq!(h.rt.notetaker_settings().update_mode, "automatic");
+    h.rt.notetaker_update_now(&m).unwrap();
+    until("covered", || h.events.last_status("notetaker_state", &m).map(|v| v["ended"]["kind"] == "covered").unwrap_or(false)).await;
+    assert!(h.fake.count(AiPurpose::Notes) >= 3, "{}", h.fake.count(AiPurpose::Notes));
+    let h2 = harness_on(h.conn.clone());
+    assert!(h2.rt.notetaker_state(&m).await["not_covered"].is_null());
+}

@@ -393,10 +393,16 @@ impl LiveRuntimes {
 
     /// What the notes of an ended meeting never covered, from the saved coverage and the saved transcript.
     fn ended_uncovered(&self, meeting_id: &str, stored: &crate::live_notes::StoredNotes) -> Option<(u64, u64)> {
+        let (lines, _) = self.deps.db.meeting_lines(meeting_id);
         if stored.doc.started_at.is_none() {
+            // notes that never took a line and wrote nothing: the whole transcript is still open
+            if stored.doc.blocks.is_empty() && stored.doc.covered_to.is_none() {
+                if let (Some(first), Some(last)) = (lines.first(), lines.last()) {
+                    return Some((first.ms, last.ms));
+                }
+            }
             return stored.doc.uncovered;
         }
-        let (lines, _) = self.deps.db.meeting_lines(meeting_id);
         let times: Vec<u64> = lines.iter().map(|l| l.ms).collect();
         stored.doc.uncovered_in(&times)
     }
@@ -530,10 +536,14 @@ impl LiveRuntimes {
             status = Some("done".to_string());
         }
         let over_cap = stored.as_ref().is_some_and(|s| ended && not_covered.is_some() && s.tokens_used >= s.cap.max(settings.cap).max(1));
-        let ended_info = if !ended {
+        // covered but empty: the runs found nothing to write, or nothing was said at all (then there is no box)
+        let nothing_written = ended && not_covered.is_none() && stored.as_ref().is_some_and(|s| s.doc.blocks.is_empty());
+        let no_speech = nothing_written && stored.as_ref().is_some_and(|s| s.doc.covered_to.is_none());
+        let ended_info = if !ended || no_speech {
             None
         } else {
             stored.as_ref().map(|s| match (not_covered, s.status.as_str(), &s.doc.ended) {
+                (None, _, _) if nothing_written => ("nothing_to_note".to_string(), Some("The notes read the whole call and found nothing to write down".to_string())),
                 (None, _, _) => ("covered".to_string(), None),
                 // the person stopped them, or turned them off, during the meeting
                 (Some(_), "stopped", _) => ("stopped".to_string(), Some("The notes were stopped before the meeting ended".to_string())),
@@ -556,6 +566,10 @@ impl LiveRuntimes {
             // a meeting that never had notes says so; nothing can be started on it
             snap.can.clear();
             snap.reason = Some("No live notes were taken in this meeting".to_string());
+        } else if no_speech {
+            snap.status = "off";
+            snap.can.clear();
+            snap.reason = Some("Nothing was said in this meeting".to_string());
         }
         serde_json::to_value(snap).unwrap_or(Value::Null)
     }

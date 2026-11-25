@@ -583,6 +583,52 @@ mod contracts {
     }
 
     #[test]
+    fn a_tool_that_is_off_is_refused_with_the_way_to_turn_it_on() {
+        let text = refusal_text("the tool is not allowed", "send_mail");
+        assert_eq!(text, "send_mail is turned off for this server. Turn it on in Settings > Personal Sources.");
+        assert!(refusal_text("an unknown tool", "x").contains("Check the server again"));
+        assert_eq!(refusal_text("outside the chat's folders", "Read"), "Read was refused: outside the chat's folders.");
+        let (event, payload) = sent(&ApprovalNotice::Refused {
+            chat_id: "c1".into(),
+            request_id: "ask-1".into(),
+            server: "m".into(),
+            tool: "send_mail".into(),
+            reason: text,
+        });
+        assert_eq!(event, "workspace_chat_approval_refused");
+        crate::assert_contract!("workspace_chat_approval_refused_off", payload);
+    }
+
+    #[tokio::test]
+    async fn the_chat_tells_the_user_and_the_model_why_a_call_was_refused() {
+        struct Rec(Mutex<Vec<String>>);
+        #[async_trait]
+        impl ApprovalBroker for Rec {
+            async fn ask(&self, _: ApprovalRequest) -> bool {
+                true
+            }
+            fn deny_chat(&self, _: &str) {}
+            fn deny_request(&self, _: &str, _: &str) {}
+            fn pending(&self, _: &str) -> usize {
+                0
+            }
+            fn refused(&self, req: &ApprovalRequest, reason: &str) {
+                self.0.lock().unwrap().push(format!("{}|{}|{reason}", req.server, req.tool));
+            }
+        }
+        let rec = Arc::new(Rec(Mutex::default()));
+        let policy = ApprovalPolicy::from_servers(&[server("m", &[("kb_search", true, Some(true), None), ("send_mail", false, None, None)])], vec![]);
+        let chat = ChatApprovals { can_ask: true, chat_id: "c1".into(), broker: rec.clone(), policy: Arc::new(policy) };
+        let (allow, why) = chat.decide_with_reason("r1", "mcp__m__send_mail", &json!({})).await;
+        assert!(!allow);
+        assert_eq!(why.as_deref(), Some("send_mail is turned off for this server. Turn it on in Settings > Personal Sources."));
+        assert_eq!(rec.0.lock().unwrap().as_slice(), ["m|send_mail|send_mail is turned off for this server. Turn it on in Settings > Personal Sources."]);
+        // a call that runs, and one that asks, report nothing
+        assert_eq!(chat.decide_with_reason("r2", "mcp__m__kb_search", &json!({})).await, (true, None));
+        assert_eq!(rec.0.lock().unwrap().len(), 1);
+    }
+
+    #[test]
     fn command_answer_workspace_approval() {
         let fixture = crate::contract::read("answer_workspace_approval");
         let args: AnswerApprovalArgs = serde_json::from_value(fixture.clone()).expect("fits the command's arguments");

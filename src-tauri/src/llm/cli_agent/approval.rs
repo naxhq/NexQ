@@ -610,6 +610,8 @@ pub trait ApprovalBroker: Send + Sync {
     fn deny_request(&self, chat_id: &str, request_id: &str);
     /// Questions asked and not yet answered or refused, for `chat_id`.
     fn pending(&self, chat_id: &str) -> usize;
+    /// A call the policy refused without a question: tell the user why.
+    fn refused(&self, _req: &ApprovalRequest, _reason: &str) {}
 }
 
 struct Pending {
@@ -729,6 +731,19 @@ impl Default for WorkspaceApprovals {
 
 #[async_trait]
 impl ApprovalBroker for WorkspaceApprovals {
+    fn refused(&self, req: &ApprovalRequest, reason: &str) {
+        if self.emitter.lock().unwrap().is_none() {
+            return;
+        }
+        self.notify(ApprovalNotice::Refused {
+            chat_id: req.chat_id.clone(),
+            request_id: self.ask_id(&req.chat_id, &req.request_id).unwrap_or_default(),
+            server: req.server.clone(),
+            tool: req.tool.clone(),
+            reason: reason.to_string(),
+        });
+    }
+
     async fn ask(&self, req: ApprovalRequest) -> bool {
         if self.emitter.lock().unwrap().is_none() {
             return false;
@@ -884,9 +899,30 @@ impl ChatApprovals {
     /// Ask the user about `name` called with `input`: the broker's answer, or
     /// a refusal for anything the policy denies. `Allow` is not asked.
     pub async fn decide(&self, request_id: &str, name: &str, input: &Value) -> bool {
-        match self.policy.verdict_for_name(name, input) {
+        self.decide_with_reason(request_id, name, input).await.0
+    }
+
+    /// [`decide`](Self::decide), and for a call the policy refuses the reason in
+    /// words (also sent to the user as a refused event, and to the model).
+    pub async fn decide_with_reason(&self, request_id: &str, name: &str, input: &Value) -> (bool, Option<String>) {
+        let allow = match self.policy.verdict_for_name(name, input) {
             ToolVerdict::Allow => true,
-            ToolVerdict::Deny(_) => false,
+            ToolVerdict::Deny(why) => {
+                let keys = self.policy.server_keys();
+                let (server, tool) = split_tool(name, &keys).unwrap_or_else(|| (String::new(), name.to_string()));
+                let reason = refusal_text(why, &tool);
+                self.broker.refused(
+                    &ApprovalRequest {
+                        chat_id: self.chat_id.clone(),
+                        request_id: request_id.to_string(),
+                        server,
+                        tool,
+                        args: Value::Null,
+                    },
+                    &reason,
+                );
+                return (false, Some(reason));
+            }
             ToolVerdict::Ask => {
                 let keys = self.policy.server_keys();
                 let (server, tool) = split_tool(name, &keys).unwrap_or_default();
@@ -900,7 +936,20 @@ impl ChatApprovals {
                     })
                     .await
             }
+        };
+        (allow, None)
+    }
+}
+
+/// Why a call was refused, in words for the user (and the model): the policy's
+/// short reason, with what to do when the user can fix it.
+pub fn refusal_text(why: &str, tool: &str) -> String {
+    match why {
+        "the tool is not allowed" => format!("{tool} is turned off for this server. Turn it on in Settings > Personal Sources."),
+        "an unknown tool" => {
+            format!("{tool} is not a tool NexQ has checked for this server. Check the server again in Settings > Personal Sources.")
         }
+        other => format!("{tool} was refused: {other}."),
     }
 }
 

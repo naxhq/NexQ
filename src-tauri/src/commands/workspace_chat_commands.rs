@@ -10,14 +10,22 @@ use crate::workspace_chat::{engine, ops, runtime, store};
 
 // ── search and index ─────────────────────────────────────────────────────────
 
+fn scope_adapter_backlog(conn: &rusqlite::Connection, workspace_id: &str) -> (usize, usize) {
+    crate::workspace_chat::scope_adapter::home_meetings(conn, workspace_id)
+        .map(|m| crate::workspace_chat::scope_adapter::meeting_backlog(conn, &m))
+        .unwrap_or((0, 0))
+}
+
 #[command]
 pub async fn get_index_status(id: String, state: State<'_, AppState>, app: AppHandle) -> Result<IndexStatus, String> {
     let active = state.meeting_active.load(std::sync::atomic::Ordering::SeqCst);
     let hub = state.workspace_chat.clone();
     runtime::workspace_opened(&app, &state, &id);
     let status = with_reader(&state, |conn| ops::index_status(conn, &hub, &id, active))?;
-    // a backlog with no indexer yet (just after an upgrade): start it now, not after the start delay
-    if status.state == "indexing" && hub.indexer().is_none() {
+    // A backlog with nobody working on it (no indexer yet after an upgrade, or a wake that
+    // was missed): start a pass now, at most once in 30 s.
+    let backlog = with_reader(&state, |conn| Ok(scope_adapter_backlog(conn, &id))).unwrap_or((0, 0));
+    if backlog.0 < backlog.1 && (hub.indexer().is_none() || (!hub.pass_running() && hub.should_kick(std::time::Duration::from_secs(30)))) {
         runtime::material_changed(&hub);
     }
     Ok(status)

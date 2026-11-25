@@ -67,7 +67,11 @@ pub fn index_status(conn: &Connection, hub: &ChatHub, workspace_id: &str, meetin
     let meetings_all = scope_adapter::home_meetings(conn, workspace_id)?;
     let (m_done, m_total) = scope_adapter::meeting_backlog(conn, &meetings_all);
     let p = hub.progress();
-    let (done, total, busy) = if m_done < m_total {
+    // A backlog counts as "indexing" only while a pass could still work on it. A pass that
+    // finished has recorded every meeting (indexed or failed), so what is left is a missed
+    // wake that the status poll restarts, not something to show as "still indexing" for ever.
+    let pass_finished = p.total > 0 && p.done >= p.total;
+    let (done, total, busy) = if m_done < m_total && !pass_finished {
         (m_done, m_total, true)
     } else {
         (p.done, p.total, p.total > 0 && p.done < p.total)
@@ -423,30 +427,61 @@ pub async fn recap_missing_for(deps: &ChatDeps, workspace_id: &str, cancel: Arc<
     made
 }
 
-/// Recaps once the first indexing pass has the workspace's meetings in (their
-/// cards are what the recaps hang on). Waits up to two minutes, gives up when
-/// cancelled, and never works during a meeting.
+/// How long a recap waits for the index before it goes ahead anyway.
+pub const RECAP_INDEX_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Recaps once the index holds what they hang on (their cards). A recap for one meeting
+/// waits only for THAT meeting's index entry; the opening pass waits for the workspace's
+/// backlog. Both wait at most [`RECAP_INDEX_WAIT`] and then go ahead (a meeting that is
+/// still not indexed is indexed right here). Gives up when cancelled and never works
+/// during a meeting.
 pub async fn recaps_when_ready(deps: &ChatDeps, workspace_id: &str, cancel: Arc<CancelToken>) -> usize {
     recaps_when_ready_for(deps, workspace_id, cancel, None).await
 }
 
 pub async fn recaps_when_ready_for(deps: &ChatDeps, workspace_id: &str, cancel: Arc<CancelToken>, only: Option<&str>) -> usize {
+    recaps_when_ready_within(deps, workspace_id, cancel, only, RECAP_INDEX_WAIT).await
+}
+
+pub async fn recaps_when_ready_within(
+    deps: &ChatDeps,
+    workspace_id: &str,
+    cancel: Arc<CancelToken>,
+    only: Option<&str>,
+    wait: std::time::Duration,
+) -> usize {
     let started = std::time::Instant::now();
     loop {
-        if cancel.is_cancelled() || started.elapsed() > std::time::Duration::from_secs(120) {
+        if cancel.is_cancelled() {
             return 0;
         }
-        let ready = deps
-            .conn()
-            .ok()
-            .and_then(|c| scope_adapter::home_meetings(&c, workspace_id).ok().map(|m| scope_adapter::meeting_backlog(&c, &m)))
-            .map_or(false, |(done, total)| done >= total);
+        let ready = deps.conn().ok().map_or(false, |c| match only {
+            Some(m) => meeting_is_indexed(&c, m),
+            None => scope_adapter::home_meetings(&c, workspace_id).ok().map(|m| scope_adapter::meeting_backlog(&c, &m)).map_or(false, |(done, total)| done >= total),
+        });
         if ready {
+            break;
+        }
+        if started.elapsed() > wait {
+            // the index did not get there (a missed wake, a failing item): do not wait for ever
+            if let (Some(m), Ok(mut conn)) = (only, deps.conn()) {
+                let _ = crate::workspace_search::indexer::index_meeting(&mut conn, m);
+            }
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
     recap_missing_for(deps, workspace_id, cancel, only).await
+}
+
+/// The meeting has an index entry (indexed, or recorded as failed).
+fn meeting_is_indexed(conn: &Connection, meeting_id: &str) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM search_sources WHERE kind = 'transcript' AND sub_ref = '' AND ref_id = ?1 AND status IN ('ok', 'error')",
+        [meeting_id],
+        |_| Ok(()),
+    )
+    .is_ok()
 }
 
 /// The database path as a reader would open it (for callers without `ChatDeps`).

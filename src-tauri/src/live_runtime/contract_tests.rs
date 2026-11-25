@@ -198,3 +198,23 @@ fn event_notetaker_state_finished_kinds() {
         assert_contract!(name, s);
     }
 }
+
+#[test]
+fn event_notetaker_state_finished_nothing_to_note() {
+    let s = RunSnapshot {
+        meeting_id: "m1".into(),
+        status: "finished",
+        reason: None,
+        error_kind: None,
+        can: vec![],
+        tokens_used: 900,
+        total_tokens: 4_000,
+        cap: 120_000,
+        next_in_ms: None,
+        model: None,
+        not_covered: None,
+        ended: Some(Ended { kind: "nothing_to_note".into(), detail: Some("The notes read the whole call and found nothing to write down".into()) }),
+        moved_online: None,
+    };
+    assert_contract!("notetaker_state_finished_nothing_to_note", s);
+}
