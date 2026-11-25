@@ -1,5 +1,4 @@
 // Shared runner for the held-out evals (blind: uses only the public API).
-import * as fs from "fs";
 import { buildNoteIndex, VoiceFollower, SaidTracker } from "./index";
 import type { Scenario, Step } from "./heldout.fixtures";
 
@@ -125,7 +124,5 @@ export function evaluate(scenarios: Scenario[], label: string): string[] {
   const sErr = saidRes.filter((x) => x.fp + x.fn > 0).sort((a, b) => b.fp * 2 + b.fn - (a.fp * 2 + a.fn)).slice(0, Math.max(0, 8 - worst.length));
   sErr.forEach((x) => L.push(`  SAID ${x.sc} ${x.wrongIds.join(",")}`));
   L.push("said errors all: " + saidRes.filter((x) => x.fp + x.fn > 0).map((x) => `${x.sc}[${x.wrongIds.join(",")}]`).join(" "));
-  const out = process.env.HELDOUT_OUT;
-  if (out) fs.writeFileSync(`${out}-${label}.txt`, L.join("\n"));
   return L;
 }

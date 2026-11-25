@@ -1,6 +1,4 @@
 import { describe, it, expect } from "vitest";
-// @ts-ignore node types are not part of the app tsconfig; only the eval tests write their report
-import { mkdirSync, writeFileSync } from "node:fs";
 import { runScenario, ScenarioResult } from "./fixtures";
 import { SCENARIOS as BASE } from "./scenarios";
 import { SCENARIOS2 } from "./scenarios2";
@@ -69,10 +67,8 @@ describe("follow evals", () => {
     lines.push(
       `TOTAL checkpoints=${n} strict=${(strict / n).toFixed(3)} correctOrHolding=${(acceptable / n).toFixed(3)} confidentWrong=${(confWrong / n).toFixed(3)} said precision=${precision.toFixed(3)} recall=${recall.toFixed(3)} (TP ${tp} FP ${fp} FN ${fn})`,
     );
-    mkdirSync(".agent-logs", { recursive: true });
     const perLang = Object.entries(groups).map(([k, g]) => `${k}=${(g.tp / Math.max(1, g.tp + g.fn)).toFixed(2)}`);
     lines.push(`offScriptSafe=${(offOk / Math.max(1, offN)).toFixed(3)} (${offOk}/${offN}) relock=${relOk}/${relN} recallByNote ${perLang.join(" ")}`);
-    writeFileSync(".agent-logs/follow-eval-table.txt", lines.join("\n"));
     expect(results.length).toBe(SCENARIOS.length);
     expect(confWrong / n).toBeLessThanOrEqual(0.01);
     expect(offOk / Math.max(1, offN)).toBeGreaterThanOrEqual(0.9);
