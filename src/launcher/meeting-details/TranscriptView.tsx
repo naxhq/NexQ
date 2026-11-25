@@ -545,12 +545,14 @@ export function TranscriptView({ segments, mergedSegments, isVisible = true, sea
           <span className="font-semibold text-muted-foreground/60">Text</span>
           <button
             onClick={() => setTranscriptFontSize(Math.max(10, transcriptFontSize - 1))}
-            className="flex h-5 w-5 items-center justify-center rounded text-[9px] font-bold text-muted-foreground/60 hover:bg-secondary/30 cursor-pointer"
+            aria-label="Smaller transcript text"
+            className="flex h-6 w-6 items-center justify-center rounded text-[9px] font-bold text-muted-foreground/60 hover:bg-secondary/30 cursor-pointer"
           >A</button>
           <span className="min-w-[18px] text-center tabular-nums font-semibold text-muted-foreground/50">{transcriptFontSize}</span>
           <button
             onClick={() => setTranscriptFontSize(Math.min(20, transcriptFontSize + 1))}
-            className="flex h-5 w-5 items-center justify-center rounded text-[13px] font-bold text-muted-foreground/60 hover:bg-secondary/30 cursor-pointer"
+            aria-label="Larger transcript text"
+            className="flex h-6 w-6 items-center justify-center rounded text-[13px] font-bold text-muted-foreground/60 hover:bg-secondary/30 cursor-pointer"
           >A</button>
           <ColorPickerButton value={transcriptTextColor} onChange={setTranscriptTextColor} label="Text color" />
         </div>
@@ -559,12 +561,14 @@ export function TranscriptView({ segments, mergedSegments, isVisible = true, sea
           <span className="font-semibold text-muted-foreground/60">Translation</span>
           <button
             onClick={() => setTranslationFontSize(Math.max(9, translationFontSize - 1))}
-            className="flex h-5 w-5 items-center justify-center rounded text-[9px] font-bold text-muted-foreground/60 hover:bg-secondary/30 cursor-pointer"
+            aria-label="Smaller translation text"
+            className="flex h-6 w-6 items-center justify-center rounded text-[9px] font-bold text-muted-foreground/60 hover:bg-secondary/30 cursor-pointer"
           >A</button>
           <span className="min-w-[18px] text-center tabular-nums font-semibold text-muted-foreground/50">{translationFontSize}</span>
           <button
             onClick={() => setTranslationFontSize(Math.min(18, translationFontSize + 1))}
-            className="flex h-5 w-5 items-center justify-center rounded text-[13px] font-bold text-muted-foreground/60 hover:bg-secondary/30 cursor-pointer"
+            aria-label="Larger translation text"
+            className="flex h-6 w-6 items-center justify-center rounded text-[13px] font-bold text-muted-foreground/60 hover:bg-secondary/30 cursor-pointer"
           >A</button>
           <ColorPickerButton value={translationTextColor} onChange={setTranslationTextColor} label="Translation color" />
         </div>
@@ -637,7 +641,7 @@ export function TranscriptView({ segments, mergedSegments, isVisible = true, sea
       {/* Note editor modal */}
       {noteEdit && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/70"
           onClick={() => setNoteEdit(null)}
         >
           <div

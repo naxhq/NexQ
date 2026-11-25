@@ -35,6 +35,7 @@
     --primary: 217 91% 48%;
     --primary-foreground: 0 0% 100%;
     --primary-text: 217 91% 35%;
+    --primary-text-hover: 217 91% 24%;
     --secondary: 214 26% 90.5%;
     --secondary-foreground: 222 47% 11%;
     --muted: 214 26% 90.5%;
@@ -78,6 +79,7 @@
     --primary: 217 91% 52%;
     --primary-foreground: 0 0% 100%;
     --primary-text: 217 91% 77%;
+    --primary-text-hover: 217 91% 88%;
     --secondary: 220 26% 14%;
     --secondary-foreground: 210 20% 92%;
     --muted: 220 20% 16%;
@@ -141,19 +143,21 @@
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 5px;
+  height: 5px; /* horizontal bars are as thin as vertical ones */
 }
 
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 
+/* Quiet at rest, 3:1 once you reach for it. */
 ::-webkit-scrollbar-thumb {
-  background: hsl(var(--input));
+  background: hsl(var(--muted-foreground) / 0.35);
   border-radius: 10px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--muted-foreground));
+  background: hsl(var(--muted-foreground) / 0.8);
 }
 
 /* Overlay window transparent background — background + backdrop-filter applied inline */
@@ -874,4 +878,18 @@ fieldset:disabled { opacity: 0.65; }
 /* A plain border on a field (no colour class) is the field edge too; any border-* class on it is more specific and wins. */
 :where(input, select, textarea) {
   border-color: hsl(var(--input));
+}
+
+/*
+ * Hover feedback for text-only controls. Every faded text class resolves to one token (see tailwind.config.ts), so
+ * "text-muted-foreground/50 hover:text-muted-foreground" would not change at all. A control that asks for a hover text
+ * colour of the muted, foreground or primary family gets the next step up. Leading space or start of the class list
+ * keeps group-hover: out of it.
+ */
+[class^="hover:text-muted-foreground"]:hover, [class*=" hover:text-muted-foreground"]:hover,
+[class^="hover:text-foreground/"]:hover, [class*=" hover:text-foreground/"]:hover {
+  color: hsl(var(--foreground));
+}
+[class^="hover:text-primary"]:not([class*="primary-foreground"]):hover, [class*=" hover:text-primary"]:not([class*="primary-foreground"]):hover {
+  color: hsl(var(--primary-text-hover));
 }

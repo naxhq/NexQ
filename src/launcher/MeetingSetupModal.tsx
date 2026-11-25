@@ -163,12 +163,12 @@ export function MeetingSetupModal({ open, onStart, onCancel, workspaceId }: Meet
     <div
       ref={backdropRef}
       onClick={handleBackdropClick}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-background/70"
       role="dialog"
       aria-modal="true"
       aria-label="Meeting setup"
     >
-      <div className="flex max-h-[calc(100vh-2rem)] w-[420px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl border border-border/40 bg-card shadow-2xl">
+      <div className="flex max-h-[calc(100vh-2rem)] w-[420px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl border border-border/40 bg-popover shadow-2xl">
 
         {/* ── HEADER ── */}
         <div className="flex shrink-0 items-center justify-between border-b border-border/20 px-5 py-4">
@@ -537,9 +537,9 @@ export function MeetingSetupModal({ open, onStart, onCancel, workspaceId }: Meet
             >
               {remember
                 ? <CheckSquare className="h-4 w-4 text-primary shrink-0" />
-                : <Square className="h-4 w-4 text-muted-foreground/50 shrink-0 group-hover:text-muted-foreground transition-colors" />
+                : <Square className="h-4 w-4 text-muted-foreground/50 shrink-0 group-hover:text-foreground transition-colors" />
               }
-              <span className="text-xs text-muted-foreground/70 group-hover:text-muted-foreground transition-colors">
+              <span className="text-xs text-muted-foreground/70 group-hover:text-foreground transition-colors">
                 Remember these settings for next time
               </span>
             </button>

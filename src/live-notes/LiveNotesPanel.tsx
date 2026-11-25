@@ -9,7 +9,7 @@ import { EMPTY_ENTRY, useLiveNotesStore } from "../stores/liveNotesStore";
 import { NotePage } from "./NotePage";
 import { MovedOnlineLine } from "./MovedOnline";
 import { Countdown, RunStatusHeader } from "./RunStatusHeader";
-import { can, endedWords, inFlight, modelLine, notCoveredText, runWords } from "./runState";
+import { can, endedSentence, endedWords, inFlight, modelLine, notCoveredText, runWords } from "./runState";
 import { useAutomaticModel } from "../models/useAutomaticModel";
 import { describeModel } from "../models/ModelField";
 import { NotesSettingsForm, formatTokens } from "./NotesSettingsForm";
@@ -181,7 +181,7 @@ export function NotesPanel() {
           </p>
           <div className="rs-notice-actions">
             {can(run, "keep_going") && (
-              <Button variant="primary" size="sm" onClick={() => void store.getState().keepGoing()}>
+              <Button variant="primary" size="sm" onClick={() => void store.getState().keepGoing(meetingId)}>
                 Keep going
               </Button>
             )}
@@ -201,6 +201,13 @@ export function NotesPanel() {
             {can(run, "try_again") && <button type="button" className="rs-tool" onClick={() => void store.getState().tryAgain()}>Try again</button>}
             {can(run, "start") && !can(run, "try_again") && <button type="button" className="rs-tool" onClick={() => void store.getState().start()}>Start notes again</button>}
           </div>
+        </div>
+      )}
+
+      {ended && endedSentence(run?.ended) && (
+        <div className="rs-notice" role="group" aria-label="How the notes ended">
+          <div className="rs-notice-title">{endedWords(run)}</div>
+          <p>{endedSentence(run?.ended)}</p>
         </div>
       )}
 

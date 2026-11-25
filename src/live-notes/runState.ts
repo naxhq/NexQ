@@ -60,6 +60,8 @@ const ENDED_HEADING: Record<EndedKind, string> = {
   manual: "Not updated automatically",
   out_of_time: "Stopped early",
   stopped: "Stopped",
+  interrupted: "Interrupted",
+  other_meeting: "Stopped for another meeting",
 };
 const ENDED_SENTENCE: Record<EndedKind, string> = {
   covered: "The notes cover the whole call.",
@@ -70,6 +72,8 @@ const ENDED_SENTENCE: Record<EndedKind, string> = {
   manual: "The notes were on manual, so they were not updated by themselves.",
   out_of_time: "The last update ran out of time.",
   stopped: "You stopped the notes.",
+  interrupted: "NexQ was closed before the notes were finished.",
+  other_meeting: "The notes stopped because another meeting started.",
 };
 
 /** One plain sentence for why the notes of a finished meeting ended as they did. */
@@ -90,7 +94,10 @@ export function endedWords(run: { status?: RunStatusName; not_covered?: NotCover
     case "paused":
       return "Paused when the meeting ended";
     case "running":
-      return "Updating the notes";
+    case "on":
+    case "waiting":
+      // Between passes the notes are still being worked on: a live word, never "Finished".
+      return runWords("notes", run.status, true).word;
     default:
       return run?.not_covered ? "Stopped early" : "Finished";
   }

@@ -298,3 +298,15 @@ describe("NotePage live regions", () => {
     expect(container.querySelector(".ln-page [role='status']")).toBeNull();
   });
 });
+
+
+describe("NotePage margin rule", () => {
+  it("only the section carries `ln-topic` (the margin rule); the topic row has its own class", () => {
+    const { container } = page();
+    const all = Array.from(container.querySelectorAll(".ln-topic"));
+    expect(all.every((el) => el.tagName === "SECTION")).toBe(true);
+    expect(all).toHaveLength(container.querySelectorAll("section").length);
+    expect(container.querySelector('[data-block-id="b1"]')).toHaveClass("ln-topic-row");
+    expect(container.querySelector('[data-block-id="b1"]')).not.toHaveClass("ln-topic");
+  });
+});

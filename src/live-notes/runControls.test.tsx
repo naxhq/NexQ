@@ -27,7 +27,7 @@ vi.mock("../lib/events", async () => {
 import { NotesPanel } from "./LiveNotesPanel";
 import { BriefPanel } from "../live-brief/BriefPanel";
 import { Countdown } from "./RunStatusHeader";
-import { countdownText, notCoveredText, endedWords, can, modelLine } from "./runState";
+import { countdownText, notCoveredText, endedWords, endedSentence, can, modelLine } from "./runState";
 import { ns, bs } from "./testing";
 import { DEFAULT_NOTETAKER_SETTINGS, EMPTY_ENTRY, useLiveNotesStore } from "../stores/liveNotesStore";
 import { DEFAULT_BRIEF_SETTINGS, useLiveBriefStore } from "../stores/liveBriefStore";
@@ -54,7 +54,7 @@ function notes(state: NotetakerState, settings: Partial<NotetakerSettings> = {},
     resume: spy("resume") as never,
     start: spy("start") as never,
     tryAgain: spy("try_again") as never,
-    keepGoing: spy("keep_going") as never,
+    keepGoing: (async (id?: string) => void calls.push(`keep_going:${id}`)) as never,
     stop: spy("stop") as never,
   });
 }
@@ -116,7 +116,7 @@ describe("buttons come from `can`", () => {
     notes(run("capped", ["keep_going"], { tokens_used: 1 }));
     render(<NotesPanel />);
     await userEvent.click(screen.getByRole("button", { name: "Keep going" }));
-    expect(calls).toEqual(["keep_going"]);
+    expect(calls).toEqual(["keep_going:m1"]);
   });
 });
 
@@ -298,5 +298,31 @@ describe("after Stop, at the end, and when the limit changes", () => {
     render(<NotesPanel />);
     expect(screen.getByText("Nothing new to add yet.")).toBeInTheDocument();
     expect(screen.getByText("Not updated")).toBeInTheDocument();
+  });
+});
+
+
+describe("ended kinds and live words between passes", () => {
+  it("says the two new kinds in plain words", () => {
+    expect(endedWords({ ended: { kind: "interrupted", detail: null } })).toBe("Interrupted");
+    expect(endedSentence({ kind: "interrupted", detail: null })).toBe("NexQ was closed before the notes were finished.");
+    expect(endedWords({ ended: { kind: "other_meeting", detail: null } })).toBe("Stopped for another meeting");
+    expect(endedSentence({ kind: "other_meeting", detail: "Standup started." })).toBe("The notes stopped because another meeting started. Standup started.");
+  });
+
+  it("between passes it is live, never Finished", () => {
+    expect(endedWords({ status: "running" })).toBe("Taking notes");
+    expect(endedWords({ status: "on" })).toBe("On");
+    expect(endedWords({ status: "waiting" })).toBe("Waiting for speech");
+    expect(endedWords({ status: "finished" })).toBe("Finished");
+  });
+
+  it("the ended panel shows the same sentence as the tab", () => {
+    notes(run("finished", ["update"], { ended: { kind: "interrupted", detail: null } }));
+    const { rerender } = render(<NotesPanel />);
+    act(() => useMeetingStore.setState({ activeMeeting: null as never }));
+    rerender(<NotesPanel />);
+    expect(screen.getByText("NexQ was closed before the notes were finished.")).toBeInTheDocument();
+    expect(screen.getByText("Live notes: Interrupted")).toBeInTheDocument();
   });
 });

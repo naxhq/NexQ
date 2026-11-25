@@ -199,7 +199,7 @@ export function Menu({ items, label, renderTrigger, align = "start", className }
                     "ui-body flex cursor-default select-none items-center gap-2 rounded-lg px-2.5 py-1.5 outline-none ui-focus",
                     i === active && "bg-accent",
                     it.danger && "text-destructive",
-                    it.disabled && "opacity-45",
+                    it.disabled && "text-muted-foreground",
                   )}
                 >
                   <span className="flex h-4 w-4 shrink-0 items-center justify-center">

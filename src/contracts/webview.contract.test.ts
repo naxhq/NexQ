@@ -50,6 +50,9 @@ const VARIANT_OF: Record<string, string> = {
 /** Event fixtures that are variants of one event (same listener, another payload). */
 const EVENT_VARIANT_OF: Record<string, string> = {
   notetaker_state_finished: "notetaker_state",
+  notetaker_state_finished_stopped: "notetaker_state",
+  notetaker_state_finished_interrupted: "notetaker_state",
+  notetaker_state_finished_other_meeting: "notetaker_state",
 };
 
 /** Fixtures named like a command that are its RESULT, with the TS type that reads them. */

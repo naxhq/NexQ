@@ -24,6 +24,11 @@ export function NoteText({ text }: { text: string }) {
   );
 }
 
+/** The row's own class. A topic row is not `ln-topic`: that is the section around it (its margin rule). */
+export function rowClass(type: NoteBlockType): string {
+  return type === "topic" ? "ln-topic-row" : `ln-${type}`;
+}
+
 export interface RowActions {
   setText: (id: string, text: string) => void;
   setType: (id: string, type: NoteBlockType) => void;
@@ -70,7 +75,7 @@ function NoteBlockRowImpl({ block, fresh, editable, editing, tabbable, actions, 
 
   if (editing || startEdit) {
     return (
-      <Tag className={cn("ln-item", isLead && "ln-lead-row", `ln-${block.type}`)} data-block-id={block.id}>
+      <Tag className={cn("ln-item", isLead && "ln-lead-row", rowClass(block.type))} data-block-id={block.id}>
         <BlockEditor
           block={block}
           onSave={(text, type) => {
@@ -146,7 +151,7 @@ function NoteBlockRowImpl({ block, fresh, editable, editing, tabbable, actions, 
 
   return (
     <Tag
-      className={cn("ln-item", isLead && "ln-lead-row", `ln-${block.type}`, fresh && "ln-fresh")}
+      className={cn("ln-item", isLead && "ln-lead-row", rowClass(block.type), fresh && "ln-fresh")}
       data-block-id={block.id}
       data-fresh={fresh ? "true" : undefined}
       tabIndex={ti}

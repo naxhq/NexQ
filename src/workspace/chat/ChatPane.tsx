@@ -210,7 +210,7 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
       {/* The question box never scrolls away: only the Context panel above it scrolls, within its own limit. */}
       <div className="shrink-0 px-5 pb-3 pt-1" data-chat-bottom>
         {!empty && (
-          <div className="max-h-[min(13rem,26vh)] overflow-y-auto" data-context-scroll>
+          <div className="max-h-[min(18rem,38vh)] overflow-y-auto" data-context-scroll>
             <ContextPanel
               report={report}
               subject={subject}

@@ -77,7 +77,7 @@ export function SourcesModal({ title, onClose, children, wide, hideClose }: Sour
       onMouseDown={(e) => {
         if (e.target === backdropRef.current) onClose();
       }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 p-4"
     >
       <div
         ref={dialogRef}

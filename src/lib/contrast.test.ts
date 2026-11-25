@@ -145,3 +145,19 @@ describe("source scan: no new fixed low-contrast text colours", () => {
     expect(found).toEqual([]);
   });
 });
+
+describe("text-only controls keep hover feedback", () => {
+  it("index.css lifts muted, foreground and primary hover text a step (both faded colours resolve to one token)", () => {
+    expect(css).toContain('[class*=" hover:text-muted-foreground"]:hover');
+    expect(css).toContain('[class*=" hover:text-foreground/"]:hover');
+    expect(css).toContain("--primary-text-hover");
+  });
+  it("the hover text of every theme stays readable", () => {
+    for (const [name, t] of Object.entries(THEMES)) {
+      expect(t["primary-text-hover"], `${name} --primary-text-hover`).toBeTruthy();
+      for (const s of ["background", "card", "secondary", "accent"]) {
+        expect(ratio(hsl(t["primary-text-hover"]), hsl(t[s])), `${name} primary hover on ${s}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+});
