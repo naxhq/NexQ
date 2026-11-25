@@ -510,7 +510,7 @@ describe("room for the answer", () => {
     setup();
     expect(await screen.findByText("Effort:")).toBeInTheDocument();
     const model = screen.getByRole("button", { name: "Model" });
-    expect(model.className).not.toContain("max-w");
+    expect(model.className).not.toContain("max-w-[");
     expect(model.className).not.toContain("truncate");
     useConfigStore.setState({ llmProvider: "ollama", llmModel: "" });
   });
@@ -571,5 +571,37 @@ describe("can_ask never blocks the chat", () => {
     fireEvent.keyDown(box, { key: "Enter" });
     await waitFor(() => expect(ipc.askWorkspace).toHaveBeenCalledWith("c1", "Go ahead", expect.any(String), false));
     useConfigStore.setState({ llmProvider: "ollama", llmModel: "" });
+  });
+});
+
+describe("composer structure", () => {
+  it("puts the question on its own full-width row and keeps the controls and Ask in a wrapping row", async () => {
+    setup({ chats: [chat("c1")], messages: pairs(1) });
+    const box = await screen.findByPlaceholderText("Ask a follow-up");
+    const root = document.querySelector("[data-composer='compact']") as HTMLElement;
+    const controls = root.querySelector("[data-composer-controls]") as HTMLElement;
+    // The textarea is not in the controls row, and fills its row.
+    expect(controls.contains(box)).toBe(false);
+    expect(box.className).toContain("w-full");
+    expect(box.className).toContain("min-w-0");
+    // Controls wrap, and may shrink; Ask is in the group that never shrinks.
+    expect(controls.className).toContain("flex-wrap");
+    expect(controls.className).toContain("min-w-0");
+    const ask = within(controls).getByRole("button", { name: "Ask" });
+    expect(ask.className).toContain("shrink-0");
+    expect(ask.parentElement?.className).toContain("shrink-0");
+    // Nothing in the composer can push the pane wider.
+    expect(root.className).toContain("min-w-0");
+    expect(root.firstElementChild?.className ?? "").not.toContain("overflow-x-scroll");
+    // Labels truncate instead of growing.
+    expect(within(controls).getByRole("button", { name: "Model" }).className).toContain("max-w-full");
+    expect(within(controls).getByRole("button", { name: /Answer options/ }).className).toContain("max-w-full");
+  });
+
+  it("is one line when empty and grows with a draft, within a cap", async () => {
+    setup({ chats: [chat("c1")], messages: pairs(1) });
+    const box = (await screen.findByPlaceholderText("Ask a follow-up")) as HTMLTextAreaElement;
+    expect(box.rows).toBe(1);
+    expect(box.style.height).toBe("24px");
   });
 });

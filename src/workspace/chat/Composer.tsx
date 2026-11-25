@@ -74,7 +74,6 @@ function selectionText(sel: Selection): string {
 export function Composer(p: ComposerProps) {
   const box = useRef<HTMLTextAreaElement | null>(null);
   const uid = useId();
-  const [focused, setFocused] = useState(false);
   const [hint, setHint] = useState(false);
   const { selection, session, compact } = p;
   const depth = p.chat?.depth ?? "balanced";
@@ -85,18 +84,42 @@ export function Composer(p: ComposerProps) {
   const smallWindow = !!report && report.window > 0 && report.window < 8000;
   const caps = p.capabilities ?? null;
   const canSend = !p.writing && !p.waitingForOther && p.draft.trim().length > 0;
-  const open = focused || p.draft.length > 0;
+  // One line while empty (even focused); two or more once there is text.
+  const open = p.draft.length > 0;
+
+  // The box's own width: a height is only measured when the text has a real width to wrap in,
+  // and again whenever that width changes (a docked panel opening, a window resize).
+  const [boxSize, setBoxSize] = useState("");
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const pane = el.closest("[data-workspace-chat]");
+    const read = () => setBoxSize(`${Math.round(el.getBoundingClientRect().width)}x${Math.round(pane?.getBoundingClientRect().height ?? 0)}`);
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    if (pane) ro.observe(pane);
+    return () => ro.disconnect();
+  }, [compact]);
 
   // Grows to its text, then scrolls. In the compact row it stays one line until focused or filled.
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
-    el.style.height = "auto";
     const floor = compact ? (open ? TWO_ROWS_PX : ONE_ROW_PX) : TWO_ROWS_PX;
-    const h = Math.min(Math.max(el.scrollHeight, floor), MAX_PX);
+    // No width yet (hidden, or still laying out): keep to the floor and measure when it has one.
+    if (typeof ResizeObserver !== "undefined" && el.getBoundingClientRect().width < 40) {
+      el.style.height = `${floor}px`;
+      el.style.overflowY = "hidden";
+      return;
+    }
+    // A long draft never pushes Ask out of sight: the box may use about a fifth of the pane.
+    const paneH = el.closest("[data-workspace-chat]")?.getBoundingClientRect().height || window.innerHeight;
+    const max = Math.max(60, Math.min(MAX_PX, Math.round(paneH * 0.2)));
+    el.style.height = "auto";
+    const h = Math.min(Math.max(el.scrollHeight, floor), max);
     el.style.height = `${h}px`;
-    el.style.overflowY = el.scrollHeight > MAX_PX ? "auto" : "hidden";
-  }, [p.draft, compact, open]);
+    el.style.overflowY = el.scrollHeight > max ? "auto" : "hidden";
+  }, [p.draft, compact, open, boxSize]);
 
   // The composer is the focus: on a new chat, and when a chat opens.
   useEffect(() => {
@@ -150,14 +173,12 @@ export function Composer(p: ComposerProps) {
           p.onDraft(e.target.value);
           if (!p.chat) void p.ensureChat();
         }}
-        onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
         onKeyDown={onKeyDown}
         placeholder={compact ? "Ask a follow-up" : "Ask about your meetings, documents and notes"}
         aria-describedby={`${uid}-hint`}
         className={cn(
-          "ui-body block w-full resize-none bg-transparent text-foreground outline-none placeholder:text-muted-foreground/70",
-          compact ? "min-w-0 flex-1 px-1.5 py-1" : "px-3.5 pb-1 pt-3",
+          "ui-body block w-full min-w-0 resize-none bg-transparent text-foreground outline-none placeholder:text-muted-foreground/70",
+          compact ? "px-2 pb-0.5 pt-1.5" : "px-3.5 pb-1 pt-3",
         )}
       />
       <p id={`${uid}-hint`} className="sr-only">
@@ -173,10 +194,10 @@ export function Composer(p: ComposerProps) {
       onPick={p.onPickModel}
       onOpenSettings={p.onOpenSettings}
       disabled={p.writing}
-      buttonClassName={cn(buttonClasses("ghost", "sm"), "ui-meta px-2", !compact && "text-foreground/90")}
+      buttonClassName={cn(buttonClasses("ghost", "sm"), "ui-meta min-w-0 max-w-full px-2", !compact && "text-foreground/90")}
     >
-      <span>{selectionText(selection)}</span>
-      {!compact && <span className="font-normal text-muted-foreground">{CAPABILITY_TEXT[cap]}</span>}
+      <span className="min-w-0 truncate">{selectionText(selection)}</span>
+      {!compact && <span className="hidden min-w-0 truncate font-normal text-muted-foreground sm:inline">{CAPABILITY_TEXT[cap]}</span>}
       <PickerCaret />
     </ModelPicker>
   );
@@ -199,35 +220,44 @@ export function Composer(p: ComposerProps) {
   );
 
   if (compact) {
+    // The question has its own full-width line; the controls wrap under it and Ask never leaves the row.
     return (
-      <div className={COLUMN}>
+      <div className={cn(COLUMN, "min-w-0")} data-composer="compact">
         {notices}
-        <div className="flex items-end gap-1 rounded-xl border border-border bg-card px-2 py-1.5 focus-within:border-ring/60">
+        <div className="min-w-0 overflow-hidden rounded-xl border border-border bg-card focus-within:border-ring/60">
           {textarea}
-          {modelPicker}
-          <OptionsMenu
-            workspaceId={p.workspaceId}
-            chat={p.chat}
-            excluded={session.excluded}
-            selection={selection}
-            disabled={p.writing}
-            onDepth={p.onDepth}
-            onEffort={p.onEffort}
-            ensureChat={p.ensureChat}
-          />
-          <span className="ui-meta min-w-[7rem] shrink-0 pb-1 text-right tabular-nums text-muted-foreground" aria-live="polite">
-            {estimate}
-          </span>
-          {action}
+          <div className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 px-2 pb-1.5 pt-1" data-composer-controls>
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-1">
+              <div className="flex min-w-0 max-w-full">{modelPicker}</div>
+              <div className="flex min-w-0 max-w-full">
+                <OptionsMenu
+                  workspaceId={p.workspaceId}
+                  chat={p.chat}
+                  excluded={session.excluded}
+                  selection={selection}
+                  disabled={p.writing}
+                  onDepth={p.onDepth}
+                  onEffort={p.onEffort}
+                  ensureChat={p.ensureChat}
+                />
+              </div>
+            </div>
+            <div className="ml-auto flex shrink-0 items-center gap-2">
+              <span className="ui-meta min-w-0 truncate text-right tabular-nums text-muted-foreground" aria-live="polite">
+                {estimate}
+              </span>
+              {action}
+            </div>
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className={COLUMN}>
+    <div className={cn(COLUMN, "min-w-0")} data-composer="full">
       {notices}
-      <div className="rounded-xl border border-border bg-card shadow-[0_1px_0_rgba(0,0,0,0.12)] focus-within:border-ring/60">
+      <div className="min-w-0 overflow-hidden rounded-xl border border-border bg-card shadow-[0_1px_0_rgba(0,0,0,0.12)] focus-within:border-ring/60">
         {textarea}
         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 px-2 pb-2 pt-1">
           {modelPicker}

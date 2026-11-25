@@ -61,9 +61,9 @@ export function OptionsMenu({
           setOpen(true);
           void ensureChat();
         }}
-        className="ui-meta inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2 font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground ui-focus ui-r-md disabled:opacity-50"
+        className="ui-meta inline-flex h-7 min-w-0 max-w-full items-center gap-1.5 whitespace-nowrap rounded-md px-2 font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground ui-focus ui-r-md disabled:opacity-50"
       >
-        {summary}
+        <span className="min-w-0 truncate">{summary}</span>
         <PickerCaret />
       </button>
       {open && pos && (
