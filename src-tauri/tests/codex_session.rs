@@ -346,7 +346,7 @@ async fn a_plain_read_is_declined_too_whatever_the_session_has() {
     assert_eq!(decision(&[&directive], |_| {}, "approve:read").await, "decision:decline");
     let rich = |l: &mut CodexLaunch| {
         l.has_notes = true;
-        l.policy = CodexPolicy { allowed_tools: ["mcp__nexq_notes__read_note".to_string()].into_iter().collect(), ..Default::default() };
+        l.policy = CodexPolicy { allowed_tools: ["mcp__nexq_notes__read_note".to_string()].into_iter().collect() };
     };
     assert_eq!(decision(&[&directive], rich, "approve:read").await, "decision:decline");
     assert_eq!(decision(&[&directive], rich, "approve:legacy-cmd").await, "decision:denied");
@@ -355,7 +355,7 @@ async fn a_plain_read_is_declined_too_whatever_the_session_has() {
 #[tokio::test]
 async fn an_mcp_tool_is_approved_only_when_it_is_in_the_allowed_set() {
     let allow = |l: &mut CodexLaunch| {
-        l.policy = CodexPolicy { allowed_tools: ["mcp__mira__kb_search".to_string()].into_iter().collect(), ..Default::default() };
+        l.policy = CodexPolicy { allowed_tools: ["mcp__mira__kb_search".to_string()].into_iter().collect() };
     };
     assert_eq!(decision(&[], allow, "approve:mcp-ok").await, "decision:accept");
     assert_eq!(decision(&[], allow, "approve:mcp-no").await, "decision:decline");

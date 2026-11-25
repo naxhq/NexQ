@@ -113,7 +113,7 @@ pub fn build_args(
 ) -> Vec<String> {
     let s = |x: &str| x.to_string();
     // A chat that cannot ask has its asking tools switched off right here.
-    let effective = super::approval::launch_sources(cfg.sources.as_ref(), cfg.approvals.as_ref());
+    let effective = super::approval::launch_sources(cfg.kind, cfg.sources.as_ref(), cfg.approvals.as_ref());
     let sources = effective.as_ref();
     let mut args = vec![
         s("-p"),
@@ -142,6 +142,10 @@ pub fn build_args(
     // sends a `can_use_tool` control request); everyone else is never asked.
     let ask = cfg.approvals.as_ref().filter(|a| a.can_ask && sources.is_some());
     args.extend([s("--permission-prompts"), s(if ask.is_some() { "host" } else { "none" }), s("--no-session-persistence")]);
+    if ask.is_some() {
+        // How a host (the Agent SDK) takes the questions: over stdio, as control requests.
+        args.extend([s("--permission-prompt-tool"), s("stdio")]);
+    }
     if let Some(src) = sources {
         // A tool that asks is left out of the allow list: only then does the CLI ask.
         let asks: std::collections::HashSet<String> =
@@ -448,6 +452,8 @@ mod tests {
 
         let asking = build(Some(approvals(true)));
         assert_eq!(value_of(&asking, "--permission-prompts").as_deref(), Some("host"));
+        // Found live: without this the CLI never asks, it denies by itself.
+        assert_eq!(value_of(&asking, "--permission-prompt-tool").as_deref(), Some("stdio"));
         let at = asking.iter().position(|a| a == "--allowedTools").unwrap();
         assert!(asking[at + 1..].contains(&"mcp__m__kb_search".to_string()) && asking[at + 1..].contains(&"Read".to_string()));
         assert!(!asking.contains(&"mcp__m__send_mail".to_string()), "a tool that asks must not be pre-allowed");
@@ -455,6 +461,7 @@ mod tests {
         // Everyone else: exactly as before.
         for other in [build(None), build(Some(approvals(false)))] {
             assert_eq!(value_of(&other, "--permission-prompts").as_deref(), Some("none"));
+            assert_eq!(value_of(&other, "--permission-prompt-tool"), None);
             assert!(other.contains(&"mcp__m__send_mail".to_string()));
         }
         // A plain session (no sources) never asks, whatever it is given.

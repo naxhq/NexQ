@@ -84,8 +84,6 @@ pub struct AcpLaunch {
     /// included. They hold secrets: never logged.
     pub mcp_servers: Vec<Value>,
     pub policy: PermissionPolicy,
-    /// Per-call approval of a workspace chat that can ask (`policy.needs_ask`).
-    pub ask: Option<crate::llm::cli_agent::approval::ChatApprovals>,
     /// Extra env vars to remove, beyond [`ACP_STRIPPED_ENV`] and the Claude ones.
     pub env_remove: Vec<String>,
 }
@@ -116,7 +114,6 @@ impl AcpLaunch {
             system_prompt: String::new(),
             mcp_servers: Vec::new(),
             policy: PermissionPolicy::deny_all(),
-            ask: None,
             env_remove: Vec::new(),
         }
     }
@@ -158,36 +155,11 @@ struct Shared {
     /// `toolCallId` -> what NexQ answered to its permission request, this turn.
     /// A call that is not here was never asked about.
     decisions: Mutex<HashMap<String, Decision>>,
-    /// A workspace chat that can ask (None everywhere else).
-    ask: Option<crate::llm::cli_agent::approval::ChatApprovals>,
-    /// Counts turns and cancels: a held question remembers it, and one whose
-    /// turn has ended (or was cancelled) is answered `cancelled`, never allowed.
-    turn_gen: std::sync::atomic::AtomicU64,
-    /// Set from a cancel or close until the next turn: nothing new is asked.
-    refuse_asks: AtomicBool,
     /// A folder made for this session, deleted with the process.
     owned_dir: Option<PathBuf>,
 }
 
 impl Shared {
-    /// Refuse every open question and ask no new one until the next turn.
-    fn deny_asks(&self) {
-        self.turn_gen.fetch_add(1, Ordering::SeqCst);
-        self.refuse_asks.store(true, Ordering::SeqCst);
-        if let Some(a) = &self.ask {
-            a.broker.deny_chat(&a.chat_id);
-        }
-    }
-
-    /// A new turn begins: questions of the old one are void, new ones allowed.
-    fn begin_turn_asks(&self) {
-        self.turn_gen.fetch_add(1, Ordering::SeqCst);
-        self.refuse_asks.store(false, Ordering::SeqCst);
-        if let Some(a) = &self.ask {
-            a.broker.deny_chat(&a.chat_id);
-        }
-    }
-
     fn send_line(&self, line: String) -> bool {
         match self.stdin_tx.lock().unwrap().as_ref() {
             Some(tx) => tx.send(line).is_ok(),
@@ -381,9 +353,8 @@ impl AcpSession {
         let (program, args, cwd, env_remove) =
             (launch.program.clone(), launch.args.clone(), launch.cwd.clone(), launch.env_remove.clone());
         let owned = launch.remove_cwd_on_close.then(|| launch.cwd.clone());
-        let ask = launch.ask.clone().map(|a| (a, tokio::runtime::Handle::current()));
         let (shared, mut events) =
-            tokio::task::spawn_blocking(move || start_process(&program, &args, &cwd, &env_remove, policy, owned, ask))
+            tokio::task::spawn_blocking(move || start_process(&program, &args, &cwd, &env_remove, policy, owned))
                 .await
                 .map_err(|e| AgentError::Spawn(format!("spawn task failed: {e}")))??;
         let next_id = AtomicU64::new(1);
@@ -464,10 +435,7 @@ impl AcpSession {
         loop {
             tokio::select! {
                 biased;
-                _ = cancel.cancelled() => {
-                    self.shared.deny_asks();
-                    return Err(AgentError::Cancelled);
-                }
+                _ = cancel.cancelled() => return Err(AgentError::Cancelled),
                 msg = rx.recv() => match msg {
                     Some(TurnMsg::Thinking) => {
                         if !quiet {
@@ -517,7 +485,6 @@ impl AcpSession {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        self.shared.deny_asks();
         self.shared.alive.store(false, Ordering::SeqCst);
         self.shared.kill_process();
     }
@@ -574,7 +541,6 @@ impl AcpSession {
         let text = self.compose_prompt(prompt);
         // Tool call ids belong to one turn: last turn's answers do not carry over.
         self.shared.clear_decisions();
-        self.shared.begin_turn_asks();
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         if !self.shared.send_line(acp::request(id, "session/prompt", acp::prompt_params(&self.session_id, &text))) {
             return Err(self.shared.crash_error());
@@ -596,7 +562,6 @@ impl AcpSession {
 impl Drop for AcpSession {
     fn drop(&mut self) {
         self.shared.closed.store(true, Ordering::SeqCst);
-        self.shared.deny_asks();
         self.shared.stdin_tx.lock().unwrap().take();
         self.shared.alive.store(false, Ordering::SeqCst);
         self.shared.kill_process();
@@ -727,7 +692,6 @@ async fn drive_turn(
                 }
             },
             _ = tx.closed(), if drain_deadline.is_none() => {
-                shared.deny_asks();
                 let _ = shared.send_line(acp::notification("session/cancel", acp::cancel_params(&session_id)));
                 drain_deadline = Some(tokio::time::Instant::now() + timeouts.drain);
             }
@@ -847,7 +811,7 @@ pub async fn probe_models(program: PathBuf, args: Vec<String>) -> Result<Vec<(St
     let cwd = sandbox_dir();
     let (p, a, c) = (program.clone(), args, cwd.clone());
     let (shared, mut events) = tokio::task::spawn_blocking(move || {
-        start_process(&p, &a, &c, &[], Arc::new(PermissionPolicy::deny_all()), None, None)
+        start_process(&p, &a, &c, &[], Arc::new(PermissionPolicy::deny_all()), None)
     })
     .await
     .map_err(|e| AgentError::Spawn(format!("spawn task failed: {e}")))??;
@@ -877,7 +841,6 @@ fn start_process(
     env_remove: &[String],
     policy: Arc<PermissionPolicy>,
     owned_dir: Option<PathBuf>,
-    ask: Option<(crate::llm::cli_agent::approval::ChatApprovals, tokio::runtime::Handle)>,
 ) -> Result<Started, AgentError> {
     let mut cmd = Command::new(program);
     cmd.args(args);
@@ -914,9 +877,6 @@ fn start_process(
         exit_status: Mutex::new(None),
         label: label_of(program, args),
         decisions: Mutex::new(HashMap::new()),
-        ask: ask.as_ref().map(|(a, _)| a.clone()),
-        turn_gen: std::sync::atomic::AtomicU64::new(0),
-        refuse_asks: AtomicBool::new(false),
         owned_dir,
     });
 
@@ -989,15 +949,7 @@ fn start_process(
                         let _ = event_tx.send(event);
                     }
                     Ok(Incoming::Request { id, method, params }) => {
-                        let held = match &ask {
-                            Some((approvals, rt)) if method == "session/request_permission" => {
-                                hold_request(&out_shared, &policy, approvals, rt, &event_tx, &id, &params)
-                            }
-                            _ => false,
-                        };
-                        if !held {
-                            answer_request(&out_shared, &policy, &id, &method, &params);
-                        }
+                        answer_request(&out_shared, &policy, &id, &method, &params);
                         let _ = event_tx.send(Event::Tick);
                     }
                     Err(e) => log::warn!("{} stdout: skipping unparseable line ({e})", out_shared.label),
@@ -1015,72 +967,6 @@ fn start_process(
     )?;
 
     Ok((shared, event_rx))
-}
-
-/// A permission request for a tool that asks: keep the JSON-RPC id open, ask
-/// the user in the background and answer when they do (or after 60 s: no).
-/// True when the request was taken. A tool that asks but cannot be asked about
-/// is refused (by [`answer_request`], whose rules deny every ask tool and which
-/// records the decision); a tool that does not ask is left to it as before.
-///
-/// Source note: `session/request_permission` params are
-/// `{sessionId, toolCall:{toolCallId, title, kind, rawInput}, options:[{optionId, name, kind}]}`
-/// (ACP spec; the same shape `permission.rs` already parses), answered with
-/// `{outcome:{outcome:"selected", optionId}}` or `{outcome:{outcome:"cancelled"}}`.
-/// Not captured from a live `agy` session.
-fn hold_request(
-    shared: &Arc<Shared>,
-    policy: &PermissionPolicy,
-    approvals: &crate::llm::cli_agent::approval::ChatApprovals,
-    rt: &tokio::runtime::Handle,
-    ticks: &mpsc::UnboundedSender<Event>,
-    id: &Value,
-    params: &Value,
-) -> bool {
-    use crate::llm::cli_agent::approval::ApprovalRequest;
-    let req = permission::parse_request(params);
-    let permission::HoldKind::Held { server, tool } = permission::hold_kind(policy, &approvals.policy, &req) else {
-        return false;
-    };
-    // Cancelled, closing, or between turns: nothing new is asked (the static
-    // rules then refuse this tool, as they refuse every tool that asks).
-    if shared.refuse_asks.load(Ordering::SeqCst) || shared.closed.load(Ordering::SeqCst) {
-        return false;
-    }
-    let turn = shared.turn_gen.load(Ordering::SeqCst);
-    let args = params["toolCall"]["rawInput"].clone();
-    let q = ApprovalRequest {
-        chat_id: approvals.chat_id.clone(),
-        request_id: req.tool_call_id.clone(),
-        server,
-        tool,
-        args: if args.is_null() { Value::Object(Default::default()) } else { args },
-    };
-    let (broker, shared, ticks, id) = (approvals.broker.clone(), shared.clone(), ticks.clone(), id.clone());
-    rt.spawn(async move {
-        let asking = broker.ask(q);
-        tokio::pin!(asking);
-        // The agent is quiet while the user thinks: keep the watchdog satisfied.
-        let mut beat = tokio::time::interval(Duration::from_secs(20));
-        let allow = loop {
-            tokio::select! {
-                allow = &mut asking => break allow,
-                _ = beat.tick() => { let _ = ticks.send(Event::Tick); }
-            }
-        };
-        // The turn this question belonged to ended (or was cancelled) while it was
-        // open: whatever the user clicked, the agent is told `cancelled`.
-        let outcome = if shared.turn_gen.load(Ordering::SeqCst) != turn || shared.closed.load(Ordering::SeqCst) {
-            permission::Outcome::Cancelled
-        } else {
-            permission::outcome_for_answer(&req, allow)
-        };
-        let allowed = outcome.is_allow(&req);
-        shared.record_decision(&req.tool_call_id, &req.tool_name, allowed);
-        log::info!("{} permission: {} ({}) -> {} (asked)", shared.label, req.tool_name, req.kind, if allowed { "allowed" } else { "refused" });
-        shared.send_line(acp::response_ok(&id, outcome.to_result()));
-    });
-    true
 }
 
 /// Reply to a request from the agent: permission requests from the policy,
@@ -1251,9 +1137,6 @@ mod tests {
             exit_status: Mutex::new(None),
             label: "agy".into(),
             decisions: Mutex::new(HashMap::new()),
-            ask: None,
-            turn_gen: std::sync::atomic::AtomicU64::new(0),
-            refuse_asks: AtomicBool::new(false),
             owned_dir: None,
         }
     }
@@ -1299,18 +1182,5 @@ mod tests {
         assert_eq!(e.kind(), AgentErrorKind::RateLimited);
         // An error after our own cancel is a cancel.
         assert!(matches!(finish_turn(Err(rpc), String::new(), Instant::now(), true), Err(AgentError::Cancelled)));
-    }
-
-    #[test]
-    fn a_cancel_or_a_new_turn_voids_the_questions_of_the_turn_before() {
-        let shared = shared_for_tests();
-        let before = shared.turn_gen.load(Ordering::SeqCst);
-        shared.deny_asks();
-        assert!(shared.refuse_asks.load(Ordering::SeqCst), "nothing new is asked after a cancel");
-        assert_ne!(shared.turn_gen.load(Ordering::SeqCst), before, "a held question sees its turn is over");
-        let cancelled = shared.turn_gen.load(Ordering::SeqCst);
-        shared.begin_turn_asks();
-        assert!(!shared.refuse_asks.load(Ordering::SeqCst), "the next turn may ask again");
-        assert_ne!(shared.turn_gen.load(Ordering::SeqCst), cancelled, "and an old answer cannot reach it");
     }
 }

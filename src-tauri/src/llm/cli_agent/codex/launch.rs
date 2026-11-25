@@ -65,8 +65,6 @@ pub struct CodexLaunch {
     pub has_notes: bool,
     /// Which approval requests are answered yes.
     pub policy: CodexPolicy,
-    /// Per-call approval of a workspace chat that can ask (`policy.ask_tools`).
-    pub ask: Option<super::super::approval::ChatApprovals>,
     /// Extra env vars to remove from the child (on top of
     /// [`STRIPPED_ENV`] and the Claude ones in `command::STRIPPED_ENV`).
     pub env_remove: Vec<String>,
@@ -145,7 +143,6 @@ impl CodexLaunch {
             mcp_servers: serde_json::Map::new(),
             has_notes: false,
             policy: CodexPolicy::default(),
-            ask: None,
             env_remove: STRIPPED_ENV.iter().map(|s| s.to_string()).collect(),
             user_mcp_servers: None,
         }

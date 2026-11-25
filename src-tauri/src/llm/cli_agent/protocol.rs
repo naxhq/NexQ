@@ -75,11 +75,18 @@ impl PlanLimit {
 
 /// A `can_use_tool` question from the CLI.
 ///
-/// Wire format, from the CLI's own source strings (claude 2.1.330; NOT
-/// captured from a live session):
+/// Wire format, CAPTURED LIVE from claude 2.1.330 (the same strings are in
+/// 2.1.328 and 2.1.329), only when the session is launched with
+/// `--permission-prompts host --permission-prompt-tool stdio`; with `host` alone
+/// the CLI never asks and answers a tool that is not in `--allowedTools` itself
+/// (`system/permission_denied`, then a `tool_result` with `user-rejected`):
 /// `{"type":"control_request","request_id":ID,"request":{"subtype":"can_use_tool",
-///   "tool_name":"mcp__srv__tool","display_name":..,"input":{..},"tool_use_id":"toolu_..",
-///   "description":..,"permission_suggestions":[..],"mcp_server":..,"decision_reason":..}}`
+///   "tool_name":"mcp__srv__tool","mcp_server":{"name":"srv","source":"dynamic"},
+///   "display_name":"Set Flag","input":{..},"permission_suggestions":[..],
+///   "server_policy_ask_only":true,"tool_use_id":"toolu_.."}}`
+/// No `control_cancel_request` was seen when a turn was cancelled or the
+/// session closed (the CLI then reports "Tool permission stream closed before
+/// response received" to the model).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PermissionAsk {
     pub request_id: String,
@@ -92,7 +99,7 @@ pub struct PermissionAsk {
 
 /// The line that allows the call. `input` is the question's own `input`,
 /// untouched: the user approved what was shown, and that is what runs.
-/// Shape (same source note as [`PermissionAsk`]):
+/// Shape (captured live, as sent by NexQ and accepted by the CLI):
 /// `{"type":"control_response","response":{"subtype":"success","request_id":ID,
 ///   "response":{"behavior":"allow","updatedInput":INPUT}}}`
 pub fn permission_allow(request_id: &str, input: &Value) -> String {
@@ -813,9 +820,17 @@ pub(crate) mod tests {
         assert_eq!(near.clone().merge(PlanLimit { resets_at: Some(3), ..near.clone() }).resets_at, Some(3));
     }
 
-    // Source: the strings of claude 2.1.330's own binary (`subtype:"can_use_tool"`,
-    // `type:"control_response"`, `control_cancel_request`); not a live capture.
-    const CAN_USE_TOOL: &str = r#"{"type":"control_request","request_id":"req-7","request":{"subtype":"can_use_tool","tool_name":"mcp__mira__send_mail","display_name":"send_mail","input":{"to":"a@b.c","body":"hi"},"tool_use_id":"toolu_01","description":"Send a mail","permission_suggestions":[],"mcp_server":"mira"}}"#;
+    // Captured live from claude 2.1.330 (ids scrubbed); the first shape is what the CLI sent.
+    const CAN_USE_TOOL: &str = r#"{"type":"control_request","request_id":"req-7","request":{"subtype":"can_use_tool","tool_name":"mcp__mira__send_mail","mcp_server":{"name":"mira","source":"dynamic"},"display_name":"Send Mail","input":{"to":"a@b.c","body":"hi"},"permission_suggestions":[{"type":"addRules","rules":[{"toolName":"mcp__mira__send_mail"}],"behavior":"allow","destination":"localSettings"}],"server_policy_ask_only":true,"tool_use_id":"toolu_01"}}"#;
+
+    /// What the CLI printed when a tool left out of `--allowedTools` was called with host
+    /// prompts but without `--permission-prompt-tool stdio` (captured live, ids scrubbed): no question.
+    const AUTO_DENIED: &str = r#"{"type":"system","subtype":"permission_denied","tool_name":"mcp__probe__set_flag","tool_use_id":"toolu_01","message":"Claude requested permissions to use mcp__probe__set_flag, but you haven't granted it yet.","uuid":"u","session_id":"s"}"#;
+
+    #[test]
+    fn without_the_stdio_prompt_tool_the_cli_denies_by_itself_and_that_is_not_a_question() {
+        assert_eq!(parse_line(AUTO_DENIED).unwrap(), AgentEvent::Other);
+    }
 
     #[test]
     fn a_can_use_tool_control_request_is_parsed_with_its_exact_input() {

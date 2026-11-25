@@ -684,14 +684,6 @@ impl AgentSessionManager {
     ) -> Result<Arc<dyn SessionHandle>, AgentError> {
         let overrides = overrides.filter(|o| *o != SessionOverride::default());
         let pinned_kind = overrides.as_ref().and_then(|o| o.kind);
-        // A chat's with-sources session needs its approval rules: without them it
-        // cannot tell a tool that asks from one that runs, so it does not start.
-        let approvals = if key.with_sources { self.approvals_for(&key.scope) } else { None };
-        if key.with_sources && matches!(key.scope, SessionScope::Workspace(_)) && approvals.is_none() {
-            return Err(AgentError::Spawn(
-                "This chat has no tool approval rules yet, so its tools and folders were not started.".into(),
-            ));
-        }
         let lock = self.spawn_lock(key);
         let _spawning = lock.lock().await;
         if self.shutting_down.load(Ordering::SeqCst) {
@@ -699,6 +691,17 @@ impl AgentSessionManager {
         }
         if self.changed_since(key, expected) {
             return Err(scope_changed());
+        }
+        // A chat's with-sources session needs its approval rules: without them it
+        // cannot tell a tool that asks from one that runs, so it does not start.
+        // Read under the spawn lock (and read again before the session is
+        // inserted), so a session never lives with rules that were replaced
+        // while it started.
+        let mut approvals = if key.with_sources { self.approvals_for(&key.scope) } else { None };
+        if key.with_sources && matches!(key.scope, SessionScope::Workspace(_)) && approvals.is_none() {
+            return Err(AgentError::Spawn(
+                "This chat has no tool approval rules yet, so its tools and folders were not started.".into(),
+            ));
         }
 
         let mut kind = pinned_kind.unwrap_or_else(|| self.settings.active());
@@ -789,12 +792,15 @@ impl AgentSessionManager {
             let mut stale = false;
             let inserted = {
                 let mut entries = self.entries.lock().unwrap();
+                // The chat's rules may have changed while the process started: then
+                // this session was built for rules that no longer apply.
+                let rules_unchanged = !key.with_sources || self.approvals_for(&key.scope) == approvals;
                 if self.changed_since(key, expected) {
                     // The scope was restarted while this session started: it
                     // was built from material that is no longer current.
                     stale = true;
                     false
-                } else if pinned_kind.is_some() || self.settings.active() == kind {
+                } else if rules_unchanged && (pinned_kind.is_some() || self.settings.active() == kind) {
                     self.cursors.lock().unwrap().insert(
                         key.clone(),
                         Arc::new(AsyncMutex::new(DeltaCursor::default())),
@@ -830,6 +836,10 @@ impl AgentSessionManager {
                 return Err(scope_changed());
             }
             kind = pinned_kind.unwrap_or_else(|| self.settings.active());
+            approvals = if key.with_sources { self.approvals_for(&key.scope) } else { None };
+            if key.with_sources && matches!(key.scope, SessionScope::Workspace(_)) && approvals.is_none() {
+                return Err(AgentError::Spawn("This chat's tool approval rules were removed while its session started.".into()));
+            }
             if attempts >= 3 {
                 return Err(AgentError::Crashed("the AI provider kept changing while a session started".into()));
             }

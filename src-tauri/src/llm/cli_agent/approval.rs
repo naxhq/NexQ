@@ -181,33 +181,48 @@ pub fn mcp_verdict(facts: &ToolFacts, tool: &str) -> ToolVerdict {
     }
 }
 
-/// `path` made absolute-comparable: `\` as `/`, `.` dropped, `..` resolved
-/// lexically; `None` when it is relative or climbs out of its root. Windows
-/// paths compare case-insensitively (lower-cased here).
-fn normalize(path: &str) -> Option<Vec<String>> {
-    let unified = path.replace('\\', "/");
-    let p = Path::new(&unified);
-    let mut parts: Vec<String> = Vec::new();
-    let mut rooted = false;
-    for comp in p.components() {
-        match comp {
-            Component::Prefix(pre) => parts.push(pre.as_os_str().to_string_lossy().to_lowercase()),
-            Component::RootDir => rooted = true,
-            Component::CurDir => {}
-            Component::ParentDir => {
-                parts.pop()?;
+/// `path` as the file system sees it: absolute, no `..` at all, symlinks and
+/// junctions resolved. A path that does not exist (yet) is resolved through its
+/// deepest existing ancestor, with the rest appended as plain names. `None`
+/// (deny) for a relative path, a `..`, or when nothing of it can be resolved.
+fn canonical(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() || path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return None;
+    }
+    let mut existing = path.to_path_buf();
+    let mut rest: Vec<std::ffi::OsString> = Vec::new();
+    loop {
+        match std::fs::canonicalize(&existing) {
+            Ok(mut resolved) => {
+                for name in rest.iter().rev() {
+                    resolved.push(name);
+                }
+                return Some(resolved);
             }
-            Component::Normal(s) => parts.push(s.to_string_lossy().to_lowercase()),
+            Err(_) => {
+                rest.push(existing.file_name()?.to_owned());
+                if !existing.pop() {
+                    return None;
+                }
+            }
         }
     }
-    // A drive prefix or a root makes a path absolute; "a/b" does not.
-    let absolute = rooted || unified.chars().nth(1) == Some(':');
-    absolute.then_some(parts)
 }
 
+/// Is `target` inside `dir`? Both go through [`canonical`] (the Windows
+/// canonical form, so case and `\\?\` spellings agree) and are compared
+/// component by component: `D:\scope2` is not inside `D:\scope`, a junction
+/// that leads out is not inside, and anything that cannot be resolved is not.
 fn inside(dir: &Path, target: &str) -> bool {
-    let (Some(d), Some(t)) = (normalize(&dir.to_string_lossy()), normalize(target)) else { return false };
-    !d.is_empty() && t.len() >= d.len() && t[..d.len()] == d[..]
+    let (Some(d), Some(t)) = (canonical(dir), canonical(Path::new(target))) else { return false };
+    d.components().count() > 1 && t.starts_with(&d)
+}
+
+/// A pattern that names its own root (`C:\x`, `/x`, `\\host\x`) instead of
+/// being relative to the folder.
+fn is_rooted(pattern: &str) -> bool {
+    let p = Path::new(pattern);
+    p.is_absolute() || p.has_root() || pattern.chars().nth(1) == Some(':') || pattern.starts_with(['/', '\\'])
 }
 
 /// The decision for a built-in tool: reads of the scope folders only.
@@ -223,7 +238,7 @@ pub fn builtin_verdict(tool: &str, input: &Value, scope_dirs: &[PathBuf]) -> Too
     // A Glob pattern is relative to the path: it must not climb out of it.
     if tool == "Glob" {
         let pattern = input.get("pattern").and_then(Value::as_str).unwrap_or("");
-        if pattern.replace('\\', "/").split('/').any(|c| c == "..") || normalize(pattern).is_some() {
+        if pattern.replace('\\', "/").split('/').any(|c| c == "..") || is_rooted(pattern) {
             return ToolVerdict::Deny("the pattern leaves the folder");
         }
     }
@@ -316,9 +331,18 @@ impl ApprovalPolicy {
     /// other CLIs need to expose the tools at all.
     pub fn adjust_launch(&self, launch: &mut SourcesLaunch, support: &ApprovalSupport) {
         if matches!(support, ApprovalSupport::Unsupported(_)) {
-            let asks: HashSet<String> = self.ask_tools().into_iter().collect();
-            launch.allowed_tools.retain(|t| !asks.contains(t));
-            for t in asks {
+            // Only tools that run by themselves stay: one that would ask, and one
+            // the policy does not know at all, are switched off (default is deny).
+            let auto: HashSet<String> = self.auto_run_tools().into_iter().collect();
+            let mut off: Vec<String> = launch
+                .allowed_tools
+                .iter()
+                .filter(|t| t.starts_with("mcp__") && !auto.contains(*t))
+                .cloned()
+                .collect();
+            off.extend(self.ask_tools());
+            launch.allowed_tools.retain(|t| !t.starts_with("mcp__") || auto.contains(t));
+            for t in off {
                 if !launch.disallowed_tools.contains(&t) {
                     launch.disallowed_tools.push(t);
                 }
@@ -331,9 +355,14 @@ impl ApprovalPolicy {
 /// has its asking tools removed from allowed and added to disallowed here, in
 /// the one place every CLI's launch goes through, so a caller that forgot
 /// `adjust_launch` still cannot run a tool that would need a question.
-pub fn launch_sources(sources: Option<&SourcesLaunch>, approvals: Option<&ChatApprovals>) -> Option<SourcesLaunch> {
+pub fn launch_sources(
+    kind: CliAgentKind,
+    sources: Option<&SourcesLaunch>,
+    approvals: Option<&ChatApprovals>,
+) -> Option<SourcesLaunch> {
     let mut launch = sources.cloned()?;
-    if let Some(a) = approvals.filter(|a| !a.can_ask) {
+    // Only Claude asks; every other CLI runs a chat's read-only tools and nothing that would need a question.
+    if let Some(a) = approvals.filter(|a| !a.can_ask || kind != CliAgentKind::Claude) {
         a.policy.adjust_launch(&mut launch, &ApprovalSupport::Unsupported("this CLI cannot ask".into()));
     }
     Some(launch)
@@ -347,6 +376,7 @@ pub enum ApprovalSupport {
     Unsupported(String),
 }
 
+/// Verified live on 2.1.330 (questions, deny, allow, cancel, timeout, close).
 /// The oldest Claude version shown to carry `--permission-prompts host` and the
 /// `can_use_tool` / `control_response` / `control_cancel_request` strings: the
 /// installed 2.1.328, 2.1.329 and 2.1.330 binaries all do (string search of the
@@ -368,9 +398,9 @@ pub fn claude_support_for_version(version: Option<super::detect::ClaudeVersion>)
 }
 
 /// Whether `kind`'s installed CLI can ask. Claude: by its version (blocking
-/// detection, cached). Codex and Antigravity ask through their own protocols
-/// (elicitation, `session/request_permission`), which every version NexQ
-/// supports has.
+/// detection, cached). Codex and Antigravity do not ask for now: their
+/// approval protocols are not verified live, so the tools that would ask are
+/// off for them (and only read-only tools run).
 pub fn approval_support(kind: CliAgentKind) -> ApprovalSupport {
     match kind {
         CliAgentKind::Claude => {
@@ -379,7 +409,10 @@ pub fn approval_support(kind: CliAgentKind) -> ApprovalSupport {
                 .and_then(|bin| super::detect::claude_version_cached(&bin));
             claude_support_for_version(version)
         }
-        CliAgentKind::Codex | CliAgentKind::Antigravity => ApprovalSupport::Supported,
+        CliAgentKind::Codex => ApprovalSupport::Unsupported("Tools that change things are off with Codex for now.".into()),
+        CliAgentKind::Antigravity => {
+            ApprovalSupport::Unsupported("Tools that change things are off with Antigravity for now.".into())
+        }
     }
 }
 

@@ -308,9 +308,29 @@ struct ClaudeAsk {
     open: AtomicUsize,
     /// Their `request_id`s: a repeated id is refused, never asked twice.
     open_ids: Mutex<std::collections::HashSet<String>>,
+    /// Counts turns: a question remembers the turn it was asked in, and an
+    /// answer that arrives after that turn ended is a refusal.
+    turn: std::sync::atomic::AtomicU64,
+    /// True outside a turn (the start state, and after every turn exit): no
+    /// question is asked then, whatever the CLI sends.
+    refuse: AtomicBool,
 }
 
 impl ClaudeAsk {
+    /// A turn starts: questions are welcome again, under a new number.
+    fn begin_turn(&self) {
+        self.turn.fetch_add(1, Ordering::SeqCst);
+        self.refuse.store(false, Ordering::SeqCst);
+    }
+
+    /// A turn ended (done, failed, cancelled, killed): whatever is still open
+    /// is refused and nothing is asked until the next turn begins.
+    fn end_turn(&self) {
+        self.refuse.store(true, Ordering::SeqCst);
+        self.turn.fetch_add(1, Ordering::SeqCst);
+        self.approvals.broker.deny_chat(&self.approvals.chat_id);
+    }
+
     fn send(&self, line: String) {
         if let Some(tx) = self.stdin.lock().unwrap().as_ref() {
             let _ = tx.send(line);
@@ -326,6 +346,11 @@ impl ClaudeAsk {
     /// Answer one question in the background: the user may take a while, and
     /// the turn keeps reading the CLI's output meanwhile.
     fn answer(self: &Arc<Self>, q: PermissionAsk) {
+        if self.refuse.load(Ordering::SeqCst) {
+            self.send(permission_deny(&q.request_id, "No tool call may be approved outside a turn."));
+            return;
+        }
+        let turn = self.turn.load(Ordering::SeqCst);
         if q.request_id.is_empty() || !self.open_ids.lock().unwrap().insert(q.request_id.clone()) {
             // No id, or one already open: the answer could not be told apart.
             self.send(permission_deny(&q.request_id, "The user did not allow this tool call."));
@@ -336,6 +361,8 @@ impl ClaudeAsk {
         tokio::spawn(async move {
             let allow = me.approvals.decide(&q.request_id, &q.tool_name, &q.input).await;
             me.open_ids.lock().unwrap().remove(&q.request_id);
+            // The turn this was asked in is over: whatever was clicked, it is a refusal.
+            let allow = allow && me.turn.load(Ordering::SeqCst) == turn && !me.refuse.load(Ordering::SeqCst);
             me.send(if allow {
                 permission_allow(&q.request_id, &q.input)
             } else {
@@ -434,7 +461,7 @@ impl ClaudeSession {
         };
 
         let ask = cfg.approvals.clone().filter(|a| a.can_ask && cfg.sources.is_some()).map(|approvals| {
-            Arc::new(ClaudeAsk { approvals, stdin: Mutex::new(Some(stdin_tx.clone())), open: AtomicUsize::new(0), open_ids: Mutex::default() })
+            Arc::new(ClaudeAsk { approvals, stdin: Mutex::new(Some(stdin_tx.clone())), open: AtomicUsize::new(0), open_ids: Mutex::default(), turn: std::sync::atomic::AtomicU64::new(0), refuse: AtomicBool::new(true) })
         });
         let session = ClaudeSession {
             model: cfg.model,
@@ -694,6 +721,9 @@ impl ClaudeSession {
         if !self.is_alive() {
             return Err(AgentError::Crashed(self.shared.crash_reason()));
         }
+        if let Some(ask) = &self.ask {
+            ask.begin_turn();
+        }
         self.send_line(user_message_with_images(text, query, images))?;
         let (tx, rx) = mpsc::unbounded_channel();
         tokio::spawn(drive_turn(guard, tx, self.shared.clone(), self.timeouts, self.ask.clone()));
@@ -812,6 +842,10 @@ async fn drive_turn(
             }
         }
     };
+    // The turn is over, however it ended: nothing stays open, nothing new is asked.
+    if let Some(ask) = &ask {
+        ask.end_turn();
+    }
     let _ = tx.send(TurnMsg::Done(outcome));
 }
 
@@ -1209,7 +1243,10 @@ mod tests {
                 stdin: Mutex::new(Some(tx)),
                 open: AtomicUsize::new(0),
                 open_ids: Mutex::default(),
+                turn: std::sync::atomic::AtomicU64::new(0),
+                refuse: AtomicBool::new(true),
             });
+            ask.begin_turn(); // the tests run inside a turn unless they say otherwise
             (ask, rx, broker, ids)
         }
 
@@ -1306,6 +1343,33 @@ mod tests {
             }
             assert!(ids.lock().unwrap().is_empty(), "nobody was asked");
             assert_eq!(ask.open.load(Ordering::SeqCst), 0);
+        }
+
+        #[tokio::test]
+        async fn outside_a_turn_nothing_is_asked_and_a_turn_that_ended_voids_its_open_question() {
+            let (ask, rx, broker, ids) = harness();
+            ask.end_turn();
+            ask.answer(question("o1", "mcp__mira__send_mail", json!({})));
+            assert_eq!(line(&rx).await["response"]["response"]["behavior"], "deny", "no turn: refused at once");
+            ask.answer(question("o2", "mcp__mira__kb_search", json!({})));
+            assert_eq!(line(&rx).await["response"]["response"]["behavior"], "deny", "even a read-only tool");
+            assert!(ids.lock().unwrap().is_empty());
+
+            // A question open when its turn ends: refused, and the late click does nothing.
+            ask.begin_turn();
+            ask.answer(question("t1", "mcp__mira__send_mail", json!({})));
+            for _ in 0..200 {
+                if !ids.lock().unwrap().is_empty() { break; }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            let id = ids.lock().unwrap()[0].clone();
+            ask.end_turn();
+            assert_eq!(line(&rx).await["response"]["response"]["behavior"], "deny");
+            assert!(!broker.answer(&id, true));
+            // The next turn is a clean start.
+            ask.begin_turn();
+            ask.answer(question("t2", "mcp__mira__kb_search", json!({})));
+            assert_eq!(line(&rx).await["response"]["response"]["behavior"], "allow");
         }
 
         #[tokio::test]

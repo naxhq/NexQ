@@ -58,33 +58,100 @@ fn write_like_names() {
     }
 }
 
+/// A folder tree in the temp dir: `<root>/scope`, `<root>/scope2`, `<root>/outside`.
+fn tree(name: &str) -> PathBuf {
+    let root = std::env::temp_dir().join(format!("nexq-approval-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    for d in ["scope/sub", "scope2", "outside"] {
+        std::fs::create_dir_all(root.join(d)).unwrap();
+    }
+    std::fs::write(root.join("scope/m1.txt"), "t").unwrap();
+    std::fs::write(root.join("scope/sub/m2.txt"), "t").unwrap();
+    std::fs::write(root.join("scope2/x.txt"), "t").unwrap();
+    std::fs::write(root.join("outside/secret.txt"), "t").unwrap();
+    root
+}
+
+/// A directory junction (no privilege needed on Windows); `false` when it cannot be made.
+fn junction(link: &Path, target: &Path) -> bool {
+    std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 #[test]
 fn built_in_reads_are_confined_to_the_scope_folders_and_everything_else_is_denied() {
-    let dirs = vec![PathBuf::from("D:\\NexQ\\chat-transcripts\\1-abc")];
+    let root = tree("builtin");
+    let scope = root.join("scope");
+    let dirs = vec![scope.clone()];
     let v = |tool: &str, input: Value| builtin_verdict(tool, &input, &dirs);
-    assert_eq!(v("Read", json!({"file_path": "D:\\NexQ\\chat-transcripts\\1-abc\\m1.txt"})), ToolVerdict::Allow);
-    assert_eq!(v("Read", json!({"file_path": "d:/nexq/CHAT-TRANSCRIPTS/1-abc/sub/m1.txt"})), ToolVerdict::Allow, "separators and case");
-    assert_eq!(v("Grep", json!({"pattern": "x", "path": "D:\\NexQ\\chat-transcripts\\1-abc"})), ToolVerdict::Allow);
-    assert_eq!(v("Glob", json!({"pattern": "*.txt", "path": "D:\\NexQ\\chat-transcripts\\1-abc"})), ToolVerdict::Allow);
-    for bad in [
-        "D:\\NexQ\\chat-transcripts\\1-abc\\..\\other\\a.txt",
-        "D:\\NexQ\\chat-transcripts\\1-abcd\\a.txt",
-        "D:\\Users\\me\\.ssh\\id_rsa",
-        "C:\\Windows\\win.ini",
-        "relative\\a.txt",
-        "..\\a.txt",
-        "",
-    ] {
-        assert!(matches!(v("Read", json!({"file_path": bad})), ToolVerdict::Deny(_)), "{bad}");
+    let p = |rel: &str| root.join(rel).to_string_lossy().into_owned();
+    assert_eq!(v("Read", json!({"file_path": p("scope/m1.txt")})), ToolVerdict::Allow);
+    assert_eq!(v("Read", json!({"file_path": p("scope/sub/m2.txt")})), ToolVerdict::Allow);
+    assert_eq!(v("Read", json!({"file_path": p("scope/not-yet.txt")})), ToolVerdict::Allow, "resolved through its folder");
+    assert_eq!(v("Read", json!({"file_path": p("scope/sub/new/deep.txt")})), ToolVerdict::Allow);
+    assert_eq!(v("Grep", json!({"pattern": "x", "path": p("scope")})), ToolVerdict::Allow);
+    assert_eq!(v("Glob", json!({"pattern": "*.txt", "path": p("scope/sub")})), ToolVerdict::Allow);
+    // The same file spelled with other separators and case (Windows is case-insensitive).
+    if cfg!(windows) {
+        let odd = p("scope/m1.txt").to_uppercase().replace('\\', "/");
+        assert_eq!(v("Read", json!({"file_path": odd})), ToolVerdict::Allow);
     }
-    // No path (Grep/Glob would use the cwd), or a pattern that climbs out.
+    for bad in [
+        p("scope/../outside/secret.txt"),          // climbs out
+        p("scope2/x.txt"),                         // a sibling that shares the prefix
+        p("outside/secret.txt"),
+        root.parent().unwrap().join("nexq-approval-nowhere/a.txt").to_string_lossy().into_owned(),
+        "relative\\a.txt".into(),
+        "..\\a.txt".into(),
+        "\\rooted-without-drive.txt".into(),
+        "".into(),
+    ] {
+        assert!(matches!(v("Read", json!({"file_path": bad.clone()})), ToolVerdict::Deny(_)), "{bad}");
+    }
+    // No path (Grep/Glob would use the cwd), or a pattern that climbs out or names its own root.
     assert!(matches!(v("Grep", json!({"pattern": "x"})), ToolVerdict::Deny(_)));
-    assert!(matches!(v("Glob", json!({"pattern": "../*", "path": "D:\\NexQ\\chat-transcripts\\1-abc"})), ToolVerdict::Deny(_)));
-    assert!(matches!(v("Glob", json!({"pattern": "C:\\*", "path": "D:\\NexQ\\chat-transcripts\\1-abc"})), ToolVerdict::Deny(_)));
+    assert!(matches!(v("Glob", json!({"pattern": "../*", "path": p("scope")})), ToolVerdict::Deny(_)));
+    assert!(matches!(v("Glob", json!({"pattern": "C:\\*", "path": p("scope")})), ToolVerdict::Deny(_)));
+    assert!(matches!(v("Glob", json!({"pattern": "/etc/*", "path": p("scope")})), ToolVerdict::Deny(_)));
     // Shell, edit, web and everything unknown: never.
     for t in ["Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch", "Task", "PowerShell", "Anything"] {
-        assert!(matches!(v(t, json!({"file_path": "D:\\NexQ\\chat-transcripts\\1-abc\\a", "command": "dir"})), ToolVerdict::Deny(_)), "{t}");
+        assert!(matches!(v(t, json!({"file_path": p("scope/m1.txt"), "command": "dir"})), ToolVerdict::Deny(_)), "{t}");
     }
+    // A scope folder that does not exist confines nothing: everything is denied.
+    let missing = vec![root.join("gone")];
+    assert!(matches!(builtin_verdict("Read", &json!({"file_path": p("scope/m1.txt")}), &missing), ToolVerdict::Deny(_)));
+    assert!(matches!(builtin_verdict("Read", &json!({"file_path": p("scope/m1.txt")}), &[]), ToolVerdict::Deny(_)));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_junction_or_link_that_leads_out_of_the_scope_does_not_count_as_inside() {
+    let root = tree("link");
+    let scope = root.join("scope");
+    if !junction(&scope.join("exit"), &root.join("outside")) {
+        eprintln!("(no junction support here: skipped)");
+        let _ = std::fs::remove_dir_all(&root);
+        return;
+    }
+    let dirs = vec![scope.clone()];
+    let via = scope.join("exit").join("secret.txt").to_string_lossy().into_owned();
+    assert!(matches!(builtin_verdict("Read", &json!({"file_path": via}), &dirs), ToolVerdict::Deny(_)), "through the junction");
+    let new_via = scope.join("exit").join("new.txt").to_string_lossy().into_owned();
+    assert!(matches!(builtin_verdict("Read", &json!({"file_path": new_via}), &dirs), ToolVerdict::Deny(_)), "a new file beyond it");
+    let root_via = scope.join("exit").to_string_lossy().into_owned();
+    assert!(matches!(builtin_verdict("Grep", &json!({"pattern": "x", "path": root_via}), &dirs), ToolVerdict::Deny(_)));
+    // And a scope folder that is itself a junction is judged by where it really is.
+    let inside_link = vec![scope.join("exit")];
+    let real = root.join("outside").join("secret.txt").to_string_lossy().into_owned();
+    assert_eq!(builtin_verdict("Read", &json!({"file_path": real}), &inside_link), ToolVerdict::Allow);
+    // Remove the junction itself (not its target) before the tree.
+    let _ = std::fs::remove_dir(scope.join("exit"));
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
@@ -105,10 +172,13 @@ fn the_policy_decides_by_the_agents_tool_name() {
     assert!(matches!(v("mcp__other__kb_search"), ToolVerdict::Deny(_)));
     assert_eq!(v("mcp_a_b_x"), ToolVerdict::Allow, "the other spelling of a name");
     assert!(matches!(v("Bash"), ToolVerdict::Deny(_)));
+    let real = tree("policy");
+    let with_scope = ApprovalPolicy { scope_dirs: vec![real.join("scope")], ..policy.clone() };
     assert_eq!(
-        policy.verdict_for_name("Read", &json!({"file_path": "D:\\scope\\a.txt"})),
+        with_scope.verdict_for_name("Read", &json!({"file_path": real.join("scope/m1.txt").to_string_lossy()})),
         ToolVerdict::Allow
     );
+    let _ = std::fs::remove_dir_all(&real);
     assert_eq!(policy.auto_run_tools(), vec!["mcp__a_b__x", "mcp__mira__kb_search"]);
     assert_eq!(policy.ask_tools(), vec!["mcp__mira__note", "mcp__mira__send_mail"]);
 }
@@ -378,11 +448,8 @@ async fn a_chat_approval_allows_denies_or_asks_by_the_policy_and_returns_the_exa
 
 mod fail_closed {
     use super::*;
-    use crate::llm::cli_agent::acp::permission::{
-        decide as acp_decide, hold_kind, parse_request, HoldKind, McpToolRule, Outcome, PermissionPolicy,
-    };
-    use crate::llm::cli_agent::codex::policy::{decide as codex_decide, CodexPolicy, Verdict};
-    use crate::llm::cli_agent::codex::protocol::{tool_params, ServerRequest};
+    use crate::llm::cli_agent::acp::permission::parse_request;
+    use crate::llm::cli_agent::codex::protocol::ServerRequest;
 
     /// One chat: `kb_search` runs, `send_mail` asks, `off` is not allowed.
     fn chat() -> ApprovalPolicy {
@@ -390,20 +457,6 @@ mod fail_closed {
             &[server("mira", &[("kb_search", true, Some(true), None), ("send_mail", true, None, None), ("off", false, Some(true), None)])],
             vec![PathBuf::from("D:\\scope")],
         )
-    }
-
-    fn codex() -> CodexPolicy {
-        let mut p = CodexPolicy::default();
-        for t in ["mcp__mira__kb_search", "mcp__mira__send_mail"] {
-            p.allowed_tools.insert(t.into());
-        }
-        p.ask_tools.insert("mcp__mira__send_mail".into());
-        p
-    }
-
-    fn acp() -> PermissionPolicy {
-        PermissionPolicy::new(vec![McpToolRule::tool("mira", "kb_search"), McpToolRule::tool("mira", "send_mail")], vec![])
-            .with_ask(vec![McpToolRule::tool("mira", "send_mail")])
     }
 
     fn elicitation(server: &str, message: &str, meta: Value) -> ServerRequest {
@@ -437,178 +490,50 @@ mod fail_closed {
         }
     }
 
-    #[test]
-    fn codex_requests_that_are_malformed_aliased_or_mixed_up_are_never_allowed_unasked() {
-        let p = codex();
-        let kind = json!({"codex_approval_kind": "mcp_tool_call"});
-        let with = |extra: Value| {
-            let mut m = kind.clone();
-            for (k, v) in extra.as_object().unwrap() {
-                m[k] = v.clone();
-            }
-            m
+    /// A chat on Codex or Antigravity never asks: the launch removes every tool
+    /// that would, so these CLIs' own rules (unchanged) see only auto-run tools.
+    fn only_auto_run(kind: CliAgentKind) -> SourcesLaunch {
+        let src = SourcesLaunch {
+            allowed_tools: vec!["mcp__mira__kb_search".into(), "mcp__mira__send_mail".into(), "mcp__mira__note".into()],
+            ..Default::default()
         };
-        let msg = |tool: &str| format!("Allow the mira MCP server to run tool \"{tool}\"?");
-        // Must come out as Deny (or at most Ask for the one tool that asks): never Allow.
-        let cases: Vec<(ServerRequest, bool)> = vec![
-            (elicitation("mira", &msg("send_mail"), json!({})), false),                              // no approval kind
-            (elicitation("mira", &msg("send_mail"), json!({"codex_approval_kind": "other"})), false),  // another kind
-            (elicitation("mira", &msg("send_mail"), json!(null)), false),                            // unparsable _meta
-            (elicitation("", &msg("send_mail"), kind.clone()), false),                               // no server
-            (elicitation("Mira", &msg("send_mail"), kind.clone()), false),                           // server alias by case
-            (elicitation("mira-label", &msg("send_mail"), kind.clone()), false),                     // a label, not the key
-            (elicitation("mira", &msg("Send_Mail"), kind.clone()), false),                           // tool by case
-            (elicitation("mira", &msg("send_mail "), kind.clone()), false),                          // padded
-            (elicitation("mira", &msg("renamed_mail"), kind.clone()), false),                        // renamed since listing
-            (elicitation("mira", "", kind.clone()), false),                                          // names nothing
-            (elicitation("mira", "Allow it?", with(json!({"tool_name": 7}))), false),                // wrong type
-            (elicitation("mira", &msg("off"), kind.clone()), false),                                 // not allowed
-            (elicitation("other", &msg("kb_search"), kind.clone()), false),                          // other server's tool
-        ];
-        for (req, _) in &cases {
-            assert!(matches!(codex_decide(req, &p), Verdict::Deny(_)), "{req:?}");
-        }
-        // Two names in one request (title says the safe one, message the one that asks): it asks.
-        let mixed = elicitation("mira", &msg("send_mail"), with(json!({"tool_title": "kb_search"})));
-        assert_eq!(codex_decide(&mixed, &p), Verdict::Ask { tool: "send_mail".into() });
-        // Held requests need visible arguments, and a duplicate id is just asked again, never allowed.
-        assert_eq!(tool_params(&json!({"codex_approval_kind": "mcp_tool_call"})), None);
-        // Everything that is not an MCP tool call is refused outright.
-        for other in [
-            ServerRequest::UserInput,
-            ServerRequest::DynamicToolCall,
-            ServerRequest::PermissionsApproval,
-            ServerRequest::AuthTokensRefresh,
-            ServerRequest::Unknown { method: "x".into() },
-        ] {
-            assert!(matches!(codex_decide(&other, &p), Verdict::Deny(_)), "{other:?}");
-        }
+        let approvals = ChatApprovals { can_ask: true, chat_id: "c".into(), broker: Arc::new(WorkspaceApprovals::new()), policy: Arc::new(chat()) };
+        launch_sources(kind, Some(&src), Some(&approvals)).unwrap()
     }
 
     #[test]
-    fn acp_requests_for_a_tool_that_asks_are_never_allowed_by_the_static_rules() {
-        let (static_rules, chat) = (acp(), chat());
-        // The ask tool, with and without a call id, in every spelling the policy knows.
-        for name in ["mcp_mira_send_mail", "mcp__mira__send_mail", "mira__send_mail"] {
-            let with_id = acp_request("c1", name);
-            assert_eq!(hold_kind(&static_rules, &chat, &with_id), HoldKind::Held { server: "mira".into(), tool: "send_mail".into() });
-            // Whatever hold_kind says, the static decision is a rejection.
-            for call_id in ["c1", ""] {
-                let r = acp_request(call_id, name);
-                assert_eq!(acp_decide(&r, &static_rules), Outcome::Selected("no".into()), "{name} id={call_id:?}");
-            }
-            assert_eq!(hold_kind(&static_rules, &chat, &acp_request("", name)), HoldKind::Refuse, "no call id: refused at once");
+    fn codex_and_antigravity_chats_get_no_tool_that_would_ask() {
+        for kind in [CliAgentKind::Codex, CliAgentKind::Antigravity] {
+            let l = only_auto_run(kind);
+            assert_eq!(l.allowed_tools, vec!["mcp__mira__kb_search"], "{kind:?}");
+            assert!(l.disallowed_tools.contains(&"mcp__mira__send_mail".to_string()), "{kind:?}");
+            assert!(l.disallowed_tools.contains(&"mcp__mira__note".to_string()), "no hint: asks, so off");
+            assert!(matches!(approval_support(kind), ApprovalSupport::Unsupported(r) if r.contains("off")));
         }
-        // A tool the chat's own rules do not let ask is refused, never asked or allowed.
-        let off_chat = ApprovalPolicy::from_servers(&[server("mira", &[("send_mail", false, None, None)])], vec![]);
-        assert_eq!(hold_kind(&static_rules, &off_chat, &acp_request("c1", "mcp_mira_send_mail")), HoldKind::Refuse);
-        // Not ours: the read-only tool is the static rules' business, unknown ones are denied by them.
-        assert_eq!(hold_kind(&static_rules, &chat, &acp_request("c1", "mcp_mira_kb_search")), HoldKind::NotMine);
-        assert_eq!(acp_decide(&acp_request("c1", "mcp_mira_kb_search"), &static_rules), Outcome::Selected("yes".into()));
-        for name in ["", "mcp_mira_", "MCP_MIRA_SEND_MAIL", "mcp_mira_Send_Mail", "mcp_other_send_mail", "run_command", "mcp_mira_renamed"] {
-            assert_eq!(hold_kind(&static_rules, &chat, &acp_request("c1", name)), HoldKind::NotMine, "{name:?}");
-            assert_eq!(acp_decide(&acp_request("c1", name), &static_rules), Outcome::Selected("no".into()), "{name:?}");
-        }
-        // Malformed params: no options, no tool call at all.
-        for params in [json!({}), json!({"toolCall": null}), json!({"toolCall": {"toolCallId": "c"}}), json!(null), json!("x")] {
-            let r = parse_request(&params);
-            assert!(!acp_decide(&r, &static_rules).is_allow(&r), "{params}");
-        }
+        // Claude keeps the full list for its own launch (the asking tools are left out of
+        // --allowedTools by build_args and handed to the host).
+        assert_eq!(only_auto_run(CliAgentKind::Claude).allowed_tools.len(), 3);
     }
 
-// ---- redaction, per the threat model ----------------------------------------
-
-#[test]
-fn only_short_scalars_under_known_secret_names_are_hidden_and_the_marker_says_what_was_hidden() {
-    let long = "z".repeat(MAX_HIDDEN_CHARS + 1);
-    let args = json!({
-        "password": "hunter2",
-        "api_key": 12345,
-        "secret": true,
-        "token": {"inner": "visible", "refresh_token": "r"},
-        "credentials": ["a", "b"],
-        "authorization": long,
-        "title": "authorization: not a key name",
-    });
-    let shown = display_args(&args).unwrap();
-    assert!(shown.redacted);
-    assert!(shown.contains("[hidden: looks like a key, string, 7 chars]"), "{shown}");
-    assert!(shown.contains("[hidden: looks like a key, number]") && shown.contains("[hidden: looks like a key, boolean]"));
-    assert!(!shown.contains("hunter2") && !shown.contains("12345"));
-    // Containers under a secret-looking key are walked, not blanked; long text is shown.
-    assert!(shown.contains("\"inner\": \"visible\""));
-    assert!(shown.contains(&"z".repeat(MAX_HIDDEN_CHARS + 1)));
-    assert!(shown.contains("authorization: not a key name"), "values are never judged, only key names");
-    assert!(shown.contains("\"a\"") && shown.contains("\"b\""));
-    assert!(!display_args(&json!({"query": "x"})).unwrap().redacted);
-}
-
-#[test]
-fn control_and_formatting_characters_are_all_written_out() {
-    let nasty = "a\u{0007}b\u{0085}c\u{2028}d\u{2066}e\u{E0041}f\u{FE0F}g\u{3164}h\u{0}i";
-    let shown = display_args(&json!({"v": nasty})).unwrap();
-    assert!(shown.chars().all(|c| c == '\n' || c == ' ' || !c.is_control()), "{shown:?}");
-    for code in ["\\u{0085}", "\\u{2028}", "\\u{2066}", "\\u{E0041}", "\\u{FE0F}", "\\u{3164}"] {
-        assert!(shown.contains(code), "{code} in {shown:?}");
+    #[test]
+    fn codex_and_acp_rules_built_from_that_launch_deny_everything_else() {
+        use crate::llm::cli_agent::acp::permission::{decide as acp_decide, McpToolRule, PermissionPolicy};
+        use crate::llm::cli_agent::codex::policy::{decide as codex_decide, CodexPolicy, Verdict};
+        let mut codex = CodexPolicy::default();
+        codex.allowed_tools.insert("mcp__mira__kb_search".into());
+        let kind = json!({"codex_approval_kind": "mcp_tool_call"});
+        let msg = |t: &str| format!("Allow the mira MCP server to run tool \"{t}\"?");
+        for tool in ["send_mail", "note", "off", "Send_Mail", "kb_search ", ""] {
+            assert!(matches!(codex_decide(&elicitation("mira", &msg(tool), kind.clone()), &codex), Verdict::Deny(_)), "{tool:?}");
+        }
+        assert!(matches!(codex_decide(&elicitation("mira", &msg("kb_search"), kind.clone()), &codex), Verdict::Allow));
+        let acp = PermissionPolicy::new(vec![McpToolRule::tool("mira", "kb_search")], vec![]);
+        let req = |name: &str| acp_request("c1", name);
+        for name in ["mcp_mira_send_mail", "mcp_mira_note", "MCP_MIRA_KB_SEARCH", "", "run_command"] {
+            let r = req(name);
+            assert!(!acp_decide(&r, &acp).is_allow(&r), "{name:?}");
+        }
+        let r = req("mcp_mira_kb_search");
+        assert!(acp_decide(&r, &acp).is_allow(&r));
     }
-    assert!(shown.contains("a") && shown.contains("i"));
-}
-
-#[tokio::test]
-async fn the_question_event_says_when_something_was_redacted() {
-    let (b, seen) = broker(Duration::from_secs(5));
-    let t = tokio::spawn({ let b = b.clone(); async move { b.ask(request("c1", "r1")).await } });
-    let ev = first_question(&seen).await;
-    assert!(ev.redacted && !ev.truncated);
-    b.answer(&ev.approval_id, false);
-    assert!(!t.await.unwrap());
-}
-
-// ---- launch enforcement ------------------------------------------------------
-
-#[test]
-fn a_chat_that_cannot_ask_never_launches_with_a_tool_that_would() {
-    use crate::llm::cli_agent::command::{build_args, SessionConfig};
-    let policy = ApprovalPolicy::from_servers(
-        &[server("m", &[("kb_search", true, Some(true), None), ("send_mail", true, None, None)])],
-        vec![],
-    );
-    let src = SourcesLaunch {
-        add_dirs: vec!["C:\\t".into()],
-        allowed_tools: vec!["mcp__m__kb_search".into(), "mcp__m__send_mail".into()],
-        ..Default::default()
-    };
-    let approvals = |can_ask| ChatApprovals {
-        can_ask,
-        chat_id: "c".into(),
-        broker: Arc::new(WorkspaceApprovals::new()),
-        policy: Arc::new(policy.clone()),
-    };
-    // The shared launch helper: what Claude, Codex and Antigravity all go through.
-    let off = launch_sources(Some(&src), Some(&approvals(false))).unwrap();
-    assert_eq!(off.allowed_tools, vec!["mcp__m__kb_search"]);
-    assert_eq!(off.disallowed_tools, vec!["mcp__m__send_mail"]);
-    assert_eq!(launch_sources(Some(&src), Some(&approvals(true))).unwrap(), src, "able to ask: unchanged");
-    assert_eq!(launch_sources(Some(&src), None).unwrap(), src, "no approvals: unchanged");
-    assert!(launch_sources(None, Some(&approvals(false))).is_none());
-    // Claude's own args, with no help from the caller.
-    let cfg = SessionConfig {
-        kind: CliAgentKind::Claude,
-        model: "m".into(),
-        effort: None,
-        system_prompt: String::new(),
-        thinking: false,
-        sources: Some(src.clone()),
-        approvals: Some(approvals(false)),
-    };
-    let args = build_args(&cfg, Path::new("sp.txt"), None);
-    let at = args.iter().position(|a| a == "--disallowedTools").expect("disallowed");
-    assert!(args[at + 1..].contains(&"mcp__m__send_mail".to_string()));
-    assert!(!args.iter().any(|a| a == "host"), "no host prompts when it cannot ask");
-    // Codex and Antigravity launches.
-    let codex = crate::llm::cli_agent::spawner::codex_launch(PathBuf::from("codex"), vec![], &cfg);
-    assert!(!codex.policy.allowed_tools.contains("mcp__m__send_mail") && codex.ask.is_none());
-    let agy = crate::llm::cli_agent::spawner::antigravity_launch(PathBuf::from("agy"), &cfg);
-    assert!(agy.ask.is_none());
-}
 }

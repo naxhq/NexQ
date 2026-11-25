@@ -257,6 +257,7 @@ fn tools_page_hinted(
 }
 
 /// [`tools_page_hinted`] without the hints.
+#[cfg(test)]
 fn tools_page(result: &Value, key: &str) -> Result<(Vec<String>, Option<String>), HandshakeError> {
     tools_page_hinted(result, key).map(|(names, _, next)| (names, next))
 }
