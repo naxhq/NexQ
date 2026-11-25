@@ -24,15 +24,17 @@ export function recoveryText(items: StoreRecovery[]): { title: string; lines: st
   return { title: items.every((i) => i.restored) ? "Settings restored" : "Some settings were reset", lines };
 }
 
+// The backend gives the list out once, so it is asked for once per window.
+let found: Promise<StoreRecovery[]> | null = null;
+const findings = () => (found ??= takeStoreRecovery().then((f) => (Array.isArray(f) ? f : []), () => []));
+
 /** Stays until closed: it is about the user's own settings, and shown once. */
 export function StoreRecoveryNotice() {
   const [items, setItems] = useState<StoreRecovery[]>([]);
 
   useEffect(() => {
     let gone = false;
-    takeStoreRecovery()
-      .then((found) => !gone && setItems(found))
-      .catch(() => {});
+    void findings().then((f) => !gone && setItems(f));
     return () => {
       gone = true;
     };
@@ -57,7 +59,10 @@ export function StoreRecoveryNotice() {
           ))}
         </div>
         <button
-          onClick={() => setItems([])}
+          onClick={() => {
+            found = Promise.resolve([]);
+            setItems([]);
+          }}
           aria-label="Close"
           className="rounded p-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-2"
         >
