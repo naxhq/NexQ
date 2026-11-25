@@ -11,7 +11,7 @@ import {
 /** Injected by the integration agent (wired to the app config). */
 export interface LayoutStorage {
   /** Whatever was saved last, or null/undefined. May be garbage; it is sanitized. */
-  load(): unknown | Promise<unknown>;
+  load?(): unknown | Promise<unknown>;
   save(state: DockState): void | Promise<void>;
 }
 
@@ -57,8 +57,14 @@ export function createDebouncedSaver<T>(save: (v: T) => void | Promise<void>, ms
  * Dock state with persistence. `known` is the full list of panel ids the window hosts.
  * Loading sanitizes whatever was saved; saving is debounced and flushed on unmount/pagehide.
  */
-export function useDockState(known: PanelId[], storage?: LayoutStorage, debounceMs = 500) {
-  const [state, dispatch] = useReducer(dockReducer, known, (k) => initialDockState(k));
+export function useDockState(
+  known: PanelId[],
+  storage?: LayoutStorage,
+  debounceMs = 500,
+  /** A state known up front (already read from the config): no flash of the default layout. */
+  initial?: DockState,
+) {
+  const [state, dispatch] = useReducer(dockReducer, known, (k) => initial ?? initialDockState(k));
   const [ready, setReady] = useState(!storage);
   const loaded = useRef(!storage);
   const saver = useRef<DebouncedSaver<DockState> | null>(null);
@@ -91,8 +97,13 @@ export function useDockState(known: PanelId[], storage?: LayoutStorage, debounce
       setReady(true);
       return;
     }
+    if (!storage.load) {
+      loaded.current = true;
+      setReady(true);
+      return;
+    }
     Promise.resolve()
-      .then(() => storage.load())
+      .then(() => storage.load?.())
       .then(finish, () => finish(null));
     return () => {
       alive = false;

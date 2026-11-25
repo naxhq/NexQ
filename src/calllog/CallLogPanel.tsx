@@ -37,9 +37,20 @@ const FILTER_OPTIONS: Array<{ label: string; value: LogFilterKind }> = [
 
 // -- Main panel component ----------------------------------------------------
 
-export function CallLogPanel() {
-  const isOpen = useCallLogStore((s) => s.isOpen);
-  const setOpen = useCallLogStore((s) => s.setOpen);
+export function CallLogPanel({ embedded = false, onClose }: { embedded?: boolean; onClose?: () => void } = {}) {
+  // Embedded in the meeting window's dock: the dock decides when it is shown,
+  // sizes it and owns Escape; the panel always draws its content.
+  const storeOpen = useCallLogStore((s) => s.isOpen);
+  const isOpen = embedded || storeOpen;
+  const setStoreOpen = useCallLogStore((s) => s.setOpen);
+  const setOpen = useCallback(
+    (open: boolean) => {
+      if (embedded) {
+        if (!open) onClose?.();
+      } else setStoreOpen(open);
+    },
+    [embedded, onClose, setStoreOpen],
+  );
   const entries = useCallLogStore((s) => s.entries);
   const activeFilter = useCallLogStore((s) => s.activeFilter);
   const setFilter = useCallLogStore((s) => s.setFilter);
@@ -65,7 +76,7 @@ export function CallLogPanel() {
 
   // Close on Escape (skip if settings overlay is open)
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || embedded) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         if (useMeetingStore.getState().settingsOpen) return;
@@ -74,7 +85,7 @@ export function CallLogPanel() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [isOpen, setOpen]);
+  }, [isOpen, embedded, setOpen]);
 
   // Filter entries
   const filteredEntries = useMemo(() => {
@@ -143,12 +154,20 @@ export function CallLogPanel() {
 
   return (
     <div
-      className={`shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${
-        isOpen ? "w-[380px]" : "w-0"
-      }`}
+      className={
+        embedded
+          ? "h-full min-h-0 w-full overflow-hidden"
+          : `shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${isOpen ? "w-[380px]" : "w-0"}`
+      }
     >
       {isOpen && (
-        <div className="flex flex-col h-full w-[380px] border-l border-border/40 bg-card">
+        <div
+          className={
+            embedded
+              ? "flex h-full w-full flex-col"
+              : "flex flex-col h-full w-[380px] border-l border-border/40 bg-card"
+          }
+        >
           {/* ── Header ── */}
           <div className="border-b border-border/30 px-3 py-2.5 shrink-0">
             <div className="flex items-center justify-between">
@@ -223,7 +242,8 @@ export function CallLogPanel() {
                 <button
                   onClick={handleClose}
                   className="rounded p-1 text-muted-foreground/50 transition-colors hover:bg-accent hover:text-foreground"
-                  title="Close (Esc)"
+                  title={embedded ? "Close" : "Close (Esc)"}
+                  aria-label={embedded ? "Close AI call log" : undefined}
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>

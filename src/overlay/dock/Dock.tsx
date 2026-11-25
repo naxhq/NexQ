@@ -178,6 +178,29 @@ export function Dock({
   const geoRef = useRef(geo);
   geoRef.current = geo;
 
+  // A panel brought forward from outside (a key, a header button, the Ask box) must also
+  // be the one a compact, single-stack view shows.
+  const seen = useRef<{ active: Record<string, string>; strips: Record<string, boolean>; docked: Set<PanelId> } | null>(null);
+  useEffect(() => {
+    const stacks = leaves(layout.root);
+    const now = {
+      active: Object.fromEntries(stacks.map((s) => [s.id, s.active])),
+      strips: Object.fromEntries(stacks.map((s) => [s.id, s.collapsed])),
+      docked: new Set(panelsOf(layout.root)),
+    };
+    const prev = seen.current;
+    seen.current = now;
+    if (!prev) return;
+    let forward: PanelId | undefined;
+    for (const s of stacks) {
+      if (prev.active[s.id] !== undefined && (prev.active[s.id] !== s.active || (prev.strips[s.id] && !s.collapsed))) {
+        forward = s.active;
+      }
+    }
+    for (const p of now.docked) if (!prev.docked.has(p)) forward = p;
+    if (forward) setFocusPanel(forward);
+  }, [layout]);
+
   const title = useCallback((id: PanelId) => panels[id]?.title ?? id, [panels]);
   const known = allPanels(layout);
 
