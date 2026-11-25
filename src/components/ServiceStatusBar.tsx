@@ -2,7 +2,7 @@
 // Shows LLM, You STT, and Them STT with provider + model, lighting up when active.
 // During recording: STT chips are interactive (click to swap provider), with mute toggles.
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import {
   Brain, Mic, MicOff, Volume2, VolumeX, Zap, Cpu,
   ChevronUp, CheckCircle, Globe, Monitor, HardDrive, Cloud, ArrowUpCircle,
@@ -242,20 +242,47 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
     setPickerOpen(null);
   }, [meetingAudioConfig, setMeetingAudioConfig]);
 
-  // In a narrow meeting window the bar stays on one row: the models move to the tooltips and the
-  // mute buttons (the header has them too) and dividers go.
+  // The meeting footer is one row that can never overlap, whatever the names are. It starts with
+  // everything and gives up one thing at a time while the row overflows (measured, not by width):
+  // 1 model names, 2 the YOU / THEM words, 3 STT names (icon and dot only), 4 the LLM name is cut
+  // with an ellipsis. Every chip keeps its full name in a tooltip.
   const [barRef, bar] = useElementSize<HTMLDivElement>();
+  const elRef = useRef<HTMLDivElement | null>(null);
+  const setBar = useCallback(
+    (el: HTMLDivElement | null) => {
+      elRef.current = el;
+      barRef(el);
+    },
+    [barRef],
+  );
   const narrow = compact && bar.w > 0 && bar.w < 640;
-  // Below ~460 px the two STT chips and their language pickers cannot all fit with names: icon and dot only, name in the tooltip.
-  const tight = compact && bar.w > 0 && bar.w < 460;
+  const [level, setLevel] = useState(0);
+  const sig = [llmProviderLabel, llmModelLabel, youStt.provider, youStt.model, themStt.provider, themStt.model, isRecording, audioMode, bar.w].join("|");
+  const lastSig = useRef(sig);
+  useLayoutEffect(() => {
+    if (!compact) return;
+    if (lastSig.current !== sig) {
+      lastSig.current = sig;
+      if (level !== 0) {
+        setLevel(0);
+        return;
+      }
+    }
+    const el = elRef.current;
+    if (el && level < 4 && el.scrollWidth > el.clientWidth + 1) setLevel(level + 1);
+  });
+  const hideModel = compact && level >= 1;
+  const hideLabel = compact && level >= 2;
+  const iconOnly = compact && level >= 3;
+  const llmShrinks = compact && level >= 4;
 
   return (
     <div
-      ref={barRef}
-      className={`flex items-center ${narrow ? "flex-nowrap gap-1 overflow-hidden" : "flex-wrap gap-2.5"} ${narrow ? "px-2 py-2" : compact ? "px-3 py-2" : "px-5 py-2.5"}`}
+      ref={setBar}
+      className={`flex items-center ${compact ? "flex-nowrap gap-1 overflow-hidden" : "flex-wrap gap-2.5"} ${narrow ? "px-2 py-2" : compact ? "px-3 py-2" : "px-5 py-2.5"}`}
     >
       {/* LLM — always interactive */}
-      <div className="relative">
+      <div className={`relative ${compact ? (llmShrinks ? "min-w-0 shrink" : "shrink-0") : ""}`}>
         {isCliAgent(llmProvider) ? (
           <AgentStatusChip
             kind={llmProvider}
@@ -276,6 +303,7 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
             pickerOpen={pickerOpen === "llm"}
             onClick={() => setPickerOpen(pickerOpen === "llm" ? null : "llm")}
             tooltip={`LLM: ${llmProviderLabel} / ${llmModelLabel}`}
+            hideModel={hideModel}
           />
         )}
         {pickerOpen === "llm" && (
@@ -314,8 +342,9 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
               pickerOpen={pickerOpen === "them"}
               onClick={() => setPickerOpen(pickerOpen === "them" ? null : "them")}
               tooltip={`Room STT: ${themStt.provider}${themStt.model ? ` / ${themStt.model}` : ""}`}
-              hideModel={narrow}
-                iconOnly={tight}
+              hideModel={hideModel}
+                hideLabel={hideLabel}
+                iconOnly={iconOnly}
             />
             {pickerOpen === "them" && (
               <STTPickerDropdown
@@ -338,8 +367,8 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
       ) : (
         <>
           {/* Online mode: You STT — interactive during recording */}
-          <div className={`flex items-center gap-1 ${narrow ? "min-w-0 shrink" : ""}`}>
-            <div className={`relative ${narrow ? "min-w-0 shrink" : ""}`}>
+          <div className={`flex items-center gap-1 ${compact ? "shrink-0" : ""}`}>
+            <div className={`relative ${compact ? "shrink-0" : ""}`}>
               <STTChip
                 icon={<Mic className="h-3.5 w-3.5" />}
                 provider={youStt.provider}
@@ -352,8 +381,9 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
                 pickerOpen={pickerOpen === "you"}
                 onClick={() => setPickerOpen(pickerOpen === "you" ? null : "you")}
                 tooltip={`Your STT: ${youStt.provider}${youStt.model ? ` / ${youStt.model}` : ""}`}
-                hideModel={narrow}
-                iconOnly={tight}
+                hideModel={hideModel}
+                hideLabel={hideLabel}
+                iconOnly={iconOnly}
               />
               {pickerOpen === "you" && (
                 <STTPickerDropdown
@@ -375,8 +405,8 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
           {!narrow && <Divider />}
 
           {/* Online mode: Them STT — interactive during recording */}
-          <div className={`flex items-center gap-1 ${narrow ? "min-w-0 shrink" : ""}`}>
-            <div className={`relative ${narrow ? "min-w-0 shrink" : ""}`}>
+          <div className={`flex items-center gap-1 ${compact ? "shrink-0" : ""}`}>
+            <div className={`relative ${compact ? "shrink-0" : ""}`}>
               <STTChip
                 icon={<Volume2 className="h-3.5 w-3.5" />}
                 provider={themStt.provider}
@@ -389,8 +419,9 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
                 pickerOpen={pickerOpen === "them"}
                 onClick={() => setPickerOpen(pickerOpen === "them" ? null : "them")}
                 tooltip={`Their STT: ${themStt.provider}${themStt.model ? ` / ${themStt.model}` : ""}`}
-                hideModel={narrow}
-                iconOnly={tight}
+                hideModel={hideModel}
+                hideLabel={hideLabel}
+                iconOnly={iconOnly}
           />
           {pickerOpen === "them" && (
             <STTPickerDropdown
@@ -493,9 +524,11 @@ function STTChip({
   onClick,
   tooltip,
   hideModel = false,
+  hideLabel = false,
   iconOnly = false,
 }: {
   hideModel?: boolean;
+  hideLabel?: boolean;
   iconOnly?: boolean;
   icon: React.ReactNode;
   provider: string;
@@ -516,7 +549,7 @@ function STTChip({
     <Root
       {...(interactive ? { type: "button" as const, "aria-haspopup": "dialog" as const, "aria-expanded": pickerOpen } : {})}
       aria-label={tooltip}
-      className={`flex min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-left transition-all duration-200 ui-focus ${hideModel ? "overflow-hidden" : ""} ${
+      className={`flex min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-left transition-all duration-200 ui-focus ${hideModel || iconOnly ? "overflow-hidden" : ""} ${
         muted
           ? "bg-destructive/5 border border-destructive/10"
           : active
@@ -544,7 +577,7 @@ function STTChip({
 
       {/* Text */}
       <span className={`flex items-center gap-1 min-w-0 ${iconOnly ? "hidden" : ""}`}>
-        {label && !hideModel && (
+        {label && !hideLabel && (
           <span className={`shrink-0 text-meta font-semibold uppercase tracking-wide transition-colors duration-200 ${
             muted ? "text-destructive/50" : active ? c.active : "text-muted-foreground/60"
           }`}>
@@ -566,7 +599,7 @@ function STTChip({
       </span>
 
       {/* Chevron — visible only when interactive */}
-      {interactive && !hideModel && (
+      {interactive && !iconOnly && (
         <ChevronUp className={`h-2.5 w-2.5 shrink-0 transition-all duration-200 ${
           pickerOpen ? "text-foreground/60 rotate-0" : "text-muted-foreground/50 rotate-180"
         }`} />

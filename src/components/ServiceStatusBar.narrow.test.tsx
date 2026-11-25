@@ -19,9 +19,22 @@ const config: MeetingAudioConfig = {
   preset_name: null,
 };
 
-/** The bar's width is read from clientWidth, which jsdom leaves at 0. */
-function barWidth(px: number) {
+/**
+ * jsdom has no layout, so a row "overflows" here while any name is still shown: that drives the
+ * bar through its steps (model, YOU/THEM, STT names) the way a too-narrow window does.
+ */
+function narrowBar(px: number) {
   Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => px });
+  Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      if (!String(this.className).includes("flex-nowrap")) return px;
+      const shown = [...this.querySelectorAll("span")].some(
+        (e) => e.children.length === 0 && /Deepgram|Azure MAI|MAI-Transcribe|^You$|^Them$/.test(e.textContent ?? "") && !e.closest(".hidden"),
+      );
+      return shown ? px + 200 : px;
+    },
+  });
 }
 
 describe("the meeting footer in a narrow window", () => {
@@ -31,21 +44,24 @@ describe("the meeting footer in a narrow window", () => {
   });
   afterEach(() => {
     cleanup();
-    // @ts-expect-error restore jsdom's own getter
+    // @ts-expect-error restore jsdom's own getters
     delete HTMLElement.prototype.clientWidth;
+    // @ts-expect-error restore jsdom's own getters
+    delete HTMLElement.prototype.scrollWidth;
   });
 
   it("at 420 px keeps names in the tooltip and has no native title (Windows would draw it in a screen share)", () => {
-    barWidth(420);
+    narrowBar(420);
     const { container } = render(<ServiceStatusBar compact />);
     expect(container.querySelectorAll("[title]")).toHaveLength(0);
     // icon and dot only: the provider name is not in the layout, the button still has its full name
     expect(screen.getByText("Deepgram").closest(".hidden")).not.toBeNull();
+    expect(screen.queryByText(/^You$/)).toBeNull();
     expect(screen.getByRole("button", { name: /^Your STT: Azure MAI Streaming/ })).toBeInTheDocument();
   });
 
-  it("at 500 px a long model name is not shown beside the chip and nothing carries a native title", () => {
-    barWidth(500);
+  it("whatever the names, the row gives up model names first and nothing carries a native title", () => {
+    narrowBar(500);
     const { container } = render(<ServiceStatusBar compact />);
     expect(container.querySelectorAll("[title]")).toHaveLength(0);
     expect(screen.queryByText("MAI-Transcribe-2-Streaming")).toBeNull();
