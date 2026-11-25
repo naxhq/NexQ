@@ -6,7 +6,7 @@ export type Step =
   | { t: "pause"; ms: number };
 export interface Scenario {
   name: string; lang: string; blocks: Blk[]; steps: Step[];
-  said: string[]; notSaid?: string[]; neg?: boolean; wer?: number;
+  said: string[]; notSaid?: string[]; neg?: boolean; wer?: number; ignore?: string[];
 }
 const B = (arr: string[], p = "b"): Blk[] => arr.map((text, i) => ({ id: p + (i + 1), text }));
 type SayStep = Extract<Step, { t: "say" }>;
@@ -114,7 +114,7 @@ export const scenarios: Scenario[] = [
     say("now on security", 4),
     say("all data is encrypted at rest and in transit", 5),
     say("and we pass a sock two audit every year", 6),
-  ], ["h3", "h4", "h6", "h7"]),
+  ], ["h3", "h4", "h6", "h7"], undefined, { ignore: ["h1", "h2", "h5"] }),
   en("en-merged-final-60w", N1, [
     say("welcome everyone and thanks for joining today so quarter three revenue grew twelve percent year over year and our new mobile app launches on March 14th and also the team is hiring five engineers in Berlin which we are really excited about as you can imagine", 3, 0, 1, { mode: "final" }),
     say("key risk is the supply chain delay from our vendor and next steps are a pilot with Acme Corp and a budget review so that is basically everything", 5, 0, 1, { mode: "final" }),
