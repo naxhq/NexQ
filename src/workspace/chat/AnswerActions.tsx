@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { BookmarkPlus, Check, Copy, ListPlus, RefreshCw } from "lucide-react";
-import { ConfirmDialog, Dialog, buttonClass } from "../../ui";
+import { Dialog, buttonClass } from "../../ui";
 import { saveAnswerToLibrary } from "../../lib/ipc";
 import type { WorkspaceMessage } from "../../lib/types";
 import { showToast } from "../../stores/toastStore";
@@ -158,33 +158,94 @@ function SaveDialog({ messageId, initial, onClose }: { messageId: number; initia
   );
 }
 
+export const INSTRUCTION_CAP = 4000;
+
+/**
+ * An answer as plain instruction text: no HTML, no link or image targets or titles, no reference
+ * definitions, no hidden characters, no [S1] tags. What this returns is what the user then sees
+ * and may edit, and it is stored exactly as shown.
+ */
+export function plainInstructionText(markdown: string): string {
+  return plainAnswer(markdown)
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<\/?[a-zA-Z][^>]*>/g, "")
+    .replace(/^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*\S.*$/gm, "")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\[[^\]]*\]/g, "$1")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF9-\uFFFB]/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+    .slice(0, INSTRUCTION_CAP);
+}
+
 function AddToInstructions({ open, workspaceId, text, onClose }: { open: boolean; workspaceId: string; text: string; onClose: () => void }) {
+  if (!open) return null;
+  return <AddToInstructionsDialog workspaceId={workspaceId} initial={plainInstructionText(text)} onClose={onClose} />;
+}
+
+function AddToInstructionsDialog({ workspaceId, initial, onClose }: { workspaceId: string; initial: string; onClose: () => void }) {
+  const [text, setText] = useState(initial);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const field = useRef<HTMLTextAreaElement | null>(null);
   const confirm = async () => {
+    if (!text.trim() || busy) return;
     setBusy(true);
+    setError(null);
     try {
       const store = useWorkspaceStore.getState();
       const detail = (await store.loadDetail(workspaceId)) ?? store.details[workspaceId];
-      const current = detail?.instructions?.trim() ?? "";
+      const current = detail?.instructions?.trimEnd() ?? "";
+      // Exactly what is in the box, after what is already there.
       await store.update(workspaceId, { instructions: current ? `${current}\n\n${text}` : text });
       showToast("Added to the instructions.", "success");
       onClose();
     } catch (e) {
-      showToast(`Couldn't change the instructions: ${e instanceof Error ? e.message : String(e)}`, "error");
-    } finally {
+      setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
     }
   };
   return (
-    <ConfirmDialog
-      open={open}
-      title="Add this answer to the instructions?"
-      body="It is sent with every question in this workspace, so keep it short and true. You can edit it in the workspace settings."
-      confirmLabel={busy ? "Adding" : "Add to instructions"}
-      onConfirm={() => void confirm()}
-      onCancel={onClose}
+    <Dialog
+      open
+      onClose={onClose}
+      title="Add this to the instructions?"
+      description="These words become instructions the AI follows in every question of this workspace. Edit them, and keep only what you want it to obey."
+      size="lg"
+      initialFocusRef={field}
+      dismissible={!busy}
+      footer={
+        <>
+          <button type="button" onClick={onClose} disabled={busy} className={cn(buttonClass.base, buttonClass.quiet)}>
+            Cancel
+          </button>
+          <button type="button" onClick={() => void confirm()} disabled={busy || !text.trim()} className={cn(buttonClass.base, buttonClass.primary)}>
+            {busy ? "Adding" : "Add to instructions"}
+          </button>
+        </>
+      }
     >
-      <p className="ui-meta line-clamp-6 whitespace-pre-wrap rounded-md bg-muted/60 px-2.5 py-2 text-foreground/90">{text}</p>
-    </ConfirmDialog>
+      <label htmlFor="ws-add-instr" className="ui-section mb-1.5 block text-foreground">
+        Text to add
+      </label>
+      <textarea
+        id="ws-add-instr"
+        ref={field}
+        value={text}
+        maxLength={INSTRUCTION_CAP}
+        rows={10}
+        onChange={(e) => setText(e.target.value)}
+        className="ui-body max-h-[50vh] w-full resize-y overflow-y-auto rounded-lg border border-input bg-background px-3 py-2 text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+      />
+      <p className="ui-meta mt-1 text-right tabular-nums text-muted-foreground">
+        {text.length.toLocaleString()} of {INSTRUCTION_CAP.toLocaleString()} characters. Plain text only: links, images and HTML were removed.
+      </p>
+      {error && (
+        <p role="alert" className="ui-body mt-2 text-destructive">
+          Couldn't change the instructions: {error}
+        </p>
+      )}
+    </Dialog>
   );
 }

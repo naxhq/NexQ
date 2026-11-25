@@ -82,6 +82,7 @@ export function Transcript({
   condensedUpto,
   ctx,
   onDismissTurn,
+  className,
 }: {
   chatId: string;
   messages: WorkspaceMessage[];
@@ -91,6 +92,7 @@ export function Transcript({
   condensedUpto: number | null;
   ctx: TurnContext;
   onDismissTurn: () => void;
+  className?: string;
 }) {
   const scroller = useRef<HTMLDivElement | null>(null);
   const stick = useRef(true);
@@ -153,8 +155,16 @@ export function Transcript({
     if (!el) return;
     const saved = chatScroll.get(chatId);
     if (saved === undefined) {
-      stick.current = true;
-      toBottom();
+      // A chat opens on the latest question with its answer under it, not on the last action row.
+      if (virtual) {
+        virtualizer.scrollToIndex(items.length - 1, { align: "start" });
+      } else {
+        const arts = el.querySelectorAll<HTMLElement>("[data-turn]");
+        const last = arts[arts.length - 1];
+        if (last) el.scrollTop = Math.max(0, last.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop - 8);
+        else toBottom();
+      }
+      stick.current = atBottom();
     } else {
       el.scrollTop = saved;
       stick.current = atBottom();
@@ -224,7 +234,7 @@ export function Transcript({
     );
 
   return (
-    <div className="relative min-h-0 flex-1">
+    <div className={cn("relative min-h-0 flex-1", className)}>
       <div
         ref={scroller}
         onScroll={onScroll}

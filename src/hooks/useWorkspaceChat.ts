@@ -4,7 +4,7 @@ import {
   EMPTY_SESSION,
   NO_CHATS,
   draftKey,
-  isKnownEmpty,
+  isEmptyChat,
   rememberedDraft,
   useWorkspaceChatStore,
   watchWorkspaceChats,
@@ -55,7 +55,7 @@ export function useWorkspaceChat(workspaceId: string): WorkspaceChatView {
 
   const chat = useMemo(() => chatsAll.find((c) => c.id === chatId) ?? null, [chatsAll, chatId]);
   const chats = useMemo(
-    () => chatsAll.filter((c) => c.id === chatId || !(isKnownEmpty(c.id) && !useWorkspaceChatStore.getState().sessions[c.id]?.messages.length)),
+    () => chatsAll.filter((c) => c.id === chatId || !(isEmptyChat(c) && !useWorkspaceChatStore.getState().sessions[c.id]?.messages.length)),
     // sessions change when messages arrive, so depend on the open session's size too.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [chatsAll, chatId, session.messages.length],

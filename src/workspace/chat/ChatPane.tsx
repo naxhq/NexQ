@@ -73,6 +73,8 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
     async (text: string, opts?: { deeper?: boolean }) => {
       const id = await ensureChat();
       if (!id) return;
+      // Settings still being saved (model, depth, meetings) settle first; if one failed, nothing is sent and the text stays.
+      if (!(await store.getState().settleWrites(id))) return;
       store.getState().setDraft(id, "");
       store.getState().setDraft(`new:${workspaceId}`, "");
       await store.getState().ask(id, text, opts);
@@ -81,17 +83,17 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
   );
 
   const pickModel = useCallback(
-    async (choice: ModelChoice) => {
+    async (choice: ModelChoice): Promise<boolean> => {
       const id = await ensureChat();
-      if (id) await store.getState().updateChat(id, { provider: choice.provider, model: choice.model, effort: null });
+      return id ? store.getState().updateChat(id, { provider: choice.provider, model: choice.model, effort: null }) : false;
     },
     [ensureChat, store],
   );
 
   const patch = useCallback(
-    async (p: { effort?: string; depth?: ContextDepth }) => {
+    async (p: { effort?: string; depth?: ContextDepth }): Promise<boolean> => {
       const id = await ensureChat();
-      if (id) await store.getState().updateChat(id, p);
+      return id ? store.getState().updateChat(id, p) : false;
     },
     [ensureChat, store],
   );
@@ -105,7 +107,8 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
       onOpenCitation: (c: WorkspaceCitation) => openCitation(openers, c),
       onAsk: (question, opts) => {
         void (async () => {
-          if (opts?.choice) await pickModel(opts.choice);
+          // A model that didn't save stops the send: the answer must not come from another model.
+          if (opts?.choice && !(await pickModel(opts.choice))) return;
           await sendText(question, { deeper: opts?.deeper });
         })();
       },
@@ -136,7 +139,7 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
   const waitingForOther = meetingActive && view.anyBusy && !writing;
 
   return (
-    <div className={cn("flex h-full min-h-0 min-w-0 flex-1 flex-col bg-background", className)} data-workspace-chat>
+    <div className={cn("flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background", className)} data-workspace-chat>
       <ChatSwitcher workspaceId={workspaceId} chats={view.chats} chat={chat} busyIds={busyList} />
 
       {view.error && (
@@ -170,6 +173,7 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
           extras={session.extras}
           turn={turn}
           condensedUpto={chat?.condensed_upto ?? null}
+          className="min-h-[50%] [@media(min-height:800px)]:min-h-[60%]"
           ctx={ctx}
           onDismissTurn={() => store.getState().dismissTurn(chatId)}
         />
@@ -177,7 +181,19 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
         <div className="flex-1" />
       )}
 
-      <div className="shrink-0 px-5 pb-3 pt-1">
+      <div className="max-h-[42%] shrink-0 overflow-y-auto px-5 pb-3 pt-1">
+        {!empty && (
+          <ContextPanel
+            report={report}
+            subject={subject}
+            estimating={session.previewing}
+            failed={session.previewFailed}
+            workspaceId={workspaceId}
+            chatId={chatId}
+            excluded={session.excluded}
+            openers={openers}
+          />
+        )}
         <Composer
           workspaceId={workspaceId}
           chat={chat}
@@ -198,10 +214,11 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
           ensureChat={ensureChat}
           onOpenSettings={openProviderSettings}
           autoFocusKey={chatId ?? `new:${workspaceId}`}
+          compact={!empty}
         />
       </div>
 
-      {empty ? (
+      {empty && (
         <div className="min-h-0 flex-[3] px-5">
           <ExampleQuestions
             questions={examples}
@@ -211,17 +228,6 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
             }}
           />
         </div>
-      ) : (
-        <ContextPanel
-          report={report}
-          subject={subject}
-          estimating={session.previewing}
-          failed={session.previewFailed}
-          workspaceId={workspaceId}
-          chatId={chatId}
-          excluded={session.excluded}
-          openers={openers}
-        />
       )}
     </div>
   );

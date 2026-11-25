@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, type KeyboardEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Info, Square } from "lucide-react";
 import { Segmented, Select, buttonClass } from "../../ui";
 import { formatTokens } from "../../voiceprint";
@@ -7,17 +7,17 @@ import type { ContextDepth, WorkspaceChat } from "../../lib/types";
 import type { ChatSession } from "../../stores/workspaceChatStore";
 import { cn } from "../../lib/utils";
 import { COLUMN } from "./column";
+import { DEPTHS } from "./depths";
 import { ModelPicker, PickerCaret } from "./ModelPicker";
+import { OptionsMenu } from "./OptionsMenu";
 import { ScopeControl } from "./ScopeControl";
 import { CAPABILITY_TEXT, TOOLS_OFF_TEXT, capabilityOf, providerLabel, toolsOffInChat, type ModelChoice, type Selection } from "./models";
 
-export const DEPTHS: Array<{ value: ContextDepth; label: string; text: string }> = [
-  { value: "lean", label: "Lean", text: "Quick and cheap. Looks at about 8k tokens of your material." },
-  { value: "balanced", label: "Balanced", text: "For most questions. Up to 24k tokens, and it stops when nothing more is relevant." },
-  { value: "deep", label: "Deep", text: "Searches widely, up to 80k tokens. Slower, and it costs more." },
-];
+export { DEPTHS } from "./depths";
 
-const MAX_ROWS_PX = 200;
+const MAX_PX = 200;
+const ONE_ROW_PX = 24;
+const TWO_ROWS_PX = 48;
 
 export interface ComposerProps {
   workspaceId: string;
@@ -42,9 +42,11 @@ export interface ComposerProps {
   ensureChat: () => Promise<string | null>;
   onOpenSettings: () => void;
   autoFocusKey: string;
+  /** A chat with messages: one quiet row, so the answers keep the room. */
+  compact: boolean;
 }
 
-function Notice({ children }: { children: React.ReactNode }) {
+function Notice({ children }: { children: ReactNode }) {
   return (
     <p className="ui-meta flex items-start gap-1.5 text-muted-foreground">
       <Info className="mt-[0.2em] h-3 w-3 shrink-0" aria-hidden="true" />
@@ -53,14 +55,23 @@ function Notice({ children }: { children: React.ReactNode }) {
   );
 }
 
+function selectionText(sel: Selection): string {
+  const base = providerLabel(sel.provider);
+  const model = isCliAgent(sel.provider) ? cliModelLabel(sel.provider, sel.model) : sel.model || "Default";
+  return `${base} ${model}`;
+}
+
 /**
- * The question box and what shapes the answer: model, effort, depth, which meetings, and an
- * estimate of what would be sent. Enter sends, Shift+Enter adds a line. It grows with the text.
+ * The question box and what shapes the answer. Enter sends, Shift+Enter adds a line. At the
+ * start it shows everything; in a chat with messages it is one row (model as quiet text,
+ * depth, effort and meetings behind one button) that grows only while focused or filled.
  */
 export function Composer(p: ComposerProps) {
   const box = useRef<HTMLTextAreaElement | null>(null);
   const uid = useId();
-  const { selection, session } = p;
+  const [focused, setFocused] = useState(false);
+  const [hint, setHint] = useState(false);
+  const { selection, session, compact } = p;
   const depth = p.chat?.depth ?? "balanced";
   const depthInfo = DEPTHS.find((d) => d.value === depth) ?? DEPTHS[1];
   const report = session.preview;
@@ -68,15 +79,18 @@ export function Composer(p: ComposerProps) {
   const offTools = toolsOffInChat(selection.provider);
   const smallWindow = !!report && report.window > 0 && report.window < 8000;
   const canSend = !p.writing && !p.waitingForOther && p.draft.trim().length > 0;
+  const open = focused || p.draft.length > 0;
 
-  // Grows to its text, then scrolls.
+  // Grows to its text, then scrolls. In the compact row it stays one line until focused or filled.
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, MAX_ROWS_PX)}px`;
-    el.style.overflowY = el.scrollHeight > MAX_ROWS_PX ? "auto" : "hidden";
-  }, [p.draft]);
+    const floor = compact ? (open ? TWO_ROWS_PX : ONE_ROW_PX) : TWO_ROWS_PX;
+    const h = Math.min(Math.max(el.scrollHeight, floor), MAX_PX);
+    el.style.height = `${h}px`;
+    el.style.overflowY = el.scrollHeight > MAX_PX ? "auto" : "hidden";
+  }, [p.draft, compact, open]);
 
   // The composer is the focus: on a new chat, and when a chat opens.
   useEffect(() => {
@@ -84,8 +98,7 @@ export function Composer(p: ComposerProps) {
   }, [p.autoFocusKey]);
 
   const send = () => {
-    if (!canSend) return;
-    p.onSend(p.draft);
+    if (canSend) p.onSend(p.draft);
   };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -102,106 +115,153 @@ export function Composer(p: ComposerProps) {
         ? "No estimate"
         : "";
 
-  return (
-    <div className={cn(COLUMN, "px-0")}>
-      <div className="space-y-1 pb-2">
-        {p.meetingActive && <Notice>A meeting is running. Answers here take turns, one at a time, so live answers stay fast.</Notice>}
-        {p.waitingForOther && !p.writing && <Notice>Another answer is still being written. Yours can go once it ends.</Notice>}
-        {offTools && p.hasLibrary && (
-          <Notice>
-            {providerLabel(selection.provider)} can't ask before it runs a tool yet. {TOOLS_OFF_TEXT}; it still reads folders and answers from your meetings.
-          </Notice>
+  const action = p.writing ? (
+    <button type="button" onClick={p.onStop} disabled={p.stopping} className={cn(buttonClass.base, buttonClass.quiet, "shrink-0 gap-1.5")}>
+      <Square className="h-3 w-3 fill-current" aria-hidden="true" />
+      {p.stopping ? "Stopping" : "Stop"}
+    </button>
+  ) : (
+    <button type="button" onClick={send} disabled={!canSend} className={cn(buttonClass.base, buttonClass.primary, "shrink-0")}>
+      Ask
+    </button>
+  );
+
+  const textarea = (
+    <>
+      <label htmlFor={`${uid}-q`} className="sr-only">
+        Ask about this workspace
+      </label>
+      <textarea
+        id={`${uid}-q`}
+        ref={box}
+        data-chat-composer
+        rows={1}
+        value={p.draft}
+        onChange={(e) => {
+          p.onDraft(e.target.value);
+          if (!p.chat) void p.ensureChat();
+        }}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        onKeyDown={onKeyDown}
+        placeholder={compact ? "Ask a follow-up" : "Ask about your meetings, documents and notes"}
+        aria-describedby={`${uid}-hint`}
+        className={cn(
+          "ui-body block w-full resize-none bg-transparent text-foreground outline-none placeholder:text-muted-foreground/70",
+          compact ? "min-w-0 flex-1 px-1.5 py-1" : "px-3.5 pb-1 pt-3",
         )}
-        {cap === "passages" && p.hasLibrary && (
-          <Notice>{providerLabel(selection.provider)} can't open folders or use tools. It answers from the passages found in your meetings and documents.</Notice>
-        )}
-        {smallWindow && report && <Notice>This model's window is small ({report.window.toLocaleString()} tokens), so answers see less of your material.</Notice>}
-      </div>
-      <div className="rounded-xl border border-border bg-card shadow-[0_1px_0_rgba(0,0,0,0.12)] focus-within:border-ring/60">
-        <label htmlFor={`${uid}-q`} className="sr-only">
-          Ask about this workspace
-        </label>
-        <textarea
-          id={`${uid}-q`}
-          ref={box}
-          data-chat-composer
-          rows={2}
-          value={p.draft}
-          onChange={(e) => {
-            p.onDraft(e.target.value);
-            if (!p.chat) void p.ensureChat();
-          }}
-          onKeyDown={onKeyDown}
-          placeholder="Ask about your meetings, documents and notes"
-          aria-describedby={`${uid}-hint`}
-          className="ui-body block w-full resize-none bg-transparent px-3.5 pb-1 pt-3 text-foreground outline-none placeholder:text-muted-foreground/70"
-        />
-        <p id={`${uid}-hint`} className="sr-only">
-          Enter sends. Shift and Enter adds a line.
-        </p>
-        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 px-2 pb-2 pt-1">
-          <ModelPicker
-            value={{ provider: selection.provider, model: selection.model }}
-            label="Model"
-            onPick={p.onPickModel}
-            onOpenSettings={p.onOpenSettings}
+      />
+      <p id={`${uid}-hint`} className="sr-only">
+        Enter sends. Shift and Enter adds a line.
+      </p>
+    </>
+  );
+
+  const modelPicker = (
+    <ModelPicker
+      value={{ provider: selection.provider, model: selection.model }}
+      label="Model"
+      onPick={p.onPickModel}
+      onOpenSettings={p.onOpenSettings}
+      disabled={p.writing}
+      buttonClassName={cn(
+        "ui-meta inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2 font-medium outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-50",
+        compact ? "text-muted-foreground hover:text-foreground" : "text-foreground/90",
+      )}
+    >
+      <span>{selectionText(selection)}</span>
+      {!compact && <span className="font-normal text-muted-foreground">{CAPABILITY_TEXT[cap]}</span>}
+      <PickerCaret />
+    </ModelPicker>
+  );
+
+  const notices = (
+    <div className={cn("space-y-1", compact ? "pb-1.5" : "pb-2")}>
+      {p.meetingActive && <Notice>A meeting is running. Answers here take turns, one at a time, so live answers stay fast.</Notice>}
+      {p.waitingForOther && !p.writing && <Notice>Another answer is still being written. Yours can go once it ends.</Notice>}
+      {offTools && p.hasLibrary && (
+        <Notice>
+          {providerLabel(selection.provider)} can't ask before it runs a tool yet. {TOOLS_OFF_TEXT}; it still reads folders and answers from your meetings.
+        </Notice>
+      )}
+      {cap === "passages" && p.hasLibrary && (
+        <Notice>{providerLabel(selection.provider)} can't open folders or use tools. It answers from the passages found in your meetings and documents.</Notice>
+      )}
+      {smallWindow && report && <Notice>This model's window is small ({report.window.toLocaleString()} tokens), so answers see less of your material.</Notice>}
+    </div>
+  );
+
+  if (compact) {
+    return (
+      <div className={COLUMN}>
+        {notices}
+        <div className="flex items-end gap-1 rounded-xl border border-border bg-card px-2 py-1.5 focus-within:border-ring/60">
+          {textarea}
+          {modelPicker}
+          <OptionsMenu
+            workspaceId={p.workspaceId}
+            chat={p.chat}
+            excluded={session.excluded}
+            selection={selection}
             disabled={p.writing}
-            buttonClassName="ui-meta inline-flex h-7 max-w-[15rem] items-center gap-1.5 rounded-md px-2 font-medium text-foreground/90 outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-50"
-          >
-            <span className="truncate">{selectionText(selection)}</span>
-            <span className="shrink-0 font-normal text-muted-foreground">{CAPABILITY_TEXT[cap]}</span>
-            <PickerCaret />
-          </ModelPicker>
+            onDepth={p.onDepth}
+            onEffort={p.onEffort}
+            ensureChat={p.ensureChat}
+          />
+          <span className="ui-meta hidden min-w-[7rem] shrink-0 pb-1 text-right tabular-nums text-muted-foreground min-[900px]:inline" aria-live="polite">
+            {estimate}
+          </span>
+          {action}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={COLUMN}>
+      {notices}
+      <div className="rounded-xl border border-border bg-card shadow-[0_1px_0_rgba(0,0,0,0.12)] focus-within:border-ring/60">
+        {textarea}
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 px-2 pb-2 pt-1">
+          {modelPicker}
           {selection.efforts.length > 0 && selection.effort && (
-            <Select
-              label="Effort"
-              value={selection.effort}
-              onChange={p.onEffort}
-              disabled={p.writing}
-              options={selection.efforts.map((e) => ({ value: e, label: isCliAgent(selection.provider) ? cliEffortLabel(e) : e }))}
-              className="ui-meta !h-7 !w-auto"
-            />
+            <span className="inline-flex items-center gap-1">
+              <span className="ui-meta text-muted-foreground" aria-hidden="true">
+                Effort:
+              </span>
+              <Select
+                label="Effort"
+                value={selection.effort}
+                onChange={p.onEffort}
+                disabled={p.writing}
+                options={selection.efforts.map((e) => ({ value: e, label: isCliAgent(selection.provider) ? cliEffortLabel(e) : e }))}
+                className="ui-meta !h-7 !w-auto"
+              />
+            </span>
           )}
           <ScopeControl workspaceId={p.workspaceId} chat={p.chat} excluded={session.excluded} ensureChat={p.ensureChat} disabled={p.writing} />
         </div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border/60 px-2 py-2">
-          <div className="min-w-0">
-            <Segmented
-              label="Depth"
-              value={depth}
-              onChange={p.onDepth}
-              options={DEPTHS.map((d) => ({ value: d.value, label: d.label, disabled: p.writing }))}
-            />
+          <div
+            onFocus={() => setHint(true)}
+            onBlur={() => setHint(false)}
+            onMouseEnter={() => setHint(true)}
+            onMouseLeave={() => setHint(false)}
+            className="shrink-0"
+          >
+            <Segmented label="Depth" value={depth} onChange={p.onDepth} options={DEPTHS.map((d) => ({ value: d.value, label: d.label, disabled: p.writing }))} />
           </div>
-          <p className="ui-meta min-w-0 flex-1 basis-40 text-muted-foreground" aria-live="polite">
-            {depthInfo.text}
-          </p>
-          <span className="ui-meta min-w-[9rem] text-right tabular-nums text-muted-foreground" aria-live="polite">
+          <span className="ui-meta ml-auto min-w-[9rem] text-right tabular-nums text-muted-foreground" aria-live="polite">
             {estimate}
           </span>
-          {p.writing ? (
-            <button
-              type="button"
-              onClick={p.onStop}
-              disabled={p.stopping}
-              className={cn(buttonClass.base, buttonClass.quiet, "gap-1.5")}
-            >
-              <Square className="h-3 w-3 fill-current" aria-hidden="true" />
-              {p.stopping ? "Stopping" : "Stop"}
-            </button>
-          ) : (
-            <button type="button" onClick={send} disabled={!canSend} className={cn(buttonClass.base, buttonClass.primary)}>
-              Ask
-            </button>
-          )}
+          {action}
         </div>
+        {hint && (
+          <p className="ui-meta border-t border-border/60 px-3 py-1.5 text-muted-foreground" aria-live="polite">
+            {depthInfo.label}: {depthInfo.text}
+          </p>
+        )}
       </div>
     </div>
   );
-}
-
-function selectionText(sel: Selection): string {
-  const base = providerLabel(sel.provider);
-  const model = isCliAgent(sel.provider) ? cliModelLabel(sel.provider, sel.model) : sel.model || "Default";
-  return sel.effort ? `${base} ${model}, ${cliEffortLabel(sel.effort)}` : `${base} ${model}`;
 }

@@ -12,6 +12,8 @@ const ipc = vi.hoisted(() => ({
   answerWorkspaceApproval: vi.fn(),
   previewChatContext: vi.fn(),
   setChatMeetingIncluded: vi.fn(),
+  listChatMeetingPrefs: vi.fn(),
+  setChatItemPref: vi.fn(),
 }));
 vi.mock("../lib/ipc", () => ipc);
 vi.mock("../lib/events", () => {
@@ -319,5 +321,84 @@ describe("estimate and scope", () => {
     ipc.setChatMeetingIncluded.mockRejectedValueOnce(new Error("no"));
     expect(await S().setMeetingIncluded("w1", "c1", "m2", false)).toBe(false);
     expect(S().sessions.c1.excluded).toEqual(["m1"]);
+  });
+});
+
+describe("settings that shape an answer", () => {
+  it("a question waits for a setting still being saved, then goes", async () => {
+    let finish: () => void = () => {};
+    ipc.updateWorkspaceChat.mockImplementationOnce(() => new Promise((r) => (finish = () => r(chat("c1", { depth: "deep" })))));
+    const saving = S().updateChat("c1", { depth: "deep" });
+    const asked = S().ask("c1", "hello");
+    await Promise.resolve();
+    expect(ipc.askWorkspace).not.toHaveBeenCalled();
+    finish();
+    await saving;
+    await asked;
+    expect(ipc.askWorkspace).toHaveBeenCalledTimes(1);
+  });
+
+  it("nothing is sent when a setting did not save, and the old value is back", async () => {
+    ipc.updateWorkspaceChat.mockRejectedValueOnce(new Error("disk full"));
+    const saving = S().updateChat("c1", { model: "opus", depth: "deep" });
+    expect(await S().ask("c1", "hello")).toBe(false);
+    await saving;
+    expect(ipc.askWorkspace).not.toHaveBeenCalled();
+    expect(S().chats.w1[0]).toMatchObject({ model: null, depth: "balanced" });
+    expect(S().sessions.c1?.turn ?? null).toBeNull();
+  });
+
+  it("writes go one at a time, in order", async () => {
+    const order: string[] = [];
+    ipc.updateWorkspaceChat.mockImplementation(async (id: string, p: { depth?: string; model?: string }) => {
+      order.push(`start ${Object.keys(p)[0]}`);
+      await new Promise((r) => setTimeout(r, p.depth ? 20 : 1));
+      order.push(`end ${Object.keys(p)[0]}`);
+      return chat(id, p as object);
+    });
+    await Promise.all([S().updateChat("c1", { depth: "lean" }), S().updateChat("c1", { model: "m" })]);
+    expect(order).toEqual(["start depth", "end depth", "start model", "end model"]);
+  });
+});
+
+describe("left-out meetings", () => {
+  it("a failed change puts back only that meeting and says why", async () => {
+    ipc.setChatMeetingIncluded.mockResolvedValueOnce(undefined);
+    ipc.setChatMeetingIncluded.mockRejectedValueOnce(new Error("busy"));
+    ipc.listChatMeetingPrefs.mockRejectedValue(new Error("none"));
+    const a = S().setMeetingIncluded("w1", "c1", "m1", false);
+    const b = S().setMeetingIncluded("w1", "c1", "m2", false);
+    expect(S().sessions.c1.excluded).toEqual(["m1", "m2"]);
+    expect(await a).toBe(true);
+    expect(await b).toBe(false);
+    expect(S().sessions.c1.excluded).toEqual(["m1"]);
+  });
+
+  it("reloads the truth from the backend once the last write is done", async () => {
+    ipc.setChatMeetingIncluded.mockResolvedValue(undefined);
+    ipc.listChatMeetingPrefs.mockResolvedValue([{ meeting_id: "m9", included: false }]);
+    await S().setMeetingIncluded("w1", "c1", "m1", false);
+    expect(S().sessions.c1.excluded).toEqual(["m9"]);
+  });
+
+  it("a question never goes while a change is unconfirmed, and not at all if it fails", async () => {
+    let fail: (e: Error) => void = () => {};
+    ipc.setChatMeetingIncluded.mockImplementationOnce(() => new Promise((_, rej) => (fail = rej)));
+    ipc.listChatMeetingPrefs.mockRejectedValue(new Error("none"));
+    void S().setMeetingIncluded("w1", "c1", "m1", false);
+    const asked = S().ask("c1", "go");
+    await Promise.resolve();
+    expect(ipc.askWorkspace).not.toHaveBeenCalled();
+    fail(new Error("no"));
+    expect(await asked).toBe(false);
+    expect(ipc.askWorkspace).not.toHaveBeenCalled();
+    expect(S().sessions.c1.excluded).toEqual([]);
+  });
+
+  it("pins go through the same queue and refresh the estimate", async () => {
+    ipc.setChatItemPref.mockResolvedValue(undefined);
+    ipc.previewChatContext.mockResolvedValue(report());
+    expect(await S().setItemPref("c1", "document", "d1", "pin")).toBe(true);
+    expect(ipc.setChatItemPref).toHaveBeenCalledWith("c1", "document", "d1", "pin");
   });
 });

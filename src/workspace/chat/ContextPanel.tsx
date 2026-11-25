@@ -4,13 +4,17 @@ import { CONTEXT_LAYER_NAMES, ContextWave, formatTokens, type ContextSelection }
 import type { ContextBar, ContextReport } from "../../lib/types";
 import { readWaveOpen, useWorkspaceChatStore, writeWaveOpen } from "../../stores/workspaceChatStore";
 import { cn } from "../../lib/utils";
+import { COLUMN } from "./column";
 import { openItem, openMeeting, type ChatOpeners } from "./open";
 
-/** The id of the meeting or item a bar stands for: "meeting:abc" or just "abc". */
-export function refOfBar(bar: ContextBar): string {
-  const at = bar.id.indexOf(":");
-  return at >= 0 ? bar.id.slice(at + 1) : bar.id;
+/** A bar's id is "<kind>:<ref>[:<sub>]" (a bare id is its own ref). */
+export function parseBar(bar: ContextBar): { kind: string; ref: string; sub: string | null } {
+  const parts = bar.id.split(":");
+  if (parts.length === 1) return { kind: bar.layer, ref: parts[0], sub: null };
+  return { kind: parts[0], ref: parts[1], sub: parts.length > 2 ? parts.slice(2).join(":") : null };
 }
+/** The meeting or item a bar stands for. */
+export const refOfBar = (bar: ContextBar) => parseBar(bar).ref;
 
 export type WaveSubject = "estimate" | "answer" | "live";
 
@@ -20,10 +24,14 @@ const HEADINGS: Record<WaveSubject, string> = {
   live: "What this answer is seeing",
 };
 
+// At rest the wave is a strip: only the bars (hover or focus reads one). The summary line, the
+// readout and the layer legend come with the expanded view.
+const STRIP_ONLY = "[&_section>div:first-child]:hidden [&_[role=status]]:hidden [&_ul]:hidden";
+
 /**
- * The context wave for the current question. Collapsible and remembered. Clicking a bar, a
- * group or a layer lists its items; a meeting can be left out of this chat from there.
- * (The contract has no pin or exclude for other items, so those only open.)
+ * The context wave for the current question, as a 22 px strip over the composer. Click it (or
+ * a bar) to expand: legend, notes and the items of a layer, where a meeting can be left out and
+ * any item pinned or left out for this chat. Remembered.
  */
 export function ContextPanel({
   report,
@@ -47,32 +55,49 @@ export function ContextPanel({
   const [open, setOpen] = useState(readWaveOpen);
   const [selection, setSelection] = useState<ContextSelection | null>(null);
   const id = useId();
-  const toggle = () => {
-    setOpen((o) => {
-      writeWaveOpen(!o);
-      return !o;
-    });
+  const set = (next: boolean) => {
+    writeWaveOpen(next);
+    setOpen(next);
   };
-  const used = report?.used ?? 0;
+  const numbers = report ? `${formatTokens(report.used)} of ${formatTokens(report.budget)}` : estimating ? "Estimating" : failed ? "No estimate" : "";
 
   return (
-    <section aria-label="Context" className="border-t border-border/60 px-4 pb-2 pt-1.5">
-      <div className="mx-auto w-full max-w-[38rem]">
-        <button
-          type="button"
-          onClick={toggle}
-          aria-expanded={open}
-          aria-controls={`${id}-body`}
-          className="ui-meta flex w-full items-center gap-1.5 rounded py-1 text-left text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
-        >
-          <ChevronRight className={cn("h-3 w-3 shrink-0 transition-transform motion-reduce:transition-none", open && "rotate-90")} aria-hidden="true" />
-          <span className="font-medium">{HEADINGS[subject]}</span>
-          <span className="ml-auto tabular-nums" aria-live="polite">
-            {report ? `${formatTokens(used)} of ${formatTokens(report.budget)}` : estimating ? "Estimating" : failed ? "No estimate" : ""}
+    <section aria-label="Context" className="pb-1.5">
+      <div className={COLUMN}>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => set(!open)}
+            aria-expanded={open}
+            aria-controls={`${id}-body`}
+            aria-label={`${HEADINGS[subject]}: ${numbers || "nothing yet"}`}
+            className="ui-meta inline-flex h-[22px] shrink-0 items-center gap-1 rounded text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+          >
+            <ChevronRight className={cn("h-3 w-3 transition-transform motion-reduce:transition-none", open && "rotate-90")} aria-hidden="true" />
+            Context
+          </button>
+          {!open && report && (
+            <div className={cn("h-[22px] min-w-0 flex-1 overflow-hidden", STRIP_ONLY)}>
+              <ContextWave
+                bars={report.bars}
+                window={report.window}
+                budget={report.budget}
+                height={22}
+                onSelect={(sel) => {
+                  setSelection(sel);
+                  set(true);
+                }}
+              />
+            </div>
+          )}
+          {(open || !report) && <span className="flex-1" />}
+          <span className="ui-meta shrink-0 tabular-nums text-muted-foreground" aria-live="polite">
+            {numbers}
           </span>
-        </button>
+        </div>
         {open && (
           <div id={`${id}-body`} className="pb-1 pt-1">
+            <p className="ui-meta pb-1 font-medium text-foreground">{HEADINGS[subject]}</p>
             {report ? (
               <>
                 <ContextWave bars={report.bars} window={report.window} budget={report.budget} height={52} onSelect={setSelection} />
@@ -106,6 +131,9 @@ export function ContextPanel({
   );
 }
 
+const rowBtn =
+  "ui-meta rounded px-1.5 py-0.5 text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60";
+
 function Inspector({
   selection,
   workspaceId,
@@ -122,41 +150,53 @@ function Inspector({
   onClose: () => void;
 }) {
   const shown = selection.bars.slice(0, 12);
+  const store = useWorkspaceChatStore;
   return (
     <div role="region" aria-label={`${CONTEXT_LAYER_NAMES[selection.layer]} items`} className="mt-2 rounded-lg border border-border bg-card px-3 py-2">
       <div className="flex items-center justify-between">
         <p className="ui-section text-foreground">{CONTEXT_LAYER_NAMES[selection.layer]}</p>
-        <button type="button" onClick={onClose} className="ui-meta rounded px-1.5 py-0.5 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60">
+        <button type="button" onClick={onClose} className={cn(rowBtn, "text-muted-foreground")}>
           Close
         </button>
       </div>
       <ul className="mt-1 divide-y divide-border/50">
         {shown.map((bar) => {
-          const ref = refOfBar(bar);
+          const { kind, ref } = parseBar(bar);
           const meeting = bar.layer === "meetings";
           const left = excluded.includes(ref);
+          const fixed = bar.layer === "instructions" || bar.layer === "conversation";
           return (
-            <li key={bar.id} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 py-1.5">
+            <li key={bar.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-1.5">
               <span className="ui-body min-w-0 flex-1 truncate text-foreground">{bar.title}</span>
               <span className="ui-meta tabular-nums text-muted-foreground">
                 {formatTokens(bar.tokens)} tokens{bar.pinned ? ", pinned" : ""}{bar.included ? "" : ", didn't fit"}
               </span>
-              {bar.layer !== "instructions" && bar.layer !== "conversation" && (
+              {!fixed && (
                 <button
                   type="button"
                   onClick={() => (meeting ? openMeeting(openers, ref, null) : openItem(openers, bar.layer === "folders" ? "folder" : "document", ref, null))}
-                  className="ui-meta rounded px-1.5 py-0.5 text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60"
+                  className={rowBtn}
                 >
                   Open
                 </button>
               )}
-              {meeting && chatId && (
+              {!fixed && chatId && (
                 <button
                   type="button"
-                  onClick={() => void useWorkspaceChatStore.getState().setMeetingIncluded(workspaceId, chatId, ref, left)}
-                  className="ui-meta rounded px-1.5 py-0.5 text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60"
+                  onClick={() => void store.getState().setItemPref(chatId, kind, ref, bar.pinned ? "default" : "pin")}
+                  className={rowBtn}
                 >
+                  {bar.pinned ? "Unpin" : "Pin"}
+                </button>
+              )}
+              {meeting && chatId && (
+                <button type="button" onClick={() => void store.getState().setMeetingIncluded(workspaceId, chatId, ref, left)} className={rowBtn}>
                   {left ? "Use in this chat" : "Leave out of this chat"}
+                </button>
+              )}
+              {!meeting && !fixed && chatId && (
+                <button type="button" onClick={() => void store.getState().setItemPref(chatId, kind, ref, "exclude")} className={rowBtn}>
+                  Leave out of this chat
                 </button>
               )}
             </li>

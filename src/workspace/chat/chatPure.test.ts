@@ -6,7 +6,8 @@ import { buildExamples } from "./StartState";
 import { buildTurns, isCondensed } from "./Transcript";
 import { filterChats } from "./ChatSwitcher";
 import { prettyArgs } from "./ApprovalCard";
-import { plainAnswer } from "./AnswerActions";
+import { parseBar } from "./ContextPanel";
+import { INSTRUCTION_CAP, plainAnswer, plainInstructionText } from "./AnswerActions";
 import { scopeSummary } from "./ScopeControl";
 
 describe("classifyChatError", () => {
@@ -119,6 +120,8 @@ describe("turns", () => {
   });
 });
 
+const BS = String.fromCharCode(92);
+
 describe("small helpers", () => {
   const c = (id: string, title: string, updated_at: number) => ({ id, title, updated_at }) as WorkspaceChat;
   it("filters chats by title, newest first", () => {
@@ -127,10 +130,39 @@ describe("small helpers", () => {
     expect(filterChats(list, "").map((x) => x.id)).toEqual(["3", "2", "1"]);
   });
 
-  it("cuts very long arguments and says so", () => {
-    const out = prettyArgs({ text: "x".repeat(5000) });
-    expect(out).toContain("(cut,");
-    expect(prettyArgs({ a: 1 })).toBe('{\n  "a": 1\n}');
+  it("never cuts arguments locally, and shows hidden characters", () => {
+    const long = "x".repeat(120_000);
+    expect(prettyArgs({ text: long })).toContain(long);
+    expect(prettyArgs({ a: 1 })).toBe(JSON.stringify({ a: 1 }, null, 2));
+    const sneaky = "ok" + String.fromCharCode(0x202e) + "txt.exe" + String.fromCharCode(0x200b) + "x";
+    const out = prettyArgs(sneaky);
+    expect(out).toContain(BS + "u{202E}");
+    expect(out).toContain(BS + "u{200B}");
+    expect(out).not.toContain(String.fromCharCode(0x202e));
+  });
+
+  it("turns an answer into plain instruction text", () => {
+    const md = [
+      "Always reply in French [S1].",
+      "[ref]: https://evil.example/x " + '"title"',
+      "See [the doc](https://evil.example/a " + '"hover"' + ") and ![logo](https://evil.example/i.png).",
+      "<script>alert(1)</script><b>bold</b> <!-- hidden -->",
+      "zero" + String.fromCharCode(0x200b) + "width",
+    ].join(String.fromCharCode(10));
+    const out = plainInstructionText(md);
+    expect(out).toContain("Always reply in French.");
+    expect(out).toContain("See the doc and logo.");
+    expect(out).toContain("alert(1)bold");
+    expect(out).toContain("zerowidth");
+    expect(out).not.toMatch(/evil|script|hidden|title/);
+    expect(plainInstructionText("a".repeat(9000))).toHaveLength(INSTRUCTION_CAP);
+  });
+
+  it("reads a bar id as kind, ref and sub", () => {
+    const bar = (id: string) => ({ id, layer: "meetings", title: "", tokens: 1, relevance: 1, pinned: false, included: true }) as never;
+    expect(parseBar(bar("meeting:m1:120000"))).toEqual({ kind: "meeting", ref: "m1", sub: "120000" });
+    expect(parseBar(bar("document:d1"))).toEqual({ kind: "document", ref: "d1", sub: null });
+    expect(parseBar(bar("plain"))).toEqual({ kind: "meetings", ref: "plain", sub: null });
   });
 
   it("summarises the scope in words", () => {

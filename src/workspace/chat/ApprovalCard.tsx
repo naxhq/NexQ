@@ -4,8 +4,15 @@ import { buttonClass } from "../../ui";
 import { cn } from "../../lib/utils";
 import { APPROVAL_SECONDS, useWorkspaceChatStore, type Approval } from "../../stores/workspaceChatStore";
 
-const MAX_ARGS_CHARS = 4000;
+/** Characters that can hide or reorder text (bidi controls, zero-width, soft hyphen, other controls) shown as \u{...}. */
+// eslint-disable-next-line no-control-regex
+const INVISIBLE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF9-\uFFFB]/g;
 
+export function escapeInvisible(text: string): string {
+  return text.replace(INVISIBLE, (c) => `\\u{${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}}`);
+}
+
+/** The whole arguments, exactly as received (never cut here), with hidden characters made visible. */
 export function prettyArgs(args: unknown): string {
   let text: string;
   try {
@@ -13,7 +20,7 @@ export function prettyArgs(args: unknown): string {
   } catch {
     text = String(args);
   }
-  return text.length > MAX_ARGS_CHARS ? `${text.slice(0, MAX_ARGS_CHARS)}\n(cut, ${text.length - MAX_ARGS_CHARS} more characters)` : text;
+  return escapeInvisible(text);
 }
 
 function useSecondsLeft(approval: Approval): number {
@@ -51,9 +58,11 @@ const CLOSED: Record<string, string> = {
 export function ApprovalCard({ approval }: { approval: Approval }) {
   const id = useId();
   const card = useRef<HTMLDivElement | null>(null);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const left = useSecondsLeft(approval);
   const pending = approval.state === "pending" && left > 0;
+  // Anything the backend cut or hid: Deny is the default and Allow is not the highlighted button.
+  const partial = approval.truncated || approval.redacted;
   const answer = useWorkspaceChatStore((s) => s.answerApproval);
 
   useEffect(() => {
@@ -61,7 +70,7 @@ export function ApprovalCard({ approval }: { approval: Approval }) {
     const typing = active instanceof HTMLElement && (active.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName));
     if (!typing && (!active || active === document.body)) {
       // Cut arguments: start on Deny, so a stray Enter can't allow what wasn't fully shown.
-      const deny = approval.truncated ? card.current?.querySelector<HTMLElement>("[data-deny]") : null;
+      const deny = partial ? card.current?.querySelector<HTMLElement>("[data-deny]") : null;
       (deny ?? card.current)?.focus({ preventScroll: false });
     }
     // Only when the card first appears.
@@ -105,12 +114,15 @@ export function ApprovalCard({ approval }: { approval: Approval }) {
       {approval.truncated && (
         <p className="ui-meta mt-1.5 text-foreground">Not everything is shown: these arguments were cut. Deny it unless you are sure.</p>
       )}
+      {approval.redacted && (
+        <p className="ui-meta mt-1.5 text-foreground">Secrets are hidden in these arguments, so this isn't exactly what runs.</p>
+      )}
       {open && (
         <pre
           id={`${id}-a`}
           tabIndex={0}
           aria-label="Exact arguments"
-          className="ui-meta mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/60 px-2.5 py-2 text-foreground/90 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          className="ui-meta mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/60 px-2.5 py-2 text-foreground/90 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
         >
           {prettyArgs(approval.args)}
         </pre>
@@ -118,10 +130,10 @@ export function ApprovalCard({ approval }: { approval: Approval }) {
       <div className="mt-3 flex min-h-8 flex-wrap items-center gap-2">
         {pending || approval.state === "sending" ? (
           <>
-            <button type="button" disabled={!pending} onClick={() => respond(true)} className={cn(buttonClass.base, buttonClass.primary)}>
+            <button type="button" disabled={!pending} onClick={() => respond(true)} className={cn(buttonClass.base, partial ? buttonClass.quiet : buttonClass.primary)}>
               Allow once
             </button>
-            <button type="button" data-deny disabled={!pending} onClick={() => respond(false)} className={cn(buttonClass.base, buttonClass.quiet)}>
+            <button type="button" data-deny disabled={!pending} onClick={() => respond(false)} className={cn(buttonClass.base, partial ? buttonClass.primary : buttonClass.quiet)}>
               Deny
             </button>
             <span className="ui-meta ml-auto tabular-nums text-muted-foreground" role="timer" aria-label={`${left} seconds left`}>

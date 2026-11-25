@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type {
+  ChatItemPrefValue,
   ContextReport,
   SourceActivity,
   WorkspaceChat,
@@ -43,6 +44,8 @@ export interface Approval {
   state: ApprovalState;
   /** The arguments were cut by the backend. */
   truncated: boolean;
+  /** Secrets were hidden in the arguments. */
+  redacted: boolean;
   /** Why a closed card closed ("answered", "timeout", "cancelled"). */
   closedReason?: string;
 }
@@ -126,7 +129,7 @@ function writePref(key: string, value: string | null) {
 }
 
 export function readWaveOpen(): boolean {
-  return readPref(PREF.wave) !== "0";
+  return readPref(PREF.wave) === "1";
 }
 export function writeWaveOpen(open: boolean) {
   writePref(PREF.wave, open ? "1" : "0");
@@ -160,8 +163,33 @@ const chatsSeq = new Map<string, number>();
 /** Chats created here that have no message yet (the backend has no message count). */
 const knownEmpty = new Set<string>();
 export const isKnownEmpty = (chatId: string) => knownEmpty.has(chatId);
+/** Empty by the backend's count when it gives one, else by what this window saw. */
+export const isEmptyChat = (c: WorkspaceChat) => (c.message_count !== undefined ? c.message_count === 0 : knownEmpty.has(c.id));
 
 const isBusy = (t: Turn | null | undefined) => !!t && (t.status === "waiting" || t.status === "streaming" || t.status === "stopping");
+
+// ── Writes that shape an answer (model, depth, scope, pins) go one at a time per chat, in order,
+// and a question waits for them: it is never sent on settings the backend hasn't confirmed. ──
+const writeQueues = new Map<string, Promise<boolean>>();
+const inflight = new Map<string, Set<Promise<boolean>>>();
+
+function enqueueWrite(chatId: string, job: () => Promise<boolean>): Promise<boolean> {
+  const prev = writeQueues.get(chatId) ?? Promise.resolve(true);
+  const next = prev.then(() => job()).catch(() => false);
+  writeQueues.set(chatId, next);
+  let set = inflight.get(chatId);
+  if (!set) inflight.set(chatId, (set = new Set()));
+  set.add(next);
+  void next.finally(() => {
+    set!.delete(next);
+    if (set!.size === 0) {
+      inflight.delete(chatId);
+      writeQueues.delete(chatId);
+    }
+  });
+  return next;
+}
+const hasPendingWrites = (chatId: string) => (inflight.get(chatId)?.size ?? 0) > 0;
 
 interface ChatState {
   chats: Record<string, WorkspaceChat[]>;
@@ -182,11 +210,14 @@ interface ChatState {
   loadMessages: (chatId: string) => Promise<void>;
 
   setDraft: (key: string, text: string) => void;
+  /** Waits for settings still being saved; false (and a message) when one failed, so nothing is sent. */
+  settleWrites: (chatId: string) => Promise<boolean>;
   ask: (chatId: string, question: string, opts?: { deeper?: boolean }) => Promise<boolean>;
   stop: (chatId: string) => Promise<void>;
   dismissTurn: (chatId: string) => void;
   answerApproval: (approval: Approval, allow: boolean) => Promise<void>;
   refreshPreview: (chatId: string, question?: string) => Promise<void>;
+  setItemPref: (chatId: string, kind: string, refId: string, pref: ChatItemPrefValue) => Promise<boolean>;
   setMeetingIncluded: (workspaceId: string, chatId: string, meetingId: string, included: boolean) => Promise<boolean>;
 }
 
@@ -351,7 +382,7 @@ export const useWorkspaceChatStore = create<ChatState>((set, get) => {
       // One empty chat at a time: "New chat" goes to the one that is already empty.
       const empty = (get().chats[workspaceId] ?? NO_CHATS).find((c) => {
         const s = get().sessions[c.id];
-        return knownEmpty.has(c.id) && !(s?.messages.length) && !isBusy(s?.turn);
+        return isEmptyChat(c) && !(s?.messages.length) && !isBusy(s?.turn) && !get().drafts[c.id];
       });
       if (empty) {
         get().selectChat(workspaceId, empty.id);
@@ -422,19 +453,22 @@ export const useWorkspaceChatStore = create<ChatState>((set, get) => {
       if (next) void get().loadMessages(next);
     },
 
-    updateChat: async (chatId, patch) => {
+    updateChat: (chatId, patch) => {
       const before = findChat(get().chats, chatId);
-      if (!before) return false;
+      if (!before) return Promise.resolve(false);
       mutateChat(set, chatId, patch);
-      try {
-        const saved = await ipc.updateWorkspaceChat(chatId, patch);
-        mutateChat(set, chatId, saved);
-        return true;
-      } catch (e) {
-        mutateChat(set, chatId, before);
-        showToast(`Couldn't change the chat: ${asText(e)}`, "error");
-        return false;
-      }
+      return enqueueWrite(chatId, async () => {
+        try {
+          const saved = await ipc.updateWorkspaceChat(chatId, patch);
+          // Only what this write was about; a later write's value is not overwritten.
+          mutateChat(set, chatId, pickKeys(saved, Object.keys(patch)));
+          return true;
+        } catch (e) {
+          mutateChat(set, chatId, pickKeys(before, Object.keys(patch)));
+          showToast(`Couldn't change the chat: ${asText(e)}`, "error");
+          return false;
+        }
+      });
     },
 
     loadMessages: async (chatId) => {
@@ -444,6 +478,18 @@ export const useWorkspaceChatStore = create<ChatState>((set, get) => {
       loadSeq.set(chatId, mine);
       const excluded = readExcluded(chatId);
       patchSession(set, chatId, () => ({ loading: true, loadError: null, excluded }));
+      // The backend's own list is the truth; the local mirror is only for older backends.
+      const wsOf = findChat(get().chats, chatId)?.workspace_id;
+      if (wsOf) {
+        Promise.resolve().then(() => ipc.listChatMeetingPrefs(wsOf, chatId)).then(
+          (prefs) => {
+            if (!Array.isArray(prefs)) return;
+            const left = prefs.filter((p) => !p.included).map((p) => p.meeting_id);
+            patchSession(set, chatId, () => ({ excluded: left }));
+          },
+          () => {},
+        );
+      }
       try {
         const saved = await ipc.listWorkspaceMessages(chatId);
         if (loadSeq.get(chatId) !== mine) return;
@@ -465,9 +511,18 @@ export const useWorkspaceChatStore = create<ChatState>((set, get) => {
       writePref(PREF.draft(key), text.length > 8000 ? text.slice(0, 8000) : text);
     },
 
+    settleWrites: async (chatId) => {
+      if (!hasPendingWrites(chatId)) return true;
+      const results = await Promise.all([...(inflight.get(chatId) ?? [])]);
+      if (results.every(Boolean)) return true;
+      showToast("A setting didn't save, so the question wasn't sent. Check it and ask again.", "error");
+      return false;
+    },
+
     ask: async (chatId, raw, opts = {}) => {
       const question = raw.trim();
       if (!question) return false;
+      if (hasPendingWrites(chatId) && !(await get().settleWrites(chatId))) return false;
       if (isBusy(get().sessions[chatId]?.turn)) return false;
       const requestId = newRequestId();
       const deeper = !!opts.deeper;
@@ -567,20 +622,52 @@ export const useWorkspaceChatStore = create<ChatState>((set, get) => {
       }
     },
 
-    setMeetingIncluded: async (workspaceId, chatId, meetingId, included) => {
-      const prev = get().sessions[chatId]?.excluded ?? [];
-      const next = included ? prev.filter((id) => id !== meetingId) : prev.includes(meetingId) ? prev : [...prev, meetingId];
-      patchSession(set, chatId, () => ({ excluded: next }));
-      writePref(PREF.excluded(chatId), next.length ? JSON.stringify(next) : null);
-      try {
-        await ipc.setChatMeetingIncluded(workspaceId, chatId, meetingId, included);
-        return true;
-      } catch (e) {
-        patchSession(set, chatId, () => ({ excluded: prev }));
-        writePref(PREF.excluded(chatId), prev.length ? JSON.stringify(prev) : null);
-        showToast(`Couldn't change which meetings are used: ${asText(e)}`, "error");
-        return false;
-      }
+    setItemPref: (chatId, kind, refId, pref) =>
+      enqueueWrite(chatId, async () => {
+        try {
+          await ipc.setChatItemPref(chatId, kind, refId, pref);
+          void get().refreshPreview(chatId);
+          return true;
+        } catch (e) {
+          showToast(`Couldn't change that item: ${asText(e)}`, "error");
+          return false;
+        }
+      }),
+
+    setMeetingIncluded: (workspaceId, chatId, meetingId, included) => {
+      const toggle = (list: string[], leaveOut: boolean) =>
+        leaveOut ? (list.includes(meetingId) ? list : [...list, meetingId]) : list.filter((id) => id !== meetingId);
+      const apply = (leaveOut: boolean) => {
+        let next: string[] = [];
+        patchSession(set, chatId, (s) => ({ excluded: (next = toggle(s.excluded, leaveOut)) }));
+        writePref(PREF.excluded(chatId), next.length ? JSON.stringify(next) : null);
+      };
+      apply(!included);
+      return enqueueWrite(chatId, async () => {
+        let ok = true;
+        try {
+          await ipc.setChatMeetingIncluded(workspaceId, chatId, meetingId, included);
+        } catch (e) {
+          ok = false;
+          // Only this meeting goes back to what it was; it shows as it really is, with the reason.
+          apply(included);
+          showToast(`Couldn't ${included ? "use" : "leave out"} that meeting: ${asText(e)}`, "error");
+        }
+        // The backend's list is the truth once the last write is done.
+        if ((inflight.get(chatId)?.size ?? 0) <= 1) {
+          try {
+            const prefs = await ipc.listChatMeetingPrefs(workspaceId, chatId);
+            if (Array.isArray(prefs) && (inflight.get(chatId)?.size ?? 0) <= 1) {
+              const left = prefs.filter((p) => !p.included).map((p) => p.meeting_id);
+              patchSession(set, chatId, () => ({ excluded: left }));
+              writePref(PREF.excluded(chatId), left.length ? JSON.stringify(left) : null);
+            }
+          } catch {
+            /* the local mirror stays */
+          }
+        }
+        return ok;
+      });
     },
 
     // Used by the event handlers below.
@@ -589,6 +676,12 @@ export const useWorkspaceChatStore = create<ChatState>((set, get) => {
 });
 
 // ── Helpers that need the store but not its state ────────────────────────────────
+
+function pickKeys<T extends object>(from: T, keys: string[]): Partial<T> {
+  const out: Partial<T> = {};
+  for (const k of keys) if (k in from) (out as Record<string, unknown>)[k] = (from as Record<string, unknown>)[k];
+  return out;
+}
 
 function findChat(all: Record<string, WorkspaceChat[]>, chatId: string): WorkspaceChat | undefined {
   for (const list of Object.values(all)) {
@@ -710,6 +803,7 @@ function internal(
         receivedAt: Date.now(),
         state: "pending",
         truncated: !!e.truncated,
+        redacted: !!e.redacted,
       };
       h.patchTurn(e.chat_id, e.request_id, (cur) => ({ approvals: [...cur.approvals, approval] }));
       approvalTimers.set(
@@ -787,6 +881,8 @@ export function resetWorkspaceChatForTests() {
   chatsSeq.clear();
   knownEmpty.clear();
   scrollPositions.clear();
+  writeQueues.clear();
+  inflight.clear();
   useWorkspaceChatStore.setState({ chats: {}, chatsLoaded: {}, chatsError: {}, activeChat: {}, sessions: {}, drafts: {} });
 }
 

@@ -32,6 +32,8 @@ const ipc = vi.hoisted(() => ({
   saveAnswerToLibrary: vi.fn(),
   listModels: vi.fn(),
   getApiKey: vi.fn(),
+  listChatMeetingPrefs: vi.fn(),
+  setChatItemPref: vi.fn(),
 }));
 vi.mock("../../lib/ipc", async (orig) => ({ ...(await orig<typeof import("../../lib/ipc")>()), ...ipc }));
 
@@ -40,6 +42,7 @@ import { VIRTUALISE_AFTER } from "./Transcript";
 import { resetWorkspaceChatForTests, useWorkspaceChatStore } from "../../stores/workspaceChatStore";
 import { FALLBACK_GENERAL, useWorkspaceStore } from "../../stores/workspaceStore";
 import { useMeetingStore } from "../../stores/meetingStore";
+import { useConfigStore } from "../../stores/configStore";
 
 const WS = "w1";
 const chat = (id: string, over: Partial<WorkspaceChat> = {}): WorkspaceChat => ({
@@ -106,6 +109,7 @@ beforeEach(() => {
   ipc.updateWorkspaceChat.mockImplementation(async (id: string, p: object) => chat(id, p));
   ipc.createWorkspaceChat.mockImplementation(async () => chat("c1", { title: "New chat" }));
   ipc.askWorkspace.mockResolvedValue(undefined);
+  ipc.listChatMeetingPrefs.mockRejectedValue(new Error("none"));
 });
 afterEach(cleanup);
 
@@ -341,7 +345,6 @@ describe("tool approval", () => {
     expect(card).toHaveTextContent("notes");
     expect(within(card).getByText(/Denied automatically in \d+ s/)).toBeInTheDocument();
     const user = userEvent.setup();
-    await user.click(within(card).getByRole("button", { name: "Show arguments" }));
     expect(within(card).getByLabelText("Exact arguments")).toHaveTextContent('"id": 3');
     await user.click(within(card).getByRole("button", { name: "Allow once" }));
     await waitFor(() => expect(ipc.answerWorkspaceApproval).toHaveBeenCalledWith("ap1", true));
@@ -438,5 +441,111 @@ describe("chats list", () => {
     expect(ipc.deleteWorkspaceChat).not.toHaveBeenCalled();
     await user.click(await screen.findByRole("button", { name: "Delete chat" }));
     await waitFor(() => expect(ipc.deleteWorkspaceChat).toHaveBeenCalledWith("c1"));
+  });
+});
+
+describe("approval card, security", () => {
+  async function card(args: unknown, extra: object) {
+    setup();
+    const box = await typeQuestion("x");
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(ipc.askWorkspace).toHaveBeenCalled());
+    const id = ipc.askWorkspace.mock.calls[0][2] as string;
+    (document.activeElement as HTMLElement | null)?.blur();
+    emit("workspace_chat_approval", { chat_id: "c1", request_id: id, approval_id: "s1", server: "s", tool: "t", args, ...extra });
+    return screen.findByRole("group", { name: /Needs your answer/ });
+  }
+
+  it("shows a very long argument in full, scrollable", async () => {
+    const long = "y".repeat(100_000);
+    const el = await card(long, {});
+    const args = within(el).getByLabelText("Exact arguments");
+    expect(args.textContent).toBe(long);
+    expect(args.className).toContain("overflow-auto");
+  });
+
+  it("makes hidden characters visible", async () => {
+    const el = await card("a" + String.fromCharCode(0x202e) + "b", {});
+    expect(within(el).getByLabelText("Exact arguments").textContent).toContain(String.fromCharCode(92) + "u{202E}");
+  });
+
+  it.each([["truncated", /Not everything is shown/], ["redacted", /Secrets are hidden/]])("when %s: says so, starts on Deny, Allow is not the main button", async (flag, text) => {
+    const el = await card({ a: 1 }, { [flag]: true });
+    expect(within(el).getByText(text)).toBeInTheDocument();
+    await waitFor(() => expect(within(el).getByRole("button", { name: "Deny" })).toHaveFocus());
+    expect(within(el).getByRole("button", { name: "Allow once" }).className).not.toContain("bg-primary");
+    expect(within(el).getByRole("button", { name: "Deny" }).className).toContain("bg-primary");
+  });
+
+  it("a complete request keeps Allow once as the main button", async () => {
+    const el = await card({ a: 1 }, {});
+    expect(within(el).getByRole("button", { name: "Allow once" }).className).toContain("bg-primary");
+  });
+});
+
+describe("room for the answer", () => {
+  it("a chat with messages gets one compact row: follow-up box, model, one options button", async () => {
+    setup({ chats: [chat("c1")], messages: pairs(1) });
+    expect(await screen.findByPlaceholderText("Ask a follow-up")).toBeInTheDocument();
+    const options = screen.getByRole("button", { name: /Answer options: Balanced, All meetings/ });
+    expect(screen.queryByRole("radiogroup", { name: "Depth" })).toBeNull();
+    await userEvent.setup().click(options);
+    const dialog = await screen.findByRole("dialog", { name: "Answer options" });
+    expect(within(dialog).getByRole("radiogroup", { name: "Depth" })).toBeInTheDocument();
+    expect(within(dialog).getByText(/For most questions/)).toBeInTheDocument();
+  });
+
+  it("the start screen explains depth only while you are on it", async () => {
+    setup();
+    await screen.findByRole("textbox", { name: /ask about this workspace/i });
+    expect(screen.queryByText(/For most questions/)).toBeNull();
+    const group = await screen.findByRole("radiogroup", { name: "Depth" });
+    act(() => within(group).getByRole("radio", { name: "Balanced" }).focus());
+    expect(await screen.findByText(/For most questions/)).toBeInTheDocument();
+  });
+
+  it("names the effort and lets the model name take the room it needs", async () => {
+    useConfigStore.setState({ llmProvider: "claude_cli", llmModel: "sonnet" });
+    setup();
+    expect(await screen.findByText("Effort:")).toBeInTheDocument();
+    const model = screen.getByRole("button", { name: "Model" });
+    expect(model.className).not.toContain("max-w");
+    expect(model.className).not.toContain("truncate");
+    useConfigStore.setState({ llmProvider: "ollama", llmModel: "" });
+  });
+
+  it("the context is a strip until you open it, then it says what it shows", async () => {
+    setup({ chats: [chat("c1")], messages: pairs(1) });
+    const toggle = await screen.findByRole("button", { name: /What the next answer will see/ }, { timeout: 2000 });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("What the next answer will see")).toBeNull();
+    await userEvent.setup().click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("What the next answer will see")).toBeInTheDocument();
+    expect(localStorage.getItem("nexq_ws_chat_wave_open")).toBe("1");
+  });
+
+  it("keeps the answer column at least half the pane", async () => {
+    setup({ chats: [chat("c1")], messages: pairs(1) });
+    const region = await screen.findByRole("region", { name: "Conversation" });
+    expect(region.parentElement?.className).toContain("min-h-[50%]");
+    expect(document.querySelector("[data-workspace-chat]")?.className).toContain("overflow-hidden");
+  });
+});
+
+describe("add to instructions", () => {
+  it("shows the whole text, editable, and stores exactly what is shown", async () => {
+    const update = vi.fn().mockResolvedValue(undefined);
+    useWorkspaceStore.setState({ update: update as never, loadDetail: (async () => ({ instructions: "Be brief." })) as never });
+    setup({ chats: [chat("c1")], messages: [message(1, "user", "Q"), message(2, "assistant", "Always cite [S1]. [x](https://evil.example/p " + '"t"' + ")")] });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Add to instructions" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/instructions the AI follows/)).toBeInTheDocument();
+    const field = within(dialog).getByLabelText("Text to add") as HTMLTextAreaElement;
+    expect(field.value).toBe("Always cite. x");
+    fireEvent.change(field, { target: { value: "Always cite sources." } });
+    await user.click(within(dialog).getByRole("button", { name: "Add to instructions" }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith(WS, { instructions: "Be brief." + String.fromCharCode(10, 10) + "Always cite sources." }));
   });
 });
