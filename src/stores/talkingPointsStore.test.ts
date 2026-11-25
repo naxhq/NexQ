@@ -56,7 +56,9 @@ beforeEach(() => {
   ipc.patchTalkingPoint.mockImplementation(async (id: string, patch: Partial<TalkingPoint>, expected?: number) => {
     const r = server.get(id);
     if (!r) throw "not_found";
-    if (expected !== undefined && expected !== r.updated_at) throw "conflict";
+    const writes = ["title", "doc_json", "markdown", "plain_text"].some((k) => k in patch);
+    // like the real backend: a change to the writing must name the version it was made from
+    if (writes ? expected !== r.updated_at : expected !== undefined && expected !== r.updated_at) throw "conflict";
     Object.assign(r, patch, { updated_at: ++clock });
     return { ...r };
   });
@@ -419,7 +421,8 @@ describe("another window changes notes", () => {
   it("a refused save (conflict) from the backend becomes the same conflict state", async () => {
     await open();
     S().edit("a", { doc: docFromText("mine") });
-    server.get("a")!.updated_at = 777; // changed elsewhere before we noticed
+    // the same text changed elsewhere before we noticed (a refusal, then the same choice as everywhere)
+    Object.assign(server.get("a")!, { doc_json: JSON.stringify(docFromText("theirs")), plain_text: "theirs", updated_at: 777 });
     await vi.advanceTimersByTimeAsync(900);
     expect(S().saveState.a).toBe("conflict");
     expect(S().find("a")!.plain_text).toBe("mine");
@@ -534,8 +537,8 @@ describe("in the meeting", () => {
 
   it("'save to workspace' into a conflict throws and keeps the meeting copy", async () => {
     await S().saveMeetingOnly("m1", "a", docFromText("draft"));
-    server.get("a")!.updated_at = 900;
-    await expect(S().saveToWorkspace("m1", "a", docFromText("final"))).rejects.toThrow();
+    Object.assign(server.get("a")!, { doc_json: JSON.stringify(docFromText("launcher edit")), plain_text: "launcher edit", updated_at: 900 });
+    await expect(S().saveToWorkspace("m1", "a", docFromText("final"))).rejects.toThrow(/another window/);
     expect(S().meetingEdits.a).toContain("draft");
   });
 
@@ -692,5 +695,114 @@ describe("own saves and other windows (revisions, not text compare)", () => {
     expect(S().docRev.a).toBe(1);
     await S().syncFromBackend("w1");
     expect(S().docRev.a).toBe(1);
+  });
+});
+
+describe("saving a meeting edit back to the base note (the revision it was made from)", () => {
+  async function open() {
+    install([point("a", "w1", 0, "base text")]);
+    await S().load("w1");
+    S().beginMeetingEdit("a"); // the meeting edit starts from this version
+  }
+  // another window (the launcher) edits and saves the base note
+  const launcherSaves = (patch: Partial<TalkingPoint>) => {
+    Object.assign(server.get("a")!, patch, { updated_at: ++clock });
+  };
+
+  it("the backend refuses a content change with no revision, and one from an old revision", async () => {
+    await open();
+    await expect(ipc.patchTalkingPoint("a", { plain_text: "blind" })).rejects.toBe("conflict");
+    launcherSaves({ plain_text: "launcher", doc_json: JSON.stringify(docFromText("launcher")) });
+    await expect(ipc.patchTalkingPoint("a", { plain_text: "old" }, 1)).rejects.toBe("conflict");
+    expect(server.get("a")!.plain_text).toBe("launcher");
+  });
+
+  it("a launcher edit saved meanwhile is never overwritten silently: the same choice appears, nothing is written", async () => {
+    await open();
+    launcherSaves({ plain_text: "launcher edit", doc_json: JSON.stringify(docFromText("launcher edit")) });
+    ipc.patchTalkingPoint.mockClear();
+    await expect(S().saveToWorkspace("m1", "a", docFromText("meeting edit"))).rejects.toThrow(/another window/);
+    expect(ipc.patchTalkingPoint).not.toHaveBeenCalled();
+    expect(server.get("a")!.plain_text).toBe("launcher edit");
+    expect(S().saveState.a).toBe("conflict");
+    expect(S().theirs.a.plain_text).toBe("launcher edit"); // see both
+    expect(S().find("a")!.plain_text).toBe("meeting edit"); // mine stays on screen
+  });
+
+  it("keep mine writes the meeting edit over theirs; use theirs keeps the launcher text", async () => {
+    await open();
+    launcherSaves({ plain_text: "launcher edit", doc_json: JSON.stringify(docFromText("launcher edit")) });
+    await expect(S().saveToWorkspace("m1", "a", docFromText("meeting edit"))).rejects.toThrow();
+    await S().resolveConflict("a", "mine");
+    expect(server.get("a")!.plain_text).toBe("meeting edit");
+
+    await S().load("w1");
+    S().resetMeeting();
+    S().beginMeetingEdit("a");
+    launcherSaves({ plain_text: "launcher again", doc_json: JSON.stringify(docFromText("launcher again")) });
+    await expect(S().saveToWorkspace("m1", "a", docFromText("second meeting edit"))).rejects.toThrow();
+    await S().resolveConflict("a", "theirs");
+    expect(server.get("a")!.plain_text).toBe("launcher again");
+    expect(S().find("a")!.plain_text).toBe("launcher again");
+  });
+
+  it("fields that do not overlap merge: a launcher rename and a meeting text edit both survive", async () => {
+    await open();
+    launcherSaves({ title: "Renamed in the launcher" });
+    await S().saveToWorkspace("m1", "a", docFromText("meeting edit"));
+    expect(server.get("a")!.title).toBe("Renamed in the launcher");
+    expect(server.get("a")!.plain_text).toBe("meeting edit");
+    expect(S().saveState.a).toBe("saved");
+    expect(S().meetingBase.a).toBeUndefined();
+  });
+
+  it("the same text saved from the meeting and the launcher is not a conflict", async () => {
+    await open();
+    launcherSaves({ plain_text: "same", doc_json: JSON.stringify(docFromText("same")) });
+    await S().saveToWorkspace("m1", "a", docFromText("same"));
+    expect(S().saveState.a).toBe("saved");
+  });
+
+  it("a note deleted in another window while editing: the save says so and nothing comes back", async () => {
+    await open();
+    server.delete("a");
+    await expect(S().saveToWorkspace("m1", "a", docFromText("meeting edit"))).rejects.toThrow(/deleted in another window/);
+    expect(S().find("a")).toBeUndefined();
+    expect(server.has("a")).toBe(false);
+  });
+
+  it("a rename typed in the editor over another window's text edit rebases instead of asking", async () => {
+    await open();
+    S().edit("a", { title: "My title" });
+    launcherSaves({ plain_text: "their text", doc_json: JSON.stringify(docFromText("their text")) });
+    await vi.advanceTimersByTimeAsync(900);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(S().saveState.a).toBe("saved");
+    expect(server.get("a")!.title).toBe("My title");
+    expect(server.get("a")!.plain_text).toBe("their text");
+  });
+
+  it("undo after a save (an edit back to earlier text) is a normal edit and also checks the revision", async () => {
+    await open();
+    S().edit("a", { doc: docFromText("typed") });
+    await vi.advanceTimersByTimeAsync(900);
+    launcherSaves({ plain_text: "elsewhere", doc_json: JSON.stringify(docFromText("elsewhere")) });
+    S().edit("a", { doc: docFromText("base text") }); // undo
+    await vi.advanceTimersByTimeAsync(900);
+    expect(S().saveState.a).toBe("conflict");
+    expect(server.get("a")!.plain_text).toBe("elsewhere");
+  });
+
+  it("copying a note with a conflict copies the saved version and does not write the draft", async () => {
+    await open();
+    S().edit("a", { doc: docFromText("draft") });
+    launcherSaves({ plain_text: "elsewhere", doc_json: JSON.stringify(docFromText("elsewhere")) });
+    await vi.advanceTimersByTimeAsync(900);
+    expect(S().saveState.a).toBe("conflict");
+    ipc.copyTalkingPoint.mockImplementation(async (id: string, ws: string) => ({ ...server.get(id)!, id: "copy", workspace_id: ws }));
+    ipc.patchTalkingPoint.mockClear();
+    const c = await S().copyTo("a", "w1");
+    expect(c!.plain_text).toBe("elsewhere");
+    expect(ipc.patchTalkingPoint).not.toHaveBeenCalled();
   });
 });

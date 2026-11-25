@@ -14,11 +14,13 @@ export function SaveStatus({
   error,
   onRetry,
   onResolve,
+  onSeeBoth,
 }: {
   state: SaveState | undefined;
   error?: string | null;
   onRetry: () => void;
   onResolve?: (which: "mine" | "theirs") => void;
+  onSeeBoth?: () => void;
 }) {
   if (state === "conflict") {
     const b = "rounded-md px-1.5 py-0.5 font-medium underline underline-offset-2 outline-none hover:bg-accent ui-focus ui-r-md";
@@ -31,6 +33,11 @@ export function SaveStatus({
         <button type="button" className={b} onClick={() => onResolve?.("theirs")}>
           Use theirs
         </button>
+        {onSeeBoth && (
+          <button type="button" className={b} onClick={onSeeBoth}>
+            See both
+          </button>
+        )}
       </span>
     );
   }
@@ -58,6 +65,9 @@ export function NoteEditorPane({ note }: { note: TalkingPoint }) {
   const retry = useTalkingPointsStore((s) => s.retry);
   const setInContext = useTalkingPointsStore((s) => s.setInContext);
   const resolve = useTalkingPointsStore((s) => s.resolveConflict);
+  const loadTheirs = useTalkingPointsStore((s) => s.loadTheirs);
+  const theirs = useTalkingPointsStore((s) => s.theirs[note.id]);
+  const [both, setBoth] = useState(false);
   const rev = useTalkingPointsStore((s) => s.docRev[note.id] ?? 0);
   const state = useTalkingPointsStore((s) => s.saveState[note.id]);
   const error = useTalkingPointsStore((s) => s.saveError[note.id]);
@@ -105,7 +115,7 @@ export function NoteEditorPane({ note }: { note: TalkingPoint }) {
           }}
           className="ui-title min-w-[10rem] flex-1 truncate rounded-md bg-transparent px-1 py-0.5 outline-none transition-colors hover:bg-accent/50 focus-visible:bg-accent/60 ui-focus ui-r-md"
         />
-        <SaveStatus state={state} error={error} onRetry={() => retry(note.id)} onResolve={(w) => void resolve(note.id, w)} />
+        <SaveStatus state={state} error={error} onRetry={() => retry(note.id)} onResolve={(w) => void resolve(note.id, w)} onSeeBoth={() => { setBoth((v) => !v); void loadTheirs(note.id); }} />
         <Menu
           label="More for this note"
           align="end"
@@ -135,6 +145,11 @@ export function NoteEditorPane({ note }: { note: TalkingPoint }) {
           )}
         />
       </header>
+      {state === "conflict" && both && (
+        <p className="ui-body mb-3 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg bg-muted p-2.5" aria-label="Their version">
+          {theirs ? theirs.plain_text || "(empty)" : "Loading their version"}
+        </p>
+      )}
       <Switch
         className="pb-3"
         checked={note.in_context}

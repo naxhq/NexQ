@@ -160,6 +160,10 @@ interface TalkingPointsState {
   saveError: Record<string, string | null>;
   /** Bumped when a note's text was replaced from the backend, so an open editor reloads it. */
   docRev: Record<string, number>;
+  /** The other window's copy of a note we have a conflict on (to show both). */
+  theirs: Record<string, TalkingPoint>;
+  /** The base note as it was when a meeting-only edit began (so "save to workspace" says which version it was made from). */
+  meetingBase: Record<string, { updated_at: number; doc_json: string; title: string }>;
   /** Last error of a list action (reorder, copy, delete). */
   actionError: string | null;
 
@@ -183,6 +187,8 @@ interface TalkingPointsState {
   flushAll: () => Promise<void>;
   retry: (id: string) => void;
   resolveConflict: (id: string, which: "mine" | "theirs") => Promise<void>;
+  loadTheirs: (id: string) => Promise<TalkingPoint | null>;
+  beginMeetingEdit: (pointId: string) => void;
   duplicate: (id: string) => Promise<TalkingPoint | null>;
   copyTo: (id: string, workspaceId: string) => Promise<TalkingPoint | null>;
   remove: (id: string) => Promise<void>;
@@ -296,6 +302,7 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
             e.conflict = true;
             if (e.timer) clearTimeout(e.timer);
             e.timer = null;
+            set((s) => ({ theirs: { ...s.theirs, [p.id]: p } }));
             setSave(p.id, "conflict", "Changed in another window");
           } else if (!clash) {
             e.base = p.updated_at;
@@ -316,6 +323,36 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
     for (const id of reload) bumpRev(id);
   };
 
+  /**
+   * The backend refused a save because the note moved on. If the other window changed fields we did not touch, our
+   * edits go on top of its version (nothing is lost on either side). If we both changed the same field, nothing is
+   * written and the person chooses (keep mine, use theirs, see both).
+   */
+  const rebaseOrConflict = async (id: string, entry: Pending) => {
+    let theirs: TalkingPoint | undefined;
+    try {
+      theirs = (await listTalkingPoints(entry.workspaceId)).find((p) => p.id === id);
+    } catch {
+      entry.conflict = true;
+      setSave(id, "conflict", "Changed in another window");
+      return;
+    }
+    if (!theirs) return vanished(id);
+    const keys = Object.keys(entry.dirty) as Array<keyof TextFields>;
+    const disjoint = keys.every((k) => entry.orig[k] !== undefined && theirs![k] === entry.orig[k]);
+    if (disjoint) {
+      entry.base = theirs.updated_at;
+      entry.attempt = 0;
+      upsert({ ...theirs, ...entry.dirty });
+      setSave(id, "dirty");
+      entry.timer = setTimeout(() => void get().flush(id), 0);
+      return;
+    }
+    entry.conflict = true;
+    set((s) => ({ theirs: { ...s.theirs, [id]: theirs! } }));
+    setSave(id, "conflict", "Changed in another window");
+  };
+
   return {
     byWorkspace: {},
     loading: {},
@@ -323,6 +360,8 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
     saveState: {},
     saveError: {},
     docRev: {},
+    theirs: {},
+    meetingBase: {},
     actionError: null,
     reading: prefs.reading,
     lastNote: prefs.lastNote,
@@ -468,8 +507,7 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
           if (tombstones.has(id) || pending.get(id) !== entry) return;
           if (isErr(e, "not_found")) return vanished(id);
           if (isErr(e, "conflict")) {
-            entry.conflict = true;
-            setSave(id, "conflict", "Changed in another window");
+            await rebaseOrConflict(id, entry);
             return;
           }
           entry.attempt += 1;
@@ -507,6 +545,11 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
         return;
       }
       if (!theirs) return vanished(id);
+      set((st) => {
+        const t = { ...st.theirs };
+        delete t[id];
+        return { theirs: t };
+      });
       if (which === "theirs") {
         forget(id);
         upsert(theirs);
@@ -521,6 +564,24 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
       upsert({ ...theirs, ...entry.dirty });
       setSave(id, "dirty");
       await get().flush(id);
+    },
+
+    loadTheirs: async (id) => {
+      const cur = get().find(id);
+      if (!cur) return get().theirs[id] ?? null;
+      try {
+        const t = (await listTalkingPoints(cur.workspace_id)).find((p) => p.id === id) ?? null;
+        if (t) set((s) => ({ theirs: { ...s.theirs, [id]: t } }));
+        return t;
+      } catch {
+        return get().theirs[id] ?? null;
+      }
+    },
+
+    beginMeetingEdit: (pointId) => {
+      const n = get().find(pointId);
+      if (!n || get().meetingBase[pointId]) return;
+      set((s) => ({ meetingBase: { ...s.meetingBase, [pointId]: { updated_at: n.updated_at, doc_json: n.doc_json, title: n.title } } }));
     },
 
     duplicate: async (id) => {
@@ -606,7 +667,13 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
           const edits = { ...s.meetingEdits };
           if (edit) edits[pointId] = edit;
           else delete edits[pointId];
-          return { meetingEdits: edits, progress: { ...s.progress, [pointId]: prog?.said ?? s.progress[pointId] ?? [] }, progressError: null };
+          // a meeting edit made earlier: its base is the version we know now (the best we can say)
+          const known = Object.values(s.byWorkspace).flat().find((p) => p.id === pointId);
+          const meetingBase =
+            edit && known && !s.meetingBase[pointId]
+              ? { ...s.meetingBase, [pointId]: { updated_at: known.updated_at, doc_json: known.doc_json, title: known.title } }
+              : s.meetingBase;
+          return { meetingEdits: edits, meetingBase, progress: { ...s.progress, [pointId]: prog?.said ?? s.progress[pointId] ?? [] }, progressError: null };
         });
       } catch (e) {
         set({ progressError: message(e) });
@@ -620,13 +687,51 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
     },
 
     saveToWorkspace: async (meetingId, pointId, doc) => {
+      const cur = get().find(pointId);
+      if (!cur) throw new Error("This note was deleted in another window");
+      // the version the meeting edit was made from; the backend refuses a save from any other
+      const base = get().meetingBase[pointId] ?? { updated_at: cur.updated_at, doc_json: cur.doc_json, title: cur.title };
+      let theirs: TalkingPoint | undefined;
+      let known = true;
+      try {
+        theirs = (await listTalkingPoints(cur.workspace_id)).find((p) => p.id === pointId);
+      } catch {
+        known = false; // the backend still decides, by revision
+      }
+      if (known && !theirs) {
+        vanished(pointId);
+        throw new Error("This note was deleted in another window");
+      }
+      let baseRev = base.updated_at;
+      let clash = false;
+      if (theirs && theirs.updated_at !== base.updated_at) {
+        upsert(theirs); // their changes to the other fields stay
+        // the same writing is not a clash (block ids differ between two documents of the same text)
+        const sameText = docToMarkdown(parseDoc(theirs.doc_json)) === docToMarkdown(doc);
+        clash = theirs.doc_json !== base.doc_json && !sameText;
+        baseRev = theirs.updated_at;
+        if (clash) set((s) => ({ theirs: { ...s.theirs, [pointId]: theirs! } }));
+      }
       get().edit(pointId, { doc });
+      const entry = pending.get(pointId);
+      if (entry) {
+        entry.base = baseRev;
+        if (clash) {
+          entry.conflict = true;
+          if (entry.timer) clearTimeout(entry.timer);
+          entry.timer = null;
+          setSave(pointId, "conflict", "Changed in another window");
+        }
+      }
+      if (clash) throw new Error("Changed in another window");
       await get().flush(pointId);
       if (get().saveState[pointId] === "failed" || get().saveState[pointId] === "conflict") throw new Error(get().saveError[pointId] ?? "Could not save");
       set((s) => {
         const edits = { ...s.meetingEdits };
         delete edits[pointId];
-        return { meetingEdits: edits };
+        const mb = { ...s.meetingBase };
+        delete mb[pointId];
+        return { meetingEdits: edits, meetingBase: mb };
       });
       await saveMeetingPointEdit(meetingId, pointId, null);
     },
@@ -726,6 +831,8 @@ export function __resetTalkingPointsForTests(): void {
     saveState: {},
     saveError: {},
     docRev: {},
+    theirs: {},
+    meetingBase: {},
     actionError: null,
     meetingEdits: {},
     progress: {},

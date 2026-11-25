@@ -144,7 +144,9 @@ pub fn patch_talking_point(
         || patch.doc_json.is_some()
         || patch.markdown.is_some()
         || patch.plain_text.is_some();
-    if content_changes && expected_updated_at.is_some_and(|at| at != point.updated_at) {
+    // A change to the writing must say which version it was made from: without a revision it could overwrite
+    // a save from another window without anyone being told, so it is refused like a stale one.
+    if content_changes && expected_updated_at != Some(point.updated_at) {
         return Err(CONFLICT.to_string());
     }
     let doc = patch.doc_json.clone().filter(|d| !d.trim().is_empty()).unwrap_or(point.doc_json.clone());
@@ -434,12 +436,32 @@ mod tests {
             &conn,
             &made.id,
             TalkingPointPatch { doc_json: Some(doc(typed).to_string()), plain_text: Some(typed.to_string()), markdown: Some(typed.to_string()), ..Default::default() },
-            None,
+            Some(made.updated_at),
         )
         .unwrap();
         assert!(patched.doc_json.contains(typed));
         assert_eq!(patched.plain_text, typed);
         assert_eq!(patched.markdown, typed);
+    }
+
+    #[test]
+    fn a_change_to_the_writing_without_a_revision_or_with_an_old_one_is_refused() {
+        let conn = memory_db();
+        let a = new_ws(&conn, "A", false, false);
+        let point = make(&conn, &a, "T", "base", true);
+        let body = |t: &str| TalkingPointPatch { doc_json: Some(doc(t).to_string()), ..Default::default() };
+        // no revision at all: refused, the stored note is untouched
+        assert_eq!(patch_talking_point(&conn, &point.id, body("blind overwrite"), None), Err(CONFLICT.to_string()));
+        assert!(!get_talking_point(&conn, &point.id).unwrap().unwrap().plain_text.contains("blind"));
+        // another window saves first
+        let theirs = patch_talking_point(&conn, &point.id, body("their edit"), Some(point.updated_at)).unwrap();
+        // a save made from the version before theirs is refused too
+        assert_eq!(patch_talking_point(&conn, &point.id, body("my edit from the old version"), Some(point.updated_at)), Err(CONFLICT.to_string()));
+        assert!(get_talking_point(&conn, &point.id).unwrap().unwrap().plain_text.contains("their edit"));
+        // from their version it goes through
+        assert!(patch_talking_point(&conn, &point.id, body("merged"), Some(theirs.updated_at)).is_ok());
+        // the AI-context switch is not a change to the writing and needs no revision
+        assert!(patch_talking_point(&conn, &point.id, TalkingPointPatch { in_context: Some(false), ..Default::default() }, None).is_ok());
     }
 
     #[test]
