@@ -37,14 +37,15 @@ export function CitationChip({
       <span>{`[${tag}]`}</span>
     );
   }
-  // The source left the workspace: a muted chip that says why on hover or focus, and opens nothing.
-  if (citation.reason) {
+  // The source is gone (its ref is empty): a muted chip that says why on hover or focus, and opens nothing.
+  if (!citation.ref_id) {
+    const reason = citation.snippet || citation.title;
     return (
-      <Tooltip content={<span className="block max-w-[16rem] text-foreground">{citation.reason}</span>} delay={200}>
+      <Tooltip content={<span className="block max-w-[16rem] text-foreground">{reason}</span>} delay={200}>
         <span
           tabIndex={0}
           role="note"
-          aria-label={`Source ${tag}: ${citation.reason}`}
+          aria-label={`Source ${tag}: ${reason}`}
           className={cn(chipClass, "cursor-default bg-muted text-muted-foreground line-through outline-none ui-focus")}
         >
           {tag}

@@ -1615,9 +1615,8 @@ export interface WorkspaceCitation {
   sub_ref: string | null;
   title: string;
   start_ms: number | null;
+  /** Text of the passage; for a source that is gone (empty `ref_id`), why in plain words. */
   snippet: string;
-  /** A plain reason instead of text when the source left the workspace ("Removed from the workspace"). */
-  reason?: string | null;
 }
 
 export interface WorkspaceMessage {

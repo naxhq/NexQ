@@ -29,7 +29,7 @@ describe("citations whose source left the workspace", () => {
 
   it("shows a muted chip with the reason, and opens nothing", () => {
     const open = vi.fn();
-    render(<CitationChip tag="S1" live={false} citation={{ ...base, reason: "Removed from the workspace" }} onOpen={open} />);
+    render(<CitationChip tag="S1" live={false} citation={{ ...base, ref_id: "", title: "Removed source", snippet: "Removed from the workspace" }} onOpen={open} />);
     const chip = screen.getByRole("note", { name: "Source S1: Removed from the workspace" });
     expect(chip).toHaveAttribute("tabindex", "0");
     chip.click();
