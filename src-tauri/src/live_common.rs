@@ -49,6 +49,12 @@ impl Clock for FakeClock {
     }
 }
 
+impl<T: Clock + ?Sized> Clock for Arc<T> {
+    fn now_ms(&self) -> u64 {
+        (**self).now_ms()
+    }
+}
+
 // ---------------------------------------------------------------- LLM
 
 #[derive(Debug, Clone)]
@@ -82,17 +88,19 @@ pub enum LlmErrorKind {
 pub struct LlmError {
     pub kind: LlmErrorKind,
     pub message: String,
+    /// The service's stable error name (`rate_limited`, `no_key` ...), empty if none.
+    pub code: &'static str,
 }
 
 impl LlmError {
     pub fn failed(msg: impl Into<String>) -> Self {
-        Self { kind: LlmErrorKind::Failed, message: msg.into() }
+        Self { kind: LlmErrorKind::Failed, message: msg.into(), code: "" }
     }
     pub fn plan_limit(msg: impl Into<String>) -> Self {
-        Self { kind: LlmErrorKind::PlanLimit, message: msg.into() }
+        Self { kind: LlmErrorKind::PlanLimit, message: msg.into(), code: "" }
     }
     pub fn cancelled() -> Self {
-        Self { kind: LlmErrorKind::Cancelled, message: "cancelled".into() }
+        Self { kind: LlmErrorKind::Cancelled, message: "cancelled".into(), code: "cancelled" }
     }
 }
 
@@ -100,6 +108,13 @@ impl LlmError {
 #[async_trait]
 pub trait LlmCall: Send + Sync {
     async fn call(&self, req: &LlmRequest) -> Result<LlmReply, LlmError>;
+}
+
+#[async_trait]
+impl<T: LlmCall + ?Sized> LlmCall for Arc<T> {
+    async fn call(&self, req: &LlmRequest) -> Result<LlmReply, LlmError> {
+        (**self).call(req).await
+    }
 }
 
 // ---------------------------------------------------------------- text sizes

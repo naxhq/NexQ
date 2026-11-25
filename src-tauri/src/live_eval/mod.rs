@@ -5,6 +5,8 @@
 #![allow(dead_code)]
 
 pub mod score;
+#[cfg(test)]
+mod redteam;
 pub mod scripted;
 pub mod sim;
 

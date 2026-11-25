@@ -194,12 +194,32 @@ impl NoteDoc {
     }
 
     pub fn user_add(&mut self, kind: BlockKind, parent: Option<&str>, text: &str, at_ms: u64) -> Option<String> {
+        self.user_add_with_id(None, kind, parent, text, None, at_ms)
+    }
+
+    /// A block the user adds. `id` is the webview's own id when it is usable
+    /// and free; `after` puts it right after that block.
+    pub fn user_add_with_id(&mut self, id: Option<&str>, kind: BlockKind, parent: Option<&str>, text: &str, after: Option<&str>, at_ms: u64) -> Option<String> {
         let cleaned = crate::live_notes::reducer::clean_text(kind, text);
         if cleaned.is_empty() {
             return None;
         }
-        let id = self.alloc_id();
-        let order = self.next_order();
+        let usable = |i: &&str| !i.is_empty() && i.len() <= 40 && i.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        let id = match id.filter(usable) {
+            Some(i) if self.get(i).is_none() => i.to_string(),
+            _ => self.alloc_id(),
+        };
+        let order = match after.and_then(|a| self.get(a)).map(|b| b.order) {
+            Some(o) => {
+                for b in self.blocks.iter_mut() {
+                    if b.order > o {
+                        b.order += 1;
+                    }
+                }
+                o + 1
+            }
+            None => self.next_order(),
+        };
         self.blocks.push(Block {
             id: id.clone(),
             kind,
@@ -335,7 +355,7 @@ impl NoteDoc {
 fn outline_line(b: &Block, depth: usize) -> String {
     let lock = if b.locked() { "*" } else { "" };
     let indent = "  ".repeat(depth);
-    format!("{indent}[{}{}] {} {}: {}", b.id, lock, fmt_clock(b.start_ms), b.kind.as_str(), b.text)
+    format!("{indent}[{}{}] {} {}: {}", b.id, lock, fmt_clock(b.start_ms), b.kind.as_str(), crate::prompt_data::clean_line_max(&b.text, 300))
 }
 
 // ---------------------------------------------------------------- spans

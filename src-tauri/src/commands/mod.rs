@@ -5,6 +5,7 @@ pub mod context_commands;
 pub mod credential_commands;
 pub mod gemini_cache_commands;
 pub mod intelligence_commands;
+pub mod live_commands;
 pub mod llm_commands;
 pub mod log_commands;
 pub mod meeting_chat_commands;

@@ -12,6 +12,8 @@ pub mod live_brief;
 pub mod live_common;
 pub mod live_eval;
 pub mod live_notes;
+pub mod live_runtime;
+pub mod prompt_data;
 pub mod llm;
 pub mod meeting_detect;
 pub mod nav_guard;
@@ -78,6 +80,7 @@ use commands::claude_cli_commands;
 use commands::cli_agent_commands;
 // == MODULE COMMANDS: workspaces ==
 use commands::workspace_chat_commands;
+use commands::live_commands;
 use commands::workspace_commands;
 
 /// Show the launcher window and hide the overlay window.
@@ -382,6 +385,9 @@ pub fn run() {
             ));
 
             let _ = app_state.app_handle.set(app.handle().clone());
+            if let Some(rt) = live_runtime::app::build(app.handle(), &app_state) {
+                live_runtime::init(rt);
+            }
             app.manage(app_state);
             workspace_chat::runtime::attach(app.handle());
 
@@ -788,6 +794,22 @@ pub fn run() {
             sources_commands::delete_mcp_secrets,
             sources_commands::open_source_file,
             workspace_commands::get_workspaces_status,
+            live_commands::notetaker_start,
+            live_commands::notetaker_stop,
+            live_commands::notetaker_update_now,
+            live_commands::notetaker_continue,
+            live_commands::get_notetaker_settings,
+            live_commands::set_notetaker_settings,
+            live_commands::get_meeting_notes,
+            live_commands::save_meeting_notes_edit,
+            live_commands::get_meeting_brief,
+            live_commands::brief_start,
+            live_commands::brief_stop,
+            live_commands::brief_refresh,
+            live_commands::brief_continue,
+            live_commands::get_brief_settings,
+            live_commands::set_brief_settings,
+            live_commands::suggest_memory,
             workspace_commands::list_workspaces,
             workspace_commands::get_workspace,
             workspace_commands::create_workspace,
@@ -871,6 +893,10 @@ pub fn run() {
             if let tauri::RunEvent::Exit = &event {
                 let meeting_active = app.state::<AppState>().meeting_active.load(std::sync::atomic::Ordering::SeqCst);
                 log::info!("NexQ is exiting (meeting active: {meeting_active})");
+                // Running notes and briefs are saved as interrupted (resumable).
+                if let Some(rt) = live_runtime::global() {
+                    tauri::async_runtime::block_on(rt.shutdown(std::time::Duration::from_secs(2)));
+                }
                 let sessions = app.state::<AppState>().agent_sessions.clone();
                 llm::cli_agent::approval::WorkspaceApprovals::global().shut_down();
                 tauri::async_runtime::block_on(sessions.close_all());

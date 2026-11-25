@@ -1,0 +1,750 @@
+//! The runtimes against fakes: a scripted model service, an in-memory
+//! database with every migration, a fake clock and a recording emitter.
+
+use super::db::LiveDb;
+use super::llm::{LlmFactory, LlmSlot, Selection};
+use super::notes::{doc_to_contract, NoteEdit};
+use super::*;
+use crate::ai_runs::AiPurpose;
+use crate::live_common::{FakeClock, LlmCall, LlmError, LlmReply, LlmRequest};
+use crate::llm::provider::CancelToken;
+use crate::workspace::test_support::{file, memory_db, new_ws};
+use async_trait::async_trait;
+use rusqlite::Connection;
+use serde_json::json;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+
+// ---------------------------------------------------------------- fakes
+
+#[derive(Default)]
+struct FakeState {
+    replies: Mutex<VecDeque<Result<LlmReply, LlmError>>>,
+    calls: Mutex<Vec<(AiPurpose, String, LlmRequest)>>,
+    delay: Mutex<Duration>,
+    cancel_seen: AtomicUsize,
+    inflight: AtomicUsize,
+    max_inflight: AtomicUsize,
+}
+
+impl FakeState {
+    fn count(&self, p: AiPurpose) -> usize {
+        self.calls.lock().unwrap().iter().filter(|c| c.0 == p).count()
+    }
+    fn prompts(&self, p: AiPurpose) -> Vec<String> {
+        self.calls.lock().unwrap().iter().filter(|c| c.0 == p).map(|c| format!("{}\n{}", c.2.system, c.2.user)).collect()
+    }
+    fn push(&self, r: Result<LlmReply, LlmError>) {
+        self.replies.lock().unwrap().push_back(r);
+    }
+}
+
+struct FakeLlm {
+    st: Arc<FakeState>,
+    purpose: AiPurpose,
+    meeting: String,
+    cancel: Arc<CancelToken>,
+}
+
+#[async_trait]
+impl LlmCall for FakeLlm {
+    async fn call(&self, req: &LlmRequest) -> Result<LlmReply, LlmError> {
+        self.st.calls.lock().unwrap().push((self.purpose, self.meeting.clone(), req.clone()));
+        let now = self.st.inflight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.st.max_inflight.fetch_max(now, Ordering::SeqCst);
+        let delay = *self.st.delay.lock().unwrap();
+        let out = if delay.is_zero() {
+            Ok(())
+        } else {
+            tokio::select! {
+                _ = tokio::time::sleep(delay) => Ok(()),
+                _ = self.cancel.cancelled() => { self.st.cancel_seen.fetch_add(1, Ordering::SeqCst); Err(LlmError::cancelled()) }
+            }
+        };
+        self.st.inflight.fetch_sub(1, Ordering::SeqCst);
+        out?;
+        if let Some(r) = self.st.replies.lock().unwrap().pop_front() {
+            return r;
+        }
+        let text = match self.purpose {
+            AiPurpose::Brief => r#"{"now":"Acme pricing","facts":[{"text":"Acme pays 12 dollars per seat","source":"P1"}]}"#,
+            AiPurpose::Memory => r#"{"items":[{"kind":"fact","title":"Acme price","text":"Acme pays 12 dollars per seat","t":"00:10"}]}"#,
+            _ => r#"{"ops":[{"op":"add","type":"bullet","text":"Something was said","t":"00:10"}]}"#,
+        };
+        Ok(LlmReply { text: text.into(), input_tokens: Some(900), output_tokens: Some(40), cached_input_tokens: Some(600) })
+    }
+}
+
+struct FakeFactory(Arc<FakeState>);
+
+impl LlmFactory for FakeFactory {
+    fn make(&self, purpose: AiPurpose, meeting_id: &str, _sel: &Selection) -> Result<LlmSlot, String> {
+        let cancel = Arc::new(CancelToken::new());
+        Ok(LlmSlot { llm: Arc::new(FakeLlm { st: self.0.clone(), purpose, meeting: meeting_id.to_string(), cancel: cancel.clone() }), cancel })
+    }
+}
+
+#[derive(Default)]
+struct Events(Mutex<Vec<(String, Value)>>);
+
+impl Emitter for Events {
+    fn emit(&self, event: &str, payload: Value) {
+        self.0.lock().unwrap().push((event.to_string(), payload));
+    }
+}
+
+impl Events {
+    fn of(&self, name: &str) -> Vec<Value> {
+        self.0.lock().unwrap().iter().filter(|(n, _)| n == name).map(|(_, v)| v.clone()).collect()
+    }
+    fn last_status(&self, name: &str, meeting: &str) -> Option<Value> {
+        self.of(name).into_iter().filter(|v| v["meeting_id"] == meeting).last()
+    }
+}
+
+struct H {
+    rt: Arc<LiveRuntimes>,
+    fake: Arc<FakeState>,
+    events: Arc<Events>,
+    clock: FakeClock,
+    live: Arc<Mutex<Option<String>>>,
+    busy: Arc<AtomicBool>,
+    closed: Arc<Mutex<Vec<String>>>,
+    conn: Arc<Mutex<Connection>>,
+}
+
+fn harness_on(conn: Arc<Mutex<Connection>>) -> H {
+    let fake = Arc::new(FakeState::default());
+    let events = Arc::new(Events::default());
+    let clock = FakeClock::new(1_000);
+    let live: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let busy = Arc::new(AtomicBool::new(false));
+    let closed = Arc::new(Mutex::new(Vec::new()));
+    let (l2, b2, c2) = (live.clone(), busy.clone(), closed.clone());
+    let deps = Deps {
+        db: LiveDb::new(conn.clone() as Arc<dyn db::ConnProvider>),
+        emitter: events.clone(),
+        factory: Arc::new(FakeFactory(fake.clone())),
+        clock: Arc::new(clock.clone()),
+        busy: Arc::new(move || b2.load(Ordering::SeqCst)),
+        live_meeting: Arc::new(move || l2.lock().unwrap().clone()),
+        generation: Arc::new(|_| 0),
+        close_sessions: Arc::new(move |id| c2.lock().unwrap().push(id)),
+        tick: Duration::from_millis(10),
+        scope_check: Duration::from_millis(25),
+        final_timeout: Duration::from_millis(300),
+    };
+    H { rt: LiveRuntimes::new(deps), fake, events, clock, live, busy, closed, conn }
+}
+
+fn harness() -> H {
+    let mut conn = memory_db();
+    let tx = conn.transaction().unwrap();
+    crate::workspace_search::migrate::migrate_search(&tx).unwrap();
+    tx.commit().unwrap();
+    harness_on(Arc::new(Mutex::new(conn)))
+}
+
+impl H {
+    fn start_meeting(&self, id: &str) {
+        *self.live.lock().unwrap() = Some(id.to_string());
+    }
+    fn enable_notes(&self) {
+        self.rt.patch_notetaker(&json!({"enabled": true})).unwrap();
+    }
+    /// Lines the actor has taken, at clock time `at`, then the clock moves on so a run is due.
+    async fn speak(&self, meeting: &str, n_words: usize, at: u64) {
+        self.clock.set(at);
+        let text = (0..n_words).map(|i| format!("w{i}")).collect::<Vec<_>>().join(" ");
+        self.rt.feed(meeting, "Them", &text, at);
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        self.clock.set(at + 3_000);
+    }
+}
+
+async fn until(what: &str, f: impl Fn() -> bool) {
+    for _ in 0..400 {
+        if f() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("timed out waiting for: {what}");
+}
+
+fn make_meeting(h: &H, ws: &str) -> String {
+    let c = h.conn.lock().unwrap();
+    let m = crate::db::meetings::create_meeting(&c, "m").unwrap();
+    crate::workspace::meetings::set_home(&c, &m.id, ws).unwrap();
+    m.id
+}
+
+fn brief_workspace(h: &H) -> String {
+    let c = h.conn.lock().unwrap();
+    let ws = new_ws(&c, "Sales", false, false);
+    c.execute("UPDATE workspaces SET brief_default = 1 WHERE id = ?1", [&ws]).unwrap();
+    ws
+}
+
+fn index_doc(h: &H, ws: &str, id: &str, title: &str, text: &str) {
+    use crate::workspace_search::{passages::build_text_passages, store::replace_source, PassageKind};
+    let c = h.conn.lock().unwrap();
+    let p = build_text_passages(PassageKind::Document, id, None, title, text, None);
+    replace_source(&c, PassageKind::Document, id, None, &p, "h", 0, 0).unwrap();
+    file(&c, ws, "document", id);
+}
+
+// ---------------------------------------------------------------- notes
+
+#[tokio::test]
+async fn nothing_runs_when_off_on_silence_or_for_a_meeting_that_is_not_live() {
+    let h = harness();
+    h.start_meeting("m1");
+    assert!(h.rt.notetaker_start("m1").is_err(), "off by default");
+    h.enable_notes();
+    assert!(h.rt.notetaker_start("demo-1").is_err(), "not the running meeting");
+    assert!(h.rt.notetaker_start("m1").is_ok());
+    // silence, punctuation, and a long wait
+    h.rt.feed("m1", "Them", "...", 1_000);
+    h.rt.feed("m1", "Them", "   ", 1_000);
+    h.clock.set(10 * 60_000);
+    h.rt.notetaker_update_now("m1");
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(h.fake.calls.lock().unwrap().len(), 0, "no model call on silence");
+    // lines for a meeting nobody started notes for go nowhere
+    h.rt.feed("other", "Them", "words words words", 5);
+    assert_eq!(h.fake.calls.lock().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn two_meetings_back_to_back_keep_to_themselves() {
+    let h = harness();
+    h.enable_notes();
+    h.rt.patch_notetaker(&json!({"scope": "every"})).unwrap();
+    h.start_meeting("A");
+    h.rt.on_meeting_start("A");
+    h.speak("A", 120, 1_000).await;
+    until("a run for A", || h.fake.count(AiPurpose::Notes) == 1).await;
+    until("doc event", || !h.events.of("notetaker_doc").is_empty()).await;
+    h.rt.on_meeting_end("A");
+    *h.live.lock().unwrap() = None;
+    until("A finished", || h.events.last_status("notetaker_state", "A").map(|v| v["status"] == "finished").unwrap_or(false)).await;
+    until("A's sessions closed", || h.closed.lock().unwrap().contains(&"A".to_string())).await;
+
+    h.start_meeting("B");
+    h.rt.on_meeting_start("B");
+    h.clock.set(900_000);
+    h.rt.feed("B", "Them", &(0..120).map(|i| format!("beta{i}")).collect::<Vec<_>>().join(" "), 900_000);
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    h.clock.set(904_000);
+    until("a run for B", || h.fake.calls.lock().unwrap().iter().any(|c| c.1 == "B")).await;
+    let calls = h.fake.calls.lock().unwrap();
+    let b_prompt = &calls.iter().find(|c| c.1 == "B").unwrap().2.user;
+    assert!(!b_prompt.contains("w5 ") && b_prompt.contains("beta5"), "B sees only B");
+    drop(calls);
+    // A's notes stay A's
+    let a = h.rt.get_notes("A").await.unwrap();
+    assert!(a["blocks"].as_array().unwrap().len() >= 1);
+    h.rt.on_meeting_end("B");
+}
+
+#[tokio::test]
+async fn this_meeting_choice_ends_with_the_meeting() {
+    let h = harness();
+    h.enable_notes(); // scope "meeting"
+    h.start_meeting("A");
+    assert!(h.rt.notetaker_start("A").is_ok());
+    h.rt.on_meeting_end("A");
+    assert!(!h.rt.notetaker_settings().enabled, "next meeting starts with notes off");
+    assert!(h.events.of("notetaker_settings_changed").len() >= 2);
+    h.start_meeting("B");
+    h.rt.on_meeting_start("B");
+    assert!(h.fake.calls.lock().unwrap().is_empty());
+    // "every meeting" is remembered
+    let h2 = harness();
+    h2.rt.patch_notetaker(&json!({"enabled": true, "scope": "every"})).unwrap();
+    h2.start_meeting("A");
+    h2.rt.on_meeting_end("A");
+    assert!(h2.rt.notetaker_settings().enabled);
+}
+
+#[tokio::test]
+async fn plan_limit_pauses_with_the_reason_and_stops_calling() {
+    let h = harness();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    h.fake.push(Err(LlmError::plan_limit("Usage limit reached, resets at 5pm")));
+    h.speak("m1", 120, 1_000).await;
+    until("paused", || h.events.last_status("notetaker_state", "m1").map(|v| v["status"] == "paused").unwrap_or(false)).await;
+    let st = h.events.last_status("notetaker_state", "m1").unwrap();
+    assert_eq!(st["reason"], "Usage limit reached, resets at 5pm");
+    h.clock.set(10 * 60_000);
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    assert_eq!(h.fake.count(AiPurpose::Notes), 1);
+}
+
+#[tokio::test]
+async fn three_provider_failures_become_an_error_state() {
+    let h = harness();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    for _ in 0..3 {
+        h.fake.push(Err(LlmError::failed("The provider said no")));
+    }
+    h.speak("m1", 120, 1_000).await;
+    for i in 1..3u64 {
+        until("a failed run", || h.fake.count(AiPurpose::Notes) as u64 >= i).await;
+        h.clock.set(1_000 + i * 30_000);
+        tokio::time::sleep(Duration::from_millis(60)).await;
+    }
+    until("error", || h.events.last_status("notetaker_state", "m1").map(|v| v["status"] == "error").unwrap_or(false)).await;
+    let st = h.events.last_status("notetaker_state", "m1").unwrap();
+    assert!(st["reason"].as_str().unwrap().contains("The provider said no"));
+    assert_eq!(h.fake.count(AiPurpose::Notes), 3);
+}
+
+#[tokio::test]
+async fn cap_then_continue_and_total_tokens_are_reported() {
+    let h = harness();
+    h.rt.patch_notetaker(&json!({"enabled": true, "cap": 2_000})).unwrap();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    h.fake.push(Ok(LlmReply { text: r#"{"ops":[{"op":"add","type":"bullet","text":"Big run","t":"00:10"}]}"#.into(), input_tokens: Some(20_000), cached_input_tokens: Some(0), output_tokens: Some(300) }));
+    h.speak("m1", 120, 1_000).await;
+    until("capped", || h.events.last_status("notetaker_state", "m1").map(|v| v["status"] == "capped").unwrap_or(false)).await;
+    let st = h.events.last_status("notetaker_state", "m1").unwrap();
+    assert!(st["tokens_used"].as_u64().unwrap() >= 2_000);
+    assert!(st["total_tokens"].as_u64().unwrap() >= 20_000, "total sent is reported beside the counted tokens");
+    h.speak("m1", 120, 40_000).await;
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    assert_eq!(h.fake.count(AiPurpose::Notes), 1, "capped: no more runs");
+    h.rt.notetaker_continue("m1");
+    until("second run", || h.fake.count(AiPurpose::Notes) == 2).await;
+}
+
+#[tokio::test]
+async fn turning_off_stops_a_run_in_flight_and_nothing_restarts_it() {
+    let h = harness();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    *h.fake.delay.lock().unwrap() = Duration::from_secs(10);
+    h.speak("m1", 120, 1_000).await;
+    until("in flight", || h.fake.inflight.load(Ordering::SeqCst) == 1).await;
+    h.rt.patch_notetaker(&json!({"enabled": false})).unwrap();
+    until("cancelled", || h.fake.cancel_seen.load(Ordering::SeqCst) == 1).await;
+    until("off", || h.events.last_status("notetaker_state", "m1").map(|v| v["status"] == "off").unwrap_or(false)).await;
+    assert!(h.rt.notetaker_start("m1").is_err(), "only an explicit enable brings it back");
+    h.speak("m1", 120, 80_000).await;
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    assert_eq!(h.fake.count(AiPurpose::Notes), 1);
+}
+
+#[tokio::test]
+async fn quit_during_a_run_saves_and_does_not_wait_for_the_model() {
+    let h = harness();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    h.fake.push(Ok(LlmReply { text: r#"{"ops":[{"op":"add","type":"bullet","text":"First run saved","t":"00:10"}]}"#.into(), ..Default::default() }));
+    h.speak("m1", 120, 1_000).await;
+    until("first run", || h.fake.count(AiPurpose::Notes) == 1).await;
+    until("saved", || h.rt.deps().db.load_notes("m1").is_some()).await;
+    *h.fake.delay.lock().unwrap() = Duration::from_secs(30);
+    h.speak("m1", 120, 60_000).await;
+    until("second run in flight", || h.fake.inflight.load(Ordering::SeqCst) == 1).await;
+    let t0 = Instant::now();
+    h.rt.shutdown(Duration::from_secs(2)).await;
+    assert!(t0.elapsed() < Duration::from_secs(1), "quit is quick");
+    let saved = h.rt.deps().db.load_notes("m1").unwrap();
+    assert_eq!(saved.status, "interrupted");
+    assert!(saved.doc.blocks.iter().any(|b| b.text == "First run saved"));
+}
+
+#[tokio::test]
+async fn interrupted_notes_are_resumable_after_a_restart() {
+    let h = harness();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    h.speak("m1", 120, 1_000).await;
+    until("a run", || h.fake.count(AiPurpose::Notes) == 1).await;
+    until("saved running", || h.rt.deps().db.load_notes("m1").map(|s| s.status == "running").unwrap_or(false)).await;
+    // the app dies: a new process opens the same database
+    let h2 = harness_on(h.conn.clone());
+    assert_eq!(h2.rt.deps().db.load_notes("m1").unwrap().status, "interrupted");
+    h2.rt.patch_notetaker(&json!({"enabled": true})).unwrap();
+    h2.start_meeting("m1");
+    h2.rt.notetaker_start("m1").unwrap();
+    let doc = h2.rt.get_notes("m1").await.unwrap();
+    assert!(doc["blocks"].as_array().unwrap().iter().any(|b| b["text"] == "Something was said"), "the saved notes are the starting point");
+}
+
+#[tokio::test]
+async fn final_pass_at_the_end_is_bounded_and_end_returns_at_once() {
+    let h = harness();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    h.clock.set(1_000);
+    h.rt.feed("m1", "Them", "only a few words here", 1_000);
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    *h.fake.delay.lock().unwrap() = Duration::from_secs(30);
+    let t0 = Instant::now();
+    h.rt.on_meeting_end("m1");
+    assert!(t0.elapsed() < Duration::from_millis(50), "end_meeting never waits");
+    until("finished", || h.events.last_status("notetaker_state", "m1").map(|v| v["status"] == "finished").unwrap_or(false)).await;
+    assert!(t0.elapsed() < Duration::from_secs(2), "the final pass gave up after final_timeout");
+    until("sessions closed", || h.closed.lock().unwrap().contains(&"m1".to_string())).await;
+}
+
+#[tokio::test]
+async fn a_live_answer_has_priority_over_notes() {
+    let h = harness();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    h.busy.store(true, Ordering::SeqCst);
+    h.speak("m1", 120, 1_000).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(h.fake.count(AiPurpose::Notes), 0, "a live answer is generating");
+    h.busy.store(false, Ordering::SeqCst);
+    until("the run after the answer", || h.fake.count(AiPurpose::Notes) == 1).await;
+}
+
+#[tokio::test]
+async fn manual_mode_only_runs_on_update_now() {
+    let h = harness();
+    h.rt.patch_notetaker(&json!({"enabled": true, "update_mode": "manual"})).unwrap();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    h.speak("m1", 150, 1_000).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(h.fake.count(AiPurpose::Notes), 0);
+    h.rt.notetaker_update_now("m1");
+    until("manual run", || h.fake.count(AiPurpose::Notes) == 1).await;
+}
+
+#[tokio::test]
+async fn two_hour_soak_has_no_growth_and_costs_stay_under_the_cap() {
+    let h = harness();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    let handle_stats = || {
+        let g = h.rt.inner.lock().unwrap();
+        let n = g.notes.get("m1").unwrap();
+        (n.queued.load(Ordering::SeqCst), n.max_queued.load(Ordering::SeqCst), n.dropped_lines.load(Ordering::SeqCst))
+    };
+    let mut peak_blocks = 0usize;
+    // 7200 s, a 15-word line every 6 s
+    for i in 0..1_200u64 {
+        let t = 1_000 + i * 6_000;
+        h.clock.set(t);
+        let text = (0..15).map(|k| format!("t{}w{}", i / 50, k)).collect::<Vec<_>>().join(" ");
+        h.rt.feed("m1", "Them", &text, t);
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        h.clock.set(t + 4_000);
+        tokio::time::sleep(Duration::from_millis(3)).await;
+        if i % 100 == 99 {
+            let doc = h.rt.get_notes("m1").await.unwrap();
+            peak_blocks = peak_blocks.max(doc["blocks"].as_array().unwrap().len());
+            let (q, _, _) = handle_stats();
+            assert!(q < 40, "the queue drains (queued {q} at line {i})");
+        }
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let (q, max_q, dropped) = handle_stats();
+    assert_eq!(q, 0);
+    assert!(max_q < 60, "backlog stayed small: {max_q}");
+    assert_eq!(dropped, 0, "notes never lose a line");
+    let runs = h.fake.count(AiPurpose::Notes);
+    assert!(runs > 100 && runs < 220, "runs {runs}");
+    assert!(h.fake.max_inflight.load(Ordering::SeqCst) == 1, "one at a time");
+    let st = h.events.last_status("notetaker_state", "m1").unwrap();
+    assert!(st["tokens_used"].as_u64().unwrap() < st["cap"].as_u64().unwrap(), "an hour or two never asks to continue");
+    assert!(peak_blocks <= 500);
+    // events are throttled: never more than 4 doc events a second of real time
+    let n_doc = h.events.of("notetaker_doc").len();
+    assert!(n_doc < 200, "doc events {n_doc}");
+}
+
+#[tokio::test]
+async fn notes_prompts_carry_no_workspace_text_or_secrets() {
+    let h = harness();
+    let ws = brief_workspace(&h);
+    {
+        let c = h.conn.lock().unwrap();
+        c.execute("UPDATE workspaces SET instructions = 'WORKSPACE_INSTRUCTIONS_CANARY' WHERE id = ?1", [&ws]).unwrap();
+        crate::workspace::memory::save_memory(
+            &c,
+            crate::workspace::types::MemoryItem {
+                id: String::new(),
+                workspace_id: ws.clone(),
+                kind: "fact".into(),
+                title: "t".into(),
+                text: "MEMORY_CANARY".into(),
+                source_meeting: None,
+                source_ms: None,
+                status: "saved".into(),
+                created_at: 0,
+                updated_at: 0,
+            },
+        )
+        .unwrap();
+    }
+    index_doc(&h, &ws, "d1", "Secrets.pdf", "DOCUMENT_CANARY Acme pays 12 dollars per seat in the annual pricing plan");
+    let m = make_meeting(&h, &ws);
+    h.start_meeting(&m);
+    h.enable_notes();
+    h.rt.patch_brief(&json!({"enabled": true})).unwrap();
+    h.rt.notetaker_start(&m).unwrap();
+    h.rt.brief_start(&m).unwrap();
+    let text = "Acme annual pricing plan seat discussion ".repeat(30);
+    h.clock.set(1_000);
+    h.rt.feed(&m, "Them", &text, 1_000);
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    h.clock.set(4_000);
+    until("notes run", || h.fake.count(AiPurpose::Notes) == 1).await;
+    for p in h.fake.prompts(AiPurpose::Notes) {
+        for c in ["WORKSPACE_INSTRUCTIONS_CANARY", "MEMORY_CANARY", "DOCUMENT_CANARY"] {
+            assert!(!p.contains(c), "notes prompt leaked {c}");
+        }
+    }
+}
+
+// ---------------------------------------------------------------- brief
+
+#[tokio::test]
+async fn brief_searches_the_scope_calls_once_and_feeds_live_answers() {
+    let h = harness();
+    let ws = brief_workspace(&h);
+    index_doc(&h, &ws, "d1", "Pricing.pdf", "Acme pays 12 dollars per seat in the annual pricing plan. Renewal is in November.");
+    let m = make_meeting(&h, &ws);
+    h.start_meeting(&m);
+    // off globally: no start
+    assert!(h.rt.brief_start(&m).is_err());
+    h.rt.patch_brief(&json!({"enabled": true})).unwrap();
+    h.rt.brief_start(&m).unwrap();
+    let line = "we talk about the annual pricing plan and the Acme seat renewal";
+    for i in 0..8u64 {
+        h.clock.set(1_000 + i * 5_000);
+        h.rt.feed(&m, "Them", line, i * 5_000);
+        tokio::time::sleep(Duration::from_millis(15)).await;
+    }
+    until("one brief call", || h.fake.count(AiPurpose::Brief) == 1).await;
+    until("sheet event", || h.events.of("brief_sheet").iter().any(|e| !e["sheet"].is_null())).await;
+    let sheet = h.events.of("brief_sheet").into_iter().find(|e| !e["sheet"].is_null()).unwrap();
+    let fact = &sheet["sheet"]["facts"][0];
+    assert_eq!(fact["source"], "Pricing.pdf");
+    assert_eq!(fact["sources"][0]["kind"], "document");
+    assert_eq!(fact["sources"][0]["ref_id"], "d1");
+    // live answers get it: wrapped, only in answer modes, only once per session
+    let t = h.rt.answer_extras(&m, "Assist", None).unwrap();
+    assert!(t.contains("Acme pays 12 dollars") && t.contains("[[DATA brief "));
+    assert!(h.rt.answer_extras(&m, "MeetingSummary", None).is_none());
+    assert!(h.rt.answer_extras(&m, "ActionItemsExtraction", None).is_none());
+    assert!(h.rt.answer_extras(&m, "Assist", Some("live-fast")).is_some());
+    assert!(h.rt.answer_extras(&m, "Assist", Some("live-fast")).is_none(), "the session already has it");
+    assert!(h.rt.answer_extras("other-meeting", "Assist", None).is_none());
+    // the prompt is fenced and says where the data is
+    let p = &h.fake.prompts(AiPurpose::Brief)[0];
+    assert!(p.contains("[[DATA passages ") && p.contains("Pricing.pdf"));
+}
+
+#[tokio::test]
+async fn brief_is_off_in_a_workspace_that_has_it_off() {
+    let h = harness();
+    let ws = { let c = h.conn.lock().unwrap(); new_ws(&c, "Quiet", false, false) };
+    let m = make_meeting(&h, &ws);
+    h.start_meeting(&m);
+    h.rt.patch_brief(&json!({"enabled": true})).unwrap();
+    assert!(h.rt.brief_start(&m).is_err());
+}
+
+#[tokio::test]
+async fn a_scope_switch_mid_run_clears_the_sheet_and_the_late_reply_is_dropped() {
+    let h = harness();
+    let ws = brief_workspace(&h);
+    index_doc(&h, &ws, "d1", "Pricing.pdf", "OLDSCOPE Acme pays 12 dollars per seat in the annual pricing plan.");
+    let other = { let c = h.conn.lock().unwrap(); new_ws(&c, "Other", false, false) };
+    let m = make_meeting(&h, &ws);
+    h.start_meeting(&m);
+    h.rt.patch_brief(&json!({"enabled": true})).unwrap();
+    h.rt.brief_start(&m).unwrap();
+    *h.fake.delay.lock().unwrap() = Duration::from_millis(400);
+    let line = "we talk about the annual pricing plan and the Acme seat renewal";
+    for i in 0..8u64 {
+        h.clock.set(1_000 + i * 5_000);
+        h.rt.feed(&m, "Them", line, i * 5_000);
+        tokio::time::sleep(Duration::from_millis(15)).await;
+    }
+    until("call in flight", || h.fake.inflight.load(Ordering::SeqCst) == 1).await;
+    // the user moves the meeting to another workspace while the call runs
+    {
+        let c = h.conn.lock().unwrap();
+        crate::workspace::meetings::set_home(&c, &m, &other).unwrap();
+    }
+    h.rt.scope_changed(&m);
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    // the old reply arrived; nothing of it is shown or given to answers
+    assert!(h.events.of("brief_sheet").iter().all(|e| e["sheet"].is_null()), "no sheet was ever published");
+    assert!(h.rt.answer_extras(&m, "Assist", None).is_none());
+    // and the brief of the new scope is off (that workspace has it off): the actor ended
+    until("actor ended", || h.rt.inner.lock().unwrap().briefs.get(&m).is_none()).await;
+}
+
+#[tokio::test]
+async fn memory_reaches_answers_only_as_fenced_core_text() {
+    let h = harness();
+    let ws = { let c = h.conn.lock().unwrap(); new_ws(&c, "Mem", false, false) };
+    {
+        let c = h.conn.lock().unwrap();
+        for i in 0..40 {
+            crate::workspace::memory::save_memory(
+                &c,
+                crate::workspace::types::MemoryItem {
+                    id: String::new(),
+                    workspace_id: ws.clone(),
+                    kind: "fact".into(),
+                    title: format!("Item {i}"),
+                    text: format!("Fact number {i} about the project, with some length to it so the budget is reached soon enough"),
+                    source_meeting: None,
+                    source_ms: None,
+                    status: if i % 5 == 0 { "suggested" } else { "saved" }.into(),
+                    created_at: 0,
+                    updated_at: i,
+                },
+            )
+            .unwrap();
+        }
+    }
+    let m = make_meeting(&h, &ws);
+    h.start_meeting(&m);
+    let t = h.rt.answer_extras(&m, "Assist", None).unwrap();
+    assert!(t.contains("[[DATA memory "));
+    assert!(crate::live_common::estimate_tokens(&t) < 600, "about 300 tokens of memory plus the fence");
+    assert!(t.contains("Item 39") && !t.contains("Item 0:"), "newest first, suggested items never");
+}
+
+#[tokio::test]
+async fn live_answer_storm_never_blocks_the_runtimes() {
+    let h = harness();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    let rt = h.rt.clone();
+    let hammer = std::thread::spawn(move || {
+        for _ in 0..20_000 {
+            rt.answer_extras("m1", "Assist", Some("s"));
+            rt.feed("m1", "Them", "storm", 1);
+        }
+    });
+    h.speak("m1", 120, 1_000).await;
+    hammer.join().unwrap();
+    // the storm kept "speech" going on the fake clock; let it fall quiet
+    let queued = || h.rt.inner.lock().unwrap().notes.get("m1").unwrap().queued.load(Ordering::SeqCst);
+    until("the backlog drains", || queued() == 0).await;
+    h.clock.set(120_000);
+    until("a run after the storm", || h.fake.count(AiPurpose::Notes) >= 1).await;
+}
+
+// ---------------------------------------------------------------- edits, settings, memory
+
+#[tokio::test]
+async fn edits_work_live_and_after_the_meeting() {
+    let h = harness();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    h.speak("m1", 120, 1_000).await;
+    until("a run", || h.fake.count(AiPurpose::Notes) == 1).await;
+    let doc = h.rt.get_notes("m1").await.unwrap();
+    let id = doc["blocks"][0]["id"].as_str().unwrap().to_string();
+    let edited = h.rt.edit_notes("m1", NoteEdit::Update { id: id.clone(), text: Some("My words".into()), r#type: None, pinned: Some(true) }).await.unwrap();
+    assert!(edited["blocks"][0]["edited"] == true && edited["blocks"][0]["pinned"] == true);
+    let added = h.rt.edit_notes("m1", NoteEdit::Add { id: "mine1".into(), r#type: "task".into(), parent: None, text: "Call Ana".into(), after: Some(id.clone()) }).await.unwrap();
+    assert_eq!(added["blocks"][1]["id"], "mine1");
+    assert!(h.rt.edit_notes("m1", NoteEdit::Delete { id: "nope".into() }).await.is_err());
+    h.rt.on_meeting_end("m1");
+    until("finished", || h.events.last_status("notetaker_state", "m1").map(|v| v["status"] == "finished").unwrap_or(false)).await;
+    // the meeting is over: edits go to the saved notes
+    let after = h.rt.edit_notes("m1", NoteEdit::Delete { id: "mine1".into() }).await.unwrap();
+    assert!(after["blocks"].as_array().unwrap().iter().all(|b| b["id"] != "mine1"));
+    assert_eq!(h.rt.get_notes("m1").await.unwrap()["blocks"][0]["text"], "My words");
+}
+
+#[tokio::test]
+async fn settings_patch_merges_persists_and_announces() {
+    let h = harness();
+    let m = h.rt.patch_notetaker(&json!({"detail": "brief", "provider": "openai"})).unwrap();
+    assert_eq!((m.detail.as_str(), m.provider.as_deref(), m.enabled), ("brief", Some("openai"), false));
+    assert!(h.rt.patch_notetaker(&json!({"detail": "enormous"})).is_err());
+    assert_eq!(h.rt.notetaker_settings().detail, "brief", "a bad patch changes nothing");
+    assert_eq!(h.events.of("notetaker_settings_changed").len(), 1);
+    h.rt.patch_brief(&json!({"cap": 50_000})).unwrap();
+    assert_eq!(h.events.of("brief_settings_changed").len(), 1);
+    let h2 = harness_on(h.conn.clone());
+    assert_eq!(h2.rt.notetaker_settings().detail, "brief");
+    assert_eq!(h2.rt.brief_settings().cap, 50_000);
+}
+
+#[tokio::test]
+async fn memory_suggestions_are_proposals_after_the_meeting_only() {
+    let h = harness();
+    let ws = { let c = h.conn.lock().unwrap(); new_ws(&c, "Mem", false, false) };
+    let m = make_meeting(&h, &ws);
+    {
+        let c = h.conn.lock().unwrap();
+        for i in 0..6 {
+            c.execute(
+                "INSERT INTO transcript_segments (id, meeting_id, text, speaker, timestamp_ms, is_final, created_at) VALUES (?1,?2,?3,'Them',?4,1,'t')",
+                rusqlite::params![format!("s{i}"), m, "Acme pays 12 dollars per seat and the price may change", 5_000 + i * 1_000],
+            )
+            .unwrap();
+        }
+    }
+    h.start_meeting(&m);
+    assert!(h.rt.suggest_memory(&ws, &m).await.is_err(), "not during the meeting");
+    *h.live.lock().unwrap() = None;
+    let items = h.rt.suggest_memory(&ws, &m).await.unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].status, "suggested");
+    assert_eq!(items[0].source_meeting.as_deref(), Some(m.as_str()));
+    assert_eq!(h.fake.count(AiPurpose::Memory), 1);
+    assert!(h.events.of("memory_changed").len() == 1);
+    let saved: i64 = h.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM workspace_memory WHERE status = 'saved'", [], |r| r.get(0)).unwrap();
+    assert_eq!(saved, 0, "nothing is saved without the user");
+}
+
+#[tokio::test]
+async fn auto_suggest_only_when_the_workspace_turned_it_on() {
+    let h = harness();
+    let ws = { let c = h.conn.lock().unwrap(); new_ws(&c, "Auto", false, false) };
+    let m = make_meeting(&h, &ws);
+    h.conn.lock().unwrap().execute(
+        "INSERT INTO transcript_segments (id, meeting_id, text, speaker, timestamp_ms, is_final, created_at) VALUES ('s1',?1,'Acme pays 12 dollars per seat today','Them',5000,1,'t')",
+        [&m],
+    ).unwrap();
+    h.start_meeting(&m);
+    *h.live.lock().unwrap() = None;
+    super::memory::auto_suggest_after(Arc::new(h.rt.deps().clone()), m.clone(), Duration::from_millis(10));
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(h.fake.count(AiPurpose::Memory), 0, "off by default");
+    h.conn.lock().unwrap().execute("UPDATE workspaces SET suggest_memory = 1 WHERE id = ?1", [&ws]).unwrap();
+    super::memory::auto_suggest_after(Arc::new(h.rt.deps().clone()), m.clone(), Duration::from_millis(10));
+    until("auto suggestion", || h.fake.count(AiPurpose::Memory) == 1).await;
+}
+
+#[test]
+fn contract_doc_shape() {
+    let mut d = crate::live_notes::doc::NoteDoc::new();
+    let t = d.user_add(crate::live_notes::doc::BlockKind::Topic, None, "Plan", 5_000).unwrap();
+    d.user_add(crate::live_notes::doc::BlockKind::Bullet, Some(&t), "Do it", 6_000).unwrap();
+    let v = doc_to_contract(&d);
+    assert_eq!(v["blocks"][1]["parent"], json!(t));
+    assert_eq!(v["blocks"][0]["type"], "topic");
+    assert_eq!(v["blocks"][0]["t"], 5_000);
+}

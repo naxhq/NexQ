@@ -28,7 +28,7 @@ pub const STEPS: &[Step] = &[
     Step { version: 9, name: "workspaces", run: v9_workspaces },
     Step { version: 10, name: "search", run: crate::workspace_search::migrate::migrate_conn },
     Step { version: 11, name: "chat", run: crate::workspace_chat::migrate::migrate },
-    // v12 notes:   Step { version: 12, name: "notes",  run: crate::notes::migrate },
+    Step { version: 12, name: "notes", run: crate::live_notes::migrate::migrate_notes_conn },
     Step { version: 13, name: "talking_points", run: v13_talking_points },
     Step { version: 14, name: "brief", run: v14_brief },
     Step { version: 15, name: "memory", run: v15_memory },
@@ -484,7 +484,7 @@ mod tests {
         let (conn, path) = v8_database(&dir);
         run_steps(&conn, Some(&path), STEPS).unwrap();
 
-        for table in ["workspaces", "workspace_items", "meeting_borrowed", "talking_points", "meeting_briefs", "workspace_memory"] {
+        for table in ["workspaces", "workspace_items", "meeting_borrowed", "talking_points", "meeting_briefs", "workspace_memory", "meeting_notes"] {
             assert!(table_exists(&conn, table), "{table} missing");
         }
         assert_eq!(count(&conn, "PRAGMA user_version"), 15);

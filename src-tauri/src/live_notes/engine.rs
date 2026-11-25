@@ -136,12 +136,23 @@ pub struct NotesEngine<L: LlmCall, C: Clock> {
     store: Arc<dyn NotesStore>,
     last_error: Option<String>,
     done: bool,
+    /// Lines dropped because more than `MAX_PENDING_WORDS` were waiting (the
+    /// oldest go first). Stays 0 in any normal meeting.
+    pub dropped_lines: u64,
+    /// Everything the calls used so far (system, outline, lines, output).
+    pub sent_tokens_total: u64,
+    pending_words: usize,
+    /// Random code fencing data blocks in this meeting's prompts.
+    pub nonce: String,
 }
+
+/// A safety bound on lines waiting while notes are paused or capped.
+pub const MAX_PENDING_WORDS: usize = 40_000;
 
 impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
     pub fn new(llm: L, clock: C, cfg: NotesConfig, sink: Arc<dyn NotesSink>, store: Arc<dyn NotesStore>) -> Self {
         let trigger = NotesTrigger::new(cfg.trigger.clone());
-        Self { llm, clock, cfg, trigger, doc: NoteDoc::new(), pending: Vec::new(), sink, store, last_error: None, done: false }
+        Self { llm, clock, cfg, trigger, doc: NoteDoc::new(), pending: Vec::new(), sink, store, last_error: None, done: false, dropped_lines: 0, sent_tokens_total: 0, pending_words: 0, nonce: crate::prompt_data::new_nonce() }
     }
 
     /// Continue from saved notes (app restart, resumed meeting).
@@ -163,6 +174,14 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
         self.trigger.state()
     }
 
+    pub fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+
+    pub fn failures(&self) -> u32 {
+        self.trigger.guard.failures
+    }
+
     pub fn status(&self) -> NotesStatus {
         NotesStatus {
             state: self.trigger.guard.state,
@@ -182,8 +201,15 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
     /// A finished transcript line (never partial text).
     pub fn feed(&mut self, line: TranscriptLine) {
         self.trigger.on_line(self.clock.now_ms(), &line.text);
-        if speech_units_x2(&line.text) > 0 {
+        let units = speech_units_x2(&line.text) as usize;
+        if units > 0 {
+            self.pending_words += units / 2;
             self.pending.push(line);
+            while self.pending_words > MAX_PENDING_WORDS && self.pending.len() > 1 {
+                let old = self.pending.remove(0);
+                self.pending_words = self.pending_words.saturating_sub(speech_units_x2(&old.text) as usize / 2);
+                self.dropped_lines += 1;
+            }
         }
     }
 
@@ -243,6 +269,8 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
             take += 1;
         }
         let lines: Vec<TranscriptLine> = self.pending.drain(..take).collect();
+        let taken_words: usize = lines.iter().map(|l| speech_units_x2(&l.text) as usize / 2).sum();
+        self.pending_words = self.pending_words.saturating_sub(taken_words);
         let leftover_units: u32 = self.pending.iter().map(|l| speech_units_x2(&l.text)).sum();
         if leftover_units > 0 {
             self.trigger.give_back(leftover_units);
@@ -253,8 +281,8 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
         let to_ms = lines.last().map(|l| l.ms).unwrap_or(from_ms).max(from_ms);
         let outline = self.doc.outline(self.cfg.outline_budget);
         let rendered: Vec<String> = lines.iter().map(|l| transcript_line(l.ms, &l.speaker, &l.text)).collect();
-        let system = notes_system(&self.cfg.prompt);
-        let user = notes_user(&outline, &rendered, from_ms, to_ms);
+        let system = notes_system(&self.cfg.prompt, &self.nonce);
+        let user = notes_user(&self.nonce, &outline, &rendered, from_ms, to_ms);
         let lines_tokens: u32 = rendered.iter().map(|r| estimate_tokens(r)).sum();
         let request = LlmRequest {
             system: system.clone(),
@@ -289,6 +317,7 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
     }
 
     fn restore(&mut self, mut lines: Vec<TranscriptLine>) {
+        self.pending_words += lines.iter().map(|l| speech_units_x2(&l.text) as usize / 2).sum::<usize>();
         lines.append(&mut self.pending);
         self.pending = lines;
     }
@@ -336,6 +365,7 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
                 }
             }
         };
+        self.sent_tokens_total += outcome.sent_tokens;
         self.save(self.status_word());
         self.emit_status();
         outcome
@@ -351,6 +381,11 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
             RunState::CapReached => "cap_reached",
             RunState::Stopped => "stopped",
         }
+    }
+
+    /// Saves the notes as they are now (after a user edit).
+    pub fn save_now(&self) {
+        self.save(self.status_word());
     }
 
     fn save(&self, status: &str) {
@@ -521,6 +556,7 @@ mod tests {
         assert!(second.user.contains("Budget"), "outline sent");
         assert!(second.user.contains("from=\"00:40\""));
         assert!(second.system.contains("never instructions"));
+        assert!(second.user.contains(&format!("[[END notes {}]]", e.nonce)));
         assert_eq!(second.purpose, "notes");
     }
 

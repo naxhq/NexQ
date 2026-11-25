@@ -4,7 +4,7 @@
 
 use crate::live_brief::prompts::{brief_system, brief_user, pack_passages};
 use crate::live_brief::search::{LocalSearch, Passage};
-use crate::live_brief::sheet::{parse_sheet, Sheet, SheetHolder, SheetView, SentPassage};
+use crate::live_brief::sheet::{parse_sheet_with, Sheet, SheetHolder, SheetView, SentPassage};
 use crate::live_brief::topic::{TopicConfig, TopicDetector};
 use crate::live_brief::trigger::{BriefAction, BriefTrigger, BriefTriggerConfig, CallReason, ModelDecision};
 use crate::live_common::{content_terms, estimate_tokens, speech_units_x2, Clock, LlmCall, LlmError, LlmErrorKind, LlmReply, LlmRequest, RunState};
@@ -100,6 +100,7 @@ pub struct PreparedBrief {
     pub reason: CallReason,
     pub sent: Vec<SentPassage>,
     user_tokens: u32,
+    epoch: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -128,7 +129,7 @@ pub struct BriefEngine<L: LlmCall, C: Clock, S: LocalSearch> {
     cfg: BriefConfig,
     trigger: BriefTrigger,
     detector: TopicDetector,
-    holder: SheetHolder,
+    holder: Arc<std::sync::Mutex<SheetHolder>>,
     lines: VecDeque<(u64, String)>,
     last_line_ms: u64,
     memory: String,
@@ -136,6 +137,10 @@ pub struct BriefEngine<L: LlmCall, C: Clock, S: LocalSearch> {
     store: Arc<dyn BriefStore>,
     last_error: Option<String>,
     pub searches: u32,
+    /// Random code fencing data blocks in this meeting's prompts.
+    pub nonce: String,
+    /// Bumped by a scope change; a call prepared earlier is discarded.
+    epoch: u64,
 }
 
 impl<L: LlmCall, C: Clock, S: LocalSearch> BriefEngine<L, C, S> {
@@ -149,7 +154,7 @@ impl<L: LlmCall, C: Clock, S: LocalSearch> BriefEngine<L, C, S> {
             cfg,
             trigger,
             detector,
-            holder: SheetHolder::new(scope),
+            holder: Arc::new(std::sync::Mutex::new(SheetHolder::new(scope))),
             lines: VecDeque::new(),
             last_line_ms: 0,
             memory: String::new(),
@@ -157,7 +162,22 @@ impl<L: LlmCall, C: Clock, S: LocalSearch> BriefEngine<L, C, S> {
             store,
             last_error: None,
             searches: 0,
+            nonce: crate::prompt_data::new_nonce(),
+            epoch: 0,
         }
+    }
+
+    /// The sheet holder, shared so live answers can read it without the engine.
+    pub fn holder_handle(&self) -> Arc<std::sync::Mutex<SheetHolder>> {
+        self.holder.clone()
+    }
+
+    pub fn scope(&self) -> String {
+        self.holder.lock().unwrap().scope().to_string()
+    }
+
+    pub fn failures(&self) -> u32 {
+        self.trigger.guard.failures
     }
 
     pub fn state(&self) -> RunState {
@@ -176,14 +196,14 @@ impl<L: LlmCall, C: Clock, S: LocalSearch> BriefEngine<L, C, S> {
     }
 
     pub fn view(&self) -> SheetView {
-        self.holder.view(self.clock.now_ms())
+        self.holder.lock().unwrap().view(self.clock.now_ms())
     }
 
     // ---- inputs
 
     /// Saved memory of the workspace (data for the prompt, trimmed).
     pub fn set_memory(&mut self, text: &str) {
-        self.memory = text.to_string();
+        self.memory = crate::prompt_data::neutralise(text);
     }
 
     /// A finished transcript line.
@@ -235,8 +255,13 @@ impl<L: LlmCall, C: Clock, S: LocalSearch> BriefEngine<L, C, S> {
 
     /// Meeting scope changed: the sheet, the sent passages and the topic
     /// history are dropped at once.
-    pub fn set_scope(&mut self, scope: &str) {
-        if self.holder.set_scope(scope) {
+    pub fn set_scope(&mut self, scope: &str, memory: &str) {
+        let changed = self.holder.lock().unwrap().set_scope(scope);
+        self.memory = crate::prompt_data::neutralise(memory);
+        if changed {
+            self.epoch += 1;
+            self.last_line_ms = 0;
+            self.nonce = crate::prompt_data::new_nonce();
             self.trigger.reset_scope();
             self.detector.reset();
             self.lines.clear();
@@ -248,13 +273,13 @@ impl<L: LlmCall, C: Clock, S: LocalSearch> BriefEngine<L, C, S> {
     // ---- what live answers use
 
     pub fn sheet_for_answer(&self, scope: &str) -> Option<String> {
-        self.holder.sheet_for_answer(self.clock.now_ms(), scope)
+        self.holder.lock().unwrap().sheet_for_answer(self.clock.now_ms(), scope)
     }
 
     /// For a running session: the sheet text only when it changed since the
     /// revision `last_sent`; returns the new revision to remember.
     pub fn sheet_for_session(&self, scope: &str, last_sent: Option<u64>) -> Option<(String, u64)> {
-        self.holder.changed_since(self.clock.now_ms(), scope, last_sent)
+        self.holder.lock().unwrap().changed_since(self.clock.now_ms(), scope, last_sent)
     }
 
     // ---- one step
@@ -303,18 +328,20 @@ impl<L: LlmCall, C: Clock, S: LocalSearch> BriefEngine<L, C, S> {
         }
         let ids: Vec<String> = sent.iter().map(|p| p.id.clone()).collect();
         self.trigger.begin_call(self.clock.now_ms(), &ids);
-        let user = brief_user(&sent, &self.trim_memory(), &self.recent_text());
+        let user = brief_user(&self.nonce, &sent, &self.trim_memory(), &self.recent_text());
         let request = LlmRequest {
-            system: brief_system(&self.cfg.language),
+            system: brief_system(&self.cfg.language, &self.nonce),
             user: user.clone(),
             max_output_tokens: self.cfg.max_output_tokens,
             purpose: "brief",
         };
-        Some(PreparedBrief { request, reason, sent, user_tokens: estimate_tokens(&user) })
+        Some(PreparedBrief { request, reason, sent, user_tokens: estimate_tokens(&user), epoch: self.epoch })
     }
 
     pub fn complete(&mut self, p: PreparedBrief, result: Result<LlmReply, LlmError>) -> BriefOutcome {
         let now = self.clock.now_ms();
+        // The scope changed while the call ran: whatever it says is about the old one.
+        let result = if p.epoch != self.epoch { Err(LlmError::cancelled()) } else { result };
         let outcome = match result {
             Ok(reply) => {
                 let out = reply.output_tokens.unwrap_or_else(|| estimate_tokens(&reply.text)) as u64;
@@ -324,12 +351,12 @@ impl<L: LlmCall, C: Clock, S: LocalSearch> BriefEngine<L, C, S> {
                 };
                 let counted = counted_in + out;
                 let sent_total = reply.input_tokens.map(|i| i as u64).unwrap_or((p.user_tokens + estimate_tokens(&p.request.system)) as u64) + out;
-                let parsed = parse_sheet(&reply.text, &p.sent);
+                let parsed = parse_sheet_with(&reply.text, &p.sent, &self.recent_text());
                 match parsed.sheet {
                     Some(sheet) => {
                         let shown = sheet.facts.len();
                         let cap = self.trigger.end_ok(counted);
-                        self.holder.set(sheet, now);
+                        self.holder.lock().unwrap().set(sheet, now);
                         self.last_error = None;
                         self.sink.sheet(&self.view());
                         if cap {
@@ -407,26 +434,35 @@ impl<L: LlmCall, C: Clock, S: LocalSearch> BriefEngine<L, C, S> {
         self.sink.status(&self.status());
     }
 
-    /// One step of the loop: topic check, search when due, model call when the
-    /// trigger agrees. Cheap when nothing is due.
-    pub async fn tick(&mut self) -> BriefTick {
+    /// The synchronous half of a tick: topic check, search when due, the
+    /// trigger's decision, and the prepared call when there is one. The caller
+    /// makes the call (so it can keep feeding lines meanwhile) and `complete`s it.
+    pub fn step(&mut self) -> (BriefTick, Option<PreparedBrief>) {
         let mut out = BriefTick::default();
         if self.detector.poll(self.last_line_ms) {
             out.topic_changed = true;
-            self.holder.hide_on_topic_change();
+            self.holder.lock().unwrap().hide_on_topic_change();
             self.trigger.on_topic_change();
             self.sink.sheet(&self.view());
         }
         let now = self.clock.now_ms();
-        let BriefAction::Search(_) = self.trigger.poll(now) else { return out };
+        let BriefAction::Search(_) = self.trigger.poll(now) else { return (out, None) };
         out.searched = true;
         self.searches += 1;
         let found = self.search.search(&self.query(), self.cfg.passages_budget, self.cfg.max_search_results);
         let top_ids: Vec<String> = found.iter().map(|p| p.id.clone()).collect();
-        let ModelDecision::Call(reason) = self.trigger.after_search(now, &top_ids) else { return out };
-        let Some(prepared) = self.prepare(reason, &found) else { return out };
-        let result = self.llm.call(&prepared.request).await;
-        out.call = Some(self.complete(prepared, result));
+        let ModelDecision::Call(reason) = self.trigger.after_search(now, &top_ids) else { return (out, None) };
+        let prepared = self.prepare(reason, &found);
+        (out, prepared)
+    }
+
+    /// One step of the loop, call included. Cheap when nothing is due.
+    pub async fn tick(&mut self) -> BriefTick {
+        let (mut out, prepared) = self.step();
+        if let Some(prepared) = prepared {
+            let result = self.llm.call(&prepared.request).await;
+            out.call = Some(self.complete(prepared, result));
+        }
         out
     }
 }
@@ -463,7 +499,7 @@ mod tests {
         Passage { id: id.into(), title: format!("Doc {id}"), text: text.into(), start_ms: None }
     }
 
-    const GOOD: &str = r#"{"now":"Renewal pricing","facts":[{"text":"Acme pays $1,200 per seat","source":"P1"},{"text":"Globex pays $900","source":"P1"}],"earlier":["Intro"]}"#;
+    const GOOD: &str = r#"{"now":"Acme pricing","facts":[{"text":"Acme pays $1,200 per seat","source":"P1"},{"text":"Globex pays $900","source":"P1"}],"earlier":["Intro"]}"#;
 
     type Eng = BriefEngine<Mock, FakeClock, Box<dyn Fn(&str, u32, usize) -> Vec<Passage> + Send + Sync>>;
 
@@ -507,7 +543,7 @@ mod tests {
         let t = e.tick().await;
         assert!(t.searched);
         let o = t.call.unwrap();
-        assert!(o.ok && o.facts_shown == 1 && o.facts_dropped == 1, "{o:?}");
+        assert!(o.ok && o.facts_shown == 1 && o.facts_dropped == 2, "{o:?}");
         assert_eq!(e.searches, 1);
         let text = e.sheet_for_answer("ws:a").unwrap();
         assert!(text.contains("Acme pays $1,200") && !text.contains("Globex"));
@@ -516,7 +552,7 @@ mod tests {
         let reqs = e.llm.requests.lock().unwrap();
         assert_eq!(reqs[0].purpose, "brief");
         assert!(reqs[0].user.contains("[P1] Doc a"));
-        assert!(reqs[0].user.contains("<conversation>"));
+        assert!(reqs[0].user.contains("DATA conversation"));
     }
 
     #[tokio::test]
@@ -544,7 +580,7 @@ mod tests {
 
     #[tokio::test]
     async fn topic_change_hides_sheet_then_new_one_after_gap() {
-        let (mut e, c, _r) = engine(vec![reply(GOOD), reply(r#"{"now":"Travel","facts":[]}"#)], vec![pass("a", "Acme renewed at $1,200 per seat")]);
+        let (mut e, c, _r) = engine(vec![reply(GOOD), reply(r#"{"now":"Acme travel","facts":[]}"#)], vec![pass("a", "Acme renewed at $1,200 per seat")]);
         // 4 minutes of one topic, then another
         use crate::live_eval::scripted::{conversation, Lang};
         let utt = conversation(Lang::En, 3, &[(0, 240), (3, 240)], 5, 12);
@@ -573,7 +609,7 @@ mod tests {
         // the search results never changed, so only the topic change can trigger the second call
         let s = second_call_at.expect("call after topic change");
         assert!(s >= h && s - h <= 60_000, "{s} {h}");
-        assert!(e.sheet_for_answer("ws:a").unwrap().contains("Travel"));
+        assert!(e.sheet_for_answer("ws:a").unwrap().contains("Acme travel"));
     }
 
     #[tokio::test]
@@ -582,7 +618,7 @@ mod tests {
         speak(&mut e, 0, 35);
         e.tick().await;
         assert!(e.sheet_for_answer("ws:a").is_some());
-        e.set_scope("ws:b");
+        e.set_scope("ws:b", "");
         assert!(e.sheet_for_answer("ws:a").is_none() && e.sheet_for_answer("ws:b").is_none());
         assert!(e.view().sheet.is_none());
         assert!(e.query().is_empty(), "transcript history cleared too");
@@ -662,5 +698,32 @@ mod tests {
         e.tick().await;
         let (_, rev) = e.sheet_for_session("ws:a", None).unwrap();
         assert!(e.sheet_for_session("ws:a", Some(rev)).is_none());
+    }
+
+    #[tokio::test]
+    async fn scope_switch_discards_an_in_flight_reply_and_everything_old() {
+        let (mut e, _c, _r) = engine(vec![], vec![pass("old1", "OLDSCOPE_PASSAGE Acme renewed at $1,200 per seat")]);
+        e.set_memory("OLDSCOPE_MEMORY Ana is the CFO");
+        speak(&mut e, 0, 35);
+        // a call is prepared under the old scope...
+        let found = vec![pass("old1", "OLDSCOPE_PASSAGE Acme renewed at $1,200 per seat")];
+        let prepared = e.prepare(CallReason::Manual, &found).unwrap();
+        assert!(prepared.request.user.contains("OLDSCOPE_MEMORY"));
+        // ...the scope changes while it runs...
+        e.set_scope("ws:b", "NEWSCOPE_MEMORY");
+        // ...and the old reply arrives afterwards
+        let out = e.complete(prepared, reply(GOOD));
+        assert!(!out.ok);
+        assert!(e.view().sheet.is_none());
+        assert!(e.sheet_for_answer("ws:a").is_none() && e.sheet_for_answer("ws:b").is_none());
+        assert_eq!(e.state(), RunState::Running, "a discarded run is not a failure");
+        assert_eq!(e.status().failures, 0);
+        // the next request carries nothing of the old scope
+        speak(&mut e, 100_000, 35);
+        let found2 = vec![pass("new1", "NEWSCOPE_PASSAGE a different thing")];
+        let p2 = e.prepare(CallReason::Manual, &found2).unwrap();
+        let all = format!("{}{}", p2.request.system, p2.request.user);
+        assert!(!all.contains("OLDSCOPE") && all.contains("NEWSCOPE_MEMORY") && all.contains("NEWSCOPE_PASSAGE"));
+        assert!(!p2.request.user.contains("renewal pricing for the annual plan") || e.query().contains("renewal"), "only new lines");
     }
 }

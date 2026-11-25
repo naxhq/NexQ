@@ -426,6 +426,9 @@ pub async fn start_capture(
                                 );
                             }
                         }
+                        if let Some(rt) = crate::live_runtime::global() {
+                            rt.feed_current("Them", &output.text, output.timestamp_ms);
+                        }
                     }
                 }
             }
@@ -1571,6 +1574,9 @@ pub async fn start_capture_per_party(
                                 );
                             }
                         }
+                        if let Some(rt) = crate::live_runtime::global() {
+                            rt.feed_current("Them", &output.text, output.timestamp_ms);
+                        }
                     }
                 },
             )
@@ -1592,6 +1598,9 @@ pub async fn start_capture_per_party(
                             true,
                         );
                     }
+                }
+                if let Some(rt) = crate::live_runtime::global() {
+                    rt.feed_current("Them", &output.text, output.timestamp_ms);
                 }
             }
         });

@@ -6,7 +6,12 @@ use rusqlite::Transaction;
 pub const NOTES_SCHEMA_STEP: u32 = 12;
 
 pub fn migrate_notes(tx: &Transaction) -> rusqlite::Result<()> {
-    tx.execute_batch(
+    migrate_notes_conn(tx)
+}
+
+/// The step as `STEPS` runs it (inside the shared migration transaction).
+pub fn migrate_notes_conn(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS meeting_notes (
             meeting_id   TEXT PRIMARY KEY NOT NULL,

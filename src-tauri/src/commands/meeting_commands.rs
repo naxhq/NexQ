@@ -460,6 +460,10 @@ pub(crate) fn restart_meeting_sessions(app: &AppHandle, meeting_id: &str) {
     // Its notes and brief sessions were started with context from the same
     // scope: they start again too (a run builds its own context each time).
     let aux_scopes = [SessionScope::Notes(meeting_id.to_string()), SessionScope::Brief(meeting_id.to_string())];
+    // The brief drops its sheet and looks the new scope up now.
+    if let Some(rt) = crate::live_runtime::global() {
+        rt.scope_changed(meeting_id);
+    }
     let is_live = live_meeting_is(&state, meeting_id);
     state.meeting_sessions.remove_scope(&live_scope);
     state.meeting_sessions.remove_scope(&past_scope);
@@ -663,6 +667,10 @@ pub async fn start_meeting(
             start_ms,
         });
     }
+    // Notes and brief start by themselves where the user turned them on for every meeting.
+    if let Some(rt) = crate::live_runtime::global() {
+        rt.on_meeting_start(&meeting.id);
+    }
     if routing::cli_agent_is_active(&state) {
         let key = SessionKey::plain(SessionScope::Live(meeting.id.clone()), Tier::Fast);
         start_session_in_background(&app, key, |state| {
@@ -716,8 +724,11 @@ pub async fn end_meeting(
         warned.remove(&meeting_id);
     }
     state.restarts.forget(&format!("meeting:{meeting_id}"));
-    // Its notes and brief sessions end after the turn they are in.
-    if let Some(ai) = state.ai_runs.clone() {
+    // Notes and brief: a bounded final pass in the background (never delays the end),
+    // then their sessions end after the turn they are in.
+    if let Some(rt) = crate::live_runtime::global() {
+        rt.on_meeting_end(&meeting_id);
+    } else if let Some(ai) = state.ai_runs.clone() {
         let id = meeting_id.clone();
         tauri::async_runtime::spawn(async move { ai.close_meeting(&id).await });
     }

@@ -31,11 +31,11 @@ fn transcript_lines(user: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let mut inside = false;
     for l in user.lines() {
-        if l.starts_with("<transcript") {
+        if l.starts_with("[[DATA transcript") {
             inside = true;
             continue;
         }
-        if l.starts_with("</transcript") {
+        if l.starts_with("[[END transcript") {
             break;
         }
         if inside {
@@ -129,7 +129,7 @@ pub fn simulate_notes(detail: Detail, seed: u64, hours_secs: u64) -> NotesSim {
                     let Some(p) = e.prepare(reason) else { break };
                     let user_tokens = estimate_tokens(&p.request.user);
                     sim.max_user_tokens = sim.max_user_tokens.max(user_tokens);
-                    let outline = p.request.user.split("</notes>").next().unwrap_or("");
+                    let outline = p.request.user.split("[[END notes").next().unwrap_or("");
                     sim.max_outline_tokens = sim.max_outline_tokens.max(estimate_tokens(outline));
                     let (from, to) = (p.from_ms, p.to_ms);
                     let res = synth.call(&p.request).await;
