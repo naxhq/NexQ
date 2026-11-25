@@ -76,6 +76,13 @@ pub struct EnvVar {
     pub secret: bool,
 }
 
+/// What a server's `tools/list` says about one tool (MCP `annotations`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ToolHints {
+    pub read_only: Option<bool>,
+    pub destructive: Option<bool>,
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct McpTool {
@@ -84,6 +91,11 @@ pub struct McpTool {
     /// `mcp__<key>__<name>`.
     pub full_name: String,
     pub allowed: bool,
+    /// The server's `annotations.readOnlyHint` from its `tools/list`
+    /// (`None` = not reported, or saved before NexQ read it: workspace chat then asks).
+    pub read_only_hint: Option<bool>,
+    /// The server's `annotations.destructiveHint`; `None` = not reported.
+    pub destructive_hint: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -186,6 +198,7 @@ mod tests {
                     name: (*n).into(),
                     full_name: format!("mcp__{key}__{n}"),
                     allowed: *a,
+                    ..Default::default()
                 })
                 .collect(),
             ..Default::default()

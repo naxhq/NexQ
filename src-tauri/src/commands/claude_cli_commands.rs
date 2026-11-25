@@ -63,6 +63,15 @@ pub async fn open_claude_login_terminal() -> Result<(), String> {
     open_cli_login_terminal(CliAgentKind::Claude).await
 }
 
+/// The user's click on a workspace chat's tool question (`workspace_chat_approval`):
+/// allow or refuse that one call. An unknown, repeated or late id does nothing;
+/// returns whether the question was still open. This command is the only way
+/// to approve: nothing a model or a tool says reaches the broker.
+#[command]
+pub fn answer_workspace_approval(approval_id: String, allow: bool) -> bool {
+    crate::llm::cli_agent::approval::WorkspaceApprovals::global().answer(&approval_id, allow)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

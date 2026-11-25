@@ -526,6 +526,9 @@ pub struct AgentSessionManager {
     /// Called with the key of every session taken out of service (closed,
     /// reaped, retired, replaced), e.g. to delete a chat's transcript folder.
     on_closed: Mutex<Option<ClosedHook>>,
+    /// Per-call tool approval of workspace chats, by chat id. Read when a
+    /// `Workspace` session starts; no other scope ever has one.
+    chat_approvals: Mutex<HashMap<String, super::approval::ChatApprovals>>,
 }
 
 /// See `AgentSessionManager::set_closed_hook`.
@@ -550,7 +553,26 @@ impl AgentSessionManager {
             shutting_down: AtomicBool::new(false),
             turn_ended: tokio::sync::Notify::new(),
             on_closed: Mutex::new(None),
+            chat_approvals: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Let the chat's sessions ask before a tool runs (takes effect for a
+    /// session started afterwards; a changed policy replaces the session).
+    pub fn set_chat_approvals(&self, approvals: super::approval::ChatApprovals) {
+        self.chat_approvals.lock().unwrap().insert(approvals.chat_id.clone(), approvals);
+    }
+
+    /// The chat is gone: forget its approvals and refuse any open question.
+    pub fn clear_chat_approvals(&self, chat_id: &str) {
+        if let Some(a) = self.chat_approvals.lock().unwrap().remove(chat_id) {
+            a.broker.deny_chat(chat_id);
+        }
+    }
+
+    fn approvals_for(&self, scope: &SessionScope) -> Option<super::approval::ChatApprovals> {
+        let chat = scope.chat_id()?;
+        self.chat_approvals.lock().unwrap().get(chat).cloned()
     }
 
     /// Run `hook` for every session that leaves service (any reason).
@@ -559,6 +581,12 @@ impl AgentSessionManager {
     }
 
     fn notify_closed(&self, key: &SessionKey) {
+        // A chat session that leaves service leaves no question open.
+        if key.with_sources {
+            if let Some(a) = self.approvals_for(&key.scope) {
+                a.broker.deny_chat(&a.chat_id);
+            }
+        }
         let hook = self.on_closed.lock().unwrap().clone();
         if let Some(hook) = hook {
             hook(key);
@@ -690,6 +718,7 @@ impl AgentSessionManager {
                 system_prompt: init.system_prompt.clone(),
                 thinking,
                 sources: if key.with_sources { init.sources.clone() } else { None },
+                approvals: if key.with_sources { self.approvals_for(&key.scope) } else { None },
             };
             let handle = match self.spawner.spawn(cfg).await {
                 Ok(handle) => handle,

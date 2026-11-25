@@ -357,6 +357,8 @@ pub fn run() {
                 Arc::new(llm::cli_agent::manager::TauriStatusSink(app.handle().clone())),
                 app_state.cli_settings.clone(),
             ));
+            // Workspace chats ask the user before a tool runs (events + command).
+            llm::cli_agent::approval::WorkspaceApprovals::global().install_app(app.handle().clone());
             tauri::async_runtime::spawn(llm::cli_agent::manager::run_idle_reaper(
                 app_state.agent_sessions.clone(),
             ));
@@ -759,6 +761,7 @@ pub fn run() {
             claude_cli_commands::claude_cli_models,
             claude_cli_commands::seed_claude_cli_models,
             claude_cli_commands::get_agent_sessions,
+            claude_cli_commands::answer_workspace_approval,
             // == COMMANDS: cli agents (Claude / Antigravity / Codex) ==
             cli_agent_commands::cli_agent_status,
             cli_agent_commands::cli_agent_models,
@@ -836,6 +839,7 @@ pub fn run() {
                 let meeting_active = app.state::<AppState>().meeting_active.load(std::sync::atomic::Ordering::SeqCst);
                 log::info!("NexQ is exiting (meeting active: {meeting_active})");
                 let sessions = app.state::<AppState>().agent_sessions.clone();
+                llm::cli_agent::approval::WorkspaceApprovals::global().shut_down();
                 tauri::async_runtime::block_on(sessions.close_all());
                 logging::flush(std::time::Duration::from_millis(500));
             }

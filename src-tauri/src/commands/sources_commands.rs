@@ -697,7 +697,12 @@ fn apply_check(server: &McpServer, found: Result<Vec<String>, String>, now_ms: u
     let mut out = server.clone();
     match found {
         Ok(full_names) => {
-            out.tools = merge_checked_tools(&server.tools, &full_names, &server.key);
+            out.tools = merge_checked_tools(
+                &server.tools,
+                &full_names,
+                &server.key,
+                &crate::llm::cli_agent::mcp_handshake::hints_of_server(&server.key),
+            );
             out.last_check = Some(McpCheckStatus {
                 ok: true,
                 tool_count: out.tools.len(),
@@ -1111,7 +1116,7 @@ mod tests {
                 EnvVar { name: "API_KEY".into(), value: None, secret: true },
                 EnvVar { name: "OLD_TOKEN".into(), value: None, secret: true },
             ],
-            tools: vec![McpTool { name: "kb".into(), full_name: "mcp__mira__kb".into(), allowed: true }],
+            tools: vec![McpTool { name: "kb".into(), full_name: "mcp__mira__kb".into(), allowed: true, ..Default::default() }],
             last_check: Some(McpCheckStatus { ok: true, tool_count: 1, error: None, checked_at_ms: 5 }),
             ..Default::default()
         };
@@ -1216,7 +1221,7 @@ mod tests {
     fn check_result_merges_tools_and_a_failure_keeps_them() {
         let server = McpServer {
             key: "m".into(),
-            tools: vec![McpTool { name: "kb_search".into(), full_name: "mcp__m__kb_search".into(), allowed: false }],
+            tools: vec![McpTool { name: "kb_search".into(), full_name: "mcp__m__kb_search".into(), allowed: false, ..Default::default() }],
             ..Default::default()
         };
         let ok = apply_check(&server, Ok(vec!["mcp__m__kb_search".into(), "mcp__m__delete_note".into()]), 7);
@@ -1464,7 +1469,7 @@ mod tests {
         let folder_cfg = PersonalSourcesConfig {
             notes_folders: vec![NotesFolder { id: "f".into(), label: "Vault".into(), path: "D:/v".into(), enabled: true }],
             mcp_servers: vec![McpServer {
-                tools: vec![McpTool { name: "kb".into(), full_name: "mcp__m__kb".into(), allowed: true }],
+                tools: vec![McpTool { name: "kb".into(), full_name: "mcp__m__kb".into(), allowed: true, ..Default::default() }],
                 ..saved_mira()
             }],
             ..Default::default()
@@ -1508,7 +1513,7 @@ mod tests {
         use crate::sources::config::McpTool;
         let mut cfg = PersonalSourcesConfig { mcp_servers: vec![saved_mira()], ..Default::default() };
         cfg.mcp_servers[0].tools =
-            vec![McpTool { name: "kb".into(), full_name: "mcp__mira__kb".into(), allowed: true }];
+            vec![McpTool { name: "kb".into(), full_name: "mcp__mira__kb".into(), allowed: true, ..Default::default() }];
         assert!(validate_sources(&cfg).is_ok());
         for bad in ["--add-dir", "--add-dir=C:\\Users", "Bash", "mcp__other__kb", "mcp__mira__a b"] {
             cfg.mcp_servers[0].tools[0].full_name = bad.into();

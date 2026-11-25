@@ -6,6 +6,7 @@
 //! [`spawner`] picks the session type for a [`CliAgentKind`].
 
 pub mod acp;
+pub mod approval;
 pub mod codex;
 pub mod command;
 pub mod context;

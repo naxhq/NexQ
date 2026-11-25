@@ -303,7 +303,7 @@ pub fn codex_sources_for(launch: Option<&SourcesLaunch>, exe: Option<&Path>) -> 
             servers.insert(key.clone(), table);
         }
     }
-    CodexSources { mcp_servers: servers, has_notes, policy: CodexPolicy { allowed_tools: policy_tools } }
+    CodexSources { mcp_servers: servers, has_notes, policy: CodexPolicy { allowed_tools: policy_tools, ..Default::default() } }
 }
 
 #[cfg(test)]

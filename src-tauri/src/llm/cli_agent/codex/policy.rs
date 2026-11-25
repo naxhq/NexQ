@@ -30,12 +30,17 @@ pub struct CodexPolicy {
     /// MCP tools a call may use, as `mcp__<server key>__<tool>` (the names the
     /// Claude sessions use) or `mcp__<server key>__*` for a whole server.
     pub allowed_tools: HashSet<String>,
+    /// The part of `allowed_tools` that asks the user on every call (workspace
+    /// chat only; empty everywhere else). Same naming.
+    pub ask_tools: HashSet<String>,
 }
 
 /// The answer to one request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
     Allow,
+    /// The user decides this call; `tool` is the tool as the policy knows it.
+    Ask { tool: String },
     Deny(&'static str),
 }
 
@@ -82,6 +87,14 @@ fn decide_mcp(server: &str, message: &str, meta: &Value, policy: &CodexPolicy) -
         }
     }
     candidates.extend(quoted(message));
+    if let Some(tool) = candidates.iter().find(|t| tool_allowed(&policy.ask_tools, server, t)) {
+        // Asking needs the tool to be allowed too: an ask-only entry is not a grant.
+        return if tool_allowed(&policy.allowed_tools, server, tool) {
+            Verdict::Ask { tool: tool.clone() }
+        } else {
+            Verdict::Deny("tool not allowed")
+        };
+    }
     if candidates.iter().any(|tool| tool_allowed(&policy.allowed_tools, server, tool)) {
         Verdict::Allow
     } else {
@@ -105,7 +118,7 @@ mod tests {
     }
 
     fn policy(tools: &[&str]) -> CodexPolicy {
-        CodexPolicy { allowed_tools: tools.iter().map(|t| t.to_string()).collect() }
+        CodexPolicy { allowed_tools: tools.iter().map(|t| t.to_string()).collect(), ..Default::default() }
     }
 
     fn verdict(req: &ServerRequest, p: &CodexPolicy) -> Verdict {
@@ -204,5 +217,31 @@ mod tests {
     fn no_tool_name_means_no() {
         let req = elicitation("mira", "Allow it?", json!({ "codex_approval_kind": "mcp_tool_call" }));
         assert!(!verdict(&req, &policy(&["mcp__mira__*"])).is_allow());
+    }
+
+    #[test]
+    fn a_tool_in_the_ask_set_is_held_for_the_user_and_everything_else_is_as_before() {
+        let mut p = policy(&["mcp__mira__kb_search", "mcp__mira__send_mail"]);
+        p.ask_tools.insert("mcp__mira__send_mail".into());
+        assert_eq!(verdict(&tool_approval("mira", "kb_search"), &p), Verdict::Allow);
+        assert_eq!(verdict(&tool_approval("mira", "send_mail"), &p), Verdict::Ask { tool: "send_mail".into() });
+        assert!(!verdict(&tool_approval("mira", "send_mail"), &p).is_allow(), "an ask is not an allow");
+        // Asking never grants: a tool only in the ask set is refused.
+        let mut only_ask = policy(&[]);
+        only_ask.ask_tools.insert("mcp__mira__send_mail".into());
+        assert!(matches!(verdict(&tool_approval("mira", "send_mail"), &only_ask), Verdict::Deny(_)));
+        // Commands and the rest stay refused whatever the ask set holds.
+        let cmd = ServerRequest::CommandApproval { legacy: false, command: "dir".into(), cwd: None, actions: vec![] };
+        assert!(matches!(verdict(&cmd, &p), Verdict::Deny(_)));
+    }
+
+    #[test]
+    fn the_arguments_of_a_held_call_come_from_the_elicitations_meta() {
+        use crate::llm::cli_agent::codex::protocol::tool_params;
+        let direct = json!({"codex_approval_kind": "mcp_tool_call", "tool_params": {"to": "a@b.c"}});
+        assert_eq!(tool_params(&direct), json!({"to": "a@b.c"}));
+        let listed = json!({"tool_params_display": [{"name": "to", "value": "a@b.c", "display_name": "To"}, {"name": "n", "value": 3}]});
+        assert_eq!(tool_params(&listed), json!({"to": "a@b.c", "n": 3}));
+        assert_eq!(tool_params(&json!({})), json!({}));
     }
 }

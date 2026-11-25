@@ -1,7 +1,7 @@
 //! Reading MCP server definitions (pasted JSON, Claude Code's `~/.claude.json`),
 //! splitting secrets out of them, and the read-only default for tool switches.
 
-use super::config::{is_valid_tool_full_name, EnvVar, McpServer, McpTool, McpTransport};
+use super::config::{is_valid_tool_full_name, EnvVar, McpServer, McpTool, McpTransport, ToolHints};
 use serde_json::Value;
 
 /// One server as written in someone's JSON, before secrets are split out.
@@ -201,7 +201,12 @@ pub fn tool_allowed_by_default(tool_name: &str) -> bool {
 /// The tool list after a Check: the user's earlier switches stay, a new tool
 /// takes the read-only default, a tool the server no longer has is dropped.
 /// Only valid names under `mcp__<key>__` count (see `is_valid_tool_full_name`).
-pub fn merge_checked_tools(old: &[McpTool], found_full_names: &[String], key: &str) -> Vec<McpTool> {
+pub fn merge_checked_tools(
+    old: &[McpTool],
+    found_full_names: &[String],
+    key: &str,
+    hints: &std::collections::HashMap<String, ToolHints>,
+) -> Vec<McpTool> {
     let prefix = format!("mcp__{key}__");
     let mut merged: Vec<McpTool> = Vec::new();
     for full in found_full_names {
@@ -217,7 +222,16 @@ pub fn merge_checked_tools(old: &[McpTool], found_full_names: &[String], key: &s
             .find(|t| t.name == name)
             .map(|t| t.allowed)
             .unwrap_or_else(|| tool_allowed_by_default(name));
-        merged.push(McpTool { name: name.to_string(), full_name: full.clone(), allowed });
+        // New hints win; a check that could not read them keeps what was saved.
+        let before = old.iter().find(|t| t.name == name);
+        let hint = hints.get(full);
+        merged.push(McpTool {
+            name: name.to_string(),
+            full_name: full.clone(),
+            allowed,
+            read_only_hint: hint.map(|h| h.read_only).unwrap_or_else(|| before.and_then(|t| t.read_only_hint)),
+            destructive_hint: hint.map(|h| h.destructive).unwrap_or_else(|| before.and_then(|t| t.destructive_hint)),
+        });
     }
     merged
 }
@@ -367,14 +381,14 @@ mod tests {
     #[test]
     fn merge_checked_tools_keeps_choices_defaults_new_drops_gone() {
         let old = vec![
-            McpTool { name: "kb_search".into(), full_name: "mcp__m__kb_search".into(), allowed: false },
-            McpTool { name: "gone".into(), full_name: "mcp__m__gone".into(), allowed: true },
+            McpTool { name: "kb_search".into(), full_name: "mcp__m__kb_search".into(), allowed: false, ..Default::default() },
+            McpTool { name: "gone".into(), full_name: "mcp__m__gone".into(), allowed: true, ..Default::default() },
         ];
         let found = vec!["mcp__m__kb_search".into(), "mcp__m__delete_note".into(), "mcp__m__kb_read".into(), "mcp__other__x".into()];
         let mut found = found;
         found.push("mcp__m__--add-dir".into());
         found.push("mcp__m__a b".into());
-        let merged = merge_checked_tools(&old, &found, "m");
+        let merged = merge_checked_tools(&old, &found, "m", &Default::default());
         let get = |n: &str| merged.iter().find(|t| t.name == n).map(|t| t.allowed);
         assert_eq!((get("kb_search"), get("delete_note"), get("kb_read"), get("gone"), get("x")), (Some(false), Some(false), Some(true), None, None));
         assert_eq!(merged.iter().find(|t| t.name == "kb_read").unwrap().full_name, "mcp__m__kb_read");

@@ -93,6 +93,22 @@ pub fn antigravity_launch(program: std::path::PathBuf, cfg: &SessionConfig) -> A
     launch.system_prompt = adapt_system_prompt(&cfg.system_prompt, has_notes);
     launch.mcp_servers = sources.mcp_servers;
     launch.policy = sources.policy;
+    if let Some(a) = cfg.approvals.as_ref().filter(|a| a.can_ask) {
+        // The tools that ask stay in the allowed rules (so they are exposed) and
+        // are listed to ask on every call.
+        let rules = a
+            .policy
+            .ask_tools()
+            .into_iter()
+            .filter_map(|full| {
+                let rest = full.strip_prefix("mcp__")?;
+                let (server, tool) = rest.split_once("__")?;
+                Some(super::acp::McpToolRule::tool(server, tool))
+            })
+            .collect::<Vec<_>>();
+        launch.policy = launch.policy.clone().with_ask(rules);
+        launch.ask = Some(a.clone());
+    }
     launch
 }
 
@@ -128,6 +144,15 @@ pub fn codex_launch(program: std::path::PathBuf, prefix_args: Vec<String>, cfg: 
     launch.mcp_servers = sources.mcp_servers;
     launch.has_notes = sources.has_notes;
     launch.policy = sources.policy;
+    if let Some(a) = cfg.approvals.as_ref().filter(|a| a.can_ask) {
+        // The tools that ask are in the allowed set (so Codex offers them) and in
+        // `ask_tools` (so each call is held for the user).
+        for name in a.policy.ask_tools() {
+            launch.policy.allowed_tools.insert(name.clone());
+            launch.policy.ask_tools.insert(name);
+        }
+        launch.ask = Some(a.clone());
+    }
     launch
 }
 
@@ -155,6 +180,7 @@ mod tests {
             system_prompt: "sp".into(),
             thinking: true,
             sources,
+            approvals: None,
         }
     }
 

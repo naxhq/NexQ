@@ -76,6 +76,7 @@ pub async fn list_server_tools(
     // A Claude that is too old counts as no Claude here: the Check is about the
     // server, so NexQ's own client answers (Settings says Claude needs an update).
     let bin = tokio::task::spawn_blocking(|| find_current_claude().ok()).await.ok().flatten();
+    let bin_was_used = bin.is_some();
     let failure = match bin {
         Some(bin) => {
             let cfg = SessionConfig {
@@ -85,6 +86,7 @@ pub async fn list_server_tools(
                 system_prompt: CHECK_SYSTEM_PROMPT.to_string(),
                 thinking: false,
                 sources: Some(launch),
+                approvals: None,
             };
             let timeouts = SessionTimeouts { init: CHECK_INIT_TIMEOUT, ..SessionTimeouts::default() };
             match ClaudeSession::spawn_with_timeouts(bin, cfg, timeouts).await {
@@ -104,7 +106,15 @@ pub async fn list_server_tools(
         None => mcp_handshake::list_tools(server, secret).await,
     };
     match failure {
-        Ok(tools) => Ok(tools),
+        Ok(tools) => {
+            // The CLI reports names only; the server's own tools/list carries
+            // the read-only and destructive hints workspace chat needs. Best
+            // effort: without them a tool simply asks before it runs.
+            if bin_was_used {
+                let _ = tokio::time::timeout(CHECK_INIT_TIMEOUT, mcp_handshake::list_tools(server, secret)).await;
+            }
+            Ok(tools)
+        }
         // The CLI says only "failed", so start the server alone and look.
         Err(message) => Err(match diagnose_start(server, secret).await {
             Some(cause) => format!("{message} {cause}"),

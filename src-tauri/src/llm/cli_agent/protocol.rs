@@ -73,6 +73,53 @@ impl PlanLimit {
     }
 }
 
+/// A `can_use_tool` question from the CLI.
+///
+/// Wire format, from the CLI's own source strings (claude 2.1.330; NOT
+/// captured from a live session):
+/// `{"type":"control_request","request_id":ID,"request":{"subtype":"can_use_tool",
+///   "tool_name":"mcp__srv__tool","display_name":..,"input":{..},"tool_use_id":"toolu_..",
+///   "description":..,"permission_suggestions":[..],"mcp_server":..,"decision_reason":..}}`
+#[derive(Debug, Clone, PartialEq)]
+pub struct PermissionAsk {
+    pub request_id: String,
+    pub tool_name: String,
+    /// The call's arguments as the CLI sent them: what an approval returns
+    /// unchanged as `updatedInput`.
+    pub input: Value,
+    pub tool_use_id: String,
+}
+
+/// The line that allows the call. `input` is the question's own `input`,
+/// untouched: the user approved what was shown, and that is what runs.
+/// Shape (same source note as [`PermissionAsk`]):
+/// `{"type":"control_response","response":{"subtype":"success","request_id":ID,
+///   "response":{"behavior":"allow","updatedInput":INPUT}}}`
+pub fn permission_allow(request_id: &str, input: &Value) -> String {
+    json!({
+        "type": "control_response",
+        "response": {
+            "subtype": "success",
+            "request_id": request_id,
+            "response": { "behavior": "allow", "updatedInput": input },
+        },
+    })
+    .to_string()
+}
+
+/// The line that refuses the call (`behavior:"deny"` with a message the model sees).
+pub fn permission_deny(request_id: &str, message: &str) -> String {
+    json!({
+        "type": "control_response",
+        "response": {
+            "subtype": "success",
+            "request_id": request_id,
+            "response": { "behavior": "deny", "message": message },
+        },
+    })
+    .to_string()
+}
+
 /// One tool call the model made (a block of an `assistant` line).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolUse {
@@ -120,6 +167,11 @@ pub enum AgentEvent {
     TurnComplete(TurnResult),
     /// A `rate_limit_event` whose status is a warning or a rejection.
     RateLimit(PlanLimit),
+    /// A `control_request` of subtype `can_use_tool`: the CLI asks the host
+    /// (NexQ) whether a tool call may run (`--permission-prompts host`).
+    PermissionRequest(PermissionAsk),
+    /// A `control_cancel_request`: the CLI withdrew a question (`request_id`).
+    PermissionCancelled(String),
     /// Any event NexQ does not act on (status, assistant, user, other deltas...).
     Other,
 }
@@ -206,6 +258,21 @@ pub fn parse_line(line: &str) -> Result<AgentEvent, String> {
                 used: info["utilization"].as_f64(),
             }))
         }
+        ("control_request", _) if v["request"]["subtype"] == "can_use_tool" => {
+            let req = &v["request"];
+            let request_id = str_field(&v, "request_id");
+            let tool_name = str_field(req, "tool_name");
+            if request_id.is_empty() || tool_name.is_empty() {
+                return Ok(AgentEvent::Other);
+            }
+            Ok(AgentEvent::PermissionRequest(PermissionAsk {
+                request_id,
+                tool_name,
+                input: req.get("input").cloned().filter(|i| !i.is_null()).unwrap_or_else(|| json!({})),
+                tool_use_id: str_field(req, "tool_use_id"),
+            }))
+        }
+        ("control_cancel_request", _) => Ok(AgentEvent::PermissionCancelled(str_field(&v, "request_id"))),
         ("stream_event", _) => {
             let delta = &v["event"]["delta"];
             if v["event"]["type"] == "content_block_delta" {
@@ -744,5 +811,53 @@ pub(crate) mod tests {
         assert_eq!(near.clone().merge(hit.clone()), hit);
         assert_eq!(hit.clone().merge(near.clone()), hit, "a later warning does not hide a hit");
         assert_eq!(near.clone().merge(PlanLimit { resets_at: Some(3), ..near.clone() }).resets_at, Some(3));
+    }
+
+    // Source: the strings of claude 2.1.330's own binary (`subtype:"can_use_tool"`,
+    // `type:"control_response"`, `control_cancel_request`); not a live capture.
+    const CAN_USE_TOOL: &str = r#"{"type":"control_request","request_id":"req-7","request":{"subtype":"can_use_tool","tool_name":"mcp__mira__send_mail","display_name":"send_mail","input":{"to":"a@b.c","body":"hi"},"tool_use_id":"toolu_01","description":"Send a mail","permission_suggestions":[],"mcp_server":"mira"}}"#;
+
+    #[test]
+    fn a_can_use_tool_control_request_is_parsed_with_its_exact_input() {
+        match parse_line(CAN_USE_TOOL).unwrap() {
+            AgentEvent::PermissionRequest(q) => {
+                assert_eq!((q.request_id.as_str(), q.tool_name.as_str(), q.tool_use_id.as_str()), ("req-7", "mcp__mira__send_mail", "toolu_01"));
+                assert_eq!(q.input, json!({"to": "a@b.c", "body": "hi"}));
+            }
+            other => panic!("{other:?}"),
+        }
+        // Other control requests, and ones missing what we need, are not questions.
+        assert_eq!(
+            parse_line(r#"{"type":"control_request","request_id":"r","request":{"subtype":"interrupt"}}"#).unwrap(),
+            AgentEvent::Other
+        );
+        assert_eq!(
+            parse_line(r#"{"type":"control_request","request":{"subtype":"can_use_tool","tool_name":"x"}}"#).unwrap(),
+            AgentEvent::Other
+        );
+        // A question with no input still has an (empty) input to return.
+        let bare = r#"{"type":"control_request","request_id":"r","request":{"subtype":"can_use_tool","tool_name":"x"}}"#;
+        assert!(matches!(parse_line(bare).unwrap(), AgentEvent::PermissionRequest(q) if q.input == json!({})));
+        assert_eq!(
+            parse_line(r#"{"type":"control_cancel_request","request_id":"req-7"}"#).unwrap(),
+            AgentEvent::PermissionCancelled("req-7".into())
+        );
+    }
+
+    #[test]
+    fn the_allow_reply_returns_the_asked_input_unchanged_and_the_deny_reply_says_no() {
+        let input = json!({"to": "a@b.c", "nested": {"n": [1, 2]}});
+        let allow: Value = serde_json::from_str(&permission_allow("req-7", &input)).unwrap();
+        assert_eq!(allow["type"], "control_response");
+        assert_eq!(allow["response"]["subtype"], "success");
+        assert_eq!(allow["response"]["request_id"], "req-7");
+        assert_eq!(allow["response"]["response"]["behavior"], "allow");
+        assert_eq!(allow["response"]["response"]["updatedInput"], input, "what runs is what was shown");
+        let deny: Value = serde_json::from_str(&permission_deny("req-7", "no")).unwrap();
+        assert_eq!(deny["response"]["response"]["behavior"], "deny");
+        assert_eq!(deny["response"]["response"]["message"], "no");
+        assert!(deny["response"]["response"].get("updatedInput").is_none());
+        // One line each: the CLI reads lines.
+        assert!(!permission_allow("r", &input).contains('\n'));
     }
 }

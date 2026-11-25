@@ -84,6 +84,8 @@ pub struct AcpLaunch {
     /// included. They hold secrets: never logged.
     pub mcp_servers: Vec<Value>,
     pub policy: PermissionPolicy,
+    /// Per-call approval of a workspace chat that can ask (`policy.needs_ask`).
+    pub ask: Option<crate::llm::cli_agent::approval::ChatApprovals>,
     /// Extra env vars to remove, beyond [`ACP_STRIPPED_ENV`] and the Claude ones.
     pub env_remove: Vec<String>,
 }
@@ -114,6 +116,7 @@ impl AcpLaunch {
             system_prompt: String::new(),
             mcp_servers: Vec::new(),
             policy: PermissionPolicy::deny_all(),
+            ask: None,
             env_remove: Vec::new(),
         }
     }
@@ -353,8 +356,9 @@ impl AcpSession {
         let (program, args, cwd, env_remove) =
             (launch.program.clone(), launch.args.clone(), launch.cwd.clone(), launch.env_remove.clone());
         let owned = launch.remove_cwd_on_close.then(|| launch.cwd.clone());
+        let ask = launch.ask.clone().map(|a| (a, tokio::runtime::Handle::current()));
         let (shared, mut events) =
-            tokio::task::spawn_blocking(move || start_process(&program, &args, &cwd, &env_remove, policy, owned))
+            tokio::task::spawn_blocking(move || start_process(&program, &args, &cwd, &env_remove, policy, owned, ask))
                 .await
                 .map_err(|e| AgentError::Spawn(format!("spawn task failed: {e}")))??;
         let next_id = AtomicU64::new(1);
@@ -811,7 +815,7 @@ pub async fn probe_models(program: PathBuf, args: Vec<String>) -> Result<Vec<(St
     let cwd = sandbox_dir();
     let (p, a, c) = (program.clone(), args, cwd.clone());
     let (shared, mut events) = tokio::task::spawn_blocking(move || {
-        start_process(&p, &a, &c, &[], Arc::new(PermissionPolicy::deny_all()), None)
+        start_process(&p, &a, &c, &[], Arc::new(PermissionPolicy::deny_all()), None, None)
     })
     .await
     .map_err(|e| AgentError::Spawn(format!("spawn task failed: {e}")))??;
@@ -841,6 +845,7 @@ fn start_process(
     env_remove: &[String],
     policy: Arc<PermissionPolicy>,
     owned_dir: Option<PathBuf>,
+    ask: Option<(crate::llm::cli_agent::approval::ChatApprovals, tokio::runtime::Handle)>,
 ) -> Result<Started, AgentError> {
     let mut cmd = Command::new(program);
     cmd.args(args);
@@ -949,7 +954,15 @@ fn start_process(
                         let _ = event_tx.send(event);
                     }
                     Ok(Incoming::Request { id, method, params }) => {
-                        answer_request(&out_shared, &policy, &id, &method, &params);
+                        let held = match &ask {
+                            Some((approvals, rt)) if method == "session/request_permission" => {
+                                hold_request(&out_shared, &policy, approvals, rt, &event_tx, &id, &params)
+                            }
+                            _ => false,
+                        };
+                        if !held {
+                            answer_request(&out_shared, &policy, &id, &method, &params);
+                        }
                         let _ = event_tx.send(Event::Tick);
                     }
                     Err(e) => log::warn!("{} stdout: skipping unparseable line ({e})", out_shared.label),
@@ -967,6 +980,64 @@ fn start_process(
     )?;
 
     Ok((shared, event_rx))
+}
+
+/// A permission request for a tool that asks: keep the JSON-RPC id open, ask
+/// the user in the background and answer when they do (or after 60 s: no).
+/// True when the request was taken; false leaves it to [`answer_request`].
+///
+/// Source note: `session/request_permission` params are
+/// `{sessionId, toolCall:{toolCallId, title, kind, rawInput}, options:[{optionId, name, kind}]}`
+/// (ACP spec; the same shape `permission.rs` already parses), answered with
+/// `{outcome:{outcome:"selected", optionId}}` or `{outcome:{outcome:"cancelled"}}`.
+/// Not captured from a live `agy` session.
+fn hold_request(
+    shared: &Arc<Shared>,
+    policy: &PermissionPolicy,
+    approvals: &crate::llm::cli_agent::approval::ChatApprovals,
+    rt: &tokio::runtime::Handle,
+    ticks: &mpsc::UnboundedSender<Event>,
+    id: &Value,
+    params: &Value,
+) -> bool {
+    use crate::llm::cli_agent::approval::{ApprovalRequest, ToolVerdict};
+    let req = permission::parse_request(params);
+    let Some((server, tool)) = policy.needs_ask(&req.tool_name) else { return false };
+    // A call that names no id cannot be matched to what runs: refused (not held).
+    if req.tool_call_id.is_empty() {
+        return false;
+    }
+    // The chat's own rules are checked again here: a tool they deny is refused, never asked.
+    if matches!(approvals.policy.mcp(&server, &tool), ToolVerdict::Deny(_)) {
+        return false;
+    }
+    let args = params["toolCall"]["rawInput"].clone();
+    let q = ApprovalRequest {
+        chat_id: approvals.chat_id.clone(),
+        request_id: req.tool_call_id.clone(),
+        server,
+        tool,
+        args: if args.is_null() { Value::Object(Default::default()) } else { args },
+    };
+    let (broker, shared, ticks, id) = (approvals.broker.clone(), shared.clone(), ticks.clone(), id.clone());
+    rt.spawn(async move {
+        let asking = broker.ask(q);
+        tokio::pin!(asking);
+        // The agent is quiet while the user thinks: keep the watchdog satisfied.
+        let mut beat = tokio::time::interval(Duration::from_secs(20));
+        let allow = loop {
+            tokio::select! {
+                allow = &mut asking => break allow,
+                _ = beat.tick() => { let _ = ticks.send(Event::Tick); }
+            }
+        };
+        let outcome = permission::outcome_for_answer(&req, allow);
+        let allowed = outcome.is_allow(&req);
+        shared.record_decision(&req.tool_call_id, &req.tool_name, allowed);
+        log::info!("{} permission: {} ({}) -> {} (asked)", shared.label, req.tool_name, req.kind, if allowed { "allowed" } else { "refused" });
+        shared.send_line(acp::response_ok(&id, outcome.to_result()));
+    });
+    true
 }
 
 /// Reply to a request from the agent: permission requests from the policy,

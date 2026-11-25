@@ -15,7 +15,9 @@
 use super::command::{
     build_args, configure_session_command, configure_sources_env, sandbox_dir, SessionConfig,
 };
+use super::approval::ChatApprovals;
 use super::protocol::{
+    permission_allow, permission_deny, PermissionAsk,
     classify_error, PlanLimit, parse_line, user_message, user_message_with_images, AgentErrorKind, AgentEvent,
     ImageAttachment, McpServerState, ToolResult, ToolUse, TurnResult,
 };
@@ -25,7 +27,7 @@ use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex as AsyncMutex, OwnedMutexGuard};
@@ -297,6 +299,45 @@ impl Shared {
     }
 }
 
+/// What lets a workspace chat's session answer `can_use_tool` questions.
+struct ClaudeAsk {
+    approvals: ChatApprovals,
+    /// The process's stdin; taken (dropped) on close so the CLI sees EOF.
+    stdin: Mutex<Option<std_mpsc::Sender<String>>>,
+    /// Questions being asked: while any is open the turn is not "silent".
+    open: AtomicUsize,
+}
+
+impl ClaudeAsk {
+    fn send(&self, line: String) {
+        if let Some(tx) = self.stdin.lock().unwrap().as_ref() {
+            let _ = tx.send(line);
+        }
+    }
+
+    /// Refuse every open question and let go of stdin.
+    fn shut(&self) {
+        self.approvals.broker.deny_chat(&self.approvals.chat_id);
+        self.stdin.lock().unwrap().take();
+    }
+
+    /// Answer one question in the background: the user may take a while, and
+    /// the turn keeps reading the CLI's output meanwhile.
+    fn answer(self: &Arc<Self>, q: PermissionAsk) {
+        self.open.fetch_add(1, Ordering::SeqCst);
+        let me = self.clone();
+        tokio::spawn(async move {
+            let allow = me.approvals.decide(&q.request_id, &q.tool_name, &q.input).await;
+            me.send(if allow {
+                permission_allow(&q.request_id, &q.input)
+            } else {
+                permission_deny(&q.request_id, "The user did not allow this tool call.")
+            });
+            me.open.fetch_sub(1, Ordering::SeqCst);
+        });
+    }
+}
+
 enum TurnMsg {
     Delta(String),
     Tool(ToolUse),
@@ -317,6 +358,8 @@ pub struct ClaudeSession {
     /// arrives, and on close and drop if it never did.
     mcp_config_file: Option<PathBuf>,
     timeouts: SessionTimeouts,
+    /// `Some` only for a workspace chat session that can ask.
+    ask: Option<Arc<ClaudeAsk>>,
 }
 
 impl ClaudeSession {
@@ -382,9 +425,13 @@ impl ClaudeSession {
             }
         };
 
+        let ask = cfg.approvals.clone().filter(|a| a.can_ask && cfg.sources.is_some()).map(|approvals| {
+            Arc::new(ClaudeAsk { approvals, stdin: Mutex::new(Some(stdin_tx.clone())), open: AtomicUsize::new(0) })
+        });
         let session = ClaudeSession {
             model: cfg.model,
             shared,
+            ask,
             stdin_tx: Mutex::new(Some(stdin_tx)),
             turn: Arc::new(AsyncMutex::new(events)),
             prompt_file,
@@ -478,7 +525,13 @@ impl ClaudeSession {
         loop {
             tokio::select! {
                 biased;
-                _ = cancel.cancelled() => return Err(AgentError::Cancelled),
+                _ = cancel.cancelled() => {
+                    // A stopped answer leaves no question open.
+                    if let Some(ask) = &self.ask {
+                        ask.approvals.broker.deny_chat(&ask.approvals.chat_id);
+                    }
+                    return Err(AgentError::Cancelled);
+                }
                 msg = rx.recv() => match msg {
                     Some(TurnMsg::Thinking) => {
                         if !quiet {
@@ -516,6 +569,9 @@ impl ClaudeSession {
     /// Close stdin, give the process 2 s to exit, then kill it. Idempotent.
     pub async fn close(&self) {
         self.shared.closed.store(true, Ordering::SeqCst);
+        if let Some(ask) = &self.ask {
+            ask.shut();
+        }
         self.stdin_tx.lock().unwrap().take();
         let deadline = Instant::now() + CLOSE_GRACE;
         loop {
@@ -632,7 +688,7 @@ impl ClaudeSession {
         }
         self.send_line(user_message_with_images(text, query, images))?;
         let (tx, rx) = mpsc::unbounded_channel();
-        tokio::spawn(drive_turn(guard, tx, self.shared.clone(), self.timeouts));
+        tokio::spawn(drive_turn(guard, tx, self.shared.clone(), self.timeouts, self.ask.clone()));
         Ok(rx)
     }
 }
@@ -640,6 +696,9 @@ impl ClaudeSession {
 impl Drop for ClaudeSession {
     fn drop(&mut self) {
         self.shared.closed.store(true, Ordering::SeqCst);
+        if let Some(ask) = &self.ask {
+            ask.shut();
+        }
         self.stdin_tx.lock().unwrap().take();
         if let Some(mut child) = self.shared.child.lock().unwrap().take() {
             if matches!(child.try_wait(), Ok(None)) {
@@ -664,6 +723,7 @@ async fn drive_turn(
     tx: mpsc::UnboundedSender<TurnMsg>,
     shared: Arc<Shared>,
     timeouts: SessionTimeouts,
+    ask: Option<Arc<ClaudeAsk>>,
 ) {
     let mut drain_deadline: Option<tokio::time::Instant> = None;
     let outcome = loop {
@@ -698,9 +758,26 @@ async fn drive_turn(
                 }
                 Ok(Some(AgentEvent::TurnComplete(result))) => break Ok(shared.settle_cost(result)),
                 Ok(Some(AgentEvent::RateLimit(limit))) => shared.note_plan_limit(limit),
+                // Only a chat session that can ask is ever asked (`--permission-prompts
+                // host` is its alone); for everyone else this event does not occur.
+                Ok(Some(AgentEvent::PermissionRequest(q))) => {
+                    if let Some(ask) = &ask {
+                        ask.answer(q);
+                    }
+                }
+                Ok(Some(AgentEvent::PermissionCancelled(id))) => {
+                    if let Some(ask) = &ask {
+                        ask.approvals.broker.deny_request(&ask.approvals.chat_id, &id);
+                    }
+                }
                 Ok(Some(_)) => {}
                 Ok(None) => break Err(AgentError::Crashed(shared.crash_reason())),
                 Err(_) => {
+                    // A question waiting for the user is activity: the CLI is quiet
+                    // because it waits for us, not because it hung.
+                    if drain_deadline.is_none() && ask.as_ref().is_some_and(|a| a.open.load(Ordering::SeqCst) > 0) {
+                        continue;
+                    }
                     let drained_out = drain_deadline
                         .is_some_and(|deadline| tokio::time::Instant::now() >= deadline);
                     shared.terminate(&if drained_out {
@@ -715,6 +792,9 @@ async fn drive_turn(
                 }
             },
             _ = tx.closed(), if drain_deadline.is_none() => {
+                if let Some(ask) = &ask {
+                    ask.approvals.broker.deny_chat(&ask.approvals.chat_id);
+                }
                 drain_deadline = Some(tokio::time::Instant::now() + timeouts.drain);
             }
         }
@@ -1079,5 +1159,106 @@ mod tests {
                 "Not logged in · Please run /login".into()
             ))
         );
+    }
+
+    mod ask {
+        use super::super::*;
+        use crate::llm::cli_agent::approval::{ApprovalBroker, ApprovalPolicy, ApprovalRequest, WorkspaceApprovals};
+        use crate::sources::config::{McpServer, McpTool};
+        use serde_json::json;
+
+        fn policy() -> ApprovalPolicy {
+            let tool = |n: &str, ro: Option<bool>| McpTool {
+                name: n.into(),
+                full_name: format!("mcp__mira__{n}"),
+                allowed: true,
+                read_only_hint: ro,
+                destructive_hint: None,
+            };
+            ApprovalPolicy::from_servers(
+                &[McpServer { key: "mira".into(), tools: vec![tool("kb_search", Some(true)), tool("send_mail", None)], ..Default::default() }],
+                vec![],
+            )
+        }
+
+        fn harness() -> (Arc<ClaudeAsk>, std_mpsc::Receiver<String>, Arc<WorkspaceApprovals>, Arc<Mutex<Vec<String>>>) {
+            let broker = Arc::new(WorkspaceApprovals::new().with_timeout(Duration::from_secs(5)));
+            let ids: Arc<Mutex<Vec<String>>> = Arc::default();
+            let target = ids.clone();
+            broker.set_emitter(Arc::new(move |n| {
+                if let crate::llm::cli_agent::approval::ApprovalNotice::Request(e) = n {
+                    target.lock().unwrap().push(e.approval_id);
+                }
+            }));
+            let (tx, rx) = std_mpsc::channel();
+            let ask = Arc::new(ClaudeAsk {
+                approvals: ChatApprovals { can_ask: true, chat_id: "c1".into(), broker: broker.clone(), policy: Arc::new(policy()) },
+                stdin: Mutex::new(Some(tx)),
+                open: AtomicUsize::new(0),
+            });
+            (ask, rx, broker, ids)
+        }
+
+        fn question(id: &str, tool: &str, input: serde_json::Value) -> PermissionAsk {
+            PermissionAsk { request_id: id.into(), tool_name: tool.into(), input, tool_use_id: "t".into() }
+        }
+
+        async fn line(rx: &std_mpsc::Receiver<String>) -> serde_json::Value {
+            for _ in 0..400 {
+                if let Ok(l) = rx.try_recv() {
+                    return serde_json::from_str(&l).unwrap();
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            panic!("no reply was written");
+        }
+
+        #[tokio::test]
+        async fn read_only_tools_run_without_a_question_and_the_rest_wait_for_the_user() {
+            let (ask, rx, broker, ids) = harness();
+            ask.answer(question("r1", "mcp__mira__kb_search", json!({"q": "x"})));
+            assert_eq!(line(&rx).await["response"]["response"]["behavior"], "allow");
+            assert!(ids.lock().unwrap().is_empty(), "nobody was asked");
+
+            let input = json!({"to": "a@b.c"});
+            ask.answer(question("r2", "mcp__mira__send_mail", input.clone()));
+            for _ in 0..200 {
+                if !ids.lock().unwrap().is_empty() { break; }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            assert_eq!(ask.open.load(Ordering::SeqCst), 1, "an open question counts as activity");
+            assert!(rx.try_recv().is_err(), "no answer yet: nothing is sent");
+            let id = ids.lock().unwrap()[0].clone();
+            assert!(broker.answer(&id, true));
+            let reply = line(&rx).await;
+            assert_eq!(reply["response"]["request_id"], "r2");
+            assert_eq!(reply["response"]["response"]["behavior"], "allow");
+            assert_eq!(reply["response"]["response"]["updatedInput"], input);
+            assert_eq!(ask.open.load(Ordering::SeqCst), 0);
+        }
+
+        #[tokio::test]
+        async fn a_refused_unknown_or_forbidden_call_is_denied_and_a_closed_session_denies_what_is_open() {
+            let (ask, rx, broker, ids) = harness();
+            ask.answer(question("r1", "Bash", json!({"command": "dir"})));
+            assert_eq!(line(&rx).await["response"]["response"]["behavior"], "deny");
+            ask.answer(question("r2", "mcp__mira__nope", json!({})));
+            assert_eq!(line(&rx).await["response"]["response"]["behavior"], "deny");
+
+            ask.answer(question("r3", "mcp__mira__send_mail", json!({})));
+            for _ in 0..200 {
+                if !ids.lock().unwrap().is_empty() { break; }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            let id = ids.lock().unwrap()[0].clone();
+            ask.approvals.broker.deny_chat("c1"); // a cancel or a close refuses what is open
+            assert_eq!(line(&rx).await["response"]["response"]["behavior"], "deny");
+            ask.shut(); // and the close lets go of stdin
+            assert!(!broker.answer(&id, true), "a late click finds nothing to allow");
+            // Stdin is let go: the CLI sees EOF.
+            assert!(ask.stdin.lock().unwrap().is_none());
+            let _ = ApprovalRequest { chat_id: String::new(), request_id: String::new(), server: String::new(), tool: String::new(), args: json!(null) };
+            let _ = broker.pending("c1");
+        }
     }
 }

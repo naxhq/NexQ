@@ -19,7 +19,8 @@
 //!   the text and the next `ask` prepends it.
 
 use super::launch::{build_args, configure_command, discover_user_mcp_servers, CodexLaunch};
-use super::policy::{self, decide, CodexPolicy};
+use super::policy::{self, decide, CodexPolicy, Verdict};
+use crate::llm::cli_agent::approval::ApprovalRequest;
 use super::protocol::{
     self, Account, Incoming, Item, Notification, RpcError, ServerRequest, ThreadStart, TurnStatus, Usage,
 };
@@ -61,6 +62,10 @@ pub fn default_timeouts() -> SessionTimeouts {
 /// What the stdout reader needs to answer the server's questions.
 struct Approvals {
     policy: CodexPolicy,
+    /// Set only for a workspace chat that can ask: a held request waits here.
+    ask: Option<super::super::approval::ChatApprovals>,
+    /// Where a held request's question runs (the reader is a plain thread).
+    rt: tokio::runtime::Handle,
 }
 
 /// State shared with the pipe threads and turn drivers.
@@ -232,7 +237,7 @@ impl CodexSession {
             })?,
         };
         let args = build_args(&launch, &user_servers);
-        let approvals = Arc::new(Approvals { policy: launch.policy.clone() });
+        let approvals = Arc::new(Approvals { policy: launch.policy.clone(), ask: launch.ask.clone(), rt: tokio::runtime::Handle::current() });
         let spawn_launch = launch.clone();
         let (shared, events) =
             tokio::task::spawn_blocking(move || start_process(&spawn_launch, &args, approvals))
@@ -914,9 +919,30 @@ fn start_process(launch: &CodexLaunch, args: &[String], approvals: Arc<Approvals
                 }
                 Some(Incoming::Request { id, request }) => {
                     let verdict = decide(&request, &approvals.policy);
-                    log::info!("codex asked ({}): {:?}", request_name(&request), verdict);
-                    let reply = protocol::reply_for(&request, verdict.is_allow());
-                    out_shared.send_line(protocol::reply_line(&id, &reply));
+                    log::info!("codex asked ({}): {}", request_name(&request), verdict_name(&verdict));
+                    match (&verdict, &approvals.ask, &request) {
+                        // Held: the JSON-RPC id stays open until the user answers (or 60 s pass).
+                        (Verdict::Ask { tool }, Some(ask), ServerRequest::McpElicitation { server, meta, .. }) => {
+                            let q = ApprovalRequest {
+                                chat_id: ask.chat_id.clone(),
+                                request_id: id.to_string(),
+                                server: server.clone(),
+                                tool: tool.clone(),
+                                args: protocol::tool_params(meta),
+                            };
+                            let (broker, shared, request, id) =
+                                (ask.broker.clone(), out_shared.clone(), request.clone(), id.clone());
+                            approvals.rt.spawn(async move {
+                                let allow = broker.ask(q).await;
+                                let reply = protocol::reply_for(&request, allow);
+                                shared.send_line(protocol::reply_line(&id, &reply));
+                            });
+                        }
+                        _ => {
+                            let reply = protocol::reply_for(&request, verdict.is_allow());
+                            out_shared.send_line(protocol::reply_line(&id, &reply));
+                        }
+                    }
                 }
                 None => log::debug!("codex stdout: skipping a line that is not JSON-RPC"),
             });
@@ -934,6 +960,15 @@ fn start_process(launch: &CodexLaunch, args: &[String], approvals: Arc<Approvals
     )?;
 
     Ok((shared, event_rx))
+}
+
+/// The verdict, for the log (never the request's content).
+fn verdict_name(v: &Verdict) -> &'static str {
+    match v {
+        Verdict::Allow => "allow",
+        Verdict::Ask { .. } => "ask",
+        Verdict::Deny(why) => why,
+    }
 }
 
 /// What a server request is, for the log (never its content).
@@ -1034,7 +1069,7 @@ mod tests {
 
     #[test]
     fn items_are_an_allowlist() {
-        let policy = CodexPolicy { allowed_tools: ["mcp__nexq_notes__read_note".to_string(), "mcp__wiki__*".to_string()].into() };
+        let policy = CodexPolicy { allowed_tools: ["mcp__nexq_notes__read_note".to_string(), "mcp__wiki__*".to_string()].into(), ..Default::default() };
         let mcp = |server: &str, tool: &str| Item::McpToolCall {
             id: "i".into(),
             server: server.into(),

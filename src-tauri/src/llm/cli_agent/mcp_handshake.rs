@@ -17,7 +17,7 @@ use super::command::{configure_command, sandbox_dir};
 use super::mcp_check::CHECK_MCP_TIMEOUT_MS;
 use super::mcp_diagnose::{resolve_command, secret_variants};
 use super::process_tree::ProcessTree;
-use crate::sources::config::{McpServer, McpTransport};
+use crate::sources::config::{McpServer, McpTransport, ToolHints};
 use crate::sources::mcp_json::{credential_id, header_credential_id};
 use serde_json::{json, Value};
 use std::io::{BufRead, Read, Write};
@@ -196,9 +196,46 @@ fn tool_name(key: &str, tool: &str) -> String {
     format!("mcp__{key}__{clean}")
 }
 
+/// `annotations.readOnlyHint` / `destructiveHint` of the tools of the servers
+/// seen by a handshake, by full name. A handshake overwrites its server's
+/// entries; a Check reads them back with [`hints_of_server`] (the Claude path
+/// of a Check lists names only, so it runs a handshake too, see `mcp_check`).
+fn hint_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, ToolHints>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, ToolHints>>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+fn record_hints(result: &Value, key: &str) {
+    let Some(tools) = result.get("tools").and_then(Value::as_array) else { return };
+    let mut cache = hint_cache().lock().unwrap();
+    for t in tools {
+        let Some(name) = t.get("name").and_then(Value::as_str) else { continue };
+        let ann = t.get("annotations");
+        let flag = |k: &str| ann.and_then(|a| a.get(k)).and_then(Value::as_bool);
+        cache.insert(
+            tool_name(key, name),
+            ToolHints { read_only: flag("readOnlyHint"), destructive: flag("destructiveHint") },
+        );
+    }
+}
+
+/// The hints the last handshake with server `key` saw.
+pub fn hints_of_server(key: &str) -> std::collections::HashMap<String, ToolHints> {
+    let prefix = format!("mcp__{key}__");
+    hint_cache()
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(name, _)| name.starts_with(&prefix))
+        .map(|(n, h)| (n.clone(), *h))
+        .collect()
+}
+
 /// The tools of one `tools/list` result (full names; a name over
 /// [`MAX_TOOL_NAME`] characters is left out) and the cursor of the next page.
 fn tools_page(result: &Value, key: &str) -> Result<(Vec<String>, Option<String>), HandshakeError> {
+    record_hints(result, key);
     let tools = result
         .get("tools")
         .and_then(Value::as_array)

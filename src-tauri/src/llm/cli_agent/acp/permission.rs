@@ -79,6 +79,9 @@ pub fn split_tool<S: AsRef<str>>(name: &str, servers: &[S]) -> Option<(String, S
 pub struct PermissionPolicy {
     allow_mcp: Vec<McpToolRule>,
     deny_mcp: Vec<McpToolRule>,
+    /// The allowed tools that ask the user on every call (workspace chat
+    /// only). Set with [`PermissionPolicy::with_ask`]; empty everywhere else.
+    ask_mcp: Vec<McpToolRule>,
     /// Server keys the session has beyond the rules' (a server with nothing
     /// allowed still must be told apart from one whose key is its prefix).
     other_servers: Vec<String>,
@@ -88,7 +91,22 @@ impl PermissionPolicy {
     /// `allow_mcp`/`deny_mcp`: tool rules; a denied tool is refused even when
     /// a rule allows it.
     pub fn new(allow_mcp: Vec<McpToolRule>, deny_mcp: Vec<McpToolRule>) -> Self {
-        Self { allow_mcp, deny_mcp, other_servers: Vec::new() }
+        Self { allow_mcp, deny_mcp, ask_mcp: Vec::new(), other_servers: Vec::new() }
+    }
+
+    /// These (already allowed) tools ask the user before each call.
+    pub fn with_ask(mut self, ask: Vec<McpToolRule>) -> Self {
+        self.ask_mcp = ask;
+        self
+    }
+
+    /// `(server, tool)` when the agent's tool `name` is an allowed tool that
+    /// must ask first.
+    pub fn needs_ask(&self, name: &str) -> Option<(String, String)> {
+        let (server, tool) = split_tool(name, &self.server_keys())?;
+        let denied = self.deny_mcp.iter().any(|r| r.covers(&server, &tool));
+        let allowed = self.allow_mcp.iter().any(|r| r.covers(&server, &tool));
+        (!denied && allowed && self.ask_mcp.iter().any(|r| r.covers(&server, &tool))).then_some((server, tool))
     }
 
     /// Also know these server keys (every `mcpServers` name of the session)
@@ -204,6 +222,22 @@ pub fn is_allowed(req: &PermissionRequest, policy: &PermissionPolicy) -> bool {
 pub fn decide(req: &PermissionRequest, policy: &PermissionPolicy) -> Outcome {
     let find = |kind: &str| req.options.iter().find(|o| o.kind == kind).map(|o| o.id.clone());
     if is_allowed(req, policy) {
+        if let Some(id) = find("allow_once") {
+            return Outcome::Selected(id);
+        }
+    }
+    match find("reject_once").or_else(|| find("reject_always")) {
+        Some(id) => Outcome::Selected(id),
+        None => Outcome::Cancelled,
+    }
+}
+
+/// The outcome for a call the user decided: `allow_once` when allowed (never
+/// `allow_always`, which would make the agent remember a grant), else the same
+/// refusal [`decide`] gives.
+pub fn outcome_for_answer(req: &PermissionRequest, allow: bool) -> Outcome {
+    let find = |kind: &str| req.options.iter().find(|o| o.kind == kind).map(|o| o.id.clone());
+    if allow {
         if let Some(id) = find("allow_once") {
             return Outcome::Selected(id);
         }
@@ -372,5 +406,30 @@ mod tests {
         // The JSON-RPC result shapes.
         assert_eq!(Outcome::Selected("x".into()).to_result(), json!({"outcome": {"outcome": "selected", "optionId": "x"}}));
         assert_eq!(Outcome::Cancelled.to_result(), json!({"outcome": {"outcome": "cancelled"}}));
+    }
+
+    #[test]
+    fn only_allowed_tools_in_the_ask_list_ask_and_the_answer_picks_allow_once_or_a_refusal() {
+        let policy = PermissionPolicy::new(
+            vec![McpToolRule::tool("mira", "kb_search"), McpToolRule::tool("mira", "send_mail")],
+            vec![McpToolRule::tool("mira", "denied")],
+        )
+        .with_ask(vec![McpToolRule::tool("mira", "send_mail"), McpToolRule::tool("mira", "denied"), McpToolRule::tool("mira", "not_allowed")]);
+        assert_eq!(policy.needs_ask("mcp_mira_send_mail"), Some(("mira".into(), "send_mail".into())));
+        assert_eq!(policy.needs_ask("mcp_mira_kb_search"), None, "runs by itself");
+        assert_eq!(policy.needs_ask("mcp_mira_denied"), None);
+        assert_eq!(policy.needs_ask("mcp_mira_not_allowed"), None, "asking is never a grant");
+        assert_eq!(PermissionPolicy::deny_all().needs_ask("mcp_mira_send_mail"), None);
+
+        let r = req("other", "mcp_mira_send_mail", json!({}));
+        assert_eq!(selected(&outcome_for_answer(&r, true)), "allow", "allow_once, never allow_always");
+        assert_eq!(selected(&outcome_for_answer(&r, false)), "deny");
+        let always_only = parse_request(&json!({
+            "toolCall": {"toolCallId": "c", "name": "x"},
+            "options": options(&[("aa", "allow_always"), ("ra", "reject_always")]),
+        }));
+        assert_eq!(selected(&outcome_for_answer(&always_only, true)), "ra", "no allow_once offered: refuse");
+        let none = parse_request(&json!({"toolCall": {"toolCallId": "c", "name": "x"}, "options": []}));
+        assert_eq!(outcome_for_answer(&none, true), Outcome::Cancelled);
     }
 }
