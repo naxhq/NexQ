@@ -87,6 +87,8 @@ struct Inner {
     briefs: HashMap<String, BriefHandle>,
     /// What each CLI session was last given: `meeting|session` -> token.
     session_tokens: HashMap<String, String>,
+    /// Epoch ms that counts as 0 for each live meeting (see `live_common::rel_ms`).
+    bases: HashMap<String, Option<i64>>,
 }
 
 pub struct LiveRuntimes {
@@ -122,6 +124,7 @@ impl LiveRuntimes {
                 notes: HashMap::new(),
                 briefs: HashMap::new(),
                 session_tokens: HashMap::new(),
+                bases: HashMap::new(),
             })),
         })
     }
@@ -205,10 +208,24 @@ impl LiveRuntimes {
     /// A final transcript line of the running meeting. Never blocks: two
     /// channel sends. Notes never lose a line; counters show the backlog.
     pub fn feed(&self, meeting_id: &str, speaker: &str, text: &str, ms: u64) {
-        let g = match self.inner.try_lock() {
+        let mut g = match self.inner.try_lock() {
             Ok(g) => g,
             // A settings change holds the lock for a moment: wait that long rather than lose the line.
             Err(_) => self.inner.lock().unwrap(),
+        };
+        // The contract is time since the meeting started; speech providers may stamp wall-clock ms.
+        let ms = if crate::live_common::is_epoch_ms(ms as i64) {
+            let base = match g.bases.get(meeting_id) {
+                Some(b) => *b,
+                None => {
+                    let b = self.deps.db.meeting_start_ms(meeting_id).filter(|s| crate::live_common::is_epoch_ms(*s)).or(Some(ms as i64));
+                    g.bases.insert(meeting_id.to_string(), b);
+                    b
+                }
+            };
+            crate::live_common::rel_ms(ms as i64, base)
+        } else {
+            ms
         };
         if let Some(h) = g.notes.get(meeting_id) {
             let q = h.queued.fetch_add(1, Ordering::SeqCst) + 1;
@@ -261,6 +278,7 @@ impl LiveRuntimes {
             let _ = h.tx.send(BriefCmd::Discard);
         }
         g.session_tokens.retain(|k, _| !k.starts_with(&format!("{meeting_id}|")));
+        g.bases.remove(meeting_id);
     }
 
     // ---------------------------------------------------------------- notes
@@ -338,6 +356,18 @@ impl LiveRuntimes {
     pub fn notetaker_update_now(&self, meeting_id: &str) -> Result<(), String> {
         if !self.notes_alive(meeting_id) {
             self.notetaker_start(meeting_id)?;
+        }
+        // any new words are enough, however few; with none it says so instead of doing nothing
+        let nothing_new = self
+            .inner
+            .lock()
+            .unwrap()
+            .notes
+            .get(meeting_id)
+            .map(|h| h.queued.load(Ordering::SeqCst) == 0 && !h.has_new.load(Ordering::SeqCst))
+            .unwrap_or(true);
+        if nothing_new {
+            return Err("Nothing new to add since the last update".into());
         }
         self.notes_cmd(meeting_id, NotesCmd::Manual);
         Ok(())

@@ -16,6 +16,12 @@ use std::sync::Arc;
 /// Event name of a chat's tool activity line.
 pub const ACTIVITY_EVENT: &str = "workspace_chat_activity";
 
+/// The wire payload of `automatic_model_updated`: a provider's model list arrived, so
+/// what "Automatic" means for it may have changed (ask `get_automatic_model` again).
+pub fn models_updated_payload(provider: &str) -> serde_json::Value {
+    serde_json::json!({ "provider": provider })
+}
+
 /// The wire payload of `workspace_chat_activity` (what the store's `activity` handler reads).
 pub fn activity_payload(chat_id: &str, request_id: &str, activity: &SourceActivity) -> serde_json::Value {
     serde_json::json!({
@@ -33,6 +39,10 @@ pub fn wire(
     request_of: Arc<dyn Fn(&str) -> Option<String> + Send + Sync>,
     emit: Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>,
 ) {
+    let told = emit.clone();
+    runs.set_models_updated(Arc::new(move |provider| {
+        told(super::models::UPDATED_EVENT, models_updated_payload(provider));
+    }));
     let resolve = request_of.clone();
     broker.set_ask_resolver(Arc::new(move |chat| resolve(chat)));
     runs.set_chat_activity(Arc::new(move |chat, activity| {

@@ -1139,19 +1139,20 @@ async fn save_to_library_makes_a_document_of_the_workspace_and_add_to_instructio
     // not a user message
     let user = store::list_messages(&rig.conn(), &chat).unwrap().remove(0);
     let mut ctx = crate::context::ContextManager::new();
-    assert!(ops::save_answer_as_document(&rig.conn(), &mut ctx, user.id, "x").is_err());
-    let id = ops::save_answer_as_document(&rig.conn(), &mut ctx, message.id, "  Budget answer ").unwrap();
+    assert!(ops::save_answer_as_document(&rig.conn(), &mut ctx, user.id, "x", "x").is_err());
+    let reviewed_doc = ops::sanitize_plain_text(&message.content, ops::DOCUMENT_CAP);
+    let id = ops::save_answer_as_document(&rig.conn(), &mut ctx, message.id, "  Budget answer ", &reviewed_doc).unwrap();
     let conn = rig.conn();
     let name: String = conn.query_row("SELECT name FROM context_resources WHERE id = ?1", [&id], |r| r.get(0)).unwrap();
     assert!(name.contains("Budget answer") || name.contains("Budget_answer") || name.contains("budget"), "{name}");
     let text = crate::workspace::documents::saved_text(&conn, &id).unwrap().unwrap();
-    assert_eq!(text.text, message.content);
+    assert_eq!(text.text, reviewed_doc);
     let member: i64 = conn
         .query_row("SELECT COUNT(*) FROM workspace_items WHERE workspace_id = ?1 AND kind = 'document' AND ref_id = ?2", rusqlite::params![rig.ws, id], |r| r.get(0))
         .unwrap();
     assert_eq!(member, 1, "filed in the chat's workspace");
     // an empty title gets a default
-    let id2 = ops::save_answer_as_document(&conn, &mut ctx, message.id, "   ").unwrap();
+    let id2 = ops::save_answer_as_document(&conn, &mut ctx, message.id, "   ", &reviewed_doc).unwrap();
     assert_ne!(id, id2);
     // the new document is found by the next question once indexed
     rig.index();
@@ -1159,16 +1160,17 @@ async fn save_to_library_makes_a_document_of_the_workspace_and_add_to_instructio
     assert!(!ops::search_workspace(&reader, &rig.ws, "budget", Some(vec!["document".into()]), 5).unwrap().is_empty());
 
     // add to instructions: after a separator, and again after the existing text
-    let ws = ops::add_answer_to_instructions(&conn, message.id).unwrap();
+    let reviewed = ops::sanitize_instruction_text(&message.content);
+    let ws = ops::add_answer_to_instructions(&conn, message.id, &reviewed).unwrap();
     assert_eq!(ws, rig.ws);
     let first = crate::workspace::store::get_workspace(&conn, &rig.ws).unwrap().instructions;
-    assert_eq!(first, message.content.trim());
-    ops::add_answer_to_instructions(&conn, message.id).unwrap();
+    assert_eq!(first, reviewed);
+    ops::add_answer_to_instructions(&conn, message.id, &reviewed).unwrap();
     let second = crate::workspace::store::get_workspace(&conn, &rig.ws).unwrap().instructions;
-    assert_eq!(second, format!("{}\n\n---\n\n{}", first, message.content.trim()));
+    assert_eq!(second, format!("{}\n\n---\n\n{}", first, reviewed));
     // the next question carries them as instructions (stable part)
     rig.ask(&chat, "Kestrel budget again?").await;
-    assert!(rig.api.calls()[1].0[0].content.contains(message.content.trim()));
+    assert!(rig.api.calls()[1].0[0].content.contains(&reviewed));
     assert!(ops::answer_of(&conn, 999_999).is_err());
 }
 
@@ -1287,7 +1289,8 @@ async fn a_passage_at_zero_milliseconds_keeps_its_time_in_the_ladder_too() {
     let of_m07: Vec<_> = cites.iter().filter(|c| c["kind"] == "transcript" && c["ref_id"] == "m07").collect();
     assert!(of_m07.len() >= 2, "{of_m07:?}");
     assert!(of_m07.iter().any(|c| c["start_ms"] == 0), "the passage at 0 ms keeps its time: {of_m07:?}");
-    assert!(of_m07.iter().any(|c| c["start_ms"].is_null()), "the recap card has no time");
+    // the recap card is placed at the passage that matches the sentence, so it has a time too
+    assert!(of_m07.iter().all(|c| c["start_ms"].is_i64()), "every citation of the meeting opens at a time: {of_m07:?}");
 }
 
 // ── revocation while an answer runs ───────────────────────────────────────────
@@ -1373,6 +1376,9 @@ async fn a_revocation_mid_stream_stops_the_answer_and_nothing_after_it_is_shown_
         let errors = rig.events_named("workspace_chat_error");
         assert_eq!(errors.len(), 1, "{what:?}: {errors:?}");
         assert_eq!(errors[0]["error_kind"], "access_changed", "{what:?}");
+        let deleted = matches!(what, Revoke::DeleteMeeting | Revoke::DeleteDocument);
+        assert_eq!(errors[0]["error_detail"], if deleted { "deleted" } else { "moved" }, "{what:?}");
+        assert_eq!(errors[0]["error"].as_str().unwrap().contains("was deleted"), deleted, "{what:?}");
         assert!(rig.events_named("workspace_chat_end").is_empty(), "{what:?}: no answer is delivered");
         assert_eq!(rig.tokens_shown(), vec!["The ", "budget ", "is "], "{what:?}: nothing after the change is shown");
         assert!(store::list_messages(&rig.conn(), &chat).unwrap().is_empty(), "{what:?}: nothing is saved");
@@ -1910,10 +1916,10 @@ async fn an_answer_that_rests_on_lost_material_cannot_be_saved_or_added_to_instr
     (rig.revoker(Revoke::UnfileDocument))();
     let mut ctx = crate::context::ContextManager::new();
     let docs_before: i64 = rig.conn().query_row("SELECT COUNT(*) FROM context_resources", [], |r| r.get(0)).unwrap();
-    assert_eq!(ops::save_answer_as_document(&rig.conn(), &mut ctx, answer.id, "x").unwrap_err(), ops::ANSWER_STALE);
+    assert_eq!(ops::save_answer_as_document(&rig.conn(), &mut ctx, answer.id, "x", "text").unwrap_err(), ops::ANSWER_STALE);
     let docs_after: i64 = rig.conn().query_row("SELECT COUNT(*) FROM context_resources", [], |r| r.get(0)).unwrap();
     assert_eq!(docs_before, docs_after, "no document was left behind");
-    assert_eq!(ops::add_answer_to_instructions(&rig.conn(), answer.id).unwrap_err(), ops::ANSWER_STALE);
+    assert_eq!(ops::add_answer_to_instructions(&rig.conn(), answer.id, "text").unwrap_err(), ops::ANSWER_STALE);
     assert!(crate::workspace::store::get_workspace(&rig.conn(), &rig.ws).unwrap().instructions.is_empty());
     // a clean answer still can
     let rig2 = Rig::new();
@@ -1923,8 +1929,8 @@ async fn an_answer_that_rests_on_lost_material_cannot_be_saved_or_added_to_instr
     rig2.ask(&chat2, "Kestrel budget?").await;
     let clean = store::list_messages(&rig2.conn(), &chat2).unwrap().remove(1);
     let mut ctx2 = crate::context::ContextManager::new();
-    assert!(ops::save_answer_as_document(&rig2.conn(), &mut ctx2, clean.id, "ok").is_ok());
-    assert!(ops::add_answer_to_instructions(&rig2.conn(), clean.id).is_ok());
+    assert!(ops::save_answer_as_document(&rig2.conn(), &mut ctx2, clean.id, "ok", &ops::sanitize_plain_text(&clean.content, ops::DOCUMENT_CAP)).is_ok());
+    assert!(ops::add_answer_to_instructions(&rig2.conn(), clean.id, &ops::sanitize_instruction_text(&clean.content)).is_ok());
 }
 
 // ── provenance: every kind, every provider ────────────────────────────────────
@@ -2110,8 +2116,8 @@ async fn for_every_kind_a_revocation_stops_the_run_and_stops_the_answers_and_the
         // not savable
         let mut ctx = crate::context::ContextManager::new();
         for answer in stored.iter().filter(|m| m.role == "assistant") {
-            assert_eq!(ops::save_answer_as_document(&rig.conn(), &mut ctx, answer.id, "x").unwrap_err(), ops::ANSWER_STALE, "{kind:?}");
-            assert_eq!(ops::add_answer_to_instructions(&rig.conn(), answer.id).unwrap_err(), ops::ANSWER_STALE, "{kind:?}");
+            assert_eq!(ops::save_answer_as_document(&rig.conn(), &mut ctx, answer.id, "x", "text").unwrap_err(), ops::ANSWER_STALE, "{kind:?}");
+            assert_eq!(ops::add_answer_to_instructions(&rig.conn(), answer.id, "text").unwrap_err(), ops::ANSWER_STALE, "{kind:?}");
         }
     }
 }
@@ -2222,7 +2228,7 @@ async fn an_answer_without_a_record_or_with_an_unknown_kind_is_never_reused() {
     let msgs = store::list_messages(&rig.conn(), &chat).unwrap();
     let mut ctx = crate::context::ContextManager::new();
     for m in msgs.iter().filter(|m| m.role == "assistant" && m.content != "GOODA") {
-        assert!(ops::save_answer_as_document(&rig.conn(), &mut ctx, m.id, "x").is_err(), "{}", m.content);
+        assert!(ops::save_answer_as_document(&rig.conn(), &mut ctx, m.id, "x", "text").is_err(), "{}", m.content);
     }
     // the unreadable scope: a chat that does not exist is never allowed
     let ghost = WorkspaceMessage { id: 1, chat_id: "nope".into(), role: "assistant".into(), content: "x".into(), model: None, citations: vec![], context: None, input_tokens: 0, output_tokens: 0, created_at: 0 };
@@ -2440,3 +2446,78 @@ async fn recaps_wait_for_the_index_use_the_cheapest_model_and_stay_inside_their_
     assert_eq!(ops::recaps_when_ready(&rig.deps, &other, Arc::new(CancelToken::new())).await, 0);
 }
 
+#[tokio::test]
+async fn add_to_instructions_stores_exactly_the_reviewed_text_and_refuses_anything_sanitising_would_change() {
+    let rig = Rig::new();
+    let chat = rig.chat();
+    rig.api.push(Step::Text(all_labels("KESTREL")));
+    rig.ask(&chat, "Kestrel budget?").await;
+    let message = store::list_messages(&rig.conn(), &chat).unwrap().remove(1);
+    let conn = rig.conn();
+    let stored = || crate::workspace::store::get_workspace(&rig.conn(), &rig.ws).unwrap().instructions;
+
+    // hidden characters, HTML, link targets, over the cap, and nothing at all are refused; nothing is stored
+    for bad in ["be kind\u{200B}", "<b>be kind</b>", "[x](https://evil.example)", "a\r\nb", "  padded  ", &"y".repeat(ops::INSTRUCTION_CAP + 1)] {
+        assert_eq!(ops::add_answer_to_instructions(&conn, message.id, bad).unwrap_err(), ops::INSTRUCTION_CHANGED, "{bad:?}");
+    }
+    assert!(ops::add_answer_to_instructions(&conn, message.id, "   ").is_err());
+    assert!(stored().is_empty());
+
+    // the text the person edited is what is stored (not the saved answer)
+    ops::add_answer_to_instructions(&conn, message.id, "Always answer in two lines.").unwrap();
+    assert_eq!(stored(), "Always answer in two lines.");
+    assert!(!stored().contains(message.content.trim()) || message.content.trim() == "Always answer in two lines.");
+}
+
+#[tokio::test]
+async fn a_citation_of_a_ten_minute_meeting_opens_where_the_sentence_was_said() {
+    let rig = Rig::new();
+    let owned: Vec<String> = (0..120)
+        .map(|i| if i == 80 { "The pelican contract renews in June.".to_string() } else { format!("Filler remark number {i} about nothing in particular today.") })
+        .collect();
+    let lines: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
+    rig.meeting("m1", "Long sync", 5, &lines);
+    rig.index();
+    let chat = rig.chat();
+    rig.api.push(Step::Text("The pelican contract renews in June [S1].".into()));
+    rig.ask(&chat, "When does the pelican contract renew?").await;
+    let end = &rig.events_named("workspace_chat_end")[0];
+    let cite = end["message"]["citations"].as_array().unwrap().iter().find(|c| c["kind"] == "transcript").unwrap().clone();
+    let at = cite["start_ms"].as_i64().unwrap();
+    // the line is at 80 x 5 s = 400 s: the citation opens within a minute and a half before it
+    assert!((310_000..=400_000).contains(&at), "opened at {at} ms");
+}
+
+#[test]
+fn the_sentence_a_citation_stands_in_is_found_without_its_marks() {
+    use super::engine::sentence_citing;
+    let a = "Budget is 5k [S1]. The deadline is May [S2, S3]. [S4] Launch follows.";
+    assert_eq!(sentence_citing(a, "S1"), "Budget is 5k");
+    assert_eq!(sentence_citing(a, "S3"), "The deadline is May");
+    assert_eq!(sentence_citing(a, "S4"), "Launch follows");
+    assert_eq!(sentence_citing(a, "S9"), "");
+}
+
+#[tokio::test]
+async fn a_recap_can_be_read_listed_and_deleted_and_is_not_written_again() {
+    let rig = Rig::new();
+    rig.meeting("m1", "Planning", 5, &["We agreed the lynx programme budget.", "Owners were named today."]);
+    rig.index();
+    crate::workspace::store::update_workspace(&rig.conn(), &rig.ws, crate::workspace::types::WorkspacePatch { recaps_with_ai: Some(true), ..Default::default() }).unwrap();
+    assert!(ops::meeting_recap(&rig.conn(), "m1").unwrap().is_none());
+    let listed = |rig: &Rig| crate::workspace::meetings::list_workspace_meetings(&rig.conn(), &rig.ws, None, 50, 0).unwrap().meetings[0].has_recap;
+    assert!(!listed(&rig));
+    rig.api.push(Step::Text("A short recap of the planning.".into()));
+    assert_eq!(ops::recap_missing(&rig.deps, &rig.ws, Arc::new(CancelToken::new())).await, 1);
+    let r = ops::meeting_recap(&rig.conn(), "m1").unwrap().expect("the recap");
+    assert!(r.text.contains("A short recap") && r.model.is_none() && r.created_at > 0);
+    assert!(listed(&rig));
+    // delete: gone, and the next pass does not write another
+    crate::workspace_search::cards::decline_recap(&rig.conn(), "m1").unwrap();
+    assert!(ops::meeting_recap(&rig.conn(), "m1").unwrap().is_none());
+    assert!(!listed(&rig));
+    rig.index();
+    rig.api.push(Step::Text("Another recap.".into()));
+    assert_eq!(ops::recap_missing(&rig.deps, &rig.ws, Arc::new(CancelToken::new())).await, 0);
+    assert!(ops::meeting_recap(&rig.conn(), "m1").unwrap().is_none());
+}

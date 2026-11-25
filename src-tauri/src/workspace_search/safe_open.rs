@@ -71,8 +71,8 @@ fn final_path(_file: &File) -> Result<std::path::PathBuf, String> {
 /// Read `path` if it is a regular file of at most `max` bytes that really
 /// lives inside `canon_root`, without ever following a link.
 pub fn read_confined(path: &Path, canon_root: &Path, max: u64) -> Result<ReadFile, String> {
-    let file = open_nofollow(path).map_err(|e| format!("not readable ({:?})", e.kind()))?;
-    let md = file.metadata().map_err(|e| format!("not readable ({:?})", e.kind()))?;
+    let file = open_nofollow(path).map_err(|e| format!("not readable: {}", crate::db::health::plain_io(&e)))?;
+    let md = file.metadata().map_err(|e| format!("not readable: {}", crate::db::health::plain_io(&e)))?;
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
@@ -100,7 +100,7 @@ pub fn read_confined(path: &Path, canon_root: &Path, max: u64) -> Result<ReadFil
     let mut bytes = Vec::with_capacity(md.len().min(max) as usize);
     file.take(max + 1)
         .read_to_end(&mut bytes)
-        .map_err(|e| format!("not readable ({:?})", e.kind()))?;
+        .map_err(|e| format!("not readable: {}", crate::db::health::plain_io(&e)))?;
     if bytes.len() as u64 > max {
         return Err("over 2 MB".into());
     }

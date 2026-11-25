@@ -960,6 +960,8 @@ pub fn run() {
             workspace_commands::create_memory,
             workspace_commands::update_memory,
             workspace_chat_commands::get_index_status,
+            workspace_chat_commands::get_meeting_recap,
+            workspace_chat_commands::delete_meeting_recap,
             workspace_chat_commands::rescan_workspace,
             workspace_chat_commands::list_workspace_chats,
             workspace_chat_commands::create_workspace_chat,

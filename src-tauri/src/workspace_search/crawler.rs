@@ -158,7 +158,7 @@ pub fn crawl_folder(
         let rd = match fs::read_dir(&dir) {
             Ok(r) => r,
             Err(e) => {
-                skip(&mut res, rel_string(&canon_root, &dir), &format!("folder not readable ({})", e.kind()));
+                skip(&mut res, rel_string(&canon_root, &dir), &format!("folder not readable: {}", crate::db::health::plain_io(&e)));
                 continue;
             }
         };
@@ -172,7 +172,7 @@ pub fn crawl_folder(
             let md = match fs::symlink_metadata(&path) {
                 Ok(m) => m,
                 Err(e) => {
-                    skip(&mut res, rel, &format!("not readable ({})", e.kind()));
+                    skip(&mut res, rel, &format!("not readable: {}", crate::db::health::plain_io(&e)));
                     continue;
                 }
             };
@@ -233,7 +233,7 @@ pub fn crawl_folder(
                     continue;
                 }
                 Err(e) => {
-                    skip(&mut res, rel, &format!("not readable ({})", e.kind()));
+                    skip(&mut res, rel, &format!("not readable: {}", crate::db::health::plain_io(&e)));
                     continue;
                 }
             }

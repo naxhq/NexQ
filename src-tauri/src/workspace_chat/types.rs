@@ -114,6 +114,9 @@ pub struct ItemPref {
     pub kind: String,
     pub ref_id: String,
     pub pref: String,
+    /// The item's name (a document's name, a meeting's title ...), empty when it is gone.
+    #[serde(default)]
+    pub title: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -135,6 +138,9 @@ pub struct IndexStatus {
     pub passages: i64,
     pub skipped: Vec<SkippedFile>,
     pub last_indexed_at: Option<i64>,
+    /// Meetings of this workspace whose recap the AI wrote (not the meeting's own summary).
+    #[serde(default)]
+    pub ai_recaps: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -144,4 +150,13 @@ pub struct IndexProgressEvent {
     pub total: usize,
     pub current: Option<String>,
     pub skipped: usize,
+}
+
+/// The recap the AI wrote for a meeting (get_meeting_recap). The model is null: a recap
+/// does not record which model wrote it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MeetingRecap {
+    pub text: String,
+    pub model: Option<String>,
+    pub created_at: i64,
 }

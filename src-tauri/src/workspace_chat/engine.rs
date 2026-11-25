@@ -652,7 +652,8 @@ pub async fn close_chat(deps: &ChatDeps, chat_id: &str) {
 
 enum Outcome {
     /// Something the answer used was taken away while it ran: stopped, nothing saved.
-    Revoked,
+    /// The detail says whether what it used was deleted or only taken out of the chat.
+    Revoked(&'static str),
     Answered(WorkspaceMessage),
     Cancelled(String),
     Failed(String, &'static str),
@@ -716,9 +717,10 @@ async fn run_ask(deps: Arc<ChatDeps>, permit: Permit, chat_id: String, question:
             };
             deps.emit("workspace_chat_end", base(json!({ "message": placeholder, "cancelled": true })));
         }
-        Ok(Outcome::Revoked) => {
+        Ok(Outcome::Revoked(detail)) => {
             deps.tools.on_cancel(&chat_id);
-            deps.emit("workspace_chat_error", base(json!({ "error": super::guard::STOPPED, "error_kind": "access_changed" })))
+            let message = if detail == "deleted" { super::guard::STOPPED_DELETED } else { super::guard::STOPPED };
+            deps.emit("workspace_chat_error", base(json!({ "error": message, "error_kind": "access_changed", "error_detail": detail })))
         }
         Ok(Outcome::Failed(message, kind)) => deps.emit("workspace_chat_error", base(json!({ "error": message, "error_kind": kind }))),
         Err(_) => deps.emit(
@@ -727,6 +729,88 @@ async fn run_ask(deps: Arc<ChatDeps>, permit: Permit, chat_id: String, question:
         ),
     }
     drop(permit);
+}
+
+/// A transcript cited as a whole (or by its recap) has no moment of its own: find the
+/// passage of that meeting that best matches the sentence the citation stands in, and
+/// open there. Any other citation keeps the time it was given.
+pub(crate) fn refine_start(conn: Option<&rusqlite::Connection>, c: &crate::workspace_search::context_plan::Citation, answer: &str) -> Option<i64> {
+    let whole = matches!(c.kind.as_str(), "meeting" | "transcript") && matches!(c.start_ms, None | Some(0));
+    let Some(conn) = conn.filter(|_| whole) else { return c.start_ms };
+    let sentence = sentence_citing(answer, &c.label);
+    if sentence.trim().is_empty() {
+        return c.start_ms;
+    }
+    let scope = crate::workspace_search::SearchScope::with_meetings(vec![c.ref_id.clone()]);
+    match crate::workspace_search::search::search(conn, &scope, &sentence, &[crate::workspace_search::PassageKind::Transcript], 1) {
+        Ok(hits) => hits.first().and_then(|p| p.start_ms).or(c.start_ms),
+        Err(_) => c.start_ms,
+    }
+}
+
+/// The sentence of `answer` that carries the citation `[label]`, without its citation marks.
+pub(crate) fn sentence_citing(answer: &str, label: &str) -> String {
+    let chars: Vec<char> = answer.chars().collect();
+    let is_end = |c: char| matches!(c, '.' | '!' | '?' | '\n' | '\u{3002}' | '\u{FF01}' | '\u{FF1F}');
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '[' {
+            if let Some(close) = chars[i..].iter().position(|c| *c == ']').map(|p| i + p) {
+                let inner: String = chars[i + 1..close].iter().collect();
+                if inner.split(|c: char| c == ',' || c == ';').any(|p| p.trim() == label) {
+                    let mut start = i;
+                    while start > 0 && !is_end(chars[start - 1]) {
+                        start -= 1;
+                    }
+                    let mut s: String = chars[start..i].iter().collect();
+                    if strip_marks(&s).is_empty() {
+                        // the mark opens the sentence: take what follows it
+                        let mut end = close + 1;
+                        while end < chars.len() && !is_end(chars[end]) {
+                            end += 1;
+                        }
+                        s = chars[close + 1..end].iter().collect();
+                    }
+                    return strip_marks(&s);
+                }
+            }
+        }
+        i += 1;
+    }
+    String::new()
+}
+
+fn strip_marks(s: &str) -> String {
+    let mut out = String::new();
+    let mut inside = false;
+    for c in s.chars() {
+        match c {
+            '[' => inside = true,
+            ']' => inside = false,
+            _ if !inside => out.push(c),
+            _ => {}
+        }
+    }
+    out.trim().to_string()
+}
+
+/// "deleted" when something the answer was built from no longer exists at all,
+/// "moved" when it still exists but is no longer part of this chat (moved to another
+/// workspace, switched off, taken off the workspace, a folder opted out ...).
+fn why_revoked(deps: &ChatDeps, a: &Assembled) -> &'static str {
+    let Ok(conn) = deps.conn() else { return "moved" };
+    for it in &a.plan.items {
+        let sql = match it.kind.as_str() {
+            "transcript" | "meeting" => "SELECT 1 FROM meetings WHERE id = ?1",
+            "document" => "SELECT 1 FROM context_resources WHERE id = ?1",
+            "talking_point" => "SELECT 1 FROM talking_points WHERE id = ?1",
+            _ => continue,
+        };
+        if conn.query_row(sql, [&it.ref_id], |_| Ok(())).is_err() {
+            return "deleted";
+        }
+    }
+    "moved"
 }
 
 /// The run said the workspace changed while its session was starting.
@@ -846,7 +930,7 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
             if attempt == 1 {
                 continue;
             }
-            return Outcome::Revoked;
+            return Outcome::Revoked(why_revoked(deps, &a));
         }
         if cli {
             // the session receives this turn: from now on it holds what it rests on
@@ -901,7 +985,7 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
     // Revoked while it ran (or while the last token arrived): nothing is shown or saved.
     if guard.revoked() || !guard.ok() {
         close_chat_session(deps, chat_id).await;
-        return Outcome::Revoked;
+        return Outcome::Revoked(why_revoked(deps, &a));
     }
     match result {
         Ok(res) => {
@@ -909,6 +993,7 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
                 return Outcome::Cancelled(partial.lock().unwrap().clone());
             }
             let validated = validate_citations(&res.text, &a.plan);
+            let refine_conn = deps.conn().ok();
             let citations: Vec<WorkspaceCitation> = validated
                 .refs
                 .iter()
@@ -918,7 +1003,7 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
                     ref_id: c.ref_id.clone(),
                     sub_ref: c.sub_ref.clone(),
                     title: c.title.clone(),
-                    start_ms: c.start_ms,
+                    start_ms: refine_start(refine_conn.as_ref(), c, &validated.text),
                     snippet: a
                         .plan
                         .items
@@ -952,7 +1037,7 @@ async fn answer(deps: &Arc<ChatDeps>, permit: &Permit, chat_id: &str, question: 
                 Ok(m) => Outcome::Answered(m),
                 Err(WriteError::Revoked) => {
                     close_chat_session(deps, chat_id).await;
-                    Outcome::Revoked
+                    Outcome::Revoked(why_revoked(deps, &a))
                 }
                 Err(WriteError::Failed(e)) => fail(e),
             }

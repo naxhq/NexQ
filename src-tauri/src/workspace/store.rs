@@ -229,7 +229,7 @@ pub fn create_workspace(conn: &Connection, input: CreateWorkspaceInput) -> Resul
             clean_opt(input.icon),
             clean_opt(input.color),
             input.description.trim(),
-            input.instructions,
+            crate::prompt_data::strip_hidden(&input.instructions),
             include_general,
             keep_separate,
             clean_opt(input.default_scenario),
@@ -266,7 +266,8 @@ fn update_workspace_in(conn: &Connection, id: &str, patch: WorkspacePatch) -> Re
         ws.description = description.trim().to_string();
     }
     if let Some(instructions) = patch.instructions {
-        ws.instructions = instructions;
+        // what the model reads is what the person can see: hidden characters never reach the stored text
+        ws.instructions = crate::prompt_data::strip_hidden(&instructions);
     }
     if let Some(scenario) = patch.default_scenario {
         ws.default_scenario = clean_opt(scenario);

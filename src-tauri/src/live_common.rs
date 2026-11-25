@@ -125,6 +125,44 @@ fn is_hiragana(c: char) -> bool {
     matches!(c as u32, 0x3040..=0x309F)
 }
 
+/// THE TIME CONTRACT: everything the notes, brief, memory, search and chat
+/// store, send or show is milliseconds SINCE THE MEETING STARTED. Speech
+/// providers stamp segments with wall-clock (epoch) ms or with ms since the
+/// start, depending on the provider; `rel_ms` turns either into the contract.
+/// Anything below this is a relative time (11 days of meeting at most).
+pub const EPOCH_FLOOR_MS: i64 = 100_000_000_000;
+
+pub fn is_epoch_ms(ts: i64) -> bool {
+    ts >= EPOCH_FLOOR_MS
+}
+
+/// A meeting's `start_time` (RFC 3339) as epoch ms.
+pub fn parse_start_ms(s: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(s).ok().map(|d| d.timestamp_millis())
+}
+
+/// The epoch ms that counts as 0 for a meeting: its start when it has a usable
+/// one, else the earliest epoch stamp seen (a meeting with no start time).
+pub fn base_ms(start: Option<i64>, stamps: impl IntoIterator<Item = i64>) -> Option<i64> {
+    start.filter(|s| is_epoch_ms(*s)).or_else(|| stamps.into_iter().filter(|t| is_epoch_ms(*t)).min())
+}
+
+/// Milliseconds since the meeting started. Relative stamps stay as they are;
+/// epoch stamps lose `base` (a stamp before the start is 0; no base at all is 0
+/// rather than a number of centuries).
+pub fn rel_ms(ts: i64, base: Option<i64>) -> u64 {
+    if ts <= 0 {
+        return 0;
+    }
+    if !is_epoch_ms(ts) {
+        return ts as u64;
+    }
+    match base {
+        Some(b) => (ts - b).max(0) as u64,
+        None => 0,
+    }
+}
+
 /// Rough token count: CJK characters at 1.5 chars per token, everything else
 /// at 4 chars per token (the shared estimate).
 pub fn estimate_tokens(s: &str) -> u32 {
@@ -958,5 +996,37 @@ mod tests {
         g.begin();
         g.end_plan_limit();
         assert_eq!(g.state, RunState::Paused(PauseReason::PlanLimit));
+    }
+}
+
+#[cfg(test)]
+mod time_contract_tests {
+    use super::*;
+
+    const START: i64 = 1_767_348_000_000;
+
+    #[test]
+    fn epoch_and_relative_stamps_both_become_time_since_the_start() {
+        assert_eq!(rel_ms(START + 83_000, Some(START)), 83_000);
+        assert_eq!(rel_ms(83_000, Some(START)), 83_000);
+        assert_eq!(rel_ms(83_000, None), 83_000);
+    }
+
+    #[test]
+    fn before_the_start_and_odd_values_are_zero_never_centuries() {
+        assert_eq!(rel_ms(START - 5_000, Some(START)), 0);
+        assert_eq!(rel_ms(START + 5_000, None), 0);
+        assert_eq!(rel_ms(-4, Some(START)), 0);
+        assert_eq!(rel_ms(0, None), 0);
+    }
+
+    #[test]
+    fn a_meeting_without_a_usable_start_counts_from_its_first_stamp() {
+        assert_eq!(base_ms(None, [START + 9_000, START + 2_000, 500]), Some(START + 2_000));
+        assert_eq!(base_ms(Some(7), [START + 2_000]), Some(START + 2_000), "a relative 'start' is no start");
+        assert_eq!(base_ms(Some(START), [START - 1]), Some(START));
+        assert_eq!(base_ms(None, [10, 20]), None);
+        assert_eq!(parse_start_ms("2026-01-02T10:00:00Z"), Some(START));
+        assert_eq!(parse_start_ms("nope"), None);
     }
 }

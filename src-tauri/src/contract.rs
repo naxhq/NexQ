@@ -109,6 +109,11 @@ mod tests {
     }
 
     #[test]
+    fn event_automatic_model_updated() {
+        assert_contract!("automatic_model_updated", serde_json::json!({ "provider": "openai" }));
+    }
+
+    #[test]
     fn event_memory_changed() {
         assert_contract!("memory_changed", MemoryChanged { workspace_id: "w1".into() });
     }

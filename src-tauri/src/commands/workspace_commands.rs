@@ -1426,6 +1426,8 @@ mod tests {
         ("sources_commands", "delete_mcp_secrets", Exempt("secrets only; the sources restart follows their revision")),
         ("sources_commands", "set_personal_sources", Must),
         ("workspace_chat_commands", "get_index_status", Read),
+        ("workspace_chat_commands", "get_meeting_recap", Read),
+        ("workspace_chat_commands", "delete_meeting_recap", Exempt("a recap is derived text, not access to anything")),
         ("workspace_chat_commands", "rescan_workspace", Exempt("re-indexes what is already in scope")),
         ("workspace_chat_commands", "list_workspace_chats", Read),
         ("workspace_chat_commands", "create_workspace_chat", Exempt("a new chat has no session")),

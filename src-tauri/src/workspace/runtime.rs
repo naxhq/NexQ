@@ -185,7 +185,9 @@ pub fn sources_for(state: &AppState, scope: &EffectiveScope) -> Result<PersonalS
 
 /// The custom instructions with the scope's workspace instructions after them.
 pub fn instructions_with_workspace(custom: &str, scope: &EffectiveScope) -> String {
-    let workspace = scope.instructions.trim();
+    // read as it is shown: hidden characters (older saved text may still have some) are taken out
+    let cleaned = crate::prompt_data::strip_hidden(&scope.instructions);
+    let workspace = cleaned.trim();
     match (custom.trim().is_empty(), workspace.is_empty()) {
         (_, true) => custom.to_string(),
         (true, false) => format!("Workspace instructions: {workspace}"),

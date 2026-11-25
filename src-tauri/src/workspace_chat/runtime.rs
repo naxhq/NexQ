@@ -62,6 +62,7 @@ pub fn build_deps(app: &AppHandle, state: &AppState) -> Result<Arc<ChatDeps>, St
     let llm = state.llm.clone();
     let (llm2, cli_settings) = (state.llm.clone(), state.cli_settings.clone());
     let app2 = app.clone();
+    let recap_runs = Some(ai.clone());
     Ok(Arc::new(ChatDeps {
         db_path: db_path(state)?,
         ai,
@@ -83,10 +84,18 @@ pub fn build_deps(app: &AppHandle, state: &AppState) -> Result<Arc<ChatDeps>, St
             };
             let kind = crate::llm::ProviderType::from_str(&provider).ok().and_then(|p| p.cli_agent_kind());
             let fast = kind.map(|k| cli_settings.config(k));
+            // the provider's own model list when known (a fetch, when due, runs in the background)
+            let available = recap_runs.as_ref().and_then(|r| r.known_models(&provider)).unwrap_or_default();
+            if let Some(r) = recap_runs.as_ref().filter(|r| r.models_due(&provider)) {
+                let (r, p) = (r.clone(), provider.clone());
+                tauri::async_runtime::spawn(async move {
+                    r.refresh_models(&p).await;
+                });
+            }
             let c = cheapest(&CheapestInput {
                 provider: &provider,
                 active_model: &model,
-                available: &[],
+                available: &available,
                 cli_fast: fast.as_ref().map(|c| (c.fast_model.as_str(), c.fast_effort.as_str())),
             });
             Some(ModelSelection::new(&c.provider, &c.model, c.effort.as_deref()))
@@ -169,6 +178,46 @@ pub fn attach(app: &AppHandle) {
 /// A meeting ended (its transcript is saved): index it.
 pub fn meeting_ended(hub: &ChatHub, meeting_id: &str) {
     hub.wake(Wake::Meeting(meeting_id.to_string()));
+}
+
+/// Recaps (when the workspace turned "Prepare recaps with AI" on): runs once the
+/// index holds the workspace's meetings, never during a meeting, at most
+/// `ops::MAX_RECAPS` per call, on the cheapest model, through the AI gate.
+/// A newer call replaces one still waiting or running.
+fn spawn_recaps(app: &AppHandle, state: &AppState, workspace_id: String, settle: Duration) {
+    let hub = state.workspace_chat.clone();
+    let Ok(deps) = build_deps(app, state) else { return };
+    let token = Arc::new(crate::llm::provider::CancelToken::new());
+    hub.set_recap_cancel(Some(token.clone()));
+    tauri::async_runtime::spawn(async move {
+        // the meeting that just ended is still being saved and indexed
+        tokio::time::sleep(settle).await;
+        let made = super::ops::recaps_when_ready(&deps, &workspace_id, token).await;
+        if made > 0 {
+            (deps.emit)("workspaces_changed", serde_json::json!({ "workspace_id": workspace_id }));
+        }
+    });
+}
+
+/// A meeting ended: its workspace gets its missing recaps (the new meeting first).
+pub fn recaps_after_meeting(app: &AppHandle, state: &AppState, meeting_id: &str) {
+    let ws = state.database.as_ref().and_then(|db| {
+        let db = db.lock().ok()?;
+        db.connection().query_row("SELECT workspace_id FROM meetings WHERE id = ?1", [meeting_id], |r| r.get::<_, Option<String>>(0)).ok().flatten()
+    });
+    if let Some(ws) = ws {
+        spawn_recaps(app, state, ws, Duration::from_secs(5));
+    }
+}
+
+/// A workspace was opened (library or chat): up to `MAX_RECAPS` missing recaps, once per opening.
+pub fn workspace_opened(app: &AppHandle, state: &AppState, workspace_id: &str) {
+    let hub = &state.workspace_chat;
+    let changed = hub.open_workspace().as_deref() != Some(workspace_id);
+    hub.set_open_workspace(Some(workspace_id.to_string()));
+    if changed && !state.meeting_active.load(Ordering::SeqCst) {
+        spawn_recaps(app, state, workspace_id.to_string(), Duration::ZERO);
+    }
 }
 
 /// A meeting was deleted: drop it from the index (the delete itself already

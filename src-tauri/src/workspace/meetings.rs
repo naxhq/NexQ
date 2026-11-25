@@ -183,10 +183,12 @@ pub fn list_workspace_meetings(
             "SELECT m.id, m.title, m.start_time, m.end_time, m.duration_seconds,
                     (SELECT COUNT(*) FROM transcript_segments ts WHERE ts.meeting_id = m.id),
                     CASE WHEN m.summary IS NOT NULL AND m.summary != '' THEN 1 ELSE 0 END,
-                    m.audio_mode, m.ai_scenario, m.workspace_id
+                    m.audio_mode, m.ai_scenario, m.workspace_id,
+                    {RECAP}
              FROM meetings m WHERE {FILTER}
              ORDER BY m.start_time DESC
-             LIMIT ?3 OFFSET ?4"
+             LIMIT ?3 OFFSET ?4",
+            RECAP = recap_column(conn)
         ))
         .map_err(|e| err("Couldn't list the meetings", e))?;
     let rows = stmt
@@ -202,11 +204,24 @@ pub fn list_workspace_meetings(
                 audio_mode: row.get::<_, String>(7).unwrap_or_else(|_| "online".to_string()),
                 ai_scenario: row.get::<_, String>(8).unwrap_or_else(|_| "team_meeting".to_string()),
                 workspace_id: row.get(9)?,
+                has_recap: row.get::<_, i32>(10)? != 0,
             })
         })
         .map_err(|e| err("Couldn't list the meetings", e))?;
     let meetings = rows.collect::<Result<Vec<_>, _>>().map_err(|e| err("Couldn't list the meetings", e))?;
     Ok(WorkspaceMeetingPage { meetings, total })
+}
+
+/// SQL for "an AI recap exists" (0 when the search tables are not there yet).
+fn recap_column(conn: &Connection) -> &'static str {
+    let has_table: bool = conn
+        .query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meeting_cards'", [], |_| Ok(()))
+        .is_ok();
+    if has_table {
+        "EXISTS (SELECT 1 FROM meeting_cards c WHERE c.meeting_id = m.id AND c.origin = 'ai')"
+    } else {
+        "0"
+    }
 }
 
 fn escape_like(text: &str) -> String {

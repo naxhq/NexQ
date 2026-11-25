@@ -182,3 +182,7 @@ impl AccessGuard {
 /// The message shown when an answer was stopped for this reason.
 pub const STOPPED: &str =
     "Something this answer was using was taken away from the chat (a meeting was moved or deleted, or a source was removed), so the answer was stopped and nothing was saved. Ask again.";
+
+/// The same, when what the answer was using was deleted.
+pub const STOPPED_DELETED: &str =
+    "Something this answer was using (a meeting or a file) was deleted, so the answer was stopped and nothing was saved. Ask again.";

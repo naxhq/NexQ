@@ -82,6 +82,11 @@ impl NotesTrigger {
         self.last_speech_ms = Some(now);
     }
 
+    pub fn clear_pending(&mut self) {
+        self.pending_x2 = 0;
+        self.manual = false;
+    }
+
     pub fn pending_words(&self) -> u32 {
         self.pending_x2 / 2
     }

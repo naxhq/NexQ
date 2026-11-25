@@ -663,6 +663,7 @@ pub async fn start_meeting(
     // is open. The meeting and its home are created in one transaction: no orphan row.
     let (meeting, workspace_notice) = create_meeting_filed(db.connection(), &title, workspace_id.as_deref(), crate::workspace::available())?;
     state.meeting_active.store(true, Ordering::SeqCst);
+    state.workspace_chat.cancel_recaps(); // recaps never run in a meeting
 
     // Clear per-meeting state so the new meeting starts fresh.
     // The intelligence buffer and last detected question persist across
@@ -811,6 +812,7 @@ pub async fn end_meeting(
         tauri::async_runtime::spawn(async move { ai.close_meeting(&id).await });
     }
     crate::workspace_chat::runtime::meeting_ended(&state.workspace_chat, &meeting_id);
+    crate::workspace_chat::runtime::recaps_after_meeting(&app, &state, &meeting_id);
 
     let db_arc = state
         .database

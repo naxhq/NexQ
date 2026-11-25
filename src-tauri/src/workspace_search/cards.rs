@@ -316,6 +316,20 @@ pub fn get_card(conn: &Connection, meeting_id: &str) -> rusqlite::Result<Option<
     .optional()
 }
 
+/// Meetings whose AI recap the user deleted: no new one is written for them.
+pub fn recap_declined(conn: &Connection, meeting_id: &str) -> bool {
+    conn.query_row("SELECT 1 FROM meeting_recap_off WHERE meeting_id = ?1", params![meeting_id], |_| Ok(())).is_ok()
+}
+
+/// Delete the AI recap of a meeting and remember not to write another. The card goes
+/// back to the plain extract the next indexing pass builds.
+pub fn decline_recap(conn: &Connection, meeting_id: &str) -> rusqlite::Result<()> {
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS meeting_recap_off (meeting_id TEXT PRIMARY KEY NOT NULL)")?;
+    conn.execute("INSERT OR IGNORE INTO meeting_recap_off(meeting_id) VALUES (?1)", params![meeting_id])?;
+    conn.execute("DELETE FROM meeting_cards WHERE meeting_id = ?1 AND origin = 'ai'", params![meeting_id])?;
+    Ok(())
+}
+
 pub fn put_card(conn: &Connection, c: &Card) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO meeting_cards(meeting_id, recap, origin, source_hash, tokens, updated_at)

@@ -118,7 +118,7 @@ fn event_chat_end() {
 fn event_chat_error() {
     assert_contract!(
         "workspace_chat_error",
-        json!({ "chat_id": "c1", "request_id": "ask-1", "error": super::guard::STOPPED, "error_kind": "access_changed" })
+        json!({ "chat_id": "c1", "request_id": "ask-1", "error": super::guard::STOPPED, "error_kind": "access_changed", "error_detail": "moved" })
     );
 }
 
@@ -155,6 +155,7 @@ fn result_get_index_status() {
         passages: 120,
         skipped: vec![SkippedFile { folder_id: "f1".into(), path: "big.pdf".into(), reason: "Too large to read".into() }],
         last_indexed_at: Some(1_700_000_000_000),
+        ai_recaps: 2,
     };
     assert_contract!("get_index_status_result", s);
 }
@@ -171,9 +172,34 @@ fn result_chat_crud() {
 }
 
 #[test]
+fn result_meeting_recap() {
+    let r = MeetingRecap { text: "Budget talk. The budget was agreed at 5k.".into(), model: None, created_at: 1_700_000_000_000 };
+    assert_contract!("get_meeting_recap_result", Some(r));
+    assert_contract!("get_meeting_recap_none_result", Option::<MeetingRecap>::None);
+}
+
+#[test]
+fn result_workspace_meeting_rows_say_whether_they_have_a_recap() {
+    let row = crate::db::meetings::MeetingSummary {
+        id: "m1".into(),
+        title: "Planning".into(),
+        start_time: "2026-03-05T10:00:00Z".into(),
+        end_time: Some("2026-03-05T10:30:00Z".into()),
+        duration_seconds: Some(1800),
+        segment_count: 12,
+        has_summary: false,
+        audio_mode: "online".into(),
+        ai_scenario: "team_meeting".into(),
+        workspace_id: "w1".into(),
+        has_recap: true,
+    };
+    assert_contract!("list_workspace_meetings_result", crate::workspace::types::WorkspaceMeetingPage { meetings: vec![row], total: 1 });
+}
+
+#[test]
 fn result_prefs_and_capabilities() {
     assert_contract!("list_chat_meeting_prefs_result", vec![MeetingPref { meeting_id: "m1".into(), included: false }]);
-    assert_contract!("list_chat_item_prefs_result", vec![ItemPref { kind: "document".into(), ref_id: "d1".into(), pref: "pin".into() }]);
+    assert_contract!("list_chat_item_prefs_result", vec![ItemPref { kind: "document".into(), ref_id: "d1".into(), pref: "pin".into(), title: "Budget plan".into() }]);
     let caps = ChatCapabilities {
         can_ask: true,
         tools_off: vec![ToolOff { tool: "Bash".into(), reason: "Not allowed in a workspace chat".into() }],
@@ -203,6 +229,11 @@ fn command_arguments() {
     assert_contract!("preview_chat_context", json!({ "chatId": "c1", "question": "What was agreed?" }));
     assert_contract!("get_chat_capabilities", json!({ "chatId": "c1" }));
     assert_contract!("ask_workspace", json!({ "chatId": "c1", "question": "What was agreed?", "requestId": "ask-1", "deeper": false }));
+    // "Search deeper" asks the same question again with `deeper`; "Leave out of this chat" is pref "exclude".
+    assert_contract!("ask_workspace_deeper", json!({ "chatId": "c1", "question": "What was agreed?", "requestId": "ask-2", "deeper": true }));
+    assert_contract!("set_chat_item_pref_exclude", json!({ "chatId": "c1", "kind": "meeting", "refId": "m1", "pref": "exclude" }));
+    assert_contract!("get_meeting_recap", json!({ "meetingId": "m1" }));
+    assert_contract!("delete_meeting_recap", json!({ "meetingId": "m1" }));
     assert_contract!("cancel_workspace_request", json!({ "requestId": "ask-1" }));
     assert_contract!("save_answer_to_library", json!({ "messageId": 5, "title": "Budget decision" }));
 }

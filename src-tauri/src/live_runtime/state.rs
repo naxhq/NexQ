@@ -80,7 +80,10 @@ pub fn snapshot(i: &StateInput) -> RunSnapshot {
             }
             RunState::Paused(PauseReason::Failures) => {
                 error_kind = kind_of(i.error_code, false);
-                ("error", Some(i.last_error.clone().map(|e| format!("Three runs in a row failed: {e}")).unwrap_or_else(|| "Three runs in a row failed".into())), vec!["try_again", "update"])
+                ("error", Some(match i.last_error.as_deref().map(str::trim).filter(|e| !e.is_empty()) {
+                    Some(e) => format!("Three runs in a row failed: {e}"),
+                    None => "Three runs in a row failed and the model gave no reason. Try again runs it once more".to_string(),
+                }), vec!["try_again", "update"])
             }
             RunState::Running => {
                 if i.last_error.is_some() {

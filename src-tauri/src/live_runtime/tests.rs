@@ -1413,7 +1413,9 @@ async fn pause_resume_and_update_after_stop_are_never_silent_no_ops() {
     // Stop, then Update now: it starts again (or refuses with a reason)
     h.rt.notetaker_stop("m1");
     until("actor ended", || h.rt.inner.lock().unwrap().notes.get("m1").is_none()).await;
-    h.rt.notetaker_update_now("m1").expect("update after stop starts it again");
+    let e = h.rt.notetaker_update_now("m1").unwrap_err();
+    assert!(e.contains("Nothing new"), "it started again and says there is nothing to add: {e}");
+    assert!(h.rt.inner.lock().unwrap().notes.get("m1").is_some(), "update after stop starts it again");
     h.speak("m1", 150, 50_000).await;
     h.rt.notetaker_update_now("m1").unwrap();
     until("a run after update", || h.fake.count(AiPurpose::Notes) == 2).await;
@@ -1543,4 +1545,109 @@ fn the_webview_payload_for_a_new_memory_item_deserialises() {
         serde_json::from_value(json!({"workspace_id": "w", "kind": "fact", "title": "t", "text": "x", "status": "saved"})).unwrap();
     assert!(!c.unsupported);
     assert_eq!(c.status.as_deref(), Some("saved"));
+}
+
+
+// ---------------------------------------------------------------- QA round 3: one time contract, manual updates
+
+const START_MS: u64 = 1_767_348_000_000; // 2026-01-02T10:00:00Z
+
+fn set_start(h: &H, id: &str, rfc3339: &str) {
+    h.conn.lock().unwrap().execute("UPDATE meetings SET start_time = ?2 WHERE id = ?1", [id, rfc3339]).unwrap();
+}
+
+async fn say(h: &H, m: &str, words: usize, at_ms: u64, clock: u64) {
+    h.clock.set(clock);
+    let text = (0..words).map(|i| format!("w{i}")).collect::<Vec<_>>().join(" ");
+    h.rt.feed(m, "Them", &text, at_ms);
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    h.clock.set(clock + 3_000);
+}
+
+#[tokio::test]
+async fn wall_clock_and_relative_stamps_reach_notes_and_brief_as_time_since_the_start() {
+    for epoch in [true, false] {
+        let h = harness();
+        h.enable_notes();
+        h.start_meeting("m1");
+        set_start(&h, "m1", "2026-01-02T10:00:00Z");
+        h.rt.notetaker_start("m1").unwrap();
+        let stamp = |rel: u64| if epoch { START_MS + rel } else { rel };
+        say(&h, "m1", 120, stamp(10_000), 1_000).await;
+        until("a run", || h.fake.count(AiPurpose::Notes) == 1).await;
+        let p = &h.fake.prompts(AiPurpose::Notes)[0];
+        assert!(p.contains("[00:10]"), "epoch={epoch}: {p}");
+        assert!(!p.contains("1767348") && !p.contains("498"), "epoch={epoch}: a wall-clock time reached the prompt");
+        let doc = h.rt.get_notes("m1").await.unwrap();
+        for b in doc["blocks"].as_array().unwrap() {
+            assert!(b["t"].as_u64().unwrap_or(0) < 3_600_000, "epoch={epoch}: {b}");
+        }
+        // a stamp before the start is 0, never negative or huge
+        h.rt.feed("m1", "Them", "early words here", if epoch { START_MS - 4_000 } else { 0 });
+    }
+}
+
+#[tokio::test]
+async fn memory_lines_follow_the_contract_for_both_kinds_of_stamps() {
+    let h = harness();
+    let ws = { let c = h.conn.lock().unwrap(); new_ws(&c, "T", false, false) };
+    let m = make_meeting(&h, &ws);
+    set_start(&h, &m, "2026-01-02T10:00:00Z");
+    {
+        let c = h.conn.lock().unwrap();
+        for (i, ts) in [START_MS + 5_000, START_MS + 65_000, 90_000].iter().enumerate() {
+            c.execute(
+                "INSERT INTO transcript_segments (id, meeting_id, text, speaker, timestamp_ms, is_final, created_at) VALUES (?1,?2,'a line about pricing','Them',?3,1,'t')",
+                rusqlite::params![format!("s{i}"), m, *ts as i64],
+            )
+            .unwrap();
+        }
+    }
+    let (lines, len) = h.rt.deps().db.meeting_lines(&m);
+    assert_eq!(lines.iter().map(|l| l.ms).collect::<Vec<_>>(), vec![5_000, 65_000, 90_000]);
+    assert_eq!(len, 90_000);
+    // a meeting with no usable start counts from its first stamp
+    set_start(&h, &m, "garbage");
+    let (lines, _) = h.rt.deps().db.meeting_lines(&m);
+    assert!(lines.iter().all(|l| l.ms < 3_600_000), "{:?}", lines.iter().map(|l| l.ms).collect::<Vec<_>>());
+}
+
+#[tokio::test]
+async fn update_now_runs_with_any_new_words_and_otherwise_says_nothing_new() {
+    let h = harness();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    let e = h.rt.notetaker_update_now("m1").unwrap_err();
+    assert!(e.contains("Nothing new"), "{e}");
+    assert_eq!(h.fake.count(AiPurpose::Notes), 0);
+    // 22 words are below the automatic threshold, but Update now takes them
+    say(&h, "m1", 22, 4_000, 1_000).await;
+    assert_eq!(h.fake.count(AiPurpose::Notes), 0, "too few for an automatic run");
+    h.rt.notetaker_update_now("m1").unwrap();
+    until("the manual run", || h.fake.count(AiPurpose::Notes) == 1).await;
+    // and nothing is left to add now
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    assert!(h.rt.notetaker_update_now("m1").unwrap_err().contains("Nothing new"));
+}
+
+#[tokio::test]
+async fn very_large_reported_usage_never_ends_notes_with_an_unexplained_failure() {
+    let h = harness();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    for _ in 0..6 {
+        h.fake.push(Ok(LlmReply { text: r#"{"ops":[{"op":"add","type":"bullet","text":"x","t":"00:10"}]}"#.into(), input_tokens: Some(u32::MAX), cached_input_tokens: Some(u32::MAX - 100), output_tokens: Some(u32::MAX) }));
+    }
+    for i in 0..4u64 {
+        say(&h, "m1", 120, 10_000 + i * 60_000, 1_000 + i * 60_000).await;
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        let _ = h.rt.notetaker_continue("m1");
+        let st = h.rt.notetaker_state("m1").await;
+        assert_ne!(st["status"], "error", "{st}");
+        if st["status"] == "capped" {
+            assert!(st["reason"].as_str().unwrap_or("").len() > 3, "capped says why: {st}");
+        }
+    }
 }

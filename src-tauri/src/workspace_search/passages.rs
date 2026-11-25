@@ -8,6 +8,9 @@ use super::PassageKind;
 
 pub const MIN_UNITS: usize = 120;
 pub const MAX_UNITS: usize = 220;
+/// A transcript passage spans at most this much talk (about 60 to 90 s): a citation
+/// opens within a minute and a half of what was said, also in a short meeting.
+pub const MAX_SPAN_MS: i64 = 75_000;
 /// Hard cap per source so one pathological file cannot flood the index.
 pub const MAX_PASSAGES_PER_SOURCE: usize = 3000;
 /// Most passages one file of a folder may make.
@@ -185,7 +188,7 @@ pub fn build_transcript_passages(
         let u = unit_count(&p.text);
         let line = format!("{}: {}", p.speaker, p.text);
         match acc.as_mut() {
-            Some(a) if a.units + u <= MAX_UNITS => {
+            Some(a) if a.units + u <= MAX_UNITS && p.end.max(a.end) - a.start <= MAX_SPAN_MS => {
                 a.lines.push(line);
                 a.units += u;
                 a.end = p.end.max(a.end);
@@ -204,7 +207,11 @@ pub fn build_transcript_passages(
     }
     if let Some(a) = acc.take() {
         // Merge a tiny tail into the previous passage when it still fits.
-        if a.units < 40 && last_units > 0 && last_units + a.units <= MAX_UNITS + 40 {
+        if a.units < 40
+            && last_units > 0
+            && last_units + a.units <= MAX_UNITS + 40
+            && out.last().map_or(false, |prev| a.end - prev.start_ms.unwrap_or(a.start) <= MAX_SPAN_MS)
+        {
             if let Some(prev) = out.last_mut() {
                 prev.text.push('\n');
                 prev.text.push_str(&a.lines.join("\n"));
@@ -379,6 +386,21 @@ mod tests {
         }
         assert_eq!(p[0].start_ms, Some(0));
         assert!(p.windows(2).all(|w| w[0].start_ms <= w[1].start_ms));
+    }
+
+    #[test]
+    fn a_ten_minute_meeting_of_short_lines_has_passages_of_a_minute_and_a_half_at_most() {
+        // 8 words every 10 s: far fewer than 120 units a minute, so only the time limit cuts
+        let segs: Vec<SegmentInput> = (0..60).map(|i| seg(if i % 2 == 0 { "You" } else { "Them" }, &words(8, &format!("t{i}x")), i * 10_000)).collect();
+        let p = build_transcript_passages("m1", "Weekly", Some(1), &segs, Some(600_000));
+        assert!(p.len() >= 7, "{} passages", p.len());
+        for x in &p {
+            let span = x.end_ms.unwrap() - x.start_ms.unwrap();
+            assert!(span <= 90_000, "a passage spans {span} ms");
+        }
+        // a line at 5:00 is in a passage that starts within 90 s before it
+        let at = p.iter().find(|x| x.text.contains("t30x0")).unwrap();
+        assert!((300_000 - at.start_ms.unwrap()).abs() <= 90_000);
     }
 
     #[test]

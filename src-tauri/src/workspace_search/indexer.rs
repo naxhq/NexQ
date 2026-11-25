@@ -217,9 +217,12 @@ fn meeting_sig(conn: &Connection, id: &str) -> rusqlite::Result<(i64, i64)> {
         "SELECT COUNT(*), COALESCE(SUM(LENGTH(text)), 0) FROM transcript_segments
          WHERE meeting_id = ?1 AND is_final = 1 AND TRIM(text) != ''",
         params![id],
-        |r| Ok((r.get(0)?, r.get(1)?)),
+        // `+ TIME_CONTRACT_SIG`: transcripts indexed before times were made relative to the meeting start read as changed once
+        |r| Ok((r.get(0)?, r.get::<_, i64>(1)? + TIME_CONTRACT_SIG)),
     )
 }
+
+const TIME_CONTRACT_SIG: i64 = 7;
 
 fn has_speaker_tag(conn: &Connection) -> bool {
     conn.query_row(
@@ -231,7 +234,7 @@ fn has_speaker_tag(conn: &Connection) -> bool {
     .unwrap_or(false)
 }
 
-fn load_segments(conn: &Connection, id: &str) -> rusqlite::Result<Vec<SegmentInput>> {
+fn load_segments(conn: &Connection, id: &str, start: Option<i64>) -> rusqlite::Result<Vec<SegmentInput>> {
     let tag = if has_speaker_tag(conn) { "speaker_tag" } else { "NULL" };
     let sql = format!(
         "SELECT speaker, {tag}, text, timestamp_ms FROM transcript_segments
@@ -247,7 +250,14 @@ fn load_segments(conn: &Connection, id: &str) -> rusqlite::Result<Vec<SegmentInp
         };
         Ok(SegmentInput { speaker: label, text: r.get(2)?, start_ms: r.get(3)? })
     })?;
-    rows.collect()
+    let mut segs = rows.collect::<rusqlite::Result<Vec<SegmentInput>>>()?;
+    // times since the meeting started, whatever the speech provider stamped
+    let base = crate::live_common::base_ms(start, segs.iter().map(|s| s.start_ms));
+    for s in &mut segs {
+        s.start_ms = crate::live_common::rel_ms(s.start_ms, base) as i64;
+    }
+    segs.sort_by_key(|s| s.start_ms);
+    Ok(segs)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -279,7 +289,7 @@ fn index_meeting_row(conn: &mut Connection, m: &MeetingRow) -> Result<Outcome, S
     let mut outcome = Outcome::Unchanged;
     let mut loaded: Option<Vec<SegmentInput>> = None;
     if !sig_same {
-        let segs = load_segments(conn, &m.id).map_err(e)?;
+        let segs = load_segments(conn, &m.id, parse_ms(&m.start_time)).map_err(e)?;
         let hash = segments_hash(&segs);
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(e)?;
         if existing.as_ref().map_or(false, |s| s.status == "ok" && s.content_hash == hash) {
@@ -302,7 +312,7 @@ fn index_meeting_row(conn: &mut Connection, m: &MeetingRow) -> Result<Outcome, S
         let segs = match loaded {
             Some(s) => s,
             None if m.summary.as_deref().map_or(true, |s| s.trim().is_empty()) => {
-                load_segments(conn, &m.id).map_err(e)?
+                load_segments(conn, &m.id, parse_ms(&m.start_time)).map_err(e)?
             }
             None => Vec::new(),
         };
@@ -1819,5 +1829,28 @@ mod tests {
         assert_eq!(r.removed, 1);
         assert!(q(&conn, &all, "numbat").is_empty());
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn transcript_times_are_since_the_meeting_start_whatever_the_stamps() {
+        // wall-clock stamps (some speech providers), relative stamps (others), before-start and a missing start
+        let start: i64 = 1_767_348_000_000; // 2026-01-02T10:00:00Z
+        let mut conn = mem_db();
+        add_meeting(&conn, "e", "Epoch", "2026-01-02T10:00:00Z", None, &[("You", "epochquokka said hello", start + 3_000), ("Them", "second epochwombat line", start + 65_000)]);
+        add_meeting(&conn, "r", "Relative", "2026-01-02T10:00:00Z", None, &[("You", "relquokka said hello", 3_000), ("Them", "second relwombat line", 65_000)]);
+        add_meeting(&conn, "b", "Before", "2026-01-02T10:00:00Z", None, &[("You", "beforequokka said hello", start - 9_000)]);
+        add_meeting(&conn, "n", "NoStart", "not a date", None, &[("You", "nostartquokka said hello", start + 5_000), ("Them", "nostartwombat second", start + 20_000)]);
+        run(&mut conn, &MeetingsOnly);
+        let all = SearchScope::with_meetings(["e", "r", "b", "n"]);
+        let first = |word: &str| search(&conn, &all, word, &[], 5).unwrap().into_iter().next().unwrap_or_else(|| panic!("no hit for {word}"));
+        // the passage that holds both lines starts at the first line's time
+        assert_eq!(first("epochquokka").start_ms, Some(3_000), "epoch stamps");
+        assert_eq!(first("relquokka").start_ms, Some(3_000), "relative stamps");
+        assert_eq!(first("beforequokka").start_ms, Some(0), "before the start is 0");
+        assert_eq!(first("nostartquokka").start_ms, Some(0), "no start time: the first stamp is 0");
+        for p in ["epochwombat", "relwombat", "nostartwombat"] {
+            let hit = first(p);
+            assert!(hit.start_ms.unwrap() < 3_600_000 && hit.end_ms.unwrap() < 3_600_000, "{p}: {:?}", (hit.start_ms, hit.end_ms));
+        }
     }
 }

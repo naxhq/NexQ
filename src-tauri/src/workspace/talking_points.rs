@@ -79,6 +79,38 @@ fn plain_from(doc_json: &str) -> String {
     serde_json::from_str::<Value>(doc_json).map(|d| plain_text_of_doc(&d)).unwrap_or_default()
 }
 
+/// Hidden characters out of a text (and nothing else: the writing is stored as written).
+fn clean_text(text: &str) -> String {
+    crate::prompt_data::strip_hidden(text)
+}
+
+fn strip_value(v: &mut Value, changed: &mut bool) {
+    match v {
+        Value::String(s) => {
+            let clean = clean_text(s);
+            if clean != *s {
+                *s = clean;
+                *changed = true;
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(|x| strip_value(x, changed)),
+        Value::Object(map) => map.iter_mut().for_each(|(_, x)| strip_value(x, changed)),
+        _ => {}
+    }
+}
+
+/// The document with hidden characters taken out of its text; a document that has none is returned as it is.
+fn clean_doc(doc: &str) -> String {
+    match serde_json::from_str::<Value>(doc) {
+        Ok(mut value) => {
+            let mut changed = false;
+            strip_value(&mut value, &mut changed);
+            if changed { value.to_string() } else { doc.to_string() }
+        }
+        Err(_) => clean_text(doc),
+    }
+}
+
 fn insert_point(
     conn: &Connection,
     workspace_id: &str,
@@ -89,6 +121,7 @@ fn insert_point(
     in_context: bool,
 ) -> Result<TalkingPoint, String> {
     get_workspace(conn, workspace_id)?;
+    let (title, doc_json, markdown, plain_text) = (clean_text(title), clean_doc(doc_json), clean_text(markdown), clean_text(plain_text));
     let id = uuid::Uuid::new_v4().to_string();
     let now = now_ms();
     let sort: i64 = conn
@@ -156,10 +189,10 @@ pub fn patch_talking_point(
          WHERE id = ?1",
         params![
             id,
-            patch.title.as_deref().unwrap_or(&point.title),
-            doc,
-            patch.markdown.as_deref().unwrap_or(&point.markdown),
-            plain,
+            clean_text(patch.title.as_deref().unwrap_or(&point.title)),
+            clean_doc(&doc),
+            clean_text(patch.markdown.as_deref().unwrap_or(&point.markdown)),
+            clean_text(&plain),
             patch.in_context.unwrap_or(point.in_context),
             // The version only moves with the content: a context toggle must not
             // make a save made on the old version look stale.

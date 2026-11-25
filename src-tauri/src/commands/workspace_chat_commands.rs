@@ -11,10 +11,10 @@ use crate::workspace_chat::{engine, ops, runtime, store};
 // ── search and index ─────────────────────────────────────────────────────────
 
 #[command]
-pub async fn get_index_status(id: String, state: State<'_, AppState>) -> Result<IndexStatus, String> {
+pub async fn get_index_status(id: String, state: State<'_, AppState>, app: AppHandle) -> Result<IndexStatus, String> {
     let active = state.meeting_active.load(std::sync::atomic::Ordering::SeqCst);
     let hub = state.workspace_chat.clone();
-    hub.set_open_workspace(Some(id.clone()));
+    runtime::workspace_opened(&app, &state, &id);
     let status = with_reader(&state, |conn| ops::index_status(conn, &hub, &id, active))?;
     // a backlog with no indexer yet (just after an upgrade): start it now, not after the start delay
     if status.state == "indexing" && hub.indexer().is_none() {
@@ -46,10 +46,28 @@ pub async fn rescan_workspace(id: String, state: State<'_, AppState>, app: AppHa
     Ok(())
 }
 
+/// The recap the AI wrote for a meeting, or null.
+#[command]
+pub async fn get_meeting_recap(meeting_id: String, state: State<'_, AppState>) -> Result<Option<MeetingRecap>, String> {
+    with_reader(&state, |conn| ops::meeting_recap(conn, &meeting_id))
+}
+
+/// Delete a meeting's AI recap; no new one is written for that meeting.
+#[command]
+pub async fn delete_meeting_recap(meeting_id: String, state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+    let ws = with_conn(&state, |conn| {
+        crate::workspace_search::cards::decline_recap(conn, &meeting_id).map_err(|e| format!("Couldn't delete the recap: {e}"))?;
+        Ok(conn.query_row("SELECT workspace_id FROM meetings WHERE id = ?1", [&meeting_id], |r| r.get::<_, Option<String>>(0)).ok().flatten())
+    })?;
+    let _ = app.emit("workspaces_changed", serde_json::json!({ "workspace_id": ws }));
+    Ok(())
+}
+
 // ── chats ────────────────────────────────────────────────────────────────────
 
 #[command]
-pub async fn list_workspace_chats(workspace_id: String, state: State<'_, AppState>) -> Result<Vec<WorkspaceChat>, String> {
+pub async fn list_workspace_chats(workspace_id: String, state: State<'_, AppState>, app: AppHandle) -> Result<Vec<WorkspaceChat>, String> {
+    runtime::workspace_opened(&app, &state, &workspace_id);
     with_conn(&state, |conn| {
         let _ = store::prune_empty_chats(conn, runtime::EMPTY_CHAT_TTL_MS);
         store::list_chats(conn, &workspace_id)
@@ -193,12 +211,12 @@ pub async fn cancel_workspace_request(request_id: String, state: State<'_, AppSt
 
 /// "Save to library": the answer becomes a Markdown document of the workspace.
 #[command]
-pub async fn save_answer_to_library(message_id: i64, title: String, state: State<'_, AppState>, app: AppHandle) -> Result<String, String> {
+pub async fn save_answer_to_library(message_id: i64, title: String, text: String, state: State<'_, AppState>, app: AppHandle) -> Result<String, String> {
     let (_, workspace_id) = with_conn(&state, |conn| ops::answer_of(conn, message_id))?;
     let id = change_and_restart(&state, &app, |_| Touch::ws(&workspace_id), || {
         let ctx = state.context.as_ref().ok_or_else(|| "Context manager not initialized".to_string())?;
         let mut ctx = ctx.lock().map_err(|e| format!("Failed to lock context manager: {e}"))?;
-        with_conn(&state, |conn| ops::save_answer_as_document(conn, &mut ctx, message_id, &title))
+        with_conn(&state, |conn| ops::save_answer_as_document(conn, &mut ctx, message_id, &title, &text))
     })?;
     runtime::documents_changed(&state.workspace_chat);
     let _ = app.emit("workspaces_changed", serde_json::json!({ "workspace_id": workspace_id }));
@@ -208,10 +226,10 @@ pub async fn save_answer_to_library(message_id: i64, title: String, state: State
 /// "Add to instructions": the answer is appended to the workspace's
 /// instructions after a separator.
 #[command]
-pub async fn add_answer_to_instructions(message_id: i64, state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+pub async fn add_answer_to_instructions(message_id: i64, text: String, state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
     let (_, workspace_id) = with_conn(&state, |conn| ops::answer_of(conn, message_id))?;
     change_and_restart(&state, &app, |_| Touch::ws(&workspace_id), || {
-        with_conn(&state, |conn| ops::add_answer_to_instructions(conn, message_id).map(|_| ()))
+        with_conn(&state, |conn| ops::add_answer_to_instructions(conn, message_id, &text).map(|_| ()))
     })?;
     let _ = app.emit("workspaces_changed", serde_json::json!({ "workspace_id": workspace_id }));
     Ok(())

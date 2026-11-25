@@ -437,6 +437,7 @@ pub fn build_context(input: &ContextInput, env: &ContextEnv) -> ContextPlan {
     let mut pinned_used = 0usize;
     let mut pinned_in: Vec<(PinnedItem, String, usize)> = Vec::new(); // item, text, tokens
     let mut pinned_cut = 0usize;
+    let (mut pins_shortened, mut pins_left_out) = (0usize, 0usize);
     let pinned_all: Vec<&PinnedItem> = input.pinned.iter().filter(|p| !is_excluded_ref(&p.kind, &p.ref_id)).collect();
     for p in &pinned_all {
         let full = tok(&p.text) + WRAP_OVERHEAD_TOKENS;
@@ -449,17 +450,27 @@ pub fn build_context(input: &ContextInput, env: &ContextEnv) -> ContextPlan {
             pinned_used += t;
             pinned_in.push(((*p).clone(), text, t));
             pinned_cut += 1;
+            pins_shortened += 1;
         } else {
             drop_note(&mut dropped, &p.kind, &p.ref_id, &p.title, "pinned items are limited to 25% of the budget");
             pinned_cut += 1;
+            pins_left_out += 1;
         }
     }
     if pinned_cut > 0 {
+        // plain words: how many went in whole, how many were shortened or left out
+        let whole = pinned_all.len() - pins_shortened - pins_left_out;
+        let mut parts: Vec<String> = Vec::new();
+        if pins_shortened > 0 {
+            parts.push(format!("{pins_shortened} shortened"));
+        }
+        if pins_left_out > 0 {
+            parts.push(format!("{pins_left_out} left out"));
+        }
         notices.push(format!(
-            "Pinned items were cut: {} of {} fit in {} tokens (25% of the budget).",
-            pinned_in.len(),
+            "Pinned items may use a quarter of the budget ({pinned_cap} tokens): {whole} of {} went in whole, {}.",
             pinned_all.len(),
-            pinned_cap
+            parts.join(", ")
         ));
     }
     let pinned_keys: HashSet<(String, String, Option<String>)> =
@@ -1148,7 +1159,7 @@ mod tests {
         let pinned = plan.items.iter().filter(|x| x.layer == "pinned").count();
         assert_eq!(pinned, 1);
         assert_eq!(plan.dropped.iter().filter(|d| d.reason.contains("25%")).count(), 3);
-        assert!(plan.notices.iter().any(|n| n.contains("Pinned items were cut")));
+        assert!(plan.notices.iter().any(|n| n.contains("Pinned items may use a quarter of the budget")));
         let seg = plan.segments.iter().find(|s| s.layer == "pinned").unwrap();
         assert!(seg.tokens <= 2_000);
     }

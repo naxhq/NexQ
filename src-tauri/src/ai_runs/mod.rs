@@ -21,6 +21,7 @@
 
 pub mod chat_events;
 pub mod gate;
+pub mod models;
 pub mod windows;
 
 use crate::credentials::CredentialManager;
@@ -465,6 +466,13 @@ pub struct AiRuns {
     ollama_ctx: Mutex<HashMap<(String, String), u64>>,
     /// Where a chat's tool activity lines go (`workspace_chat_activity`).
     chat_activity: Mutex<Option<ChatActivityEmitter>>,
+    /// The models each API provider offers (see `models`).
+    model_lists: models::ModelLists,
+    models_ttl: Duration,
+    /// Providers whose list is being fetched right now (one fetch each).
+    models_inflight: Mutex<std::collections::HashSet<String>>,
+    /// Told the provider whenever a list arrives (`automatic_model_updated`).
+    models_updated: Mutex<Option<Arc<dyn Fn(&str) + Send + Sync>>>,
 }
 
 /// Gets a workspace chat's id and one activity line of its running answer.
@@ -537,7 +545,71 @@ impl AiRuns {
             defer_limit: DEFER_LIMIT,
             ollama_ctx: Mutex::new(HashMap::new()),
             chat_activity: Mutex::new(None),
+            model_lists: models::ModelLists::default(),
+            models_ttl: models::LIST_TTL,
+            models_inflight: Mutex::new(Default::default()),
+            models_updated: Mutex::new(None),
         }
+    }
+
+    /// Who hears that a provider's model list arrived.
+    pub fn set_models_updated(&self, f: Arc<dyn Fn(&str) + Send + Sync>) {
+        *self.models_updated.lock().unwrap() = Some(f);
+    }
+
+    pub fn with_models_ttl(mut self, ttl: Duration) -> Self {
+        self.models_ttl = ttl;
+        self
+    }
+
+    fn list_config(&self, provider: &str) -> Option<ProviderConfig> {
+        if !models::keeps_list(provider) {
+            return None;
+        }
+        self.configs.config_for(&ModelSelection::new(provider, "", None)).ok()
+    }
+
+    /// The model ids `provider` offers, when a list for its current key and
+    /// address is known. Instant: never fetches (see [`AiRuns::refresh_models`]).
+    pub fn known_models(&self, provider: &str) -> Option<Vec<String>> {
+        let config = self.list_config(provider)?;
+        self.model_lists.known(provider, models::fingerprint(&config))
+    }
+
+    /// Is a fetch of `provider`'s list due (and possible: a key, an API provider)?
+    pub fn models_due(&self, provider: &str) -> bool {
+        match self.list_config(provider) {
+            Some(config) => self.model_lists.due(provider, models::fingerprint(&config), self.models_ttl, models::RETRY_AFTER),
+            None => false,
+        }
+    }
+
+    /// Fetch `provider`'s list now if one is due: through its own `list_models`,
+    /// within [`models::FETCH_TIMEOUT`], never while a live answer runs. True
+    /// when a new list was stored.
+    pub async fn refresh_models(&self, provider: &str) -> bool {
+        let Some(config) = self.list_config(provider) else { return false };
+        let fingerprint = models::fingerprint(&config);
+        if !self.model_lists.due(provider, fingerprint, self.models_ttl, models::RETRY_AFTER) || self.gate.is_busy() {
+            return false;
+        }
+        if !self.models_inflight.lock().unwrap().insert(provider.to_string()) {
+            return false;
+        }
+        let fetched = tokio::time::timeout(models::FETCH_TIMEOUT, self.api.list_models(config)).await;
+        self.models_inflight.lock().unwrap().remove(provider);
+        let ids = match fetched {
+            Ok(Ok(list)) if !list.is_empty() => Some(list.into_iter().map(|m| m.id).collect::<Vec<_>>()),
+            _ => None,
+        };
+        let stored = ids.is_some();
+        self.model_lists.store(provider, fingerprint, ids);
+        if stored {
+            if let Some(told) = self.models_updated.lock().unwrap().clone() {
+                told(provider);
+            }
+        }
+        stored
     }
 
     /// Chats report what their tools do through this (see [`ChatActivityEmitter`]).

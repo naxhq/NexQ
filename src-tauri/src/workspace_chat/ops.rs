@@ -77,7 +77,22 @@ pub fn index_status(conn: &Connection, hub: &ChatHub, workspace_id: &str, meetin
         (true, false) => "indexing",
         _ => "idle",
     };
-    Ok(IndexStatus { workspace_id: workspace_id.into(), state: state.into(), done, total, passages, skipped, last_indexed_at: last })
+    let ai_recaps: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM meeting_cards c JOIN meetings m ON m.id = c.meeting_id WHERE m.workspace_id = ?1 AND c.origin = 'ai'",
+            [workspace_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    Ok(IndexStatus { workspace_id: workspace_id.into(), state: state.into(), done, total, passages, skipped, last_indexed_at: last, ai_recaps: ai_recaps.max(0) as usize })
+}
+
+/// The AI-written recap of a meeting (not the meeting's own summary), if there is one.
+pub fn meeting_recap(conn: &Connection, meeting_id: &str) -> Result<Option<MeetingRecap>, String> {
+    match get_card(conn, meeting_id) {
+        Ok(Some(c)) if c.origin == CardOrigin::Ai => Ok(Some(MeetingRecap { text: c.recap, model: None, created_at: c.updated_at })),
+        _ => Ok(None), // no card, another origin, or no search tables yet
+    }
 }
 
 // ── answers into the library and the instructions ───────────────────────────
@@ -103,17 +118,25 @@ pub fn save_answer_as_document(
     context: &mut crate::context::ContextManager,
     message_id: i64,
     title: &str,
+    text: &str,
 ) -> Result<String, String> {
     let (message, workspace_id) = answer_of(conn, message_id)?;
+    // The text the person reviewed is what is stored: anything cleaning would change is refused.
+    if text.trim().is_empty() {
+        return Err("There is nothing to save.".to_string());
+    }
+    if sanitize_plain_text(text, DOCUMENT_CAP) != text {
+        return Err(DOCUMENT_CHANGED.to_string());
+    }
     let title = if title.trim().is_empty() { "Chat answer".to_string() } else { title.trim().to_string() };
-    let resource = context.add_text(&title, &message.content)?;
+    let resource = context.add_text(&title, text)?;
     // the check and the inserts are one transaction
     let saved = super::guard::atomically(
         conn,
         |c| super::guard::answer_is_clean(c, &message),
         |c| {
             crate::db::context::add_context_resource(c, &crate::workspace::documents::db_row(&resource)).map_err(|e| e.to_string())?;
-            crate::workspace::documents::store_text(c, &resource.id, &message.content, resource.token_count as i64)?;
+            crate::workspace::documents::store_text(c, &resource.id, text, resource.token_count as i64)?;
             crate::workspace::store::add_item(c, &workspace_id, crate::workspace::types::ItemKind::Document, &resource.id, None)
         },
     );
@@ -129,19 +152,109 @@ pub fn save_answer_as_document(
     }
 }
 
-/// "Add to instructions": the answer is appended to the workspace's
-/// instructions after a separator. Returns the workspace id.
-pub fn add_answer_to_instructions(conn: &Connection, message_id: i64) -> Result<String, String> {
+// ── Text that becomes standing instructions ───────────────────────────────────
+//
+// What the person reviewed is what is stored. The same rules run in the dialog (TypeScript,
+// `workspace/chat/instructionText.ts`); both are checked against
+// `src/contracts/vectors/instruction_text.json`. Plain text only: no HTML, no link or image
+// targets or titles, no reference definitions, no hidden, control or bidi characters.
+
+/// Most characters (code points) of instruction text added at once.
+pub const INSTRUCTION_CAP: usize = 4000;
+
+pub const INSTRUCTION_CHANGED: &str =
+    "That text has hidden characters, HTML, link targets or more than 4000 characters, so it can't be added as it is. Review the cleaned text and add it again.";
+
+struct Rules {
+    crlf: regex::Regex,
+    tags: regex::Regex,
+    comment: regex::Regex,
+    html: regex::Regex,
+    refdef: regex::Regex,
+    image: regex::Regex,
+    link: regex::Regex,
+    reflink: regex::Regex,
+    blanks: regex::Regex,
+}
+
+fn rules() -> &'static Rules {
+    static RULES: std::sync::OnceLock<Rules> = std::sync::OnceLock::new();
+    RULES.get_or_init(|| {
+        let r = |p: &str| regex::Regex::new(p).expect("fixed pattern");
+        Rules {
+            crlf: r(r"\r\n?"),
+            tags: r(r"\s?\[S\d+(?:\s*,\s*S\d+)*\]"),
+            comment: r(r"(?s)<!--.*?-->"),
+            html: r(r"</?[a-zA-Z][^>]*>"),
+            refdef: r(r"(?m)^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*\S.*$"),
+            image: r(r"!\[([^\]]*)\]\([^)]*\)"),
+            link: r(r"\[([^\]]+)\]\([^)]*\)"),
+            reflink: r(r"\[([^\]]+)\]\[[^\]]*\]"),
+            blanks: r(r"\n{3,}"),
+        }
+    })
+}
+
+fn one_pass(raw: &str, cap: usize) -> String {
+    let k = rules();
+    let t = crate::prompt_data::strip_hidden(&k.crlf.replace_all(raw, "\n"));
+    let t = k.tags.replace_all(&t, "");
+    let t = k.comment.replace_all(&t, "");
+    let t = k.html.replace_all(&t, "");
+    let t = k.refdef.replace_all(&t, "");
+    let t = k.image.replace_all(&t, "${1}");
+    let t = k.link.replace_all(&t, "${1}");
+    let t = k.reflink.replace_all(&t, "${1}");
+    let t = k.blanks.replace_all(&t, "\n\n");
+    t.trim().chars().take(cap).collect::<String>().trim_end().to_string()
+}
+
+/// Most characters (code points) of a document saved from an answer.
+pub const DOCUMENT_CAP: usize = 100_000;
+
+pub const DOCUMENT_CHANGED: &str =
+    "That text has hidden characters, HTML, link targets or is too long, so it can't be saved as it is. Review the cleaned text and save it again.";
+
+/// Plain text up to `cap` characters, applied until nothing changes, so the result is a fixed
+/// point (cleaning it again returns it as it is).
+pub fn sanitize_plain_text(raw: &str, cap: usize) -> String {
+    let mut cur = raw.to_string();
+    for _ in 0..8 {
+        let next = one_pass(&cur, cap);
+        if next == cur {
+            return cur;
+        }
+        cur = next;
+    }
+    cur
+}
+
+/// Plain instruction text (see `sanitize_plain_text`, capped at `INSTRUCTION_CAP`).
+pub fn sanitize_instruction_text(raw: &str) -> String {
+    sanitize_plain_text(raw, INSTRUCTION_CAP)
+}
+
+/// "Add to instructions": the text the person reviewed is appended to the workspace's
+/// instructions after a separator, in the same transaction that checks that nothing the answer
+/// used has left the workspace. Text that sanitising would change is refused, so what was
+/// shown is what is stored. Returns the workspace id.
+pub fn add_answer_to_instructions(conn: &Connection, message_id: i64, text: &str) -> Result<String, String> {
     let (message, workspace_id) = answer_of(conn, message_id)?;
+    if text.trim().is_empty() {
+        return Err("There is nothing to add.".to_string());
+    }
     super::guard::atomically(
         conn,
         |c| super::guard::answer_is_clean(c, &message),
         |c| {
+            if sanitize_instruction_text(text) != text {
+                return Err(INSTRUCTION_CHANGED.to_string());
+            }
             let ws = crate::workspace::store::get_workspace(c, &workspace_id)?;
-            let text = super::engine::append_to_instructions(&ws.instructions, &message.content);
+            let stored = super::engine::append_to_instructions(&ws.instructions, text);
             c.execute(
                 "UPDATE workspaces SET instructions = ?2, updated_at = ?3 WHERE id = ?1",
-                rusqlite::params![workspace_id, text, crate::db::workspace_migrations::now_ms()],
+                rusqlite::params![workspace_id, stored, crate::db::workspace_migrations::now_ms()],
             )
             .map(|_| ())
             .map_err(|e| format!("Couldn't save the instructions: {e}"))
@@ -177,6 +290,9 @@ pub async fn recap_missing(deps: &ChatDeps, workspace_id: &str, cancel: Arc<Canc
         for m in meetings.into_iter().filter(|m| !m.summary) {
             if out.len() >= MAX_RECAPS {
                 break;
+            }
+            if crate::workspace_search::cards::recap_declined(&conn, &m.id) {
+                continue;
             }
             let Ok(Some(card)) = get_card(&conn, &m.id) else { continue }; // not indexed yet
             if card.origin == CardOrigin::Ai || card.origin == CardOrigin::Summary {
@@ -257,4 +373,40 @@ pub async fn recaps_when_ready(deps: &ChatDeps, workspace_id: &str, cancel: Arc<
 /// The database path as a reader would open it (for callers without `ChatDeps`).
 pub fn reader(db_path: &Path) -> Result<Connection, String> {
     crate::db::open_reader(db_path).map_err(|e| format!("Couldn't open the database: {e}"))
+}
+
+#[cfg(test)]
+mod instruction_text_tests {
+    use super::*;
+
+    #[derive(serde::Deserialize)]
+    struct Vector {
+        name: String,
+        input: String,
+        output: String,
+    }
+
+    fn vectors() -> Vec<Vector> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("src").join("contracts").join("vectors").join("instruction_text.json");
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        serde_json::from_str(&text).expect("vectors are JSON")
+    }
+
+    #[test]
+    fn the_shared_vectors_give_the_same_text_as_the_dialog() {
+        let all = vectors();
+        assert!(all.len() >= 20);
+        for v in all {
+            assert_eq!(sanitize_instruction_text(&v.input), v.output, "{}", v.name);
+            // what comes out is what goes in: sanitising it again changes nothing
+            assert_eq!(sanitize_instruction_text(&v.output), v.output, "{} (second pass)", v.name);
+        }
+    }
+
+    #[test]
+    fn emoji_and_right_to_left_text_are_never_refused() {
+        for text in ["family \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467} heart \u{2764}\u{FE0F}", "\u{05E9}\u{05DC}\u{05D5}\u{05DD} and \u{0645}\u{0631}\u{062D}\u{0628}\u{0627}"] {
+            assert_eq!(sanitize_instruction_text(text), text);
+        }
+    }
 }

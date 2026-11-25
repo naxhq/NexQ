@@ -876,3 +876,89 @@ async fn a_run_built_before_its_scope_restarted_starts_no_session() {
     fresh.expected_generation = Some(r.runs.generation(&key));
     assert!(r.runs.run(fresh, None).await.is_ok());
 }
+
+// ---------------------------------------------------------------------------
+// The model lists "Automatic" picks from
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_provider_list_is_fetched_once_kept_and_read_without_fetching() {
+    let r = rig();
+    *r.api.listing.lock().unwrap() = vec![model_info("gpt-5", Some(400_000)), model_info("gpt-5-nano", Some(400_000)), model_info("gpt-4o-mini-tts", None)];
+    // Unknown until fetched: reading never fetches.
+    assert_eq!(r.runs.known_models("openai"), None);
+    assert!(r.runs.models_due("openai"));
+    assert_eq!(r.api.list_calls.load(Ordering::SeqCst), 0);
+    let told: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = told.clone();
+    r.runs.set_models_updated(Arc::new(move |p: &str| sink.lock().unwrap().push(p.to_string())));
+    assert!(r.runs.refresh_models("openai").await);
+    assert_eq!(r.runs.known_models("openai"), Some(vec!["gpt-5".to_string(), "gpt-5-nano".to_string(), "gpt-4o-mini-tts".to_string()]));
+    assert_eq!(*told.lock().unwrap(), vec!["openai".to_string()], "the UI hears it arrived");
+    // Within the day: no second fetch.
+    assert!(!r.runs.models_due("openai"));
+    assert!(!r.runs.refresh_models("openai").await);
+    assert_eq!(r.api.list_calls.load(Ordering::SeqCst), 1);
+    // What "Automatic" says: the label is the active model before the list, the small one after.
+    use crate::live_runtime::cheapest::{cheapest, CheapestInput};
+    let label = |avail: &[String]| cheapest(&CheapestInput { provider: "openai", active_model: "gpt-5", available: avail, cli_fast: None }).label;
+    assert_eq!(label(&[]), "OpenAI · gpt-5 (active model)");
+    assert_eq!(label(&r.runs.known_models("openai").unwrap()), "OpenAI · gpt-5-nano (cheapest)", "the speech model is skipped");
+}
+
+#[tokio::test]
+async fn a_changed_key_or_address_makes_the_list_stale_and_due_again() {
+    let r = rig();
+    *r.api.listing.lock().unwrap() = vec![model_info("gpt-5-nano", None)];
+    assert!(r.runs.refresh_models("openai").await);
+    assert!(r.runs.known_models("openai").is_some());
+    r.configs.base_urls.lock().unwrap().insert("openai".into(), "http://proxy.example/v1".into());
+    assert_eq!(r.runs.known_models("openai"), None, "fetched for another address");
+    assert!(r.runs.models_due("openai"));
+    assert!(r.runs.refresh_models("openai").await);
+    assert_eq!(r.api.list_calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn a_list_is_never_fetched_while_a_live_answer_runs_or_for_providers_that_keep_none() {
+    let r = rig();
+    *r.api.listing.lock().unwrap() = vec![model_info("gpt-5-nano", None)];
+    let live = r.gate.enter();
+    assert!(!r.runs.refresh_models("openai").await);
+    assert_eq!(r.api.list_calls.load(Ordering::SeqCst), 0);
+    drop(live);
+    assert!(r.runs.refresh_models("openai").await);
+    for p in ["ollama", "lm_studio", "custom", "claude_cli", "codex_cli", "antigravity_cli", "nope"] {
+        assert!(!r.runs.models_due(p), "{p}");
+        assert!(!r.runs.refresh_models(p).await, "{p}");
+        assert_eq!(r.runs.known_models(p), None, "{p}");
+    }
+    assert_eq!(r.api.list_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_failed_or_empty_fetch_keeps_no_list_and_is_not_repeated_at_once() {
+    let r = rig();
+    // The provider answers with nothing usable.
+    assert!(!r.runs.refresh_models("gemini").await);
+    assert_eq!(r.runs.known_models("gemini"), None);
+    assert!(!r.runs.models_due("gemini"), "waits before the next try");
+    assert!(!r.runs.refresh_models("gemini").await);
+    assert_eq!(r.api.list_calls.load(Ordering::SeqCst), 1);
+    // No key saved: nothing to fetch with, nothing known.
+    assert!(!r.runs.models_due("openrouter"));
+    assert_eq!(r.runs.known_models("openrouter"), None);
+}
+
+#[tokio::test]
+async fn an_old_list_is_fetched_again() {
+    let api = FakeApi::new();
+    *api.listing.lock().unwrap() = vec![model_info("claude-haiku-5-5", None)];
+    let cli = Arc::new(AgentSessionManager::new(Arc::new(FakeSpawner::default()), Arc::new(NoopStatusSink), Arc::new(CliSettings::isolated())));
+    let configs = FakeConfigs::new(&[("anthropic", "sk-ant")]);
+    let runs = AiRuns::with_parts(api.clone(), cli, LiveGate::new(), configs).with_models_ttl(Duration::ZERO);
+    assert!(runs.refresh_models("anthropic").await);
+    assert!(runs.models_due("anthropic"));
+    assert!(runs.refresh_models("anthropic").await);
+    assert_eq!(api.list_calls.load(Ordering::SeqCst), 2);
+}

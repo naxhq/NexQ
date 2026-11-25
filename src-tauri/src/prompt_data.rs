@@ -40,9 +40,156 @@ pub fn fold_char(c: char) -> Option<char> {
     }
 }
 
+// ── Hidden characters: one rule for everything the model reads or a person stores ─────────────
+//
+// What the model reads must be what the person can see. `strip_hidden` removes what is invisible
+// or reorders text (control, zero-width, bidi, tag and other format characters, stray variation
+// selectors) and keeps what is real writing: joiners and non-joiners inside the scripts that use
+// them (Persian, Indic, Sinhala, Khmer, Myanmar, Mongolian, Arabic, Syriac), emoji sequences
+// (family, keycap, flags), and the glyph-choice selectors after Han characters and symbols. It is
+// a single linear pass without regular expressions. The same rules run in TypeScript
+// (`workspace/chat/instructionText.ts`); both are checked against
+// `src/contracts/vectors/instruction_text.json`.
+
+fn hidden_always(cp: u32) -> bool {
+    cp <= 0x08
+        || cp == 0x0b
+        || cp == 0x0c
+        || (0x0e..=0x1f).contains(&cp)
+        || (0x7f..=0x9f).contains(&cp)
+        || cp == 0xad
+        || cp == 0x034f
+        || cp == 0x061c
+        || cp == 0x115f
+        || cp == 0x1160
+        || cp == 0x17b4
+        || cp == 0x17b5
+        || cp == 0x180e
+        || cp == 0x200b
+        || cp == 0x200e
+        || cp == 0x200f
+        || cp == 0x2028
+        || cp == 0x2029
+        || (0x202a..=0x202e).contains(&cp)
+        || (0x2060..=0x206f).contains(&cp)
+        || cp == 0x3164
+        || cp == 0xfeff
+        || cp == 0xffa0
+        || (0xfff9..=0xfffb).contains(&cp)
+        || (0xe0000..=0xe007f).contains(&cp)
+}
+
+fn is_selector(cp: u32) -> bool {
+    (0xfe00..=0xfe0f).contains(&cp) || (0xe0100..=0xe01ef).contains(&cp) || (0x180b..=0x180d).contains(&cp) || cp == 0x180f
+}
+
+fn is_han(cp: u32) -> bool {
+    (0x3400..=0x4dbf).contains(&cp) || (0x4e00..=0x9fff).contains(&cp) || (0xf900..=0xfaff).contains(&cp) || (0x20000..=0x323af).contains(&cp)
+}
+
+/// Symbols, arrows, math, dingbats, shapes and the emoji blocks, and a few single signs.
+fn is_symbol_base(cp: u32) -> bool {
+    matches!(cp, 0xa9 | 0xae | 0x203c | 0x2049 | 0x3030 | 0x303d | 0x3297 | 0x3299)
+        || (0x2100..=0x2bff).contains(&cp)
+        || (0x1f000..=0x1faff).contains(&cp)
+}
+
+fn is_mongolian(cp: u32) -> bool {
+    (0x1820..=0x18af).contains(&cp)
+}
+
+/// A letter or vowel sign of a script whose spelling uses joiners (digits and punctuation excluded).
+fn joiner_letter(cp: u32) -> bool {
+    let in_script = (0x0600..=0x06ff).contains(&cp)
+        || (0x0700..=0x074f).contains(&cp)
+        || (0x0750..=0x077f).contains(&cp)
+        || (0x08a0..=0x08ff).contains(&cp)
+        || (0xfb50..=0xfdff).contains(&cp)
+        || (0xfe70..=0xfefe).contains(&cp)
+        || (0x0900..=0x0dff).contains(&cp)
+        || (0x1000..=0x109f).contains(&cp)
+        || (0x1780..=0x17ff).contains(&cp)
+        || (0x1800..=0x18af).contains(&cp);
+    let not_letter = (0x0660..=0x0669).contains(&cp)
+        || (0x06f0..=0x06f9).contains(&cp)
+        || (0x066a..=0x066d).contains(&cp)
+        || matches!(cp, 0x060c | 0x061b | 0x061f | 0x06d4 | 0x0964 | 0x0965 | 0x0970)
+        || (0x104a..=0x104f).contains(&cp)
+        || (0x17d4..=0x17dc).contains(&cp)
+        || (0x1800..=0x180f).contains(&cp);
+    in_script && !not_letter
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Last {
+    Other,
+    Joiner,
+    Selector,
+}
+
+fn joiner_ok(cp: u32, base: u32, next: u32) -> bool {
+    if joiner_letter(base) && joiner_letter(next) {
+        return true;
+    }
+    // an emoji sequence: only the zero-width joiner, between two symbols
+    cp == 0x200d && is_symbol_base(base) && is_symbol_base(next)
+}
+
+fn selector_ok(cp: u32, base: u32, next: u32) -> bool {
+    match cp {
+        0xfe0f if (0x30..=0x39).contains(&base) || base == 0x23 || base == 0x2a => next == 0x20e3,
+        0xfe00..=0xfe0f => is_han(base) || is_symbol_base(base),
+        0xe0100..=0xe01ef => is_han(base),
+        _ => is_mongolian(base),
+    }
+}
+
+/// True for what `strip_hidden` may keep after a joiner or selector decision (see `fold`).
+fn is_joiner_or_selector(c: char) -> bool {
+    let cp = c as u32;
+    cp == 0x200c || cp == 0x200d || is_selector(cp)
+}
+
+/// Hidden characters out, real writing kept. Linear; never changes a visible character.
+pub fn strip_hidden(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut base = 0u32;
+    let mut last = Last::Other;
+    for (i, &c) in chars.iter().enumerate() {
+        let cp = c as u32;
+        if hidden_always(cp) {
+            continue;
+        }
+        let next = chars.get(i + 1).map_or(0, |n| *n as u32);
+        if cp == 0x200c || cp == 0x200d {
+            if last == Last::Joiner || !joiner_ok(cp, base, next) {
+                continue;
+            }
+            out.push(c);
+            last = Last::Joiner;
+            continue;
+        }
+        if is_selector(cp) {
+            if last != Last::Other || !selector_ok(cp, base, next) {
+                continue;
+            }
+            out.push(c);
+            last = Last::Selector;
+            continue;
+        }
+        out.push(c);
+        base = cp;
+        last = Last::Other;
+    }
+    out
+}
+
 /// NFKC, then every look-alike, invisible or control character folded or dropped.
 pub fn fold(s: &str) -> String {
-    s.nfkc().filter_map(fold_char).collect()
+    let composed: String = s.nfkc().collect();
+    // Hidden characters go by `strip_hidden` (which keeps real joiners and selectors); the rest folds as before.
+    strip_hidden(&composed).chars().filter_map(|c| if is_joiner_or_selector(c) { Some(c) } else { fold_char(c) }).collect()
 }
 
 /// Character-level neutralising shared by every prompt: folded, every angle
@@ -311,4 +458,38 @@ mod tests {
 /// Same shape as `workspace_search::context_plan::wrap_data(nonce, label, text)`.
 pub fn wrap_data(nonce: &str, label: &str, text: &str) -> String {
     wrap(nonce, label, text)
+}
+
+#[cfg(test)]
+mod strip_hidden_tests {
+    use super::*;
+
+    #[test]
+    fn real_writing_survives() {
+        for text in [
+            "\u{645}\u{6cc}\u{200c}\u{62e}\u{648}\u{627}\u{647}\u{645}",
+            "\u{915}\u{94d}\u{200d}\u{937}",
+            "\u{dc1}\u{dca}\u{200d}\u{dbb}\u{dd3}",
+            "\u{8fbb}\u{e0101}",
+            "\u{1F468}\u{200d}\u{1F469}\u{200d}\u{1F467}",
+            "1\u{fe0f}\u{20e3}",
+            "\u{1F1EB}\u{1F1F7}",
+            "\u{2764}\u{fe0f}\u{200d}\u{1F525}",
+        ] {
+            assert_eq!(strip_hidden(text), text);
+        }
+    }
+
+    #[test]
+    fn hidden_things_go() {
+        assert_eq!(strip_hidden("a\u{200b}b\u{200c}c\u{202e}d\u{e0041}e\u{fe0f}f\u{0007}g"), "abcdefg");
+        assert_eq!(strip_hidden("\u{1F3F4}\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}"), "\u{1F3F4}");
+        assert_eq!(strip_hidden("\u{6cc}\u{200c}\u{200c}\u{62e}"), "\u{6cc}\u{200c}\u{62e}");
+    }
+
+    #[test]
+    fn the_prompt_fold_keeps_a_persian_word_whole_and_still_drops_hidden_text() {
+        assert_eq!(fold("\u{645}\u{6cc}\u{200c}\u{62e}"), "\u{645}\u{6cc}\u{200c}\u{62e}");
+        assert_eq!(fold("ig\u{200b}nore"), "ignore");
+    }
 }

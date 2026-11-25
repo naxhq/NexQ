@@ -438,6 +438,13 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
         self.last_code
     }
 
+    /// The trigger and the held lines disagree (nothing to send): drop the request and its count.
+    pub fn resync(&mut self) {
+        if self.pending.is_empty() {
+            self.trigger.clear_pending();
+        }
+    }
+
     pub fn has_pending(&self) -> bool {
         !self.pending.is_empty()
     }

@@ -28,6 +28,18 @@ pub struct CheapestInput<'a> {
     pub cli_fast: Option<(&'a str, &'a str)>,
 }
 
+/// Ids that are not chat models, whatever else their name says (a speech, image,
+/// embedding, moderation or realtime model can be called "mini" or "flash" too).
+const NOT_CHAT: [&str; 14] = [
+    "tts", "audio", "image", "imagen", "embed", "moderation", "guard", "whisper", "transcribe", "realtime", "live", "search", "veo",
+    "computer-use",
+];
+
+fn is_chat_model(id: &str) -> bool {
+    let id = id.to_lowercase();
+    !NOT_CHAT.iter().any(|w| id.contains(w))
+}
+
 /// Small models, best (cheapest and still good at structured output) first.
 fn small_models(provider: &str) -> &'static [&'static str] {
     match provider {
@@ -73,7 +85,7 @@ pub fn cheapest(i: &CheapestInput<'_>) -> CheapestChoice {
     if !table.is_empty() && !i.available.is_empty() {
         for pref in table {
             // newest of the matches: the greatest name
-            if let Some(m) = i.available.iter().filter(|a| a.to_lowercase().contains(pref)).max() {
+            if let Some(m) = i.available.iter().filter(|a| is_chat_model(a) && a.to_lowercase().contains(pref)).max() {
                 return CheapestChoice { provider: i.provider.to_string(), model: m.clone(), effort: None, label: format!("{name} · {m} (cheapest)") };
             }
         }
@@ -110,6 +122,28 @@ mod tests {
         assert_eq!(pick("anthropic", "claude-sonnet-4", &["claude-sonnet-4", "claude-haiku-4-5"]).model, "claude-haiku-4-5");
         assert_eq!(pick("gemini", "gemini-2.5-pro", &["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]).model, "gemini-2.5-flash-lite");
         assert_eq!(pick("groq", "llama-3.3-70b", &["llama-3.3-70b", "llama-3.1-8b-instant"]).model, "llama-3.1-8b-instant");
+    }
+
+    #[test]
+    fn speech_image_guard_and_realtime_models_are_never_the_cheapest_chat_model() {
+        let noisy = pick("openai", "gpt-5", &["gpt-4o-mini-tts", "gpt-4o-mini-transcribe", "gpt-4o-mini-realtime-preview", "gpt-4o-mini-search-preview", "gpt-4o-mini", "gpt-5"]);
+        assert_eq!(noisy.model, "gpt-4o-mini");
+        let gemini = pick("gemini", "gemini-2.5-pro", &["gemini-2.5-flash-image", "gemini-live-2.5-flash", "gemini-2.5-flash-preview-tts", "gemini-2.5-flash", "gemini-2.5-pro"]);
+        assert_eq!(gemini.model, "gemini-2.5-flash");
+        let groq = pick("groq", "llama-3.3-70b-versatile", &["llama-guard-3-8b", "whisper-large-v3", "llama-3.1-8b-instant", "llama-3.3-70b-versatile"]);
+        assert_eq!(groq.model, "llama-3.1-8b-instant");
+        // Only non-chat models match: the active model, said so.
+        let none = pick("openai", "gpt-5", &["gpt-4o-mini-tts", "gpt-5"]);
+        assert_eq!((none.model.as_str(), none.label.as_str()), ("gpt-5", "OpenAI · gpt-5 (active model)"));
+    }
+
+    #[test]
+    fn each_api_provider_picks_its_own_small_model_and_the_newest_of_it() {
+        assert_eq!(pick("anthropic", "claude-sonnet-5-5", &["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001", "claude-haiku-5-5"]).model, "claude-haiku-5-5");
+        assert_eq!(pick("openai", "gpt-5", &["gpt-5", "gpt-5-nano-2025-08-07", "gpt-5-nano"]).model, "gpt-5-nano-2025-08-07");
+        assert_eq!(pick("openrouter", "openai/gpt-5", &["openai/gpt-5", "anthropic/claude-haiku-4.5", "google/gemini-2.5-flash"]).model, "anthropic/claude-haiku-4.5");
+        let c = pick("gemini", "gemini-2.5-pro", &["gemini-2.5-pro", "gemini-2.5-flash-lite"]);
+        assert_eq!(c.label, "Google Gemini · gemini-2.5-flash-lite (cheapest)");
     }
 
     #[test]

@@ -62,6 +62,8 @@ pub struct NotesHandle {
     pub finished: Arc<AtomicBool>,
     pub dropped_lines: Arc<AtomicU64>,
     pub sent_tokens: Arc<AtomicU64>,
+    /// Words the actor holds that no run has covered yet ("Update now" says "nothing new" without it).
+    pub has_new: Arc<AtomicBool>,
 }
 
 pub struct NotesParams {
@@ -200,6 +202,7 @@ pub fn spawn(p: NotesParams) -> Result<NotesHandle, String> {
         finished: Arc::new(AtomicBool::new(false)),
         dropped_lines: Arc::new(AtomicU64::new(0)),
         sent_tokens: Arc::new(AtomicU64::new(0)),
+        has_new: Arc::new(AtomicBool::new(false)),
     };
     let actor = Actor::new(p, swap, &handle);
     tokio::spawn(actor.run(rx));
@@ -215,6 +218,7 @@ struct Actor {
     finished_flag: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
     sent: Arc<AtomicU64>,
+    has_new: Arc<AtomicBool>,
     dirty: Arc<AtomicBool>,
     discarded: Arc<AtomicBool>,
     last: Option<RunSnapshot>,
@@ -251,6 +255,7 @@ impl Actor {
             finished_flag: handle.finished.clone(),
             dropped: handle.dropped_lines.clone(),
             sent: handle.sent_tokens.clone(),
+            has_new: handle.has_new.clone(),
             dirty,
             discarded,
             last: None,
@@ -313,6 +318,7 @@ impl Actor {
             self.last_deadline = deadline;
         }
         self.dropped.store(self.engine.dropped_lines, Ordering::SeqCst);
+        self.has_new.store(self.engine.has_pending(), Ordering::SeqCst);
         self.sent.store(self.engine.sent_tokens_total, Ordering::SeqCst);
     }
 
@@ -407,7 +413,11 @@ impl Actor {
         }
         let gen0 = (self.p.generation)(&self.p.meeting_id, false);
         self.swap.set_expected(Some(gen0));
-        let Some(prep) = self.engine.prepare(reason) else { return };
+        let Some(prep) = self.engine.prepare(reason) else {
+            // the trigger believed there were words but the engine holds none: forget the request so it cannot stick
+            self.engine.resync();
+            return;
+        };
         // "running" is shown while the call is in flight
         self.emit_state();
         let req = prep.request.clone();

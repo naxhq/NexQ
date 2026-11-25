@@ -42,6 +42,7 @@ pub fn build(app: &AppHandle, state: &AppState) -> Option<Arc<LiveRuntimes>> {
     // rule for notes, brief, memory and recaps.
     let cli_settings = state.cli_settings.clone();
     let openrouter = state.openrouter_cache.clone();
+    let list_runs = runs.clone();
     let resolver: Arc<dyn Fn(Option<&str>) -> Option<CheapestChoice> + Send + Sync> = Arc::new(move |provider: Option<&str>| {
         let (active_provider, active_model) = {
             let router = llm.as_ref()?.lock().ok()?;
@@ -49,11 +50,23 @@ pub fn build(app: &AppHandle, state: &AppState) -> Option<Arc<LiveRuntimes>> {
         };
         let provider = provider.map(str::to_string).unwrap_or_else(|| active_provider.clone());
         let active_model = if provider == active_provider { active_model } else { String::new() };
-        let available: Vec<String> = if provider == "openrouter" {
+        let mut available: Vec<String> = if provider == "openrouter" {
             openrouter.lock().ok().and_then(|c| c.as_ref().map(|c| c.models.iter().map(|m| m.id.clone()).collect())).unwrap_or_default()
         } else {
             Vec::new()
         };
+        // The provider's own list, when it is known. Reading is instant; when a fetch is
+        // due it runs in the background (never during a live answer) and the UI is told
+        // when it lands. Until then "Automatic" says it uses the active model.
+        if available.is_empty() {
+            available = list_runs.known_models(&provider).unwrap_or_default();
+        }
+        if list_runs.models_due(&provider) {
+            let (r, p) = (list_runs.clone(), provider.clone());
+            tauri::async_runtime::spawn(async move {
+                r.refresh_models(&p).await;
+            });
+        }
         let kind = crate::llm::ProviderType::from_str(&provider).ok().and_then(|p| p.cli_agent_kind());
         let fast = kind.map(|k| cli_settings.config(k));
         Some(cheapest(&CheapestInput {

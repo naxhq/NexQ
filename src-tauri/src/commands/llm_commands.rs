@@ -91,6 +91,14 @@ pub async fn set_llm_provider(
         }
     }
 
+    // "Automatic" model names (notes, brief, memory, recaps) follow the provider in use:
+    // fetch its model list in the background if one is due (never during a live answer).
+    if let Some(runs) = state.ai_runs.clone() {
+        let provider = provider_type.clone();
+        tauri::async_runtime::spawn(async move {
+            runs.refresh_models(&provider).await;
+        });
+    }
     log::info!("LLM provider set to: {}", provider_type);
     Ok(())
 }

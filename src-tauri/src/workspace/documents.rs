@@ -63,6 +63,9 @@ pub fn remove_document(conn: &Connection, id: &str) -> Result<(), String> {
 
 /// Saves the extracted text of a document.
 pub fn store_text(conn: &Connection, id: &str, text: &str, token_count: i64) -> Result<(), String> {
+    // One linear pass when the text is stored: the index and every later prompt read what a person can see.
+    let text = crate::prompt_data::strip_hidden(text);
+    let text = text.as_str();
     conn.execute(
         "INSERT INTO document_text (resource_id, text, token_count, status, error, extracted_at)
          VALUES (?1, ?2, ?3, 'ready', NULL, ?4)

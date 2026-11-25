@@ -249,15 +249,30 @@ impl LiveDb {
         self.read(|c| store::get_workspace(c, workspace_id).map(|w| w.suggest_memory).unwrap_or(false)).unwrap_or(false)
     }
 
-    /// The final lines of a meeting and its length.
+    /// When the meeting started (epoch ms), if its row has a usable start time.
+    pub fn meeting_start_ms(&self, meeting_id: &str) -> Option<i64> {
+        self.read(|c| {
+            c.query_row("SELECT start_time FROM meetings WHERE id = ?1", params![meeting_id], |r| r.get::<_, Option<String>>(0))
+                .ok()
+                .flatten()
+                .and_then(|s| crate::live_common::parse_start_ms(&s))
+        })
+        .flatten()
+    }
+
+    /// The final lines of a meeting (times since its start) and its length.
     pub fn meeting_lines(&self, meeting_id: &str) -> (Vec<MemLine>, u64) {
+        let start = self.meeting_start_ms(meeting_id);
         self.read(|c| {
             let mut stmt = match c.prepare("SELECT speaker, text, timestamp_ms FROM transcript_segments WHERE meeting_id = ?1 AND is_final = 1 ORDER BY timestamp_ms, rowid") {
                 Ok(s) => s,
                 Err(_) => return (Vec::new(), 0),
             };
-            let rows = stmt.query_map(params![meeting_id], |r| Ok(MemLine { speaker: r.get(0)?, text: r.get(1)?, ms: r.get::<_, i64>(2)?.max(0) as u64 }));
-            let lines: Vec<MemLine> = rows.map(|r| r.filter_map(|x| x.ok()).collect()).unwrap_or_default();
+            let rows = stmt.query_map(params![meeting_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)));
+            let raw: Vec<(String, String, i64)> = rows.map(|r| r.filter_map(|x| x.ok()).collect()).unwrap_or_default();
+            let base = crate::live_common::base_ms(start, raw.iter().map(|x| x.2));
+            let mut lines: Vec<MemLine> = raw.into_iter().map(|(speaker, text, ts)| MemLine { speaker, text, ms: crate::live_common::rel_ms(ts, base) }).collect();
+            lines.sort_by_key(|l| l.ms);
             let len = lines.last().map(|l| l.ms).unwrap_or(0);
             (lines, len)
         })

@@ -71,7 +71,7 @@ pub fn create_memory(conn: &Connection, input: MemoryCreate) -> Result<MemoryIte
     conn.execute(
         "INSERT INTO workspace_memory (id, workspace_id, kind, title, text, source_meeting, source_ms, status, created_at, updated_at, unsupported)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10)",
-        params![id, input.workspace_id, input.kind, input.title.trim(), input.text.trim(), input.source_meeting, input.source_ms, status, now, input.unsupported as i64],
+        params![id, input.workspace_id, input.kind, crate::prompt_data::strip_hidden(input.title.trim()).trim(), crate::prompt_data::strip_hidden(input.text.trim()).trim(), input.source_meeting, input.source_ms, status, now, input.unsupported as i64],
     )
     .map_err(|e| err("Couldn't save the memory", e))?;
     touch(conn, &input.workspace_id);
@@ -91,10 +91,10 @@ pub fn update_memory(conn: &Connection, id: &str, update: MemoryUpdate) -> Resul
         item.status = status;
     }
     if let Some(title) = update.title {
-        item.title = title.trim().to_string();
+        item.title = crate::prompt_data::strip_hidden(title.trim()).trim().to_string();
     }
     if let Some(text) = update.text {
-        item.text = text.trim().to_string();
+        item.text = crate::prompt_data::strip_hidden(text.trim()).trim().to_string();
     }
     if item.text.is_empty() && item.title.is_empty() {
         return Err("Write what to remember".to_string());
@@ -176,6 +176,17 @@ mod tests {
             status: None,
             unsupported: false,
         }
+    }
+
+    #[test]
+    fn hidden_characters_never_reach_stored_memory_but_real_writing_does() {
+        let conn = memory_db();
+        let a = new_ws(&conn, "A", false, false);
+        let saved = create_memory(&conn, input(&a, "Erin\u{200B} owns\u{202E} billing \u{1F468}\u{200D}\u{1F469}")).unwrap();
+        assert_eq!(saved.text, "Erin owns billing \u{1F468}\u{200D}\u{1F469}");
+        let persian = "\u{645}\u{6cc}\u{200c}\u{62e}\u{648}\u{627}\u{647}\u{645}";
+        let updated = update_memory(&conn, &saved.id, MemoryUpdate { text: Some(format!("{persian}\u{200B}")), ..Default::default() }).unwrap();
+        assert_eq!(updated.text, persian);
     }
 
     #[test]

@@ -3240,6 +3240,7 @@ dependencies = [
  "ogg",
  "ort",
  "pdf-extract",
+ "regex",
  "reqwest 0.12.28",
  "rusqlite",
  "rustfft",

@@ -370,9 +370,25 @@ pub fn list_item_prefs(conn: &Connection, chat_id: &str) -> Result<Vec<ItemPref>
         .prepare("SELECT kind, ref_id, pref FROM workspace_chat_item_prefs WHERE chat_id = ?1 ORDER BY kind, ref_id")
         .map_err(|e| err("Couldn't read the choices", e))?;
     let rows = stmt
-        .query_map(params![chat_id], |r| Ok(ItemPref { kind: r.get(0)?, ref_id: r.get(1)?, pref: r.get(2)? }))
+        .query_map(params![chat_id], |r| Ok(ItemPref { kind: r.get(0)?, ref_id: r.get(1)?, pref: r.get(2)?, title: String::new() }))
         .map_err(|e| err("Couldn't read the choices", e))?;
-    rows.collect::<Result<_, _>>().map_err(|e| err("Couldn't read the choices", e))
+    let mut prefs: Vec<ItemPref> = rows.collect::<Result<_, _>>().map_err(|e| err("Couldn't read the choices", e))?;
+    for p in &mut prefs {
+        p.title = item_title(conn, &p.kind, &p.ref_id);
+    }
+    Ok(prefs)
+}
+
+/// The name of a pinned or excluded item, empty when it is gone.
+fn item_title(conn: &Connection, kind: &str, ref_id: &str) -> String {
+    let sql = match kind {
+        "document" => "SELECT name FROM context_resources WHERE id = ?1",
+        "talking_point" => "SELECT title FROM talking_points WHERE id = ?1",
+        "meeting" => "SELECT title FROM meetings WHERE id = ?1",
+        "folder" => "SELECT label FROM workspace_items WHERE ref_id = ?1 AND kind = 'folder' AND label IS NOT NULL LIMIT 1",
+        _ => return String::new(),
+    };
+    conn.query_row(sql, [ref_id], |r| r.get::<_, String>(0)).unwrap_or_default()
 }
 
 /// Remove chats that were created and never used, untouched for `older_than_ms`.
@@ -628,7 +644,7 @@ mod tests {
         assert!(set_item_pref(&conn, &c.id, "document", "d1", Some("bogus")).is_err());
         let prefs = list_item_prefs(&conn, &c.id).unwrap();
         assert_eq!(prefs.len(), 2);
-        assert_eq!(prefs[0], ItemPref { kind: "document".into(), ref_id: "d1".into(), pref: "exclude".into() });
+        assert_eq!(prefs[0], ItemPref { kind: "document".into(), ref_id: "d1".into(), pref: "exclude".into(), title: String::new() });
         set_item_pref(&conn, &c.id, "document", "d1", None).unwrap();
         assert_eq!(list_item_prefs(&conn, &c.id).unwrap().len(), 1);
         set_meeting_included(&conn, &ws, None, "m2", false).unwrap();
