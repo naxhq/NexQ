@@ -83,11 +83,11 @@ pub(crate) fn live_session_record(
         Some(id) => runtime::for_meeting(state, id),
         None => runtime::for_default(state),
     };
-    let documents = state
+    let (documents, document_rules) = state
         .context
         .as_ref()
         .and_then(|c| c.lock().ok())
-        .map(|c| c.get_assembled_context_for(&scoped))
+        .map(|c| (c.get_assembled_context_for(&scoped), c.document_rules_for(&scoped)))
         .unwrap_or_default();
     let (mut preload, rag_mode) = routing::document_preload(&documents);
     let mut sent = HashMap::new();
@@ -100,6 +100,7 @@ pub(crate) fn live_session_record(
             &scenario_prompt,
             &speaker_context,
             &runtime::instructions_with_workspace(&custom_instructions(state), &scoped.scope),
+            &document_rules,
         ),
         preload,
         sent,

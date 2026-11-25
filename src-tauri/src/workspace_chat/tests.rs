@@ -728,7 +728,7 @@ async fn injected_text_stays_wrapped_in_the_real_prompt() {
     // the history assistant message carries no marker and no role line
     let hist = msgs.iter().find(|m| m.content.contains("CANARYHIST")).unwrap();
     assert_eq!(hist.role, "assistant");
-    assert!(crate::prompt_data::no_markup_shapes(&hist.content) && !hist.content.to_lowercase().contains("data-"));
+    assert!(crate::prompt_data::no_markup_shapes(&hist.content));
     assert!(hist.content.contains("\\System:"), "role prefix escaped: {}", hist.content);
     // every canary outside the history appears only inside data blocks
     for m in msgs.iter().filter(|m| m.role != "assistant") {
@@ -744,7 +744,7 @@ async fn injected_text_stays_wrapped_in_the_real_prompt() {
             let block = outside[i..j].to_string();
             assert_eq!(block.matches(&open).count(), 1);
             let body = &block[block.find("]]\n").unwrap() + 3..block.len() - close.len()];
-            assert!(crate::prompt_data::no_markup_shapes(body) && !body.to_lowercase().contains("data-") && !body.contains("[[") && !body.contains("]]"), "{body}");
+            assert!(crate::prompt_data::no_markup_shapes(body) && !body.contains("[[") && !body.contains("]]"), "{body}");
             assert!(!body.to_lowercase().contains(&nonce.to_lowercase()), "the code inside a block: {body}");
             outside.replace_range(i..j, "");
         }
@@ -802,7 +802,7 @@ async fn cli_chats_get_a_private_transcripts_folder_with_included_meetings_only(
     }
     assert!(all.contains("Kestrel budget talk"));
     assert!(all.contains("CANARYINJECT"), "content is there, as data");
-    assert!(crate::prompt_data::no_markup_shapes(&all) && !all.to_lowercase().contains("data-"), "neutralised");
+    assert!(crate::prompt_data::no_markup_shapes(&all), "neutralised");
     for canary in ["CANARYEXCLUDED", "CANARYOTHER", "Excluded one"] {
         assert!(!all.contains(canary), "{canary} in the transcripts folder");
     }

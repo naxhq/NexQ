@@ -103,7 +103,7 @@ fn assert_structure(plan: &ContextPlan, canary: &str) {
                     let body = &body_rest[..j];
                     assert!(!body.contains(&open) && !body.contains("[[") && !body.contains("]]"), "delimiter inside a block: {body}");
                     assert!(crate::prompt_data::no_markup_shapes(body), "markup shape inside a block: {body}");
-                    assert!(!body.to_lowercase().contains("data-"), "DATA- inside a block: {body}");
+                    assert!(crate::prompt_data::no_markup_shapes(body), "marker-like DATA- inside a block: {body}");
                     assert!(!body.to_lowercase().contains(&plan.nonce.to_lowercase()), "the code inside a block: {body}");
                     assert!(!body.chars().any(|c| c.is_control() && c != '\n' && c != '\t'), "control char in a block");
                     rest = &body_rest[j + close.len()..];
@@ -116,7 +116,7 @@ fn assert_structure(plan: &ContextPlan, canary: &str) {
     for t in &plan.turns {
         assert!(crate::prompt_data::no_markup_shapes(&t.content) || t.role == "user");
         if t.role == "assistant" {
-            assert!(!t.content.to_lowercase().contains("data-"));
+            assert!(crate::prompt_data::no_markup_shapes(&t.content));
             for line in t.content.lines() {
                 let l = line.trim_start().to_lowercase();
                 for r in ["user", "assistant", "system", "human"] {

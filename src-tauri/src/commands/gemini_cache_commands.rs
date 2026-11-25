@@ -19,14 +19,21 @@ pub async fn create_gemini_context_cache(
     // when none runs). The cache answers only requests with the same scope.
     let scoped = crate::workspace::runtime::for_live_or_default(&state);
     let scope_fingerprint = scoped.scope.fingerprint();
-    let context_text = {
+    let (context_text, document_rules) = {
         let ctx = state
             .context
             .as_ref()
             .ok_or("Context manager not initialized")?
             .lock()
             .map_err(|e| format!("Context lock failed: {}", e))?;
-        ctx.get_assembled_context_for(&scoped)
+        (ctx.get_assembled_context_for(&scoped), ctx.document_rules_for(&scoped))
+    };
+    // the documents are fenced data: the cache's system prompt says so
+    let system_prompt = match (system_prompt.filter(|s| !s.trim().is_empty()), document_rules.is_empty()) {
+        (Some(s), false) => Some(format!("{s}\n\n{document_rules}")),
+        (Some(s), true) => Some(s),
+        (None, false) => Some(document_rules),
+        (None, true) => None,
     };
 
     if context_text.trim().is_empty() {

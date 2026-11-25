@@ -70,7 +70,14 @@ impl IndexProvider for WorkspaceIndexProvider {
             .map_err(|e| read_err("the talking points", e))?;
         let rows = stmt
             .query_map([], |r| {
-                Ok(TalkingPointInput { id: r.get(0)?, title: r.get(1)?, plain_text: r.get(2)?, in_context: r.get::<_, i64>(3)? != 0 })
+                // stored as written; what is indexed (and later quoted) has no hidden characters
+                let (title, text): (String, String) = (r.get(1)?, r.get(2)?);
+                Ok(TalkingPointInput {
+                    id: r.get(0)?,
+                    title: crate::prompt_data::strip_hidden(&title),
+                    plain_text: crate::prompt_data::strip_hidden(&text),
+                    in_context: r.get::<_, i64>(3)? != 0,
+                })
             })
             .map_err(|e| read_err("the talking points", e))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| read_err("the talking points", e))

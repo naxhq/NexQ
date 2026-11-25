@@ -257,7 +257,8 @@ pub fn flatten(text: &str) -> String {
     clean
         .split('\n')
         .map(|line| {
-            let lower = line.trim_start().to_lowercase();
+            // looked for on a folded copy (fullwidth roles and colons count); the line keeps its characters
+            let lower = crate::prompt_data::fold_match(line.trim_start());
             let role = ["user", "assistant", "system", "human", "ai", "developer", "tool", "model", "me"]
                 .iter()
                 .any(|r| lower.strip_prefix(r).map_or(false, |rest| rest.trim_start().starts_with(':')));

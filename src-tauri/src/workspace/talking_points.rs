@@ -317,9 +317,10 @@ pub fn context_texts(conn: &Connection, meeting_id: Option<&str>, scope: &Effect
                 .map(|doc| plain_text_of_doc(&doc)),
             None => None,
         };
-        let text = edited.unwrap_or(point.plain_text);
+        // Stored as written; what the AI reads has no hidden characters (and the meeting's own edit is read the same way).
+        let text = crate::prompt_data::strip_hidden(&edited.unwrap_or(point.plain_text));
         if !text.trim().is_empty() {
-            out.push(PointText { title: point.title, text });
+            out.push(PointText { title: crate::prompt_data::strip_hidden(&point.title), text });
         }
     }
     Ok(out)
@@ -493,5 +494,40 @@ mod tests {
         // And the edit is gone when cleared.
         save_meeting_point_edit(&conn, "m", &flagged.id, None).unwrap();
         assert!(context_texts(&conn, Some("m"), &scope).unwrap()[0].text.contains("CANARY_FLAGGED"));
+    }
+}
+
+#[cfg(test)]
+mod hidden_text_tests {
+    use super::*;
+    use crate::workspace::test_support::*;
+    use serde_json::json;
+
+    const HIDDEN: &str = "\u{202e}\u{200b}\u{e0041}\u{e0042}";
+
+    #[test]
+    fn what_the_ai_reads_of_a_talking_point_has_no_hidden_characters_even_though_it_is_stored_as_written() {
+        let conn = memory_db();
+        let a = new_ws(&conn, "A", false, false);
+        let content = TalkingContent {
+            doc_json: None,
+            markdown: None,
+            plain_text: Some(format!("CANARY_PLAIN{HIDDEN} text")),
+            in_context: true,
+        };
+        let point = create_talking_point(&conn, &a, Some(format!("Title{HIDDEN}")), content).unwrap();
+        // stored as written
+        assert!(point.plain_text.contains('\u{202e}'));
+        let scope = crate::workspace::scope::scope_for_home(&conn, &a, &[]).unwrap();
+        let texts = context_texts(&conn, None, &scope).unwrap();
+        let all = format!("{}{}", texts[0].title, texts[0].text);
+        assert!(all.contains("CANARY_PLAIN") && all.contains("Title"));
+        assert!(!all.chars().any(|c| matches!(c, '\u{202e}' | '\u{200b}' | '\u{e0041}' | '\u{e0042}')), "{all:?}");
+        // the meeting's own edit is read the same way
+        let doc = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":format!("CANARY_EDIT{HIDDEN}")}]}]});
+        save_meeting_point_edit(&conn, "m", &point.id, Some(&doc.to_string())).unwrap();
+        let edited = context_texts(&conn, Some("m"), &scope).unwrap();
+        assert!(edited[0].text.contains("CANARY_EDIT"));
+        assert!(!edited[0].text.chars().any(|c| matches!(c, '\u{202e}' | '\u{200b}' | '\u{e0041}' | '\u{e0042}')), "{:?}", edited[0].text);
     }
 }

@@ -1240,7 +1240,7 @@ pub async fn generate_assist(
 
     // Append composed instructions (tone + format + length + custom text) to system prompt.
     // These are behavioral directives that belong in the system context, not as reference materials.
-    let system_prompt = if include_instructions && !composed_instructions.is_empty() {
+    let mut system_prompt = if include_instructions && !composed_instructions.is_empty() {
         format!("{}\n\nAdditional Instructions: {}", base_system_prompt, composed_instructions)
     } else {
         base_system_prompt
@@ -1309,6 +1309,11 @@ pub async fn generate_assist(
     if include_rag && active_cache_name.is_none() && rag.context_text.is_empty() {
         if let Some(docs) = attached_documents_fallback(&state, &scoped) {
             rag.context_text = docs;
+            // the fallback documents are fenced data: say so in the system prompt
+            let rules = state.context.as_ref().and_then(|c| c.lock().ok()).map(|c| c.document_rules_for(&scoped)).unwrap_or_default();
+            if !rules.is_empty() {
+                system_prompt = format!("{system_prompt}\n\n{rules}");
+            }
         }
     }
 
