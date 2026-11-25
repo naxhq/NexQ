@@ -53,7 +53,7 @@ export function TalkingPointsEditor({ workspaceId, className }: TalkingPointsEdi
 
   const create = async (init?: Parameters<ReturnType<typeof store.getState>["create"]>[1]) => {
     const p = await store.getState().create(workspaceId, init ?? { title: "Untitled note", doc: emptyDoc() });
-    setSelectedId(p.id);
+    if (p) setSelectedId(p.id);
   };
 
   const openCopy = (id: string) => {

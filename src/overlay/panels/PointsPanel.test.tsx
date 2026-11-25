@@ -5,7 +5,8 @@ import type { Meeting, TalkingPoint, TranscriptSegment } from "../../lib/types";
 
 const ipc = vi.hoisted(() => ({
   listTalkingPoints: vi.fn(),
-  saveTalkingPoint: vi.fn(),
+  createTalkingPoint: vi.fn(),
+  patchTalkingPoint: vi.fn(),
   deleteTalkingPoint: vi.fn(),
   copyTalkingPoint: vi.fn(),
   reorderTalkingPoints: vi.fn(),
@@ -57,6 +58,27 @@ const sayLine = (id: string, text: string, o: Partial<TranscriptSegment> = {}) =
     useTranscriptStore.getState().updateInterimSegment({ id, text, speaker: "User", timestamp_ms: 0, is_final: true, confidence: 0.9, ...o }),
   );
 
+// a small fake backend: patches merge into the latest copy of the note
+const rows = new Map<string, TalkingPoint>();
+let clock = 1000;
+const saveCalls = () => ipc.createTalkingPoint.mock.calls.length + ipc.patchTalkingPoint.mock.calls.length;
+const lastSaved = () => [...rows.values()].sort((a, b) => b.updated_at - a.updated_at)[0];
+function wireBackend() {
+  rows.clear();
+  clock = 1000;
+  ipc.patchTalkingPoint.mockImplementation(async (id: string, patch: Partial<TalkingPoint>) => {
+    const base = rows.get(id) ?? NOTES.find((n) => n.id === id)!;
+    const next = { ...base, ...patch, updated_at: ++clock };
+    rows.set(id, next);
+    return next;
+  });
+  ipc.createTalkingPoint.mockImplementation(async (ws: string, title?: string, content?: string) => {
+    const next: TalkingPoint = { id: "created" + ++clock, workspace_id: ws, title: title ?? "Untitled note", doc_json: content ?? "", markdown: "", plain_text: "", in_context: false, sort: 99, created_at: 1, updated_at: ++clock };
+    rows.set(next.id, next);
+    return next;
+  });
+}
+
 // jsdom has no layout; ProseMirror asks for rectangles when it scrolls the caret into view
 beforeAll(() => {
   const rect = { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) };
@@ -70,7 +92,7 @@ beforeEach(() => {
   __resetTalkingPointsForTests();
   for (const f of Object.values(ipc)) f.mockReset();
   ipc.listTalkingPoints.mockImplementation(async (ws: string) => NOTES.filter((n) => n.workspace_id === ws));
-  ipc.saveTalkingPoint.mockImplementation(async (p: TalkingPoint) => p);
+  wireBackend();
   ipc.getPointProgress.mockResolvedValue(null);
   ipc.getMeetingPointEdit.mockResolvedValue(null);
   ipc.saveMeetingPointEdit.mockResolvedValue(undefined);
@@ -93,8 +115,7 @@ describe("PointsPanel states", () => {
     render(<PointsPanel />);
     expect(await screen.findByText("Write your first talking points")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Write a note" }));
-    expect(ipc.saveTalkingPoint).toHaveBeenCalledTimes(1);
-    expect(ipc.saveTalkingPoint.mock.calls[0][0].workspace_id).toBe("w1");
+    expect(ipc.createTalkingPoint).toHaveBeenCalledWith("w1", "Talking points", expect.any(String));
     expect(await screen.findByRole("button", { name: "Save to workspace" })).toBeInTheDocument();
     expect(await screen.findByRole("textbox", { name: /Edit Talking points/ })).toBeInTheDocument();
   });
@@ -273,6 +294,7 @@ describe("how the note moves", () => {
     sayLine("t1", "welcome everyone to the quarterly review", { speaker: "Them" });
     expect(screen.getByText("3 left to say")).toBeInTheDocument();
     sayLine("u1", "welcome everyone to the quarterly review", { is_final: false });
+    sayLine("u1", "welcome everyone to the quarterly review"); // interims hold back their last words; the final settles it
     expect(await screen.findByText("2 left to say")).toBeInTheDocument();
     expect(await screen.findByText("Following you")).toBeInTheDocument();
     sayLine("u2", "first revenue grew twelve percent compared with last year");
@@ -356,7 +378,7 @@ describe("edit in place", () => {
     const [m, id, json] = ipc.saveMeetingPointEdit.mock.calls[0];
     expect([m, id]).toEqual(["m1", "n1"]);
     expect(json).toContain("Added today.");
-    expect(ipc.saveTalkingPoint).not.toHaveBeenCalled();
+    expect(saveCalls()).toBe(0);
     const region = await screen.findByRole("region", { name: /Opening/ });
     expect(within(region).getByText(/Added today\./)).toBeInTheDocument();
     expect(screen.getByText("edited for this meeting")).toBeInTheDocument();
@@ -370,8 +392,8 @@ describe("edit in place", () => {
     await user.click(await screen.findByRole("textbox", { name: "Edit Opening" }));
     await user.keyboard("For everyone. ");
     await user.click(screen.getByRole("button", { name: "Save to workspace" }));
-    await waitFor(() => expect(ipc.saveTalkingPoint).toHaveBeenCalled());
-    expect(ipc.saveTalkingPoint.mock.calls[ipc.saveTalkingPoint.mock.calls.length - 1][0].plain_text).toContain("For everyone.");
+    await waitFor(() => expect(saveCalls()).toBeGreaterThan(0));
+    expect(lastSaved().plain_text).toContain("For everyone.");
     await waitFor(() => expect(ipc.saveMeetingPointEdit).toHaveBeenLastCalledWith("m1", "n1", null));
   });
 
@@ -383,7 +405,7 @@ describe("edit in place", () => {
     await user.click(await screen.findByRole("textbox", { name: "Edit Opening" }));
     await user.keyboard("Oops");
     await user.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(ipc.saveTalkingPoint).not.toHaveBeenCalled();
+    expect(saveCalls()).toBe(0);
     expect(ipc.saveMeetingPointEdit).not.toHaveBeenCalled();
     expect(await screen.findByRole("region", { name: /Opening/ })).toBeInTheDocument();
   });
@@ -395,7 +417,7 @@ describe("edit in place", () => {
     await user.click(screen.getByRole("button", { name: "Edit this note" }));
     await user.click(await screen.findByRole("textbox", { name: "Edit Opening" }));
     await user.keyboard("x");
-    ipc.saveTalkingPoint.mockRejectedValue("offline");
+    ipc.patchTalkingPoint.mockRejectedValue("offline");
     await user.click(screen.getByRole("button", { name: "Save to workspace" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("offline");
     expect(screen.getByRole("textbox", { name: "Edit Opening" })).toBeInTheDocument();

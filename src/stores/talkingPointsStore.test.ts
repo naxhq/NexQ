@@ -3,7 +3,8 @@ import type { PointSaid, TalkingPoint } from "../lib/types";
 
 const ipc = vi.hoisted(() => ({
   listTalkingPoints: vi.fn(),
-  saveTalkingPoint: vi.fn(),
+  createTalkingPoint: vi.fn(),
+  patchTalkingPoint: vi.fn(),
   deleteTalkingPoint: vi.fn(),
   copyTalkingPoint: vi.fn(),
   reorderTalkingPoints: vi.fn(),
@@ -13,6 +14,7 @@ const ipc = vi.hoisted(() => ({
   saveMeetingPointEdit: vi.fn(),
 }));
 vi.mock("../lib/ipc", () => ipc);
+vi.mock("../lib/events", () => ({ onWorkspacesChanged: vi.fn(async () => () => undefined) }));
 
 import { __resetTalkingPointsForTests, DEFAULT_READING, loadPrefs, pendingSaveCount, useTalkingPointsStore as useStore } from "./talkingPointsStore";
 import { docBlocks, docFromText, parseDoc } from "../talking-points/doc/model";
@@ -35,11 +37,37 @@ function point(id: string, ws = "w1", sort = 0, text = "hello"): TalkingPoint {
   };
 }
 
+/** A tiny backend: patches merge, expectedUpdatedAt is checked, a missing note is "not_found". */
+const server = new Map<string, TalkingPoint>();
+let clock = 100;
+function install(list: TalkingPoint[]) {
+  server.clear();
+  for (const p of list) server.set(p.id, { ...p });
+}
+const sent = () => ipc.patchTalkingPoint.mock.calls.map((c) => c[1] as Record<string, unknown>);
+
 beforeEach(() => {
   vi.useFakeTimers();
   __resetTalkingPointsForTests();
   for (const f of Object.values(ipc)) f.mockReset();
-  ipc.saveTalkingPoint.mockImplementation(async (p: TalkingPoint) => p);
+  server.clear();
+  clock = 100;
+  ipc.listTalkingPoints.mockImplementation(async (ws: string) => [...server.values()].filter((p) => p.workspace_id === ws).map((p) => ({ ...p })));
+  ipc.patchTalkingPoint.mockImplementation(async (id: string, patch: Partial<TalkingPoint>, expected?: number) => {
+    const r = server.get(id);
+    if (!r) throw "not_found";
+    if (expected !== undefined && expected !== r.updated_at) throw "conflict";
+    Object.assign(r, patch, { updated_at: ++clock });
+    return { ...r };
+  });
+  ipc.createTalkingPoint.mockImplementation(async (ws: string, title?: string, content?: string) => {
+    const r: TalkingPoint = { ...point(`new${server.size + 1}`, ws, server.size), title: title ?? "Untitled note", doc_json: content ?? "", markdown: "", plain_text: "", updated_at: ++clock };
+    server.set(r.id, r);
+    return { ...r };
+  });
+  ipc.deleteTalkingPoint.mockImplementation(async (id: string) => {
+    if (!server.delete(id)) throw "not_found";
+  });
   ipc.savePointProgress.mockResolvedValue(undefined);
   ipc.saveMeetingPointEdit.mockResolvedValue(undefined);
   localStorage.clear();
@@ -48,7 +76,7 @@ afterEach(() => vi.useRealTimers());
 
 describe("loading and creating", () => {
   it("loads a workspace's notes in order", async () => {
-    ipc.listTalkingPoints.mockResolvedValue([point("b", "w1", 1), point("a", "w1", 0)]);
+    install([point("b", "w1", 1), point("a", "w1", 0)]);
     await S().load("w1");
     expect(S().byWorkspace.w1.map((p) => p.id)).toEqual(["a", "b"]);
     expect(S().loading.w1).toBe(false);
@@ -58,65 +86,83 @@ describe("loading and creating", () => {
     ipc.listTalkingPoints.mockRejectedValueOnce("backend down");
     await S().load("w1");
     expect(S().loadError.w1).toBe("backend down");
-    ipc.listTalkingPoints.mockResolvedValue([point("a")]);
+    install([point("a")]);
     await S().load("w1");
     expect(S().loadError.w1).toBeNull();
   });
 
-  it("creates a note with derived text and saves it", async () => {
-    ipc.listTalkingPoints.mockResolvedValue([point("a", "w1", 4)]);
+  it("creates through the backend, then sends our own markdown and plain text", async () => {
+    install([point("a", "w1", 4)]);
     await S().load("w1");
     const p = await S().create("w1", { title: "  New  ", doc: docFromText("one two") });
-    expect(p.title).toBe("New");
-    expect(p.sort).toBe(5);
-    expect(p.plain_text).toBe("one two");
-    expect(ipc.saveTalkingPoint).toHaveBeenCalledTimes(1);
-    expect(S().saveState[p.id]).toBe("saved");
+    expect(ipc.createTalkingPoint).toHaveBeenCalledWith("w1", "New", expect.stringContaining("one two"));
+    expect(p!.plain_text).toBe("one two");
+    expect(sent()).toEqual([{ markdown: "one two\n", plain_text: "one two" }]);
+    expect(S().saveState[p!.id]).toBe("saved");
+    expect(S().byWorkspace.w1.map((x) => x.id)).toContain(p!.id);
     expect(pendingSaveCount()).toBe(0);
+  });
+
+  it("a refused create says why and adds nothing", async () => {
+    install([]);
+    await S().load("w1");
+    ipc.createTalkingPoint.mockRejectedValueOnce("disk full");
+    expect(await S().create("w1")).toBeNull();
+    expect(S().actionError).toBe("disk full");
+    expect(S().byWorkspace.w1).toEqual([]);
   });
 });
 
 describe("autosave", () => {
   async function open() {
-    ipc.listTalkingPoints.mockResolvedValue([point("a")]);
+    install([point("a")]);
     await S().load("w1");
   }
 
-  it("waits for a pause in typing and sends only the newest text", async () => {
+  it("waits for a pause and sends only the changed fields, based on the version it knows", async () => {
     await open();
     S().edit("a", { doc: docFromText("one") });
-    S().edit("a", { doc: docFromText("one two") });
     S().edit("a", { doc: docFromText("one two three") });
     expect(S().saveState.a).toBe("dirty");
-    expect(ipc.saveTalkingPoint).not.toHaveBeenCalled();
+    expect(ipc.patchTalkingPoint).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(900);
-    expect(ipc.saveTalkingPoint).toHaveBeenCalledTimes(1);
-    expect(ipc.saveTalkingPoint.mock.calls[0][0].plain_text).toBe("one two three");
+    expect(ipc.patchTalkingPoint).toHaveBeenCalledTimes(1);
+    const [, patch, expected] = ipc.patchTalkingPoint.mock.calls[0];
+    expect(Object.keys(patch).sort()).toEqual(["doc_json", "markdown", "plain_text"]);
+    expect(patch.plain_text).toBe("one two three");
+    expect(expected).toBe(1);
     expect(S().saveState.a).toBe("saved");
+  });
+
+  it("a title change sends the title alone", async () => {
+    await open();
+    S().edit("a", { title: "Renamed" });
+    await vi.advanceTimersByTimeAsync(900);
+    expect(sent()).toEqual([{ title: "Renamed" }]);
   });
 
   it("a failed save keeps the text, says so, retries with back-off and recovers", async () => {
     await open();
-    ipc.saveTalkingPoint.mockRejectedValueOnce("offline").mockRejectedValueOnce("offline");
+    ipc.patchTalkingPoint.mockRejectedValueOnce("offline").mockRejectedValueOnce("offline");
     S().edit("a", { doc: docFromText("kept") });
     await vi.advanceTimersByTimeAsync(900);
     expect(S().saveState.a).toBe("failed");
     expect(S().saveError.a).toBe("offline");
     expect(S().find("a")!.plain_text).toBe("kept");
     expect(pendingSaveCount()).toBe(1);
-    await vi.advanceTimersByTimeAsync(2100); // first retry (2 s) fails again
-    expect(ipc.saveTalkingPoint).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(ipc.patchTalkingPoint).toHaveBeenCalledTimes(2);
     expect(S().saveState.a).toBe("failed");
-    await vi.advanceTimersByTimeAsync(5100); // second retry (5 s) succeeds
-    expect(ipc.saveTalkingPoint).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(5100);
+    expect(ipc.patchTalkingPoint).toHaveBeenCalledTimes(3);
     expect(S().saveState.a).toBe("saved");
-    expect(ipc.saveTalkingPoint.mock.calls[2][0].plain_text).toBe("kept");
+    expect(server.get("a")!.plain_text).toBe("kept");
     expect(pendingSaveCount()).toBe(0);
   });
 
   it("the network coming back retries at once", async () => {
     await open();
-    ipc.saveTalkingPoint.mockRejectedValueOnce("offline");
+    ipc.patchTalkingPoint.mockRejectedValueOnce("offline");
     S().edit("a", { doc: docFromText("x") });
     await vi.advanceTimersByTimeAsync(900);
     expect(S().saveState.a).toBe("failed");
@@ -125,51 +171,254 @@ describe("autosave", () => {
     expect(S().saveState.a).toBe("saved");
   });
 
-  it("typing while a save is in flight sends the newer text next, never loses it", async () => {
+  it("race: typing while a save is in flight sends the newer text next and loses nothing", async () => {
     await open();
-    let release: (p: TalkingPoint) => void = () => undefined;
-    ipc.saveTalkingPoint.mockImplementationOnce(() => new Promise<TalkingPoint>((r) => (release = r)));
+    let release: () => void = () => undefined;
+    const realImpl = ipc.patchTalkingPoint.getMockImplementation()!;
+    ipc.patchTalkingPoint.mockImplementationOnce(
+      (...a: unknown[]) => new Promise((r) => (release = () => r((realImpl as (...x: unknown[]) => unknown)(...a)))),
+    );
     S().edit("a", { doc: docFromText("first") });
     await vi.advanceTimersByTimeAsync(900);
     expect(S().saveState.a).toBe("saving");
     S().edit("a", { doc: docFromText("second") });
-    release(ipc.saveTalkingPoint.mock.calls[0][0]);
+    release();
     await vi.advanceTimersByTimeAsync(900);
-    expect(ipc.saveTalkingPoint).toHaveBeenCalledTimes(2);
-    expect(ipc.saveTalkingPoint.mock.calls[1][0].plain_text).toBe("second");
+    expect(ipc.patchTalkingPoint).toHaveBeenCalledTimes(2);
+    expect(server.get("a")!.plain_text).toBe("second");
     expect(S().find("a")!.plain_text).toBe("second");
     expect(S().saveState.a).toBe("saved");
-  });
-
-  it("a note with unsaved text keeps it over a reload from the backend", async () => {
-    await open();
-    ipc.saveTalkingPoint.mockRejectedValue("offline");
-    S().edit("a", { doc: docFromText("local") });
-    await vi.advanceTimersByTimeAsync(900);
-    ipc.listTalkingPoints.mockResolvedValue([point("a", "w1", 0, "stored")]);
-    await S().load("w1");
-    expect(S().find("a")!.plain_text).toBe("local");
-  });
-
-  it("toggling AI context saves at once", async () => {
-    await open();
-    S().edit("a", { in_context: true });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(ipc.saveTalkingPoint).toHaveBeenCalledTimes(1);
-    expect(ipc.saveTalkingPoint.mock.calls[0][0].in_context).toBe(true);
   });
 
   it("flushAll sends what is waiting (window closing)", async () => {
     await open();
     S().edit("a", { doc: docFromText("late") });
     await S().flushAll();
-    expect(ipc.saveTalkingPoint).toHaveBeenCalledTimes(1);
+    expect(server.get("a")!.plain_text).toBe("late");
+  });
+
+  it("'Use as AI context' is its own immediate patch, never part of autosave", async () => {
+    await open();
+    S().edit("a", { doc: docFromText("typing") });
+    await S().setInContext("a", true);
+    expect(sent()[0]).toEqual({ in_context: true });
+    expect(ipc.patchTalkingPoint.mock.calls[0][2]).toBeUndefined();
+    expect(S().find("a")!.in_context).toBe(true);
+    await vi.advanceTimersByTimeAsync(900);
+    expect(sent()[1]).not.toHaveProperty("in_context");
+    expect(S().saveState.a).toBe("saved"); // the text save was not broken by our own in_context patch
+    expect(server.get("a")!.in_context).toBe(true);
+    expect(server.get("a")!.plain_text).toBe("typing");
+  });
+
+  it("a refused 'AI context' change goes back and says why", async () => {
+    await open();
+    ipc.patchTalkingPoint.mockRejectedValueOnce("locked");
+    await S().setInContext("a", true);
+    expect(S().find("a")!.in_context).toBe(false);
+    expect(S().actionError).toBe("locked");
+  });
+});
+
+describe("deleted notes stay deleted", () => {
+  async function open() {
+    install([point("a"), point("b", "w1", 1)]);
+    await S().load("w1");
+  }
+
+  it("waits for a save in flight before deleting, and that save cannot bring the note back", async () => {
+    await open();
+    let release: () => void = () => undefined;
+    const realImpl = ipc.patchTalkingPoint.getMockImplementation()!;
+    ipc.patchTalkingPoint.mockImplementationOnce(
+      (...a: unknown[]) => new Promise((r) => (release = () => r((realImpl as (...x: unknown[]) => unknown)(...a)))),
+    );
+    S().edit("a", { doc: docFromText("typed") });
+    await vi.advanceTimersByTimeAsync(900);
+    const del = S().remove("a");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ipc.deleteTalkingPoint).not.toHaveBeenCalled(); // waits for the save
+    release();
+    await del;
+    expect(ipc.deleteTalkingPoint).toHaveBeenCalledWith("a");
+    expect(S().find("a")).toBeUndefined();
+    expect(server.has("a")).toBe(false);
+    expect(pendingSaveCount()).toBe(0);
+  });
+
+  it("a queued save is dropped when the note is deleted", async () => {
+    await open();
+    S().edit("a", { doc: docFromText("queued") });
+    await S().remove("a");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(ipc.patchTalkingPoint).not.toHaveBeenCalled();
+    expect(server.has("a")).toBe(false);
+  });
+
+  it("edit and flush after deletion do nothing", async () => {
+    await open();
+    await S().remove("a");
+    S().edit("a", { doc: docFromText("ghost") });
+    await S().flush("a");
+    await S().setInContext("a", true);
+    expect(ipc.patchTalkingPoint).not.toHaveBeenCalled();
+    expect(S().find("a")).toBeUndefined();
+  });
+
+  it("a reload, even a stale one that still lists the note, does not bring it back", async () => {
+    await open();
+    const stale = [...server.values()].map((p) => ({ ...p }));
+    await S().remove("a");
+    ipc.listTalkingPoints.mockResolvedValue(stale);
+    await S().syncFromBackend("w1");
+    await S().load("w1");
+    expect(S().byWorkspace.w1.map((p) => p.id)).toEqual(["b"]);
+  });
+
+  it("a refused delete takes the tombstone back and keeps the unsaved text", async () => {
+    await open();
+    S().edit("a", { doc: docFromText("keep me") });
+    ipc.deleteTalkingPoint.mockRejectedValueOnce("busy");
+    await S().remove("a");
+    expect(S().actionError).toBe("busy");
+    expect(S().find("a")!.plain_text).toBe("keep me");
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(server.get("a")!.plain_text).toBe("keep me");
+  });
+
+  it("a note deleted in another window is dropped when our save is refused (not_found)", async () => {
+    await open();
+    S().edit("a", { doc: docFromText("edit") });
+    server.delete("a");
+    await vi.advanceTimersByTimeAsync(900);
+    expect(S().find("a")).toBeUndefined();
+    expect(S().actionError).toMatch(/deleted in another window/);
+    expect(pendingSaveCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(ipc.patchTalkingPoint).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("another window changes notes", () => {
+  async function open() {
+    install([point("a", "w1", 0, "alpha"), point("b", "w1", 1, "beta")]);
+    await S().load("w1");
+  }
+
+  it("a reload brings in changes, new notes and removals when nothing is unsaved", async () => {
+    await open();
+    server.get("b")!.title = "Beta renamed";
+    server.get("b")!.updated_at = 500;
+    server.get("b")!.doc_json = JSON.stringify(docFromText("new beta"));
+    server.set("c", point("c", "w1", 2));
+    server.delete("a");
+    await S().syncFromBackend();
+    expect(S().byWorkspace.w1.map((p) => p.id)).toEqual(["b", "c"]);
+    expect(S().find("b")!.title).toBe("Beta renamed");
+    expect(S().docRev.b).toBe(1); // an open editor reloads the new text
+  });
+
+  it("unsaved local fields win; fields changed elsewhere that we did not touch come in", async () => {
+    await open();
+    S().edit("a", { doc: docFromText("my words") });
+    server.get("a")!.title = "Their title";
+    server.get("a")!.updated_at = 500;
+    await S().syncFromBackend("w1");
+    const a = S().find("a")!;
+    expect(a.plain_text).toBe("my words");
+    expect(a.title).toBe("Their title");
+    expect(S().saveState.a).toBe("dirty");
+    await vi.advanceTimersByTimeAsync(900);
+    expect(ipc.patchTalkingPoint.mock.calls[0][2]).toBe(500); // based on the version we now know
+    expect(server.get("a")!.plain_text).toBe("my words");
+    expect(server.get("a")!.title).toBe("Their title");
+    expect(S().saveState.a).toBe("saved");
+  });
+
+  it("the same field changed in both places is a conflict: nothing is sent, nothing is lost", async () => {
+    await open();
+    S().edit("a", { doc: docFromText("mine") });
+    server.get("a")!.doc_json = JSON.stringify(docFromText("theirs"));
+    server.get("a")!.plain_text = "theirs";
+    server.get("a")!.updated_at = 500;
+    await S().syncFromBackend("w1");
+    expect(S().saveState.a).toBe("conflict");
+    expect(S().find("a")!.plain_text).toBe("mine");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(ipc.patchTalkingPoint).not.toHaveBeenCalled();
+    S().edit("a", { doc: docFromText("mine again") });
+    expect(S().saveState.a).toBe("conflict");
+  });
+
+  it("keep mine saves our text over theirs", async () => {
+    await open();
+    S().edit("a", { doc: docFromText("mine") });
+    server.get("a")!.plain_text = "theirs";
+    server.get("a")!.doc_json = JSON.stringify(docFromText("theirs"));
+    server.get("a")!.updated_at = 500;
+    await S().syncFromBackend("w1");
+    await S().resolveConflict("a", "mine");
+    expect(server.get("a")!.plain_text).toBe("mine");
+    expect(S().saveState.a).toBe("saved");
+  });
+
+  it("use theirs drops our edits and reloads the editor", async () => {
+    await open();
+    S().edit("a", { doc: docFromText("mine") });
+    server.get("a")!.plain_text = "theirs";
+    server.get("a")!.doc_json = JSON.stringify(docFromText("theirs"));
+    server.get("a")!.updated_at = 500;
+    await S().syncFromBackend("w1");
+    await S().resolveConflict("a", "theirs");
+    expect(S().find("a")!.plain_text).toBe("theirs");
+    expect(S().saveState.a).toBe("saved");
+    expect(S().docRev.a).toBe(1);
+    expect(pendingSaveCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(ipc.patchTalkingPoint).not.toHaveBeenCalled();
+  });
+
+  it("a refused save (conflict) from the backend becomes the same conflict state", async () => {
+    await open();
+    S().edit("a", { doc: docFromText("mine") });
+    server.get("a")!.updated_at = 777; // changed elsewhere before we noticed
+    await vi.advanceTimersByTimeAsync(900);
+    expect(S().saveState.a).toBe("conflict");
+    expect(S().find("a")!.plain_text).toBe("mine");
+    await S().resolveConflict("a", "mine");
+    expect(server.get("a")!.plain_text).toBe("mine");
+  });
+
+  it("a reload during our own save does not call it a conflict", async () => {
+    await open();
+    let release: () => void = () => undefined;
+    const realImpl = ipc.patchTalkingPoint.getMockImplementation()!;
+    ipc.patchTalkingPoint.mockImplementationOnce((...a: unknown[]) => {
+      const applied = (realImpl as (...x: unknown[]) => Promise<unknown>)(...a); // the backend applies it now
+      return new Promise((r) => (release = () => r(applied)));
+    });
+    S().edit("a", { doc: docFromText("mine") });
+    await vi.advanceTimersByTimeAsync(900);
+    // the backend has applied our save, the reply is not back yet
+    await S().syncFromBackend("w1");
+    expect(S().saveState.a).toBe("saving");
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(S().saveState.a).not.toBe("conflict");
+  });
+
+  it("a failed reload leaves local edits alone", async () => {
+    await open();
+    S().edit("a", { doc: docFromText("mine") });
+    ipc.listTalkingPoints.mockRejectedValue("down");
+    await S().syncFromBackend();
+    expect(S().find("a")!.plain_text).toBe("mine");
   });
 });
 
 describe("list actions", () => {
   beforeEach(async () => {
-    ipc.listTalkingPoints.mockResolvedValue([point("a", "w1", 0), point("b", "w1", 1), point("c", "w1", 2)]);
+    install([point("a", "w1", 0), point("b", "w1", 1), point("c", "w1", 2)]);
     await S().load("w1");
   });
 
@@ -180,14 +429,14 @@ describe("list actions", () => {
     await p;
     expect(S().byWorkspace.w1.map((x) => x.id)).toEqual(["a", "b", "c"]);
     expect(S().actionError).toBe("locked");
+    ipc.reorderTalkingPoints.mockResolvedValue(undefined);
     await S().reorder("w1", ["b", "c", "a"]);
     expect(ipc.reorderTalkingPoints).toHaveBeenLastCalledWith("w1", ["b", "c", "a"]);
     expect(S().actionError).toBeNull();
   });
 
   it("duplicates with new block ids and the same context flag", async () => {
-    S().edit("a", { in_context: true });
-    await vi.advanceTimersByTimeAsync(0);
+    await S().setInContext("a", true);
     const copy = await S().duplicate("a");
     expect(copy!.title).toBe("Note a copy");
     await vi.advanceTimersByTimeAsync(0);
@@ -199,7 +448,6 @@ describe("list actions", () => {
 
   it("copies to another workspace and reports a failure", async () => {
     ipc.copyTalkingPoint.mockResolvedValue({ ...point("a2", "w2") });
-    ipc.listTalkingPoints.mockResolvedValue([]);
     await S().load("w2");
     const c = await S().copyTo("a", "w2");
     expect(c!.workspace_id).toBe("w2");
@@ -209,26 +457,23 @@ describe("list actions", () => {
     expect(S().actionError).toBe("nope");
   });
 
-  it("deletes after the backend agrees, and keeps the note when it does not", async () => {
-    ipc.deleteTalkingPoint.mockRejectedValueOnce("busy");
-    await S().remove("b");
-    expect(S().find("b")).toBeDefined();
-    expect(S().actionError).toBe("busy");
+  it("deletes after the backend agrees", async () => {
     await S().remove("b");
     expect(S().find("b")).toBeUndefined();
+    expect(S().byWorkspace.w1.map((x) => x.id)).toEqual(["a", "c"]);
   });
 });
 
 describe("in the meeting", () => {
   beforeEach(async () => {
-    ipc.listTalkingPoints.mockResolvedValue([point("a")]);
+    install([point("a")]);
     await S().load("w1");
   });
 
   it("an 'only this meeting' edit does not touch the workspace note", async () => {
     await S().saveMeetingOnly("m1", "a", docFromText("for today"));
     expect(ipc.saveMeetingPointEdit).toHaveBeenCalledWith("m1", "a", expect.stringContaining("for today"));
-    expect(ipc.saveTalkingPoint).not.toHaveBeenCalled();
+    expect(ipc.patchTalkingPoint).not.toHaveBeenCalled();
     expect(S().meetingEdits.a).toContain("for today");
     expect(S().find("a")!.plain_text).toBe("hello");
   });
@@ -236,18 +481,24 @@ describe("in the meeting", () => {
   it("'save to workspace' saves the note, then drops the meeting copy", async () => {
     await S().saveMeetingOnly("m1", "a", docFromText("draft"));
     await S().saveToWorkspace("m1", "a", docFromText("final"));
-    expect(ipc.saveTalkingPoint).toHaveBeenCalledTimes(1);
-    expect(ipc.saveTalkingPoint.mock.calls[0][0].plain_text).toBe("final");
+    expect(server.get("a")!.plain_text).toBe("final");
     expect(ipc.saveMeetingPointEdit).toHaveBeenLastCalledWith("m1", "a", null);
     expect(S().meetingEdits.a).toBeUndefined();
   });
 
   it("'save to workspace' that fails keeps the meeting copy and throws", async () => {
     await S().saveMeetingOnly("m1", "a", docFromText("draft"));
-    ipc.saveTalkingPoint.mockRejectedValue("offline");
+    ipc.patchTalkingPoint.mockRejectedValue("offline");
     await expect(S().saveToWorkspace("m1", "a", docFromText("final"))).rejects.toThrow("offline");
     expect(S().meetingEdits.a).toContain("draft");
     expect(ipc.saveMeetingPointEdit).not.toHaveBeenLastCalledWith("m1", "a", null);
+  });
+
+  it("'save to workspace' into a conflict throws and keeps the meeting copy", async () => {
+    await S().saveMeetingOnly("m1", "a", docFromText("draft"));
+    server.get("a")!.updated_at = 900;
+    await expect(S().saveToWorkspace("m1", "a", docFromText("final"))).rejects.toThrow();
+    expect(S().meetingEdits.a).toContain("draft");
   });
 
   it("loads the meeting copy and the saved progress of a note", async () => {

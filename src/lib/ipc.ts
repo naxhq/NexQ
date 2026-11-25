@@ -5,9 +5,9 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  BriefSettings, BriefSheet, DeleteWorkspaceMode, ContextReport, IndexStatus, LibraryItem, MeetingScope,
+  BriefSettings, BriefSheet, ChatItemPrefValue, ChatMeetingPref, DeleteWorkspaceMode, ContextReport, IndexStatus, LibraryItem, MeetingScope,
   MemoryItem, NoteDoc, NoteEdit, NotetakerSettings, Passage, PassageKind, PointProgress, PointSaid,
-  TalkingPoint, WorkspaceChat, WorkspaceChatPatch, WorkspaceDetail, WorkspaceInput, WorkspaceItemKind,
+  TalkingPoint, TalkingPointPatch, WorkspaceChat, WorkspaceChatPatch, WorkspaceDetail, WorkspaceInput, WorkspaceItemKind,
   WorkspaceMeetingPage, WorkspaceMessage, WorkspacePatch, WorkspaceSummary,
 } from "./types";
 import type {
@@ -1125,6 +1125,10 @@ export async function removeWorkspaceItem(id: string, kind: WorkspaceItemKind, r
 export async function listLibrary(): Promise<LibraryItem[]> {
   return invoke<LibraryItem[]>("list_library");
 }
+/** Deletes every meeting of a workspace in one call; what went and what did not. */
+export async function deleteWorkspaceMeetings(id: string): Promise<{ deleted: number; failed: number }> {
+  return invoke("delete_workspace_meetings", { id });
+}
 export async function moveMeeting(meetingId: string, workspaceId: string): Promise<void> {
   return invoke("move_meeting", { meetingId, workspaceId });
 }
@@ -1191,6 +1195,14 @@ export async function setChatMeetingIncluded(
 ): Promise<void> {
   return invoke("set_chat_meeting_included", { workspaceId, chatId, meetingId, included });
 }
+/** Which meetings this chat leaves out (the saved truth; the pane also keeps a local mirror). */
+export async function listChatMeetingPrefs(workspaceId: string, chatId: string): Promise<ChatMeetingPref[]> {
+  return invoke<ChatMeetingPref[]>("list_chat_meeting_prefs", { workspaceId, chatId });
+}
+/** `kind` and `refId` are the two first parts of a `ContextBar.id` ("<kind>:<ref>[:<sub>]"). */
+export async function setChatItemPref(chatId: string, kind: string, refId: string, pref: ChatItemPrefValue): Promise<void> {
+  return invoke("set_chat_item_pref", { chatId, kind, refId, pref });
+}
 /** The estimate shown before sending. */
 export async function previewChatContext(chatId: string, question?: string): Promise<ContextReport> {
   return invoke<ContextReport>("preview_chat_context", { chatId, question });
@@ -1238,8 +1250,9 @@ export async function notetakerContinue(meetingId: string): Promise<void> {
 export async function getNotetakerSettings(): Promise<NotetakerSettings> {
   return invoke<NotetakerSettings>("get_notetaker_settings");
 }
-export async function setNotetakerSettings(settings: NotetakerSettings): Promise<void> {
-  return invoke("set_notetaker_settings", { settings });
+/** A patch: only the fields present change. Returns the merged settings. */
+export async function setNotetakerSettings(patch: Partial<NotetakerSettings>): Promise<NotetakerSettings> {
+  return invoke<NotetakerSettings>("set_notetaker_settings", { patch });
 }
 
 // == IPC: Brief ==
@@ -1262,8 +1275,9 @@ export async function briefContinue(meetingId: string): Promise<void> {
 export async function getBriefSettings(): Promise<BriefSettings> {
   return invoke<BriefSettings>("get_brief_settings");
 }
-export async function setBriefSettings(settings: BriefSettings): Promise<void> {
-  return invoke("set_brief_settings", { settings });
+/** A patch: only the fields present change. Returns the merged settings. */
+export async function setBriefSettings(patch: Partial<BriefSettings>): Promise<BriefSettings> {
+  return invoke<BriefSettings>("set_brief_settings", { patch });
 }
 
 // == IPC: Workspace memory ==
@@ -1294,8 +1308,20 @@ export async function resolveMemory(
 export async function listTalkingPoints(workspaceId: string): Promise<TalkingPoint[]> {
   return invoke<TalkingPoint[]>("list_talking_points", { workspaceId });
 }
-export async function saveTalkingPoint(point: TalkingPoint): Promise<TalkingPoint> {
-  return invoke<TalkingPoint>("save_talking_point", { point });
+/** Creates a note. `content` is the TipTap document as JSON text. */
+export async function createTalkingPoint(workspaceId: string, title?: string, content?: string): Promise<TalkingPoint> {
+  return invoke<TalkingPoint>("create_talking_point", { workspaceId, title, content });
+}
+/**
+ * Changes only the fields given. With `expectedUpdatedAt` the backend refuses ("conflict")
+ * when the note changed since; a note deleted elsewhere is refused with "not_found".
+ */
+export async function patchTalkingPoint(
+  id: string,
+  patch: TalkingPointPatch,
+  expectedUpdatedAt?: number,
+): Promise<TalkingPoint> {
+  return invoke<TalkingPoint>("patch_talking_point", { id, patch, expectedUpdatedAt });
 }
 export async function deleteTalkingPoint(id: string): Promise<void> {
   return invoke("delete_talking_point", { id });

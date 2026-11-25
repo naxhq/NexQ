@@ -17,7 +17,8 @@ import {
   reorderTalkingPoints,
   saveMeetingPointEdit,
   savePointProgress,
-  saveTalkingPoint,
+  createTalkingPoint,
+  patchTalkingPoint,
 } from "../lib/ipc";
 import type { PointSaid, TalkingPoint } from "../lib/types";
 import {
@@ -30,8 +31,9 @@ import {
   type TpDoc,
 } from "../talking-points/doc/model";
 import { docToMarkdown } from "../talking-points/doc/markdown";
+import { onWorkspacesChanged } from "../lib/events";
 
-export type SaveState = "saved" | "dirty" | "saving" | "failed";
+export type SaveState = "saved" | "dirty" | "saving" | "failed" | "conflict";
 export type ScrollKind = "manual" | "auto" | "voice";
 
 export interface ReadingSettings {
@@ -120,16 +122,32 @@ function message(e: unknown): string {
 
 // -- pending autosaves (module state: timers are not render state) -----------------------------
 
+/** The fields autosave sends. `in_context` is its own immediate patch, never part of this. */
+type TextFields = Pick<TalkingPoint, "title" | "doc_json" | "markdown" | "plain_text">;
+
 interface Pending {
-  point: TalkingPoint;
-  version: number;
+  workspaceId: string;
+  /** Only what changed locally and the backend does not have yet. */
+  dirty: Partial<TextFields>;
+  /** Values the dirty fields had before our first edit (to tell a real clash from an unrelated change). */
+  orig: Partial<TextFields>;
+  /** `updated_at` of the backend copy our edits are based on. */
+  base: number;
   timer: ReturnType<typeof setTimeout> | null;
   attempt: number;
-  inFlight: boolean;
+  inFlight: Promise<void> | null;
+  /** Changed in another window while we had unsaved edits. */
+  conflict: boolean;
 }
 const pending = new Map<string, Pending>();
+/** Notes deleted in this session: no save, reload or merge may bring them back. */
+const tombstones = new Set<string>();
 const progressTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const progressLatest = new Map<string, { meetingId: string; pointId: string; said: PointSaid[] }>();
+
+function isErr(e: unknown, code: "not_found" | "conflict"): boolean {
+  return message(e).toLowerCase().includes(code);
+}
 
 interface TalkingPointsState {
   byWorkspace: Record<string, TalkingPoint[]>;
@@ -137,6 +155,8 @@ interface TalkingPointsState {
   loadError: Record<string, string | null>;
   saveState: Record<string, SaveState>;
   saveError: Record<string, string | null>;
+  /** Bumped when a note's text was replaced from the backend, so an open editor reloads it. */
+  docRev: Record<string, number>;
   /** Last error of a list action (reorder, copy, delete). */
   actionError: string | null;
 
@@ -151,11 +171,15 @@ interface TalkingPointsState {
   progressError: string | null;
 
   load: (workspaceId: string) => Promise<void>;
-  create: (workspaceId: string, init?: { title?: string; doc?: TpDoc }) => Promise<TalkingPoint>;
-  edit: (id: string, patch: { title?: string; doc?: TpDoc; in_context?: boolean }) => void;
+  /** Reloads every loaded workspace (or one) keeping unsaved local edits. */
+  syncFromBackend: (workspaceId?: string | null) => Promise<void>;
+  create: (workspaceId: string, init?: { title?: string; doc?: TpDoc }) => Promise<TalkingPoint | null>;
+  edit: (id: string, patch: { title?: string; doc?: TpDoc }) => void;
+  setInContext: (id: string, value: boolean) => Promise<void>;
   flush: (id: string) => Promise<void>;
   flushAll: () => Promise<void>;
   retry: (id: string) => void;
+  resolveConflict: (id: string, which: "mine" | "theirs") => Promise<void>;
   duplicate: (id: string) => Promise<TalkingPoint | null>;
   copyTo: (id: string, workspaceId: string) => Promise<TalkingPoint | null>;
   remove: (id: string) => Promise<void>;
@@ -174,14 +198,8 @@ interface TalkingPointsState {
   resetMeeting: () => void;
 }
 
-function withDerived(p: TalkingPoint, doc: TpDoc): TalkingPoint {
-  return {
-    ...p,
-    doc_json: serializeDoc(doc),
-    markdown: docToMarkdown(doc),
-    plain_text: docPlainText(doc),
-    updated_at: Date.now(),
-  };
+function derived(doc: TpDoc): Pick<TalkingPoint, "doc_json" | "markdown" | "plain_text"> {
+  return { doc_json: serializeDoc(doc), markdown: docToMarkdown(doc), plain_text: docPlainText(doc) };
 }
 
 export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
@@ -192,7 +210,9 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
     writePrefs({ reading: s.reading, lastNote: s.lastNote, recent: s.recent });
   };
 
-  const replacePoint = (point: TalkingPoint) =>
+  /** Puts a point into its workspace list (never a deleted one). */
+  const upsert = (point: TalkingPoint) => {
+    if (tombstones.has(point.id)) return;
     set((s) => {
       const list = s.byWorkspace[point.workspace_id];
       if (!list) return s;
@@ -200,6 +220,16 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
       const next = i >= 0 ? list.map((p, k) => (k === i ? point : p)) : [...list, point];
       return { byWorkspace: { ...s.byWorkspace, [point.workspace_id]: next } };
     });
+  };
+
+  const drop = (id: string) =>
+    set((s) => {
+      const byWorkspace: Record<string, TalkingPoint[]> = {};
+      for (const [ws, list] of Object.entries(s.byWorkspace)) byWorkspace[ws] = list.filter((p) => p.id !== id);
+      return { byWorkspace };
+    });
+
+  const bumpRev = (id: string) => set((s) => ({ docRev: { ...s.docRev, [id]: (s.docRev[id] ?? 0) + 1 } }));
 
   const setSave = (id: string, state: SaveState, error: string | null = null) =>
     set((s) => ({ saveState: { ...s.saveState, [id]: state }, saveError: { ...s.saveError, [id]: error } }));
@@ -212,12 +242,81 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
     p.timer = setTimeout(() => void get().flush(id), wait);
   };
 
+  /** The note as the user sees it: backend copy with unsaved fields on top. */
+  const withDirty = (server: TalkingPoint, e: Pending | undefined): TalkingPoint => (e ? { ...server, ...e.dirty } : server);
+
+  const forget = (id: string) => {
+    const e = pending.get(id);
+    if (e?.timer) clearTimeout(e.timer);
+    pending.delete(id);
+  };
+
+  /** The backend says the note is gone: stop saving it, remove it, say so. */
+  const vanished = (id: string) => {
+    tombstones.add(id);
+    forget(id);
+    drop(id);
+    set({ actionError: "That note was deleted in another window." });
+  };
+
+  const upsertNew = (p: TalkingPoint) => {
+    tombstones.delete(p.id);
+    set((s) => {
+      const list = s.byWorkspace[p.workspace_id];
+      if (!list || list.some((x) => x.id === p.id)) return s;
+      return { byWorkspace: { ...s.byWorkspace, [p.workspace_id]: [...list, p] } };
+    });
+  };
+
+  /**
+   * Takes the backend's list of a workspace, keeping what is not saved yet. A note with
+   * unsaved fields keeps them (they win); if the same fields also changed elsewhere it
+   * is marked as a conflict for the user to settle. Deleted-here notes stay deleted.
+   */
+  const applyServerList = (ws: string, list: TalkingPoint[]) => {
+    const prev = get().byWorkspace[ws] ?? [];
+    const out: TalkingPoint[] = [];
+    const seen = new Set<string>();
+    const reload: string[] = [];
+    for (const p of list) {
+      if (tombstones.has(p.id)) continue;
+      seen.add(p.id);
+      const e = pending.get(p.id);
+      const local = prev.find((x) => x.id === p.id);
+      if (e && Object.keys(e.dirty).length > 0) {
+        if (!e.inFlight) {
+          const clash = (Object.keys(e.dirty) as Array<keyof TextFields>).some(
+            (k) => e.orig[k] !== undefined && p[k] !== e.orig[k] && p[k] !== e.dirty[k],
+          );
+          if (clash && !e.conflict) {
+            e.conflict = true;
+            if (e.timer) clearTimeout(e.timer);
+            e.timer = null;
+            setSave(p.id, "conflict", "Changed in another window");
+          } else if (!clash) {
+            e.base = p.updated_at;
+          }
+        }
+        out.push({ ...p, ...e.dirty });
+        continue;
+      }
+      if (local && local.doc_json !== p.doc_json) reload.push(p.id);
+      out.push(p);
+    }
+    // unsaved notes the backend no longer lists stay until their save is refused ("not_found")
+    for (const x of prev) if (!seen.has(x.id) && pending.has(x.id) && !tombstones.has(x.id)) out.push(x);
+    out.sort((a, b) => a.sort - b.sort);
+    set((s) => ({ byWorkspace: { ...s.byWorkspace, [ws]: out } }));
+    for (const id of reload) bumpRev(id);
+  };
+
   return {
     byWorkspace: {},
     loading: {},
     loadError: {},
     saveState: {},
     saveError: {},
+    docRev: {},
     actionError: null,
     reading: prefs.reading,
     lastNote: prefs.lastNote,
@@ -227,6 +326,7 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
     progressError: null,
 
     find: (id) => {
+      if (tombstones.has(id)) return undefined;
       for (const list of Object.values(get().byWorkspace)) {
         const hit = list.find((p) => p.id === id);
         if (hit) return hit;
@@ -238,17 +338,8 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
       set((s) => ({ loading: { ...s.loading, [workspaceId]: true }, loadError: { ...s.loadError, [workspaceId]: null } }));
       try {
         const list = await listTalkingPoints(workspaceId);
-        set((s) => {
-          // A note with an unsaved edit keeps its local text over the stored one.
-          const merged = list
-            .map((p) => pending.get(p.id)?.point ?? p)
-            .sort((a, b) => a.sort - b.sort);
-          const extra = (s.byWorkspace[workspaceId] ?? []).filter((p) => pending.has(p.id) && !merged.some((m) => m.id === p.id));
-          return {
-            byWorkspace: { ...s.byWorkspace, [workspaceId]: [...merged, ...extra] },
-            loading: { ...s.loading, [workspaceId]: false },
-          };
-        });
+        applyServerList(workspaceId, list);
+        set((s) => ({ loading: { ...s.loading, [workspaceId]: false } }));
       } catch (e) {
         set((s) => ({
           loading: { ...s.loading, [workspaceId]: false },
@@ -257,81 +348,148 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
       }
     },
 
-    create: async (workspaceId, init) => {
-      const list = get().byWorkspace[workspaceId] ?? [];
-      const doc = init?.doc ?? emptyDoc();
-      const now = Date.now();
-      const point = withDerived(
-        {
-          id: uid(),
-          workspace_id: workspaceId,
-          title: cleanTitle(init?.title ?? "", "Untitled note"),
-          doc_json: "",
-          markdown: "",
-          plain_text: "",
-          in_context: false,
-          sort: list.reduce((m, p) => Math.max(m, p.sort), -1) + 1,
-          created_at: now,
-          updated_at: now,
-        },
-        doc,
+    syncFromBackend: async (workspaceId) => {
+      const ids = workspaceId && get().byWorkspace[workspaceId] ? [workspaceId] : Object.keys(get().byWorkspace);
+      await Promise.all(
+        ids.map(async (ws) => {
+          try {
+            applyServerList(ws, await listTalkingPoints(ws));
+          } catch {
+            /* the next change or a manual reload tries again; local edits are untouched */
+          }
+        }),
       );
-      set((s) => ({ byWorkspace: { ...s.byWorkspace, [workspaceId]: [...(s.byWorkspace[workspaceId] ?? []), point] } }));
-      pending.set(point.id, { point, version: 1, timer: null, attempt: 0, inFlight: false });
-      setSave(point.id, "dirty");
-      await get().flush(point.id);
-      return get().find(point.id) ?? point;
+    },
+
+    create: async (workspaceId, init) => {
+      const doc = init?.doc ?? emptyDoc();
+      let created: TalkingPoint;
+      try {
+        created = await createTalkingPoint(workspaceId, cleanTitle(init?.title ?? "", "Untitled note"), serializeDoc(doc));
+      } catch (e) {
+        set({ actionError: message(e) });
+        return null;
+      }
+      upsertNew(created);
+      // our own derived text goes in as a normal autosave, so markdown and plain text are always ours
+      const d = derived(doc);
+      if (created.markdown !== d.markdown || created.plain_text !== d.plain_text) {
+        pending.set(created.id, {
+          workspaceId,
+          dirty: { markdown: d.markdown, plain_text: d.plain_text },
+          orig: {},
+          base: created.updated_at,
+          timer: null,
+          attempt: 0,
+          inFlight: null,
+          conflict: false,
+        });
+        upsert({ ...created, ...d });
+        setSave(created.id, "dirty");
+        await get().flush(created.id);
+      } else {
+        setSave(created.id, "saved");
+      }
+      return get().find(created.id) ?? created;
     },
 
     edit: (id, patch) => {
-      const current = pending.get(id)?.point ?? get().find(id);
+      if (tombstones.has(id)) return;
+      const current = get().find(id);
       if (!current) return;
-      let next: TalkingPoint = { ...current };
-      if (patch.title !== undefined) next.title = cleanTitle(patch.title, "Untitled note");
-      if (patch.in_context !== undefined) next.in_context = patch.in_context;
-      if (patch.doc) next = withDerived(next, patch.doc);
-      else next.updated_at = Date.now();
-      const p = pending.get(id);
-      const entry: Pending = p ?? { point: next, version: 0, timer: null, attempt: 0, inFlight: false };
-      entry.point = next;
-      entry.version += 1;
-      pending.set(id, entry);
-      replacePoint(next);
+      const fields: Partial<TextFields> = {};
+      if (patch.title !== undefined) fields.title = cleanTitle(patch.title, "Untitled note");
+      if (patch.doc) Object.assign(fields, derived(patch.doc));
+      let e = pending.get(id);
+      if (!e) {
+        e = { workspaceId: current.workspace_id, dirty: {}, orig: {}, base: current.updated_at, timer: null, attempt: 0, inFlight: null, conflict: false };
+        pending.set(id, e);
+      }
+      for (const k of Object.keys(fields) as Array<keyof TextFields>) if (!(k in e.orig)) e.orig[k] = current[k];
+      Object.assign(e.dirty, fields);
+      upsert({ ...current, ...fields });
+      if (e.conflict) {
+        setSave(id, "conflict");
+        return;
+      }
       setSave(id, "dirty");
-      if (entry.timer) clearTimeout(entry.timer);
-      // A switch is saved at once; typing waits for a pause.
-      const wait = patch.doc || patch.title !== undefined ? AUTOSAVE_MS : 0;
-      entry.attempt = 0;
-      entry.timer = setTimeout(() => void get().flush(id), wait);
+      if (e.timer) clearTimeout(e.timer);
+      e.attempt = 0;
+      e.timer = setTimeout(() => void get().flush(id), AUTOSAVE_MS);
+    },
+
+    setInContext: async (id, value) => {
+      const before = get().find(id);
+      if (!before || tombstones.has(id)) return;
+      upsert({ ...before, in_context: value });
+      try {
+        const saved = await patchTalkingPoint(id, { in_context: value });
+        if (tombstones.has(id)) return;
+        const e = pending.get(id);
+        // the backend copy moved on by our own change; text edits are still based on it
+        if (e && !e.conflict) e.base = saved.updated_at;
+        const cur = get().find(id);
+        if (cur) upsert({ ...cur, in_context: saved.in_context, updated_at: e ? cur.updated_at : saved.updated_at });
+      } catch (e) {
+        if (isErr(e, "not_found")) return vanished(id);
+        const cur = get().find(id);
+        if (cur) upsert({ ...cur, in_context: before.in_context });
+        set({ actionError: message(e) });
+      }
     },
 
     flush: async (id) => {
       const entry = pending.get(id);
-      if (!entry || entry.inFlight) return;
+      if (!entry || tombstones.has(id)) return;
+      if (entry.inFlight) return entry.inFlight;
+      if (entry.conflict) return;
       if (entry.timer) clearTimeout(entry.timer);
       entry.timer = null;
-      entry.inFlight = true;
-      const sent = entry.version;
-      const payload = entry.point;
+      const sent = { ...entry.dirty };
+      if (Object.keys(sent).length === 0) {
+        pending.delete(id);
+        setSave(id, "saved");
+        return;
+      }
       setSave(id, "saving");
-      try {
-        const saved = await saveTalkingPoint(payload);
-        entry.inFlight = false;
-        if (entry.version === sent) {
-          pending.delete(id);
-          replacePoint({ ...payload, sort: saved?.sort ?? payload.sort, updated_at: saved?.updated_at ?? payload.updated_at });
-          setSave(id, "saved");
-        } else {
-          // Typed while saving: the newer text goes next.
-          entry.attempt = 0;
-          setSave(id, "dirty");
-          entry.timer = setTimeout(() => void get().flush(id), 0);
+      const run = (async () => {
+        try {
+          const saved = await patchTalkingPoint(id, sent, entry.base);
+          if (tombstones.has(id) || pending.get(id) !== entry) return;
+          entry.base = saved.updated_at;
+          for (const k of Object.keys(sent) as Array<keyof TextFields>) if (entry.dirty[k] === sent[k]) {
+              delete entry.dirty[k];
+              delete entry.orig[k];
+            }
+          const cur = get().find(id);
+          if (cur) upsert({ ...cur, sort: saved.sort, updated_at: saved.updated_at });
+          if (Object.keys(entry.dirty).length === 0) {
+            pending.delete(id);
+            setSave(id, "saved");
+          } else {
+            // typed while saving: the newer text goes next
+            entry.attempt = 0;
+            setSave(id, "dirty");
+            entry.timer = setTimeout(() => void get().flush(id), 0);
+          }
+        } catch (e) {
+          if (tombstones.has(id) || pending.get(id) !== entry) return;
+          if (isErr(e, "not_found")) return vanished(id);
+          if (isErr(e, "conflict")) {
+            entry.conflict = true;
+            setSave(id, "conflict", "Changed in another window");
+            return;
+          }
+          entry.attempt += 1;
+          setSave(id, "failed", message(e));
+          scheduleRetry(id);
         }
-      } catch (e) {
-        entry.inFlight = false;
-        entry.attempt += 1;
-        setSave(id, "failed", message(e));
-        scheduleRetry(id);
+      })();
+      entry.inFlight = run;
+      try {
+        await run;
+      } finally {
+        if (entry.inFlight === run) entry.inFlight = null;
       }
     },
 
@@ -345,12 +503,39 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
       void get().flush(id);
     },
 
+    resolveConflict: async (id, which) => {
+      const entry = pending.get(id);
+      const cur = get().find(id);
+      if (!cur) return;
+      let theirs: TalkingPoint | undefined;
+      try {
+        theirs = (await listTalkingPoints(cur.workspace_id)).find((p) => p.id === id);
+      } catch (e) {
+        set({ actionError: message(e) });
+        return;
+      }
+      if (!theirs) return vanished(id);
+      if (which === "theirs") {
+        forget(id);
+        upsert(theirs);
+        bumpRev(id);
+        setSave(id, "saved");
+        return;
+      }
+      if (!entry) return;
+      entry.conflict = false;
+      entry.base = theirs.updated_at;
+      entry.attempt = 0;
+      upsert({ ...theirs, ...entry.dirty });
+      setSave(id, "dirty");
+      await get().flush(id);
+    },
+
     duplicate: async (id) => {
-      const src = pending.get(id)?.point ?? get().find(id);
+      const src = get().find(id);
       if (!src) return null;
-      const doc = parseDoc(src.doc_json);
-      const copy = await get().create(src.workspace_id, { title: `${src.title} copy`, doc: reidDoc(doc) });
-      get().edit(copy.id, { in_context: src.in_context });
+      const copy = await get().create(src.workspace_id, { title: `${src.title} copy`, doc: reidDoc(parseDoc(src.doc_json)) });
+      if (copy && src.in_context) await get().setInContext(copy.id, true);
       return copy;
     },
 
@@ -372,19 +557,28 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
     remove: async (id) => {
       const src = get().find(id);
       const entry = pending.get(id);
+      // from now on nothing may save or bring the note back
+      tombstones.add(id);
       if (entry?.timer) clearTimeout(entry.timer);
-      pending.delete(id);
+      entry && (entry.timer = null);
+      if (entry?.inFlight) await entry.inFlight.catch(() => undefined);
       try {
         await deleteTalkingPoint(id);
       } catch (e) {
+        if (isErr(e, "not_found")) {
+          forget(id);
+          drop(id);
+          return;
+        }
+        // still there: take the tombstone back and keep trying to save what it had
+        tombstones.delete(id);
+        if (entry && pending.get(id) === entry && Object.keys(entry.dirty).length) scheduleRetry(id);
         set({ actionError: message(e) });
         return;
       }
-      if (!src) return;
-      set((s) => ({
-        byWorkspace: { ...s.byWorkspace, [src.workspace_id]: (s.byWorkspace[src.workspace_id] ?? []).filter((p) => p.id !== id) },
-        actionError: null,
-      }));
+      forget(id);
+      if (src) drop(id);
+      set({ actionError: null });
     },
 
     reorder: async (workspaceId, ids) => {
@@ -437,7 +631,7 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
     saveToWorkspace: async (meetingId, pointId, doc) => {
       get().edit(pointId, { doc });
       await get().flush(pointId);
-      if (get().saveState[pointId] === "failed") throw new Error(get().saveError[pointId] ?? "Could not save");
+      if (get().saveState[pointId] === "failed" || get().saveState[pointId] === "conflict") throw new Error(get().saveError[pointId] ?? "Could not save");
       set((s) => {
         const edits = { ...s.meetingEdits };
         delete edits[pointId];
@@ -514,6 +708,12 @@ if (typeof window !== "undefined") {
       }
     }
   });
+  // another window changed the notes: reload what is loaded here, keeping unsaved edits
+  try {
+    void onWorkspacesChanged((e) => void useTalkingPointsStore.getState().syncFromBackend(e.workspace_id ?? null)).catch(() => undefined);
+  } catch {
+    /* no event bridge (tests) */
+  }
   window.addEventListener("beforeunload", () => {
     void useTalkingPointsStore.getState().flushAll();
     void useTalkingPointsStore.getState().flushProgress();
@@ -524,6 +724,7 @@ if (typeof window !== "undefined") {
 export function __resetTalkingPointsForTests(): void {
   for (const e of pending.values()) if (e.timer) clearTimeout(e.timer);
   pending.clear();
+  tombstones.clear();
   for (const t of progressTimers.values()) clearTimeout(t);
   progressTimers.clear();
   progressLatest.clear();
@@ -533,6 +734,7 @@ export function __resetTalkingPointsForTests(): void {
     loadError: {},
     saveState: {},
     saveError: {},
+    docRev: {},
     actionError: null,
     meetingEdits: {},
     progress: {},

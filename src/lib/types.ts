@@ -1421,10 +1421,14 @@ export interface WorkspaceDetail extends WorkspaceSummary {
   recaps_with_ai: boolean;
   /** "Suggest after meetings" for memory (off by default). */
   suggest_memory: boolean;
+  /** The live brief runs in this workspace's meetings (off by default). */
+  brief_enabled?: boolean;
   items: WorkspaceItem[];
 }
 
 export interface WorkspaceInput {
+  /** Client-made UUID so the mark shown while creating is the real one (the backend makes one when absent). */
+  id?: string;
   name: string;
   icon?: string | null;
   color?: string | null;
@@ -1440,6 +1444,7 @@ export type WorkspacePatch = Partial<WorkspaceInput> & {
   pinned?: boolean;
   recaps_with_ai?: boolean;
   suggest_memory?: boolean;
+  brief_enabled?: boolean;
 };
 
 /** Deleting a workspace: move its meetings, chats and talking points to General, or delete them. */
@@ -1572,9 +1577,20 @@ export interface WorkspaceChat {
   include_meetings: boolean;
   /** Messages up to this id are condensed (shows "Earlier messages condensed"). */
   condensed_upto: number | null;
+  /** Saved messages (0 = an empty chat). Absent from older backends. */
+  message_count?: number;
   created_at: number;
   updated_at: number;
 }
+
+/** One meeting's switch for a chat (`list_chat_meeting_prefs`): false = left out of this chat. */
+export interface ChatMeetingPref {
+  meeting_id: string;
+  included: boolean;
+}
+
+/** Per chat: pin an item so it is always sent, exclude it, or go back to the default (`set_chat_item_pref`). */
+export type ChatItemPrefValue = "pin" | "exclude" | "default";
 
 export type WorkspaceChatPatch = Partial<
   Pick<WorkspaceChat, "title" | "provider" | "model" | "effort" | "depth" | "include_meetings">
@@ -1639,6 +1655,8 @@ export interface WorkspaceChatApprovalEvent extends WorkspaceChatEventBase {
   args: unknown;
   /** The arguments were cut: not everything is shown. */
   truncated?: boolean;
+  /** Secrets were replaced in `args`: what is shown is not exactly what runs. */
+  redacted?: boolean;
 }
 
 /** `workspace_chat_approval_closed`: the question is over (answered elsewhere, timed out, cancelled). */
@@ -1697,6 +1715,8 @@ export interface NotetakerState {
   tokens_used: number;
   cap: number;
   next_in_ms?: number | null;
+  /** All tokens the run has seen, when counted apart from `tokens_used`. */
+  total_tokens?: number | null;
   /** Why it paused (plan limit, three failures ...). */
   reason?: string | null;
 }
@@ -1721,6 +1741,16 @@ export interface BriefFact {
   /** Title of the cited passage (chip label). */
   source: string;
   passage_id?: number | null;
+  /** Where the fact comes from, to open it directly. */
+  sources?: BriefSource[];
+}
+
+export interface BriefSource {
+  kind: PassageKind;
+  ref_id: string;
+  sub_ref: string | null;
+  title: string;
+  start_ms: number | null;
 }
 
 /** A short sheet of facts about what is being discussed now. */
@@ -1794,6 +1824,9 @@ export interface TalkingPoint {
   created_at: number;
   updated_at: number;
 }
+
+/** Fields of a note to change; absent fields stay as they are. */
+export type TalkingPointPatch = Partial<Pick<TalkingPoint, "title" | "doc_json" | "markdown" | "plain_text" | "in_context">>;
 
 /** One block (by stable id) the user has said or ticked. */
 export interface PointSaid {

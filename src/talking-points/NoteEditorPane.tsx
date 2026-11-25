@@ -9,7 +9,31 @@ import { cleanTitle, parseDoc } from "./doc/model";
 import { saveExportFile } from "../lib/export";
 import { cn } from "../lib/utils";
 
-export function SaveStatus({ state, error, onRetry }: { state: SaveState | undefined; error?: string | null; onRetry: () => void }) {
+export function SaveStatus({
+  state,
+  error,
+  onRetry,
+  onResolve,
+}: {
+  state: SaveState | undefined;
+  error?: string | null;
+  onRetry: () => void;
+  onResolve?: (which: "mine" | "theirs") => void;
+}) {
+  if (state === "conflict") {
+    const b = "rounded-md px-1.5 py-0.5 font-medium underline underline-offset-2 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60";
+    return (
+      <span className="ui-meta inline-flex items-center gap-2 text-destructive" role="alert">
+        Changed in another window.
+        <button type="button" className={b} onClick={() => onResolve?.("mine")}>
+          Keep mine
+        </button>
+        <button type="button" className={b} onClick={() => onResolve?.("theirs")}>
+          Use theirs
+        </button>
+      </span>
+    );
+  }
   if (state === "failed") {
     return (
       <span className="ui-meta inline-flex items-center gap-2 text-destructive" role="alert">
@@ -32,6 +56,9 @@ export function SaveStatus({ state, error, onRetry }: { state: SaveState | undef
 export function NoteEditorPane({ note }: { note: TalkingPoint }) {
   const edit = useTalkingPointsStore((s) => s.edit);
   const retry = useTalkingPointsStore((s) => s.retry);
+  const setInContext = useTalkingPointsStore((s) => s.setInContext);
+  const resolve = useTalkingPointsStore((s) => s.resolveConflict);
+  const rev = useTalkingPointsStore((s) => s.docRev[note.id] ?? 0);
   const state = useTalkingPointsStore((s) => s.saveState[note.id]);
   const error = useTalkingPointsStore((s) => s.saveError[note.id]);
   const [title, setTitle] = useState(note.title);
@@ -78,7 +105,7 @@ export function NoteEditorPane({ note }: { note: TalkingPoint }) {
           }}
           className="ui-title min-w-[10rem] flex-1 truncate rounded-md bg-transparent px-1 py-0.5 outline-none transition-colors hover:bg-accent/50 focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/60"
         />
-        <SaveStatus state={state} error={error} onRetry={() => retry(note.id)} />
+        <SaveStatus state={state} error={error} onRetry={() => retry(note.id)} onResolve={(w) => void resolve(note.id, w)} />
         <Menu
           label="More for this note"
           align="end"
@@ -114,14 +141,14 @@ export function NoteEditorPane({ note }: { note: TalkingPoint }) {
       <Switch
         className="pb-3"
         checked={note.in_context}
-        onChange={(in_context) => edit(note.id, { in_context })}
+        onChange={(v) => void setInContext(note.id, v)}
         label="Use as AI context"
         description="Live answers and the workspace chat can draw on this note."
       />
       <div className="min-h-0 flex-1 overflow-y-auto pr-1">
         <LazyRichEditor
           docJson={note.doc_json}
-          resetKey={note.id}
+          resetKey={`${note.id}:${rev}`}
           ariaLabel={`Text of ${note.title}`}
           onChange={(doc) => edit(note.id, { doc })}
         />

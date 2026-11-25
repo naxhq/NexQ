@@ -5,7 +5,8 @@ import type { TalkingPoint } from "../lib/types";
 
 const ipc = vi.hoisted(() => ({
   listTalkingPoints: vi.fn(),
-  saveTalkingPoint: vi.fn(),
+  createTalkingPoint: vi.fn(),
+  patchTalkingPoint: vi.fn(),
   deleteTalkingPoint: vi.fn(),
   copyTalkingPoint: vi.fn(),
   reorderTalkingPoints: vi.fn(),
@@ -48,11 +49,32 @@ beforeAll(() => {
   document.elementFromPoint = () => null;
 });
 
+// a small fake backend: patches merge into the latest copy of the note
+const rows = new Map<string, TalkingPoint>();
+let clock = 1000;
+const saveCalls = () => ipc.createTalkingPoint.mock.calls.length + ipc.patchTalkingPoint.mock.calls.length;
+const lastSaved = () => [...rows.values()].sort((a, b) => b.updated_at - a.updated_at)[0];
+function wireBackend() {
+  rows.clear();
+  clock = 1000;
+  ipc.patchTalkingPoint.mockImplementation(async (id: string, patch: Partial<TalkingPoint>) => {
+    const base = rows.get(id) ?? NOTES.find((n) => n.id === id)!;
+    const next = { ...base, ...patch, updated_at: ++clock };
+    rows.set(id, next);
+    return next;
+  });
+  ipc.createTalkingPoint.mockImplementation(async (ws: string, title?: string, content?: string) => {
+    const next: TalkingPoint = { id: "created" + ++clock, workspace_id: ws, title: title ?? "Untitled note", doc_json: content ?? "", markdown: "", plain_text: "", in_context: false, sort: 99, created_at: 1, updated_at: ++clock };
+    rows.set(next.id, next);
+    return next;
+  });
+}
+
 beforeEach(() => {
   __resetTalkingPointsForTests();
   for (const f of Object.values(ipc)) f.mockReset();
   ipc.listTalkingPoints.mockResolvedValue(NOTES);
-  ipc.saveTalkingPoint.mockImplementation(async (p: TalkingPoint) => p);
+  wireBackend();
   ipc.reorderTalkingPoints.mockResolvedValue(undefined);
   ipc.deleteTalkingPoint.mockResolvedValue(undefined);
   ipc.listWorkspaces.mockResolvedValue([
@@ -98,7 +120,7 @@ describe("the notes list", () => {
     expect(screen.getAllByRole("button", { name: /Import/ }).length).toBeGreaterThan(0);
     await userEvent.click(screen.getByRole("button", { name: "Write a note" }));
     expect(await screen.findByLabelText("Note title")).toBeInTheDocument();
-    expect(ipc.saveTalkingPoint).toHaveBeenCalledTimes(1);
+    expect(ipc.createTalkingPoint).toHaveBeenCalledTimes(1);
   });
 
   it("moves a note with the arrow keys on its grip and says where it went", async () => {
@@ -153,7 +175,7 @@ describe("the notes list", () => {
     await user.click(screen.getByRole("button", { name: "Actions for Pricing" }));
     await user.click(await screen.findByRole("menuitem", { name: "Duplicate" }));
     await waitFor(() => expect(screen.getByRole("button", { name: /^Pricing copy/ })).toBeInTheDocument());
-    expect(ipc.saveTalkingPoint).toHaveBeenCalled();
+    expect(saveCalls()).toBeGreaterThan(0);
     expect(screen.getByLabelText("Note title")).toHaveValue("Pricing copy");
   });
 
@@ -200,14 +222,14 @@ describe("the editor", () => {
     await user.click(box);
     await user.keyboard(" and more");
     expect(await screen.findByText("Unsaved changes")).toBeInTheDocument();
-    await waitFor(() => expect(ipc.saveTalkingPoint).toHaveBeenCalled(), { timeout: 3000 });
-    expect(ipc.saveTalkingPoint.mock.calls[ipc.saveTalkingPoint.mock.calls.length - 1][0].plain_text).toContain("and more");
+    await waitFor(() => expect(saveCalls()).toBeGreaterThan(0), { timeout: 3000 });
+    expect(lastSaved().plain_text).toContain("and more");
     expect(await screen.findByText("Saved")).toBeInTheDocument();
   });
 
   it("shows a failed save, keeps trying and lets you retry now", async () => {
     const user = userEvent.setup();
-    ipc.saveTalkingPoint.mockRejectedValueOnce("offline");
+    ipc.patchTalkingPoint.mockRejectedValueOnce("offline");
     render(<TalkingPointsEditor workspaceId="w1" />);
     await user.click(await screen.findByRole("textbox", { name: "Text of Opening" }));
     await user.keyboard("!");
@@ -215,7 +237,7 @@ describe("the editor", () => {
     expect(alert).toHaveTextContent("Not saved: offline");
     await user.click(within(alert).getByRole("button", { name: "Try now" }));
     expect(await screen.findByText("Saved")).toBeInTheDocument();
-    expect(ipc.saveTalkingPoint).toHaveBeenCalledTimes(2);
+    expect(ipc.patchTalkingPoint).toHaveBeenCalledTimes(2);
   });
 
   it("renames the note", async () => {
@@ -225,8 +247,8 @@ describe("the editor", () => {
     await user.clear(title);
     await user.type(title, "Kick off plan");
     await user.tab();
-    await waitFor(() => expect(ipc.saveTalkingPoint).toHaveBeenCalled());
-    expect(ipc.saveTalkingPoint.mock.calls[ipc.saveTalkingPoint.mock.calls.length - 1][0].title).toBe("Kick off plan");
+    await waitFor(() => expect(saveCalls()).toBeGreaterThan(0));
+    expect(lastSaved().title).toBe("Kick off plan");
     expect(screen.getByRole("button", { name: /^Kick off plan/ })).toBeInTheDocument();
   });
 
@@ -237,8 +259,8 @@ describe("the editor", () => {
     expect(sw).toHaveAttribute("aria-checked", "false");
     await user.click(sw);
     expect(sw).toHaveAttribute("aria-checked", "true");
-    await waitFor(() => expect(ipc.saveTalkingPoint).toHaveBeenCalled());
-    expect(ipc.saveTalkingPoint.mock.calls[ipc.saveTalkingPoint.mock.calls.length - 1][0].in_context).toBe(true);
+    await waitFor(() => expect(saveCalls()).toBeGreaterThan(0));
+    expect(lastSaved().in_context).toBe(true);
     expect(screen.getByText(/used as AI context/)).toBeInTheDocument();
   });
 
@@ -266,8 +288,8 @@ describe("the editor", () => {
     await user.click(within(bar).getByRole("button", { name: "Bold" }));
     await user.click(within(bar).getByRole("button", { name: "Colour" }));
     await user.click(await screen.findByRole("button", { name: "Red" }));
-    await waitFor(() => expect(ipc.saveTalkingPoint).toHaveBeenCalled(), { timeout: 3000 });
-    const saved = ipc.saveTalkingPoint.mock.calls[ipc.saveTalkingPoint.mock.calls.length - 1][0] as TalkingPoint;
+    await waitFor(() => expect(saveCalls()).toBeGreaterThan(0), { timeout: 3000 });
+    const saved = lastSaved() as TalkingPoint;
     expect(saved.doc_json).toContain('"bold"');
     expect(saved.doc_json).toContain('"name":"red"');
     expect(saved.doc_json).not.toMatch(/#[0-9a-f]{3,6}|rgb|hsl/i);
@@ -301,8 +323,8 @@ describe("Markdown import", () => {
     await user.paste("# Kick off\n\n- **Goals** for the quarter\n- Risks");
     expect(within(dlg).getByText("7 words will be imported.")).toBeInTheDocument();
     await user.click(within(dlg).getByRole("button", { name: "Import as a new note" }));
-    await waitFor(() => expect(ipc.saveTalkingPoint).toHaveBeenCalled());
-    const saved = ipc.saveTalkingPoint.mock.calls[ipc.saveTalkingPoint.mock.calls.length - 1][0] as TalkingPoint;
+    await waitFor(() => expect(saveCalls()).toBeGreaterThan(0));
+    const saved = lastSaved() as TalkingPoint;
     expect(saved.title).toBe("Kick off");
     expect(saved.plain_text).toContain("Goals for the quarter");
     expect(saved.doc_json).toContain('"bulletList"');
@@ -327,8 +349,8 @@ describe("Markdown import", () => {
     await user.click(within(dlg).getByLabelText("Markdown to import"));
     await user.paste('Hi <script>alert(1)</script>there\n\n<img src=x onerror=alert(2)>\n\n[click](javascript:alert(3)) ![x](https://evil.test/p.png)');
     await user.click(within(dlg).getByRole("button", { name: "Import as a new note" }));
-    await waitFor(() => expect(ipc.saveTalkingPoint).toHaveBeenCalled());
-    const saved = ipc.saveTalkingPoint.mock.calls[ipc.saveTalkingPoint.mock.calls.length - 1][0] as TalkingPoint;
+    await waitFor(() => expect(saveCalls()).toBeGreaterThan(0));
+    const saved = lastSaved() as TalkingPoint;
     const all = saved.doc_json + saved.markdown + saved.plain_text;
     expect(all).not.toMatch(/alert|onerror|javascript|evil|<script|<img/);
     expect(saved.plain_text).toContain("Hi there");
