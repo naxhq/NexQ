@@ -1,5 +1,7 @@
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { MoreHorizontal } from "lucide-react";
+import { Tooltip } from "../../ui/Tooltip";
+import { DockGrip } from "./DockGrip";
 import type { Geometry, StackGeo } from "./layoutGeometry";
 import type { DockAction, PanelId } from "./layoutModel";
 import type { DockPanelDef } from "./Dock";
@@ -21,6 +23,9 @@ interface Props {
   tabPointerCancel: (e: ReactPointerEvent<HTMLElement>) => void;
   tabKeyDown: (e: ReactKeyboardEvent<HTMLElement>, panel: PanelId, st: StackGeo) => void;
   renderTabExtra?: (panel: PanelId) => ReactNode;
+  locked?: boolean;
+  /** Hover tips mean nothing on touch. */
+  touch?: boolean;
 }
 
 /** Tab bars and collapsed strips. */
@@ -39,6 +44,8 @@ export function DockTabs({
   tabPointerCancel,
   tabKeyDown,
   renderTabExtra,
+  locked = false,
+  touch = false,
 }: Props) {
   const extraOf = (p: PanelId) => (renderTabExtra ? renderTabExtra(p) : null);
   return (
@@ -71,8 +78,24 @@ export function DockTabs({
                 {s.panels.map((p) => {
                   const sel = p === s.active;
                   return (
-                    <button
+                    <Tooltip
                       key={p}
+                      disabled={touch || s.virtual}
+                      content={
+                        locked ? (
+                          <>
+                            <div className="font-medium">Layout is locked</div>
+                            <div className="text-muted-foreground">Click the lock to unlock</div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="font-medium">Drag to move</div>
+                            <div className="text-muted-foreground">Right-click or Shift+F10 for options</div>
+                          </>
+                        )
+                      }
+                    >
+                    <button
                       id={`nq-tab-${p}`}
                       type="button"
                       role="tab"
@@ -97,11 +120,31 @@ export function DockTabs({
                         }
                       }}
                     >
-                      {panels[p]?.icon}
+                      {!s.virtual && (
+                        <span
+                          className="nq-dock-grip-slot"
+                          onPointerDown={locked ? (e) => e.stopPropagation() : undefined}
+                          onPointerUp={locked ? (e) => e.stopPropagation() : undefined}
+                          onClick={
+                            locked
+                              ? (e) => {
+                                  e.stopPropagation();
+                                  act({ type: "lock", locked: false }, "Layout unlocked");
+                                }
+                              : undefined
+                          }
+                        >
+                          <DockGrip locked={locked} />
+                        </span>
+                      )}
+                      <span className="nq-dock-tab-icon" data-tab-icon>
+                        {panels[p]?.icon}
+                      </span>
                       <span className="nq-dock-tab-label" data-label={title(p)}>
                         {title(p)}
                       </span>
                     </button>
+                    </Tooltip>
                   );
                 })}
               </div>

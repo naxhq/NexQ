@@ -83,6 +83,6 @@ export function presetLayout(preset: PresetId, known: PanelId[], locked = false)
 }
 
 export function initialDockState(known: PanelId[] = DEFAULT_PANELS): DockState {
-  return { layout: presetLayout("classic", known), custom: [], customSeq: 0 };
+  return { layout: presetLayout("classic", known), custom: [], customSeq: 0, drags: 0 };
 }
 

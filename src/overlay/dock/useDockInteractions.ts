@@ -20,6 +20,7 @@ import {
   type PanelId,
   allPanels,
   describeDock,
+  dropLabel,
   findNode,
   leaves,
   moveOptions,
@@ -72,13 +73,24 @@ export interface InteractionCtx {
   ghostRef: React.RefObject<HTMLDivElement>;
   previewShown: React.MutableRefObject<boolean>;
   cleanup: React.MutableRefObject<(() => void) | null>;
+  previewLabelRef: React.RefObject<HTMLSpanElement>;
+  ghostIconRef: React.RefObject<HTMLSpanElement>;
+  ghostNameRef: React.RefObject<HTMLSpanElement>;
+  ghostDoRef: React.RefObject<HTMLDivElement>;
+  noteRef: React.RefObject<HTMLDivElement>;
+  /** The first few successful drags show the one-line note. */
+  showNote: boolean;
 }
 
 export function useDockInteractions(ctx: InteractionCtx) {
   const {
     layout, panels, dispatch, rootRef, geoRef, metas, focusPanel, setFocusPanel, menu, setMenu,
     act, say, focusTabAfter, title, dragRef, previewRef, caretRef, ghostRef, previewShown, cleanup,
+    previewLabelRef, ghostIconRef, ghostNameRef, ghostDoRef, noteRef: _noteRef, showNote,
   } = ctx;
+  const ghostW = useRef(0);
+  const ghostH = useRef(0);
+  const lastSaid = useRef("");
   /* ---- imperative live geometry (60 fps, commit on release) ---- */
   const applyGeo = useCallback((g: Geometry) => {
     const root = rootRef.current;
@@ -143,6 +155,9 @@ export function useDockInteractions(ctx: InteractionCtx) {
       dragRef.current = null;
       const root = rootRef.current;
       root?.removeAttribute("data-dragging");
+      root?.removeAttribute("data-hit");
+      root?.removeAttribute("data-note");
+      root?.removeAttribute("data-notepos");
       if (ghostRef.current) ghostRef.current.style.display = "none";
       showPreview(null);
       root?.querySelectorAll("[data-dragging]").forEach((n) => n.removeAttribute("data-dragging"));
@@ -207,23 +222,43 @@ export function useDockInteractions(ctx: InteractionCtx) {
     const x = e.clientX - rr.left;
     const y = e.clientY - rr.top;
     const g = geoRef.current;
-    if (ghostRef.current) {
-      ghostRef.current.style.transform = `translate3d(${x + 12}px, ${y + 14}px, 0)`;
-    }
+    // The note never covers what is under the pointer: it moves to the top when the pointer is low.
+    const notePos = y > g.size.h * 0.8 ? "top" : "bottom";
+    if (root.getAttribute("data-notepos") !== notePos) root.setAttribute("data-notepos", notePos);
     const docked = panelsOf(layout.root).length;
     const hit = hitTest(g, x, y, d.panel, docked > 1);
     const index = hit?.onTabBar && hit.stackId ? insertionIndex(hit.stackId, e.clientX, d.panel) : undefined;
     if (!sameHit(hit, d.hit) || index !== d.index) {
       if (!sameHit(hit, d.hit)) {
-        say(
-          hit
-            ? describeDock(layout, { type: "dock", panel: d.panel, target: hit.target, zone: hit.zone }, title)
-            : "No drop target",
-        );
+        // One object makes the highlight, the chip's second line, the box label and the spoken text.
+        const over = x >= 0 && y >= 0 && x < g.size.w && y < g.size.h;
+        const label = hit || over ? dropLabel(layout, hit, d.panel, title) : "Move over a highlighted area";
+        lastSaid.current = `${title(d.panel)}: ${label}`;
+        say(lastSaid.current);
+        if (ghostDoRef.current) ghostDoRef.current.textContent = label;
+        if (ghostRef.current) {
+          ghostW.current = ghostRef.current.offsetWidth;
+          ghostH.current = ghostRef.current.offsetHeight;
+        }
+        root.setAttribute("data-hit", hit ? "true" : "false");
+        // A pointer drag says it once, on the chip. The box label is for moves without a chip.
+        const pl = previewLabelRef.current;
+        if (pl) pl.style.display = "none";
       }
       d.hit = hit;
       d.index = index;
       showPreview(hit, hit?.onTabBar ? tabInsertionPosition(hit.stackId!, e.clientX) : undefined);
+    }
+    // The chip is placed last, with the width of the words it now carries.
+    if (ghostRef.current) {
+      // Off the pointer's hot area (down and to the right), flipped at the window's edges, never outside.
+      let gx = x + 20;
+      if (gx + ghostW.current > g.size.w - 4) gx = x - ghostW.current - 14;
+      let gy = y + 24;
+      if (gy + ghostH.current > g.size.h - 4) gy = y - ghostH.current - 16;
+      gx = Math.min(Math.max(4, gx), Math.max(4, g.size.w - ghostW.current - 4));
+      gy = Math.min(Math.max(4, gy), Math.max(4, g.size.h - ghostH.current - 4));
+      ghostRef.current.style.transform = `translate3d(${gx}px, ${gy}px, 0)`;
     }
     // auto-scroll an overflowing tab bar under the pointer
     autoScroll(e.clientX, hit);
@@ -264,9 +299,19 @@ export function useDockInteractions(ctx: InteractionCtx) {
       d.started = true;
       rootRef.current?.setAttribute("data-dragging", "true");
       e.currentTarget.setAttribute("data-dragging", "true");
+      const root = rootRef.current;
+      root?.setAttribute("data-hit", "false");
+      root?.setAttribute("data-note", showNote ? "true" : "false");
+      if (ghostNameRef.current) ghostNameRef.current.textContent = title(d.panel);
+      if (ghostDoRef.current) ghostDoRef.current.textContent = "Move over a highlighted area";
+      if (ghostIconRef.current) {
+        const icon = (e.currentTarget as HTMLElement).querySelector("[data-tab-icon]");
+        ghostIconRef.current.innerHTML = icon?.innerHTML ?? "";
+      }
       if (ghostRef.current) {
-        ghostRef.current.textContent = title(d.panel);
         ghostRef.current.style.display = "block";
+        ghostW.current = ghostRef.current.offsetWidth;
+        ghostH.current = ghostRef.current.offsetHeight;
       }
       watchCancel(() => {
         cancelAnimationFrame(scrollRaf.current);
@@ -295,7 +340,11 @@ export function useDockInteractions(ctx: InteractionCtx) {
     if (hit) {
       const a: DockAction = { type: "dock", panel, target: hit.target, zone: hit.zone, index };
       focusTabAfter(panel);
-      act(a, describeDock(layout, a, title));
+      // The drop was already announced as the pointer settled on it: not again.
+      const said = describeDock(layout, a, title);
+      act(a, said === lastSaid.current ? undefined : said);
+      // Only a finished drag counts (Escape and pointer-cancel never get here).
+      dispatch({ type: "countDrag" });
     }
   };
 

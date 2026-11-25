@@ -52,7 +52,7 @@ Type a name in **Save this layout as...** and click **Save**. It appears under *
 
 Each stack of panels has a row of tabs. A panel can share a stack with others, as tabs.
 
-**With the mouse.** Press a tab and drag it. As you move over the window, a preview shows where it would land:
+**With the mouse.** Every tab starts with a small handle of six dots. The tab you are on always shows it quietly; the others show it when you point at them. Point at a tab for a moment and a tip says **Drag to move** and **Right-click or Shift+F10 for options**. Press the tab and drag it. A small chip follows the pointer with the panel's name and, under it, what dropping here will do (for example **Right of Transcript**, **Above Assistant**, **Tab in Notes**, **Left edge of the window**, **Reorder**, or **No change here**). The highlighted area carries the same words. Before the pointer is over anything, thin dashed outlines show every area the panel can land on. For your first five drags a short note at the bottom says **Drop on a highlighted area to rearrange. Esc cancels.**; it moves to the top when the pointer is near the bottom. As you move over the window, a preview shows where it would land:
 
 - The left, right, top or bottom of another panel puts it beside, above or below that panel
 - The middle of another panel adds it as a tab there
@@ -73,7 +73,7 @@ The **Move** menu is also under the **...** at the end of each tab row, and on r
 
 ## Resize
 
-Drag the thin line between two panels. It snaps to the middle and to the lines of neighbouring panels; hold `Alt` while dragging to move freely. Double-click the line to even the two sides out.
+Drag the thin line between two panels. A small handle of three dots appears on it when you point at it. It snaps to the middle and to the lines of neighbouring panels; hold `Alt` while dragging to move freely. Double-click the line to even the two sides out.
 
 With the keyboard, `Tab` to a separator and use the arrow keys (16 pixels at a time, 64 with `Shift`), `Home` and `End` for the smallest and largest size, and `Enter` to even out.
 
@@ -90,9 +90,10 @@ With the keyboard, `Tab` to a separator and use the arrow keys (16 pixels at a t
 
 - Dragging, moving, resizing, choosing a layout and **Reset to Classic** do nothing
 - You can still show, hide and collapse panels
+- The tab handles turn into a small lock when you point at them (click it to unlock)
 - The **Move** menu still opens, and says "Layout is locked: panels can't move" with an **Unlock layout** item
 
-The menu says **Layout locked** while it is on. Click it again to unlock.
+The first line of the **Layout** menu reminds you to drag panels by their dots. It says **Layout locked** while the lock is on. Click it again to unlock.
 
 ## Small windows
 

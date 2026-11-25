@@ -147,6 +147,8 @@ export function sanitizeState(json: unknown, known: PanelId[] = DEFAULT_PANELS):
   if (typeof json.customSeq === "number" && Number.isFinite(json.customSeq)) {
     customSeq = Math.max(customSeq, Math.floor(json.customSeq));
   }
-  return { layout, custom, customSeq };
+  const drags =
+    typeof json.drags === "number" && Number.isFinite(json.drags) ? Math.min(99, Math.max(0, Math.floor(json.drags))) : 0;
+  return { layout, custom, customSeq, drags };
 }
 

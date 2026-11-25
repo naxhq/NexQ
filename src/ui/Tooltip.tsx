@@ -42,10 +42,12 @@ export interface TooltipProps {
   children: ReactElement<Record<string, unknown>>;
   /** Wait before showing on hover (focus shows at once). */
   delay?: number;
+  /** Never show (touch devices, where a hover tip has no meaning). */
+  disabled?: boolean;
 }
 
 /** Hover and keyboard-focus tooltip. Escape hides it. */
-export function Tooltip({ content, children, delay = 350 }: TooltipProps) {
+export function Tooltip({ content, children, delay = 350, disabled = false }: TooltipProps) {
   const [anchor, setAnchor] = useState<Anchor | null>(null);
   const timer = useRef<number | undefined>(undefined);
   const id = useId();
@@ -69,6 +71,8 @@ export function Tooltip({ content, children, delay = 350 }: TooltipProps) {
     return () => document.removeEventListener("keydown", onKey);
   }, [anchor, hide]);
 
+  if (disabled) return children;
+
   const own = children.props as {
     onMouseEnter?: (e: MouseEvent) => void;
     onMouseLeave?: (e: MouseEvent) => void;
@@ -91,7 +95,8 @@ export function Tooltip({ content, children, delay = 350 }: TooltipProps) {
         },
         onFocus: (e: FocusEvent) => {
           own.onFocus?.(e);
-          show(e.currentTarget, 0);
+          // Focus that comes from a press is not a request for help; keyboard focus is.
+          if (e.currentTarget.matches?.(":focus-visible") !== false) show(e.currentTarget, 0);
         },
         onBlur: (e: FocusEvent) => {
           own.onBlur?.(e);

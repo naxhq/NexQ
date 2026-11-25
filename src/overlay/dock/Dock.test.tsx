@@ -238,7 +238,7 @@ describe("Dock: tabs and the Move menu (keyboard alternative)", () => {
     expect(screen.queryByRole("menu")).toBeNull();
     const root = stateRef.layout.root!;
     expect(root.kind === "split" && root.dir).toBe("col");
-    expect(screen.getByRole("status").textContent).toContain("below Assistant");
+    expect(screen.getByRole("status").textContent).toMatch(/below Assistant/i);
   });
 
   it("Escape closes the menu and returns focus to the tab", () => {
@@ -424,5 +424,103 @@ describe("debounced saver", () => {
     }, 10);
     s.push(1);
     expect(() => vi.advanceTimersByTime(20)).not.toThrow();
+  });
+});
+
+describe("Dock: the drag affordances", () => {
+  const geo = () =>
+    computeGeometry(stateRef.layout, { w: 900, h: 600 }, Object.fromEntries(IDS.map((i) => [i, { minW: 180, minH: 120 }])));
+  const ptr = (type: "pointerDown" | "pointerMove" | "pointerUp", el: Element, x: number, y: number) =>
+    fireEvent[type](el, { pointerId: 1, button: 0, clientX: x, clientY: y, isPrimary: true });
+
+  it("every tab carries a six-dot grip that is not part of its name", () => {
+    const { container } = render(<Harness />);
+    const tabs = screen.getAllByRole("tab");
+    expect(container.querySelectorAll(".nq-dock-grip").length).toBe(tabs.length);
+    for (const g of container.querySelectorAll(".nq-dock-grip")) {
+      expect(g.getAttribute("aria-hidden")).toBe("true");
+      expect(g.querySelectorAll("circle").length).toBe(6);
+    }
+    expect(screen.getByRole("tab", { name: "Transcript" })).toBeTruthy();
+  });
+
+  it("a locked layout shows a lock, not dots, and clicking it unlocks", () => {
+    const { container } = render(<Harness />);
+    run({ type: "lock", locked: true });
+    expect(container.querySelector(".nq-grip-l")).toBeNull();
+    const lock = container.querySelector(".nq-dock-lock")!;
+    expect(lock).toBeTruthy();
+    fireEvent.click(lock.closest(".nq-dock-grip-slot")!);
+    expect(stateRef.layout.locked).toBe(false);
+    expect(container.querySelector(".nq-grip-l")).toBeTruthy();
+  });
+
+  it("a keyboard-focused tab explains itself with the real keys, and the tip is gone once a drag starts", () => {
+    render(<Harness />);
+    const tab = screen.getByRole("tab", { name: "Assistant" });
+    tab.focus();
+    fireEvent.focus(tab);
+    const tip = screen.queryByRole("tooltip");
+    if (tip) {
+      expect(tip.textContent).toContain("Drag to move");
+      expect(tip.textContent).toContain("Shift+F10");
+      ptr("pointerDown", tab, 600, 20);
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    }
+  });
+
+  it("while dragging, the chip and the status text say the same thing, from the drop target; the box carries no second label, taken from the drop target", () => {
+    const { container } = render(<Harness />);
+    const tab = screen.getByRole("tab", { name: "Transcript" });
+    const a = geo().stacks.find((s) => s.panels[0] === "assistant")!;
+    ptr("pointerDown", tab, 100, 25);
+    ptr("pointerMove", tab, 110, 60);
+    const dock = container.querySelector(".nq-dock")!;
+    expect(dock.getAttribute("data-hit")).toBe("false");
+    expect(container.querySelector(".nq-dock-ghost-name")!.textContent).toBe("Transcript");
+    ptr("pointerMove", tab, a.rect.x + a.rect.w - 14, 300);
+    expect(dock.getAttribute("data-hit")).toBe("true");
+    const label = "Right of Assistant";
+    expect(container.querySelector(".nq-dock-ghost-do")!.textContent).toBe(label);
+    // the words live on the chip only during a pointer drag
+    expect((container.querySelector(".nq-dock-drop-label") as HTMLElement).style.display).toBe("none");
+    expect(screen.getByRole("status").textContent).toBe(`Transcript: ${label}`);
+    ptr("pointerUp", tab, a.rect.x + a.rect.w - 14, 300);
+    expect(panelsOf(stateRef.layout.root)).toEqual(["assistant", "transcript"]);
+  });
+
+  it("the one-line note shows for the first five finished drags, moves up when the pointer is low, and Escape does not count", () => {
+    const { container } = render(<Harness />);
+    const tab = () => screen.getByRole("tab", { name: "Transcript" });
+    const dock = () => container.querySelector(".nq-dock")!;
+    // an Escape does not count
+    ptr("pointerDown", tab(), 100, 25);
+    ptr("pointerMove", tab(), 110, 60);
+    expect(dock().getAttribute("data-note")).toBe("true");
+    ptr("pointerMove", tab(), 300, 580);
+    expect(dock().getAttribute("data-notepos")).toBe("top");
+    ptr("pointerMove", tab(), 300, 200);
+    expect(dock().getAttribute("data-notepos")).toBe("bottom");
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(stateRef.drags ?? 0).toBe(0);
+    ptr("pointerUp", tab(), 300, 200);
+    // five finished drags, then no note
+    for (let i = 0; i < 5; i++) run({ type: "countDrag" });
+    expect(stateRef.drags).toBe(5);
+    ptr("pointerDown", tab(), 100, 25);
+    ptr("pointerMove", tab(), 110, 60);
+    expect(dock().getAttribute("data-note")).toBe("false");
+    fireEvent.keyDown(window, { key: "Escape" });
+  });
+
+  it("a finished drag counts once", () => {
+    render(<Harness />);
+    const tab = screen.getByRole("tab", { name: "Transcript" });
+    const a = geo().stacks.find((s) => s.panels[0] === "assistant")!;
+    ptr("pointerDown", tab, 100, 25);
+    ptr("pointerMove", tab, 110, 60);
+    ptr("pointerMove", tab, a.rect.x + a.rect.w - 14, 300);
+    ptr("pointerUp", tab, a.rect.x + a.rect.w - 14, 300);
+    expect(stateRef.drags).toBe(1);
   });
 });

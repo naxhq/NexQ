@@ -54,6 +54,8 @@ export interface DockState {
   layout: Layout;
   custom: SavedLayout[];
   customSeq: number;
+  /** Successful drags so far; the first few show a short note (see showDragNote). */
+  drags?: number;
 }
 
 export const MIN_FRAC = 0.05;

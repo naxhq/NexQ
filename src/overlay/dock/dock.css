@@ -77,10 +77,10 @@
   align-items: center;
   gap: 6px;
   flex: 0 0 auto;
-  padding: 0 12px;
+  padding: 0 12px 0 8px;
   border: 0;
   background: none;
-  cursor: pointer;
+  cursor: grab;
   font: inherit;
   font-size: 0.71875rem;
   line-height: 1.4;
@@ -102,7 +102,7 @@
 .nq-dock-tab[aria-selected="true"]::after {
   content: "";
   position: absolute;
-  left: 12px;
+  left: 8px;
   right: 12px;
   bottom: -1px;
   height: 1px;
@@ -138,7 +138,7 @@
   border: 0;
   background: none;
   cursor: pointer;
-  color: hsl(var(--muted-foreground) / 0.6);
+  color: hsl(var(--muted-foreground));
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -338,4 +338,229 @@
   .nq-dock-extra > * {
     visibility: hidden;
   }
+}
+
+/* ---- the grip: six dots that say "drag me" ---- */
+.nq-dock[data-locked="true"] .nq-dock-tab {
+  cursor: pointer;
+}
+.nq-dock-tab-icon:empty {
+  display: none;
+}
+.nq-dock-tab-icon {
+  display: inline-flex;
+  align-items: center;
+}
+/* The slot is always there (10 px plus a 24 px hit area), so showing the dots never moves a label. */
+.nq-dock-grip-slot {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  height: 24px;
+  margin: 0 -2px 0 -2px;
+  padding: 0 4px;
+  box-sizing: content-box;
+}
+.nq-dock-grip {
+  display: inline-flex;
+  color: hsl(var(--muted-foreground));
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease;
+}
+.nq-dock-grip svg {
+  fill: currentColor;
+  overflow: visible;
+}
+.nq-grip-l,
+.nq-grip-r {
+  transition: transform 140ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.nq-dock-tab[aria-selected="true"] .nq-dock-grip {
+  opacity: 0.85;
+}
+.nq-dock-tab:hover .nq-dock-grip,
+.nq-dock-tab:focus-visible .nq-dock-grip {
+  opacity: 1;
+  color: hsl(var(--primary));
+}
+.nq-dock-tab:hover .nq-grip-l,
+.nq-dock-tab:focus-visible .nq-grip-l {
+  transform: translateX(-0.5px);
+}
+.nq-dock-tab:hover .nq-grip-r,
+.nq-dock-tab:focus-visible .nq-grip-r {
+  transform: translateX(0.5px);
+}
+/* Locked: no dots, a lock on hover or focus (it unlocks on click). */
+.nq-dock-grip[data-locked],
+.nq-dock-tab[aria-selected="true"] .nq-dock-grip[data-locked] {
+  opacity: 0;
+}
+.nq-dock-tab:hover .nq-dock-grip[data-locked],
+.nq-dock-tab:focus-visible .nq-dock-grip[data-locked] {
+  opacity: 1;
+  color: hsl(var(--foreground));
+}
+.nq-dock[data-locked="true"] .nq-dock-grip-slot {
+  cursor: pointer;
+}
+.nq-dock-lock {
+  width: 11px;
+  height: 11px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nq-grip-l,
+  .nq-grip-r {
+    transition: none;
+  }
+  .nq-dock-tab:hover .nq-grip-l,
+  .nq-dock-tab:focus-visible .nq-grip-l,
+  .nq-dock-tab:hover .nq-grip-r,
+  .nq-dock-tab:focus-visible .nq-grip-r {
+    transform: none;
+  }
+}
+/* A narrow strip keeps the grip and cuts the label. */
+.nq-dock-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- while dragging ---- */
+.nq-dock-hint {
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0.35);
+  background-image: none;
+  opacity: 0;
+  pointer-events: none !important;
+  transition: opacity 140ms ease;
+  /* a dashed outline that stays light: a 1px dashed border drawn as an inset mask */
+  outline: 1px dashed hsl(var(--primary) / 0.5);
+  outline-offset: -3px;
+  box-shadow: none;
+}
+.nq-dock[data-dragging="true"]:not([data-hit="true"]) .nq-dock-hint {
+  opacity: 1;
+}
+.nq-dock-drop-label {
+  display: none;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  max-width: calc(100% - 16px);
+  padding: 3px 9px;
+  border-radius: 8px;
+  font-size: 0.71875rem;
+  line-height: 1.4;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: hsl(var(--primary-foreground, var(--foreground)));
+  background: hsl(var(--primary) / 0.92);
+}
+.nq-dock-ghost {
+  padding: 5px 10px 5px 8px;
+  border-radius: 10px;
+  background: hsl(var(--popover));
+  box-shadow:
+    0 0 0 1px hsl(var(--border)),
+    0 8px 20px -10px rgba(0, 0, 0, 0.5);
+}
+.nq-dock-ghost-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.nq-dock-ghost-grip {
+  fill: hsl(var(--primary));
+  flex: none;
+}
+.nq-dock-ghost-icon {
+  display: inline-flex;
+}
+.nq-dock-ghost-icon:empty {
+  display: none;
+}
+.nq-dock-ghost-do {
+  margin-top: 1px;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
+}
+.nq-dock-note {
+  display: none;
+  position: absolute;
+  left: 50%;
+  top: auto;
+  bottom: 14px;
+  width: max-content;
+  height: auto;
+  transform: translateX(-50%);
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 24px);
+  padding: 5px 10px;
+  border-radius: 9px;
+  font-size: 0.71875rem;
+  line-height: 1.4;
+  color: hsl(var(--foreground));
+  background: hsl(var(--popover));
+  box-shadow: 0 0 0 1px hsl(var(--border)), 0 8px 20px -10px rgba(0, 0, 0, 0.5);
+  pointer-events: none !important;
+}
+.nq-dock-note kbd {
+  padding: 0 5px;
+  border-radius: 4px;
+  font: inherit;
+  font-weight: 600;
+  background: hsl(var(--muted));
+  box-shadow: 0 0 0 1px hsl(var(--border));
+}
+.nq-dock[data-dragging="true"][data-note="true"] .nq-dock-note {
+  display: flex;
+}
+.nq-dock[data-notepos="top"] .nq-dock-note {
+  bottom: auto;
+  top: 44px;
+}
+.nq-dock-ghost {
+  width: max-content;
+  height: auto;
+}
+
+/* ---- separators: a small handle appears with the highlight ---- */
+.nq-dock-sep::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  opacity: 0;
+  transform: translate(-50%, -50%);
+  transition: opacity 140ms ease;
+  pointer-events: none;
+  background-repeat: no-repeat;
+  background-image: radial-gradient(circle, hsl(var(--primary)) 1.1px, transparent 1.6px),
+    radial-gradient(circle, hsl(var(--primary)) 1.1px, transparent 1.6px),
+    radial-gradient(circle, hsl(var(--primary)) 1.1px, transparent 1.6px);
+}
+.nq-dock-sep[data-axis="x"]::before {
+  width: 4px;
+  height: 16px;
+  background-size: 4px 4px;
+  background-position: 50% 0, 50% 50%, 50% 100%;
+}
+.nq-dock-sep[data-axis="y"]::before {
+  width: 16px;
+  height: 4px;
+  background-size: 4px 4px;
+  background-position: 0 50%, 50% 50%, 100% 50%;
+}
+.nq-dock-sep:hover::before,
+.nq-dock-sep:focus-visible::before,
+.nq-dock-sep[data-active="true"]::before {
+  opacity: 0.85;
 }

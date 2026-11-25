@@ -1,6 +1,7 @@
 import { Dir, DockState, Layout, LayoutNode, MAX_CUSTOM, PanelId, Place, SavedLayout, Side, Zone, allPanels, clone, findNode, findStackOf, leaves, newId, newStack, normalizeLayout, panelsOf, parentOf, replaceNode, violations } from "./layoutTree";
 import { PresetId, presetLayout } from "./layoutPresets";
 import { sanitizeLayout } from "./layoutSanitize";
+import { dropLabel } from "./dropLabel";
 
 /* ------------------------------------------------------------------ actions */
 
@@ -21,6 +22,7 @@ export type DockAction =
   | { type: "saveLayout"; name: string }
   | { type: "renameLayout"; id: string; name: string }
   | { type: "deleteLayout"; id: string }
+  | { type: "countDrag" }
   | { type: "restoreLayout"; saved: SavedLayout; index: number }
   | { type: "applyLayout"; id: string }
   | { type: "lock"; locked: boolean }
@@ -280,13 +282,15 @@ export function step(state: DockState, a: DockAction): DockState {
       const customSeq = state.customSeq + 1;
       const snap = clone(l);
       snap.locked = false;
-      return { layout: l0, custom: [...custom, { id: `c${customSeq}`, name, layout: snap }], customSeq };
+      return { ...state, layout: l0, custom: [...custom, { id: `c${customSeq}`, name, layout: snap }], customSeq };
     }
     case "renameLayout": {
       const name = a.name.trim().slice(0, 40);
       if (!name || !custom.some((c) => c.id === a.id)) break;
       return { ...state, custom: custom.map((c) => (c.id === a.id ? { ...c, name } : c)) };
     }
+    case "countDrag":
+      return { ...state, drags: Math.min(99, (state.drags ?? 0) + 1) };
     case "deleteLayout":
       if (!custom.some((c) => c.id === a.id)) break;
       return { ...state, custom: custom.filter((c) => c.id !== a.id) };
@@ -309,7 +313,7 @@ export function step(state: DockState, a: DockAction): DockState {
   if (!changed) return state;
   normalizeLayout(layout);
   if (violations(layout, allPanels(l0)).length) return state;
-  return { layout, custom, customSeq: state.customSeq };
+  return { ...state, layout, custom, customSeq: state.customSeq };
 }
 
 export function dockReducer(state: DockState, action: DockAction): DockState {
@@ -380,21 +384,6 @@ export function describeDock(
   a: Extract<DockAction, { type: "dock" }>,
   title: (id: PanelId) => string,
 ): string {
-  const me = title(a.panel);
-  if (a.target.kind === "edge") return `${me}: dock to the ${a.zone} edge`;
-  const s = findNode(layout.root, a.target.stackId);
-  const d = s && s.kind === "stack" ? title(s.active) : "panel";
-  switch (a.zone) {
-    case "left":
-      return `${me}: left of ${d}`;
-    case "right":
-      return `${me}: right of ${d}`;
-    case "top":
-      return `${me}: above ${d}`;
-    case "bottom":
-      return `${me}: below ${d}`;
-    default:
-      return `${me}: into tabs with ${d}`;
-  }
+  return `${title(a.panel)}: ${dropLabel(layout, { target: a.target, zone: a.zone }, a.panel, title)}`;
 }
 

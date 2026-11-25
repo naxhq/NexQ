@@ -19,6 +19,7 @@ import {
   type PanelId,
   allPanels,
   describeDock,
+  showDragNote,
   findNode,
   leaves,
   moveOptions,
@@ -108,6 +109,7 @@ export function Dock({
   renderTabExtra,
 }: DockProps) {
   const layout = state.layout;
+  const touchOnly = typeof window !== "undefined" && !!window.matchMedia?.("(hover: none)").matches;
   const rootRef = useRef<HTMLDivElement>(null);
   const size = useContainerSize(rootRef, sizeOverride);
   const [live, setLive] = useState("");
@@ -121,6 +123,11 @@ export function Dock({
   const previewRef = useRef<HTMLDivElement>(null);
   const caretRef = useRef<HTMLDivElement>(null);
   const ghostRef = useRef<HTMLDivElement>(null);
+  const previewLabelRef = useRef<HTMLSpanElement>(null);
+  const ghostIconRef = useRef<HTMLSpanElement>(null);
+  const ghostNameRef = useRef<HTMLSpanElement>(null);
+  const ghostDoRef = useRef<HTMLDivElement>(null);
+  const noteRef = useRef<HTMLDivElement>(null);
   const previewShown = useRef(false);
   const cleanup = useRef<(() => void) | null>(null);
 
@@ -237,6 +244,7 @@ export function Dock({
   } = useDockInteractions({
     layout, panels, dispatch, rootRef, geoRef, metas, focusPanel, setFocusPanel, menu, setMenu,
     act, say, focusTabAfter, title, dragRef, previewRef, caretRef, ghostRef, previewShown, cleanup,
+    previewLabelRef, ghostIconRef, ghostNameRef, ghostDoRef, noteRef, showNote: showDragNote(state.drags),
   });
 
   /* ---- move menu ---- */
@@ -326,6 +334,7 @@ export function Dock({
       style={rootStyle}
       role="group"
       aria-label="Meeting panels"
+      data-locked={layout.locked || undefined}
     >
       <DockLayer
         geo={geo}
@@ -350,6 +359,8 @@ export function Dock({
         tabPointerCancel={tabPointerCancel}
         tabKeyDown={tabKeyDown}
         renderTabExtra={renderTabExtra}
+        locked={layout.locked}
+        touch={touchOnly}
       />
 
       <DockSeparators
@@ -364,7 +375,19 @@ export function Dock({
         sepKeyDown={sepKeyDown}
       />
 
-      <DockDropLayer previewRef={previewRef} caretRef={caretRef} ghostRef={ghostRef} />
+      <DockDropLayer
+        geo={geo}
+        refs={{
+          preview: previewRef,
+          previewLabel: previewLabelRef,
+          caret: caretRef,
+          ghost: ghostRef,
+          ghostIcon: ghostIconRef,
+          ghostName: ghostNameRef,
+          ghostDo: ghostDoRef,
+          note: noteRef,
+        }}
+      />
 
       {menu && (
         <DockMenu
