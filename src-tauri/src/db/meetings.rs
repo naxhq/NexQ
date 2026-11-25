@@ -100,6 +100,9 @@ pub struct MeetingSummary {
     /// The workspace the meeting is filed in.
     #[serde(default = "general_workspace")]
     pub workspace_id: String,
+    /// An AI-written recap exists for it (the workspace list fills this in).
+    #[serde(default)]
+    pub has_recap: bool,
 }
 
 /// Fills in the workspace of each meeting (one indexed query), when workspaces
@@ -318,6 +321,7 @@ pub fn list_meetings(
             audio_mode: row.get::<_, String>(7).unwrap_or_else(|_| "online".to_string()),
             ai_scenario: row.get::<_, String>(8).unwrap_or_else(|_| "team_meeting".to_string()),
             workspace_id: general_workspace(),
+            has_recap: false,
         })
     })?;
 
@@ -496,6 +500,7 @@ pub fn search_meetings(
             audio_mode: row.get::<_, String>(7).unwrap_or_else(|_| "online".to_string()),
             ai_scenario: row.get::<_, String>(8).unwrap_or_else(|_| "team_meeting".to_string()),
             workspace_id: general_workspace(),
+            has_recap: false,
         })
     })?;
 

@@ -21,6 +21,14 @@ use super::health::{self, BackupInfo};
 pub const EVERY_MS: i64 = 24 * 60 * 60 * 1000;
 /// After start, so the check never competes with startup.
 pub const START_DELAY: Duration = Duration::from_secs(120);
+
+/// A check is wanted now: the first pass runs without the usual delay and without the daily memo.
+static CHECK_SOON: AtomicBool = AtomicBool::new(false);
+
+/// Asks for a check right after start (an open that SQLite had to make sense of).
+pub fn check_soon() {
+    CHECK_SOON.store(true, Ordering::SeqCst);
+}
 /// How often a skipped check (a meeting was running) is looked at again.
 pub const RETRY_EVERY: Duration = Duration::from_secs(30 * 60);
 const MEMO_FILE: &str = "db-integrity.json";
@@ -160,7 +168,7 @@ pub enum Pass {
 
 /// One pass: skip when not due or `busy`, else check and remember.
 pub fn run_once(dir: &Path, now_ms: i64, busy: &AtomicBool) -> Pass {
-    if !due(load_memo(dir).as_ref(), now_ms) || busy.load(Ordering::SeqCst) {
+    if !(CHECK_SOON.load(Ordering::SeqCst) || due(load_memo(dir).as_ref(), now_ms)) || busy.load(Ordering::SeqCst) {
         return Pass::Skipped;
     }
     match quick_check(&dir.join(health::DB_NAME), busy) {
@@ -171,6 +179,7 @@ pub fn run_once(dir: &Path, now_ms: i64, busy: &AtomicBool) -> Pass {
                 None => log::info!("The database check passed"),
             }
             save_memo(dir, &Memo { checked_at: now_ms, finding: finding.clone() });
+            CHECK_SOON.store(false, Ordering::SeqCst);
             Pass::Checked(finding)
         }
         Err(None) => {
@@ -194,7 +203,9 @@ pub fn spawn(
 ) {
     set_current(load_memo(&dir).and_then(|m| m.finding));
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(START_DELAY).await;
+        if !CHECK_SOON.load(Ordering::SeqCst) {
+            tokio::time::sleep(START_DELAY).await;
+        }
         let busy = std::sync::Arc::new(busy);
         loop {
             let (d, b) = (dir.clone(), busy.clone());

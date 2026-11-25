@@ -41,7 +41,7 @@ pub async fn restore_database_copy(name: String, state: State<'_, AppState>) -> 
     let kind = recovery_allowed(&state)?;
     check_kind_for_restore(kind)?;
     let dir = crate::app_paths::data_dir();
-    health::restore_copy(&dir, &name, health::stamp_now())?;
+    health::restore_copy(&dir, &name, health::stamp_now(), kind)?;
     crate::db::integrity::forget(&dir);
     Ok(())
 }
@@ -55,7 +55,7 @@ pub async fn start_with_new_database(state: State<'_, AppState>) -> Result<(), S
         return Err("Starting with a new database is only offered when the file can't be read".to_string());
     }
     let dir = crate::app_paths::data_dir();
-    health::start_new(&dir, health::stamp_now())?;
+    health::start_new(&dir, health::stamp_now(), kind)?;
     crate::db::integrity::forget(&dir);
     Ok(())
 }

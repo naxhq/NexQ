@@ -90,8 +90,13 @@ pub fn open_or_problem(app_data_dir: PathBuf) -> Result<DatabaseManager, health:
     if let Err(e) = health::resume_pending(&app_data_dir) {
         return Err(problem(ProblemKind::Unreadable, e, &app_data_dir));
     }
-    if let Err((kind, why)) = health::probe(&app_data_dir.join(health::DB_NAME)) {
+    let main = app_data_dir.join(health::DB_NAME);
+    if let Err((kind, why)) = health::probe(&main) {
         return Err(problem(kind, why, &app_data_dir));
+    }
+    if health::open_needs_early_check(&main) {
+        // Shorter than its header says, opened with the help of a -wal: look for damage at once.
+        integrity::check_soon();
     }
     DatabaseManager::new(app_data_dir.clone())
         .map_err(|e| problem(ProblemKind::UpgradeFailed, format!("Bringing your meetings up to date didn't finish: {e}"), &app_data_dir))
@@ -214,7 +219,7 @@ mod open_tests {
         std::fs::write(d.join("nexq.db.damaged-5"), b"damaged").unwrap();
         std::fs::write(
             d.join("nexq.db.pending-restore"),
-            r#"{"action":"restore","source":"nexq-before-workspaces.db","stamp":5}"#,
+            r#"{"action":"restore","source":"nexq-before-workspaces.db","stamp":5,"phase":"aside"}"#,
         )
         .unwrap();
         let mgr = open_or_problem(d.clone()).ok().expect("the start finishes the restore and opens it");
