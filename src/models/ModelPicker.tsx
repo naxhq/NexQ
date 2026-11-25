@@ -117,8 +117,8 @@ export function ModelPicker({ value, onPick, label, children, buttonClassName, o
   return (
     <>
       <button
-        ref={trigger}
         type="button"
+        ref={trigger}
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -225,7 +225,7 @@ function Section({
           <p className="ui-meta px-3 py-1 text-muted-foreground">
             Couldn't list models.{" "}
             {onOpenSettings && (
-              <button type="button" onClick={onOpenSettings} className="rounded text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
+              <button type="button" onClick={onOpenSettings} className="rounded text-foreground underline underline-offset-2 outline-none ui-focus ui-focus-sm">
                 Open provider settings
               </button>
             )}

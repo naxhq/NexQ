@@ -150,7 +150,7 @@ export function NoteList({ notes, selectedId, onSelect, onReorder, onDuplicate, 
                 onPointerUp={() => finish(true)}
                 onPointerCancel={() => finish(false)}
                 onKeyDown={(e) => onGripKey(e, n.id)}
-                className="inline-flex h-9 w-6 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 active:cursor-grabbing"
+                className="inline-flex h-9 w-6 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:text-foreground ui-focus ui-r-md active:cursor-grabbing"
               >
                 <GripVertical className="h-4 w-4" aria-hidden />
               </button>
@@ -158,7 +158,7 @@ export function NoteList({ notes, selectedId, onSelect, onReorder, onDuplicate, 
                 type="button"
                 aria-current={selected ? "true" : undefined}
                 onClick={() => onSelect(n.id)}
-                className="min-w-0 flex-1 rounded-md px-1.5 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                className="min-w-0 flex-1 rounded-md px-1.5 py-1.5 text-left outline-none ui-focus ui-r-md"
               >
                 <span className={cn("ui-body block truncate", selected && "font-semibold")}>{n.title}</span>
                 <span className="ui-meta block truncate text-muted-foreground">
@@ -175,7 +175,7 @@ export function NoteList({ notes, selectedId, onSelect, onReorder, onDuplicate, 
                     {...props}
                     type="button"
                     aria-label={`Actions for ${n.title}`}
-                    className="mr-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+                    className="mr-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground ui-focus ui-r-md"
                   >
                     <MoreHorizontal className="h-4 w-4" aria-hidden />
                   </button>

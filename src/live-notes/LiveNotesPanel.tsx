@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Copy, MoreHorizontal, RefreshCw, Undo2 } from "lucide-react";
-import { Dialog, Kbd, Menu, Segmented, buttonClass, type MenuItemSpec } from "../ui";
+import { Dialog, Kbd, Menu, Segmented, type MenuItemSpec, Button } from "../ui";
 import { cn } from "../lib/utils";
 import type { NotetakerSettings, NotetakerState } from "../lib/types";
 import { onNotesUpdateRequested } from "../lib/events";
@@ -151,12 +151,12 @@ export function NotesPanel() {
             The notes used {formatTokens(used)} tokens, the limit you set. Keep going adds {formatTokens(settings?.cap ?? cap)} more.
           </p>
           <div className="rs-notice-actions">
-            <button type="button" className={cn(buttonClass.base, buttonClass.primary, "h-7")} onClick={() => void store.getState().keepGoing()}>
+            <Button variant="primary" size="sm"  onClick={() => void store.getState().keepGoing()}>
               Keep going
-            </button>
-            <button type="button" className={cn(buttonClass.base, buttonClass.quiet, "h-7")} onClick={() => void store.getState().stop()}>
+            </Button>
+            <Button size="sm"  onClick={() => void store.getState().stop()}>
               Stop
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -197,9 +197,9 @@ export function NotesPanel() {
               ]}
             />
             <div>
-              <button type="button" className={cn(buttonClass.base, buttonClass.primary)} onClick={() => void store.getState().turnOn(scope)}>
+              <Button variant="primary"  onClick={() => void store.getState().turnOn(scope)}>
                 Turn on notes
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -255,9 +255,9 @@ export function NotesPanel() {
         onClose={() => setDialog(false)}
         title="Live notes settings"
         footer={
-          <button type="button" className={cn(buttonClass.base, buttonClass.primary)} onClick={() => setDialog(false)}>
+          <Button variant="primary"  onClick={() => setDialog(false)}>
             Done
-          </button>
+          </Button>
         }
       >
         {settings && <NotesSettingsForm settings={settings} onChange={(p) => void store.getState().patchSettings(p)} />}

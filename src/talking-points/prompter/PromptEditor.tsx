@@ -3,7 +3,7 @@ import type { TalkingPoint } from "../../lib/types";
 import { useTalkingPointsStore } from "../../stores/talkingPointsStore";
 import { LazyRichEditor } from "../editor/LazyRichEditor";
 import { parseDoc, type TpDoc } from "../doc/model";
-import { buttonClass } from "../../ui";
+import { Button } from "../../ui";
 import { cn } from "../../lib/utils";
 
 interface Props {
@@ -60,15 +60,15 @@ export function PromptEditor({ note, docJson, meetingId, onDone }: Props) {
         </p>
       )}
       <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border px-2 py-1.5">
-        <button type="button" className={cn(buttonClass.base, buttonClass.quiet)} onClick={onDone} disabled={busy !== null}>
+        <Button  onClick={onDone} disabled={busy !== null}>
           Cancel
-        </button>
-        <button type="button" className={cn(buttonClass.base, buttonClass.quiet)} onClick={() => void run("meeting")} disabled={busy !== null}>
+        </Button>
+        <Button  onClick={() => void run("meeting")} disabled={busy !== null}>
           Only this meeting
-        </button>
-        <button type="button" className={cn(buttonClass.base, buttonClass.primary)} onClick={() => void run("workspace")} disabled={busy !== null}>
+        </Button>
+        <Button variant="primary"  onClick={() => void run("workspace")} disabled={busy !== null}>
           Save to workspace
-        </button>
+        </Button>
       </div>
     </div>
   );

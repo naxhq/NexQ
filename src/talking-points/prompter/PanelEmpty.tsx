@@ -1,4 +1,4 @@
-import { EmptyState, buttonClass } from "../../ui";
+import { EmptyState, Button } from "../../ui";
 import { cn } from "../../lib/utils";
 
 /** What the panel shows before there is a note: loading, a failed load, or the first-note invitation. */
@@ -26,9 +26,9 @@ export function PanelEmpty({
         title="Your notes did not load"
         body={error}
         action={
-          <button type="button" className={cn(buttonClass.base, buttonClass.primary)} onClick={onRetry}>
+          <Button variant="primary"  onClick={onRetry}>
             Try again
-          </button>
+          </Button>
         }
       />
     );
@@ -39,9 +39,9 @@ export function PanelEmpty({
         title="Write your first talking points"
         body="Keep what you want to say in front of you. NexQ can follow your voice and tick off what you have covered."
         action={
-          <button type="button" className={cn(buttonClass.base, buttonClass.primary)} onClick={onStart}>
+          <Button variant="primary"  onClick={onStart}>
             Write a note
-          </button>
+          </Button>
         }
       />
     </div>

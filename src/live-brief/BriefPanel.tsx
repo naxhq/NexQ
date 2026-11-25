@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { FileText, MoreHorizontal, Pause, Play, RefreshCw } from "lucide-react";
-import { Dialog, Menu, buttonClass, type MenuItemSpec } from "../ui";
+import { Dialog, Menu, type MenuItemSpec, Button } from "../ui";
 import { cn } from "../lib/utils";
 import type { BriefFact } from "../lib/types";
 import { openBriefSource } from "./openSource";
@@ -134,8 +134,8 @@ export function BriefPanel() {
           <div id="lb-cap-title" className="rs-notice-title">Keep the brief going?</div>
           <p>It used {formatTokens(run?.tokens_used ?? 0)} tokens, the limit you set. Keep going adds {formatTokens(settings?.cap ?? run?.cap ?? 0)} more.</p>
           <div className="rs-notice-actions">
-            <button type="button" className={cn(buttonClass.base, buttonClass.primary, "h-7")} onClick={() => void store.getState().keepGoing()}>Keep going</button>
-            <button type="button" className={cn(buttonClass.base, buttonClass.quiet, "h-7")} onClick={() => void store.getState().pause()}>Stop</button>
+            <Button variant="primary" size="sm"  onClick={() => void store.getState().keepGoing()}>Keep going</Button>
+            <Button size="sm"  onClick={() => void store.getState().pause()}>Stop</Button>
           </div>
         </div>
       )}
@@ -164,9 +164,9 @@ export function BriefPanel() {
           <div className="rs-empty">
             <h3>Brief</h3>
             <p>While you talk, NexQ looks through this workspace for what is known about the topic and keeps a short sheet. Live answers use it. It sends the transcript and the matching passages to your chosen model.</p>
-            <button type="button" className={cn(buttonClass.base, buttonClass.primary, "mt-3")} onClick={() => void store.getState().turnOn()}>
+            <Button variant="primary"  onClick={() => void store.getState().turnOn()} className="mt-3">
               Turn on the brief
-            </button>
+            </Button>
           </div>
         ) : !sheet ? (
           <div className="rs-empty" role="status">
@@ -212,7 +212,7 @@ export function BriefPanel() {
         open={dialog}
         onClose={() => setDialog(false)}
         title="Brief settings"
-        footer={<button type="button" className={cn(buttonClass.base, buttonClass.primary)} onClick={() => setDialog(false)}>Done</button>}
+        footer={<Button variant="primary"  onClick={() => setDialog(false)}>Done</Button>}
       >
         {settings && <BriefSettingsForm settings={settings} onChange={(p) => void store.getState().patchSettings(p)} />}
       </Dialog>

@@ -56,7 +56,7 @@ export function ReaderControls({
               type="button"
               aria-label={p.playing ? "Pause auto-scroll" : "Start auto-scroll"}
               onClick={() => (p.playing ? p.pause() : p.play())}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground outline-none transition-colors hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring/60"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground outline-none transition-colors hover:bg-primary/90 ui-focus ui-focus-pill"
             >
               {p.playing ? <Pause className="h-4 w-4" aria-hidden /> : <Play className="h-4 w-4" aria-hidden />}
             </button>

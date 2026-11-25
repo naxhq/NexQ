@@ -38,7 +38,7 @@ function Stepper({
   plusDisabled: boolean;
 }) {
   const b =
-    "inline-flex h-7 w-7 items-center justify-center rounded-md bg-muted text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-40";
+    "inline-flex h-7 w-7 items-center justify-center rounded-md bg-muted text-foreground outline-none transition-colors hover:bg-accent ui-focus ui-r-md disabled:opacity-40";
   return (
     <div className="flex items-center justify-between gap-3">
       <span className="ui-body">{label}</span>
@@ -63,7 +63,7 @@ function Stepper({
               onMinus();
             }
           }}
-          className="ui-body w-12 rounded-md text-center tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          className="ui-body w-12 rounded-md text-center tabular-nums outline-none ui-focus ui-r-md"
         >
           {shown}
         </span>

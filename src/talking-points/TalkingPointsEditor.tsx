@@ -8,7 +8,7 @@ import { FileText, Plus } from "lucide-react";
 import { useTalkingPointsStore } from "../stores/talkingPointsStore";
 import { listWorkspaces } from "../lib/ipc";
 import type { WorkspaceSummary } from "../lib/types";
-import { ConfirmDialog, Dialog, EmptyState, Select, buttonClass } from "../ui";
+import { ConfirmDialog, Dialog, EmptyState, Select, Button } from "../ui";
 import { cn } from "../lib/utils";
 import { NoteList } from "./NoteList";
 import { NoteEditorPane } from "./NoteEditorPane";
@@ -92,9 +92,9 @@ export function TalkingPointsEditor({ workspaceId, className, initialId = null }
         title="Talking points did not load"
         body={loadError}
         action={
-          <button type="button" className={cn(buttonClass.base, buttonClass.primary)} onClick={() => void store.getState().load(workspaceId)}>
+          <Button variant="primary"  onClick={() => void store.getState().load(workspaceId)}>
             Try again
-          </button>
+          </Button>
         }
       />
     );
@@ -106,13 +106,13 @@ export function TalkingPointsEditor({ workspaceId, className, initialId = null }
         <div className="mb-2 flex items-center justify-between gap-2 px-1">
           <h2 className="ui-section">Talking points</h2>
           <span className="flex items-center gap-1">
-            <button type="button" className={cn(buttonClass.base, "h-7 px-2.5 hover:bg-accent")} onClick={() => setImportOpen(true)}>
+            <Button variant="ghost" size="sm"  onClick={() => setImportOpen(true)}>
               Import
-            </button>
-            <button type="button" className={cn(buttonClass.base, buttonClass.primary, "h-7 gap-1 px-2.5")} onClick={() => void create()}>
+            </Button>
+            <Button variant="primary" size="sm"  onClick={() => void create()} className="gap-1">
               <Plus className="h-3.5 w-3.5" aria-hidden />
               New note
-            </button>
+            </Button>
           </span>
         </div>
         {actionError && (
@@ -143,12 +143,12 @@ export function TalkingPointsEditor({ workspaceId, className, initialId = null }
             body="Keep what you want to say in front of you during a call. Paste Markdown to start from something you already have."
             action={
               <span className="flex items-center gap-2">
-                <button type="button" className={cn(buttonClass.base, buttonClass.primary)} onClick={() => void create()}>
+                <Button variant="primary"  onClick={() => void create()}>
                   Write a note
-                </button>
-                <button type="button" className={cn(buttonClass.base, "border border-border hover:bg-accent")} onClick={() => setImportOpen(true)}>
+                </Button>
+                <Button variant="ghost"  onClick={() => setImportOpen(true)}>
                   Import Markdown
-                </button>
+                </Button>
               </span>
             }
           />
@@ -185,12 +185,12 @@ export function TalkingPointsEditor({ workspaceId, className, initialId = null }
         dismissible={!copyBusy}
         footer={
           <>
-            <button type="button" className={cn(buttonClass.base, buttonClass.quiet)} onClick={() => setCopyId(null)} disabled={copyBusy}>
+            <Button  onClick={() => setCopyId(null)} disabled={copyBusy}>
               Cancel
-            </button>
-            <button type="button" className={cn(buttonClass.base, buttonClass.primary)} onClick={() => void doCopy()} disabled={!target || copyBusy}>
+            </Button>
+            <Button variant="primary"  onClick={() => void doCopy()} disabled={!target || copyBusy}>
               Copy note
-            </button>
+            </Button>
           </>
         }
       >

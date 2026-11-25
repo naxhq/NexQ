@@ -39,7 +39,7 @@ export function TalkingPointsSection({ workspaceId }: { workspaceId: string }) {
         <button
           type="button"
           onClick={(e) => void create(e)}
-          className="ui-meta inline-flex h-7 items-center gap-1 rounded-lg px-2 font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60"
+          className="ui-meta inline-flex h-7 items-center gap-1 rounded-lg px-2 font-medium text-foreground outline-none transition-colors hover:bg-accent ui-focus ui-r-lg"
         >
           <Plus className="h-3.5 w-3.5" aria-hidden />
           New note
@@ -60,7 +60,7 @@ export function TalkingPointsSection({ workspaceId }: { workspaceId: string }) {
               <button
                 type="button"
                 onClick={openEditor}
-                className="flex w-full items-baseline justify-between gap-3 rounded-lg px-2 py-1.5 text-left outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60"
+                className="flex w-full items-baseline justify-between gap-3 rounded-lg px-2 py-1.5 text-left outline-none transition-colors hover:bg-accent ui-focus ui-r-lg"
               >
                 <span className="ui-body min-w-0 truncate">{n.title}</span>
                 <span className={cn("ui-meta shrink-0", n.in_context ? "text-foreground" : "text-muted-foreground")}>

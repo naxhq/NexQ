@@ -15,7 +15,7 @@ interface Props {
 }
 
 const btn =
-  "inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors duration-150 hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 aria-pressed:bg-accent aria-pressed:text-foreground";
+  "inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors duration-150 hover:bg-accent hover:text-foreground ui-focus ui-r-md aria-pressed:bg-accent aria-pressed:text-foreground";
 
 function Tip({ label, keys, children }: { label: string; keys?: string; children: ReactNode }) {
   return (
@@ -203,7 +203,7 @@ export function FloatingToolbar({ editor, container, compact }: Props) {
                   setPop(null);
                 }}
                 className={cn(
-                  "tp-swatch h-6 w-6 rounded-full outline-none ring-offset-popover transition-shadow focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:ring-offset-2",
+                  "tp-swatch h-6 w-6 rounded-full outline-none transition-shadow ui-focus ui-focus-pill",
                   curColor === n && "ring-2 ring-foreground/70 ring-offset-2",
                 )}
                 style={{ background: `hsl(var(--tp-${n}))` }}
@@ -215,7 +215,7 @@ export function FloatingToolbar({ editor, container, compact }: Props) {
                 run((c) => c.unsetMark("tpColor"));
                 setPop(null);
               }}
-              className="ui-meta ml-1 rounded-md px-1.5 py-1 text-muted-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60"
+              className="ui-meta ml-1 rounded-md px-1.5 py-1 text-muted-foreground outline-none hover:bg-accent ui-focus ui-r-md"
             >
               Clear
             </button>
@@ -242,7 +242,7 @@ export function FloatingToolbar({ editor, container, compact }: Props) {
                     setPop(null);
                   }}
                   className={cn(
-                    "ui-body whitespace-nowrap rounded-md px-3 py-1 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60",
+                    "ui-body whitespace-nowrap rounded-md px-3 py-1 text-left outline-none hover:bg-accent ui-focus ui-r-md",
                     on && "font-semibold",
                   )}
                 >

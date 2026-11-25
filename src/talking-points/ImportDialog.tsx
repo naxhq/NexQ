@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Dialog, buttonClass } from "../ui";
+import { Dialog, Button } from "../ui";
 import { cn } from "../lib/utils";
 import { markdownTitle, markdownToDoc } from "./doc/markdown";
 import { countWords, docPlainText, type TpDoc } from "./doc/model";
@@ -71,20 +71,20 @@ export function ImportDialog({ open, onClose, onImport }: Props) {
       size="lg"
       footer={
         <>
-          <button type="button" className={cn(buttonClass.base, buttonClass.quiet)} onClick={onClose} disabled={busy}>
+          <Button  onClick={onClose} disabled={busy}>
             Cancel
-          </button>
-          <button type="button" className={cn(buttonClass.base, buttonClass.primary)} onClick={() => void submit()} disabled={!text.trim() || busy}>
+          </Button>
+          <Button variant="primary"  onClick={() => void submit()} disabled={!text.trim() || busy}>
             Import as a new note
-          </button>
+          </Button>
         </>
       }
     >
       <div className="space-y-3">
         <div className="flex items-center gap-3">
-          <button type="button" className={cn(buttonClass.base, "border border-border hover:bg-accent")} onClick={() => picker.current?.click()}>
+          <Button variant="ghost"  onClick={() => picker.current?.click()}>
             Choose a file
-          </button>
+          </Button>
           <span className="ui-meta min-w-0 truncate text-muted-foreground">{fileName ? `${fileName}` : "Markdown or plain text"}</span>
           <input
             ref={picker}
@@ -107,7 +107,7 @@ export function ImportDialog({ open, onClose, onImport }: Props) {
           placeholder={"# Opening\n\n- What I want them to remember\n- The one number that matters"}
           rows={10}
           spellCheck={false}
-          className="ui-body block max-h-[50vh] w-full resize-y rounded-lg border border-border bg-background p-3 font-[inherit] outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          className="ui-body block max-h-[50vh] w-full resize-y rounded-lg border border-border bg-background p-3 font-[inherit] outline-none ui-focus ui-r-lg"
         />
         <p className="ui-meta text-muted-foreground" aria-live="polite">
           {words > 0 ? `${words} ${words === 1 ? "word" : "words"} will be imported.` : "Nothing to import yet."}

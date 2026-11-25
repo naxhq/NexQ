@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { MoreHorizontal } from "lucide-react";
 import type { TalkingPoint } from "../lib/types";
 import { useTalkingPointsStore, type SaveState } from "../stores/talkingPointsStore";
-import { Menu, Switch, buttonClass } from "../ui";
+import { Menu, Switch, Button } from "../ui";
 import { LazyRichEditor } from "./editor/LazyRichEditor";
 import { docToMarkdown } from "./doc/markdown";
 import { cleanTitle, parseDoc } from "./doc/model";
@@ -21,7 +21,7 @@ export function SaveStatus({
   onResolve?: (which: "mine" | "theirs") => void;
 }) {
   if (state === "conflict") {
-    const b = "rounded-md px-1.5 py-0.5 font-medium underline underline-offset-2 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60";
+    const b = "rounded-md px-1.5 py-0.5 font-medium underline underline-offset-2 outline-none hover:bg-accent ui-focus ui-r-md";
     return (
       <span className="ui-meta inline-flex items-center gap-2 text-destructive" role="alert">
         Changed in another window.
@@ -38,7 +38,7 @@ export function SaveStatus({
     return (
       <span className="ui-meta inline-flex items-center gap-2 text-destructive" role="alert">
         Not saved{error ? `: ${error}` : ""}. It keeps trying.
-        <button type="button" onClick={onRetry} className="rounded-md px-1.5 py-0.5 font-medium underline underline-offset-2 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60">
+        <button type="button" onClick={onRetry} className="rounded-md px-1.5 py-0.5 font-medium underline underline-offset-2 outline-none hover:bg-accent ui-focus ui-r-md">
           Try now
         </button>
       </span>
@@ -103,7 +103,7 @@ export function NoteEditorPane({ note }: { note: TalkingPoint }) {
           onKeyDown={(e) => {
             if (e.key === "Enter") (e.target as HTMLInputElement).blur();
           }}
-          className="ui-title min-w-[10rem] flex-1 truncate rounded-md bg-transparent px-1 py-0.5 outline-none transition-colors hover:bg-accent/50 focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/60"
+          className="ui-title min-w-[10rem] flex-1 truncate rounded-md bg-transparent px-1 py-0.5 outline-none transition-colors hover:bg-accent/50 focus-visible:bg-accent/60 ui-focus ui-r-md"
         />
         <SaveStatus state={state} error={error} onRetry={() => retry(note.id)} onResolve={(w) => void resolve(note.id, w)} />
         <Menu
@@ -127,14 +127,11 @@ export function NoteEditorPane({ note }: { note: TalkingPoint }) {
             },
           ]}
           renderTrigger={(props) => (
-            <button
+            <Button variant="ghost"
               {...props}
-              type="button"
-              aria-label="More for this note"
-              className={cn(buttonClass.base, "w-8 px-0 text-muted-foreground hover:bg-accent hover:text-foreground")}
-            >
+              aria-label="More for this note" className="w-8 px-0">
               <MoreHorizontal className="h-4 w-4" aria-hidden />
-            </button>
+            </Button>
           )}
         />
       </header>

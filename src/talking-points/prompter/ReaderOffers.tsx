@@ -1,6 +1,6 @@
 import { RotateCcw } from "lucide-react";
 import type { ScrollKind } from "../../stores/talkingPointsStore";
-import { buttonClass } from "../../ui";
+import { Button } from "../../ui";
 import { cn } from "../../lib/utils";
 import type { PrompterState } from "./prompterTypes";
 
@@ -12,39 +12,26 @@ export function ReaderOffers({ p, readingMode }: { p: PrompterState; readingMode
         {p.suggestion ? `Go to: ${p.suggestion.text}` : ""}
       </div>
       {p.suggestion && (
-        <button
-          type="button"
+        <Button variant="ghost"
           tabIndex={-1}
-          onClick={p.goToSuggestion}
-          className={cn(
-            buttonClass.base,
-            "tp-suggest max-w-[calc(100%-1.5rem)] border border-border bg-popover/95 text-popover-foreground shadow-md backdrop-blur-sm hover:bg-accent",
-            p.suggestion.edge === "top" ? "tp-suggest-top" : "tp-suggest-bottom",
-          )}
-        >
+          onClick={p.goToSuggestion} className={cn("tp-suggest max-w-[calc(100%-1.5rem)] bg-popover/95 text-popover-foreground shadow-md backdrop-blur-sm", p.suggestion.edge === "top" ? "tp-suggest-top" : "tp-suggest-bottom")}>
           <span className="truncate">Go to: {p.suggestion.text}</span>
-        </button>
+        </Button>
       )}
       {p.canGoBack && (
-        <button
-          type="button"
+        <Button variant="ghost"
           tabIndex={-1}
-          onClick={p.goBack}
-          className={cn(buttonClass.base, "tp-back border border-border bg-popover/95 text-popover-foreground shadow-md backdrop-blur-sm hover:bg-accent")}
-        >
+          onClick={p.goBack} className="tp-back bg-popover/95 text-popover-foreground shadow-md backdrop-blur-sm">
           <RotateCcw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
           Back to where I was
-        </button>
+        </Button>
       )}
       {p.yielding && readingMode !== "manual" && (
-        <button
-          type="button"
-          onClick={p.resume}
-          className={cn(buttonClass.base, "tp-resume border border-border bg-popover/95 text-popover-foreground shadow-md backdrop-blur-sm hover:bg-accent")}
-        >
+        <Button variant="ghost"
+          onClick={p.resume} className="tp-resume bg-popover/95 text-popover-foreground shadow-md backdrop-blur-sm">
           <RotateCcw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
           Resume
-        </button>
+        </Button>
       )}
     </>
   );

@@ -258,7 +258,7 @@ export function PointsPanel() {
               setSettings(false);
               setSwitcher((v) => !v);
             }}
-            className="ui-section flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-left outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60"
+            className="ui-section flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-left outline-none transition-colors hover:bg-accent ui-focus ui-r-lg"
           >
             <span className="min-w-0 truncate">{note?.title ?? "Untitled note"}</span>
             {meetingOnly !== undefined && <span className="ui-meta shrink-0 font-normal text-muted-foreground">edited for this meeting</span>}
@@ -270,7 +270,7 @@ export function PointsPanel() {
               aria-label="Edit this note"
               onClick={startEditing}
               disabled={!note}
-              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-40"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none hover:bg-accent hover:text-foreground ui-focus ui-r-lg disabled:opacity-40"
             >
               <Pencil className="h-4 w-4" aria-hidden />
             </button>
@@ -286,7 +286,7 @@ export function PointsPanel() {
                 setSwitcher(false);
                 setSettings((v) => !v);
               }}
-              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none hover:bg-accent hover:text-foreground ui-focus ui-r-lg"
             >
               <SlidersHorizontal className="h-4 w-4" aria-hidden />
             </button>
@@ -349,7 +349,7 @@ export function PointsPanel() {
             onWheel={p.noteUserIntent}
             onPointerDown={p.noteUserIntent}
             onTouchMove={p.noteUserIntent}
-            className="h-full overflow-y-auto overscroll-contain rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="h-full overflow-y-auto overscroll-contain rounded-sm outline-none ui-focus ui-r-sm"
             style={{ fontSize: reading.fontSize, lineHeight: reading.lineSpacing }}
           >
             <div ref={contentRef} className="pt-3">
