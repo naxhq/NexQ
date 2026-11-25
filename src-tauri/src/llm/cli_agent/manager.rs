@@ -514,6 +514,10 @@ pub struct AgentSessionManager {
     /// while a turn of theirs is still running. A new session may already
     /// hold the key; these only finish their turns and are then closed.
     retiring: Mutex<Vec<(SessionKey, Entry)>>,
+    /// Bumped whenever a scope's sessions are taken out of service for a
+    /// change of what they were started with (see [`AgentSessionManager::generation`]).
+    /// Lock order: `entries`, then `scope_gen`.
+    scope_gen: Mutex<HashMap<SessionScope, u64>>,
     cursors: Mutex<HashMap<SessionKey, Arc<AsyncMutex<DeltaCursor>>>>,
     usage: Mutex<HashMap<SessionScope, SessionUsage>>,
     shutting_down: AtomicBool,
@@ -540,6 +544,7 @@ impl AgentSessionManager {
             entries: Mutex::new(HashMap::new()),
             spawn_locks: Mutex::new(HashMap::new()),
             retiring: Mutex::new(Vec::new()),
+            scope_gen: Mutex::new(HashMap::new()),
             cursors: Mutex::new(HashMap::new()),
             usage: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
@@ -586,12 +591,52 @@ impl AgentSessionManager {
         init: SessionInit,
         overrides: Option<SessionOverride>,
     ) -> Result<Arc<dyn SessionHandle>, AgentError> {
+        self.ensure_at(key, init, overrides, None).await
+    }
+
+    /// The generation of `scope`: read it BEFORE building the `init` a session
+    /// is started with, and pass it to [`AgentSessionManager::ensure_at`].
+    pub fn generation(&self, scope: &SessionScope) -> u64 {
+        self.scope_gen.lock().unwrap().get(scope).copied().unwrap_or(0)
+    }
+
+    /// Whether `scope` changed since `expected` was read.
+    fn changed_since(&self, scope: &SessionScope, expected: Option<u64>) -> bool {
+        expected.is_some_and(|g| self.generation(scope) != g)
+    }
+
+    /// Bumps the generation of `scope`; the caller holds the `entries` lock, so
+    /// the bump and the removal of the scope's sessions are one step.
+    fn bump_locked(&self, scope: &SessionScope) {
+        *self.scope_gen.lock().unwrap().entry(scope.clone()).or_insert(0) += 1;
+    }
+
+    fn bump_scope(&self, scope: &SessionScope) {
+        let _entries = self.entries.lock().unwrap();
+        self.bump_locked(scope);
+    }
+
+    /// [`AgentSessionManager::ensure_with`] for an `init` built when `scope` was
+    /// at generation `expected`. If the scope was restarted since (its sessions
+    /// detached or closed), nothing starts with that `init`: a session already
+    /// being spawned is closed instead of inserted, and the call fails with
+    /// [`scope_changed`] so the caller builds a fresh record and tries once more.
+    pub async fn ensure_at(
+        &self,
+        key: &SessionKey,
+        init: SessionInit,
+        overrides: Option<SessionOverride>,
+        expected: Option<u64>,
+    ) -> Result<Arc<dyn SessionHandle>, AgentError> {
         let overrides = overrides.filter(|o| *o != SessionOverride::default());
         let pinned_kind = overrides.as_ref().and_then(|o| o.kind);
         let lock = self.spawn_lock(key);
         let _spawning = lock.lock().await;
         if self.shutting_down.load(Ordering::SeqCst) {
             return Err(shut_down_error());
+        }
+        if self.changed_since(&key.scope, expected) {
+            return Err(scope_changed());
         }
 
         let mut kind = pinned_kind.unwrap_or_else(|| self.settings.active());
@@ -677,9 +722,15 @@ impl AgentSessionManager {
             };
             // Check the kind and insert under one lock: a switch after this
             // point runs `close_other_kinds`, which then finds the entry.
+            let mut stale = false;
             let inserted = {
                 let mut entries = self.entries.lock().unwrap();
-                if pinned_kind.is_some() || self.settings.active() == kind {
+                if self.changed_since(&key.scope, expected) {
+                    // The scope was restarted while this session started: it
+                    // was built from material that is no longer current.
+                    stale = true;
+                    false
+                } else if pinned_kind.is_some() || self.settings.active() == kind {
                     self.cursors.lock().unwrap().insert(
                         key.clone(),
                         Arc::new(AsyncMutex::new(DeltaCursor::default())),
@@ -710,6 +761,9 @@ impl AgentSessionManager {
             }
             handle.close().await;
             self.emit(key, SessionState::Closed, &model, None);
+            if stale {
+                return Err(scope_changed());
+            }
             kind = pinned_kind.unwrap_or_else(|| self.settings.active());
             if attempts >= 3 {
                 return Err(AgentError::Crashed("the AI provider kept changing while a session started".into()));
@@ -871,6 +925,8 @@ impl AgentSessionManager {
     /// Close every tier of `scope` (meeting ended / left the meeting view). A
     /// session still starting for that scope is waited for and closed too.
     pub async fn close_scope(&self, scope: &SessionScope) {
+        // A request that built its record before this must not start a session with it.
+        self.bump_scope(scope);
         for with_sources in [false, true] {
             self.close_variant(scope, with_sources).await;
         }
@@ -880,6 +936,7 @@ impl AgentSessionManager {
     /// Close both tiers' with-sources sessions of `scope` and leave the plain
     /// ones (the sources changed in settings; usage is kept).
     pub async fn close_sources(&self, scope: &SessionScope) {
+        self.bump_scope(scope);
         self.close_variant(scope, true).await;
     }
 
@@ -988,6 +1045,9 @@ impl AgentSessionManager {
         let mut moved: Vec<(SessionKey, Entry)> = Vec::new();
         {
             let mut entries = self.entries.lock().unwrap();
+            // The bump and the removal are one step: a spawn that started before
+            // finds the generation changed when it is about to insert.
+            self.bump_locked(scope);
             let keys: Vec<SessionKey> = entries.keys().filter(|k| &k.scope == scope).cloned().collect();
             for key in keys {
                 if let Some(mut entry) = entries.remove(&key) {
@@ -1036,6 +1096,7 @@ impl AgentSessionManager {
 
     /// [`AgentSessionManager::close_scope_graceful`] for one key.
     pub async fn close_key_graceful(&self, key: &SessionKey, bound: Duration) {
+        self.bump_scope(&key.scope);
         let lock = self.spawn_lock(key);
         let _spawning = lock.lock().await;
         let running = {
@@ -1131,6 +1192,22 @@ impl AgentSessionManager {
     /// next `ensure` starts a fresh one. Reports `closed` and returns the
     /// handle for the caller to `close()` (off the request's critical path).
     /// Scope usage is kept.
+    /// Like [`AgentSessionManager::retire_if_idle`], but only when the session at
+    /// `key` is `handle` itself: a newer session that took the key is left alone.
+    pub fn retire_handle_if_idle(&self, key: &SessionKey, handle: &Arc<dyn SessionHandle>) -> Option<Arc<dyn SessionHandle>> {
+        let entry = {
+            let mut entries = self.entries.lock().unwrap();
+            match entries.get(key) {
+                Some(e) if e.in_flight == 0 && same_session(&e.handle, handle) => entries.remove(key)?,
+                _ => return None,
+            }
+        };
+        self.cursors.lock().unwrap().remove(key);
+        self.emit(key, SessionState::Closed, &entry.handle.model(), None);
+        self.notify_closed(key);
+        Some(entry.handle)
+    }
+
     pub fn retire_if_idle(&self, key: &SessionKey) -> Option<Arc<dyn SessionHandle>> {
         let entry = {
             let mut entries = self.entries.lock().unwrap();
@@ -1300,6 +1377,19 @@ fn same_session(a: &Arc<dyn SessionHandle>, b: &Arc<dyn SessionHandle>) -> bool 
     std::ptr::eq(Arc::as_ptr(a) as *const (), Arc::as_ptr(b) as *const ())
 }
 
+const SCOPE_CHANGED: &str = "the meeting's material changed while this session started";
+
+/// A session was about to start from an `init` built before its scope was
+/// restarted. Retryable: build a fresh record and ask once more.
+pub fn scope_changed() -> AgentError {
+    AgentError::Crashed(SCOPE_CHANGED.to_string())
+}
+
+/// Whether `err` is [`scope_changed`].
+pub fn is_scope_changed(err: &AgentError) -> bool {
+    matches!(err, AgentError::Crashed(m) if m == SCOPE_CHANGED)
+}
+
 fn shut_down_error() -> AgentError {
     AgentError::Spawn("NexQ is shutting down".into())
 }
@@ -1315,11 +1405,17 @@ mod tests {
         alive: AtomicBool,
         closed: AtomicBool,
         appended: Mutex<Vec<String>>,
+        /// Held at the first warm-up message until released.
+        warm: Mutex<Option<Arc<TestGate>>>,
     }
 
     #[async_trait]
     impl SessionHandle for FakeSession {
         async fn append_context(&self, text: &str) -> Result<(), AgentError> {
+            let gate = self.warm.lock().unwrap().take();
+            if let Some(gate) = gate {
+                gate.pass().await;
+            }
             self.appended.lock().unwrap().push(text.to_string());
             Ok(())
         }
@@ -1400,12 +1496,35 @@ mod tests {
         fail_sources: AtomicBool,
         /// Switch the active kind while the next session starts.
         switch_during_spawn: Mutex<Option<(Arc<CliSettings>, CliAgentKind)>>,
+        /// Hold the next spawn at its start / after the session exists, until released.
+        gate_start: Mutex<Option<Arc<TestGate>>>,
+        gate_end: Mutex<Option<Arc<TestGate>>>,
+        /// Hold the warm-up (the first preload message) of the next session.
+        gate_warm: Mutex<Option<Arc<TestGate>>>,
+    }
+
+    /// A point a fake spawner waits at: `entered` says it is there, `release` lets it go.
+    #[derive(Default)]
+    struct TestGate {
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+
+    impl TestGate {
+        async fn pass(&self) {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
     }
 
     #[async_trait]
     impl SessionSpawner for FakeSpawner {
         async fn spawn(&self, cfg: SessionConfig) -> Result<Arc<dyn SessionHandle>, AgentError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            let start = self.gate_start.lock().unwrap().take();
+            if let Some(gate) = start {
+                gate.pass().await;
+            }
             tokio::task::yield_now().await;
             if let Some((settings, kind)) = self.switch_during_spawn.lock().unwrap().take() {
                 settings.set_active(kind);
@@ -1418,8 +1537,13 @@ mod tests {
                 alive: AtomicBool::new(true),
                 closed: AtomicBool::new(false),
                 appended: Mutex::new(Vec::new()),
+                warm: Mutex::new(self.gate_warm.lock().unwrap().take()),
             });
             self.spawned.lock().unwrap().push((cfg, s.clone()));
+            let end = self.gate_end.lock().unwrap().take();
+            if let Some(gate) = end {
+                gate.pass().await;
+            }
             Ok(s)
         }
     }
@@ -2578,6 +2702,182 @@ mod tests {
         assert!(spawner.spawned.lock().unwrap()[0].1.closed.load(Ordering::SeqCst));
         // Nothing is left to detach or close.
         assert_eq!(mgr.detach_scope(&scope), 0);
+    }
+
+    // ---- a scope restart never lets a session start from a record built before it ----
+
+    fn live_key() -> (SessionScope, SessionKey) {
+        let scope = SessionScope::Live("m".into());
+        let k = key(scope.clone(), Tier::Fast);
+        (scope, k)
+    }
+
+    /// Starts `ensure_at` for `k` (built at generation `generation`) in a task.
+    fn start_at(
+        mgr: &Arc<AgentSessionManager>,
+        k: &SessionKey,
+        preload: &[&str],
+        generation: u64,
+    ) -> tokio::task::JoinHandle<Result<Arc<dyn SessionHandle>, AgentError>> {
+        let (mgr, k, init) = (mgr.clone(), k.clone(), init(preload));
+        tokio::spawn(async move { mgr.ensure_at(&k, init, None, Some(generation)).await })
+    }
+
+    fn stale(result: &Result<Arc<dyn SessionHandle>, AgentError>) -> bool {
+        matches!(result, Err(e) if is_scope_changed(e))
+    }
+
+    #[tokio::test]
+    async fn a_detach_before_the_spawn_stops_the_old_record_from_starting_anything() {
+        let (mgr, spawner, _sink) = setup();
+        let mgr = Arc::new(mgr);
+        let (scope, k) = live_key();
+        let built_at = mgr.generation(&scope);
+        mgr.detach_scope(&scope);
+        let result = mgr.ensure_at(&k, init(&["OLD DOCUMENTS"]), None, Some(built_at)).await;
+        assert!(stale(&result));
+        assert_eq!(spawner.calls.load(Ordering::SeqCst), 0, "nothing was started");
+        // A record built after the detach starts normally.
+        let fresh = mgr.ensure_at(&k, init(&["NEW DOCUMENTS"]), None, Some(mgr.generation(&scope))).await.unwrap();
+        assert!(fresh.is_alive());
+        assert_eq!(spawner.spawned.lock().unwrap()[0].1.appended.lock().unwrap()[0], "NEW DOCUMENTS");
+    }
+
+    #[tokio::test]
+    async fn a_detach_while_the_spawn_is_starting_closes_that_session_and_inserts_nothing() {
+        let (mgr, spawner, _sink) = setup();
+        let mgr = Arc::new(mgr);
+        let (scope, k) = live_key();
+        let gate = Arc::new(TestGate::default());
+        *spawner.gate_start.lock().unwrap() = Some(gate.clone());
+        let task = start_at(&mgr, &k, &["OLD"], mgr.generation(&scope));
+        gate.entered.notified().await;
+        mgr.detach_scope(&scope);
+        gate.release.notify_one();
+        assert!(stale(&task.await.unwrap()));
+        assert!(spawner.spawned.lock().unwrap()[0].1.closed.load(Ordering::SeqCst), "the stale session is closed");
+        assert!(mgr.snapshot().is_empty(), "and never inserted");
+    }
+
+    #[tokio::test]
+    async fn a_detach_after_the_spawn_but_before_the_insert_is_caught_too() {
+        let (mgr, spawner, _sink) = setup();
+        let mgr = Arc::new(mgr);
+        let (scope, k) = live_key();
+        let gate = Arc::new(TestGate::default());
+        *spawner.gate_end.lock().unwrap() = Some(gate.clone());
+        let task = start_at(&mgr, &k, &[], mgr.generation(&scope));
+        gate.entered.notified().await;
+        mgr.detach_scope(&scope);
+        gate.release.notify_one();
+        assert!(stale(&task.await.unwrap()));
+        assert!(spawner.spawned.lock().unwrap()[0].1.closed.load(Ordering::SeqCst));
+        assert!(mgr.snapshot().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_detach_during_the_warm_up_is_caught() {
+        let (mgr, spawner, _sink) = setup();
+        let mgr = Arc::new(mgr);
+        let (scope, k) = live_key();
+        let gate = Arc::new(TestGate::default());
+        *spawner.gate_warm.lock().unwrap() = Some(gate.clone());
+        let task = start_at(&mgr, &k, &["OLD DOCUMENTS"], mgr.generation(&scope));
+        gate.entered.notified().await;
+        mgr.detach_scope(&scope);
+        gate.release.notify_one();
+        assert!(stale(&task.await.unwrap()));
+        assert!(spawner.spawned.lock().unwrap()[0].1.closed.load(Ordering::SeqCst));
+        assert!(mgr.snapshot().is_empty());
+    }
+
+    #[tokio::test]
+    async fn two_detaches_in_a_row_leave_only_a_record_built_after_the_second_usable() {
+        let (mgr, spawner, _sink) = setup();
+        let mgr = Arc::new(mgr);
+        let (scope, k) = live_key();
+        let first = mgr.generation(&scope);
+        mgr.detach_scope(&scope);
+        let between = mgr.generation(&scope);
+        let gate = Arc::new(TestGate::default());
+        *spawner.gate_start.lock().unwrap() = Some(gate.clone());
+        let task = start_at(&mgr, &k, &["BETWEEN"], between);
+        gate.entered.notified().await;
+        mgr.detach_scope(&scope);
+        gate.release.notify_one();
+        assert!(stale(&task.await.unwrap()), "built between the two detaches");
+        assert!(stale(&mgr.ensure_at(&k, init(&[]), None, Some(first)).await));
+        let last = mgr.generation(&scope);
+        assert!(last > between && between > first);
+        mgr.ensure_at(&k, init(&["LAST"]), None, Some(last)).await.unwrap();
+        assert_eq!(mgr.snapshot().len(), 1);
+        let spawned = spawner.spawned.lock().unwrap();
+        assert!(spawned[0].1.closed.load(Ordering::SeqCst) && !spawned[1].1.closed.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn an_old_record_cannot_pick_up_the_newer_session_that_took_the_key() {
+        let (mgr, spawner, _sink) = setup();
+        let mgr = Arc::new(mgr);
+        let (scope, k) = live_key();
+        let old = mgr.generation(&scope);
+        mgr.detach_scope(&scope);
+        let new_handle = mgr.ensure_at(&k, init(&["NEW"]), None, Some(mgr.generation(&scope))).await.unwrap();
+        assert!(stale(&mgr.ensure_at(&k, init(&["OLD"]), None, Some(old)).await));
+        assert_eq!(spawner.calls.load(Ordering::SeqCst), 1);
+        assert!(new_handle.is_alive(), "the newer session is untouched");
+        // Retiring "by handle" leaves a newer session alone and removes the one it names.
+        let other: Arc<dyn SessionHandle> = Arc::new(FakeSession {
+            model: "x".into(),
+            alive: AtomicBool::new(true),
+            closed: AtomicBool::new(false),
+            appended: Mutex::new(Vec::new()),
+            warm: Mutex::new(None),
+        });
+        assert!(mgr.retire_handle_if_idle(&k, &other).is_none());
+        assert_eq!(mgr.snapshot().len(), 1);
+        assert!(mgr.retire_handle_if_idle(&k, &new_handle).is_some());
+        assert!(mgr.snapshot().is_empty());
+    }
+
+    #[tokio::test]
+    async fn every_way_of_closing_a_scope_moves_its_generation() {
+        let (mgr, _spawner, _sink) = setup();
+        let scope = SessionScope::Workspace("c".into());
+        let k = key(scope.clone(), Tier::Deep);
+        let mut last = mgr.generation(&scope);
+        mgr.close_scope(&scope).await;
+        assert!(mgr.generation(&scope) > last);
+        last = mgr.generation(&scope);
+        mgr.close_sources(&scope).await;
+        assert!(mgr.generation(&scope) > last);
+        last = mgr.generation(&scope);
+        mgr.close_scope_graceful(&scope, Duration::from_millis(10)).await;
+        assert!(mgr.generation(&scope) > last);
+        last = mgr.generation(&scope);
+        mgr.close_key_graceful(&k, Duration::from_millis(10)).await;
+        assert!(mgr.generation(&scope) > last);
+        // Another scope's generation did not move.
+        assert_eq!(mgr.generation(&SessionScope::Live("m".into())), 0);
+    }
+
+    #[tokio::test]
+    async fn an_ask_after_the_detach_never_reaches_the_old_session() {
+        let (mgr, spawner, _sink) = setup();
+        let mgr = Arc::new(mgr);
+        let (scope, k) = live_key();
+        mgr.ensure(&k, init(&["old"])).await.unwrap();
+        mgr.detach_scope(&scope);
+        // No session at the key: the ask fails instead of using the retired one.
+        let late = mgr.ask(&k, "hello", no_delta(), Arc::new(CancelToken::new())).await;
+        assert!(late.is_err());
+        mgr.ensure(&k, init(&["new"])).await.unwrap();
+        let answer = mgr.ask(&k, "hello", no_delta(), Arc::new(CancelToken::new())).await.unwrap();
+        assert_eq!(answer.text, "hello");
+        let spawned = spawner.spawned.lock().unwrap();
+        assert!(spawned[1].1.appended.lock().unwrap().iter().any(|m| m == "new"));
+        drop(spawned);
+        mgr.close_retired_graceful(&scope, Duration::from_millis(50)).await;
     }
 
     #[tokio::test]

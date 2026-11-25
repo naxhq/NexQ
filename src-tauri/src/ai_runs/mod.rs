@@ -122,6 +122,12 @@ pub struct AiRunRequest {
     pub recycle_after: Option<usize>,
     /// Prompt size when the caller knows it (else estimated from the text).
     pub est_input_tokens: Option<u64>,
+    /// The scope generation ([`AiRuns::generation`]) read BEFORE the caller built
+    /// `system`, `stable_context` and the sources from the workspace. If that
+    /// scope restarted since, no CLI session starts with them and the run fails
+    /// with `Unavailable` ("changed while this was starting"): build the
+    /// context again and retry once. `None`: read when the run starts.
+    pub expected_generation: Option<u64>,
 }
 
 impl AiRunRequest {
@@ -139,6 +145,7 @@ impl AiRunRequest {
             sources: None,
             recycle_after: None,
             est_input_tokens: None,
+            expected_generation: None,
         }
     }
 }
@@ -510,6 +517,12 @@ impl AiRuns {
         self
     }
 
+    /// The generation of a CLI session scope: read it before building the
+    /// context of a run for that scope (see [`AiRunRequest::expected_generation`]).
+    pub fn generation(&self, scope: &SessionScope) -> u64 {
+        self.cli.generation(scope)
+    }
+
     pub fn gate(&self) -> &Arc<LiveGate> {
         &self.gate
     }
@@ -723,6 +736,7 @@ impl AiRuns {
         let key = req.session_key.clone().unwrap_or_else(|| {
             SessionKey::plain(SessionScope::Workspace(format!("run-{}", uuid::Uuid::new_v4())), Tier::Fast)
         });
+        let expected = req.expected_generation.unwrap_or_else(|| self.cli.generation(&key.scope));
         let overrides = SessionOverride {
             kind: Some(kind),
             model: Some(req.selection.model.clone()).filter(|m| !m.trim().is_empty()),
@@ -739,7 +753,7 @@ impl AiRuns {
             self.cli.recycle_after(&key, n).await;
         }
         let size = Size { needed, window };
-        let result = self.ask_cli(&key, init, overrides, &last.content, &req, sink, size).await;
+        let result = self.ask_cli(&key, init, overrides, expected, &last.content, &req, sink, size).await;
         if ephemeral {
             self.cli.close_scope(&key.scope).await;
         }
@@ -766,6 +780,7 @@ impl AiRuns {
         key: &SessionKey,
         init: SessionInit,
         overrides: SessionOverride,
+        expected: u64,
         prompt: &str,
         req: &AiRunRequest,
         sink: Option<TokenSink>,
@@ -773,7 +788,13 @@ impl AiRuns {
     ) -> Result<(crate::llm::cli_agent::protocol::TurnResult, String, Option<PlanLimit>), AiRunError> {
         // Not raced against the cancel: dropping a spawn mid-way would leave the
         // session status stuck on "starting". The cancel is checked right after.
-        let handle = self.cli.ensure_with(key, init, Some(overrides)).await.map_err(|e| map_agent_error(e, size))?;
+        let handle = self.cli.ensure_at(key, init, Some(overrides), Some(expected)).await.map_err(|e| {
+            if crate::llm::cli_agent::manager::is_scope_changed(&e) {
+                AiRunError::Unavailable { message: "The workspace changed while this was starting. Try again.".to_string() }
+            } else {
+                map_agent_error(e, size)
+            }
+        })?;
         if req.cancel.is_cancelled() {
             return Err(AiRunError::Cancelled);
         }

@@ -237,14 +237,30 @@ fn past_transcript(transcript: &serde_json::Value, names: &HashMap<String, Strin
 pub(crate) fn start_session_in_background(
     app: &AppHandle,
     key: SessionKey,
-    build: impl FnOnce(&AppState) -> Result<SessionRecord, String> + Send + 'static,
+    build: impl Fn(&AppState) -> Result<SessionRecord, String> + Send + Sync + 'static,
 ) {
-    let epoch = app.state::<AppState>().meeting_sessions.epoch(&key.scope);
+    start_session_attempt(app, key, std::sync::Arc::new(build), true);
+}
+
+/// One try of [`start_session_in_background`]. The generation is read before
+/// the record is built: if the scope restarts in between, the session is not
+/// started from that record and (once) the record is built again.
+fn start_session_attempt(
+    app: &AppHandle,
+    key: SessionKey,
+    build: std::sync::Arc<dyn Fn(&AppState) -> Result<SessionRecord, String> + Send + Sync>,
+    retry: bool,
+) {
+    let (epoch, generation) = {
+        let state = app.state::<AppState>();
+        (state.meeting_sessions.epoch(&key.scope), state.agent_sessions.generation(&key.scope))
+    };
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let label = routing::session_key_label(&key);
         let built = {
             let app = app.clone();
+            let build = build.clone();
             tokio::task::spawn_blocking(move || build(&app.state::<AppState>())).await
         };
         let state = app.state::<AppState>();
@@ -276,19 +292,27 @@ pub(crate) fn start_session_in_background(
             preload: record.preload,
             sources: record.sources,
         };
-        match state.agent_sessions.ensure(&key, init).await {
-            Ok(_) => {
+        match state.agent_sessions.ensure_at(&key, init, None, Some(generation)).await {
+            Ok(handle) => {
                 if key.with_sources {
                     state.sources_cooldown.clear_key(&key);
                 }
-                // Closed (and not reopened) while it was starting: close it
-                // now; live sessions are never reaped.
+                // Closed (and not reopened) while it was starting: close exactly
+                // this session (never a newer one that took the key); live
+                // sessions are never reaped.
                 let closed = state.meeting_sessions.epoch(&key.scope) != epoch
                     && !state.meeting_sessions.contains(&key);
                 if closed {
-                    if let Some(handle) = state.agent_sessions.retire_if_idle(&key) {
+                    if let Some(handle) = state.agent_sessions.retire_handle_if_idle(&key, &handle) {
                         handle.close().await;
                     }
+                }
+            }
+            Err(e) if crate::llm::cli_agent::manager::is_scope_changed(&e) => {
+                // Restarted while it started: that record is gone. Build a new one, once.
+                log::info!("Claude session {label} was restarted while it started");
+                if retry {
+                    start_session_attempt(&app, key, build, false);
                 }
             }
             Err(e) => {
@@ -403,6 +427,9 @@ pub(crate) fn restart_meeting_sessions(app: &AppHandle, meeting_id: &str) {
     state.sources_cooldown.clear();
     let live_scope = SessionScope::Live(meeting_id.to_string());
     let past_scope = SessionScope::Past(meeting_id.to_string());
+    // Its notes and brief sessions were started with context from the same
+    // scope: they start again too (a run builds its own context each time).
+    let aux_scopes = [SessionScope::Notes(meeting_id.to_string()), SessionScope::Brief(meeting_id.to_string())];
     let is_live = live_meeting_is(&state, meeting_id);
     state.meeting_sessions.remove_scope(&live_scope);
     state.meeting_sessions.remove_scope(&past_scope);
@@ -411,6 +438,9 @@ pub(crate) fn restart_meeting_sessions(app: &AppHandle, meeting_id: &str) {
     // old ones, which only finish the turn they are in and close.
     state.agent_sessions.detach_scope(&live_scope);
     state.agent_sessions.detach_scope(&past_scope);
+    for scope in &aux_scopes {
+        state.agent_sessions.detach_scope(scope);
+    }
     let rewarm = is_live && routing::cli_agent_is_active(&state);
     let with_sources = rewarm
         && runtime::sources_for(&state, &runtime::for_meeting(&state, meeting_id).scope)
@@ -431,6 +461,29 @@ pub(crate) fn restart_meeting_sessions(app: &AppHandle, meeting_id: &str) {
         let bound = crate::llm::cli_agent::manager::DRAIN_TIMEOUT;
         sessions.close_retired_graceful(&live_scope, bound).await;
         sessions.close_retired_graceful(&past_scope, bound).await;
+        for scope in &aux_scopes {
+            sessions.close_retired_graceful(scope, bound).await;
+        }
+    });
+}
+
+/// The material of these chats' workspace changed: their sessions leave at once
+/// (the next run starts one from its fresh context) and close after the turn
+/// they are in.
+pub(crate) fn restart_chat_sessions(app: &AppHandle, chat_ids: Vec<String>) {
+    if chat_ids.is_empty() {
+        return;
+    }
+    let state = app.state::<AppState>();
+    let scopes: Vec<SessionScope> = chat_ids.into_iter().map(SessionScope::Workspace).collect();
+    for scope in &scopes {
+        state.agent_sessions.detach_scope(scope);
+    }
+    let sessions = state.agent_sessions.clone();
+    tauri::async_runtime::spawn(async move {
+        for scope in &scopes {
+            sessions.close_retired_graceful(scope, crate::llm::cli_agent::manager::DRAIN_TIMEOUT).await;
+        }
     });
 }
 
@@ -472,7 +525,10 @@ pub async fn close_past_meeting_session(
     meeting_id: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    close_scope_in_background(&state, SessionScope::Past(meeting_id));
+    close_scope_in_background(&state, SessionScope::Past(meeting_id.clone()));
+    if let Some(ai) = state.ai_runs.clone() {
+        tauri::async_runtime::spawn(async move { ai.close_meeting(&meeting_id).await });
+    }
     Ok(())
 }
 

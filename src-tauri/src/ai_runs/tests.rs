@@ -852,3 +852,21 @@ fn error_kinds_and_texts() {
     assert_eq!(thinking_for_effort(Some("off")), ThinkingSetting::Off);
     assert_eq!(thinking_for_effort(None), ThinkingSetting::Auto);
 }
+
+#[tokio::test]
+async fn a_run_built_before_its_scope_restarted_starts_no_session() {
+    let r = rig();
+    let key = chat_key("c1");
+    let scope = key.scope.clone();
+    let before = r.runs.generation(&scope);
+    r.cli.detach_scope(&scope); // the workspace changed: the chat's sessions restart
+    let mut stale = cli_req("claude_cli", "sonnet", None, &key, "question");
+    stale.expected_generation = Some(before);
+    let err = r.runs.run(stale, None).await.unwrap_err();
+    assert!(matches!(err, AiRunError::Unavailable { ref message } if message.contains("changed")), "{err:?}");
+    assert!(r.spawner.spawned.lock().unwrap().is_empty(), "nothing started from the old context");
+    // The same run built after the change goes through.
+    let mut fresh = cli_req("claude_cli", "sonnet", None, &key, "question");
+    fresh.expected_generation = Some(r.runs.generation(&scope));
+    assert!(r.runs.run(fresh, None).await.is_ok());
+}

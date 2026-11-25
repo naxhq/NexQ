@@ -114,16 +114,66 @@ pub async fn update_workspace(
     detail_of(&state, &id)
 }
 
-/// A workspace the running meeting uses changed: its sessions start again with
-/// the new scope.
-fn restart_live_if_involved(state: &AppState, app: &AppHandle, workspace_id: &str) {
-    let Some(live) = live_meeting_id(state) else { return };
-    let involved = with_conn(state, |conn| meetings::get_meeting_scope(conn, &live))
-        .map(|s| s.effective.iter().any(|w| w == workspace_id))
-        .unwrap_or(false);
-    if involved {
-        meeting_commands::restart_meeting_sessions(app, &live);
+/// Chats whose scope includes `workspace_id`: its own, and (for General) the
+/// ones of workspaces that also use General. Empty when there are no chats yet.
+fn chats_using(conn: &Connection, workspace_id: &str) -> Vec<String> {
+    let sql = "SELECT c.id FROM workspace_chats c JOIN workspaces w ON w.id = c.workspace_id
+               WHERE c.workspace_id = ?1 OR (?1 = 'general' AND w.include_general = 1 AND w.keep_separate = 0)";
+    let Ok(mut stmt) = conn.prepare(sql) else { return Vec::new() };
+    let Ok(rows) = stmt.query_map(rusqlite::params![workspace_id], |row| row.get::<_, String>(0)) else {
+        return Vec::new();
+    };
+    rows.filter_map(Result::ok).collect()
+}
+
+/// What starts again when a workspace changes.
+#[derive(Default)]
+pub(crate) struct Dependents {
+    meetings: Vec<String>,
+    chats: Vec<String>,
+}
+
+/// The meetings (running, open in a view, or with a session record) and chats
+/// whose scope includes `workspace_id`. Read it BEFORE a change that removes
+/// the link (a deleted workspace, a ended borrow).
+pub(crate) fn dependents_of(state: &AppState, workspace_id: &str) -> Dependents {
+    let mut candidates: Vec<String> = live_meeting_id(state).into_iter().collect();
+    let from_sessions = state.agent_sessions.snapshot().into_iter().filter_map(|s| s.meeting_id);
+    let from_records = state.meeting_sessions.scopes().into_iter().filter_map(|s| match s {
+        crate::llm::cli_agent::manager::SessionScope::Live(id)
+        | crate::llm::cli_agent::manager::SessionScope::Past(id) => Some(id),
+        _ => None,
+    });
+    for id in from_sessions.chain(from_records) {
+        if !candidates.contains(&id) {
+            candidates.push(id);
+        }
     }
+    with_conn(state, |conn| {
+        let meetings: Vec<String> = candidates
+            .iter()
+            .filter(|m| {
+                meetings::get_meeting_scope(conn, m).map(|s| s.effective.iter().any(|w| w == workspace_id)).unwrap_or(false)
+            })
+            .cloned()
+            .collect();
+        Ok(Dependents { meetings, chats: chats_using(conn, workspace_id) })
+    })
+    .unwrap_or_default()
+}
+
+/// Starts the dependents' sessions again from their new scope.
+pub(crate) fn restart_dependents(app: &AppHandle, deps: Dependents) {
+    for id in deps.meetings {
+        meeting_commands::restart_meeting_sessions(app, &id);
+    }
+    meeting_commands::restart_chat_sessions(app, deps.chats);
+}
+
+/// A workspace changed (its material, instructions or borrowers): every
+/// session that was started with its material starts again from the new scope.
+pub(crate) fn restart_live_if_involved(state: &AppState, app: &AppHandle, workspace_id: &str) {
+    restart_dependents(app, dependents_of(state, workspace_id));
 }
 
 #[command]
@@ -153,12 +203,29 @@ pub async fn delete_workspace(id: String, mode: DeleteMode, state: State<'_, App
             return Err("A meeting is running in this workspace. End it first".to_string());
         }
     }
+    // Meetings that used it (their own, or by borrowing) and its chats start
+    // again once it is gone; read who they are first.
+    let mut deps = dependents_of(&state, &id);
+    let own: Vec<String> = with_conn(&state, |conn| {
+        let mut stmt = conn
+            .prepare("SELECT id FROM meetings WHERE workspace_id = ?1")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(rusqlite::params![id], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?;
+        Ok(rows.filter_map(Result::ok).collect())
+    })
+    .unwrap_or_default();
+    for m in own {
+        if !deps.meetings.contains(&m) {
+            deps.meetings.push(m);
+        }
+    }
     let deleted = with_conn(&state, |conn| store::delete_workspace(conn, &id, mode))?;
     if let Some(dir) = purge::recordings_dir() {
         purge::delete_files_inside(&dir, &deleted.files);
     }
     emit_changed(&app, None);
     emit_memory(&app, &id);
+    restart_dependents(&app, deps);
     Ok(())
 }
 
@@ -343,6 +410,10 @@ pub async fn delete_talking_point(id: String, state: State<'_, AppState>, app: A
         Ok(ws)
     })?;
     emit_changed(&app, workspace.as_deref());
+    if let Some(ws) = workspace.as_deref() {
+        // Its text may be in the context of a running session.
+        restart_live_if_involved(&state, &app, ws);
+    }
     Ok(())
 }
 
@@ -384,8 +455,19 @@ pub async fn save_meeting_point_edit(
     point_id: String,
     doc: Option<String>,
     state: State<'_, AppState>,
+    app: AppHandle,
 ) -> Result<(), String> {
-    with_conn(&state, |conn| talking_points::save_meeting_point_edit(conn, &meeting_id, &point_id, doc.as_deref()))
+    let in_context = with_conn(&state, |conn| {
+        talking_points::save_meeting_point_edit(conn, &meeting_id, &point_id, doc.as_deref())?;
+        Ok(crate::workspace::scope::scope_for(conn, crate::workspace::ScopeOwner::Meeting(&meeting_id))?
+            .talking_point_ids
+            .contains(&point_id))
+    })?;
+    // This meeting's own version of a context note is in its sessions' context.
+    if in_context {
+        meeting_commands::restart_meeting_sessions(&app, &meeting_id);
+    }
+    Ok(())
 }
 
 // ── Memory ───────────────────────────────────────────────────────────────────

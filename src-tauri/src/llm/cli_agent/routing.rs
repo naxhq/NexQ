@@ -508,6 +508,14 @@ impl MeetingSessions {
             .retain(|key, _| !(key.scope == *scope && key.with_sources));
     }
 
+    /// Every scope that has a record (a session may not be running for it).
+    pub fn scopes(&self) -> Vec<SessionScope> {
+        let mut scopes: Vec<SessionScope> = self.records.lock().unwrap().keys().map(|k| k.scope.clone()).collect();
+        scopes.sort();
+        scopes.dedup();
+        scopes
+    }
+
     /// Every scope that has a with-sources record.
     pub fn scopes_with_sources(&self) -> Vec<SessionScope> {
         let mut scopes: Vec<SessionScope> = self
@@ -734,8 +742,12 @@ pub async fn ask_meeting_session(
     let mut on_sent = Some(on_sent);
     let mut prompt: Option<String> = None;
     let mut restarted = false;
+    let mut rebuilt = false;
     let streamed = Arc::new(AtomicBool::new(false));
     loop {
+        // Read before the record: a restart of the scope in between makes this
+        // generation stale, and nothing starts from a record built before it.
+        let generation = manager.generation(&key.scope);
         let Some(init) = sessions.restart_init(key) else {
             return Err(AskFailure::Closed);
         };
@@ -746,7 +758,7 @@ pub async fn ask_meeting_session(
             )));
         }
         let attempt = async {
-            let handle = manager.ensure(key, init).await?;
+            let handle = manager.ensure_at(key, init, None, Some(generation)).await?;
             if cancel.is_cancelled() {
                 return Err(AgentError::CancelledBeforeSend);
             }
@@ -802,6 +814,15 @@ pub async fn ask_meeting_session(
             }
             Err(e) => e,
         };
+        // The scope was restarted while the session started: read the record
+        // again (one try); a session of the new generation is never retired here.
+        if super::manager::is_scope_changed(&err) {
+            if !rebuilt && sessions.contains(key) {
+                rebuilt = true;
+                continue;
+            }
+            return Err(AskFailure::Closed);
+        }
         if !sessions.contains(key) {
             retire(manager, key);
             return Err(AskFailure::Closed);

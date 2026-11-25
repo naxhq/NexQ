@@ -8,6 +8,7 @@
 //! explicit removal of an item (`remove_library_item`) deletes its memberships.
 
 use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
 
 use crate::db::workspace_migrations::now_ms;
 use crate::sources::config::PersonalSourcesConfig;
@@ -51,19 +52,52 @@ fn config_ids(cfg: &PersonalSourcesConfig) -> Vec<(ItemKind, String)> {
     folders.chain(servers).filter(|(_, id)| !id.is_empty()).collect()
 }
 
-/// A push made by an explicit user action (adding a folder or server from
-/// Settings) names the workspace to file what is new in it: the folders and
-/// servers `new` has that `old` did not.
-pub fn file_new_items(
-    conn: &Connection,
-    old: &PersonalSourcesConfig,
-    new: &PersonalSourcesConfig,
-    workspace_id: &str,
-) -> Result<usize, String> {
-    let known = config_ids(old);
+/// What the user's own action asks to file: the workspace and the ids of the
+/// items just added (never inferred from the config).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Filing {
+    pub workspace_id: String,
+    pub items: Vec<FilingItem>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FilingItem {
+    pub kind: ItemKind,
+    pub ref_id: String,
+}
+
+/// Refuses a filing whose workspace is unknown or archived (checked before
+/// anything is saved).
+pub fn check_filing(conn: &Connection, filing: &Filing) -> Result<(), String> {
+    let ws = super::store::get_workspace(conn, &filing.workspace_id)?;
+    if ws.archived {
+        return Err(format!("\"{}\" is archived", ws.name));
+    }
+    Ok(())
+}
+
+/// Files the listed folders and servers in the workspace. Only an id that is in
+/// `cfg` and has no membership anywhere is filed; every other id is ignored
+/// (an unknown id, one already in a workspace, a document). Returns how many
+/// were filed.
+pub fn file_explicit(conn: &Connection, cfg: &PersonalSourcesConfig, filing: &Filing) -> Result<usize, String> {
+    check_filing(conn, filing)?;
     let mut filed = 0;
-    for (kind, id) in config_ids(new).into_iter().filter(|e| !known.contains(e)) {
-        super::store::add_item(conn, workspace_id, kind, &id, None)?;
+    for item in &filing.items {
+        if item.kind == ItemKind::Document || !is_configured(cfg, item.kind, &item.ref_id) {
+            continue;
+        }
+        let has_membership: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM workspace_items WHERE kind = ?1 AND ref_id = ?2)",
+                params![item.kind.as_str(), item.ref_id],
+                |row| row.get(0),
+            )
+            .map_err(tx_err)?;
+        if has_membership {
+            continue;
+        }
+        super::store::add_item(conn, &filing.workspace_id, item.kind, &item.ref_id, None)?;
         filed += 1;
     }
     Ok(filed)
@@ -148,19 +182,62 @@ mod tests {
         assert_eq!(members(&conn), vec![("general".into(), "folder".into(), "f2".into())]);
     }
 
+    fn item(kind: ItemKind, id: &str) -> FilingItem {
+        FilingItem { kind, ref_id: id.into() }
+    }
+
     #[test]
-    fn an_explicit_add_files_only_what_is_new_in_the_named_workspace() {
+    fn explicit_filing_files_only_configured_ids_with_no_membership() {
         let conn = memory_db();
         let a = new_ws(&conn, "A", false, false);
-        let old = cfg(&["f1"], &[]);
-        sync_with_config(&conn, &old).unwrap();
-        let new = cfg(&["f1", "f2"], &["s1"]);
-        assert_eq!(file_new_items(&conn, &old, &new, &a).unwrap(), 2);
-        let mine: Vec<_> = members(&conn).into_iter().filter(|m| m.0 == a).collect();
-        assert_eq!(mine.len(), 2);
-        // f1 was already known, so it was not filed in A.
-        assert!(!mine.iter().any(|m| m.2 == "f1"));
-        assert!(file_new_items(&conn, &old, &new, "nope").is_err());
+        // f1 is seeded into General; f2, s1 are new; "ghost" is not configured; a document is ignored.
+        sync_with_config(&conn, &cfg(&["f1"], &[])).unwrap();
+        let config = cfg(&["f1", "f2"], &["s1"]);
+        let filing = Filing {
+            workspace_id: a.clone(),
+            items: vec![
+                item(ItemKind::Folder, "f1"),
+                item(ItemKind::Folder, "f2"),
+                item(ItemKind::Server, "s1"),
+                item(ItemKind::Folder, "ghost"),
+                item(ItemKind::Document, "d1"),
+            ],
+        };
+        assert_eq!(file_explicit(&conn, &config, &filing).unwrap(), 2);
+        let mine: Vec<_> = members(&conn).into_iter().filter(|m| m.0 == a).map(|m| m.2).collect();
+        assert_eq!(mine, vec!["f2", "s1"]);
+        // Filing again changes nothing: they now have a membership.
+        assert_eq!(file_explicit(&conn, &config, &filing).unwrap(), 0);
+    }
+
+    #[test]
+    fn an_item_not_named_by_the_user_is_never_filed_even_if_new_in_the_config() {
+        let conn = memory_db();
+        let a = new_ws(&conn, "A", false, false);
+        let config = cfg(&["f1", "f2"], &[]);
+        let filing = Filing { workspace_id: a.clone(), items: vec![item(ItemKind::Folder, "f1")] };
+        file_explicit(&conn, &config, &filing).unwrap();
+        assert!(members(&conn).iter().all(|m| m.2 != "f2"));
+    }
+
+    #[test]
+    fn filing_into_an_unknown_or_archived_workspace_is_refused() {
+        let conn = memory_db();
+        let a = new_ws(&conn, "Old", false, false);
+        crate::workspace::store::archive_workspace(&conn, &a, true).unwrap();
+        let config = cfg(&["f1"], &[]);
+        for ws in [a, "nope".to_string()] {
+            let filing = Filing { workspace_id: ws, items: vec![item(ItemKind::Folder, "f1")] };
+            assert!(file_explicit(&conn, &config, &filing).is_err());
+            assert!(check_filing(&conn, &filing).is_err());
+        }
+        assert!(members(&conn).is_empty());
+    }
+
+    #[test]
+    fn the_filing_shape_matches_what_the_webview_sends() {
+        let filing: Filing = serde_json::from_str(r#"{"workspace_id":"w","items":[{"kind":"folder","ref_id":"f"}]}"#).unwrap();
+        assert_eq!((filing.workspace_id.as_str(), filing.items.len()), ("w", 1));
     }
 
     #[test]

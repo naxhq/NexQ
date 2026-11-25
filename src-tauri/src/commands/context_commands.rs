@@ -51,7 +51,31 @@ pub async fn load_context_file(
 pub async fn remove_context_file(
     resource_id: String,
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
+    // The workspaces that held it: sessions started with its text start again.
+    let holders: Vec<String> = if crate::workspace::available() {
+        state
+            .database
+            .as_ref()
+            .and_then(|db| db.lock().ok())
+            .map(|db| {
+                let mut stmt = db
+                    .connection()
+                    .prepare("SELECT workspace_id FROM workspace_items WHERE kind = 'document' AND ref_id = ?1")
+                    .ok();
+                stmt.as_mut()
+                    .and_then(|s| s.query_map([&resource_id], |r| r.get::<_, String>(0)).ok().map(|rows| rows.filter_map(Result::ok).collect()))
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let deps: Vec<_> = holders
+        .iter()
+        .map(|ws| crate::commands::workspace_commands::dependents_of(&state, ws))
+        .collect();
     let ctx_mgr = state
         .context
         .as_ref()
@@ -77,6 +101,9 @@ pub async fn remove_context_file(
         }
     }
 
+    for d in deps {
+        crate::commands::workspace_commands::restart_dependents(&app, d);
+    }
     Ok(())
 }
 
