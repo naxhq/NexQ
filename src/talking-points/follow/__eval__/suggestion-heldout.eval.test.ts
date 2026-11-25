@@ -1,5 +1,4 @@
 import { describe, it, expect } from "vitest";
-import * as fs from "fs";
 import { buildNoteIndex } from "../tokenize";
 import { VoiceFollower } from "../follower";
 import { ScrollController } from "../scroll";
@@ -14,8 +13,6 @@ import { scenarios3 } from "./heldout-set3.fixtures";
 const pct = (a: number, b: number) => (b ? ((100 * a) / b).toFixed(0) + "%" : "n/a");
 const report: string[] = [];
 const emit = () => {
-  const out = process.env.HELDOUT_OUT;
-  if (out) fs.writeFileSync(`${out}-suggest.txt`, report.join("\n"));
 };
 
 describe("suggestion held-out", () => {
