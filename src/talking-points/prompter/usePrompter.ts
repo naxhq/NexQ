@@ -29,6 +29,9 @@ export const FOCUS_RATIO = 0.33;
 /** A suggestion must hold this long before it is shown, and goes after this long. */
 export const SUGGEST_AFTER_MS = 1000;
 export const SUGGEST_EXPIRE_MS = 12_000;
+/** An automatic move longer than this many words (or to a block that is not next door) can be undone. */
+export const BIG_MOVE_WORDS = 25;
+export const BACK_CHIP_MS = 8000;
 
 /** What the prompter needs from a follower (the real one, or a fake in tests). */
 export interface FollowerLike {
@@ -94,6 +97,9 @@ export interface PrompterState {
   suggestion: GoToSuggestion | null;
   goToSuggestion: () => void;
   dismissSuggestion: () => void;
+  /** After a big automatic move: return to where you were (the follower holds there). */
+  canGoBack: boolean;
+  goBack: () => void;
 }
 
 function stateOf(
@@ -102,8 +108,9 @@ function stateOf(
   cur: number,
   saidIt: boolean,
   said: (id: string) => boolean,
+  auto: (id: string) => boolean,
 ): BlockState {
-  if (saidIt && said(id)) return "said";
+  if (saidIt && said(id)) return auto(id) ? "autosaid" : "said";
   if (i === cur) return "current";
   return i < cur ? "past" : "ahead";
 }
@@ -140,6 +147,10 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
   const rawSuggest = useRef<{ blockId: string; since: number } | null>(null);
   const dismissed = useRef<string | null>(null);
   const [suggestBlock, setSuggestBlock] = useState<string | null>(null);
+  const lastPos = useRef<number | null>(null);
+  const backTo = useRef<number | null>(null);
+  const backTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [canGoBack, setCanGoBack] = useState(false);
 
   const optsRef = useRef(opts);
   optsRef.current = opts;
@@ -254,6 +265,25 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     const snap = f.snapshot();
     setFollowState((prev) => (prev === snap.state ? prev : snap.state));
     setFollowPosition(snap.position);
+    if (snap.state === "following") {
+      const prev = lastPos.current;
+      if (prev !== null) {
+        const far = Math.abs(snap.position - prev) > BIG_MOVE_WORDS;
+        const ix = indexRef.current;
+        const blockAt = (t: number) => (ix.tokens.length ? ix.tokens[Math.max(0, Math.min(ix.tokens.length - 1, Math.floor(t)))].block : 0);
+        const skipped = Math.abs(blockAt(snap.position) - blockAt(prev)) > 1;
+        if (far || skipped) {
+          backTo.current = prev;
+          setCanGoBack(true);
+          if (backTimer.current) clearTimeout(backTimer.current);
+          backTimer.current = setTimeout(() => {
+            backTo.current = null;
+            setCanGoBack(false);
+          }, BACK_CHIP_MS);
+        }
+      }
+      lastPos.current = snap.position;
+    }
     said.current!.setPlace(snap.position);
     const sg = snap.state === "unsure" ? snap.suggestion : null;
     if (!sg || !optsRef.current.suggest) {
@@ -298,6 +328,10 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
   }, [wantVoice, wantSaid, publishVoiceState, noteKey]);
 
   // a suggestion shows once it has held for a second, and goes after twelve
+  useEffect(() => () => {
+    if (backTimer.current) clearTimeout(backTimer.current);
+  }, []);
+
   useEffect(() => {
     if (!wantVoice) return;
     const t = setInterval(() => {
@@ -412,6 +446,7 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     lastSet.current = el.scrollTop;
     if (effRef.current !== "off") {
       follower.current!.seek(token);
+      lastPos.current = token;
       voiceTarget.current = token;
       c.setVoice(token, "following");
       yieldRef.current = true;
@@ -477,10 +512,24 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     if (bi < 0) return;
     const tok = indexRef.current.blocks[bi].first;
     follower.current!.seek(tok);
+    lastPos.current = tok;
     voiceTarget.current = tok;
     ctrl.current.setVoice(tok, "following");
     rawSuggest.current = null;
     setSuggestBlock(null);
+    updateCurrent(tok);
+    resume();
+  }, [updateCurrent, resume]);
+  const goBack = useCallback(() => {
+    const tok = backTo.current;
+    if (tok === null) return;
+    follower.current!.seek(tok); // the follower holds here until it hears you again
+    lastPos.current = tok;
+    voiceTarget.current = tok;
+    ctrl.current.setVoice(tok, "following");
+    backTo.current = null;
+    if (backTimer.current) clearTimeout(backTimer.current);
+    setCanGoBack(false);
     updateCurrent(tok);
     resume();
   }, [updateCurrent, resume]);
@@ -505,7 +554,7 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
   const states = useMemo(() => {
     const m = new Map<string, BlockState>();
     const s = said.current!;
-    blocks.forEach((b, i) => m.set(b.id, stateOf(i, b.id, curBlock, reading.saidIt, (id) => s.isSaid(id))));
+    blocks.forEach((b, i) => m.set(b.id, stateOf(i, b.id, curBlock, reading.saidIt, (id) => s.isSaid(id), (id) => s.marks()[id] === "auto")));
     return m;
     // `rev` is the said tracker's change counter
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -568,5 +617,7 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     suggestion,
     goToSuggestion,
     dismissSuggestion,
+    canGoBack,
+    goBack,
   };
 }

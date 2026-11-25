@@ -9,6 +9,8 @@ interface Props {
   onClose: () => void;
   /** Said it needs your own voice; when it cannot work the switch says why. */
   saidItNote?: string | null;
+  /** Honest word about the language being spoken (nothing for English and French). */
+  languageNote?: string | null;
 }
 
 function Stepper({
@@ -51,7 +53,7 @@ function Stepper({
 const r1 = (n: number) => Math.round(n * 10) / 10;
 
 /** How the note reads: size, spacing, speed, and whether lines are ticked as you say them. */
-export function ReadingSettingsPopover({ reading, onChange, onClose, saidItNote }: Props) {
+export function ReadingSettingsPopover({ reading, onChange, onClose, saidItNote, languageNote }: Props) {
   const ref = useRef<HTMLDivElement | null>(null);
   const L = READING_LIMITS;
 
@@ -111,7 +113,12 @@ export function ReadingSettingsPopover({ reading, onChange, onClose, saidItNote 
         checked={reading.saidIt}
         onChange={(saidIt) => onChange({ saidIt })}
         label="Tick what I have said"
-        description={saidItNote ?? "Lines settle back as you say them. Click a tick to change it."}
+        description={
+          <>
+            {saidItNote ?? "Lines settle back as you say them. Click a tick to change it."}
+            {languageNote && <span className="mt-1 block">{languageNote}</span>}
+          </>
+        }
       />
       <Switch
         checked={reading.suggest}

@@ -156,3 +156,37 @@ describe("Go to chip", () => {
     expect(h.place).toHaveBeenCalledWith(7);
   });
 });
+
+describe("Back to where I was", () => {
+  it("appears after a big automatic move; Backspace in the reader returns and holds the follower there", async () => {
+    render(<PointsPanel />);
+    const region = await screen.findByRole("region", { name: /Opening/ });
+    region.focus();
+    h.snap.state = "following";
+    h.snap.position = 2;
+    await tick(1500);
+    h.snap.position = 60;
+    await tick(1500);
+    expect(screen.getByRole("button", { name: "Back to where I was" })).toBeInTheDocument();
+    expect(region).toHaveFocus();
+    h.seek.mockClear();
+    act(() => {
+      region.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true }));
+    });
+    expect(h.seek).toHaveBeenCalledWith(2);
+    expect(screen.queryByRole("button", { name: "Back to where I was" })).not.toBeInTheDocument();
+  });
+
+  it("says plainly when the language is one the ticks are weaker in", async () => {
+    useConfigStore.setState({ meetingAudioConfig: { you: { language: "es-ES", stt_provider: "deepgram" } } as never });
+    render(<PointsPanel />);
+    await screen.findByRole("region", { name: /Opening/ });
+    expect(screen.getByText("Ticks may be missed in Spanish.")).toBeInTheDocument();
+    cleanup();
+    useConfigStore.setState({ meetingAudioConfig: { you: { language: "en-US", stt_provider: "deepgram" } } as never });
+    render(<PointsPanel />);
+    await screen.findByRole("region", { name: /Opening/ });
+    expect(screen.queryByText(/Ticks (may|often)/)).not.toBeInTheDocument();
+    useConfigStore.setState({ meetingAudioConfig: null });
+  });
+});

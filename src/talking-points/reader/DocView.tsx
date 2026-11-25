@@ -10,7 +10,8 @@ import { sanitizeDoc, type TpBlock, type TpDoc, type TpHeading, type TpInline, t
 import { cn } from "../../lib/utils";
 import "../talkingPoints.css";
 
-export type BlockState = "current" | "ahead" | "past" | "said";
+/** "autosaid": ticked by voice (softer, easy to spot and untick); "said": ticked by hand. */
+export type BlockState = "current" | "ahead" | "past" | "said" | "autosaid";
 
 export interface DocViewProps {
   doc: TpDoc;
@@ -53,7 +54,8 @@ interface BlockProps {
 
 const Block = memo(function Block({ block, depth, state, ticks, onToggleSaid }: BlockProps) {
   const id = block.attrs.id;
-  const said = state === "said";
+  const auto = state === "autosaid";
+  const said = state === "said" || auto;
   const common = {
     "data-block-id": id,
     "data-state": state,
@@ -67,7 +69,8 @@ const Block = memo(function Block({ block, depth, state, ticks, onToggleSaid }: 
           data-tp-skip=""
           tabIndex={-1}
           aria-pressed={said}
-          aria-label={`Said it: ${firstWords(block.content)}`}
+          data-auto={auto ? "" : undefined}
+          aria-label={`Said it: ${firstWords(block.content)}${auto ? ", heard by voice" : ""}`}
           onClick={() => onToggleSaid?.(id)}
           className="tp-tick"
         >

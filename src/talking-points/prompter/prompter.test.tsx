@@ -176,7 +176,7 @@ describe("usePrompter with scripted speech", () => {
     const { hook, ids, onSaidChange } = setup();
     say("u1", "welcome everyone to the", { is_final: false });
     say("u1", "welcome everyone to the quarterly review", { is_final: true });
-    expect(hook.result.current.states.get(ids[0])).toBe("said");
+    expect(hook.result.current.states.get(ids[0])).toBe("autosaid");
     expect(hook.result.current.leftToSay).toBe(2);
     expect(onSaidChange).toHaveBeenCalled();
     const last = onSaidChange.mock.calls[onSaidChange.mock.calls.length - 1][0] as PointSaid[];
@@ -236,7 +236,7 @@ describe("usePrompter with scripted speech", () => {
     const { hook, ids } = setup({}, { audioMode: "online", mutedYou: true, youEngine: "x" });
     hook.rerender({ reading: { ...DEFAULT_READING, mode: "voice", saidIt: true }, avail: { audioMode: "online", mutedYou: false, youEngine: "x" } });
     say("u1", "welcome everyone to the quarterly review");
-    expect(hook.result.current.states.get(ids[0])).toBe("said");
+    expect(hook.result.current.states.get(ids[0])).toBe("autosaid");
   });
 
   it("said-it can be switched off and then nothing ticks or settles", () => {
@@ -249,7 +249,7 @@ describe("usePrompter with scripted speech", () => {
   it("voice following can be off while said-it still ticks (manual mode)", () => {
     const { hook, ids } = setup({ mode: "manual" });
     say("u1", "welcome everyone to the quarterly review");
-    expect(hook.result.current.states.get(ids[0])).toBe("said");
+    expect(hook.result.current.states.get(ids[0])).toBe("autosaid");
     expect(hook.result.current.followState).toBe("off");
   });
 

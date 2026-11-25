@@ -14,6 +14,7 @@ import { DocView } from "../../talking-points/reader/DocView";
 import { parseDoc, type TpDoc } from "../../talking-points/doc/model";
 import { usePrompter, FOCUS_RATIO } from "../../talking-points/prompter/usePrompter";
 import { followAvailability } from "../../talking-points/prompter/voice";
+import { languageNote as langNote, resolveLanguage } from "../../talking-points/prompter/language";
 import { Switcher, type SwitcherNote } from "../../talking-points/prompter/Switcher";
 import { ReadingSettingsPopover } from "../../talking-points/prompter/ReadingSettingsPopover";
 import { PromptEditor } from "../../talking-points/prompter/PromptEditor";
@@ -45,6 +46,7 @@ export function PointsPanel() {
   const audioMode = useMeetingStore((s) => s.audioMode);
   const mutedYou = useConfigStore((s) => s.mutedYou);
   const youEngine = useConfigStore((s) => s.meetingAudioConfig?.you?.stt_provider);
+  const youLanguage = useConfigStore((s) => s.meetingAudioConfig?.you?.language);
   const meetingId = meeting?.id ?? "";
   const home = meeting?.workspace_id ?? "general";
 
@@ -134,6 +136,8 @@ export function PointsPanel() {
     youEngine,
   });
 
+  const honesty = langNote(resolveLanguage(youLanguage, note?.plain_text ?? ""));
+
   const p = usePrompter({
     doc,
     noteKey: note?.id ?? "",
@@ -180,6 +184,10 @@ export function PointsPanel() {
         if (p.playing) p.pause();
         else p.play();
       } else p.noteUserIntent();
+    } else if (k === "Backspace" && p.canGoBack) {
+      e.preventDefault();
+      e.stopPropagation();
+      p.goBack();
     } else if (k === "Enter" && p.suggestion) {
       e.preventDefault();
       e.stopPropagation();
@@ -331,6 +339,7 @@ export function PointsPanel() {
             onChange={(patch) => store.getState().setReading(patch)}
             onClose={() => setSettings(false)}
             saidItNote={reading.saidIt ? voiceNote : null}
+            languageNote={honesty}
           />
         )}
       </div>
@@ -379,6 +388,9 @@ export function PointsPanel() {
               </span>
             )}
           </div>
+          {reading.mode === "voice" && availability.ok && honesty && (
+            <p className="ui-meta shrink-0 px-3 pb-1.5 text-muted-foreground">{honesty}</p>
+          )}
           {reading.mode === "voice" && !availability.ok && (
             <p className="ui-meta shrink-0 px-3 pb-1.5 text-muted-foreground" role="status">
               {availability.message}
@@ -418,7 +430,7 @@ export function PointsPanel() {
             </div>
           </div>
           <span id="tp-reader-help" className="sr-only">
-            Enter ticks the current line, or goes to the suggested point. Plus and minus change the text size. Space plays or pauses auto-scroll.
+            Enter ticks the current line, or goes to the suggested point. Backspace returns after a big jump. Plus and minus change the text size. Space plays or pauses auto-scroll.
           </span>
           <span aria-hidden className="tp-focus-mark" style={{ top: `calc(${FOCUS_RATIO * 100}% - 1px)` }} />
           <div aria-live="polite" className="sr-only">
@@ -436,6 +448,17 @@ export function PointsPanel() {
               )}
             >
               <span className="truncate">Go to: {p.suggestion.text}</span>
+            </button>
+          )}
+          {p.canGoBack && (
+            <button
+              type="button"
+              tabIndex={-1}
+              onClick={p.goBack}
+              className={cn(buttonClass.base, "tp-back border border-border bg-popover/95 text-popover-foreground shadow-md backdrop-blur-sm hover:bg-accent")}
+            >
+              <RotateCcw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              Back to where I was
             </button>
           )}
           {p.yielding && reading.mode !== "manual" && (

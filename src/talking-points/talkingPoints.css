@@ -124,3 +124,14 @@
 .tp-suggest-top { top: 0.5rem; }
 .tp-suggest-bottom { bottom: 3.25rem; }
 @media (prefers-reduced-motion: reduce) { .tp-suggest { animation: none; } }
+
+/* Ticks heard by voice are softer than ones made by hand: a hollow, dashed ring and a lighter settle */
+.tp-read [data-state="autosaid"] { opacity: 0.5; }
+.tp-tick[data-auto] {
+  background: hsl(var(--success) / 0.16);
+  border-style: dashed;
+  border-color: hsl(var(--success) / 0.8);
+  color: hsl(var(--success));
+}
+.tp-back { position: absolute; left: 50%; transform: translateX(-50%); bottom: 0.75rem; animation: tp-chip-in 200ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+@media (prefers-reduced-motion: reduce) { .tp-back { animation: none; } }
