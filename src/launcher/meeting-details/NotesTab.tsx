@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Copy, Download, Undo2 } from "lucide-react";
-import { useLiveNotesStore } from "../../stores/liveNotesStore";
+import { EMPTY_ENTRY, useLiveNotesStore } from "../../stores/liveNotesStore";
 import { NotePage } from "../../live-notes/NotePage";
 import { docToMarkdown } from "../../live-notes/page";
 import { copyText } from "../../live-notes/clipboard";
@@ -16,10 +16,8 @@ interface NotesTabProps {
 /** The notes of a meeting, set as a page. Editable; copy or save as Markdown. */
 export function NotesTab({ meetingId, title, onJump }: NotesTabProps) {
   const store = useLiveNotesStore;
-  const doc = store((s) => s.doc);
-  const ownId = store((s) => s.meetingId);
+  const { doc, undoStack } = store((s) => s.entries[meetingId] ?? EMPTY_ENTRY);
   const settings = store((s) => s.settings);
-  const undoStack = store((s) => s.undoStack);
   const error = store((s) => s.error);
   const [loaded, setLoaded] = useState(false);
 
@@ -44,16 +42,16 @@ export function NotesTab({ meetingId, title, onJump }: NotesTabProps) {
   const actions = useMemo(() => {
     const s = store.getState();
     return {
-      setText: (id: string, text: string) => void s.setText(id, text),
-      setType: (id: string, type: Parameters<typeof s.setType>[1]) => void s.setType(id, type),
-      togglePin: (id: string) => void s.togglePin(id),
-      addLine: (...a: Parameters<typeof s.addLine>) => void s.addLine(...a),
-      deleteLine: (id: string) => void s.deleteLine(id),
-      undo: () => void s.undo(),
+      setText: (id: string, text: string) => void s.setText(meetingId, id, text),
+      setType: (id: string, type: Parameters<typeof s.setType>[2]) => void s.setType(meetingId, id, type),
+      togglePin: (id: string) => void s.togglePin(meetingId, id),
+      addLine: (type: Parameters<typeof s.addLine>[1], parent: string | null, text: string, after?: string | null) => void s.addLine(meetingId, type, parent, text, after),
+      deleteLine: (id: string) => void s.deleteLine(meetingId, id),
+      undo: () => void s.undo(meetingId),
     };
-  }, [store]);
+  }, [store, meetingId]);
 
-  const mine = ownId === meetingId ? doc : null;
+  const mine = doc;
   const markdown = docToMarkdown(mine, title);
   const empty = !mine || mine.blocks.length === 0;
 
@@ -75,7 +73,7 @@ export function NotesTab({ meetingId, title, onJump }: NotesTabProps) {
           Save as file
         </button>
         {undoStack.length > 0 && (
-          <button type="button" className="ln-tool" onClick={() => void store.getState().undo()}>
+          <button type="button" className="ln-tool" onClick={() => void store.getState().undo(meetingId)}>
             <Undo2 className="h-3 w-3" aria-hidden />
             Undo {undoStack[undoStack.length - 1].label.toLowerCase()}
           </button>

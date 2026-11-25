@@ -5,7 +5,7 @@
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { NOTES_UPDATE_EVENT } from "./hotkeys";
 import type {
-  BriefSheetEvent, BriefState, MemoryChangedEvent, NotetakerDocEvent, NotetakerState,
+  BriefSettings, BriefSheetEvent, BriefState, NotetakerSettings, MemoryChangedEvent, NotetakerDocEvent, NotetakerState,
   WorkspaceChatActivityEvent, WorkspaceChatApprovalEvent, WorkspaceChatApprovalClosedEvent, WorkspaceChatContextEvent, WorkspaceChatEndEvent,
   WorkspaceChatErrorEvent, WorkspaceChatStartEvent, WorkspaceChatTokenEvent, WorkspaceIndexProgressEvent,
   WorkspacesChangedEvent,
@@ -464,6 +464,12 @@ export function onNotetakerDoc(handler: (e: NotetakerDocEvent) => void): Promise
 }
 export function onBriefState(handler: (e: BriefState) => void): Promise<UnlistenFn> {
   return listen<BriefState>("brief_state", (e) => handler(e.payload));
+}
+export function onNotetakerSettingsChanged(handler: (e: NotetakerSettings) => void): Promise<UnlistenFn> {
+  return listen<NotetakerSettings>("notetaker_settings_changed", (e) => handler(e.payload));
+}
+export function onBriefSettingsChanged(handler: (e: BriefSettings) => void): Promise<UnlistenFn> {
+  return listen<BriefSettings>("brief_settings_changed", (e) => handler(e.payload));
 }
 export function onBriefSheet(handler: (e: BriefSheetEvent) => void): Promise<UnlistenFn> {
   return listen<BriefSheetEvent>("brief_sheet", (e) => handler(e.payload));

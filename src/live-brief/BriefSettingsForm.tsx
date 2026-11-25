@@ -1,5 +1,5 @@
 import type { BriefSettings } from "../lib/types";
-import { Select, Switch } from "../ui";
+import { Select } from "../ui";
 import { ModelPicker } from "../live-notes/ModelPicker";
 import { formatTokens } from "../live-notes/NotesSettingsForm";
 
@@ -10,12 +10,6 @@ export function BriefSettingsForm({ settings, onChange }: { settings: BriefSetti
   const caps = BRIEF_CAP_CHOICES.includes(settings.cap) ? BRIEF_CAP_CHOICES : [...BRIEF_CAP_CHOICES, settings.cap].sort((a, b) => a - b);
   return (
     <div className="flex flex-col gap-4">
-      <Switch
-        checked={settings.enabled}
-        onChange={(enabled) => onChange({ enabled })}
-        label="Keep a brief while I talk"
-        description="Looks through the workspace for what is known about the topic and keeps a short sheet. Live answers use it. The transcript and the matching passages go to the model you choose."
-      />
       <div className="flex flex-col gap-1.5">
         <div className="ui-section">Model</div>
         <ModelPicker idPrefix="brief" value={{ provider: settings.provider, model: settings.model, effort: settings.effort }} onChange={(c) => onChange(c)} />

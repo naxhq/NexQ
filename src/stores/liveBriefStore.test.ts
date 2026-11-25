@@ -5,6 +5,9 @@ const h = vi.hoisted(() => ({
   sheet: null as BriefSheet | null,
   calls: [] as string[],
   fail: null as string | null,
+  failOnly: new Set<string>(),
+  wsOn: true,
+  live: "m1" as string | null,
   onSheet: null as null | ((e: BriefSheetEvent) => void),
   onState: null as null | ((e: BriefState) => void),
 }));
@@ -12,19 +15,33 @@ const h = vi.hoisted(() => ({
 vi.mock("../lib/ipc", () => {
   const rec = (name: string) => async () => {
     h.calls.push(name);
-    if (h.fail) throw h.fail;
+    if (h.fail || h.failOnly.has(name)) throw h.fail ?? "failed";
   };
   return {
     getMeetingBrief: async () => h.sheet,
     getBriefSettings: async () => ({ enabled: true, provider: null, model: null, effort: null, cap: 60000 }),
-    setBriefSettings: rec("set_settings"),
+    setBriefSettings: async (patch: object) => {
+      h.calls.push("set_settings:" + JSON.stringify(patch));
+      return { enabled: false, provider: null, model: null, effort: null, cap: 60000, ...patch };
+    },
+    getWorkspace: async () => {
+      if (h.failOnly.has("get_ws")) throw "offline";
+      return { brief_enabled: h.wsOn };
+    },
+    updateWorkspace: async (_id: string, patch: { brief_enabled: boolean }) => {
+      h.calls.push("ws:" + patch.brief_enabled);
+      if (h.failOnly.has("ws")) throw "failed";
+      h.wsOn = patch.brief_enabled;
+    },
     briefStart: rec("start"),
     briefStop: rec("stop"),
     briefRefresh: rec("refresh"),
     briefContinue: rec("continue"),
   };
 });
+vi.mock("./meetingStore", () => ({ useMeetingStore: { getState: () => ({ activeMeeting: h.live ? { id: h.live } : null }) } }));
 vi.mock("../lib/events", () => ({
+  onBriefSettingsChanged: async () => () => {},
   onBriefSheet: async (cb: (e: BriefSheetEvent) => void) => {
     h.onSheet = cb;
     return () => (h.onSheet = null);
@@ -43,6 +60,9 @@ beforeEach(() => {
   h.sheet = null;
   h.calls.length = 0;
   h.fail = null;
+  h.failOnly.clear();
+  h.wsOn = true;
+  h.live = "m1";
   useLiveBriefStore.getState().reset();
 });
 
@@ -84,11 +104,48 @@ describe("liveBriefStore", () => {
     expect(h.calls).toEqual(["refresh", "stop", "start", "continue"]);
   });
 
-  it("turning it on or off starts and stops the run", async () => {
+  it("turning on is per workspace: saves it there, then starts the live meeting", async () => {
+    h.wsOn = false;
+    await useLiveBriefStore.getState().attach("m1", "w1");
+    await useLiveBriefStore.getState().turnOn();
+    expect(h.calls).toEqual(["ws:true", "start"]);
+    expect(useLiveBriefStore.getState().workspaceEnabled).toBe(true);
+  });
+
+  it("run controls go to the live meeting only", async () => {
+    h.live = "m-live";
+    await useLiveBriefStore.getState().attach("m-past", "w1");
+    await useLiveBriefStore.getState().refresh();
+    h.live = null;
+    await useLiveBriefStore.getState().refresh();
+    expect(h.calls).toEqual(["refresh"]);
+  });
+
+  it("turning off tries to stop and to save whichever fails, then shows the truth", async () => {
+    await useLiveBriefStore.getState().attach("m1", "w1");
+    h.failOnly.add("stop");
+    await useLiveBriefStore.getState().turnOff();
+    expect(h.calls).toEqual(expect.arrayContaining(["stop", "ws:false"]));
+    expect(useLiveBriefStore.getState().workspaceEnabled).toBe(false);
+    expect(useLiveBriefStore.getState().error).toMatch(/may still be running/);
+  });
+
+  it("never claims off when the save failed or the truth is unreadable", async () => {
+    await useLiveBriefStore.getState().attach("m1", "w1");
+    h.failOnly.add("ws");
+    await useLiveBriefStore.getState().turnOff();
+    expect(useLiveBriefStore.getState().workspaceEnabled).toBe(true);
+    h.failOnly.add("get_ws");
+    await useLiveBriefStore.getState().turnOff();
+    expect(useLiveBriefStore.getState().workspaceEnabled).toBeNull();
+    expect(useLiveBriefStore.getState().error).toMatch(/Could not confirm/);
+  });
+
+  it("a settings change is a patch", async () => {
     await useLiveBriefStore.getState().attach("m1");
-    await useLiveBriefStore.getState().patchSettings({ enabled: false });
-    await useLiveBriefStore.getState().patchSettings({ enabled: true });
-    expect(h.calls).toEqual(["set_settings", "stop", "set_settings", "start"]);
+    await useLiveBriefStore.getState().patchSettings({ cap: 120000 });
+    expect(h.calls).toEqual(["set_settings:" + JSON.stringify({ cap: 120000 })]);
+    expect(useLiveBriefStore.getState().settings?.cap).toBe(120000);
   });
 
   it("says what failed", async () => {

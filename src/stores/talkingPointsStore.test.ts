@@ -60,8 +60,9 @@ beforeEach(() => {
     Object.assign(r, patch, { updated_at: ++clock });
     return { ...r };
   });
-  ipc.createTalkingPoint.mockImplementation(async (ws: string, title?: string, content?: string) => {
-    const r: TalkingPoint = { ...point(`new${server.size + 1}`, ws, server.size), title: title ?? "Untitled note", doc_json: content ?? "", markdown: "", plain_text: "", updated_at: ++clock };
+  // like the backend: everything arrives in one call; a missing flag would default to true
+  ipc.createTalkingPoint.mockImplementation(async (ws: string, title: string, c: { doc_json: string; markdown: string; plain_text: string; in_context?: boolean }) => {
+    const r: TalkingPoint = { ...point(`new${server.size + 1}`, ws, server.size), title, ...c, in_context: c.in_context ?? true, updated_at: ++clock };
     server.set(r.id, r);
     return { ...r };
   });
@@ -91,16 +92,53 @@ describe("loading and creating", () => {
     expect(S().loadError.w1).toBeNull();
   });
 
-  it("creates through the backend, then sends our own markdown and plain text", async () => {
+  it("creates in one atomic call with the text and an explicit AI-context flag (on by default)", async () => {
     install([point("a", "w1", 4)]);
     await S().load("w1");
     const p = await S().create("w1", { title: "  New  ", doc: docFromText("one two") });
-    expect(ipc.createTalkingPoint).toHaveBeenCalledWith("w1", "New", expect.stringContaining("one two"));
-    expect(p!.plain_text).toBe("one two");
-    expect(sent()).toEqual([{ markdown: "one two\n", plain_text: "one two" }]);
+    expect(ipc.createTalkingPoint).toHaveBeenCalledTimes(1);
+    expect(ipc.createTalkingPoint).toHaveBeenCalledWith("w1", "New", {
+      doc_json: expect.stringContaining("one two"),
+      markdown: "one two\n",
+      plain_text: "one two",
+      in_context: true,
+    });
+    expect(p!.in_context).toBe(true);
+    expect(ipc.patchTalkingPoint).not.toHaveBeenCalled(); // no follow-up call, nothing to turn on or off
     expect(S().saveState[p!.id]).toBe("saved");
     expect(S().byWorkspace.w1.map((x) => x.id)).toContain(p!.id);
     expect(pendingSaveCount()).toBe(0);
+  });
+
+  it("duplicating an opted-out note is opted out at every instant; an opted-in one is opted in", async () => {
+    install([point("a"), { ...point("b", "w1", 1), in_context: true }]);
+    await S().load("w1");
+    const seen: boolean[] = [];
+    const unsub = useStore.subscribe((st) => {
+      for (const p of st.byWorkspace.w1 ?? []) if (p.title === "Note a copy") seen.push(p.in_context);
+    });
+    const copyA = await S().duplicate("a");
+    unsub();
+    expect(ipc.createTalkingPoint.mock.calls[0][2].in_context).toBe(false);
+    expect(copyA!.in_context).toBe(false);
+    expect(server.get(copyA!.id)!.in_context).toBe(false);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((v) => v === false)).toBe(true);
+    expect(ipc.patchTalkingPoint).not.toHaveBeenCalled();
+    const copyB = await S().duplicate("b");
+    expect(ipc.createTalkingPoint.mock.calls[1][2].in_context).toBe(true);
+    expect(copyB!.in_context).toBe(true);
+  });
+
+  it("copying to another workspace keeps the source's flag and sends nothing else", async () => {
+    install([point("a")]);
+    await S().load("w1");
+    await S().load("w2");
+    ipc.copyTalkingPoint.mockImplementation(async (id: string, ws: string) => ({ ...server.get(id)!, id: "copy1", workspace_id: ws }));
+    const c = await S().copyTo("a", "w2");
+    expect(c!.in_context).toBe(false);
+    expect(S().byWorkspace.w2[0].in_context).toBe(false);
+    expect(ipc.patchTalkingPoint).not.toHaveBeenCalled();
   });
 
   it("a refused create says why and adds nothing", async () => {

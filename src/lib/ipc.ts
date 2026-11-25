@@ -1308,8 +1308,15 @@ export async function resolveMemory(
 export async function listTalkingPoints(workspaceId: string): Promise<TalkingPoint[]> {
   return invoke<TalkingPoint[]>("list_talking_points", { workspaceId });
 }
-/** Creates a note. `content` is the TipTap document as JSON text. */
-export async function createTalkingPoint(workspaceId: string, title?: string, content?: string): Promise<TalkingPoint> {
+/** Everything a new note starts with, in one call (nothing is ever on for a moment and then turned off). */
+export interface TalkingPointContent {
+  doc_json: string;
+  markdown: string;
+  plain_text: string;
+  in_context: boolean;
+}
+/** Creates a note in one atomic call, with the AI-context flag explicit. */
+export async function createTalkingPoint(workspaceId: string, title: string, content: TalkingPointContent): Promise<TalkingPoint> {
   return invoke<TalkingPoint>("create_talking_point", { workspaceId, title, content });
 }
 /**

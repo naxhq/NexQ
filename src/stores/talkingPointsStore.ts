@@ -176,7 +176,7 @@ interface TalkingPointsState {
   load: (workspaceId: string) => Promise<void>;
   /** Reloads every loaded workspace (or one) keeping unsaved local edits. */
   syncFromBackend: (workspaceId?: string | null) => Promise<void>;
-  create: (workspaceId: string, init?: { title?: string; doc?: TpDoc }) => Promise<TalkingPoint | null>;
+  create: (workspaceId: string, init?: { title?: string; doc?: TpDoc; in_context?: boolean }) => Promise<TalkingPoint | null>;
   edit: (id: string, patch: { title?: string; doc?: TpDoc }) => void;
   setInContext: (id: string, value: boolean) => Promise<void>;
   flush: (id: string) => Promise<void>;
@@ -368,32 +368,18 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
       const doc = init?.doc ?? emptyDoc();
       let created: TalkingPoint;
       try {
-        created = await createTalkingPoint(workspaceId, cleanTitle(init?.title ?? "", "Untitled note"), serializeDoc(doc));
+        // one atomic call with everything, the flag explicit: notes are AI context unless the source says otherwise
+        created = await createTalkingPoint(workspaceId, cleanTitle(init?.title ?? "", "Untitled note"), {
+          ...derived(doc),
+          in_context: init?.in_context ?? true,
+        });
       } catch (e) {
         set({ actionError: message(e) });
         return null;
       }
       upsertNew(created);
-      // our own derived text goes in as a normal autosave, so markdown and plain text are always ours
-      const d = derived(doc);
-      if (created.markdown !== d.markdown || created.plain_text !== d.plain_text) {
-        pending.set(created.id, {
-          workspaceId,
-          dirty: { markdown: d.markdown, plain_text: d.plain_text },
-          orig: {},
-          base: created.updated_at,
-          timer: null,
-          attempt: 0,
-          inFlight: null,
-          conflict: false,
-        });
-        upsert({ ...created, ...d });
-        setSave(created.id, "dirty");
-        await get().flush(created.id);
-      } else {
-        setSave(created.id, "saved");
-      }
-      return get().find(created.id) ?? created;
+      setSave(created.id, "saved");
+      return created;
     },
 
     edit: (id, patch) => {
@@ -537,9 +523,8 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
     duplicate: async (id) => {
       const src = get().find(id);
       if (!src) return null;
-      const copy = await get().create(src.workspace_id, { title: `${src.title} copy`, doc: reidDoc(parseDoc(src.doc_json)) });
-      if (copy && src.in_context) await get().setInContext(copy.id, true);
-      return copy;
+      // the copy is born with the source's own flag
+      return get().create(src.workspace_id, { title: `${src.title} copy`, doc: reidDoc(parseDoc(src.doc_json)), in_context: src.in_context });
     },
 
     copyTo: async (id, workspaceId) => {

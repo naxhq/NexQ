@@ -10,9 +10,10 @@ import {
   saveMeetingNotesEdit,
   setNotetakerSettings,
 } from "../lib/ipc";
-import { onNotetakerDoc, onNotetakerState } from "../lib/events";
+import { onNotetakerDoc, onNotetakerSettingsChanged, onNotetakerState } from "../lib/events";
 import { applyEdit, invertEdit, newUserId, planDelete } from "../live-notes/edits";
 import { diffDocs } from "../live-notes/page";
+import { useMeetingStore } from "./meetingStore";
 
 /** How long a new or changed line keeps its margin tick. */
 export const FRESH_MS = 4000;
@@ -37,44 +38,70 @@ export function cleanDoc(x: unknown): NoteDoc | null {
   return d && Array.isArray(d.blocks) ? d : null;
 }
 
+function cleanSettings(x: unknown): NotetakerSettings | null {
+  return x && typeof x === "object" ? (x as NotetakerSettings) : null;
+}
+
 interface UndoEntry {
   label: string;
   edits: NoteEdit[];
 }
 
-interface LiveNotesState {
-  meetingId: string | null;
+/** One meeting's notes as the editor sees them: the live meeting and a past one never share this. */
+export interface NotesEntry {
   doc: NoteDoc | null;
   version: number;
-  run: NotetakerState | null;
-  settings: NotetakerSettings | null;
   /** Lines that are new or changed, until when (ms epoch). */
   fresh: Record<string, number>;
   /** Bumps when new lines arrive, so the page can count them while the reader is scrolled up. */
   arrivals: { seq: number; added: string[] };
   undoStack: UndoEntry[];
+}
+
+export const EMPTY_ENTRY: NotesEntry = { doc: null, version: 0, fresh: {}, arrivals: { seq: 0, added: [] }, undoStack: [] };
+const blank = (): NotesEntry => ({ ...EMPTY_ENTRY, fresh: {}, arrivals: { seq: 0, added: [] }, undoStack: [] });
+
+/** The live meeting: the only one a run command may ever touch. */
+export function liveMeetingId(): string | null {
+  return useMeetingStore.getState().activeMeeting?.id ?? null;
+}
+
+interface LiveNotesState {
+  /** Notes by meeting id (the live one and any past one open in meeting details). */
+  entries: Record<string, NotesEntry>;
+  /** Runs seen by event, by meeting id. */
+  runs: Record<string, NotetakerState>;
+  settings: NotetakerSettings | null;
   /** The last thing that failed, in words. */
   error: string | null;
 
+  /** Load a meeting's notes and follow it. Never changes which meeting is live. */
   attach: (meetingId: string) => Promise<() => void>;
+  /** Follow the settings from either window. */
+  watchSettings: () => Promise<() => void>;
+  loadSettings: () => Promise<void>;
   reset: () => void;
+
+  // Run controls: the live meeting only.
   turnOn: (scope: NotetakerSettings["scope"]) => Promise<void>;
   stop: () => Promise<void>;
   start: () => Promise<void>;
   updateNow: () => Promise<void>;
   keepGoing: () => Promise<void>;
   patchSettings: (patch: Partial<NotetakerSettings>) => Promise<void>;
-  edit: (edit: NoteEdit, label?: string) => Promise<void>;
-  setText: (id: string, text: string) => Promise<void>;
-  setType: (id: string, type: NoteBlockType) => Promise<void>;
-  togglePin: (id: string) => Promise<void>;
-  addLine: (type: NoteBlockType, parent: string | null, text: string, after?: string | null) => Promise<string>;
-  deleteLine: (id: string) => Promise<void>;
-  undo: () => Promise<void>;
+
+  // Edits: the meeting they are about.
+  edit: (meetingId: string, edit: NoteEdit, label?: string) => Promise<void>;
+  setText: (meetingId: string, id: string, text: string) => Promise<void>;
+  setType: (meetingId: string, id: string, type: NoteBlockType) => Promise<void>;
+  togglePin: (meetingId: string, id: string) => Promise<void>;
+  addLine: (meetingId: string, type: NoteBlockType, parent: string | null, text: string, after?: string | null) => Promise<string>;
+  deleteLine: (meetingId: string, id: string) => Promise<void>;
+  undo: (meetingId: string) => Promise<void>;
   clearError: () => void;
 }
 
-let pruneTimer: ReturnType<typeof setTimeout> | null = null;
+const pruneTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function describeError(e: unknown): string {
   const s = typeof e === "string" ? e : e instanceof Error ? e.message : "";
@@ -82,215 +109,256 @@ function describeError(e: unknown): string {
 }
 
 export const useLiveNotesStore = create<LiveNotesState>((set, get) => {
-  const markFresh = (ids: string[]) => {
+  const entry = (id: string): NotesEntry => get().entries[id] ?? EMPTY_ENTRY;
+  const patchEntry = (id: string, fn: (e: NotesEntry) => Partial<NotesEntry>) =>
+    set((s) => {
+      const cur = s.entries[id] ?? blank();
+      return { entries: { ...s.entries, [id]: { ...cur, ...fn(cur) } } };
+    });
+
+  const markFresh = (meetingId: string, ids: string[]) => {
     if (ids.length === 0) return;
     const until = Date.now() + FRESH_MS;
-    set((s) => {
-      const fresh = { ...s.fresh };
+    patchEntry(meetingId, (e) => {
+      const fresh = { ...e.fresh };
       for (const id of ids) fresh[id] = until;
       return { fresh };
     });
-    if (pruneTimer) clearTimeout(pruneTimer);
-    pruneTimer = setTimeout(() => {
-      const now = Date.now();
-      set((s) => {
-        const fresh: Record<string, number> = {};
-        for (const [id, t] of Object.entries(s.fresh)) if (t > now) fresh[id] = t;
-        return { fresh };
-      });
-    }, FRESH_MS + 50);
+    const old = pruneTimers.get(meetingId);
+    if (old) clearTimeout(old);
+    pruneTimers.set(
+      meetingId,
+      setTimeout(() => {
+        const now = Date.now();
+        patchEntry(meetingId, (e) => {
+          const fresh: Record<string, number> = {};
+          for (const [id, t] of Object.entries(e.fresh)) if (t > now) fresh[id] = t;
+          return { fresh };
+        });
+      }, FRESH_MS + 50),
+    );
   };
 
   const receiveDoc = (meetingId: string, doc: NoteDoc, version: number) => {
-    const s = get();
-    if (s.meetingId !== meetingId) return;
+    const cur = get().entries[meetingId];
+    if (!cur) return; // nobody is looking at this meeting
     if (!cleanDoc(doc)) return;
-    if (version < s.version) return; // an older run's answer arriving late
-    const diff = diffDocs(s.doc, doc);
-    const added = s.doc ? diff.added : [];
-    set((cur) => ({
-      doc,
-      version,
-      arrivals: added.length ? { seq: cur.arrivals.seq + 1, added } : cur.arrivals,
-    }));
-    if (s.doc) markFresh([...diff.added, ...diff.changed]);
+    if (version < cur.version) return; // an older run's answer arriving late
+    const diff = diffDocs(cur.doc, doc);
+    const added = cur.doc ? diff.added : [];
+    patchEntry(meetingId, (e) => ({ doc, version, arrivals: added.length ? { seq: e.arrivals.seq + 1, added } : e.arrivals }));
+    if (cur.doc) markFresh(meetingId, [...diff.added, ...diff.changed]);
   };
 
-  const send = async (edits: NoteEdit[]) => {
-    const meetingId = get().meetingId;
-    if (!meetingId) return;
+  const send = async (meetingId: string, edits: NoteEdit[]) => {
     let last: NoteDoc | null = null;
     for (const e of edits) last = await saveMeetingNotesEdit(meetingId, e);
-    if (cleanDoc(last) && get().meetingId === meetingId) set({ doc: last });
+    if (cleanDoc(last)) patchEntry(meetingId, () => ({ doc: last }));
   };
 
   const fail = (e: unknown) => set({ error: describeError(e) });
 
+  /** The settings as the backend has them now. */
+  const reread = async () => {
+    const s = cleanSettings(await getNotetakerSettings());
+    if (s) set({ settings: s });
+    return s;
+  };
+
+  /** Stop every run we know of, the live meeting first. Never throws. */
+  const stopEverything = async (): Promise<boolean> => {
+    const ids = new Set<string>();
+    const live = liveMeetingId();
+    if (live) ids.add(live);
+    for (const [id, r] of Object.entries(get().runs)) if (r.status !== "off" && r.status !== "finished") ids.add(id);
+    const results = await Promise.allSettled([...ids].map((id) => notetakerStop(id)));
+    return results.every((r) => r.status === "fulfilled");
+  };
+
   return {
-    meetingId: null,
-    doc: null,
-    version: 0,
-    run: null,
+    entries: {},
+    runs: {},
     settings: null,
-    fresh: {},
-    arrivals: { seq: 0, added: [] },
-    undoStack: [],
     error: null,
 
     attach: async (meetingId) => {
-      if (get().meetingId !== meetingId) {
-        set({ meetingId, doc: null, version: 0, run: null, fresh: {}, arrivals: { seq: 0, added: [] }, undoStack: [], error: null });
-      }
-      const unlisten: Array<() => void> = [];
+      if (!get().entries[meetingId]) patchEntry(meetingId, () => blank());
       let alive = true;
       const [offState, offDoc] = await Promise.all([
         onNotetakerState((e) => {
-          if (alive && e.meeting_id === get().meetingId) set({ run: e });
+          if (alive && e.meeting_id === meetingId) set((s) => ({ runs: { ...s.runs, [meetingId]: e } }));
         }),
         onNotetakerDoc((e) => {
-          if (alive) receiveDoc(e.meeting_id, e.doc, e.version);
+          if (alive && e.meeting_id === meetingId) receiveDoc(meetingId, e.doc, e.version);
         }),
       ]);
-      unlisten.push(offState, offDoc);
       try {
         const [doc, settings] = await Promise.all([getMeetingNotes(meetingId), getNotetakerSettings()]);
-        if (alive && get().meetingId === meetingId) {
+        if (alive) {
           // A newer event may already have arrived; keep it.
-          set((cur) => ({
-            doc: cur.doc ?? cleanDoc(doc),
-            settings: settings && typeof settings === "object" ? settings : cur.settings,
-          }));
+          patchEntry(meetingId, (e) => ({ doc: e.doc ?? cleanDoc(doc) }));
+          const s = cleanSettings(settings);
+          if (s) set({ settings: s });
         }
       } catch (e) {
         if (alive) fail(e);
       }
       return () => {
         alive = false;
-        for (const u of unlisten) u();
+        offState();
+        offDoc();
       };
     },
 
+    watchSettings: async () => {
+      const off = await onNotetakerSettingsChanged((s) => {
+        const next = cleanSettings(s);
+        if (next) set({ settings: next });
+      });
+      await get().loadSettings();
+      return off;
+    },
+    loadSettings: async () => {
+      try {
+        await reread();
+      } catch (e) {
+        fail(e);
+      }
+    },
+
     reset: () => {
-      if (pruneTimer) clearTimeout(pruneTimer);
-      set({ meetingId: null, doc: null, version: 0, run: null, fresh: {}, arrivals: { seq: 0, added: [] }, undoStack: [], error: null });
+      for (const t of pruneTimers.values()) clearTimeout(t);
+      pruneTimers.clear();
+      set({ entries: {}, runs: {}, error: null });
     },
 
     turnOn: async (scope) => {
-      const id = get().meetingId;
-      if (!id) return;
-      const next = { ...(get().settings ?? DEFAULT_NOTETAKER_SETTINGS), enabled: true, scope };
-      set({ settings: next, error: null });
+      set({ error: null });
       try {
-        await setNotetakerSettings(next);
-        await notetakerStart(id);
+        const merged = cleanSettings(await setNotetakerSettings({ enabled: true, scope }));
+        if (merged) set({ settings: merged });
+        const live = liveMeetingId();
+        if (live) await notetakerStart(live);
       } catch (e) {
         fail(e);
+        void reread().catch(() => {});
       }
     },
     stop: async () => {
-      const id = get().meetingId;
-      if (!id) return;
-      try {
-        await notetakerStop(id);
-      } catch (e) {
-        fail(e);
-      }
+      // Stopping this meeting's notes is "off for now": attempt it, then show the truth.
+      const ok = await stopEverything();
+      if (!ok) set({ error: "Could not stop the notes. Try again." });
     },
     start: async () => {
-      const id = get().meetingId;
-      if (!id) return;
+      const live = liveMeetingId();
+      if (!live) return;
       set({ error: null });
       try {
-        await notetakerStart(id);
+        await notetakerStart(live);
       } catch (e) {
         fail(e);
       }
     },
     updateNow: async () => {
-      const id = get().meetingId;
-      if (!id) return;
+      const live = liveMeetingId();
+      if (!live) return;
       set({ error: null });
       try {
-        await notetakerUpdateNow(id);
+        await notetakerUpdateNow(live);
       } catch (e) {
         fail(e);
       }
     },
     keepGoing: async () => {
-      const id = get().meetingId;
-      if (!id) return;
+      const live = liveMeetingId();
+      if (!live) return;
       try {
-        await notetakerContinue(id);
-      } catch (e) {
-        fail(e);
-      }
-    },
-    patchSettings: async (patch) => {
-      const next = { ...(get().settings ?? DEFAULT_NOTETAKER_SETTINGS), ...patch };
-      set({ settings: next });
-      try {
-        await setNotetakerSettings(next);
-        // Turning notes on or off from the settings also starts or stops this meeting's run.
-        const id = get().meetingId;
-        if (id && patch.enabled === true) await notetakerStart(id);
-        else if (id && patch.enabled === false) await notetakerStop(id);
+        await notetakerContinue(live);
       } catch (e) {
         fail(e);
       }
     },
 
-    edit: async (edit, label = "Change") => {
-      const doc = get().doc;
+    patchSettings: async (patch) => {
+      if (patch.enabled === false) {
+        // Off must never be claimed unless it is true: try both, then read the truth.
+        const [saved, stopped] = await Promise.allSettled([setNotetakerSettings(patch), stopEverything()]);
+        let truth: NotetakerSettings | null = null;
+        try {
+          truth = await reread();
+        } catch {
+          truth = null;
+        }
+        const clean = saved.status === "fulfilled" && stopped.status === "fulfilled" && stopped.value;
+        if (!truth) set({ error: "Could not confirm whether the notes are off. Check again before you rely on it." });
+        else if (!clean || truth.enabled) set({ error: "Notes may still be running. Try turning them off again." });
+        return;
+      }
+      const before = get().settings;
+      if (before) set({ settings: { ...before, ...patch } });
+      try {
+        const merged = cleanSettings(await setNotetakerSettings(patch));
+        if (merged) set({ settings: merged });
+        const live = liveMeetingId();
+        if (live && patch.enabled === true) await notetakerStart(live);
+      } catch (e) {
+        fail(e);
+        void reread().catch(() => {});
+      }
+    },
+
+    edit: async (meetingId, edit, label = "Change") => {
+      const doc = entry(meetingId).doc;
       if (!doc) return;
       const back = invertEdit(doc, edit);
-      set((s) => ({
+      patchEntry(meetingId, (e) => ({
         doc: applyEdit(doc, edit),
-        undoStack: back.length ? [...s.undoStack, { label, edits: back }].slice(-UNDO_LIMIT) : s.undoStack,
+        undoStack: back.length ? [...e.undoStack, { label, edits: back }].slice(-UNDO_LIMIT) : e.undoStack,
       }));
       try {
-        await send([edit]);
+        await send(meetingId, [edit]);
       } catch (e) {
-        set({ doc });
+        patchEntry(meetingId, () => ({ doc }));
         fail(e);
       }
     },
-    setText: (id, text) => get().edit({ op: "update", id, text }, "Edit"),
-    setType: (id, type) => get().edit({ op: "update", id, type }, "Edit"),
-    togglePin: async (id) => {
-      const b = get().doc?.blocks.find((x) => x.id === id);
-      if (b) await get().edit({ op: "update", id, pinned: !b.pinned }, b.pinned ? "Unpin" : "Pin");
+    setText: (m, id, text) => get().edit(m, { op: "update", id, text }, "Edit"),
+    setType: (m, id, type) => get().edit(m, { op: "update", id, type }, "Edit"),
+    togglePin: async (m, id) => {
+      const b = entry(m).doc?.blocks.find((x) => x.id === id);
+      if (b) await get().edit(m, { op: "update", id, pinned: !b.pinned }, b.pinned ? "Unpin" : "Pin");
     },
-    addLine: async (type, parent, text, after) => {
+    addLine: async (m, type, parent, text, after) => {
       const id = newUserId();
-      await get().edit({ op: "add", id, type, parent, text, after: after ?? null }, "Add");
+      await get().edit(m, { op: "add", id, type, parent, text, after: after ?? null }, "Add");
       return id;
     },
-    deleteLine: async (id) => {
-      const doc = get().doc;
+    deleteLine: async (m, id) => {
+      const doc = entry(m).doc;
       if (!doc) return;
       const { edits, undo } = planDelete(doc, id);
       if (!edits.length) return;
       let next = doc;
       for (const e of edits) next = applyEdit(next, e);
-      set((s) => ({ doc: next, undoStack: [...s.undoStack, { label: "Delete", edits: undo }].slice(-UNDO_LIMIT) }));
+      patchEntry(m, (e) => ({ doc: next, undoStack: [...e.undoStack, { label: "Delete", edits: undo }].slice(-UNDO_LIMIT) }));
       try {
-        await send(edits);
+        await send(m, edits);
       } catch (e) {
-        set({ doc });
+        patchEntry(m, () => ({ doc }));
         fail(e);
       }
     },
-    undo: async () => {
-      const { undoStack, doc } = get();
+    undo: async (m) => {
+      const { undoStack, doc } = entry(m);
       const top = undoStack[undoStack.length - 1];
       if (!top || !doc) return;
       let next = doc;
       for (const e of top.edits) next = applyEdit(next, e);
-      set({ doc: next, undoStack: undoStack.slice(0, -1) });
+      patchEntry(m, () => ({ doc: next, undoStack: undoStack.slice(0, -1) }));
       try {
-        await send(top.edits);
+        await send(m, top.edits);
       } catch (e) {
-        set({ doc });
+        patchEntry(m, () => ({ doc }));
         fail(e);
       }
     },

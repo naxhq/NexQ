@@ -5,7 +5,7 @@ import { cn } from "../lib/utils";
 import type { NotetakerSettings, NotetakerState } from "../lib/types";
 import { onNotesUpdateRequested } from "../lib/events";
 import { useMeetingStore } from "../stores/meetingStore";
-import { useLiveNotesStore } from "../stores/liveNotesStore";
+import { EMPTY_ENTRY, useLiveNotesStore } from "../stores/liveNotesStore";
 import { NotePage } from "./NotePage";
 import { NotesSettingsForm, formatTokens } from "./NotesSettingsForm";
 import { jumpToTranscript } from "./jump";
@@ -36,12 +36,10 @@ export function statusWords(run: NotetakerState | null, settings: NotetakerSetti
 export function NotesPanel() {
   const meetingId = useMeetingStore((s) => s.activeMeeting?.id ?? "");
   const store = useLiveNotesStore;
-  const doc = store((s) => s.doc);
-  const run = store((s) => s.run);
+  const entry = store((s) => s.entries[meetingId] ?? EMPTY_ENTRY);
+  const { doc, fresh, arrivals, undoStack } = entry;
+  const run = store((s) => s.runs[meetingId] ?? null);
   const settings = store((s) => s.settings);
-  const fresh = store((s) => s.fresh);
-  const arrivals = store((s) => s.arrivals);
-  const undoStack = store((s) => s.undoStack);
   const error = store((s) => s.error);
   const [dialog, setDialog] = useState(false);
   const [scope, setScope] = useState<NotetakerSettings["scope"]>("meeting");
@@ -63,33 +61,51 @@ export function NotesPanel() {
     };
   }, [meetingId, store]);
 
+  // Settings change from the other window too.
+  useEffect(() => {
+    let off: (() => void) | null = null;
+    let gone = false;
+    void store
+      .getState()
+      .watchSettings()
+      .then((u) => (gone ? u() : (off = u)))
+      .catch(() => {});
+    return () => {
+      gone = true;
+      off?.();
+    };
+  }, [store]);
+
   // The N key (raised by the meeting window's shortcuts) asks for an update.
   useEffect(
     () =>
       onNotesUpdateRequested(() => {
         const s = store.getState();
-        if (s.settings?.enabled && s.run?.status !== "running" && s.run?.status !== "capped") void s.updateNow();
+        const r = s.runs[meetingId]?.status;
+        if (s.settings?.enabled && r !== "running" && r !== "capped") void s.updateNow();
       }),
-    [store],
+    [store, meetingId],
   );
 
   const actions = useMemo(() => {
     const s = store.getState();
     return {
-      setText: (id: string, text: string) => void s.setText(id, text),
-      setType: (id: string, type: Parameters<typeof s.setType>[1]) => void s.setType(id, type),
-      togglePin: (id: string) => void s.togglePin(id),
-      addLine: (...a: Parameters<typeof s.addLine>) => void s.addLine(...a),
-      deleteLine: (id: string) => void s.deleteLine(id),
-      undo: () => void s.undo(),
+      setText: (id: string, text: string) => void s.setText(meetingId, id, text),
+      setType: (id: string, type: Parameters<typeof s.setType>[2]) => void s.setType(meetingId, id, type),
+      togglePin: (id: string) => void s.togglePin(meetingId, id),
+      addLine: (type: Parameters<typeof s.addLine>[1], parent: string | null, text: string, after?: string | null) => void s.addLine(meetingId, type, parent, text, after),
+      deleteLine: (id: string) => void s.deleteLine(meetingId, id),
+      undo: () => void s.undo(meetingId),
     };
-  }, [store]);
+  }, [store, meetingId]);
 
   if (!meetingId) {
     return <div className="ln-root"><p className="ln-empty text-muted-foreground">Notes appear here once a meeting has started.</p></div>;
   }
 
-  const { word, note } = statusWords(run, settings);
+  const { word, note: baseNote } = statusWords(run, settings);
+  const nextS = run?.status === "idle" && run.next_in_ms && run.next_in_ms > 0 ? Math.ceil(run.next_in_ms / 1000) : 0;
+  const note = baseNote ?? (nextS ? `next update in about ${nextS} s` : undefined);
   const colors = settings?.colors ?? true;
   const hasBlocks = (doc?.blocks.length ?? 0) > 0;
   const enabled = !!settings?.enabled;
@@ -229,7 +245,7 @@ export function NotesPanel() {
         <footer className="ln-foot">
           {enabled && cap > 0 && (
             <>
-              <span>{formatTokens(used)} of {formatTokens(cap)} tokens</span>
+              <span>{formatTokens(used)} of {formatTokens(cap)} tokens{run?.total_tokens ? `, ${formatTokens(run.total_tokens)} seen in all` : ""}</span>
               <div
                 className="ln-meter"
                 role="meter"
@@ -244,7 +260,7 @@ export function NotesPanel() {
             </>
           )}
           {undoStack.length > 0 && (
-            <button type="button" className="ln-tool ml-auto" onClick={() => void store.getState().undo()}>
+            <button type="button" className="ln-tool ml-auto" onClick={() => void store.getState().undo(meetingId)}>
               <Undo2 className="h-3 w-3" aria-hidden />
               Undo {undoStack[undoStack.length - 1].label.toLowerCase()}
             </button>

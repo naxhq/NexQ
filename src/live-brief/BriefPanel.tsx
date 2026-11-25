@@ -3,7 +3,7 @@ import { FileText, MoreHorizontal, Pause, Play, RefreshCw } from "lucide-react";
 import { Dialog, Menu, buttonClass, type MenuItemSpec } from "../ui";
 import { cn } from "../lib/utils";
 import type { BriefFact } from "../lib/types";
-import { searchWorkspace } from "../lib/ipc";
+import { openBriefSource } from "./openSource";
 import { useMeetingStore } from "../stores/meetingStore";
 import { sheetTimeMs, useLiveBriefStore } from "../stores/liveBriefStore";
 import { formatTokens } from "../live-notes/NotesSettingsForm";
@@ -14,9 +14,6 @@ import "../live-notes/liveNotes.css";
 
 /** A sheet older than this is no longer handed to live answers (spec 6b). */
 export const ANSWER_FRESH_MS = 4 * 60_000;
-
-/** DOM event: the host should open this source (a meeting at a time, or a document). */
-export const OPEN_SOURCE_EVENT = "nexq:open-source";
 
 export function briefStatusWords(status: string | undefined, enabled: boolean): string {
   if (!enabled) return "Brief is off";
@@ -33,30 +30,17 @@ export function briefStatusWords(status: string | undefined, enabled: boolean): 
   }
 }
 
-/** Find the passage a fact cites and ask the host to open it. */
-async function openSource(workspaceId: string | undefined, fact: BriefFact): Promise<void> {
-  if (!workspaceId) return;
-  try {
-    const hits = await searchWorkspace(workspaceId, fact.source, null, 10);
-    const hit = hits.find((p) => p.id === fact.passage_id) ?? hits.find((p) => p.title === fact.source) ?? hits[0];
-    if (!hit) return;
-    if (hit.kind === "transcript") useMeetingStore.getState().setSelectedMeetingId(hit.ref_id);
-    window.dispatchEvent(new CustomEvent(OPEN_SOURCE_EVENT, { detail: hit }));
-  } catch {
-    /* Nothing to open: the chip stays as a label. */
-  }
-}
-
-function SourceChip({ fact, workspaceId }: { fact: BriefFact; workspaceId?: string }) {
+function SourceChip({ fact }: { fact: BriefFact }) {
+  const src = fact.sources?.[0];
   const inner = (
     <>
       <FileText className="mr-1 h-3 w-3 shrink-0" aria-hidden />
-      <span>{fact.source}</span>
+      <span>{src?.title ?? fact.source}</span>
     </>
   );
-  if (!workspaceId) return <span className="lb-chip">{inner}</span>;
+  if (!src) return <span className="lb-chip">{inner}</span>;
   return (
-    <button type="button" className="lb-chip" onClick={() => void openSource(workspaceId, fact)} aria-label={`Open source: ${fact.source}`}>
+    <button type="button" className="lb-chip" onClick={() => void openBriefSource(src)} aria-label={`Open source: ${src.title}`}>
       {inner}
     </button>
   );
@@ -80,7 +64,7 @@ export function BriefPanel() {
     let gone = false;
     void store
       .getState()
-      .attach(meetingId)
+      .attach(meetingId, workspaceId ?? null)
       .then((u) => {
         if (gone) u();
         else off = u;
@@ -89,13 +73,28 @@ export function BriefPanel() {
       gone = true;
       off?.();
     };
-  }, [meetingId, store]);
+  }, [meetingId, workspaceId, store]);
+
+  useEffect(() => {
+    let off: (() => void) | null = null;
+    let gone = false;
+    void store
+      .getState()
+      .watchSettings()
+      .then((u) => (gone ? u() : (off = u)))
+      .catch(() => {});
+    return () => {
+      gone = true;
+      off?.();
+    };
+  }, [store]);
 
   if (!meetingId) {
     return <div className="ln-root"><p className="ln-empty text-muted-foreground">The brief appears here once a meeting has started.</p></div>;
   }
 
-  const enabled = !!settings?.enabled;
+  const workspaceEnabled = store((st) => st.workspaceEnabled);
+  const enabled = workspaceEnabled ?? false;
   const paused = run?.status === "paused" || run?.status === "capped";
   const capped = run?.status === "capped";
   const failed = run?.status === "error" || (run?.status === "paused" && !!run.reason);
@@ -172,7 +171,7 @@ export function BriefPanel() {
       )}
 
       <div className="ln-scroll" role="region" aria-label="Brief">
-        {!enabled && settings ? (
+        {!enabled ? (
           <div className="ln-empty">
             <h3>Brief</h3>
             <p>While you talk, NexQ looks through this workspace for what is known about the topic and keeps a short sheet. Live answers use it. It sends the transcript and the matching passages to your chosen model.</p>
@@ -200,7 +199,7 @@ export function BriefPanel() {
                 {sheet.facts.slice(0, 6).map((f, i) => (
                   <li key={`${f.passage_id ?? "x"}-${i}`} className="lb-fact">
                     <div className="lb-fact-text"><NoteText text={f.text} /></div>
-                    <SourceChip fact={f} workspaceId={workspaceId} />
+                    <SourceChip fact={f} />
                   </li>
                 ))}
               </ul>

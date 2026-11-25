@@ -21,7 +21,7 @@ vi.mock("../lib/events", async () => {
 });
 
 import { NotesPanel, statusWords } from "./LiveNotesPanel";
-import { useLiveNotesStore, DEFAULT_NOTETAKER_SETTINGS } from "../stores/liveNotesStore";
+import { EMPTY_ENTRY, useLiveNotesStore, DEFAULT_NOTETAKER_SETTINGS } from "../stores/liveNotesStore";
 import { useMeetingStore } from "../stores/meetingStore";
 import { NOTES_UPDATE_EVENT } from "../lib/hotkeys";
 
@@ -30,10 +30,10 @@ const calls = vi.hoisted(() => [] as string[]);
 function seed(opts: { settings?: Partial<NotetakerSettings>; run?: Partial<NotetakerState> | null; doc?: boolean; error?: string | null }) {
   const spy = (name: string) => vi.fn(async () => void calls.push(name));
   useLiveNotesStore.setState({
-    meetingId: "m1",
-    doc: opts.doc === false ? { version: 1, blocks: [] } : structuredClone(sampleDoc),
+    entries: { m1: { ...EMPTY_ENTRY, doc: opts.doc === false ? { version: 1, blocks: [] } : structuredClone(sampleDoc) } },
     settings: { ...DEFAULT_NOTETAKER_SETTINGS, enabled: true, ...opts.settings },
-    run: opts.run === null ? null : { meeting_id: "m1", status: "running", tokens_used: 42000, cap: 120000, ...opts.run },
+    runs: opts.run === null ? {} : { m1: { meeting_id: "m1", status: "running", tokens_used: 42000, cap: 120000, ...opts.run } },
+    watchSettings: async () => () => {},
     error: opts.error ?? null,
     // The panel attaches on mount; the store's own attach is replaced so no IPC is needed.
     attach: async () => () => {},
@@ -96,7 +96,7 @@ describe("NotesPanel", () => {
     expect(calls).toEqual(["update_now", "update_now"]);
 
     calls.length = 0;
-    act(() => useLiveNotesStore.setState({ run: { meeting_id: "m1", status: "running", tokens_used: 1, cap: 10 } }));
+    act(() => useLiveNotesStore.setState({ runs: { m1: { meeting_id: "m1", status: "running", tokens_used: 1, cap: 10 } } }));
     expect(screen.getByRole("button", { name: /Update now/ })).toBeDisabled();
     act(() => void window.dispatchEvent(new Event(NOTES_UPDATE_EVENT)));
     expect(calls).toEqual([]);
@@ -156,7 +156,7 @@ describe("NotesPanel", () => {
 
   it("offers Undo after a change", async () => {
     seed({});
-    useLiveNotesStore.setState({ undoStack: [{ label: "Delete", edits: [] }], undo: (async () => void calls.push("undo")) as never });
+    useLiveNotesStore.setState({ entries: { m1: { ...EMPTY_ENTRY, doc: structuredClone(sampleDoc), undoStack: [{ label: "Delete", edits: [] }] } }, undo: (async () => void calls.push("undo")) as never });
     render(<NotesPanel />);
     await userEvent.click(screen.getByRole("button", { name: "Undo delete" }));
     expect(calls).toEqual(["undo"]);

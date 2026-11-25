@@ -63,8 +63,8 @@ function wireBackend() {
     rows.set(id, next);
     return next;
   });
-  ipc.createTalkingPoint.mockImplementation(async (ws: string, title?: string, content?: string) => {
-    const next: TalkingPoint = { id: "created" + ++clock, workspace_id: ws, title: title ?? "Untitled note", doc_json: content ?? "", markdown: "", plain_text: "", in_context: false, sort: 99, created_at: 1, updated_at: ++clock };
+  ipc.createTalkingPoint.mockImplementation(async (ws: string, title: string, c: { doc_json: string; markdown: string; plain_text: string; in_context?: boolean }) => {
+    const next: TalkingPoint = { id: "created" + ++clock, workspace_id: ws, title, ...c, in_context: c.in_context ?? true, sort: 99, created_at: 1, updated_at: ++clock };
     rows.set(next.id, next);
     return next;
   });

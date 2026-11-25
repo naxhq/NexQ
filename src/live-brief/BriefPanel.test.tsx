@@ -11,7 +11,8 @@ vi.mock("../lib/ipc", () => ({
   searchWorkspace: async () => hits.list,
 }));
 
-import { BriefPanel, OPEN_SOURCE_EVENT, briefStatusWords } from "./BriefPanel";
+import { BriefPanel, briefStatusWords } from "./BriefPanel";
+import { WORKSPACE_OPEN_EVENT } from "./openSource";
 import { Age, formatAge } from "./Age";
 import { DEFAULT_BRIEF_SETTINGS, useLiveBriefStore } from "../stores/liveBriefStore";
 import { useMeetingStore } from "../stores/meetingStore";
@@ -21,7 +22,7 @@ const calls = vi.hoisted(() => [] as string[]);
 const sheet = (over: Partial<BriefSheet> = {}): BriefSheet => ({
   now: "Pricing for the Berlin launch",
   facts: [
-    { text: "The Berlin plan was set at 40k in March.", source: "Launch notes", passage_id: 7 },
+    { text: "The Berlin plan was set at 40k in March.", source: "Launch notes", passage_id: 7, sources: [{ kind: "transcript", ref_id: "m-old", sub_ref: null, title: "Launch notes", start_ms: 5000 }] },
     { text: "Support is covered by Omar.", source: "Weekly sync, 3 Mar", passage_id: 9 },
   ],
   earlier: ["Hiring timeline", "Venue options"],
@@ -36,8 +37,10 @@ function seed(over: Record<string, unknown> = {}) {
     sheet: sheet(),
     hidden: false,
     run: { meeting_id: "m1", status: "idle", tokens_used: 1000, cap: 60000 },
-    settings: { ...DEFAULT_BRIEF_SETTINGS, enabled: true },
+    settings: { ...DEFAULT_BRIEF_SETTINGS },
+    workspaceEnabled: true,
     error: null,
+    watchSettings: async () => () => {},
     attach: async () => () => {},
     refresh: spy("refresh") as never,
     pause: spy("pause") as never,
@@ -93,7 +96,7 @@ describe("BriefPanel", () => {
   });
 
   it("starts by explaining itself and what it sends, then turns on", async () => {
-    seed({ sheet: null, settings: { ...DEFAULT_BRIEF_SETTINGS, enabled: false }, run: null });
+    seed({ sheet: null, workspaceEnabled: false, run: null });
     render(<BriefPanel />);
     expect(screen.getByRole("heading", { name: "Brief is off" })).toBeInTheDocument();
     expect(screen.getByText(/Live answers use it/)).toBeInTheDocument();
@@ -130,16 +133,22 @@ describe("BriefPanel", () => {
     expect(screen.getByRole("button", { name: "Change model" })).toBeInTheDocument();
   });
 
-  it("opens a source: the host hears which passage", async () => {
-    hits.list = [{ id: 7, kind: "transcript", ref_id: "m-old", sub_ref: null, title: "Launch notes", start_ms: 5000, end_ms: 9000, text: "", tokens: 1, occurred_at: null, score: 1 }];
+  it("opens a source directly from its reference, no search", async () => {
     seed();
-    const heard: Array<{ kind: string; ref_id: string }> = [];
+    const heard: Array<{ kind: string; ref_id: string; start_ms: number | null }> = [];
     const on = (e: Event) => heard.push((e as CustomEvent).detail);
-    window.addEventListener(OPEN_SOURCE_EVENT, on);
+    window.addEventListener(WORKSPACE_OPEN_EVENT, on);
     render(<BriefPanel />);
     await userEvent.click(screen.getByRole("button", { name: "Open source: Launch notes" }));
-    window.removeEventListener(OPEN_SOURCE_EVENT, on);
-    expect(heard).toEqual([expect.objectContaining({ kind: "transcript", ref_id: "m-old" })]);
+    window.removeEventListener(WORKSPACE_OPEN_EVENT, on);
+    expect(heard).toEqual([expect.objectContaining({ kind: "transcript", ref_id: "m-old", start_ms: 5000 })]);
+  });
+
+  it("shows a source without a reference as a label, not a button", () => {
+    seed();
+    render(<BriefPanel />);
+    expect(screen.queryByRole("button", { name: "Open source: Weekly sync, 3 Mar" })).toBeNull();
+    expect(screen.getByText("Weekly sync, 3 Mar")).toBeInTheDocument();
   });
 });
 
