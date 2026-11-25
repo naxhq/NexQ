@@ -107,6 +107,9 @@ pub struct ContextManager {
     wrapped: std::sync::Mutex<std::collections::HashMap<String, (String, String)>>,
     /// The last capped text of the scope's documents, with what it was made from.
     capped: std::sync::Mutex<Option<(String, Option<String>)>>,
+    /// Counted up by every load, edit, removal, re-extraction and missing mark;
+    /// the kept copies are built for one number and never served for another.
+    revision: u64,
 }
 
 impl ContextManager {
@@ -126,6 +129,7 @@ impl ContextManager {
             custom_instructions: String::new(),
             wrapped: Default::default(),
             capped: Default::default(),
+            revision: 0,
         }
     }
 
@@ -135,9 +139,22 @@ impl ContextManager {
         crate::app_paths::context_dir()
     }
 
+    /// Every change of the library starts here: the number moves on and the kept
+    /// wrapped and capped copies (which hold document text) are dropped.
+    fn touched(&mut self) {
+        self.revision += 1;
+        if let Ok(mut k) = self.wrapped.lock() {
+            k.clear();
+        }
+        if let Ok(mut k) = self.capped.lock() {
+            *k = None;
+        }
+    }
+
     /// Load a file into the context manager.
     /// Copies the file to the context directory, extracts text, and caches it.
     pub fn load_file(&mut self, file_path: &str) -> Result<ContextResource, String> {
+        self.touched();
         let source_path = Path::new(file_path);
 
         if !source_path.exists() {
@@ -266,6 +283,7 @@ impl ContextManager {
     /// reads the file off the main thread and calls [`Self::finish_extraction`].
     /// Restoring twice changes nothing.
     pub fn restore_resource(&mut self, mut resource: ContextResource, text: Option<String>) {
+        self.touched();
         if self.resources.iter().any(|r| r.id == resource.id) {
             return;
         }
@@ -286,6 +304,7 @@ impl ContextManager {
     /// A resource restored with no saved text could not be read: it stays,
     /// shown as missing.
     pub fn mark_missing(&mut self, resource_id: &str) {
+        self.touched();
         if let Some(r) = self.resources.iter_mut().find(|r| r.id == resource_id) {
             r.status = STATUS_MISSING.to_string();
         }
@@ -294,6 +313,7 @@ impl ContextManager {
 
     /// The text of a `loading` resource has been read.
     pub fn finish_extraction(&mut self, resource_id: &str, text: String) {
+        self.touched();
         let token_count = count_tokens(&text);
         let Some(r) = self.resources.iter_mut().find(|r| r.id == resource_id) else {
             return;
@@ -307,6 +327,7 @@ impl ContextManager {
     /// Adds a Markdown document made from text (an answer saved to the
     /// library): written to the context folder like any loaded file.
     pub fn add_text(&mut self, title: &str, markdown: &str) -> Result<ContextResource, String> {
+        self.touched();
         let stem = file_stem(title);
         let resource_id = Uuid::new_v4().to_string();
         let file_name = format!("{stem}.md");
@@ -338,6 +359,7 @@ impl ContextManager {
 
     /// Remove a context resource by its ID.
     pub fn remove_file(&mut self, resource_id: &str) -> Result<(), String> {
+        self.touched();
         // Find the resource
         let idx = self
             .resources
@@ -395,7 +417,7 @@ impl ContextManager {
         let mut parts = Vec::new();
         for (resource, text) in self.scoped_documents(scope) {
             let attrs = format!(" {} \"{}\"", resource.file_type, resource.name.replace('"', " "));
-            let built_from = format!("{nonce}|{}|{}|{attrs}", resource.loaded_at, text.len());
+            let built_from = format!("{}|{nonce}|{}|{attrs}", self.revision, text.len());
             if let Ok(kept) = self.wrapped.lock() {
                 if let Some((from, block)) = kept.get(&resource.id) {
                     if *from == built_from {
@@ -423,7 +445,7 @@ impl ContextManager {
     /// The raw (unwrapped) documents the scope allows.
     fn document_blocks<'a>(&'a self, scope: &'a EffectiveScope) -> Vec<RawBlock<'a>> {
         self.scoped_documents(scope)
-            .map(|(r, text)| RawBlock { label: "doc", attrs: format!(" {} \"{}\"", r.file_type, r.name.replace('"', " ")), text })
+            .map(|(r, text)| RawBlock { label: "doc", id: r.id.clone(), attrs: format!(" {} \"{}\"", r.file_type, r.name.replace('"', " ")), text })
             .collect()
     }
 
@@ -440,10 +462,16 @@ impl ContextManager {
             return None;
         }
         // the same documents under the same cap give the same text: kept, so an answer does not redo the cut and the wrap
-        let key = format!(
-            "{nonce}|{max_chars}|{}",
-            blocks.iter().map(|b| format!("{}{}{}", b.attrs, b.text.len(), b.text.chars().take(64).collect::<String>())).collect::<Vec<_>>().join("#")
-        );
+        // a document is told apart by its id and the revision of the library; a talking point (small, and
+        // not tracked by the revision) by its whole text. Each part is length-prefixed, so none can run into the next.
+        let parts: Vec<String> = blocks
+            .iter()
+            .map(|b| {
+                let body = if b.label == "point" { b.text } else { "" };
+                format!("{}:{}{}:{}{}:{}", b.id.len(), b.id, b.attrs.len(), b.attrs, body.len(), body)
+            })
+            .collect();
+        let key = format!("{}|{nonce}|{max_chars}|{}", self.revision, parts.join("|"));
         if let Ok(kept) = self.capped.lock() {
             if let Some((k, v)) = kept.as_ref() {
                 if *k == key {
@@ -574,6 +602,7 @@ const FENCE_OVERHEAD_TOKENS: usize = 24;
 /// A document or talking point before it is wrapped.
 struct RawBlock<'a> {
     label: &'static str,
+    id: String,
     attrs: String,
     text: &'a str,
 }
@@ -615,7 +644,7 @@ fn point_blocks(ctx: &ScopedContext) -> Vec<RawBlock<'_>> {
         .iter()
         .map(|p| {
             let title = if p.title.trim().is_empty() { "Talking point" } else { p.title.trim() };
-            RawBlock { label: "point", attrs: format!(" \"{}\"", title.replace('"', " ")), text: p.text.trim() }
+            RawBlock { label: "point", id: String::new(), attrs: format!(" \"{}\"", title.replace('"', " ")), text: p.text.trim() }
         })
         .collect()
 }
@@ -639,6 +668,7 @@ mod tests {
             custom_instructions: "CANARY_CUSTOM".to_string(),
             wrapped: Default::default(),
             capped: Default::default(),
+            revision: 0,
         };
         for (id, text) in docs {
             let r = ContextResource {
@@ -735,6 +765,43 @@ mod tests {
         assert!(saw_short);
         assert_eq!(m.get_resources_context_capped_for(&ctx, full.chars().count()).as_deref(), Some(full.as_str()));
         assert_eq!(m.get_resources_context_capped_for(&scoped(&[], "", &[]), 100), None);
+    }
+
+    #[test]
+    fn kept_copies_follow_every_change_of_the_library() {
+        let a = format!("{}AAAA", "x".repeat(100));
+        let b = format!("{}BBBB", "x".repeat(100)); // same length and same start, another end
+        let mut m = manager_with(&[("a", &a)]);
+        let ctx = scoped(&["a"], "", &[]);
+        let first = m.get_resources_context_capped_for(&ctx, 5_000).unwrap();
+        let wrapped = m.get_assembled_context_for(&ctx);
+        assert!(first.contains("AAAA") && wrapped.contains("AAAA"));
+        // an edit that keeps the length and the first characters
+        m.finish_extraction("a", b.clone());
+        let after = m.get_resources_context_capped_for(&ctx, 5_000).unwrap();
+        assert!(after.contains("BBBB") && !after.contains("AAAA"), "no stale copy");
+        assert!(m.get_assembled_context_for(&ctx).contains("BBBB"));
+        // unfiled mid-session: the scope no longer holds it
+        let none = scoped(&[], "", &[]);
+        assert_eq!(m.get_resources_context_capped_for(&none, 5_000), None);
+        assert!(!m.get_assembled_context_for(&none).contains("BBBB"));
+        // filed again
+        assert!(m.get_resources_context_capped_for(&ctx, 5_000).unwrap().contains("BBBB"));
+        // removed: gone from the answer and from the kept copies
+        let _ = m.get_assembled_context_for(&ctx);
+        m.remove_file("a").unwrap();
+        assert_eq!(m.get_resources_context_capped_for(&ctx, 5_000), None);
+        assert!(m.wrapped.lock().unwrap().is_empty() && m.capped.lock().unwrap().is_none(), "no text kept");
+        // re-added under the same id with other text
+        m.restore_resource(
+            ContextResource { id: "a".into(), name: "a.txt".into(), file_type: "txt".into(), file_path: String::new(), size_bytes: 0, token_count: 0, preview: String::new(), loaded_at: String::new(), status: STATUS_READY.into() },
+            Some("CCCC fresh".into()),
+        );
+        let again = m.get_resources_context_capped_for(&ctx, 5_000).unwrap();
+        assert!(again.contains("CCCC") && !again.contains("BBBB"));
+        // a document marked missing is not served from a kept copy
+        m.mark_missing("a");
+        assert!(!m.get_assembled_context_for(&ctx).contains("CCCC"));
     }
 
     #[test]

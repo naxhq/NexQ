@@ -88,6 +88,8 @@ pub struct NotesParams {
     /// run, then the notes are finished again. Empty for a live meeting.
     pub preload: Vec<TranscriptLine>,
     pub one_shot: bool,
+    /// The meeting that is live now: an update of an ended meeting never competes with it.
+    pub live_meeting: Arc<dyn Fn() -> Option<String> + Send + Sync>,
 }
 
 // ---------------------------------------------------------------- contract shapes
@@ -241,6 +243,10 @@ struct Actor {
     one_shot: bool,
     /// Set when the meeting ended while a run was in flight: that run gets `final_timeout`, not forever.
     finish_deadline: Option<tokio::time::Instant>,
+    /// The end-of-meeting passes (or the update of an ended meeting) began: `(retried, why)` of `begin_final`.
+    closing_begun: Option<(bool, Option<String>)>,
+    /// A new live meeting took over while an update of an ended one was running.
+    yielded: bool,
 }
 
 impl Actor {
@@ -257,6 +263,7 @@ impl Actor {
             engine.resume_from(r.doc, r.tokens_used, r.cap);
         }
         let one_shot = p.one_shot;
+        let final_timeout = p.final_timeout;
         if one_shot {
             // the range is taken up again by this run; what it leaves is marked again at the end
             engine.doc_mut().uncovered = None;
@@ -287,7 +294,9 @@ impl Actor {
             quitting: false,
             interrupted: false,
             one_shot,
-            finish_deadline: None,
+            finish_deadline: if one_shot { Some(tokio::time::Instant::now() + final_timeout.saturating_mul(30)) } else { None },
+            closing_begun: None,
+            yielded: false,
         }
     }
 
@@ -435,18 +444,19 @@ impl Actor {
     }
 
     /// One run when the trigger says so, taking commands while the call is in flight.
-    async fn maybe_run(&mut self, rx: &mut mpsc::UnboundedReceiver<NotesCmd>) {
-        let Decision::Run(reason) = self.engine.poll() else { return };
+    /// Returns whether a pass was made.
+    async fn maybe_run(&mut self, rx: &mut mpsc::UnboundedReceiver<NotesCmd>) -> bool {
+        let Decision::Run(reason) = self.engine.poll() else { return false };
         let allowed = self.auto() || matches!(reason, RunReason::Manual | RunReason::Final);
         if !allowed {
-            return;
+            return false;
         }
         let gen0 = (self.p.generation)(&self.p.meeting_id, false);
         self.swap.set_expected(Some(gen0));
         let Some(prep) = self.engine.prepare(reason) else {
             // the trigger believed there were words but the engine holds none: forget the request so it cannot stick
             self.engine.resync();
-            return;
+            return false;
         };
         // "running" is shown while the call is in flight
         self.emit_state();
@@ -455,6 +465,7 @@ impl Actor {
         let fut = swap.call(&req);
         tokio::pin!(fut);
         let mut timed_out = false;
+        let mut watch = tokio::time::interval(self.p.tick.max(Duration::from_millis(5)));
         let result = loop {
             // a run still going when the meeting ended is given `final_timeout` and then cancelled:
             // its lines go back and the end says which minutes are not covered
@@ -474,6 +485,13 @@ impl Actor {
                     timed_out = true;
                     self.swap.cancel();
                 }
+                _ = watch.tick() => {
+                    // a meeting started while an old one is being updated: this pass is given up at once
+                    if self.should_yield() {
+                        self.yielded = true;
+                        self.swap.cancel();
+                    }
+                }
             }
         };
         if self.discarded.load(Ordering::SeqCst) || (self.p.generation)(&self.p.meeting_id, false) != gen0 {
@@ -482,13 +500,55 @@ impl Actor {
         } else {
             self.engine.complete(prep, result);
         }
+        true
     }
 
-    /// The update of an ended meeting: passes over the saved lines like the end of a meeting does,
-    /// until nothing is left, the limit is reached or a run fails.
-    async fn finish_one_shot(&mut self) {
-        let _ = self.engine.finish_with(true).await;
+    /// Another meeting is live while this one's notes are being updated after its end.
+    fn should_yield(&self) -> bool {
+        self.one_shot && (self.p.live_meeting)().is_some_and(|id| id != self.p.meeting_id)
+    }
+
+    fn conclude(&mut self, forced: Option<(&str, String)>) {
+        let (retried, why) = self.closing_begun.clone().unwrap_or((false, None));
+        let outcome = self.engine.last_outcome().filter(|o| o.reason == RunReason::Final).cloned();
+        self.engine.conclude(true, retried, why, outcome, forced);
         self.done = true;
+    }
+
+    /// One step of the passes at the end of the meeting, or of the update of an ended one. Each pass
+    /// goes through the same prepare, call (watching commands, the deadline and a new meeting) and
+    /// complete as a live run, so a delete, a stop, a quit, a new meeting, a changed provider or the
+    /// limit are seen before and during every pass. Returns true when the actor is done.
+    async fn closing_step(&mut self, rx: &mut mpsc::UnboundedReceiver<NotesCmd>) -> bool {
+        if self.closing_begun.is_none() {
+            self.closing_begun = Some(self.engine.begin_final(true));
+        }
+        if self.should_yield() {
+            self.conclude(Some(("paused", "Paused: another meeting started. Update notes again when it ends".into())));
+            return true;
+        }
+        if self.finish_deadline.is_some_and(|d| tokio::time::Instant::now() >= d) {
+            self.conclude(None);
+            return true;
+        }
+        if self.one_shot && (self.p.busy)() {
+            return false; // a live answer is being written: wait for it
+        }
+        self.engine.request_final();
+        let ran = self.maybe_run(rx).await;
+        if self.quitting || self.discarded.load(Ordering::SeqCst) {
+            return true;
+        }
+        if self.yielded {
+            self.conclude(Some(("paused", "Paused: another meeting started. Update notes again when it ends".into())));
+            return true;
+        }
+        let failed = ran && self.engine.last_outcome().is_some_and(|o| !o.ok);
+        if !ran || failed || !self.engine.has_pending() {
+            self.conclude(None);
+            return true;
+        }
+        false
     }
 
     async fn run(mut self, mut rx: mpsc::UnboundedReceiver<NotesCmd>) {
@@ -506,14 +566,13 @@ impl Actor {
             if self.quitting {
                 break;
             }
-            if self.finishing {
-                let _ = self.engine.finish().await;
-                self.done = true;
-                break;
-            }
-            if self.one_shot {
-                self.finish_one_shot().await;
-                break;
+            if self.finishing || self.one_shot {
+                if self.closing_step(&mut rx).await {
+                    break;
+                }
+                self.emit_state();
+                self.flush_doc(false);
+                continue;
             }
             self.engine.set_gate(!(self.p.busy)());
             self.maybe_run(&mut rx).await;
@@ -534,6 +593,10 @@ impl Actor {
             self.finished_flag.store(true, Ordering::SeqCst);
             (self.p.on_exit)(&self.p.meeting_id);
             return;
+        }
+        if (self.finishing || self.one_shot) && !self.done && !self.interrupted && self.user_stopped {
+            // the person stopped the notes during the passes at the end: what is left is marked, not lost
+            self.conclude(Some(("stopped", "The notes were stopped".into())));
         }
         if self.interrupted {
             // a run that was in flight finished after the quit saved: save as interrupted once more

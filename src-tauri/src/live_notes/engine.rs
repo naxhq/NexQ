@@ -137,6 +137,7 @@ pub struct NotesEngine<L: LlmCall, C: Clock> {
     last_error: Option<String>,
     /// The error code of the last failure (`no_key` ...).
     last_code: &'static str,
+    last_outcome: Option<RunOutcome>,
     /// What the end-of-meeting pass did, when it had to decide (shown in the state).
     pub final_note: Option<String>,
     done: bool,
@@ -156,7 +157,7 @@ pub const MAX_PENDING_WORDS: usize = 40_000;
 impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
     pub fn new(llm: L, clock: C, cfg: NotesConfig, sink: Arc<dyn NotesSink>, store: Arc<dyn NotesStore>) -> Self {
         let trigger = NotesTrigger::new(cfg.trigger.clone());
-        Self { llm, clock, cfg, trigger, doc: NoteDoc::new(), pending: Vec::new(), sink, store, last_error: None, last_code: "", final_note: None, done: false, dropped_lines: 0, sent_tokens_total: 0, pending_words: 0, nonce: crate::prompt_data::new_nonce() }
+        Self { llm, clock, cfg, trigger, doc: NoteDoc::new(), pending: Vec::new(), sink, store, last_error: None, last_code: "", last_outcome: None, final_note: None, done: false, dropped_lines: 0, sent_tokens_total: 0, pending_words: 0, nonce: crate::prompt_data::new_nonce() }
     }
 
     /// Continue from saved notes (app restart, resumed meeting).
@@ -382,6 +383,7 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
             }
         };
         self.sent_tokens_total += outcome.sent_tokens;
+        self.last_outcome = Some(outcome.clone());
         self.save(self.status_word());
         self.emit_status();
         outcome
@@ -517,28 +519,13 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
     }
 
     /// `finish`, or (`run_final` false: manual mode) only the bookkeeping, with
-    /// the note naming what was never sent.
+    /// the note naming what was never sent. The live actor does not use this loop: it runs
+    /// the same passes itself (`begin_final`, passes through its own call path, `conclude`)
+    /// so a delete, a stop, a quit or a new meeting is seen between and during passes.
     pub async fn finish_with(&mut self, run_final: bool) -> Option<RunOutcome> {
-        // After three failures one bounded last try is made, unless the cause
-        // cannot be fixed by trying (no key); a plan limit is not retried either.
-        let mut retried = false;
-        let mut why: Option<String> = None;
-        match self.trigger.guard.state {
-            RunState::Paused(PauseReason::Failures) if self.last_code != "no_key" && run_final => {
-                self.trigger.guard.allow_final_retry();
-                retried = true;
-            }
-            RunState::Paused(PauseReason::Failures) => {
-                why = Some("Not tried again at the end: the provider needs a key or a sign-in".into());
-            }
-            RunState::Paused(PauseReason::PlanLimit) => {
-                why = Some("Not tried again at the end: the plan's usage limit was reached".into());
-            }
-            _ => {}
-        }
+        let (retried, why) = self.begin_final(run_final);
         let started = std::time::Instant::now();
         let mut outcome = None;
-        let mut passes = 0;
         while run_final {
             self.trigger.request_final();
             let Decision::Run(reason) = self.poll() else { break };
@@ -555,11 +542,49 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
             let o = self.complete(prepared, result);
             let ok = o.ok;
             outcome = Some(o);
-            passes += 1;
             if !ok || self.pending.is_empty() {
                 break;
             }
         }
+        self.conclude(run_final, retried, why, outcome.clone(), None);
+        outcome
+    }
+
+    /// Before the passes at the end: after three failures one bounded last try is made, unless the
+    /// cause cannot be fixed by trying (no key); a plan limit is not retried either.
+    pub fn begin_final(&mut self, run_final: bool) -> (bool, Option<String>) {
+        let mut retried = false;
+        let mut why: Option<String> = None;
+        match self.trigger.guard.state {
+            RunState::Paused(PauseReason::Failures) if self.last_code != "no_key" && run_final => {
+                self.trigger.guard.allow_final_retry();
+                retried = true;
+            }
+            RunState::Paused(PauseReason::Failures) => {
+                why = Some("Not tried again at the end: the provider needs a key or a sign-in".into());
+            }
+            RunState::Paused(PauseReason::PlanLimit) => {
+                why = Some("Not tried again at the end: the plan's usage limit was reached".into());
+            }
+            _ => {}
+        }
+        (retried, why)
+    }
+
+    /// The last of the passes was `request_final` then the usual poll, prepare, call, complete.
+    pub fn request_final(&mut self) {
+        self.trigger.request_final();
+    }
+
+    /// What the last finished run did.
+    pub fn last_outcome(&self) -> Option<&RunOutcome> {
+        self.last_outcome.as_ref()
+    }
+
+    /// After the passes: marks what is not covered, says how the notes ended and saves them as done.
+    /// `forced` names an end the passes did not reach by themselves (`kind`, lead of the note):
+    /// another meeting started, the person stopped it.
+    pub fn conclude(&mut self, run_final: bool, retried: bool, mut why: Option<String>, outcome: Option<RunOutcome>, forced: Option<(&str, String)>) {
         if retried {
             why = Some(match &outcome {
                 Some(o) if o.ok => "Tried once more at the end after earlier errors: it worked".to_string(),
@@ -567,11 +592,12 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
                 None => "Nothing was left to send at the end".to_string(),
             });
         }
-        let _ = passes;
         self.mark_uncovered();
         if let Some((from, to)) = self.doc.uncovered {
             let range = format!("{} to {}", fmt_clock(from), fmt_clock(to));
-            let lead = if !run_final {
+            let lead = if let Some((_, lead)) = &forced {
+                lead.clone()
+            } else if !run_final {
                 "Notes were on manual".to_string()
             } else {
                 why.take().unwrap_or_else(|| match self.trigger.guard.state {
@@ -589,12 +615,14 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
             self.final_note = why;
         }
         let failed = outcome.as_ref().filter(|o| !o.ok).and_then(|o| o.error.clone()).filter(|e| e != "cancelled");
-        self.doc.ended = Some(self.ended_kind(run_final, failed));
+        self.doc.ended = Some(match forced {
+            Some((kind, _)) if self.doc.uncovered.is_some() => (kind.to_string(), None),
+            _ => self.ended_kind(run_final, failed),
+        });
         self.done = true;
         self.trigger.stop();
         self.save("done");
         self.emit_status();
-        outcome
     }
 }
 

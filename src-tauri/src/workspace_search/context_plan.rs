@@ -253,8 +253,9 @@ pub fn wrap_data(nonce: &str, label: &str, text: &str) -> String {
 /// neutralised, and a line that starts like a speaker label or a chat
 /// control token gets a backslash so it cannot pass for a turn.
 pub fn flatten(text: &str) -> String {
-    // the model's own earlier turns: history, fenced by role; ordinary closers and generics are text
-    let clean = neutralise(text);
+    // unfenced text (earlier turns, condensed history, one-line fields): the strict pass, whatever the spelling or what precedes a
+    // role or tool word; ordinary HTML closers (`</div>`) still stay
+    let clean = crate::prompt_data::neutralise_text_strict(text);
     clean
         .split('\n')
         .map(|line| {

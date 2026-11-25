@@ -29,7 +29,7 @@ use crate::live_runtime::db::{LiveDb, LiveScope};
 use crate::live_runtime::llm::LlmFactory;
 use crate::live_runtime::notes::{NoteEdit, NotesCmd, NotesHandle, NotesParams};
 use crate::live_runtime::settings::{merge, BriefSettings, MemorySettings, NotetakerSettings, BRIEF_KEY, MEMORY_KEY, NOTETAKER_KEY};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -269,6 +269,8 @@ impl LiveRuntimes {
 
     pub fn meeting_deleted(&self, meeting_id: &str) {
         self.deps.deleted.lock().unwrap().insert(meeting_id.to_string());
+        // a memory run in flight for it is stopped too, not only checked between its calls
+        memory::cancel_runs_where(|meeting, _, _| meeting == meeting_id);
         memory::cancel_runs_of_meeting(meeting_id);
         let mut g = self.inner.lock().unwrap();
         if let Some(h) = g.notes.remove(meeting_id) {
@@ -344,6 +346,7 @@ impl LiveRuntimes {
             final_timeout: self.deps.final_timeout,
             preload: Vec::new(),
             one_shot: false,
+            live_meeting: self.deps.live_meeting.clone(),
         })?;
         self.inner.lock().unwrap().notes.insert(meeting_id.to_string(), handle);
         Ok(())
@@ -448,6 +451,7 @@ impl LiveRuntimes {
             final_timeout: self.deps.final_timeout,
             preload,
             one_shot: true,
+            live_meeting: self.deps.live_meeting.clone(),
         })?;
         self.inner.lock().unwrap().notes.insert(meeting_id.to_string(), handle);
         Ok(())

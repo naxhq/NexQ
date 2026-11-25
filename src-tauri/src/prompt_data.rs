@@ -305,6 +305,17 @@ fn word_at(look: &[char], from: usize) -> String {
 ///
 /// Keeps line breaks; idempotent.
 pub fn neutralise_text(text: &str) -> String {
+    neutralise_text_with(text, false)
+}
+
+/// Like `neutralise_text`, but with no exemption for generics or components: a role, tool or wrapper word after `<` is
+/// escaped whatever its spelling or what comes before it. For text outside a fence (earlier turns, one-line fields).
+/// Ordinary HTML closers (`</div>`) still stay.
+pub fn neutralise_text_strict(text: &str) -> String {
+    neutralise_text_with(text, true)
+}
+
+fn neutralise_text_with(text: &str, strict: bool) -> String {
     // line endings are one kind (a lone carriage return is a control character, and "\r\n" is just a line break)
     let content: Vec<char> = strip_hidden(&text.nfc().collect::<String>().replace("\r\n", "\n").replace('\r', "\n")).chars().collect();
     let look: Vec<char> = content.iter().map(|&c| looks_like(c)).collect();
@@ -343,8 +354,21 @@ pub fn neutralise_text(text: &str) -> String {
                 // capitalised) are code; chat tokens are caught whatever surrounds them
                 let generic_ctx = j0 - i == 1 && i > 0 && (content[i - 1].is_alphanumeric() || content[i - 1] == '_');
                 let original_word: String = content[j.min(n)..].iter().take(word.chars().count()).collect();
-                let pascal = component_name(&original_word) && !ROLE_WORDS.contains(&word.as_str());
-                let named = TAG_WORDS.contains(&word.as_str()) && !generic_ctx && !pascal;
+                // Only a PascalCase identifier is exempt, and only where it reads as code: after a word (`List<User>`, `Vec<Message>`)
+                // or as a component that is not a role (`<Link>`). `x<system>` and `foo<invoke>` are escaped; a lower-case word is a
+                // generic only when a comma or a nested bracket follows it (`map<user, string>`).
+                let component = component_name(&original_word);
+                let next_ch = {
+                    let mut m = j + word.chars().count();
+                    while m < n && look[m] == ' ' {
+                        m += 1;
+                    }
+                    look.get(m).copied().unwrap_or(' ')
+                };
+                let exempt = !strict
+                    && ((component && (generic_ctx || !ROLE_WORDS.contains(&word.as_str())))
+                        || (generic_ctx && matches!(next_ch, ',' | '<')));
+                let named = TAG_WORDS.contains(&word.as_str()) && !exempt;
                 let control = TAG_EXACT.contains(&word.as_str()) || TAG_PREFIXES.iter().any(|p| word.starts_with(p));
                 let closer = if after == '/' {
                     let k = skip(j + 1);
@@ -1106,5 +1130,30 @@ mod generics_and_speed_tests {
             assert!(!out.is_empty());
         }
         assert!(started.elapsed() < std::time::Duration::from_secs(15), "{:?}", started.elapsed());
+    }
+}
+
+#[cfg(test)]
+mod spelling_tests {
+    use super::*;
+
+    #[test]
+    fn only_pascal_case_in_a_code_context_is_exempt_role_and_tool_words_in_other_spellings_are_escaped() {
+        for ok in ["List<User>", "Vec<Message>", "Promise<Result>", "map<user, string>", "Map<String, Vec<User>>", "<Link>go</Link>", "<Message>hi</Message>", "<Result value={x} />"] {
+            assert_eq!(neutralise_text(ok), ok, "{ok}");
+        }
+        for bad in ["x<system>", "foo<invoke>", "foo<INVOKE>", "Vec<user>", "list<TOOL>", "<User>", "<SYSTEM>", "a<assistant>", "x<tool_call>", "foo<message>"] {
+            assert_ne!(neutralise_text(bad), bad, "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_strict_pass_has_no_exemption_for_unfenced_text_but_keeps_ordinary_closers() {
+        for bad in ["List<User>", "Vec<Message>", "<Link>", "<Message>", "map<user, string>", "x<system>", "<tool_call>"] {
+            assert_ne!(neutralise_text_strict(bad), bad, "{bad}");
+        }
+        for ok in ["</div>", "</span>", "</T>", "</Foo>", "a<b and c>d", "Vec<T>", "1 < 2"] {
+            assert_eq!(neutralise_text_strict(ok), ok, "{ok}");
+        }
     }
 }

@@ -2222,3 +2222,121 @@ async fn an_unrelated_settings_patch_does_not_reset_keep_goings_fresh_allotment(
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(h.rt.notetaker_state("m1").await["cap"].as_u64().unwrap(), raised, "the limit was reset to the setting");
 }
+
+// ---------------------------------------------------------------- the passes after the end listen to everything
+
+/// An ended meeting with notes that covered nothing yet and `lines` saved lines: updating it takes several passes.
+fn seed_ended(h: &H, lines: usize) -> String {
+    let ws = { let c = h.conn.lock().unwrap(); new_ws(&c, "Ended", false, false) };
+    let m = make_meeting(h, &ws);
+    {
+        let c = h.conn.lock().unwrap();
+        for i in 0..lines {
+            c.execute(
+                "INSERT INTO transcript_segments (id, meeting_id, text, speaker, timestamp_ms, is_final, created_at) VALUES (?1,?2,?3,'Them',?4,1,'t')",
+                rusqlite::params![format!("e{i}"), m, format!("line {i} about the annual pricing plan and the renewal terms for the next year"), 1_000 + (i as i64) * 2_000],
+            )
+            .unwrap();
+        }
+    }
+    let mut doc = crate::live_notes::doc::NoteDoc::new();
+    doc.started_at = Some(0);
+    h.rt.deps().db.save_notes(&m, &doc, "done", 100, 120_000).unwrap();
+    h.rt.patch_notetaker(&json!({"enabled": true})).unwrap();
+    m
+}
+
+async fn first_pass_in_flight(h: &H, m: &str) {
+    *h.fake.delay.lock().unwrap() = Duration::from_millis(400);
+    h.rt.notetaker_update_now(m).unwrap();
+    until("the first pass", || h.fake.inflight.load(Ordering::SeqCst) == 1).await;
+}
+
+#[tokio::test]
+async fn an_update_of_an_ended_meeting_takes_every_pass_until_covered() {
+    let h = harness();
+    let m = seed_ended(&h, 300);
+    h.rt.notetaker_update_now(&m).unwrap();
+    until("covered", || h.events.last_status("notetaker_state", &m).map(|v| v["status"] == "finished" && v["ended"]["kind"] == "covered").unwrap_or(false)).await;
+    assert!(h.fake.count(AiPurpose::Notes) >= 2, "more than one pass: {}", h.fake.count(AiPurpose::Notes));
+}
+
+#[tokio::test]
+async fn deleting_the_meeting_mid_pass_stops_the_update_and_saves_nothing() {
+    let h = harness();
+    let m = seed_ended(&h, 300);
+    let before = h.rt.deps().db.load_notes(&m).unwrap().updated_at;
+    first_pass_in_flight(&h, &m).await;
+    let seen = h.events.all.lock().unwrap().len();
+    h.rt.meeting_deleted(&m);
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    assert_eq!(h.fake.count(AiPurpose::Notes), 1, "no pass after the delete");
+    assert_eq!(h.rt.deps().db.load_notes(&m).unwrap().updated_at, before, "nothing saved after the delete");
+    let late: Vec<String> = h.events.all.lock().unwrap().iter().skip(seen).filter(|(_, v)| v["meeting_id"] == json!(m)).map(|(n, _)| n.clone()).collect();
+    assert!(late.is_empty(), "events after the delete: {late:?}");
+}
+
+#[tokio::test]
+async fn stopping_mid_update_marks_what_is_left_and_sends_nothing_more() {
+    let h = harness();
+    let m = seed_ended(&h, 300);
+    first_pass_in_flight(&h, &m).await;
+    h.rt.notetaker_stop(&m);
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    assert_eq!(h.fake.count(AiPurpose::Notes), 1);
+    let st = h.rt.notetaker_state(&m).await;
+    assert!(!st["not_covered"].is_null() && st["ended"]["kind"] != "covered", "{st}");
+}
+
+#[tokio::test]
+async fn quitting_mid_update_keeps_the_range_for_the_next_start() {
+    let h = harness();
+    let m = seed_ended(&h, 300);
+    first_pass_in_flight(&h, &m).await;
+    h.rt.shutdown(Duration::from_secs(2)).await;
+    assert_eq!(h.fake.count(AiPurpose::Notes), 1);
+    let h2 = harness_on(h.conn.clone());
+    let st = h2.rt.notetaker_state(&m).await;
+    assert!(!st["not_covered"].is_null(), "{st}");
+    assert!(can_of(&st).contains(&"update".to_string()), "{st}");
+}
+
+#[tokio::test]
+async fn a_new_live_meeting_makes_the_update_give_way_at_once() {
+    let h = harness();
+    let m = seed_ended(&h, 300);
+    first_pass_in_flight(&h, &m).await;
+    h.start_meeting("another-live-meeting");
+    until("paused", || h.events.last_status("notetaker_state", &m).map(|v| v["ended"]["kind"] == "paused").unwrap_or(false)).await;
+    assert_eq!(h.fake.count(AiPurpose::Notes), 1, "no pass for the old meeting once the new one started");
+    let st = h.events.last_status("notetaker_state", &m).unwrap();
+    assert!(can_of(&st).contains(&"update".to_string()) && st["reason"].as_str().unwrap_or("").contains("another meeting"), "{st}");
+}
+
+#[tokio::test]
+async fn the_provider_is_resolved_again_for_each_pass_of_an_update() {
+    let h = harness();
+    *h.fake.active.lock().unwrap() = "A".into();
+    let m = seed_ended(&h, 300);
+    first_pass_in_flight(&h, &m).await;
+    *h.fake.active.lock().unwrap() = "B".into();
+    until("covered", || h.events.last_status("notetaker_state", &m).map(|v| v["ended"]["kind"] == "covered").unwrap_or(false)).await;
+    let used = providers(&h);
+    assert_eq!(used.first().map(String::as_str), Some("A"));
+    assert!(used.iter().skip(1).all(|p| p == "B") && used.len() >= 2, "{used:?}");
+}
+
+#[tokio::test]
+async fn the_limit_reached_between_passes_ends_the_update_as_limit() {
+    let h = harness();
+    let m = seed_ended(&h, 300);
+    h.rt.patch_notetaker(&json!({"cap": 150_000})).unwrap();
+    big_usage(&h, 1); // the first pass reports 20k tokens
+    h.rt.deps().db.save_notes(&m, &h.rt.deps().db.load_notes(&m).unwrap().doc, "done", 100, 5_000).unwrap();
+    h.rt.patch_notetaker(&json!({"cap": 5_000})).unwrap();
+    h.rt.notetaker_update_now(&m).unwrap();
+    until("ended", || h.events.last_status("notetaker_state", &m).map(|v| v["status"] == "finished").unwrap_or(false)).await;
+    let st = h.events.last_status("notetaker_state", &m).unwrap();
+    assert_eq!(st["ended"]["kind"], "limit", "{st}");
+    assert_eq!(h.fake.count(AiPurpose::Notes), 1, "no pass after the limit");
+}
