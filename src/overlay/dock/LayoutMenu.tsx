@@ -24,7 +24,7 @@ interface MenuProps {
   onClose?: () => void;
 }
 
-const sectionCls = "px-2 pb-1 pt-2 text-[9px] font-semibold uppercase tracking-widest text-muted-foreground/60";
+const sectionCls = "px-2 pb-1 pt-2 text-[11px] font-semibold text-muted-foreground/70";
 const rowCls =
   "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-foreground/90 transition-colors hover:bg-foreground/[0.07] focus-visible:bg-foreground/[0.07] focus-visible:outline-none disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent";
 
@@ -53,7 +53,7 @@ export function LayoutMenu({ state, dispatch, panels, onClose }: MenuProps) {
             key={id}
             type="button"
             disabled={locked}
-            className="flex flex-col items-center gap-1 rounded-md px-1 py-1.5 text-[10px] text-foreground/80 transition-colors hover:bg-foreground/[0.07] focus-visible:bg-foreground/[0.07] focus-visible:outline-none disabled:opacity-40"
+            className="flex flex-col items-center gap-1 rounded-md px-1 py-1.5 text-[11px] text-foreground/80 transition-colors hover:bg-foreground/[0.07] focus-visible:bg-foreground/[0.07] focus-visible:outline-none disabled:opacity-40"
             onClick={() => dispatch({ type: "preset", preset: id })}
           >
             <LayoutPreview layout={presetLayout(id, known)} />
@@ -91,7 +91,7 @@ export function LayoutMenu({ state, dispatch, panels, onClose }: MenuProps) {
               className={`${rowCls} min-w-0 flex-1`}
               onClick={() => dispatch({ type: "applyLayout", id: c.id })}
             >
-              <LayoutPreview layout={c.layout} w={28} h={20} />
+              <LayoutPreview layout={c.layout} w={40} h={26} />
               <span className="truncate">{c.name}</span>
             </button>
           )}
@@ -153,7 +153,7 @@ export function LayoutMenu({ state, dispatch, panels, onClose }: MenuProps) {
                 type="button"
                 role="checkbox"
                 aria-checked={on}
-                disabled={locked || (on && !canHide)}
+                disabled={on && !canHide}
                 className={rowCls}
                 onClick={() => dispatch({ type: on ? "hide" : "show", panel: p })}
               >
@@ -241,7 +241,7 @@ export function LayoutMenuButton({ className, ...menu }: ButtonProps) {
         <div
           role="dialog"
           aria-label="Layout"
-          className="absolute right-0 top-full z-50 mt-1.5 w-[272px] max-h-[70vh] overflow-y-auto rounded-xl border border-border/30 bg-background/97 p-1.5 shadow-xl backdrop-blur-md"
+          className="absolute right-0 top-full z-50 mt-1.5 w-[272px] max-h-[70vh] overflow-y-auto rounded-xl border border-border/40 bg-popover p-1.5 shadow-xl"
         >
           <LayoutMenu {...menu} onClose={() => setOpen(false)} />
         </div>

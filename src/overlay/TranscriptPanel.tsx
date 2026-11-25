@@ -13,7 +13,7 @@ import { mergeConsecutiveSegments } from "../lib/mergeSegments";
 import { Mic, MicOff, Volume2, VolumeX, Search, X, Radio } from "lucide-react";
 import { ColorPickerButton } from "../components/ColorPickerButton";
 
-export function TranscriptPanel({ onOpenDevLog }: { onOpenDevLog?: () => void } = {}) {
+export function TranscriptPanel({ onOpenDevLog, short = false }: { onOpenDevLog?: () => void; short?: boolean } = {}) {
   const segments = useTranscriptStore((s) => s.segments);
   const searchQuery = useTranscriptStore((s) => s.searchQuery);
   const autoScroll = useTranscriptStore((s) => s.autoScroll);
@@ -164,7 +164,7 @@ export function TranscriptPanel({ onOpenDevLog }: { onOpenDevLog?: () => void } 
           )}
         </div>
         {isRecording && (
-          <div className="mx-1 mb-1.5 space-y-1">
+          <div className={`mx-1 mb-1.5 space-y-1 ${short ? "hidden" : ""}`}>
             {isInPerson ? (
               <AudioActivityBar
                 icon={<Radio className="h-3.5 w-3.5" />}
@@ -263,7 +263,7 @@ export function TranscriptPanel({ onOpenDevLog }: { onOpenDevLog?: () => void } 
       </div>
 
       {/* Typeset controls */}
-      <div className="flex items-center gap-2 mx-1 mb-1 px-2.5 py-1 border-t border-border/10">
+      <div className={`flex items-center gap-2 mx-1 mb-1 px-2.5 py-1 border-t border-border/10 ${short ? "hidden" : ""}`}>
         <span className="text-[0.6rem] uppercase tracking-widest text-muted-foreground/40 font-medium">Text</span>
         <div className="flex items-center gap-0.5">
           <button onClick={() => setTranscriptFontSize(Math.max(10, transcriptFontSize - 1))} className="h-5 w-5 flex items-center justify-center rounded text-[0.6rem] text-muted-foreground/50 hover:bg-accent/40 transition-colors">A</button>
@@ -283,7 +283,7 @@ export function TranscriptPanel({ onOpenDevLog }: { onOpenDevLog?: () => void } 
 
       {/* Live audio activity indicators — mode-aware */}
       {isRecording && (
-        <div className="mx-1 mb-1.5 space-y-1">
+        <div className={`mx-1 mb-1.5 space-y-1 ${short ? "hidden" : ""}`}>
           {isInPerson ? (
             <AudioActivityBar
               icon={<Radio className="h-3.5 w-3.5" />}
@@ -432,6 +432,44 @@ function AudioActivityBar({
       {muted && (
         <span className="flex h-2 w-2 shrink-0 rounded-full bg-destructive/30" aria-hidden="true" />
       )}
+    </div>
+  );
+}
+
+/** The You / Them meters as one slim line, for the tab bar of a transcript too short for the full bars. */
+export function TranscriptTabMeters() {
+  const isRecording = useMeetingStore((s) => s.isRecording);
+  const audioMode = useMeetingStore((s) => s.audioMode);
+  const { micLevel, systemLevel } = useAudioLevel();
+  const mutedYou = useConfigStore((s) => s.mutedYou);
+  const mutedThem = useConfigStore((s) => s.mutedThem);
+  const toggleMuteYou = useConfigStore((s) => s.toggleMuteYou);
+  const toggleMuteThem = useConfigStore((s) => s.toggleMuteThem);
+  if (!isRecording) return null;
+  const inPerson = audioMode === "in_person";
+  const items = inPerson
+    ? [{ label: "Room", level: Math.max(micLevel, systemLevel), muted: mutedThem, toggle: toggleMuteThem, color: "bg-purple-500" }]
+    : [
+        { label: "You", level: micLevel, muted: mutedYou, toggle: toggleMuteYou, color: "bg-speaker-user" },
+        { label: "Them", level: systemLevel, muted: mutedThem, toggle: toggleMuteThem, color: "bg-speaker-interviewer" },
+      ];
+  return (
+    <div className="flex items-center gap-2 px-1" role="group" aria-label="Audio levels">
+      {items.map((m) => (
+        <button
+          key={m.label}
+          type="button"
+          onClick={m.toggle}
+          aria-pressed={m.muted}
+          aria-label={m.muted ? `Unmute ${m.label}` : `Mute ${m.label}`}
+          className="flex items-center gap-1 rounded px-1 text-[10px] font-medium text-muted-foreground/70 hover:text-foreground"
+        >
+          <span>{m.label}</span>
+          <span className="h-1 w-8 overflow-hidden rounded-full bg-muted/30" role="meter" aria-label={`${m.label} audio level`} aria-valuenow={m.muted ? 0 : Math.round(m.level)} aria-valuemin={0} aria-valuemax={100}>
+            <span className={`block h-full rounded-full ${m.muted ? "bg-destructive/40" : m.color}`} style={{ width: m.muted ? "100%" : `${Math.min(100, Math.round(m.level))}%` }} />
+          </span>
+        </button>
+      ))}
     </div>
   );
 }

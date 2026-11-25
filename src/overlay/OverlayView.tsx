@@ -37,6 +37,8 @@ import {
 } from "./dock";
 import { FOCUS_TOOLTIP, focusMode, isShowing, nextFocus, toggleAction } from "./dockControl";
 import { hideTransient, readDock } from "./dockPersistence";
+import { TranscriptTabMeters } from "./TranscriptPanel";
+import { SHORT_ASSISTANT_PX, SHORT_TRANSCRIPT_PX, useElementSize } from "./useElementSize";
 import { NotesPanel } from "./panels/NotesPanel";
 import { BriefPanel } from "./panels/BriefPanel";
 import { PointsPanel } from "./panels/PointsPanel";
@@ -301,27 +303,32 @@ export function OverlayView() {
 
   // Each panel keeps its identity (a stable element at a stable place), so none of
   // them remounts when the layout changes.
+  // A short area keeps the lines and drops the toolbars around them.
+  const [transcriptRef, transcriptSize] = useElementSize<HTMLDivElement>();
+  const [assistantRef, assistantSize] = useElementSize<HTMLDivElement>();
+  const shortTranscript = transcriptSize.h > 0 && transcriptSize.h < SHORT_TRANSCRIPT_PX;
+  const shortAssistant = assistantSize.h > 0 && assistantSize.h < SHORT_ASSISTANT_PX;
   const panels = {
     transcript: {
       title: "Transcript",
       reading: true,
       node: (
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-2.5">
-          <TranscriptPanel onOpenDevLog={() => openPanel("devlog")} />
+        <div ref={transcriptRef} className="flex min-h-0 flex-1 flex-col overflow-hidden p-2.5">
+          <TranscriptPanel short={shortTranscript} onOpenDevLog={() => openPanel("devlog")} />
         </div>
       ),
     },
     assistant: {
-      title: "AI",
+      title: "Assistant",
       reading: true,
       node: (
-        <div className="flex min-h-0 flex-1 flex-col gap-2 p-2.5">
+        <div ref={assistantRef} className="flex min-h-0 flex-1 flex-col gap-2 p-2.5">
           <QuestionPanel />
           <div className="flex shrink-0 items-center gap-1 border-b border-border/20 pb-1.5">
             <ModeButtons />
           </div>
           <div className="flex min-h-0 flex-1 flex-col">
-            <AIResponsePanel />
+            <AIResponsePanel short={shortAssistant} />
           </div>
         </div>
       ),
@@ -507,7 +514,13 @@ export function OverlayView() {
       {/* ═══ MAIN: the dock ═══ */}
       <div className="relative flex-1 min-h-0">
         <div className="absolute inset-0">
-          <Dock panels={panels} state={dock} dispatch={dockDispatch} windowOpacity={overlayOpacity} />
+          <Dock
+            panels={panels}
+            state={dock}
+            dispatch={dockDispatch}
+            windowOpacity={overlayOpacity}
+            renderTabExtra={(p) => (p === "transcript" && shortTranscript ? <TranscriptTabMeters /> : null)}
+          />
         </div>
       </div>
 

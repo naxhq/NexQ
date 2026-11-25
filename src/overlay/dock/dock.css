@@ -82,10 +82,8 @@
   background: none;
   cursor: pointer;
   font: inherit;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
   white-space: nowrap;
   color: hsl(var(--muted-foreground) / 0.65);
   touch-action: none;
@@ -169,10 +167,8 @@
   background: hsl(var(--card) / var(--dock-surface-alpha));
   color: hsl(var(--muted-foreground) / 0.5);
   font: inherit;
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 500;
   transition:
     background 150ms ease,
     color 150ms ease;
@@ -251,10 +247,8 @@
   display: none;
   padding: 3px 9px;
   border-radius: 8px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
   white-space: nowrap;
   color: hsl(var(--foreground));
   background: hsl(var(--background) / 0.92);

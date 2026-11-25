@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback } from "react";
+import { useElementSize, NARROW_CARD_PX } from "./useElementSize";
 import { HelpCircle, Sparkles, Check, Clock, X } from "lucide-react";
 import { onQuestionDetected, onTranscriptFinal, onTranscriptUpdate } from "../lib/events";
 import { runUserAction } from "../lib/userAction";
@@ -250,11 +251,16 @@ export function QuestionDetector() {
     return () => clearTimeout(timer);
   }, [waiting, latest?.text, otherPartyActivity, autoAssist]);
 
+  // A narrow card (a narrow dock column) puts the Assist button on its own line.
+  const [cardRef, card] = useElementSize<HTMLDivElement>();
+  const narrow = card.w > 0 && card.w < NARROW_CARD_PX;
+
   return (
     <div className="flex flex-col gap-2.5" role="region" aria-label="Detected questions">
       {/* Latest question — prominent card */}
       <div
-        className={`group flex items-start gap-3 rounded-lg transition-all duration-200 ${
+        ref={cardRef}
+        className={`group flex items-start gap-3 rounded-lg transition-all duration-200 ${narrow ? "flex-wrap" : ""} ${
           latest ? "cursor-pointer hover:bg-info/10 question-card-enter" : ""
         }`}
         onClick={() => latest && handleAssist(0)}
@@ -288,7 +294,7 @@ export function QuestionDetector() {
         </div>
 
         {latest && (
-          <div className="flex shrink-0 items-center gap-1">
+          <div className={`flex shrink-0 items-center gap-1 ${narrow ? "basis-full justify-end" : ""}`}>
             <button
               onClick={(e) => { e.stopPropagation(); handleAssist(0); }}
               aria-label={latest.assisted ? "Already answered" : "Get AI assistance for this question"}

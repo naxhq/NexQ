@@ -275,8 +275,8 @@ const TEMPLATES: Record<PresetId, Tpl> = {
     [S(["notes", "brief"], { a: "notes" }), 0.58],
   ),
   presenter: R(
-    [S(["points", "brief"], { a: "points" }), 0.4],
-    [C([S(["assistant"]), 0.7], [S(["transcript"]), 0.3]), 0.6],
+    [S(["points", "brief"], { a: "points" }), 0.45],
+    [S(["assistant", "transcript"], { a: "assistant" }), 0.55],
   ),
   everything: R(
     [S(["transcript", "calllog", "devlog"], { a: "transcript" }), 0.34],

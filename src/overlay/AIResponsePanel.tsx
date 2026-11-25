@@ -30,7 +30,7 @@ type TabId = "current" | `resp-${string}` | `pinned-${string}`;
 const PREVIOUS_TABS = 4;
 
 // Sub-PRD 6: Streaming markdown, response history tabs, pin/copy
-export function AIResponsePanel() {
+export function AIResponsePanel({ short = false }: { short?: boolean } = {}) {
   const isStreaming = useStreamStore((s) => s.isStreaming);
   const phase = useStreamStore((s) => s.phase);
   const currentContent = useStreamStore((s) => s.currentContent);
@@ -295,7 +295,7 @@ export function AIResponsePanel() {
       </div>
 
       {/* Typeset controls */}
-      <div className="flex shrink-0 flex-col gap-1 border-t border-border/10 px-1 pt-1.5">
+      <div className={`flex shrink-0 flex-col gap-1 border-t border-border/10 px-1 pt-1.5 ${short ? "hidden" : ""}`}>
         {/* Row 1: font size + color */}
         <div className="flex items-center gap-3">
           <span className="text-[0.6rem] uppercase tracking-widest text-muted-foreground/40 font-medium">AI Text</span>

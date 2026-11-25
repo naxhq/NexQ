@@ -166,7 +166,7 @@ describe("the meeting window's dock", () => {
     headerBtn("Focus AI panel");
     expect(screen.getByRole("button", { name: "Expand Transcript panel" })).toBeTruthy();
     headerBtn("Focus Transcript");
-    expect(screen.getByRole("button", { name: "Expand AI panel" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Expand Assistant panel" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Expand Transcript panel" })).toBeNull();
     headerBtn("Split view");
     expect(screen.queryByRole("button", { name: /^Expand/ })).toBeNull();
@@ -206,9 +206,9 @@ describe("the meeting window's dock", () => {
     renderOverlay();
     headerBtn("Focus AI panel");
     headerBtn("Focus Transcript");
-    expect(screen.getByRole("button", { name: "Expand AI panel" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Expand Assistant panel" })).toBeTruthy();
     act(() => void window.dispatchEvent(new Event(SCREENSHOT_EVENT, { cancelable: true })));
-    expect(screen.queryByRole("button", { name: "Expand AI panel" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Expand Assistant panel" })).toBeNull();
   });
 
   it("reading panels carry the reading backing, which stays at 85% when the window is nearly clear", () => {
@@ -217,6 +217,25 @@ describe("the meeting window's dock", () => {
     const root = screen.getByRole("group", { name: "Meeting panels" });
     expect(Number(root.style.getPropertyValue("--dock-reading-alpha"))).toBeCloseTo(readingBackingAlpha(0.1), 5);
     expect(document.querySelectorAll('[data-dock-surface][data-reading="true"]').length).toBe(2);
+  });
+});
+
+describe("short areas", () => {
+  it("a short transcript drops its toolbar and shows slim meters in the tab bar", () => {
+    const h = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight")!;
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, get: () => 150 });
+    try {
+      renderOverlay();
+      expect(document.querySelector(".nq-dock-extra [role='group'][aria-label='Audio levels']")).toBeTruthy();
+      expect(panel("transcript").querySelector(".hidden")).toBeTruthy();
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, "clientHeight", h);
+    }
+  });
+
+  it("at a normal height nothing is dropped and the tab bar has no meters", () => {
+    renderOverlay();
+    expect(document.querySelector("[aria-label='Audio levels']")).toBeNull();
   });
 });
 
