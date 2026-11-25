@@ -136,6 +136,8 @@ pub struct BriefEngine<L: LlmCall, C: Clock, S: LocalSearch> {
     sink: Arc<dyn BriefSink>,
     store: Arc<dyn BriefStore>,
     last_error: Option<String>,
+    last_code: &'static str,
+    sent_total: u64,
     pub searches: u32,
     /// Random code fencing data blocks in this meeting's prompts.
     pub nonce: String,
@@ -161,6 +163,8 @@ impl<L: LlmCall, C: Clock, S: LocalSearch> BriefEngine<L, C, S> {
             sink,
             store,
             last_error: None,
+            last_code: "",
+            sent_total: 0,
             searches: 0,
             nonce: crate::prompt_data::new_nonce(),
             epoch: 0,
@@ -178,6 +182,32 @@ impl<L: LlmCall, C: Clock, S: LocalSearch> BriefEngine<L, C, S> {
 
     pub fn failures(&self) -> u32 {
         self.trigger.guard.failures
+    }
+
+    /// Everything the calls used so far (all input and output).
+    pub fn sent_tokens_total(&self) -> u64 {
+        self.sent_total
+    }
+
+    pub fn last_code(&self) -> &'static str {
+        self.last_code
+    }
+
+    pub fn has_sheet(&self) -> bool {
+        self.holder.lock().unwrap().view(self.clock.now_ms()).sheet.is_some()
+    }
+
+    /// A new cap from the settings, applied at once.
+    pub fn set_cap(&mut self, cap: u64) {
+        self.trigger.guard.set_cap(cap);
+        self.emit_status();
+    }
+
+    /// "Try again": forgives the failures and runs again with the current settings.
+    pub fn retry(&mut self) {
+        self.trigger.guard.retry();
+        self.last_error = None;
+        self.emit_status();
     }
 
     pub fn state(&self) -> RunState {
@@ -399,6 +429,7 @@ impl<L: LlmCall, C: Clock, S: LocalSearch> BriefEngine<L, C, S> {
                 self.trigger.end_err(e.kind, 0);
                 if e.kind != LlmErrorKind::Cancelled {
                     self.last_error = Some(e.message.clone());
+                    self.last_code = e.code;
                 }
                 BriefOutcome {
                     reason: p.reason,
@@ -412,6 +443,7 @@ impl<L: LlmCall, C: Clock, S: LocalSearch> BriefEngine<L, C, S> {
                 }
             }
         };
+        self.sent_total += outcome.sent_tokens;
         self.save();
         self.emit_status();
         outcome

@@ -5,6 +5,8 @@ use crate::ai_runs::{AiPurpose, AiRunError, AiRunRequest, AiRuns, ModelSelection
 use crate::live_common::{LlmCall, LlmError, LlmErrorKind, LlmReply, LlmRequest};
 use crate::llm::cli_agent::manager::{SessionKey, SessionScope, Tier};
 use crate::llm::provider::CancelToken;
+use crate::live_runtime::cheapest::{explicit_label, CheapestChoice};
+use crate::live_runtime::state::ModelLabel;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -32,6 +34,17 @@ pub struct LlmSlot {
 /// after a cancel; the old one stays cancelled.
 pub trait LlmFactory: Send + Sync {
     fn make(&self, purpose: AiPurpose, meeting_id: &str, selection: &Selection) -> Result<LlmSlot, String>;
+
+    /// What "Automatic" means for this provider (None = the active one): the
+    /// cheapest good-enough model, with the label shown before turning anything on.
+    fn automatic(&self, _provider: Option<&str>) -> Option<CheapestChoice> {
+        None
+    }
+
+    /// The model a selection really names, for the state shown to the user.
+    fn label(&self, _selection: &Selection) -> Option<ModelLabel> {
+        None
+    }
 }
 
 pub fn map_error(e: AiRunError) -> LlmError {
@@ -108,25 +121,29 @@ impl LlmCall for AiRunsLlm {
 /// The app's factory: every call goes through `AiRuns`.
 pub struct AiRunsFactory {
     pub runs: Arc<AiRuns>,
-    /// What to use when the settings name no provider (the app's active one).
-    pub default_selection: Arc<dyn Fn() -> Option<ModelSelection> + Send + Sync>,
+    /// "Automatic" for a provider (None = the app's active one); see `cheapest`.
+    pub resolver: Arc<dyn Fn(Option<&str>) -> Option<CheapestChoice> + Send + Sync>,
+}
+
+impl AiRunsFactory {
+    fn selection_of(&self, sel: &Selection) -> Result<ModelSelection, String> {
+        let provider = sel.provider.as_deref().filter(|p| !p.is_empty());
+        let model = sel.model.as_deref().filter(|m| !m.is_empty());
+        let effort = sel.effort.as_deref().filter(|e| !e.is_empty());
+        match (provider, model) {
+            (Some(p), Some(m)) => Ok(ModelSelection::new(p, m, effort)),
+            _ => {
+                let c = (self.resolver)(provider).ok_or_else(|| "No AI provider is set up".to_string())?;
+                let model = model.map(str::to_string).unwrap_or(c.model);
+                Ok(ModelSelection::new(&c.provider, &model, effort.or(c.effort.as_deref())))
+            }
+        }
+    }
 }
 
 impl LlmFactory for AiRunsFactory {
     fn make(&self, purpose: AiPurpose, meeting_id: &str, sel: &Selection) -> Result<LlmSlot, String> {
-        let selection = match sel.provider.as_deref().filter(|p| !p.is_empty()) {
-            Some(p) => ModelSelection::new(p, sel.model.as_deref().unwrap_or(""), sel.effort.as_deref()),
-            None => {
-                let mut d = (self.default_selection)().ok_or_else(|| "No AI provider is set up".to_string())?;
-                if let Some(m) = sel.model.as_deref().filter(|m| !m.is_empty()) {
-                    d.model = m.to_string();
-                }
-                if sel.effort.is_some() {
-                    d.effort = sel.effort.clone();
-                }
-                d
-            }
-        };
+        let selection = self.selection_of(sel)?;
         let cancel = Arc::new(CancelToken::new());
         let expected = Arc::new(AtomicU64::new(NO_GENERATION));
         let (runs, id) = (self.runs.clone(), meeting_id.to_string());
@@ -137,6 +154,17 @@ impl LlmFactory for AiRunsFactory {
         let llm = AiRunsLlm { runs: self.runs.clone(), purpose, meeting_id: meeting_id.to_string(), selection, cancel: cancel.clone(), expected: expected.clone(), generation };
         Ok(LlmSlot { llm: Arc::new(llm), cancel, expected })
     }
+
+    fn automatic(&self, provider: Option<&str>) -> Option<CheapestChoice> {
+        (self.resolver)(provider)
+    }
+
+    fn label(&self, sel: &Selection) -> Option<ModelLabel> {
+        let s = self.selection_of(sel).ok()?;
+        let named = sel.model.as_deref().is_some_and(|m| !m.is_empty()) && sel.provider.as_deref().is_some_and(|p| !p.is_empty());
+        let label = if named { explicit_label(&s.provider, &s.model) } else { (self.resolver)(sel.provider.as_deref().filter(|p| !p.is_empty()))?.label };
+        Some(ModelLabel { provider: s.provider, model: s.model, label })
+    }
 }
 
 /// The model call an engine holds: the current slot can be cancelled and
@@ -146,22 +174,39 @@ pub struct SwapLlm {
     factory: Arc<dyn LlmFactory>,
     purpose: AiPurpose,
     meeting_id: String,
-    selection: Selection,
+    selection: Mutex<Selection>,
 }
 
 impl SwapLlm {
     pub fn new(factory: Arc<dyn LlmFactory>, purpose: AiPurpose, meeting_id: &str, selection: Selection) -> Result<Arc<SwapLlm>, String> {
         let slot = factory.make(purpose, meeting_id, &selection)?;
-        Ok(Arc::new(SwapLlm { slot: Mutex::new(slot), factory, purpose, meeting_id: meeting_id.to_string(), selection }))
+        Ok(Arc::new(SwapLlm { slot: Mutex::new(slot), factory, purpose, meeting_id: meeting_id.to_string(), selection: Mutex::new(selection) }))
     }
 
     /// Cancels what is running and makes a fresh slot for the next call.
     pub fn cancel_and_renew(&self) {
         let mut g = self.slot.lock().unwrap();
         g.cancel.cancel();
-        if let Ok(s) = self.factory.make(self.purpose, &self.meeting_id, &self.selection) {
+        let sel = self.selection.lock().unwrap().clone();
+        if let Ok(s) = self.factory.make(self.purpose, &self.meeting_id, &sel) {
             *g = s;
         }
+    }
+
+    /// A new model for the next call. A call in flight finishes on the old one.
+    pub fn reselect(&self, selection: Selection) -> Result<(), String> {
+        let slot = self.factory.make(self.purpose, &self.meeting_id, &selection)?;
+        *self.selection.lock().unwrap() = selection;
+        *self.slot.lock().unwrap() = slot;
+        Ok(())
+    }
+
+    pub fn selection(&self) -> Selection {
+        self.selection.lock().unwrap().clone()
+    }
+
+    pub fn label(&self) -> Option<ModelLabel> {
+        self.factory.label(&self.selection())
     }
 
     pub fn cancel(&self) {

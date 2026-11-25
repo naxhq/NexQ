@@ -2,7 +2,6 @@
 //! trigger, sheet parser and validator, holder with staleness and scope rules,
 //! prompts, engine). Search, model call, clock, events and saving are injected.
 
-#![allow(dead_code)]
 
 pub mod engine;
 pub mod prompts;

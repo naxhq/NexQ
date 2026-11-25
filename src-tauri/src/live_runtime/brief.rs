@@ -7,10 +7,11 @@ use crate::ai_runs::AiPurpose;
 use crate::live_brief::engine::{BriefConfig, BriefEngine, BriefLine, BriefSink, BriefSnapshot, BriefStatus, BriefStore};
 use crate::live_brief::search::{LocalSearch, Passage};
 use crate::live_brief::sheet::{Sheet, SheetHolder, SheetView};
-use crate::live_common::{Clock, LlmCall, PauseReason, RunState};
+use crate::live_common::{Clock, LlmCall};
 use crate::live_runtime::db::{LiveDb, LiveScope};
 use crate::live_runtime::llm::{LlmFactory, Selection, SwapLlm};
 use crate::live_runtime::settings::BriefSettings;
+use crate::live_runtime::state::{snapshot, RunSnapshot, StateInput};
 use crate::live_runtime::Emitter;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -25,6 +26,10 @@ pub enum BriefCmd {
     ScopeChanged,
     Pause,
     Resume,
+    /// Forgive the failures and run again with the current settings.
+    TryAgain,
+    /// New model and cap for the next run.
+    Reconfigure(BriefSettings),
     KeepGoing,
     Stop,
     Finish,
@@ -32,6 +37,7 @@ pub enum BriefCmd {
     /// The meeting is being deleted: stop and save nothing.
     Discard,
     Get(oneshot::Sender<Value>),
+    State(oneshot::Sender<Value>),
 }
 
 /// What live answers and the scope-change path reach without asking the actor.
@@ -137,28 +143,6 @@ pub fn sheet_to_contract(sheet: &Sheet, generated_at: i64) -> Value {
     })
 }
 
-pub fn status_event(meeting_id: &str, st: &BriefStatus, stopped: bool) -> Value {
-    let (status, reason): (&str, Option<String>) = if stopped {
-        ("off", None)
-    } else {
-        match st.state {
-            RunState::Stopped => ("off", None),
-            RunState::CapReached => ("capped", Some("The token cap for this meeting was reached".into())),
-            RunState::Paused(PauseReason::User) => ("paused", None),
-            RunState::Paused(PauseReason::PlanLimit) => ("paused", Some(st.last_error.clone().unwrap_or_else(|| "The plan's usage limit was reached".into()))),
-            RunState::Paused(PauseReason::Failures) => ("error", Some(st.last_error.clone().map(|e| format!("Three runs in a row failed: {e}")).unwrap_or_else(|| "Three runs in a row failed".into()))),
-            RunState::Running => {
-                if st.in_flight || st.tokens_used > 0 {
-                    ("running", st.last_error.clone())
-                } else {
-                    ("idle", None)
-                }
-            }
-        }
-    };
-    json!({"meeting_id": meeting_id, "status": status, "tokens_used": st.tokens_used, "cap": st.cap, "reason": reason})
-}
-
 pub fn spawn(p: BriefParams) -> Result<BriefHandle, String> {
     let selection = Selection { provider: p.settings.provider.clone(), model: p.settings.model.clone(), effort: p.settings.effort.clone() };
     let swap = SwapLlm::new(p.factory.clone(), AiPurpose::Brief, &p.meeting_id, selection)?;
@@ -191,19 +175,45 @@ async fn run(
     finished: Arc<AtomicBool>,
     discarded: Arc<AtomicBool>,
 ) {
-    let mut last_state = Value::Null;
+    let mut last_snap: Option<RunSnapshot> = None;
+    let mut stop_reason: Option<String> = None;
     let mut last_rev: Option<u64> = None;
     let mut stopped = false;
     let mut quitting = false;
     let mut interrupted = false;
     let mut last_scope_check = std::time::Instant::now();
 
+    // the one state the UI shows (see `state`)
+    macro_rules! build_snap {
+        () => {{
+            let st = engine.status();
+            snapshot(&StateInput {
+                meeting_id: p.meeting_id.clone(),
+                state: st.state,
+                in_flight: st.in_flight,
+                tokens_used: st.tokens_used,
+                total_tokens: engine.sent_tokens_total(),
+                cap: st.cap,
+                last_error: st.last_error.clone(),
+                error_code: engine.last_code(),
+                finished: false,
+                user_stopped: stopped,
+                manual_mode: false,
+                started: st.tokens_used > 0 || engine.has_sheet(),
+                uncovered: false,
+                next_in_ms: None,
+                final_note: None,
+                stop_reason: stop_reason.clone(),
+                model: swap.label(),
+            })
+        }};
+    }
     macro_rules! emit_state {
         () => {{
-            let ev = status_event(&p.meeting_id, &engine.status(), stopped);
-            if ev != last_state {
-                p.emitter.emit("brief_state", ev.clone());
-                last_state = ev;
+            let snap = build_snap!();
+            if last_snap.as_ref() != Some(&snap) {
+                p.emitter.emit("brief_state", serde_json::to_value(&snap).unwrap_or(Value::Null));
+                last_snap = Some(snap);
             }
         }};
     }
@@ -224,8 +234,8 @@ async fn run(
     macro_rules! refresh_scope {
         () => {{
             let counter = shared.counter.load(Ordering::SeqCst);
-            match p.db.scope(&p.meeting_id) {
-                Some(mut s) if (p.still_enabled)(&s) => {
+            match p.db.scope_result(&p.meeting_id) {
+                Ok(mut s) if (p.still_enabled)(&s) => {
                     s.generation = (p.generation)(&p.meeting_id, true);
                     let key = scope_key(&s.fingerprint, counter, s.generation);
                     if key != engine.scope() {
@@ -235,9 +245,13 @@ async fn run(
                     }
                 }
                 other => {
+                    stop_reason = Some(match &other {
+                        Err(e) => format!("The brief stopped: {e}"),
+                        _ => "The brief is off in this workspace".to_string(),
+                    });
                     shared.invalidate();
                     engine.set_scope(&format!("off#{}", shared.counter.load(Ordering::SeqCst)), "");
-                    let fp = other.map(|s| s.fingerprint).unwrap_or_default();
+                    let fp = other.ok().map(|s| s.fingerprint).unwrap_or_default();
                     let st = engine.status();
                     let _ = p.db.save_brief(&p.meeting_id, None, "off", st.tokens_used, st.cap, &fp);
                     stopped = true;
@@ -258,6 +272,19 @@ async fn run(
                 BriefCmd::ScopeChanged => last_scope_check = std::time::Instant::now() - p.scope_check - Duration::from_secs(1),
                 BriefCmd::Pause => engine.pause(),
                 BriefCmd::Resume => engine.resume(),
+                BriefCmd::TryAgain => engine.retry(),
+                BriefCmd::Reconfigure(s) => {
+                    engine.set_cap(s.cap);
+                    let sel = Selection { provider: s.provider.clone(), model: s.model.clone(), effort: s.effort.clone() };
+                    if sel != swap.selection() {
+                        if let Err(e) = swap.reselect(sel) {
+                            log::warn!("live brief: the new model could not be set: {e}");
+                        }
+                    }
+                }
+                BriefCmd::State(reply) => {
+                    let _ = reply.send(serde_json::to_value(build_snap!()).unwrap_or(Value::Null));
+                }
                 BriefCmd::KeepGoing => engine.keep_going(),
                 BriefCmd::Stop => {
                     swap.cancel();
@@ -324,6 +351,7 @@ async fn run(
                 }
                 continue;
             }
+            emit_state!();
             let req = prep.request.clone();
             let fut = swap.call(&req);
             tokio::pin!(fut);

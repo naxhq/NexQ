@@ -3,7 +3,7 @@
 //! loses a line), and it keeps taking them while a model call is in flight.
 
 use crate::ai_runs::AiPurpose;
-use crate::live_common::{Clock, LlmCall, RunState};
+use crate::live_common::{Clock, LlmCall};
 use crate::live_notes::db::StoredNotes;
 use crate::live_notes::doc::{BlockKind, NoteDoc};
 use crate::live_notes::engine::{NotesConfig, NotesEngine, NotesSink, NotesSnapshot, NotesStatus, NotesStore, TranscriptLine};
@@ -13,11 +13,12 @@ use crate::live_notes::trigger::{Decision, RunReason};
 use crate::live_runtime::db::LiveDb;
 use crate::live_runtime::llm::{LlmFactory, Selection, SwapLlm};
 use crate::live_runtime::settings::NotetakerSettings;
+use crate::live_runtime::state::{snapshot, RunSnapshot, StateInput};
 use crate::live_runtime::Emitter;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 
@@ -35,6 +36,8 @@ pub enum NotesCmd {
     Manual,
     Pause,
     Resume,
+    /// Forgive the failures and run again with the current settings.
+    TryAgain,
     KeepGoing,
     /// The user stopped the notes (the meeting goes on).
     Stop,
@@ -44,8 +47,11 @@ pub enum NotesCmd {
     Quit,
     /// The meeting is being deleted: stop and save nothing.
     Discard,
+    /// New settings (model, cap, detail, language, mode) for the next run.
+    Reconfigure(NotetakerSettings),
     Edit(NoteEdit, oneshot::Sender<Result<Value, String>>),
     Get(oneshot::Sender<Value>),
+    State(oneshot::Sender<Value>),
 }
 
 pub struct NotesHandle {
@@ -161,40 +167,8 @@ impl NotesStore for DbStore {
     }
 }
 
-pub fn status_event(meeting_id: &str, st: &NotesStatus, total_tokens: u64, finished: bool, stopped_by_user: bool, final_note: Option<String>) -> Value {
-    let (status, reason): (&str, Option<String>) = if finished {
-        ("finished", final_note)
-    } else if stopped_by_user || st.state == RunState::Stopped {
-        ("off", None)
-    } else {
-        match st.state {
-            RunState::CapReached => ("capped", Some("The token cap for this meeting was reached".to_string())),
-            RunState::Paused(crate::live_common::PauseReason::User) => ("paused", None),
-            RunState::Paused(crate::live_common::PauseReason::PlanLimit) => ("paused", Some(st.last_error.clone().unwrap_or_else(|| "The plan's usage limit was reached".into()))),
-            RunState::Paused(crate::live_common::PauseReason::Failures) => ("error", Some(st.last_error.clone().map(|e| format!("Three runs in a row failed: {e}")).unwrap_or_else(|| "Three runs in a row failed".into()))),
-            _ => {
-                if st.in_flight || st.tokens_used > 0 {
-                    ("running", st.last_error.clone())
-                } else {
-                    ("idle", None)
-                }
-            }
-        }
-    };
-    json!({
-        "meeting_id": meeting_id,
-        "status": status,
-        "tokens_used": st.tokens_used,
-        "total_tokens": total_tokens,
-        "cap": st.cap,
-        "reason": reason,
-    })
-}
-
-fn cfg_from(s: &NotetakerSettings) -> NotesConfig {
-    let mut cfg = NotesConfig::default();
-    cfg.trigger.cap_tokens = s.cap;
-    cfg.prompt = NotesPromptOptions {
+fn prompt_of(s: &NotetakerSettings) -> NotesPromptOptions {
+    NotesPromptOptions {
         detail: match s.detail.as_str() {
             "brief" => Detail::Brief,
             "detailed" => Detail::Detailed,
@@ -202,13 +176,22 @@ fn cfg_from(s: &NotetakerSettings) -> NotesConfig {
         },
         language: if s.language == "meeting" { OutputLanguage::Meeting } else { OutputLanguage::Fixed(s.language.clone()) },
         small_model: false,
-    };
+    }
+}
+
+pub fn selection_of(s: &NotetakerSettings) -> Selection {
+    Selection { provider: s.provider.clone(), model: s.model.clone(), effort: s.effort.clone() }
+}
+
+fn cfg_from(s: &NotetakerSettings) -> NotesConfig {
+    let mut cfg = NotesConfig::default();
+    cfg.trigger.cap_tokens = s.cap;
+    cfg.prompt = prompt_of(s);
     cfg
 }
 
 pub fn spawn(p: NotesParams) -> Result<NotesHandle, String> {
-    let selection = Selection { provider: p.settings.provider.clone(), model: p.settings.model.clone(), effort: p.settings.effort.clone() };
-    let swap = SwapLlm::new(p.factory.clone(), AiPurpose::Notes, &p.meeting_id, selection)?;
+    let swap = SwapLlm::new(p.factory.clone(), AiPurpose::Notes, &p.meeting_id, selection_of(&p.settings))?;
     let (tx, rx) = mpsc::unbounded_channel();
     let handle = NotesHandle {
         tx,
@@ -218,179 +201,288 @@ pub fn spawn(p: NotesParams) -> Result<NotesHandle, String> {
         dropped_lines: Arc::new(AtomicU64::new(0)),
         sent_tokens: Arc::new(AtomicU64::new(0)),
     };
-    let shared = (handle.queued.clone(), handle.finished.clone(), handle.dropped_lines.clone(), handle.sent_tokens.clone());
-    tokio::spawn(run(p, swap, rx, shared));
+    let actor = Actor::new(p, swap, &handle);
+    tokio::spawn(actor.run(rx));
     Ok(handle)
 }
 
-type Shared = (Arc<AtomicUsize>, Arc<AtomicBool>, Arc<AtomicU64>, Arc<AtomicU64>);
-
-#[allow(unused_assignments)]
-async fn run(p: NotesParams, swap: Arc<SwapLlm>, mut rx: mpsc::UnboundedReceiver<NotesCmd>, shared: Shared) {
-    let (queued, finished_flag, dropped, sent) = shared;
-    let dirty = Arc::new(AtomicBool::new(false));
-    let sink = Arc::new(ActorSink { dirty: dirty.clone() });
-    let discarded = Arc::new(AtomicBool::new(false));
-    let store = Arc::new(DbStore { db: p.db.clone(), meeting_id: p.meeting_id.clone(), discarded: discarded.clone() });
-    let mut cfg = cfg_from(&p.settings);
-    cfg.final_timeout = p.final_timeout;
-    let mut engine = NotesEngine::new(swap.clone(), p.clock.clone(), cfg, sink, store);
-    if let Some(r) = p.resume {
-        engine.resume_from(r.doc, r.tokens_used, r.cap);
-    }
-    let auto = p.settings.update_mode == "automatic";
-    let mut last_state = Value::Null;
-    let mut last_doc_emit = Instant::now() - Duration::from_secs(5);
-    let mut done = false;
-    let mut finishing = false;
-    let mut user_stopped = false;
-    let mut quitting = false;
-    let mut interrupted = false;
-
-    macro_rules! emit_state {
-        () => {{
-            let ev = status_event(&p.meeting_id, &engine.status(), engine.sent_tokens_total, done, user_stopped, engine.final_note.clone());
-            if ev != last_state {
-                p.emitter.emit("notetaker_state", ev.clone());
-                last_state = ev;
-            }
-            dropped.store(engine.dropped_lines, Ordering::SeqCst);
-            sent.store(engine.sent_tokens_total, Ordering::SeqCst);
-        }};
-    }
-    macro_rules! flush_doc {
-        ($force:expr) => {{
-            if dirty.load(Ordering::SeqCst) && ($force || last_doc_emit.elapsed() >= Duration::from_millis(250)) {
-                dirty.store(false, Ordering::SeqCst);
-                last_doc_emit = Instant::now();
-                p.emitter.emit("notetaker_doc", json!({"meeting_id": p.meeting_id, "version": engine.doc().version, "doc": doc_to_contract(engine.doc())}));
-            }
-        }};
-    }
-    // Commands that never need the engine idle. Returns false to leave.
-    macro_rules! handle {
-        ($cmd:expr) => {{
-            match $cmd {
-                NotesCmd::Line(l) => {
-                    queued.fetch_sub(1, Ordering::SeqCst);
-                    engine.feed(l);
-                }
-                NotesCmd::Manual => engine.request_manual(),
-                NotesCmd::Pause => engine.pause(),
-                NotesCmd::Resume => engine.resume(),
-                NotesCmd::KeepGoing => engine.keep_going(),
-                NotesCmd::Stop => {
-                    user_stopped = true;
-                    swap.cancel();
-                    engine.stop();
-                    quitting = true;
-                }
-                NotesCmd::Finish => finishing = true,
-                NotesCmd::Discard => {
-                    discarded.store(true, Ordering::SeqCst);
-                    swap.cancel();
-                    quitting = true;
-                }
-                NotesCmd::Quit => {
-                    swap.cancel();
-                    let st = engine.status();
-                    let _ = p.db.save_notes(&p.meeting_id, engine.doc(), "interrupted", st.tokens_used, st.cap);
-                    quitting = true;
-                    interrupted = true;
-                }
-                NotesCmd::Edit(edit, reply) => {
-                    let res = apply_edit(engine.doc_mut(), &edit).map(|_| {
-                        engine.save_now();
-                        dirty.store(true, Ordering::SeqCst);
-                        doc_to_contract(engine.doc())
-                    });
-                    let _ = reply.send(res);
-                }
-                NotesCmd::Get(reply) => {
-                    let _ = reply.send(doc_to_contract(engine.doc()));
-                }
-            }
-        }};
-    }
-
-    emit_state!();
-    let mut ticker = tokio::time::interval(p.tick);
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    'main: loop {
-        tokio::select! {
-            cmd = rx.recv() => match cmd {
-                Some(c) => handle!(c),
-                None => break 'main,
-            },
-            _ = ticker.tick() => {}
-        }
-        if quitting {
-            break;
-        }
-        if finishing {
-            let _ = engine.finish().await;
-            done = true;
-            finished_flag.store(true, Ordering::SeqCst);
-            break;
-        }
-        engine.set_gate(!(p.busy)());
-        if let Decision::Run(reason) = engine.poll() {
-            let allowed = auto || matches!(reason, RunReason::Manual | RunReason::Final);
-            if allowed {
-                let gen0 = (p.generation)(&p.meeting_id, false);
-                swap.set_expected(Some(gen0));
-                if let Some(prep) = engine.prepare(reason) {
-                    let req = prep.request.clone();
-                    let fut = swap.call(&req);
-                    tokio::pin!(fut);
-                    let result = loop {
-                        tokio::select! {
-                            r = &mut fut => break r,
-                            cmd = rx.recv() => match cmd {
-                                Some(c) => handle!(c),
-                                None => { swap.cancel(); quitting = true; }
-                            },
-                        }
-                    };
-                    if discarded.load(Ordering::SeqCst) || (p.generation)(&p.meeting_id, false) != gen0 {
-                        // the scope generation moved or the meeting is going: nothing is applied, the lines go back
-                        engine.abort(prep);
-                    } else {
-                        engine.complete(prep, result);
-                    }
-                    if quitting {
-                        break;
-                    }
-                }
-            }
-        }
-        emit_state!();
-        flush_doc!(false);
-    }
-    if discarded.load(Ordering::SeqCst) {
-        finished_flag.store(true, Ordering::SeqCst);
-        (p.on_exit)(&p.meeting_id);
-        return;
-    }
-    if interrupted {
-        // a run that was in flight finished after the quit saved: save as interrupted once more
-        let st = engine.status();
-        let _ = p.db.save_notes(&p.meeting_id, engine.doc(), "interrupted", st.tokens_used, st.cap);
-    }
-    if finishing && !done {
-        let _ = engine.finish().await;
-        done = true;
-        finished_flag.store(true, Ordering::SeqCst);
-    }
-    emit_state!();
-    flush_doc!(true);
-    finished_flag.store(true, Ordering::SeqCst);
-    (p.on_exit)(&p.meeting_id);
+struct Actor {
+    p: NotesParams,
+    swap: Arc<SwapLlm>,
+    engine: NotesEngine<Arc<SwapLlm>, Arc<dyn Clock>>,
+    settings: NotetakerSettings,
+    queued: Arc<AtomicUsize>,
+    finished_flag: Arc<AtomicBool>,
+    dropped: Arc<AtomicU64>,
+    sent: Arc<AtomicU64>,
+    dirty: Arc<AtomicBool>,
+    discarded: Arc<AtomicBool>,
+    last: Option<RunSnapshot>,
+    last_deadline: Option<u64>,
+    last_doc_emit: Instant,
+    done: bool,
+    finishing: bool,
+    /// Manual mode, meeting over: waits for one "Update now" for what was never sent.
+    ended_waiting: bool,
+    user_stopped: bool,
+    quitting: bool,
+    interrupted: bool,
 }
 
-#[allow(unused)]
-fn _assert_send() {
-    fn is_send<T: Send>() {}
-    is_send::<NotesParams>();
-    let _ = Mutex::new(0);
+impl Actor {
+    fn new(mut p: NotesParams, swap: Arc<SwapLlm>, handle: &NotesHandle) -> Self {
+        let dirty = Arc::new(AtomicBool::new(false));
+        let discarded = Arc::new(AtomicBool::new(false));
+        let sink = Arc::new(ActorSink { dirty: dirty.clone() });
+        let store = Arc::new(DbStore { db: p.db.clone(), meeting_id: p.meeting_id.clone(), discarded: discarded.clone() });
+        let mut cfg = cfg_from(&p.settings);
+        cfg.final_timeout = p.final_timeout;
+        let mut engine = NotesEngine::new(swap.clone(), p.clock.clone(), cfg, sink, store);
+        if let Some(r) = p.resume.take() {
+            engine.resume_from(r.doc, r.tokens_used, r.cap);
+        }
+        let settings = p.settings.clone();
+        Self {
+            p,
+            swap,
+            engine,
+            settings,
+            queued: handle.queued.clone(),
+            finished_flag: handle.finished.clone(),
+            dropped: handle.dropped_lines.clone(),
+            sent: handle.sent_tokens.clone(),
+            dirty,
+            discarded,
+            last: None,
+            last_deadline: None,
+            last_doc_emit: Instant::now() - Duration::from_secs(5),
+            done: false,
+            finishing: false,
+            ended_waiting: false,
+            user_stopped: false,
+            quitting: false,
+            interrupted: false,
+        }
+    }
+
+    fn auto(&self) -> bool {
+        self.settings.update_mode == "automatic"
+    }
+
+    /// The one state the UI shows (see `state`).
+    fn snapshot(&self) -> RunSnapshot {
+        let st = self.engine.status();
+        snapshot(&StateInput {
+            meeting_id: self.p.meeting_id.clone(),
+            state: st.state,
+            in_flight: st.in_flight,
+            tokens_used: st.tokens_used,
+            total_tokens: self.engine.sent_tokens_total,
+            cap: st.cap,
+            last_error: st.last_error.clone(),
+            error_code: self.engine.last_code(),
+            finished: self.done || self.ended_waiting,
+            user_stopped: self.user_stopped,
+            manual_mode: !self.auto(),
+            started: st.tokens_used > 0 || st.pending_words > 0,
+            uncovered: self.engine.has_pending(),
+            next_in_ms: if self.auto() { self.engine.next_run_in_ms() } else { None },
+            final_note: self.engine.final_note.clone(),
+            stop_reason: None,
+            model: self.swap.label(),
+        })
+    }
+
+    /// Emits the state when it changed. `next_in_ms` is a deadline the UI counts
+    /// down, so it only counts as a change when the deadline moved by seconds.
+    fn emit_state(&mut self) {
+        let snap = self.snapshot();
+        let deadline = snap.next_in_ms.map(|n| self.p.clock.now_ms() + n);
+        let mut same = self.last.clone();
+        if let Some(l) = same.as_mut() {
+            l.next_in_ms = snap.next_in_ms;
+        }
+        let deadline_moved = match (self.last_deadline, deadline) {
+            (Some(a), Some(b)) => a.abs_diff(b) > 1_500,
+            (None, None) => false,
+            _ => true,
+        };
+        if same.as_ref() != Some(&snap) || deadline_moved {
+            self.p.emitter.emit("notetaker_state", serde_json::to_value(&snap).unwrap_or(Value::Null));
+            self.last = Some(snap);
+            self.last_deadline = deadline;
+        }
+        self.dropped.store(self.engine.dropped_lines, Ordering::SeqCst);
+        self.sent.store(self.engine.sent_tokens_total, Ordering::SeqCst);
+    }
+
+    fn flush_doc(&mut self, force: bool) {
+        if self.dirty.load(Ordering::SeqCst) && (force || self.last_doc_emit.elapsed() >= Duration::from_millis(250)) {
+            self.dirty.store(false, Ordering::SeqCst);
+            self.last_doc_emit = Instant::now();
+            self.p.emitter.emit(
+                "notetaker_doc",
+                json!({"meeting_id": self.p.meeting_id, "version": self.engine.doc().version, "doc": doc_to_contract(self.engine.doc())}),
+            );
+        }
+    }
+
+    /// New settings for the next run (a run in flight finishes as it was).
+    fn reconfigure(&mut self, s: NotetakerSettings) {
+        self.engine.set_prompt(prompt_of(&s));
+        self.engine.set_cap(s.cap);
+        if selection_of(&s) != selection_of(&self.settings) {
+            if let Err(e) = self.swap.reselect(selection_of(&s)) {
+                log::warn!("live notes: the new model could not be set: {e}");
+            }
+        }
+        self.settings = s;
+    }
+
+    fn handle(&mut self, cmd: NotesCmd) {
+        match cmd {
+            NotesCmd::Line(l) => {
+                self.queued.fetch_sub(1, Ordering::SeqCst);
+                self.engine.feed(l);
+            }
+            NotesCmd::Manual => self.engine.request_manual(),
+            NotesCmd::Pause => self.engine.pause(),
+            NotesCmd::Resume => self.engine.resume(),
+            NotesCmd::TryAgain => self.engine.retry(),
+            NotesCmd::KeepGoing => self.engine.keep_going(),
+            NotesCmd::Stop => {
+                self.user_stopped = true;
+                self.swap.cancel();
+                self.engine.stop();
+                self.quitting = true;
+            }
+            NotesCmd::Finish => {
+                if self.auto() {
+                    self.finishing = true;
+                } else {
+                    // manual: nothing runs unasked; what was never sent stays one "Update now" away
+                    self.ended_waiting = true;
+                    let range = self.engine.pending_range().map(|(a, b)| format!(" Not covered: {} to {}", crate::live_common::fmt_clock(a), crate::live_common::fmt_clock(b))).unwrap_or_default();
+                    self.engine.final_note = Some(format!("Notes were on manual.{range}"));
+                }
+            }
+            NotesCmd::Discard => {
+                self.discarded.store(true, Ordering::SeqCst);
+                self.swap.cancel();
+                self.quitting = true;
+            }
+            NotesCmd::Quit => {
+                self.swap.cancel();
+                if !self.ended_waiting {
+                    let st = self.engine.status();
+                    let _ = self.p.db.save_notes(&self.p.meeting_id, self.engine.doc(), "interrupted", st.tokens_used, st.cap);
+                    self.interrupted = true;
+                }
+                self.quitting = true;
+            }
+            NotesCmd::Reconfigure(s) => self.reconfigure(s),
+            NotesCmd::Edit(edit, reply) => {
+                let res = apply_edit(self.engine.doc_mut(), &edit).map(|_| {
+                    self.engine.save_now();
+                    self.dirty.store(true, Ordering::SeqCst);
+                    doc_to_contract(self.engine.doc())
+                });
+                let _ = reply.send(res);
+            }
+            NotesCmd::Get(reply) => {
+                let _ = reply.send(doc_to_contract(self.engine.doc()));
+            }
+            NotesCmd::State(reply) => {
+                let _ = reply.send(serde_json::to_value(self.snapshot()).unwrap_or(Value::Null));
+            }
+        }
+    }
+
+    /// One run when the trigger says so, taking commands while the call is in flight.
+    async fn maybe_run(&mut self, rx: &mut mpsc::UnboundedReceiver<NotesCmd>) {
+        let Decision::Run(reason) = self.engine.poll() else { return };
+        let allowed = self.auto() || matches!(reason, RunReason::Manual | RunReason::Final);
+        if !allowed {
+            return;
+        }
+        let gen0 = (self.p.generation)(&self.p.meeting_id, false);
+        self.swap.set_expected(Some(gen0));
+        let Some(prep) = self.engine.prepare(reason) else { return };
+        // "running" is shown while the call is in flight
+        self.emit_state();
+        let req = prep.request.clone();
+        let swap = self.swap.clone();
+        let fut = swap.call(&req);
+        tokio::pin!(fut);
+        let result = loop {
+            tokio::select! {
+                r = &mut fut => break r,
+                cmd = rx.recv() => match cmd {
+                    Some(c) => self.handle(c),
+                    None => { self.swap.cancel(); self.quitting = true; }
+                },
+            }
+        };
+        if self.discarded.load(Ordering::SeqCst) || (self.p.generation)(&self.p.meeting_id, false) != gen0 {
+            // the scope generation moved or the meeting is going: nothing is applied, the lines go back
+            self.engine.abort(prep);
+        } else {
+            self.engine.complete(prep, result);
+        }
+    }
+
+    async fn run(mut self, mut rx: mpsc::UnboundedReceiver<NotesCmd>) {
+        self.emit_state();
+        let mut ticker = tokio::time::interval(self.p.tick);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        'main: loop {
+            tokio::select! {
+                cmd = rx.recv() => match cmd {
+                    Some(c) => self.handle(c),
+                    None => break 'main,
+                },
+                _ = ticker.tick() => {}
+            }
+            if self.quitting {
+                break;
+            }
+            if self.finishing {
+                let _ = self.engine.finish().await;
+                self.done = true;
+                break;
+            }
+            self.engine.set_gate(!(self.p.busy)());
+            self.maybe_run(&mut rx).await;
+            if self.quitting {
+                break;
+            }
+            if self.ended_waiting && !self.engine.has_pending() {
+                // the one update after the meeting covered everything
+                self.engine.final_note = None;
+                let _ = self.engine.finish_with(false).await;
+                self.done = true;
+                break;
+            }
+            self.emit_state();
+            self.flush_doc(false);
+        }
+        if self.discarded.load(Ordering::SeqCst) {
+            self.finished_flag.store(true, Ordering::SeqCst);
+            (self.p.on_exit)(&self.p.meeting_id);
+            return;
+        }
+        if self.interrupted {
+            // a run that was in flight finished after the quit saved: save as interrupted once more
+            let st = self.engine.status();
+            let _ = self.p.db.save_notes(&self.p.meeting_id, self.engine.doc(), "interrupted", st.tokens_used, st.cap);
+        }
+        if self.ended_waiting && !self.done {
+            let _ = self.engine.finish_with(false).await;
+            self.done = true;
+        }
+        self.emit_state();
+        self.flush_doc(true);
+        self.finished_flag.store(true, Ordering::SeqCst);
+        (self.p.on_exit)(&self.p.meeting_id);
+    }
 }

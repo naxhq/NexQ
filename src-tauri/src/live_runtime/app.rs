@@ -1,9 +1,10 @@
 //! The app's side of the runtimes: Tauri events, the AI run service, the
 //! database behind `AppState`, the running meeting and the live-answer gate.
 
-use crate::ai_runs::{AiRuns, ModelSelection};
+use crate::ai_runs::AiRuns;
 use crate::live_common::SystemClock;
 use crate::live_runtime::db::LiveDb;
+use crate::live_runtime::cheapest::{cheapest, CheapestChoice, CheapestInput};
 use crate::live_runtime::llm::AiRunsFactory;
 use crate::live_runtime::{Deps, Emitter, LiveRuntimes};
 use crate::llm::cli_agent::manager::{SessionKey, SessionScope, Tier};
@@ -37,17 +38,37 @@ pub fn build(app: &AppHandle, state: &AppState) -> Option<Arc<LiveRuntimes>> {
     let runs = state.ai_runs.clone()?;
     let live = state.live_meeting.clone();
     let llm = state.llm.clone();
-    let default_selection: Arc<dyn Fn() -> Option<ModelSelection> + Send + Sync> = Arc::new(move || {
-        let router = llm.as_ref()?.lock().ok()?;
-        let provider = router.active_provider_type()?.as_str().to_string();
-        Some(ModelSelection::new(&provider, router.active_model(), None))
+    // "Automatic" is the cheapest good-enough model (see `cheapest`): the same
+    // rule for notes, brief, memory and recaps.
+    let cli_settings = state.cli_settings.clone();
+    let openrouter = state.openrouter_cache.clone();
+    let resolver: Arc<dyn Fn(Option<&str>) -> Option<CheapestChoice> + Send + Sync> = Arc::new(move |provider: Option<&str>| {
+        let (active_provider, active_model) = {
+            let router = llm.as_ref()?.lock().ok()?;
+            (router.active_provider_type()?.as_str().to_string(), router.active_model().to_string())
+        };
+        let provider = provider.map(str::to_string).unwrap_or_else(|| active_provider.clone());
+        let active_model = if provider == active_provider { active_model } else { String::new() };
+        let available: Vec<String> = if provider == "openrouter" {
+            openrouter.lock().ok().and_then(|c| c.as_ref().map(|c| c.models.iter().map(|m| m.id.clone()).collect())).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let kind = crate::llm::ProviderType::from_str(&provider).ok().and_then(|p| p.cli_agent_kind());
+        let fast = kind.map(|k| cli_settings.config(k));
+        Some(cheapest(&CheapestInput {
+            provider: &provider,
+            active_model: &active_model,
+            available: &available,
+            cli_fast: fast.as_ref().map(|c| (c.fast_model.as_str(), c.fast_effort.as_str())),
+        }))
     });
-    let factory = Arc::new(AiRunsFactory { runs: runs.clone(), default_selection });
+    let factory = Arc::new(AiRunsFactory { runs: runs.clone(), resolver });
     let gate = runs.gate().clone();
     let close_runs = runs.clone();
     let live_id = live.clone();
     let deps = Deps {
-        db: LiveDb::new(Arc::new(database) as Arc<dyn crate::live_runtime::db::ConnProvider>),
+        db: LiveDb::new(Arc::new(database) as Arc<dyn crate::live_runtime::db::ConnProvider>).with_reader(state.readers.clone()),
         emitter: Arc::new(TauriEmitter(app.clone())),
         factory,
         clock: Arc::new(SystemClock),

@@ -7,7 +7,7 @@
 //! * `poll()` / `prepare()` / `complete()` let an actor keep feeding lines
 //!   while the call is in flight (lines queue, one run at a time).
 
-use crate::live_common::{PauseReason, estimate_tokens, speech_units_x2, Clock, LlmCall, LlmError, LlmErrorKind, LlmReply, LlmRequest, RunState};
+use crate::live_common::{fmt_clock, PauseReason, estimate_tokens, speech_units_x2, Clock, LlmCall, LlmError, LlmErrorKind, LlmReply, LlmRequest, RunState};
 use crate::live_notes::doc::NoteDoc;
 use crate::live_notes::ops::{parse_ops, ParseMode};
 use crate::live_notes::prompts::{notes_system, notes_user, transcript_line, NotesPromptOptions};
@@ -424,42 +424,108 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
         Some(self.complete(prepared, result))
     }
 
-    /// Meeting ended: one last pass over what is still unsent, bounded by
-    /// `final_timeout`, then the notes are saved as done.
+    /// The time range of the lines that were not sent yet, if any.
+    pub fn pending_range(&self) -> Option<(u64, u64)> {
+        Some((self.pending.first()?.ms, self.pending.last()?.ms))
+    }
+
+    /// When the next automatic run is due (ms from now), if one is scheduled.
+    pub fn next_run_in_ms(&self) -> Option<u64> {
+        self.trigger.next_in_ms(self.clock.now_ms())
+    }
+
+    pub fn last_code(&self) -> &'static str {
+        self.last_code
+    }
+
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    /// New prompt options (detail, language) for the next run.
+    pub fn set_prompt(&mut self, o: NotesPromptOptions) {
+        self.cfg.prompt = o;
+    }
+
+    pub fn set_cap(&mut self, cap: u64) {
+        self.cfg.trigger.cap_tokens = cap;
+        self.trigger.guard.set_cap(cap);
+        self.emit_status();
+    }
+
+    /// "Try again": forgives the failures and runs again with the current settings.
+    pub fn retry(&mut self) {
+        self.trigger.guard.retry();
+        self.last_error = None;
+        self.emit_status();
+    }
+
+    /// Meeting ended: passes over what is still unsent until nothing is left or
+    /// `final_timeout` is used up, then the notes are saved as done. The note
+    /// says which minutes are not covered when something is left.
     pub async fn finish(&mut self) -> Option<RunOutcome> {
+        self.finish_with(true).await
+    }
+
+    /// `finish`, or (`run_final` false: manual mode) only the bookkeeping, with
+    /// the note naming what was never sent.
+    pub async fn finish_with(&mut self, run_final: bool) -> Option<RunOutcome> {
         // After three failures one bounded last try is made, unless the cause
         // cannot be fixed by trying (no key); a plan limit is not retried either.
         let mut retried = false;
+        let mut why: Option<String> = None;
         match self.trigger.guard.state {
-            RunState::Paused(PauseReason::Failures) if self.last_code != "no_key" => {
+            RunState::Paused(PauseReason::Failures) if self.last_code != "no_key" && run_final => {
                 self.trigger.guard.allow_final_retry();
                 retried = true;
             }
             RunState::Paused(PauseReason::Failures) => {
-                self.final_note = Some("Not tried again at the end: the provider needs a key or a sign-in".into());
+                why = Some("Not tried again at the end: the provider needs a key or a sign-in".into());
             }
             RunState::Paused(PauseReason::PlanLimit) => {
-                self.final_note = Some("Not tried again at the end: the plan's usage limit was reached".into());
+                why = Some("Not tried again at the end: the plan's usage limit was reached".into());
             }
             _ => {}
         }
-        self.trigger.request_final();
+        let started = std::time::Instant::now();
         let mut outcome = None;
-        if let Decision::Run(reason) = self.poll() {
-            if let Some(prepared) = self.prepare(reason) {
-                let result = match tokio::time::timeout(self.cfg.final_timeout, self.llm.call(&prepared.request)).await {
-                    Ok(r) => r,
-                    Err(_) => Err(LlmError::cancelled()),
-                };
-                outcome = Some(self.complete(prepared, result));
+        let mut passes = 0;
+        while run_final {
+            self.trigger.request_final();
+            let Decision::Run(reason) = self.poll() else { break };
+            let Some(prepared) = self.prepare(reason) else { break };
+            let left = self.cfg.final_timeout.saturating_sub(started.elapsed());
+            if left.is_zero() {
+                self.abort(prepared);
+                break;
+            }
+            let result = match tokio::time::timeout(left, self.llm.call(&prepared.request)).await {
+                Ok(r) => r,
+                Err(_) => Err(LlmError::cancelled()),
+            };
+            let o = self.complete(prepared, result);
+            let ok = o.ok;
+            outcome = Some(o);
+            passes += 1;
+            if !ok || self.pending.is_empty() {
+                break;
             }
         }
         if retried {
-            self.final_note = Some(match &outcome {
+            why = Some(match &outcome {
                 Some(o) if o.ok => "Tried once more at the end after earlier errors: it worked".to_string(),
                 Some(o) => format!("Tried once more at the end after earlier errors: {}", o.error.clone().unwrap_or_else(|| "it failed".into())),
                 None => "Nothing was left to send at the end".to_string(),
             });
+        }
+        let _ = passes;
+        if let Some((from, to)) = self.pending_range() {
+            let range = format!("{} to {}", fmt_clock(from), fmt_clock(to));
+            let lead = if !run_final { "Notes were on manual".to_string() } else { why.take().unwrap_or_else(|| "The end of the meeting came first".to_string()) };
+            why = Some(format!("{lead}. Not covered: {range}"));
+        }
+        if why.is_some() {
+            self.final_note = why;
         }
         self.done = true;
         self.trigger.stop();

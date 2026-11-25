@@ -2,7 +2,6 @@
 //! scripted conversations, fixtures of model outputs, a scorer and a one-hour
 //! simulation. Test-time tooling; nothing here runs in the app.
 
-#![allow(dead_code)]
 
 pub mod score;
 #[cfg(test)]

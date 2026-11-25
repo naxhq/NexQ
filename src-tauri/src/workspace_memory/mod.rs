@@ -4,7 +4,6 @@
 //! as updates. Nothing here saves anything: the user approves, edits or
 //! dismisses every proposal. Memory is data, never instructions.
 
-#![allow(dead_code)]
 
 use crate::live_brief::sheet::unsupported;
 use crate::live_common::{estimate_tokens, fmt_clock, normalize, parse_clock_value, parse_loose_where, similarity, str_field, LlmCall, LlmError, LlmRequest};

@@ -3,7 +3,6 @@
 //! v12 migration and database functions). The model call, clock, events and
 //! saving are injected through traits; see `engine`.
 
-#![allow(dead_code)]
 
 pub mod db;
 pub mod doc;

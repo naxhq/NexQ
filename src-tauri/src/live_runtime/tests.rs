@@ -262,7 +262,7 @@ async fn nothing_runs_when_off_on_silence_or_for_a_meeting_that_is_not_live() {
     h.rt.feed("m1", "Them", "...", 1_000);
     h.rt.feed("m1", "Them", "   ", 1_000);
     h.clock.set(10 * 60_000);
-    h.rt.notetaker_update_now("m1");
+    let _ = h.rt.notetaker_update_now("m1");
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert_eq!(h.fake.calls.lock().unwrap().len(), 0, "no model call on silence");
     // lines for a meeting nobody started notes for go nowhere
@@ -374,7 +374,7 @@ async fn cap_then_continue_and_total_tokens_are_reported() {
     h.speak("m1", 120, 40_000).await;
     tokio::time::sleep(Duration::from_millis(80)).await;
     assert_eq!(h.fake.count(AiPurpose::Notes), 1, "capped: no more runs");
-    h.rt.notetaker_continue("m1");
+    h.rt.notetaker_continue("m1").unwrap();
     until("second run", || h.fake.count(AiPurpose::Notes) == 2).await;
 }
 
@@ -477,7 +477,7 @@ async fn manual_mode_only_runs_on_update_now() {
     h.speak("m1", 150, 1_000).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(h.fake.count(AiPurpose::Notes), 0);
-    h.rt.notetaker_update_now("m1");
+    h.rt.notetaker_update_now("m1").unwrap();
     until("manual run", || h.fake.count(AiPurpose::Notes) == 1).await;
 }
 
@@ -581,8 +581,15 @@ async fn brief_searches_the_scope_calls_once_and_feeds_live_answers() {
     assert!(t.contains("Acme pays 12 dollars") && t.contains("[[DATA brief "));
     assert!(h.rt.answer_extras(&m, "MeetingSummary", None).is_none());
     assert!(h.rt.answer_extras(&m, "ActionItemsExtraction", None).is_none());
-    assert!(h.rt.answer_extras(&m, "Assist", Some("live-fast")).is_some());
-    assert!(h.rt.answer_extras(&m, "Assist", Some("live-fast")).is_none(), "the session already has it");
+    let first = h.rt.session_extras(&m, "Assist", "live-fast#0").expect("a new session gets it");
+    // not recorded until the turn succeeded: a failed turn leaves it due
+    assert!(h.rt.session_extras(&m, "Assist", "live-fast#0").is_some(), "a failed turn does not count");
+    h.rt.mark_session_sent(&first);
+    assert!(h.rt.session_extras(&m, "Assist", "live-fast#0").is_none(), "the session already has it");
+    // a restarted session (new generation) gets it again
+    assert!(h.rt.session_extras(&m, "Assist", "live-fast#1").is_some());
+    h.rt.forget_sessions(&m);
+    assert!(h.rt.session_extras(&m, "Assist", "live-fast#0").is_some(), "a restart of the meeting's sessions resends");
     assert!(h.rt.answer_extras("other-meeting", "Assist", None).is_none());
     // the prompt is fenced and says where the data is
     let p = &h.fake.prompts(AiPurpose::Brief)[0];
@@ -1093,7 +1100,7 @@ async fn a_raised_cap_is_kept_across_stop_and_start_and_over_the_cap_never_runs(
     h.fake.push(Ok(LlmReply { text: r#"{"ops":[]}"#.into(), input_tokens: Some(20_000), cached_input_tokens: Some(0), output_tokens: Some(300) }));
     h.speak("m1", 120, 1_000).await;
     until("capped", || h.events.last_status("notetaker_state", "m1").map(|v| v["status"] == "capped").unwrap_or(false)).await;
-    h.rt.notetaker_continue("m1");
+    h.rt.notetaker_continue("m1").unwrap();
     until("running again with the raised cap", || {
         h.events.last_status("notetaker_state", "m1").map(|v| v["status"] != "capped" && v["cap"].as_u64().unwrap() > 20_000).unwrap_or(false)
     })
@@ -1328,4 +1335,212 @@ async fn fresh_install_memory_suggestions_need_no_switch_and_auto_follows_the_wo
     super::memory::auto_suggest_after(Arc::new(restarted.rt.deps().clone()), m.clone(), Duration::from_millis(10));
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert_eq!(restarted.fake.count(AiPurpose::Memory), 0);
+}
+
+// ---------------------------------------------------------------- ME review round 1
+
+fn status_of(h: &H, name: &str, m: &str) -> String {
+    h.events.last_status(name, m).and_then(|v| v["status"].as_str().map(str::to_string)).unwrap_or_default()
+}
+
+fn can_of(v: &Value) -> Vec<String> {
+    v["can"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default()
+}
+
+#[tokio::test]
+async fn state_is_running_only_while_a_run_is_in_flight_and_the_getter_agrees() {
+    let h = harness();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    *h.fake.delay.lock().unwrap() = Duration::from_millis(300);
+    h.speak("m1", 120, 1_000).await;
+    until("running", || status_of(&h, "notetaker_state", "m1") == "running").await;
+    assert_eq!(h.rt.notetaker_state("m1").await["status"], "running");
+    until("on between runs", || status_of(&h, "notetaker_state", "m1") == "on").await;
+    let st = h.rt.notetaker_state("m1").await;
+    assert_eq!(st["status"], "on");
+    assert!(can_of(&st).contains(&"pause".to_string()) || can_of(&st).contains(&"update".to_string()), "{st}");
+    for key in ["meeting_id", "status", "reason", "error_kind", "can", "tokens_used", "total_tokens", "cap", "next_in_ms", "model"] {
+        assert!(st.get(key).is_some(), "the state has `{key}`: {st}");
+    }
+}
+
+#[tokio::test]
+async fn a_settings_patch_reaches_a_running_actor_at_once() {
+    let h = harness();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    h.speak("m1", 120, 1_000).await;
+    until("a run", || h.fake.count(AiPurpose::Notes) == 1).await;
+    h.rt.patch_notetaker(&json!({"cap": 777_000})).unwrap();
+    for _ in 0..200 {
+        if h.rt.notetaker_state("m1").await["cap"] == 777_000 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(h.rt.notetaker_state("m1").await["cap"], 777_000);
+    // the brief too
+    let (_ws, m) = brief_with_sheet(&h).await;
+    h.rt.patch_brief(&json!({"cap": 555_000})).unwrap();
+    for _ in 0..200 {
+        if h.rt.brief_state(&m).await["cap"] == 555_000 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(h.rt.brief_state(&m).await["cap"], 555_000);
+}
+
+#[tokio::test]
+async fn pause_resume_and_update_after_stop_are_never_silent_no_ops() {
+    let h = harness();
+    h.enable_notes();
+    h.start_meeting("m1");
+    assert!(h.rt.notetaker_pause("m1").is_err(), "nothing runs yet: it says so");
+    h.rt.notetaker_start("m1").unwrap();
+    h.rt.notetaker_pause("m1").unwrap();
+    until("paused", || status_of(&h, "notetaker_state", "m1") == "paused").await;
+    let st = h.rt.notetaker_state("m1").await;
+    assert!(can_of(&st).contains(&"resume".to_string()), "{st}");
+    h.speak("m1", 150, 1_000).await;
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    assert_eq!(h.fake.count(AiPurpose::Notes), 0, "paused: no automatic run");
+    h.rt.notetaker_resume("m1").unwrap();
+    until("a run after resume", || h.fake.count(AiPurpose::Notes) == 1).await;
+    // Stop, then Update now: it starts again (or refuses with a reason)
+    h.rt.notetaker_stop("m1");
+    until("actor ended", || h.rt.inner.lock().unwrap().notes.get("m1").is_none()).await;
+    h.rt.notetaker_update_now("m1").expect("update after stop starts it again");
+    h.speak("m1", 150, 50_000).await;
+    h.rt.notetaker_update_now("m1").unwrap();
+    until("a run after update", || h.fake.count(AiPurpose::Notes) == 2).await;
+    // off: refused with the reason, not ignored
+    h.rt.patch_notetaker(&json!({"enabled": false})).unwrap();
+    until("gone", || h.rt.inner.lock().unwrap().notes.get("m1").map(|x| x.finished.load(Ordering::SeqCst)).unwrap_or(true)).await;
+    let e = h.rt.notetaker_update_now("m1").unwrap_err();
+    assert!(e.contains("turned off"), "{e}");
+}
+
+#[tokio::test]
+async fn try_again_on_a_failed_actor_runs_again_with_the_current_settings() {
+    let h = harness();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    for _ in 0..3 {
+        h.fake.push(Err(LlmError::failed("The provider said no")));
+    }
+    h.speak("m1", 120, 1_000).await;
+    for i in 1..3u64 {
+        until("a failed run", || h.fake.count(AiPurpose::Notes) as u64 >= i).await;
+        h.clock.set(1_000 + i * 30_000);
+        tokio::time::sleep(Duration::from_millis(60)).await;
+    }
+    until("error", || status_of(&h, "notetaker_state", "m1") == "error").await;
+    let st = h.rt.notetaker_state("m1").await;
+    assert!(can_of(&st).contains(&"try_again".to_string()), "{st}");
+    assert_eq!(st["error_kind"].as_str().map(|s| !s.is_empty()), Some(true), "{st}");
+    h.rt.notetaker_start("m1").unwrap();
+    h.clock.set(200_000);
+    until("it runs again", || h.fake.count(AiPurpose::Notes) == 4).await;
+    assert_ne!(status_of(&h, "notetaker_state", "m1"), "error");
+}
+
+#[tokio::test]
+async fn the_getters_answer_when_nothing_runs_and_say_why() {
+    let h = harness();
+    h.start_meeting("m1");
+    let st = h.rt.notetaker_state("m1").await;
+    assert_eq!(st["status"], "off");
+    assert_eq!(st["reason"], "Live notes are turned off");
+    assert_eq!(can_of(&st), vec!["start".to_string()]);
+    // a workspace with the brief off: the reason is the switch
+    let ws = { let c = h.conn.lock().unwrap(); new_ws(&c, "NoBrief", false, false) };
+    let m = make_meeting(&h, &ws);
+    let st = h.rt.brief_state(&m).await;
+    assert_eq!(st["status"], "off");
+    assert!(st["reason"].as_str().unwrap_or("").contains("off in this workspace"), "{st}");
+    // a meeting that is gone: the reason is shown, not an empty off
+    let st = h.rt.brief_state("no-such-meeting").await;
+    assert!(st["reason"].as_str().unwrap_or("").len() > 3, "{st}");
+}
+
+#[tokio::test]
+async fn manual_mode_runs_nothing_unasked_at_the_end_and_offers_update() {
+    let h = harness();
+    h.rt.patch_notetaker(&json!({"enabled": true, "update_mode": "manual"})).unwrap();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    h.speak("m1", 150, 1_000).await;
+    h.rt.on_meeting_end("m1");
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(h.fake.count(AiPurpose::Notes), 0, "no run nobody asked for");
+    let st = h.events.last_status("notetaker_state", "m1").unwrap();
+    assert!(can_of(&st).contains(&"update".to_string()), "{st}");
+}
+
+#[tokio::test]
+async fn the_final_pass_that_runs_out_of_time_says_which_minutes_are_not_covered() {
+    let h = harness();
+    h.enable_notes();
+    h.start_meeting("m1");
+    h.rt.notetaker_start("m1").unwrap();
+    *h.fake.delay.lock().unwrap() = Duration::from_millis(900);
+    h.speak("m1", 150, 61_000).await;
+    until("a run in flight", || h.fake.inflight.load(Ordering::SeqCst) == 1).await;
+    // talk that arrives while that run works: still uncovered when the meeting ends
+    h.rt.feed("m1", "Them", &(0..80).map(|i| format!("late{i}")).collect::<Vec<_>>().join(" "), 70_000);
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    h.rt.on_meeting_end("m1");
+    until("finished", || status_of(&h, "notetaker_state", "m1") == "finished").await;
+    let st = h.events.last_status("notetaker_state", "m1").unwrap();
+    let reason = st["reason"].as_str().unwrap_or("");
+    assert!(reason.contains("Not covered"), "{st}");
+    assert!(can_of(&st).contains(&"update".to_string()), "{st}");
+}
+
+#[tokio::test]
+async fn extras_are_sent_again_after_a_session_restart_and_counted_only_after_success() {
+    let h = harness();
+    let (_ws, m) = brief_with_sheet(&h).await;
+    let e = h.rt.session_extras(&m, "Assist", "live-fast#3").unwrap();
+    assert!(h.rt.session_extras(&m, "Assist", "live-fast#3").is_some(), "no success yet");
+    h.rt.mark_session_sent(&e);
+    assert!(h.rt.session_extras(&m, "Assist", "live-fast#3").is_none());
+    assert!(h.rt.session_extras(&m, "Assist", "live-fast#4").is_some(), "a new generation is a new session");
+    h.rt.forget_sessions(&m);
+    assert!(h.rt.session_extras(&m, "Assist", "live-fast#3").is_some());
+}
+
+#[tokio::test]
+async fn automatic_memory_runs_stay_under_the_cap_and_say_so() {
+    let h = harness();
+    let ws = { let c = h.conn.lock().unwrap(); new_ws(&c, "Cap", false, false) };
+    let m = make_meeting(&h, &ws);
+    {
+        let c = h.conn.lock().unwrap();
+        for i in 0..6 {
+            c.execute(
+                "INSERT INTO transcript_segments (id, meeting_id, text, speaker, timestamp_ms, is_final, created_at) VALUES (?1,?2,?3,'Them',?4,1,'t')",
+                rusqlite::params![format!("s{i}"), m, "Acme pays 12 dollars per seat and the price may change", 5_000 + i * 1_000],
+            )
+            .unwrap();
+        }
+    }
+    let e = super::memory::suggest(h.rt.deps(), &ws, &m, Some(5)).await.unwrap_err();
+    assert!(e.contains("cap"), "{e}");
+    assert_eq!(h.fake.count(AiPurpose::Memory), 0, "nothing was sent over the cap");
+    assert!(super::memory::suggest(h.rt.deps(), &ws, &m, Some(100_000)).await.is_ok());
+    assert_eq!(h.fake.count(AiPurpose::Memory), 1);
+}
+
+#[test]
+fn the_webview_payload_for_a_new_memory_item_deserialises() {
+    let c: crate::workspace::types::MemoryCreate =
+        serde_json::from_value(json!({"workspace_id": "w", "kind": "fact", "title": "t", "text": "x", "status": "saved"})).unwrap();
+    assert!(!c.unsupported);
+    assert_eq!(c.status.as_deref(), Some("saved"));
 }

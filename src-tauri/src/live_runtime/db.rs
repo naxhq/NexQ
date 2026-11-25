@@ -15,7 +15,6 @@ use crate::workspace::types::{MemoryCreate, MemoryItem};
 use crate::workspace_memory::{MemLine, MemoryKind, SavedItem};
 use crate::workspace_search::{self as wsearch, MeetingScope, PassageKind, SearchScope};
 use rusqlite::{params, Connection, OptionalExtension};
-use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
 /// Gives a closure the shared connection. False when it could not be had.
@@ -78,6 +77,9 @@ pub struct StoredBrief {
 #[derive(Clone)]
 pub struct LiveDb {
     conn: Arc<dyn ConnProvider>,
+    /// Read-only connections for the reads of the live path, so they never wait for the
+    /// shared connection the transcript writer uses. None in tests (one in-memory connection).
+    reader: Option<Arc<crate::db::readers::ReaderPool>>,
 }
 
 fn run<T>(p: &dyn ConnProvider, f: impl FnOnce(&Connection) -> T) -> Option<T> {
@@ -95,15 +97,24 @@ pub fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
-fn hash_of(parts: &[String]) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    parts.hash(&mut h);
-    h.finish()
-}
-
 impl LiveDb {
     pub fn new(conn: Arc<dyn ConnProvider>) -> Self {
-        Self { conn }
+        Self { conn, reader: None }
+    }
+
+    pub fn with_reader(mut self, reader: Option<Arc<crate::db::readers::ReaderPool>>) -> Self {
+        self.reader = reader;
+        self
+    }
+
+    /// A read: on a reader of its own when there is one (else on the shared connection).
+    fn read<T>(&self, f: impl Fn(&Connection) -> T) -> Option<T> {
+        if let Some(pool) = &self.reader {
+            if let Ok(out) = pool.with(&f) {
+                return Some(out);
+            }
+        }
+        run(self.conn.as_ref(), f)
     }
 
     fn with<T>(&self, f: impl FnOnce(&Connection) -> T) -> Option<T> {
@@ -113,7 +124,7 @@ impl LiveDb {
     // ---- settings (key/value)
 
     pub fn kv_get(&self, key: &str) -> Option<String> {
-        self.with(|c| c.query_row("SELECT value FROM app_state WHERE key = ?1", params![key], |r| r.get::<_, Option<String>>(0)).optional().ok().flatten().flatten()).flatten()
+        self.read(|c| c.query_row("SELECT value FROM app_state WHERE key = ?1", params![key], |r| r.get::<_, Option<String>>(0)).optional().ok().flatten().flatten()).flatten()
     }
 
     pub fn kv_set(&self, key: &str, value: &str) -> Result<(), String> {
@@ -122,13 +133,13 @@ impl LiveDb {
     }
 
     pub fn meeting_exists(&self, meeting_id: &str) -> bool {
-        self.with(|c| c.query_row("SELECT 1 FROM meetings WHERE id = ?1", params![meeting_id], |_| Ok(())).optional().ok().flatten().is_some()).unwrap_or(false)
+        self.read(|c| c.query_row("SELECT 1 FROM meetings WHERE id = ?1", params![meeting_id], |_| Ok(())).optional().ok().flatten().is_some()).unwrap_or(false)
     }
 
     // ---- notes (a save never creates a row for a meeting that is gone)
 
     pub fn load_notes(&self, meeting_id: &str) -> Option<notes_db::StoredNotes> {
-        self.with(|c| notes_db::load_notes(c, meeting_id).ok().flatten()).flatten()
+        self.read(|c| notes_db::load_notes(c, meeting_id).ok().flatten()).flatten()
     }
 
     pub fn save_notes(&self, meeting_id: &str, doc: &NoteDoc, status: &str, used: u64, cap: u64) -> Result<(), String> {
@@ -139,7 +150,7 @@ impl LiveDb {
     // ---- brief
 
     pub fn load_brief(&self, meeting_id: &str) -> Option<StoredBrief> {
-        self.with(|c| {
+        self.read(|c| {
             c.query_row("SELECT sheet_json, status, tokens_used, cap, fingerprint FROM meeting_briefs WHERE meeting_id = ?1", params![meeting_id], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, String>(4)?))
             })
@@ -185,8 +196,17 @@ impl LiveDb {
 
     // ---- scope
 
+    /// The meeting's scope, or why it can't be had (shown as the reason it stopped).
+    pub fn scope_result(&self, meeting_id: &str) -> Result<LiveScope, String> {
+        match self.read(|c| crate::workspace::access::live_parts(c, meeting_id)) {
+            None => Err("the database is busy".to_string()),
+            Some(None) => Err("workspaces are unavailable, or this meeting is gone".to_string()),
+            Some(Some(_)) => self.scope(meeting_id).ok_or_else(|| "the scope could not be read".to_string()),
+        }
+    }
+
     pub fn scope(&self, meeting_id: &str) -> Option<LiveScope> {
-        self.with(|c| {
+        self.read(|c| {
             // the one place the live fingerprint is made
             let p = crate::workspace::access::live_parts(c, meeting_id)?;
             let search = SearchScope {
@@ -207,7 +227,7 @@ impl LiveDb {
             return Vec::new();
         }
         let kinds = [PassageKind::Transcript, PassageKind::Document, PassageKind::Folder, PassageKind::TalkingPoint];
-        self.with(|c| wsearch::search::search(c, &scope.search, query, &kinds, max).unwrap_or_default())
+        self.read(|c| wsearch::search::search(c, &scope.search, query, &kinds, max).unwrap_or_default())
             .unwrap_or_default()
             .into_iter()
             .map(|p| Passage {
@@ -222,16 +242,16 @@ impl LiveDb {
     // ---- memory
 
     pub fn meeting_home(&self, meeting_id: &str) -> Option<String> {
-        self.with(|c| c.query_row("SELECT workspace_id FROM meetings WHERE id = ?1", params![meeting_id], |r| r.get::<_, String>(0)).ok()).flatten()
+        self.read(|c| c.query_row("SELECT workspace_id FROM meetings WHERE id = ?1", params![meeting_id], |r| r.get::<_, String>(0)).ok()).flatten()
     }
 
     pub fn suggest_flag(&self, workspace_id: &str) -> bool {
-        self.with(|c| store::get_workspace(c, workspace_id).map(|w| w.suggest_memory).unwrap_or(false)).unwrap_or(false)
+        self.read(|c| store::get_workspace(c, workspace_id).map(|w| w.suggest_memory).unwrap_or(false)).unwrap_or(false)
     }
 
     /// The final lines of a meeting and its length.
     pub fn meeting_lines(&self, meeting_id: &str) -> (Vec<MemLine>, u64) {
-        self.with(|c| {
+        self.read(|c| {
             let mut stmt = match c.prepare("SELECT speaker, text, timestamp_ms FROM transcript_segments WHERE meeting_id = ?1 AND is_final = 1 ORDER BY timestamp_ms, rowid") {
                 Ok(s) => s,
                 Err(_) => return (Vec::new(), 0),
@@ -245,7 +265,7 @@ impl LiveDb {
     }
 
     pub fn saved_memory(&self, workspace_id: &str) -> Vec<SavedItem> {
-        self.with(|c| {
+        self.read(|c| {
             ws_memory::list_memory(c, workspace_id)
                 .unwrap_or_default()
                 .into_iter()

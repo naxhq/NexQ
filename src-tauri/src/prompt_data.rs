@@ -13,7 +13,6 @@
 //! API: `new_nonce`, `wrap`, `clean_line`, `neutralise`, `rules`,
 //! `looks_like_instruction`, `plain_fact`.
 
-#![allow(dead_code)]
 
 use unicode_normalization::UnicodeNormalization;
 

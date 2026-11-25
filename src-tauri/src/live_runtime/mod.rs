@@ -6,15 +6,18 @@
 //! meeting, the live-answer gate, the scope generation) comes in through
 //! `Deps`, so the whole thing runs in tests with fakes.
 
-#![allow(dead_code)]
 
 pub mod app;
 pub mod brief;
+pub mod cheapest;
+#[cfg(test)]
+mod contract_tests;
 pub mod db;
 pub mod llm;
 pub mod memory;
 pub mod notes;
 pub mod settings;
+pub mod state;
 
 #[cfg(test)]
 mod tests;
@@ -35,6 +38,24 @@ use tokio::sync::oneshot;
 
 pub trait Emitter: Send + Sync {
     fn emit(&self, event: &str, payload: Value);
+}
+
+/// Drops what an actor says about a meeting that is being deleted, even in the
+/// moment before the actor has seen its own discard.
+struct GuardedEmitter {
+    inner: Arc<dyn Emitter>,
+    deleted: Arc<Mutex<std::collections::HashSet<String>>>,
+}
+
+impl Emitter for GuardedEmitter {
+    fn emit(&self, event: &str, payload: Value) {
+        if let Some(id) = payload.get("meeting_id").and_then(Value::as_str) {
+            if self.deleted.lock().map(|d| d.contains(id)).unwrap_or(false) {
+                return;
+            }
+        }
+        self.inner.emit(event, payload);
+    }
 }
 
 /// What the app gives the runtimes.
@@ -134,6 +155,12 @@ impl LiveRuntimes {
         for tx in stop {
             let _ = tx.send(NotesCmd::Stop);
         }
+        // model, cap, detail, language and mode reach a running actor for its next run
+        if merged.enabled {
+            for h in self.inner.lock().unwrap().notes.values() {
+                let _ = h.tx.send(NotesCmd::Reconfigure(merged.clone()));
+            }
+        }
         self.deps.emitter.emit("notetaker_settings_changed", serde_json::to_value(&merged).unwrap_or(Value::Null));
         Ok(merged)
     }
@@ -164,6 +191,9 @@ impl LiveRuntimes {
             let merged = merge(&g.brief, &patch)?;
             self.deps.db.kv_set(BRIEF_KEY, &serde_json::to_string(&merged).map_err(|e| e.to_string())?)?;
             g.brief = merged.clone();
+            for h in g.briefs.values() {
+                let _ = h.tx.send(BriefCmd::Reconfigure(merged.clone()));
+            }
             merged
         };
         self.deps.emitter.emit("brief_settings_changed", serde_json::to_value(&merged).unwrap_or(Value::Null));
@@ -216,6 +246,10 @@ impl LiveRuntimes {
 
     /// The meeting is being deleted: its actors stop at once and save
     /// nothing, and suggestions still in flight for it are dropped.
+    fn guarded_emitter(&self) -> Arc<dyn Emitter> {
+        Arc::new(GuardedEmitter { inner: self.deps.emitter.clone(), deleted: self.deps.deleted.clone() })
+    }
+
     pub fn meeting_deleted(&self, meeting_id: &str) {
         self.deps.deleted.lock().unwrap().insert(meeting_id.to_string());
         let mut g = self.inner.lock().unwrap();
@@ -245,7 +279,11 @@ impl LiveRuntimes {
             if !g.notetaker.enabled {
                 return Err("Live notes are turned off".into());
             }
-            if g.notes.get(meeting_id).map(|h| !h.finished.load(Ordering::SeqCst)).unwrap_or(false) {
+            if let Some(h) = g.notes.get(meeting_id).filter(|h| !h.finished.load(Ordering::SeqCst)) {
+                // start / try again on a paused or failed actor: it runs again with the current settings
+                let _ = h.tx.send(NotesCmd::Reconfigure(g.notetaker.clone()));
+                let _ = h.tx.send(NotesCmd::TryAgain);
+                let _ = h.tx.send(NotesCmd::Resume);
                 return Ok(());
             }
             g.notetaker.clone()
@@ -268,7 +306,7 @@ impl LiveRuntimes {
             settings,
             resume,
             db: self.deps.db.clone(),
-            emitter: self.deps.emitter.clone(),
+            emitter: self.guarded_emitter(),
             factory: self.deps.factory.clone(),
             clock: self.deps.clock.clone(),
             busy: self.deps.busy.clone(),
@@ -290,11 +328,70 @@ impl LiveRuntimes {
     pub fn notetaker_stop(&self, meeting_id: &str) {
         self.notes_cmd(meeting_id, NotesCmd::Stop);
     }
-    pub fn notetaker_update_now(&self, meeting_id: &str) {
-        self.notes_cmd(meeting_id, NotesCmd::Manual);
+
+    fn notes_alive(&self, meeting_id: &str) -> bool {
+        self.inner.lock().unwrap().notes.get(meeting_id).map(|h| !h.finished.load(Ordering::SeqCst)).unwrap_or(false)
     }
-    pub fn notetaker_continue(&self, meeting_id: &str) {
+
+    /// "Update now": never a silent no-op. With no actor (after Stop, or never
+    /// started) it starts one when it may, or says why it cannot.
+    pub fn notetaker_update_now(&self, meeting_id: &str) -> Result<(), String> {
+        if !self.notes_alive(meeting_id) {
+            self.notetaker_start(meeting_id)?;
+        }
+        self.notes_cmd(meeting_id, NotesCmd::Manual);
+        Ok(())
+    }
+
+    pub fn notetaker_pause(&self, meeting_id: &str) -> Result<(), String> {
+        if !self.notes_alive(meeting_id) {
+            return Err("Live notes are not running in this meeting".into());
+        }
+        self.notes_cmd(meeting_id, NotesCmd::Pause);
+        Ok(())
+    }
+
+    /// Resume works from every state: a paused or failed actor runs again, a
+    /// stopped one is started.
+    pub fn notetaker_resume(&self, meeting_id: &str) -> Result<(), String> {
+        if self.notes_alive(meeting_id) {
+            self.notes_cmd(meeting_id, NotesCmd::TryAgain);
+            self.notes_cmd(meeting_id, NotesCmd::Resume);
+            Ok(())
+        } else {
+            self.notetaker_start(meeting_id)
+        }
+    }
+
+    pub fn notetaker_continue(&self, meeting_id: &str) -> Result<(), String> {
+        if !self.notes_alive(meeting_id) {
+            return Err("Live notes are not running in this meeting".into());
+        }
         self.notes_cmd(meeting_id, NotesCmd::KeepGoing);
+        Ok(())
+    }
+
+    fn model_label(&self, sel: &llm::Selection) -> Option<state::ModelLabel> {
+        self.deps.factory.label(sel)
+    }
+
+    /// The state the UI shows, for a running or a stopped feature (same payload as the events).
+    pub async fn notetaker_state(&self, meeting_id: &str) -> Value {
+        let tx = self.inner.lock().unwrap().notes.get(meeting_id).map(|h| h.tx.clone());
+        if let Some(tx) = tx {
+            let (r, rx) = oneshot::channel();
+            if tx.send(NotesCmd::State(r)).is_ok() {
+                if let Ok(Ok(v)) = tokio::time::timeout(Duration::from_secs(2), rx).await {
+                    return v;
+                }
+            }
+        }
+        let settings = self.notetaker_settings();
+        let stored = self.deps.db.load_notes(meeting_id);
+        let reason = if !settings.enabled { Some("Live notes are turned off".to_string()) } else { None };
+        let (status, used, cap) = stored.as_ref().map(|s| (Some(s.status.clone()), s.tokens_used, s.cap)).unwrap_or((None, 0, settings.cap));
+        let model = self.model_label(&notes::selection_of(&settings));
+        serde_json::to_value(state::idle_snapshot(meeting_id, status.as_deref(), used, cap.max(1), reason, model)).unwrap_or(Value::Null)
     }
 
     /// The saved notes (live or not) in the contract's shape.
@@ -338,12 +435,15 @@ impl LiveRuntimes {
         self.require_live(meeting_id)?;
         let settings = {
             let g = self.inner.lock().unwrap();
-            if g.briefs.get(meeting_id).map(|h| !h.finished.load(Ordering::SeqCst)).unwrap_or(false) {
+            if let Some(h) = g.briefs.get(meeting_id).filter(|h| !h.finished.load(Ordering::SeqCst)) {
+                let _ = h.tx.send(BriefCmd::Reconfigure(g.brief.clone()));
+                let _ = h.tx.send(BriefCmd::TryAgain);
+                let _ = h.tx.send(BriefCmd::Resume);
                 return Ok(());
             }
             g.brief.clone()
         };
-        let mut scope = self.deps.db.scope(meeting_id).ok_or_else(|| "Workspaces are unavailable".to_string())?;
+        let mut scope = self.deps.db.scope_result(meeting_id).map_err(|e| format!("The brief cannot start: {e}"))?;
         scope.generation = (self.deps.generation)(meeting_id, true);
         if !scope.brief_enabled {
             return Err("The brief is off in this workspace".into());
@@ -366,7 +466,7 @@ impl LiveRuntimes {
             settings,
             scope,
             db: self.deps.db.clone(),
-            emitter: self.deps.emitter.clone(),
+            emitter: self.guarded_emitter(),
             factory: self.deps.factory.clone(),
             clock: self.deps.clock.clone(),
             busy: self.deps.busy.clone(),
@@ -389,11 +489,72 @@ impl LiveRuntimes {
     pub fn brief_stop(&self, meeting_id: &str) {
         self.brief_cmd(meeting_id, BriefCmd::Stop);
     }
-    pub fn brief_refresh(&self, meeting_id: &str) {
-        self.brief_cmd(meeting_id, BriefCmd::Refresh);
+
+    fn brief_alive(&self, meeting_id: &str) -> bool {
+        self.inner.lock().unwrap().briefs.get(meeting_id).map(|h| !h.finished.load(Ordering::SeqCst)).unwrap_or(false)
     }
-    pub fn brief_continue(&self, meeting_id: &str) {
+
+    /// "Refresh": never a silent no-op (it starts the brief when it may, or says why not).
+    pub fn brief_refresh(&self, meeting_id: &str) -> Result<(), String> {
+        if !self.brief_alive(meeting_id) {
+            self.brief_start(meeting_id)?;
+        }
+        self.brief_cmd(meeting_id, BriefCmd::Refresh);
+        Ok(())
+    }
+
+    pub fn brief_pause(&self, meeting_id: &str) -> Result<(), String> {
+        if !self.brief_alive(meeting_id) {
+            return Err("The brief is not running in this meeting".into());
+        }
+        self.brief_cmd(meeting_id, BriefCmd::Pause);
+        Ok(())
+    }
+
+    pub fn brief_resume(&self, meeting_id: &str) -> Result<(), String> {
+        if self.brief_alive(meeting_id) {
+            self.brief_cmd(meeting_id, BriefCmd::TryAgain);
+            self.brief_cmd(meeting_id, BriefCmd::Resume);
+            Ok(())
+        } else {
+            self.brief_start(meeting_id)
+        }
+    }
+
+    pub fn brief_continue(&self, meeting_id: &str) -> Result<(), String> {
+        if !self.brief_alive(meeting_id) {
+            return Err("The brief is not running in this meeting".into());
+        }
         self.brief_cmd(meeting_id, BriefCmd::KeepGoing);
+        Ok(())
+    }
+
+    pub async fn brief_state(&self, meeting_id: &str) -> Value {
+        let tx = self.inner.lock().unwrap().briefs.get(meeting_id).map(|h| h.tx.clone());
+        if let Some(tx) = tx {
+            let (r, rx) = oneshot::channel();
+            if tx.send(BriefCmd::State(r)).is_ok() {
+                if let Ok(Ok(v)) = tokio::time::timeout(Duration::from_secs(2), rx).await {
+                    return v;
+                }
+            }
+        }
+        let settings = self.brief_settings();
+        let stored = self.deps.db.load_brief(meeting_id);
+        let reason = match self.deps.db.scope_result(meeting_id) {
+            Ok(s) if !s.brief_enabled => Some("The brief is off in this workspace".to_string()),
+            Ok(_) => None,
+            Err(e) => Some(format!("The brief cannot run: {e}")),
+        };
+        let (status, used, cap) = stored.as_ref().map(|s| (Some(s.status.clone()), s.tokens_used, s.cap)).unwrap_or((None, 0, settings.cap));
+        let model = self.model_label(&llm::Selection { provider: settings.provider.clone(), model: settings.model.clone(), effort: settings.effort.clone() });
+        serde_json::to_value(state::idle_snapshot(meeting_id, status.as_deref(), used, cap.max(1), reason, model)).unwrap_or(Value::Null)
+    }
+
+    /// What "Automatic" means for a provider (None = the active one): the model and
+    /// the label to show before anything is turned on.
+    pub fn automatic_model(&self, provider: Option<&str>) -> Option<cheapest::CheapestChoice> {
+        self.deps.factory.automatic(provider)
     }
 
     pub async fn get_brief(&self, meeting_id: &str) -> Option<Value> {
@@ -491,6 +652,41 @@ impl LiveRuntimes {
     /// is there, or (for a CLI session) when the session already has it.
     /// Never waits for the brief and never calls a model.
     pub fn answer_extras(&self, meeting_id: &str, mode: &str, session: Option<&str>) -> Option<String> {
+        match session {
+            None => self.build_extras(meeting_id, mode).map(|e| e.text),
+            Some(key) => self.session_extras(meeting_id, mode, key).map(|e| e.text),
+        }
+    }
+
+    /// For a CLI session: the extras only when this session has not been given
+    /// them. `session_key` names the session and its generation (a restart gives
+    /// it a new one, so a restarted session gets everything again). Nothing is
+    /// recorded until the turn succeeded: `mark_session_sent`.
+    pub fn session_extras(&self, meeting_id: &str, mode: &str, session_key: &str) -> Option<SessionExtras> {
+        let e = self.build_extras(meeting_id, mode)?;
+        let key = format!("{meeting_id}|{session_key}");
+        let g = self.inner.lock().ok()?;
+        if g.session_tokens.get(&key) == Some(&e.token) {
+            return None;
+        }
+        Some(SessionExtras { text: e.text, token: e.token, key })
+    }
+
+    /// The turn that carried `extras` succeeded: this session now has them.
+    pub fn mark_session_sent(&self, extras: &SessionExtras) {
+        if let Ok(mut g) = self.inner.lock() {
+            g.session_tokens.insert(extras.key.clone(), extras.token.clone());
+        }
+    }
+
+    /// A meeting's sessions restarted: they get the brief and memory again.
+    pub fn forget_sessions(&self, meeting_id: &str) {
+        if let Ok(mut g) = self.inner.lock() {
+            g.session_tokens.retain(|k, _| !k.starts_with(&format!("{meeting_id}|")));
+        }
+    }
+
+    fn build_extras(&self, meeting_id: &str, mode: &str) -> Option<SessionExtras> {
         if !ANSWER_MODES.contains(&mode) {
             return None;
         }
@@ -516,15 +712,7 @@ impl LiveRuntimes {
         if sheet_text.is_none() && memory.trim().is_empty() {
             return None;
         }
-        if let Some(label) = session {
-            let token = format!("{rev}:{:x}", fnv(&memory));
-            let key = format!("{meeting_id}|{label}");
-            let mut g = self.inner.lock().ok()?;
-            if g.session_tokens.get(&key) == Some(&token) {
-                return None;
-            }
-            g.session_tokens.insert(key, token);
-        }
+        let token = format!("{rev}:{:x}", fnv(&memory));
         let mut out = crate::prompt_data::rules(&nonce);
         if let Some(t) = sheet_text {
             out.push('\n');
@@ -534,8 +722,16 @@ impl LiveRuntimes {
             out.push('\n');
             out.push_str(&crate::prompt_data::wrap(&nonce, "memory", &memory));
         }
-        Some(out)
+        Some(SessionExtras { text: out, token, key: String::new() })
     }
+}
+
+/// What a session was (or is about to be) given: see `session_extras`.
+#[derive(Debug, Clone)]
+pub struct SessionExtras {
+    pub text: String,
+    token: String,
+    key: String,
 }
 
 fn fnv(s: &str) -> u64 {

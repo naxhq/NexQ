@@ -4,7 +4,6 @@
 //!
 //! Nothing here touches the network, the database or the wall clock.
 
-#![allow(dead_code)]
 
 use async_trait::async_trait;
 use serde::Serialize;
@@ -119,33 +118,17 @@ impl<T: LlmCall + ?Sized> LlmCall for Arc<T> {
 
 // ---------------------------------------------------------------- text sizes
 
-/// Han, Hiragana, Katakana (scripts written without spaces).
-pub fn is_cjk(c: char) -> bool {
-    matches!(c as u32,
-        0x3040..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xFF66..=0xFF9F)
-}
+/// Han, Hiragana, Katakana (scripts written without spaces): the shared definition.
+pub use crate::text_kit::is_cjk;
 
 fn is_hiragana(c: char) -> bool {
     matches!(c as u32, 0x3040..=0x309F)
 }
 
-fn is_han(c: char) -> bool {
-    matches!(c as u32, 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF)
-}
-
 /// Rough token count: CJK characters at 1.5 chars per token, everything else
-/// at 4 chars per token.
+/// at 4 chars per token (the shared estimate).
 pub fn estimate_tokens(s: &str) -> u32 {
-    let mut cjk = 0u32;
-    let mut other = 0u32;
-    for c in s.chars() {
-        if is_cjk(c) {
-            cjk += 1;
-        } else {
-            other += 1;
-        }
-    }
-    ((cjk as f32 / 1.5) + (other as f32 / 4.0)).ceil() as u32
+    crate::text_kit::estimate_tokens(s) as u32
 }
 
 /// Speech volume in half-words: whitespace-separated words count 2, each CJK
@@ -770,6 +753,30 @@ impl RunGuard {
 
     pub fn stop(&mut self) {
         self.state = RunState::Stopped;
+    }
+
+    /// A new cap from the settings, applied at once: lowering it below what
+    /// was used stops the runs; raising it above lets a capped run go on.
+    pub fn set_cap(&mut self, cap: u64) {
+        self.cap = cap;
+        self.base_cap = cap;
+        if self.state == RunState::Running && self.used >= self.cap {
+            self.state = RunState::CapReached;
+        } else if self.state == RunState::CapReached && self.used < self.cap {
+            self.state = RunState::Running;
+        }
+    }
+
+    /// "Try again" on a paused or failed run: the failures are forgiven and it
+    /// runs again with the current settings (unless it is over its cap).
+    pub fn retry(&mut self) {
+        if matches!(self.state, RunState::Paused(_)) {
+            self.failures = 0;
+            self.state = RunState::Running;
+            if self.used >= self.cap {
+                self.state = RunState::CapReached;
+            }
+        }
     }
 
     pub fn set_gate(&mut self, open: bool) {

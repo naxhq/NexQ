@@ -62,12 +62,14 @@ pub struct NotesTrigger {
     last_run_ms: Option<u64>,
     manual: bool,
     final_requested: bool,
+    /// A backlog is waiting (a long pause, a big catch-up): the next run need not wait for the gap.
+    catch_up: bool,
 }
 
 impl NotesTrigger {
     pub fn new(cfg: NotesTriggerConfig) -> Self {
         let guard = RunGuard::new(cfg.cap_tokens, cfg.max_failures);
-        Self { cfg, guard, pending_x2: 0, last_speech_ms: None, last_run_ms: None, manual: false, final_requested: false }
+        Self { cfg, guard, pending_x2: 0, last_speech_ms: None, last_run_ms: None, manual: false, final_requested: false, catch_up: false }
     }
 
     /// A finished transcript line arrived at `now`.
@@ -131,7 +133,7 @@ impl NotesTrigger {
         }
         let since_run = self.last_run_ms.map(|t| now.saturating_sub(t));
         if let Some(s) = since_run {
-            if s < self.cfg.min_gap_ms {
+            if s < self.cfg.min_gap_ms && !self.catch_up {
                 return Decision::Wait;
             }
         }
@@ -149,10 +151,28 @@ impl NotesTrigger {
         Decision::Wait
     }
 
+    /// When the next automatic run is due, if one is scheduled (a deadline the UI counts down).
+    pub fn next_in_ms(&self, now: u64) -> Option<u64> {
+        if self.guard.state != RunState::Running || self.pending_x2 == 0 {
+            return None;
+        }
+        let words = self.pending_x2 / 2;
+        let gap_left = self.last_run_ms.map(|t| self.cfg.min_gap_ms.saturating_sub(now.saturating_sub(t))).unwrap_or(0);
+        if words >= self.cfg.min_words {
+            let quiet = self.last_speech_ms.map(|t| now.saturating_sub(t)).unwrap_or(0);
+            Some(gap_left.max(self.cfg.pause_ms.saturating_sub(quiet)))
+        } else if words >= self.cfg.forced_min_words {
+            self.last_run_ms.map(|t| (t + self.cfg.max_gap_ms).saturating_sub(now))
+        } else {
+            None
+        }
+    }
+
     pub fn begin_run(&mut self, now: u64) -> Taken {
         self.guard.begin();
         self.manual = false;
         self.final_requested = false;
+        self.catch_up = false;
         let taken = Taken { units_x2: self.pending_x2 };
         self.pending_x2 = 0;
         self.last_run_ms = Some(now);
@@ -162,6 +182,7 @@ impl NotesTrigger {
     /// A run used only part of the queue (very long backlog): the rest stays.
     pub fn give_back(&mut self, units_x2: u32) {
         self.pending_x2 += units_x2;
+        self.catch_up = units_x2 > 0;
     }
 
     /// Returns true when this run reached the cap.

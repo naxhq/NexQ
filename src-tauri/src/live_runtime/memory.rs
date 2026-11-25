@@ -64,11 +64,12 @@ fn merge(all: Vec<Proposal>) -> Vec<Proposal> {
 impl LiveRuntimes {
     /// `suggest_memory(workspaceId, meetingId)`: only after the meeting ended.
     pub async fn suggest_memory(&self, workspace_id: &str, meeting_id: &str) -> Result<Vec<MemoryItem>, String> {
-        suggest(self.deps(), workspace_id, meeting_id).await
+        suggest(self.deps(), workspace_id, meeting_id, None).await
     }
 }
 
-pub async fn suggest(deps: &Deps, workspace_id: &str, meeting_id: &str) -> Result<Vec<MemoryItem>, String> {
+/// `cap`: the most tokens the calls may send (automatic runs follow the notes cap; a person asking is not capped).
+pub async fn suggest(deps: &Deps, workspace_id: &str, meeting_id: &str, cap: Option<u64>) -> Result<Vec<MemoryItem>, String> {
     if (deps.live_meeting)().as_deref() == Some(meeting_id) {
         return Err("Memory is suggested after the meeting ends".into());
     }
@@ -88,7 +89,16 @@ pub async fn suggest(deps: &Deps, workspace_id: &str, meeting_id: &str) -> Resul
     let mut proposals: Vec<Proposal> = Vec::new();
     let mut last_err: Option<String> = None;
     let mut ok_calls = 0;
+    let mut sent: u64 = 0;
     for chunk in chunk_lines(&lines, CHUNK_TOKENS, MAX_CHUNKS) {
+        let chunk_tokens: u64 = chunk.iter().map(|l| u64::from(estimate_tokens(&l.text)) + 8).sum();
+        if let Some(cap) = cap {
+            if sent + chunk_tokens > cap {
+                last_err = Some("The token cap for automatic runs was reached, so some of the meeting was not read".into());
+                break;
+            }
+        }
+        sent += chunk_tokens;
         let input = MemoryInput {
             lines: chunk,
             meeting_len_ms: len_ms,
@@ -140,7 +150,13 @@ pub fn auto_suggest_after(deps: Arc<Deps>, meeting_id: String, delay: std::time:
         if !deps.db.suggest_flag(&home) {
             return;
         }
-        if let Err(e) = suggest(&deps, &home, &meeting_id).await {
+        let cap = deps
+            .db
+            .kv_get(crate::live_runtime::settings::NOTETAKER_KEY)
+            .and_then(|j| serde_json::from_str::<crate::live_runtime::settings::NotetakerSettings>(&j).ok())
+            .map(|n| n.cap)
+            .unwrap_or(crate::live_runtime::settings::DEFAULT_CAP);
+        if let Err(e) = suggest(&deps, &home, &meeting_id, Some(cap)).await {
             log::info!("Automatic memory suggestions failed: {e}");
         }
     });
