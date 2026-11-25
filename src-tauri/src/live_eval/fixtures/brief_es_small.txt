@@ -1,0 +1,1 @@
+{'now': 'Presupuesto', 'facts': [{'text': 'Marketing pide un 12 por ciento más', 'source': 'P1'}, {'text': 'Acme se encarga de la impresión', 'source': 'P2'}, {'text': 'Globex sube un 8 por ciento', 'source': 'P3'},]}

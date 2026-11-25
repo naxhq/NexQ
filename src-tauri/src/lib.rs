@@ -8,6 +8,10 @@ pub mod intelligence;
 pub mod logging;
 pub mod rag;
 pub mod sources;
+pub mod live_brief;
+pub mod live_common;
+pub mod live_eval;
+pub mod live_notes;
 pub mod llm;
 pub mod meeting_detect;
 pub mod nav_guard;
@@ -20,6 +24,7 @@ pub mod tray;
 pub mod workspace;
 pub mod workspace_chat;
 pub mod workspace_search;
+pub mod workspace_memory;
 
 use state::AppState;
 use std::sync::{Arc, Mutex};

@@ -1,0 +1,1 @@
+{"now": "budget", "facts": [{"text": "Marketing wants 15% more for Paris", "source": "P1"}, {"text": "Globex contra

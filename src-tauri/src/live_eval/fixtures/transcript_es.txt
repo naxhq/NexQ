@@ -1,0 +1,12 @@
+00:04|Tú|Vale, empecemos con el presupuesto del tercer trimestre.
+00:11|Ellos|Marketing pide un 12 por ciento más, unos 48.000 euros extra para el lanzamiento en Lisboa.
+00:29|Tú|Es mucho. ¿Qué dijo María sobre la fecha del lanzamiento?
+00:37|Ellos|María confirmó que el lanzamiento es el 14 de septiembre y Acme se encarga de la impresión.
+00:55|Tú|Bien. ¿Podemos pagarlo sin recortar ingeniería?
+01:03|Ellos|Si congelamos las contrataciones hasta octubre, sí. Si no, habría que despedir a dos contratistas.
+01:24|Tú|Congelemos las contrataciones entonces. Se lo digo a Tomás hoy.
+01:33|Ellos|Además, el contrato con el proveedor Globex se renueva en noviembre y el precio sube un 5 por ciento.
+01:50|Tú|Hay que renegociar. ¿Quién se encarga?
+01:58|Ellos|Nadie todavía. Yo puedo, pero necesito el contrato anterior de legal.
+02:20|Tú|De acuerdo, tú llevas Globex. Yo pido el contrato a legal antes del viernes.
+02:31|Ellos|Una pregunta abierta: ¿seguimos necesitando la oficina de Berlín el año que viene?
