@@ -1,5 +1,9 @@
 {
   "ai_recaps": 2,
+  "ai_recaps_failed": {
+    "count": 1,
+    "reason": "The model did not answer in time"
+  },
   "done": 3,
   "last_indexed_at": 1700000000000,
   "passages": 120,

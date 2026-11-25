@@ -12,6 +12,7 @@
     "provider": "openai"
   },
   "next_in_ms": 30000,
+  "not_covered": null,
   "reason": null,
   "status": "on",
   "tokens_used": 4200,

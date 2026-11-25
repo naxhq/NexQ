@@ -18,6 +18,9 @@ import notetakerResume from "./fixtures/notetaker_resume.json";
 import briefPause from "./fixtures/brief_pause.json";
 import briefResume from "./fixtures/brief_resume.json";
 import saveEdit from "./fixtures/save_meeting_notes_edit.json";
+import saveEditAdd from "./fixtures/save_meeting_notes_edit_add.json";
+import saveEditDelete from "./fixtures/save_meeting_notes_edit_delete.json";
+import notetakerFinished from "./fixtures/notetaker_state_finished.json";
 import setNotetakerSettingsArgs from "./fixtures/set_notetaker_settings.json";
 import setBriefSettingsArgs from "./fixtures/set_brief_settings.json";
 import setMemorySettingsArgs from "./fixtures/set_memory_settings.json";
@@ -26,7 +29,7 @@ import setMemorySettingsArgs from "./fixtures/set_memory_settings.json";
 const REQUIRED = [
   "notetaker_state", "brief_state", "notetaker_doc", "notetaker_settings_changed", "brief_settings_changed", "memory_settings_changed",
   "get_notetaker_state", "get_brief_state", "get_automatic_model", "notetaker_pause", "notetaker_resume", "brief_pause", "brief_resume",
-  "save_meeting_notes_edit", "set_notetaker_settings", "set_brief_settings", "set_memory_settings",
+  "save_meeting_notes_edit", "save_meeting_notes_edit_add", "save_meeting_notes_edit_delete", "notetaker_state_finished", "set_notetaker_settings", "set_brief_settings", "set_memory_settings",
 ];
 const present = Object.keys(import.meta.glob("./fixtures/*.json")).map((k) => k.replace("./fixtures/", "").replace(".json", ""));
 
@@ -99,9 +102,14 @@ describe("arguments the wrappers send equal the backend's own", () => {
     expect(sent()).toEqual([cmd, fixture]);
   });
 
-  it.each(["add", "update", "delete"] as const)("save_meeting_notes_edit (%s)", async (op) => {
-    await ipc.saveMeetingNotesEdit(saveEdit.meetingId, saveEdit[op] as NoteEdit);
-    expect(h.calls[h.calls.length - 1]).toEqual(["save_meeting_notes_edit", { meetingId: saveEdit.meetingId, edit: saveEdit[op] }]);
+  it.each([
+    ["update", saveEdit],
+    ["add", saveEditAdd],
+    ["delete", saveEditDelete],
+  ] as const)("save_meeting_notes_edit (%s)", async (op, fixture) => {
+    expect(fixture.edit.op).toBe(op);
+    await ipc.saveMeetingNotesEdit(fixture.meetingId, fixture.edit as NoteEdit);
+    expect(h.calls[h.calls.length - 1]).toEqual(["save_meeting_notes_edit", fixture]);
   });
 });
 
@@ -169,5 +177,9 @@ describe("the panels offer exactly what `can` allows", () => {
     const b: BriefState = briefState as BriefState;
     expect([typeof n.total_tokens, typeof b.total_tokens, Array.isArray(n.can), Array.isArray(b.can)]).toEqual(["number", "number", true, true]);
     expect(memorySettings).toHaveProperty("provider");
+    // The finished state carries the range, and the others say there is none.
+    expect(notetakerFinished.not_covered).toEqual({ from_ms: 120000, to_ms: 2400000 });
+    expect(n.not_covered).toBeNull();
+    expect(b.not_covered).toBeNull();
   });
 });

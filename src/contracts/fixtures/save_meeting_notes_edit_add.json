@@ -1,0 +1,11 @@
+{
+  "edit": {
+    "after": null,
+    "id": "n9",
+    "op": "add",
+    "parent": null,
+    "text": "A new point",
+    "type": "bullet"
+  },
+  "meetingId": "m1"
+}

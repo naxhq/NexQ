@@ -1,5 +1,5 @@
 // `strip_hidden` is written twice (Rust in prompt_data.rs, TypeScript in instructionText.ts). This
-// test runs the TypeScript one over every code point (0..10FFFF, surrogates apart) in six contexts,
+// test runs the TypeScript one over every code point (0..10FFFF, surrogates apart) in nine contexts,
 // hashes what comes out and compares it with the committed hash that the Rust test checks too.
 import { describe, expect, it } from "vitest";
 import table from "./vectors/strip_hidden_table.json";
@@ -12,6 +12,9 @@ const PREFIX_SUFFIX: Array<[number[], number[]]> = [
   [[0x8fbb], []],
   [[0x2764], [0x1f525]],
   [[0x31], [0x20e3]],
+  [[0xe2a], [0xe14]],
+  [[0x647], [0x20]],
+  [[0xd28, 0xd4d], [0x20]],
 ];
 
 function tableHash(): string {

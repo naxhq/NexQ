@@ -1,21 +1,9 @@
 {
-  "add": {
-    "after": null,
-    "id": "n9",
-    "op": "add",
-    "parent": null,
-    "text": "A new point",
-    "type": "bullet"
-  },
-  "delete": {
-    "id": "n9",
-    "op": "delete"
-  },
-  "meetingId": "m1",
-  "update": {
+  "edit": {
     "id": "n2",
     "op": "update",
     "pinned": true,
     "text": "Edited"
-  }
+  },
+  "meetingId": "m1"
 }

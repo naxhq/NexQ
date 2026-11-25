@@ -150,9 +150,9 @@
   "output": "ab"
  },
  {
-  "name": "zwnj at the edge of a word goes",
+  "name": "a persian half-space at the end of a word stays",
   "input": "\u06cc\u200c x",
-  "output": "\u06cc x"
+  "output": "\u06cc\u200c x"
  },
  {
   "name": "japanese ideographic variation selector survives",
@@ -210,7 +210,52 @@
   "output": "\u1820\u180b"
  },
  {
-  "name": "zero width space inside a persian word still goes",
+  "name": "malayalam chillu with a final zwj survives",
+  "input": "\u0d28\u0d4d\u200d x",
+  "output": "\u0d28\u0d4d\u200d x"
+ },
+ {
+  "name": "arabic heh with a joiner survives",
+  "input": "\u0647\u200d \u0647\u200d\u0645",
+  "output": "\u0647\u200d \u0647\u200d\u0645"
+ },
+ {
+  "name": "a joiner after a latin letter goes",
+  "input": "a\u200d b\u200c",
+  "output": "a b"
+ },
+ {
+  "name": "a joiner at the start of a word goes",
+  "input": "\u200d\u0647 \u200c\u0645",
+  "output": "\u0647 \u0645"
+ },
+ {
+  "name": "thai word break survives",
+  "input": "\u0e2a\u0e27\u0e31\u0e2a\u0e14\u0e35\u200b\u0e04\u0e23\u0e31\u0e1a",
+  "output": "\u0e2a\u0e27\u0e31\u0e2a\u0e14\u0e35\u200b\u0e04\u0e23\u0e31\u0e1a"
+ },
+ {
+  "name": "khmer, lao and myanmar word breaks survive",
+  "input": "\u1780\u17d2\u1798\u17c2\u200b\u179a \u0e81\u0eb2\u200b\u0e99 \u1000\u103a\u200b\u1001",
+  "output": "\u1780\u17d2\u1798\u17c2\u200b\u179a \u0e81\u0eb2\u200b\u0e99 \u1000\u103a\u200b\u1001"
+ },
+ {
+  "name": "a zero width space between latin letters goes",
+  "input": "a\u200bb",
+  "output": "ab"
+ },
+ {
+  "name": "a zero width space between a thai letter and a space goes",
+  "input": "\u0e2a\u200b x",
+  "output": "\u0e2a x"
+ },
+ {
+  "name": "a zero width space followed by a zwnj is judged by the letters around it",
+  "input": "\u0e2a\u200b\u200c\u0e14",
+  "output": "\u0e2a\u0e14"
+ },
+ {
+  "name": "a zero width space inside a persian word goes",
   "input": "\u0645\u200b\u06cc",
   "output": "\u0645\u06cc"
  }

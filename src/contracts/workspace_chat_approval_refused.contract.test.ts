@@ -65,7 +65,7 @@ afterEach(() => {
 
 // `workspace_chat_approval_refused`: a tool that was not run shows as a line of the answer it names.
 describe("workspace_chat_approval_refused", () => {
-  const refused = loadFixture<{ chat_id: string; request_id: string; reason: string }>("workspace_chat_approval_refused");
+  const refused = loadFixture<{ chat_id: string; request_id: string; server: string; tool: string; reason: string }>("workspace_chat_approval_refused");
 
   it("adds a notice to that answer, once", async () => {
     await startAsk(refused.request_id);
@@ -73,7 +73,7 @@ describe("workspace_chat_approval_refused", () => {
     h().approvalRefused(refused as never);
     const notices = S().sessions.c1.turn!.activity.filter((a) => a.kind === "notice");
     expect(notices).toHaveLength(1);
-    expect(notices[0].label).toContain(refused.reason);
+    expect(notices[0].label).toBe(`${refused.server}: ${refused.tool} was not run: ${refused.reason}`);
   });
 
   it("is dropped for another answer", async () => {
