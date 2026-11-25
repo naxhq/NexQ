@@ -6,6 +6,7 @@ use serde_json::Value;
 
 pub const NOTETAKER_KEY: &str = "live_notetaker_settings";
 pub const BRIEF_KEY: &str = "live_brief_settings";
+pub const MEMORY_KEY: &str = "live_memory_settings";
 pub const DEFAULT_CAP: u64 = 120_000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -57,6 +58,22 @@ pub struct BriefSettings {
 impl Default for BriefSettings {
     fn default() -> Self {
         Self { enabled: false, provider: None, model: None, effort: None, cap: DEFAULT_CAP }
+    }
+}
+
+/// Which model proposes memory after a meeting. `None` everywhere: the cheapest
+/// automatic choice, resolved like notes and the brief (never a silent fallback).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MemorySettings {
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
+
+impl Validate for MemorySettings {
+    fn validate(&mut self) -> Result<(), String> {
+        Ok(())
     }
 }
 
@@ -133,6 +150,14 @@ mod tests {
         let cleared = merge(&m, &json!({"provider": null})).unwrap();
         assert_eq!(cleared.provider, None);
         assert!(merge(&BriefSettings::default(), &json!({"enabled": true})).unwrap().enabled);
+    }
+
+    #[test]
+    fn memory_settings_patch() {
+        let m = merge(&MemorySettings::default(), &json!({"provider": "openai", "model": "gpt"})).unwrap();
+        assert_eq!((m.provider.as_deref(), m.model.as_deref(), m.effort.as_deref()), (Some("openai"), Some("gpt"), None));
+        assert_eq!(merge(&m, &json!({"provider": null})).unwrap().provider, None);
+        assert!(merge(&m, &json!({"cap": 1})).is_err());
     }
 
     #[test]

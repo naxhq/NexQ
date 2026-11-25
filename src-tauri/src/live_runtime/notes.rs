@@ -42,6 +42,8 @@ pub enum NotesCmd {
     Finish,
     /// The app is closing: save and go.
     Quit,
+    /// The meeting is being deleted: stop and save nothing.
+    Discard,
     Edit(NoteEdit, oneshot::Sender<Result<Value, String>>),
     Get(oneshot::Sender<Value>),
 }
@@ -66,6 +68,8 @@ pub struct NotesParams {
     pub clock: Arc<dyn Clock>,
     /// True while a live answer is generating.
     pub busy: Arc<dyn Fn() -> bool + Send + Sync>,
+    /// The AI run service's scope generation for (meeting, is_brief).
+    pub generation: Arc<dyn Fn(&str, bool) -> u64 + Send + Sync>,
     /// Called once when the actor ends (the registry forgets it, sessions close).
     pub on_exit: Arc<dyn Fn(&str) + Send + Sync>,
     pub tick: Duration,
@@ -145,10 +149,14 @@ impl NotesSink for ActorSink {
 struct DbStore {
     db: LiveDb,
     meeting_id: String,
+    discarded: Arc<AtomicBool>,
 }
 
 impl NotesStore for DbStore {
     fn save(&self, s: &NotesSnapshot) -> Result<(), String> {
+        if self.discarded.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         self.db.save_notes(&self.meeting_id, &s.doc, &s.status, s.tokens_used, s.cap)
     }
 }
@@ -217,11 +225,13 @@ pub fn spawn(p: NotesParams) -> Result<NotesHandle, String> {
 
 type Shared = (Arc<AtomicUsize>, Arc<AtomicBool>, Arc<AtomicU64>, Arc<AtomicU64>);
 
+#[allow(unused_assignments)]
 async fn run(p: NotesParams, swap: Arc<SwapLlm>, mut rx: mpsc::UnboundedReceiver<NotesCmd>, shared: Shared) {
     let (queued, finished_flag, dropped, sent) = shared;
     let dirty = Arc::new(AtomicBool::new(false));
     let sink = Arc::new(ActorSink { dirty: dirty.clone() });
-    let store = Arc::new(DbStore { db: p.db.clone(), meeting_id: p.meeting_id.clone() });
+    let discarded = Arc::new(AtomicBool::new(false));
+    let store = Arc::new(DbStore { db: p.db.clone(), meeting_id: p.meeting_id.clone(), discarded: discarded.clone() });
     let mut cfg = cfg_from(&p.settings);
     cfg.final_timeout = p.final_timeout;
     let mut engine = NotesEngine::new(swap.clone(), p.clock.clone(), cfg, sink, store);
@@ -276,6 +286,11 @@ async fn run(p: NotesParams, swap: Arc<SwapLlm>, mut rx: mpsc::UnboundedReceiver
                     quitting = true;
                 }
                 NotesCmd::Finish => finishing = true,
+                NotesCmd::Discard => {
+                    discarded.store(true, Ordering::SeqCst);
+                    swap.cancel();
+                    quitting = true;
+                }
                 NotesCmd::Quit => {
                     swap.cancel();
                     let st = engine.status();
@@ -322,6 +337,8 @@ async fn run(p: NotesParams, swap: Arc<SwapLlm>, mut rx: mpsc::UnboundedReceiver
         if let Decision::Run(reason) = engine.poll() {
             let allowed = auto || matches!(reason, RunReason::Manual | RunReason::Final);
             if allowed {
+                let gen0 = (p.generation)(&p.meeting_id, false);
+                swap.set_expected(Some(gen0));
                 if let Some(prep) = engine.prepare(reason) {
                     let req = prep.request.clone();
                     let fut = swap.call(&req);
@@ -335,7 +352,12 @@ async fn run(p: NotesParams, swap: Arc<SwapLlm>, mut rx: mpsc::UnboundedReceiver
                             },
                         }
                     };
-                    engine.complete(prep, result);
+                    if discarded.load(Ordering::SeqCst) || (p.generation)(&p.meeting_id, false) != gen0 {
+                        // the scope generation moved or the meeting is going: nothing is applied, the lines go back
+                        engine.abort(prep);
+                    } else {
+                        engine.complete(prep, result);
+                    }
                     if quitting {
                         break;
                     }
@@ -344,6 +366,11 @@ async fn run(p: NotesParams, swap: Arc<SwapLlm>, mut rx: mpsc::UnboundedReceiver
         }
         emit_state!();
         flush_doc!(false);
+    }
+    if discarded.load(Ordering::SeqCst) {
+        finished_flag.store(true, Ordering::SeqCst);
+        (p.on_exit)(&p.meeting_id);
+        return;
     }
     if interrupted {
         // a run that was in flight finished after the quit saved: save as interrupted once more

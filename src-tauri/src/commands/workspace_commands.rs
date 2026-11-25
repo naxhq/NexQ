@@ -184,6 +184,22 @@ pub(crate) fn dependents_of(state: &AppState, workspace_id: &str) -> Dependents 
     .unwrap_or_default()
 }
 
+/// The live runtimes of the meetings that use `workspace_id` look their scope up again now.
+pub(crate) fn poke_live(state: &AppState, workspace_id: &str) {
+    if let Some(rt) = crate::live_runtime::global() {
+        for id in dependents_of(state, workspace_id).meetings {
+            rt.scope_changed(&id);
+        }
+    }
+}
+
+/// The ids of the meetings filed in a workspace.
+fn meeting_ids_of(conn: &Connection, workspace_id: &str) -> Vec<String> {
+    conn.prepare("SELECT id FROM meetings WHERE workspace_id = ?1")
+        .and_then(|mut stmt| stmt.query_map(rusqlite::params![workspace_id], |row| row.get::<_, String>(0)).map(|r| r.filter_map(Result::ok).collect()))
+        .unwrap_or_default()
+}
+
 /// Everything that depends on `touch` at this moment.
 fn dependents_for(state: &AppState, touch: &Touch) -> Dependents {
     let mut all = Dependents { meetings: touch.meetings.clone(), chats: Vec::new() };
@@ -270,6 +286,14 @@ pub(crate) fn finish_change(state: &AppState, app: &AppHandle, touched: &dyn Fn(
     let touch = with_conn(state, |conn| Ok(touched(conn))).unwrap_or_default();
     let mut deps = dependents_for(state, &touch);
     deps.merge(before.deps);
+    // The live brief and the core memory follow every change at once, grant or
+    // revocation: invalidating is cheap, local and not a session restart, so
+    // it is neither coalesced nor delayed and comes before anything else.
+    if let Some(rt) = crate::live_runtime::global() {
+        for id in &deps.meetings {
+            rt.scope_changed(id);
+        }
+    }
     let after = views_of(state, &deps);
     for (target, kind) in decisions(&before.views, &after, ok) {
         apply_restart(app, target, kind);
@@ -423,6 +447,9 @@ pub async fn update_workspace(
     change_and_restart(&state, &app, |_| Touch::ws_if(matters, &id), || {
         with_conn(&state, |conn| store::update_workspace(conn, &id, patch).map(|_| ()))
     })?;
+    // Cosmetic for sessions, but the brief switch and memory suggestions reach
+    // the live runtimes at once (off stops the run and clears the sheet).
+    poke_live(&state, &id);
     emit_changed(&app, Some(&id));
     detail_of(&state, &id)
 }
@@ -468,6 +495,14 @@ pub async fn delete_workspace(id: String, mode: DeleteMode, state: State<'_, App
             .unwrap_or_default();
         own.iter().fold(Touch::ws(&id), |t, m| t.also(Touch::meeting(m)))
     };
+    // Meetings that are about to go stop their notes and brief first and save nothing.
+    if mode == DeleteMode::Delete {
+        if let (Some(rt), Ok(own)) = (crate::live_runtime::global(), with_conn(&state, |conn| Ok(meeting_ids_of(conn, &id)))) {
+            for m in own {
+                rt.meeting_deleted(&m);
+            }
+        }
+    }
     let deleted = change_and_restart(&state, &app, touched, || {
         with_conn(&state, |conn| store::delete_workspace(conn, &id, mode))
     })?;
@@ -530,6 +565,12 @@ pub async fn delete_workspace_meetings(id: String, state: State<'_, AppState>, a
     let running = live_meeting_id(&state);
     let db = state.database.clone().ok_or_else(|| "Database not initialized".to_string())?;
     let touched = |_: &Connection| ids.iter().fold(Touch::ws(&id), |t, m| t.also(Touch::meeting(m)));
+    // Their notes and brief stop first and save nothing (the running meeting is refused below).
+    if let Some(rt) = crate::live_runtime::global() {
+        for m in ids.iter().filter(|m| running.as_deref() != Some(m.as_str())) {
+            rt.meeting_deleted(m);
+        }
+    }
     // The purges and the files on disk take a while: not on the async runtime's threads.
     let job = {
         let ids = ids.clone();
@@ -992,7 +1033,7 @@ mod tests {
             (
                 "workspace_chat_commands.rs",
                 code(include_str!("workspace_chat_commands.rs")),
-                &["save_answer_to_library", "add_answer_to_instructions"],
+                &["save_answer_to_library", "add_answer_to_instructions", "set_chat_meeting_included", "set_chat_item_pref"],
             ),
         ]
     }
@@ -1082,6 +1123,7 @@ mod tests {
             material: ["general".to_string()].into_iter().collect(),
             items: items.iter().map(|s| s.to_string()).collect(),
             memory: memory.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
         }
     }
 
@@ -1136,6 +1178,31 @@ mod tests {
         }
         assert!(!item_patch_matters(&ItemPatch { pinned: Some(true), label: Some(Some("x".into())), ..Default::default() }));
         assert!(item_patch_matters(&ItemPatch { index_opt_in: Some(false), ..Default::default() }));
+    }
+
+    /// The live commands change no material (settings, start/stop, suggestions
+    /// that no prompt reads until the user saves them). Each is listed, so a new
+    /// one must be classified; one that changed material would have to be moved
+    /// to `MUTATING` of its own file and use `change_and_restart`.
+    const LIVE_NO_MATERIAL: &[&str] = &[
+        "notetaker_start", "notetaker_stop", "notetaker_update_now", "notetaker_continue", "get_notetaker_settings",
+        "set_notetaker_settings", "get_meeting_notes", "save_meeting_notes_edit", "get_meeting_brief", "brief_start",
+        "brief_stop", "brief_refresh", "brief_continue", "get_brief_settings", "set_brief_settings",
+        "get_memory_settings", "set_memory_settings", "suggest_memory",
+    ];
+
+    #[test]
+    fn every_live_command_is_classified_and_registered() {
+        let code = include_str!("live_commands.rs").split("#[cfg(test)]").next().unwrap().to_string();
+        let found = commands(&code);
+        for name in &found {
+            assert!(LIVE_NO_MATERIAL.contains(&name.as_str()), "{name} is new: classify it (does it change material?)");
+        }
+        let lib = include_str!("../lib.rs");
+        for name in LIVE_NO_MATERIAL {
+            assert!(found.iter().any(|f| f == name), "{name} is listed but is not a command");
+            assert!(lib.contains(&format!("live_commands::{name},")), "{name} is not registered in lib.rs");
+        }
     }
 
     #[test]

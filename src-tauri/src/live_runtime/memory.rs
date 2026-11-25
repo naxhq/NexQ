@@ -7,7 +7,7 @@ use crate::live_common::{estimate_tokens, similarity};
 use crate::live_notes::prompts::OutputLanguage;
 use crate::live_runtime::llm::Selection;
 use crate::live_runtime::{LiveRuntimes, Deps};
-use crate::workspace::types::MemoryItem;
+use crate::workspace::types::{MemoryCreate, MemoryItem};
 use crate::workspace_memory::{suggest_memory, MemLine, MemoryConfig, MemoryInput, Proposal, MAX_SUGGESTIONS};
 use serde_json::json;
 use std::sync::Arc;
@@ -72,13 +72,17 @@ pub async fn suggest(deps: &Deps, workspace_id: &str, meeting_id: &str) -> Resul
     if (deps.live_meeting)().as_deref() == Some(meeting_id) {
         return Err("Memory is suggested after the meeting ends".into());
     }
+    // The workspace asked about must be the meeting's home, now and again when saving.
+    if deps.db.meeting_home(meeting_id).as_deref() != Some(workspace_id) {
+        return Err("This meeting does not belong to that workspace".into());
+    }
     let (lines, len_ms) = deps.db.meeting_lines(meeting_id);
     if lines.is_empty() {
         return Ok(Vec::new());
     }
     let saved = deps.db.saved_memory(workspace_id);
-    let settings: crate::live_runtime::settings::NotetakerSettings =
-        deps.db.kv_get(crate::live_runtime::settings::NOTETAKER_KEY).and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
+    let settings: crate::live_runtime::settings::MemorySettings =
+        deps.db.kv_get(crate::live_runtime::settings::MEMORY_KEY).and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
     let selection = Selection { provider: settings.provider.clone(), model: settings.model.clone(), effort: settings.effort.clone() };
     let slot = deps.factory.make(AiPurpose::Memory, meeting_id, &selection)?;
     let mut proposals: Vec<Proposal> = Vec::new();
@@ -104,24 +108,27 @@ pub async fn suggest(deps: &Deps, workspace_id: &str, meeting_id: &str) -> Resul
     if ok_calls == 0 {
         return Err(last_err.unwrap_or_else(|| "The suggestion failed".into()));
     }
-    let now = crate::live_runtime::db::now_ms();
-    let items: Vec<MemoryItem> = merge(proposals)
+    if deps.deleted.lock().unwrap().contains(meeting_id) {
+        return Ok(Vec::new());
+    }
+    let items: Vec<MemoryCreate> = merge(proposals)
         .into_iter()
-        .map(|p| MemoryItem {
-            id: String::new(),
+        .map(|p| MemoryCreate {
             workspace_id: workspace_id.to_string(),
             kind: p.kind.as_str().to_string(),
             title: p.title,
             text: p.text,
             source_meeting: Some(meeting_id.to_string()),
             source_ms: Some(p.source_ms as i64),
-            status: "suggested".into(),
-            created_at: now,
-            updated_at: now,
+            status: Some("suggested".into()),
+            unsupported: p.unsupported,
         })
         .collect();
-    let stored = deps.db.save_suggestions(items);
-    deps.emitter.emit("memory_changed", json!({"workspace_id": workspace_id}));
+    // one transaction that re-checks the meeting and its home
+    let stored = deps.db.save_suggestions(meeting_id, workspace_id, items);
+    if !stored.is_empty() {
+        deps.emitter.emit("memory_changed", json!({"workspace_id": workspace_id}));
+    }
     Ok(stored)
 }
 

@@ -322,6 +322,13 @@ impl<L: LlmCall, C: Clock> NotesEngine<L, C> {
         self.pending = lines;
     }
 
+    /// Gives a prepared run up without applying anything (the scope changed
+    /// under it, the meeting was deleted): its lines go back to the queue.
+    pub fn abort(&mut self, p: PreparedRun) {
+        self.trigger.end_err(LlmErrorKind::Cancelled, p.taken, 0);
+        self.restore(p.lines);
+    }
+
     /// Applies the model's answer (or error) of a prepared run.
     pub fn complete(&mut self, p: PreparedRun, result: Result<LlmReply, LlmError>) -> RunOutcome {
         let outcome = match result {

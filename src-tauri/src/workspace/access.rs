@@ -8,6 +8,10 @@ use std::collections::BTreeSet;
 
 use rusqlite::Connection;
 
+use std::hash::{Hash, Hasher};
+
+use rusqlite::params;
+
 use super::scope::{scope_for, EffectiveScope, ScopeOwner};
 use super::{memory, types::GENERAL_ID};
 
@@ -20,6 +24,15 @@ pub struct AccessView {
     pub material: BTreeSet<String>,
     pub items: BTreeSet<String>,
     pub memory: BTreeSet<String>,
+    /// Folders the user opted in to index (opting out takes access away).
+    pub opted_folders: BTreeSet<String>,
+    /// The live scope fingerprint of a meeting (see [`live_parts`]); empty for a chat.
+    pub fingerprint: String,
+    /// The meetings it may use: its home workspace's, minus the ones switched
+    /// off (for a chat: the ones the chat includes).
+    pub meetings: BTreeSet<String>,
+    /// The scope has instructions of its own.
+    pub instructions: bool,
 }
 
 /// A restart caused by a grant waits (it may be coalesced); one caused by a
@@ -30,7 +43,7 @@ pub enum Kind {
     Revoke,
 }
 
-fn view_from(conn: &Connection, scope: &EffectiveScope) -> AccessView {
+fn view_from(conn: &Connection, scope: &EffectiveScope, folders: Vec<String>, meetings: BTreeSet<String>, fingerprint: String) -> AccessView {
     let mut items = BTreeSet::new();
     for (kind, ids) in [
         ("document", &scope.document_ids),
@@ -44,6 +57,10 @@ fn view_from(conn: &Connection, scope: &EffectiveScope) -> AccessView {
         material: scope.material_workspaces.iter().cloned().collect(),
         items,
         memory: memory::saved_for_scope(conn, scope).map(|m| m.into_iter().map(|i| i.id).collect()).unwrap_or_default(),
+        opted_folders: folders.into_iter().collect(),
+        fingerprint,
+        meetings,
+        instructions: !scope.instructions.trim().is_empty(),
     }
 }
 
@@ -53,17 +70,115 @@ pub fn view_of_meeting(conn: &Connection, meeting_id: &str) -> Option<AccessView
     if !exists {
         return None;
     }
-    scope_for(conn, ScopeOwner::Meeting(meeting_id)).ok().map(|s| view_from(conn, &s))
+    let scope = scope_for(conn, ScopeOwner::Meeting(meeting_id)).ok()?;
+    let parts = live_parts_from(conn, &scope, meeting_id);
+    let meetings: BTreeSet<String> = conn
+        .prepare("SELECT id FROM meetings WHERE workspace_id = ?1")
+        .and_then(|mut s| s.query_map([&scope.home], |r| r.get::<_, String>(0)).map(|r| r.filter_map(Result::ok).collect::<Vec<_>>()))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| m != meeting_id && !parts.excluded_meetings.contains(m))
+        .collect();
+    Some(view_from(conn, &scope, parts.folder_ids.clone(), meetings, parts.fingerprint))
 }
 
-/// What the chat `chat_id` may use now (None when it does not exist).
+/// What the chat `chat_id` may use now (None when it does not exist): its
+/// workspace's scope after the chat's own exclusions and meeting choices.
 pub fn view_of_chat(conn: &Connection, chat_id: &str) -> Option<AccessView> {
-    scope_for(conn, ScopeOwner::Chat(chat_id)).ok().map(|s| view_from(conn, &s))
+    let chat = crate::workspace_chat::store::get_chat(conn, chat_id).ok().flatten()?;
+    let cs = crate::workspace_chat::scope_adapter::chat_scope(conn, &chat).ok()?;
+    let meetings: BTreeSet<String> = cs.meetings.iter().map(|m| m.id.clone()).collect();
+    Some(view_from(conn, &cs.eff, cs.folder_ids.clone(), meetings, String::new()))
 }
 
 /// Whether something the first view allowed is not allowed by the second.
 pub fn is_revoke(before: &AccessView, after: &AccessView) -> bool {
     !before.material.is_subset(&after.material) || !before.items.is_subset(&after.items) || !before.memory.is_subset(&after.memory)
+        || !before.opted_folders.is_subset(&after.opted_folders)
+        || !before.meetings.is_subset(&after.meetings)
+        || (before.instructions && !after.instructions)
+}
+
+/// Everything the live notes, brief and answers of a meeting are scoped by:
+/// the ONE place the live fingerprint is made. Any difference in any part is a
+/// different scope.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveParts {
+    pub fingerprint: String,
+    pub home: String,
+    pub document_ids: Vec<String>,
+    /// Only folders the user opted in to index.
+    pub folder_ids: Vec<String>,
+    pub talking_point_ids: Vec<String>,
+    /// The meeting itself and the ones switched off for the whole workspace.
+    pub excluded_meetings: Vec<String>,
+    /// Saved memory of the scope, newest first, about 300 tokens at most.
+    pub memory_text: String,
+    pub brief_enabled: bool,
+}
+
+fn core_memory(conn: &Connection, scope: &EffectiveScope) -> String {
+    let mut items = memory::saved_for_scope(conn, scope).unwrap_or_default();
+    items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    let mut out = String::new();
+    let mut used = 0u32;
+    for m in items {
+        let line = format!("- {}: {}
+", crate::prompt_data::clean_line_max(&m.title, 80), crate::prompt_data::clean_line_max(&m.text, 240));
+        let t = crate::live_common::estimate_tokens(&line);
+        if used + t > 300 {
+            break;
+        }
+        used += t;
+        out.push_str(&line);
+    }
+    out.trim_end().to_string()
+}
+
+pub fn live_parts_from(conn: &Connection, scope: &EffectiveScope, meeting_id: &str) -> LiveParts {
+    let brief_enabled = super::store::get_workspace(conn, &scope.home).map(|w| w.brief_default).unwrap_or(false);
+    let mut folders = crate::workspace_chat::scope_adapter::opted_in_folders(conn, scope).unwrap_or_default();
+    folders.sort();
+    let mut excluded = vec![meeting_id.to_string()];
+    if let Ok(mut stmt) = conn.prepare("SELECT meeting_id FROM workspace_meeting_prefs WHERE workspace_id = ?1 AND chat_id = '' AND included = 0") {
+        if let Ok(rows) = stmt.query_map(params![scope.home], |r| r.get::<_, String>(0)) {
+            excluded.extend(rows.filter_map(Result::ok));
+        }
+    }
+    excluded.sort();
+    excluded.dedup();
+    let memory_text = core_memory(conn, scope);
+    let mut docs = scope.document_ids.clone();
+    docs.sort();
+    let mut points = scope.talking_point_ids.clone();
+    points.sort();
+    let mut material = scope.material_workspaces.clone();
+    material.sort();
+    let mut parts = vec![scope.home.clone(), format!("brief={brief_enabled}"), memory_text.clone()];
+    for (tag, list) in [("m", &material), ("d", &docs), ("f", &folders), ("t", &points), ("x", &excluded)] {
+        parts.push(format!("{tag}:{}", list.join(",")));
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    parts.hash(&mut h);
+    LiveParts {
+        fingerprint: format!("{}:{:x}", scope.home, h.finish()),
+        home: scope.home.clone(),
+        document_ids: docs,
+        folder_ids: folders,
+        talking_point_ids: points,
+        excluded_meetings: excluded,
+        memory_text,
+        brief_enabled,
+    }
+}
+
+/// The live parts of a meeting (None when workspaces cannot say: unrestricted or unknown).
+pub fn live_parts(conn: &Connection, meeting_id: &str) -> Option<LiveParts> {
+    let scope = scope_for(conn, ScopeOwner::Meeting(meeting_id)).ok()?;
+    if scope.unrestricted {
+        return None;
+    }
+    Some(live_parts_from(conn, &scope, meeting_id))
 }
 
 /// The kind of a change from what one dependent could use before and after.
@@ -121,7 +236,7 @@ mod tests {
         set_meeting_scope(&conn, "m", &[b.clone()]).unwrap();
         let mem = crate::workspace::memory::create_memory(
             &conn,
-            MemoryCreate { workspace_id: a.clone(), kind: "fact".into(), title: "t".into(), text: "x".into(), source_meeting: None, source_ms: None, status: None },
+            MemoryCreate { workspace_id: a.clone(), kind: "fact".into(), title: "t".into(), text: "x".into(), source_meeting: None, source_ms: None, status: None, unsupported: false },
         )
         .unwrap();
         assert_eq!(kind_after(&conn, "m", || { conn.execute("DELETE FROM workspace_items WHERE ref_id = 'd1'", []).unwrap(); }), Kind::Revoke, "an item removed");
@@ -140,6 +255,51 @@ mod tests {
             Kind::Grant,
             "a workspace kept separate loses nothing of its own"
         );
+    }
+
+    /// Every attribute that reduces what a meeting or chat may use: flipped off
+    /// it is a revocation, flipped back on a grant.
+    #[test]
+    fn each_access_attribute_flipped_off_is_a_revocation_and_back_on_a_grant() {
+        let conn = memory_db();
+        let a = new_ws(&conn, "A", true, false);
+        meeting(&conn, "m", &a);
+        meeting(&conn, "other", &a);
+        file(&conn, &a, "document", "d1");
+        file(&conn, &a, "folder", "f1");
+        conn.execute("UPDATE workspace_items SET index_opt_in = 1 WHERE ref_id = 'f1'", []).unwrap();
+        conn.execute("INSERT INTO talking_points (id, workspace_id, title, in_context, created_at, updated_at) VALUES ('p', ?1, 't', 1, 0, 0)", params![a]).unwrap();
+        let mem = crate::workspace::memory::create_memory(
+            &conn,
+            MemoryCreate { workspace_id: a.clone(), kind: "fact".into(), title: "t".into(), text: "x".into(), source_meeting: None, source_ms: None, status: None, unsupported: false },
+        )
+        .unwrap();
+        store::update_workspace(&conn, &a, WorkspacePatch { instructions: Some("be brief".into()), ..Default::default() }).unwrap();
+        conn.execute("INSERT INTO workspace_chats (id, workspace_id, created_at, updated_at) VALUES ('c', ?1, 0, 0)", params![a]).unwrap();
+        let both = |conn: &Connection| (view_of_meeting(conn, "m").unwrap(), view_of_chat(conn, "c").unwrap());
+        // (name, turn it off, turn it back on)
+        type Flip<'a> = (&'a str, Box<dyn Fn(&Connection) + 'a>, Box<dyn Fn(&Connection) + 'a>);
+        let flips: Vec<Flip> = vec![
+            ("folder opt-in", Box::new(|c| { c.execute("UPDATE workspace_items SET index_opt_in = 0 WHERE ref_id = 'f1'", []).unwrap(); }), Box::new(|c| { c.execute("UPDATE workspace_items SET index_opt_in = 1 WHERE ref_id = 'f1'", []).unwrap(); })),
+            ("talking point in context", Box::new(|c| { c.execute("UPDATE talking_points SET in_context = 0", []).unwrap(); }), Box::new(|c| { c.execute("UPDATE talking_points SET in_context = 1", []).unwrap(); })),
+            ("document in the workspace", Box::new(|c| { c.execute("DELETE FROM workspace_items WHERE ref_id = 'd1'", []).unwrap(); }), Box::new(|c| { file(c, &a, "document", "d1"); })),
+            ("memory saved", Box::new(|c| { crate::workspace::memory::update_memory(c, &mem.id, crate::workspace::types::MemoryUpdate { status: Some("dismissed".into()), ..Default::default() }).unwrap(); }), Box::new(|c| { crate::workspace::memory::update_memory(c, &mem.id, crate::workspace::types::MemoryUpdate { status: Some("saved".into()), ..Default::default() }).unwrap(); })),
+            ("instructions", Box::new(|c| { store::update_workspace(c, &a, WorkspacePatch { instructions: Some(String::new()), ..Default::default() }).unwrap(); }), Box::new(|c| { store::update_workspace(c, &a, WorkspacePatch { instructions: Some("be brief".into()), ..Default::default() }).unwrap(); })),
+            ("General included", Box::new(|c| { store::update_workspace(c, &a, WorkspacePatch { include_general: Some(false), ..Default::default() }).unwrap(); }), Box::new(|c| { store::update_workspace(c, &a, WorkspacePatch { include_general: Some(true), ..Default::default() }).unwrap(); })),
+            ("meeting included for the workspace", Box::new(|c| { crate::workspace_chat::store::set_meeting_included(c, &a, None, "other", false).unwrap(); }), Box::new(|c| { crate::workspace_chat::store::set_meeting_included(c, &a, None, "other", true).unwrap(); })),
+            ("item excluded in the chat", Box::new(|c| { crate::workspace_chat::store::set_item_pref(c, "c", "document", "d1", Some("exclude")).unwrap(); }), Box::new(|c| { crate::workspace_chat::store::set_item_pref(c, "c", "document", "d1", None).unwrap(); })),
+        ];
+        for (name, off, on) in &flips {
+            let before = both(&conn);
+            off(&conn);
+            let after_off = both(&conn);
+            let revoked = is_revoke(&before.0, &after_off.0) || is_revoke(&before.1, &after_off.1);
+            assert!(revoked, "{name}: turned off must be a revocation");
+            on(&conn);
+            let after_on = both(&conn);
+            assert!(!is_revoke(&after_off.0, &after_on.0) && !is_revoke(&after_off.1, &after_on.1), "{name}: turned back on must be a grant");
+            assert_eq!(kind_of(&after_off.0, &after_on.0), Kind::Grant, "{name}");
+        }
     }
 
     #[test]

@@ -411,10 +411,12 @@ fn v14_brief(conn: &Connection) -> rusqlite::Result<()> {
             status      TEXT NOT NULL DEFAULT 'idle',
             tokens_used INTEGER NOT NULL DEFAULT 0,
             cap         INTEGER NOT NULL DEFAULT 0,
-            updated_at  INTEGER NOT NULL
+            updated_at  INTEGER NOT NULL,
+            fingerprint TEXT NOT NULL DEFAULT ''
         );
         ",
-    )
+    )?;
+    add_column_if_missing(conn, "meeting_briefs", "fingerprint", "TEXT NOT NULL DEFAULT ''")
 }
 
 /// v15: workspace memory.
@@ -431,11 +433,27 @@ fn v15_memory(conn: &Connection) -> rusqlite::Result<()> {
             source_ms      INTEGER,
             status         TEXT NOT NULL CHECK(status IN ('suggested','saved','dismissed')),
             created_at     INTEGER NOT NULL,
-            updated_at     INTEGER NOT NULL
+            updated_at     INTEGER NOT NULL,
+            unsupported    INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_workspace_memory_ws ON workspace_memory(workspace_id, status);
         ",
-    )
+    )?;
+    add_column_if_missing(conn, "workspace_memory", "unsupported", "INTEGER NOT NULL DEFAULT 0")
+}
+
+/// Adds a column to a table made by an earlier build of an unreleased step.
+fn add_column_if_missing(conn: &Connection, table: &str, column: &str, ddl: &str) -> rusqlite::Result<()> {
+    let has: bool = conn
+        .prepare(&format!("PRAGMA table_info({table})"))?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|c| c == column);
+    if has {
+        Ok(())
+    } else {
+        conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+    }
 }
 
 #[cfg(test)]

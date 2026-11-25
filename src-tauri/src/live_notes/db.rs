@@ -16,7 +16,7 @@ pub fn save_notes(conn: &Connection, meeting_id: &str, doc: &NoteDoc, status: &s
     let json = serde_json::to_string(doc).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
     conn.execute(
         "INSERT INTO meeting_notes (meeting_id, doc_json, status, tokens_used, cap, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6 WHERE EXISTS (SELECT 1 FROM meetings WHERE id = ?1)
          ON CONFLICT(meeting_id) DO UPDATE SET
             doc_json = excluded.doc_json, status = excluded.status,
             tokens_used = excluded.tokens_used, cap = excluded.cap, updated_at = excluded.updated_at",
@@ -57,6 +57,7 @@ mod tests {
 
     fn conn() -> Connection {
         let mut c = Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE meetings (id TEXT PRIMARY KEY); INSERT INTO meetings VALUES ('m1'), ('m2');").unwrap();
         let tx = c.transaction().unwrap();
         migrate_notes(&tx).unwrap();
         tx.commit().unwrap();

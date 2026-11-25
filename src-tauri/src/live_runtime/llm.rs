@@ -6,7 +6,11 @@ use crate::live_common::{LlmCall, LlmError, LlmErrorKind, LlmReply, LlmRequest};
 use crate::llm::cli_agent::manager::{SessionKey, SessionScope, Tier};
 use crate::llm::provider::CancelToken;
 use async_trait::async_trait;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+
+/// `LlmSlot::expected` when no generation was read.
+pub const NO_GENERATION: u64 = u64::MAX;
 
 /// Which model a runtime asked for (None parts fall back to the app's active one).
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -20,6 +24,8 @@ pub struct Selection {
 pub struct LlmSlot {
     pub llm: Arc<dyn LlmCall>,
     pub cancel: Arc<CancelToken>,
+    /// The scope generation read before the request was built (`NO_GENERATION`: none).
+    pub expected: Arc<AtomicU64>,
 }
 
 /// Makes the model call of one runtime. A new slot (new cancel token) is made
@@ -45,23 +51,46 @@ pub struct AiRunsLlm {
     meeting_id: String,
     selection: ModelSelection,
     cancel: Arc<CancelToken>,
+    expected: Arc<AtomicU64>,
+    /// The scope's generation now (the AI run service's, for this meeting and purpose).
+    generation: Arc<dyn Fn() -> u64 + Send + Sync>,
 }
 
 #[async_trait]
 impl LlmCall for AiRunsLlm {
     async fn call(&self, req: &LlmRequest) -> Result<LlmReply, LlmError> {
-        let mut run = AiRunRequest::new(self.purpose, self.selection.clone(), &req.system, &req.user);
-        run.max_output = req.max_output_tokens as u64;
-        run.cancel = self.cancel.clone();
         let scope = match self.purpose {
             AiPurpose::Notes => Some(SessionScope::Notes(self.meeting_id.clone())),
             AiPurpose::Brief => Some(SessionScope::Brief(self.meeting_id.clone())),
             _ => None,
         };
-        run.session_key = scope.map(|s| SessionKey::plain(s, Tier::Fast));
-        // A notes session starts over every 25 runs so its history stays small.
-        run.recycle_after = if self.purpose == AiPurpose::Notes { Some(25) } else { None };
-        let out = self.runs.run(run, None).await.map_err(map_error)?;
+        let build = |expected: u64| {
+            let mut run = AiRunRequest::new(self.purpose, self.selection.clone(), &req.system, &req.user);
+            run.max_output = req.max_output_tokens as u64;
+            run.cancel = self.cancel.clone();
+            run.session_key = scope.clone().map(|s| SessionKey::plain(s, Tier::Fast));
+            // A notes session starts over every 25 runs so its history stays small.
+            run.recycle_after = if self.purpose == AiPurpose::Notes { Some(25) } else { None };
+            run.expected_generation = Some(expected);
+            run
+        };
+        let expected = match self.expected.load(Ordering::SeqCst) {
+            NO_GENERATION => (self.generation)(),
+            g => g,
+        };
+        let mut result = self.runs.run(build(expected), None).await;
+        if let Err(AiRunError::Unavailable { message }) = &result {
+            if message.contains("changed while this was starting") {
+                if self.purpose == AiPurpose::Notes {
+                    // notes carry no workspace material: the same request is still right
+                    result = self.runs.run(build((self.generation)()), None).await;
+                } else {
+                    // a brief request was built from the old scope: never retried
+                    return Err(LlmError { kind: LlmErrorKind::Cancelled, message: "The scope changed".into(), code: "scope_changed" });
+                }
+            }
+        }
+        let out = result.map_err(map_error)?;
         if let Some(limit) = out.plan_limit.as_ref() {
             if matches!(limit.level, crate::llm::cli_agent::protocol::PlanLimitLevel::Hit) && out.text.trim().is_empty() {
                 return Err(LlmError { kind: LlmErrorKind::PlanLimit, message: "The plan's usage limit was reached".into(), code: "rate_limited" });
@@ -99,8 +128,14 @@ impl LlmFactory for AiRunsFactory {
             }
         };
         let cancel = Arc::new(CancelToken::new());
-        let llm = AiRunsLlm { runs: self.runs.clone(), purpose, meeting_id: meeting_id.to_string(), selection, cancel: cancel.clone() };
-        Ok(LlmSlot { llm: Arc::new(llm), cancel })
+        let expected = Arc::new(AtomicU64::new(NO_GENERATION));
+        let (runs, id) = (self.runs.clone(), meeting_id.to_string());
+        let generation: Arc<dyn Fn() -> u64 + Send + Sync> = Arc::new(move || {
+            let scope = if purpose == AiPurpose::Brief { SessionScope::Brief(id.clone()) } else { SessionScope::Notes(id.clone()) };
+            runs.generation(&SessionKey::plain(scope, Tier::Fast))
+        });
+        let llm = AiRunsLlm { runs: self.runs.clone(), purpose, meeting_id: meeting_id.to_string(), selection, cancel: cancel.clone(), expected: expected.clone(), generation };
+        Ok(LlmSlot { llm: Arc::new(llm), cancel, expected })
     }
 }
 
@@ -131,6 +166,11 @@ impl SwapLlm {
 
     pub fn cancel(&self) {
         self.slot.lock().unwrap().cancel.cancel();
+    }
+
+    /// The generation read before building the next request (None: read it at call time).
+    pub fn set_expected(&self, generation: Option<u64>) {
+        self.slot.lock().unwrap().expected.store(generation.unwrap_or(NO_GENERATION), Ordering::SeqCst);
     }
 }
 

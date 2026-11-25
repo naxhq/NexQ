@@ -111,8 +111,15 @@ pub async fn set_chat_meeting_included(
     meeting_id: String,
     included: bool,
     state: State<'_, AppState>,
+    app: AppHandle,
 ) -> Result<(), String> {
-    with_conn(&state, |conn| store::set_meeting_included(conn, &workspace_id, chat_id.as_deref(), &meeting_id, included))
+    // Taking a meeting out of a chat takes effect for its next request and
+    // drops its CLI session (and its transcripts folder) at once, like any
+    // other change of access.
+    let ws = workspace_id.clone();
+    change_and_restart(&state, &app, |_| Touch::chats(&ws), || {
+        with_conn(&state, |conn| store::set_meeting_included(conn, &workspace_id, chat_id.as_deref(), &meeting_id, included))
+    })
 }
 
 #[command]
@@ -131,8 +138,13 @@ pub async fn set_chat_item_pref(
     ref_id: String,
     pref: Option<String>,
     state: State<'_, AppState>,
+    app: AppHandle,
 ) -> Result<(), String> {
-    with_conn(&state, |conn| store::set_item_pref(conn, &chat_id, &kind, &ref_id, pref.as_deref()))
+    // "exclude" takes the item out of the chat's next request and ends its session at once.
+    let ws = with_conn(&state, |conn| Ok(store::get_chat(conn, &chat_id)?.map(|c| c.chat.workspace_id))).unwrap_or(None).unwrap_or_default();
+    change_and_restart(&state, &app, |_| Touch::chats(&ws), || {
+        with_conn(&state, |conn| store::set_item_pref(conn, &chat_id, &kind, &ref_id, pref.as_deref()))
+    })
 }
 
 #[command]

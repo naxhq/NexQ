@@ -809,6 +809,8 @@ pub fn run() {
             live_commands::brief_continue,
             live_commands::get_brief_settings,
             live_commands::set_brief_settings,
+            live_commands::get_memory_settings,
+            live_commands::set_memory_settings,
             live_commands::suggest_memory,
             workspace_commands::list_workspaces,
             workspace_commands::get_workspace,

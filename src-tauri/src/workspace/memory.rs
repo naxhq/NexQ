@@ -8,7 +8,7 @@ use super::scope::EffectiveScope;
 use super::store::{get_workspace, now_ms, touch};
 use super::types::{MemoryCreate, MemoryItem, MemoryPatch, MemoryUpdate, MEMORY_KINDS, MEMORY_STATUSES, NOT_FOUND};
 
-const COLUMNS: &str = "id, workspace_id, kind, title, text, source_meeting, source_ms, status, created_at, updated_at";
+const COLUMNS: &str = "id, workspace_id, kind, title, text, source_meeting, source_ms, status, created_at, updated_at, unsupported";
 
 fn err(what: &str, e: rusqlite::Error) -> String {
     format!("{what}: {e}")
@@ -26,6 +26,7 @@ fn read_item(row: &Row<'_>) -> rusqlite::Result<MemoryItem> {
         status: row.get(7)?,
         created_at: row.get(8)?,
         updated_at: row.get(9)?,
+        unsupported: row.get::<_, i64>(10)? != 0,
     })
 }
 
@@ -68,9 +69,9 @@ pub fn create_memory(conn: &Connection, input: MemoryCreate) -> Result<MemoryIte
     let id = uuid::Uuid::new_v4().to_string();
     let now = now_ms();
     conn.execute(
-        "INSERT INTO workspace_memory (id, workspace_id, kind, title, text, source_meeting, source_ms, status, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
-        params![id, input.workspace_id, input.kind, input.title.trim(), input.text.trim(), input.source_meeting, input.source_ms, status, now],
+        "INSERT INTO workspace_memory (id, workspace_id, kind, title, text, source_meeting, source_ms, status, created_at, updated_at, unsupported)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10)",
+        params![id, input.workspace_id, input.kind, input.title.trim(), input.text.trim(), input.source_meeting, input.source_ms, status, now, input.unsupported as i64],
     )
     .map_err(|e| err("Couldn't save the memory", e))?;
     touch(conn, &input.workspace_id);
@@ -173,6 +174,7 @@ mod tests {
             source_meeting: None,
             source_ms: None,
             status: None,
+            unsupported: false,
         }
     }
 

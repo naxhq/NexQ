@@ -220,66 +220,16 @@ pub struct ContextPlan {
     pub nonce: String,
 }
 
-/// What a character counts as for marker purposes: `None` = invisible or
-/// control (dropped), otherwise the plain ASCII look-alike it folds to.
-fn fold_char(c: char) -> Option<char> {
-    match c {
-        '\n' | '\t' => Some(c),
-        '\u{2028}' | '\u{2029}' => Some('\n'),
-        c if c.is_control() => None,
-        '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}'
-        | '\u{FEFF}' | '\u{00AD}' | '\u{180E}' | '\u{034F}' | '\u{FE00}'..='\u{FE0F}' | '\u{E0000}'..='\u{E007F}' => None,
-        '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0),
-        '\u{3000}' => Some(' '),
-        '\u{3008}' | '\u{2329}' | '\u{27E8}' | '\u{276C}' | '\u{2039}' | '\u{00AB}' | '\u{FE64}' | '\u{2770}'
-        | '\u{29FC}' | '\u{1438}' | '\u{3014}' => Some('<'),
-        '\u{3009}' | '\u{232A}' | '\u{27E9}' | '\u{276D}' | '\u{203A}' | '\u{00BB}' | '\u{FE65}' | '\u{2771}'
-        | '\u{29FD}' | '\u{1433}' | '\u{3015}' => Some('>'),
-        _ => Some(c),
-    }
-}
+use crate::prompt_data::fold_char;
 
-/// Text that goes inside a data block: invisible and control characters are
-/// removed, every angle bracket (and look-alike, fullwidth form included)
-/// becomes a harmless single quote mark, and any `DATA-` (any case, any width)
-/// is broken, so nothing in it can open, close or imitate a marker.
+/// Text that goes inside a data block (see `prompt_data::neutralise_text`).
 pub fn neutralise(text: &str) -> String {
-    let mut out: Vec<char> = Vec::with_capacity(text.len());
-    let mut folded: Vec<char> = Vec::with_capacity(text.len());
-    for c in text.chars() {
-        let Some(f) = fold_char(c) else { continue };
-        match f {
-            '<' => {
-                out.push('\u{2039}');
-                folded.push('\u{2039}');
-            }
-            '>' => {
-                out.push('\u{203A}');
-                folded.push('\u{203A}');
-            }
-            _ => {
-                out.push(if f == c { c } else { f });
-                folded.push(f.to_ascii_lowercase());
-            }
-        }
-    }
-    let needle: Vec<char> = "data-".chars().collect();
-    let mut i = 0;
-    while i + needle.len() <= folded.len() {
-        if folded[i..i + needle.len()] == needle[..] {
-            out[i + 4] = '\u{2010}';
-            folded[i + 4] = '\u{2010}';
-            i += 5;
-        } else {
-            i += 1;
-        }
-    }
-    out.into_iter().collect()
+    crate::prompt_data::neutralise_text(text)
 }
 
 /// A fresh random marker token for a chat (kept with the chat).
 pub fn new_nonce() -> String {
-    uuid::Uuid::new_v4().simple().to_string()[..16].to_string()
+    crate::prompt_data::new_nonce()
 }
 
 /// One line of untrusted text for a label or a file name: control characters

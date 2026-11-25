@@ -6,6 +6,7 @@ use crate::live_common::SystemClock;
 use crate::live_runtime::db::LiveDb;
 use crate::live_runtime::llm::AiRunsFactory;
 use crate::live_runtime::{Deps, Emitter, LiveRuntimes};
+use crate::llm::cli_agent::manager::{SessionKey, SessionScope, Tier};
 use crate::state::AppState;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
@@ -20,11 +21,14 @@ impl Emitter for TauriEmitter {
     }
 }
 
-/// The seam to the AI run service's scope generation (`AiRuns::generation`).
-/// Until that lands here it reports one constant generation; the brief then
-/// relies on its own scope check, which is also what clears the sheet.
-pub fn generation_seam(_runs: &Arc<AiRuns>) -> Arc<dyn Fn(&str) -> u64 + Send + Sync> {
-    Arc::new(|_scope: &str| 0)
+/// The AI run service's scope generation (`AiRuns::generation`) of a meeting's
+/// notes or brief session scope; it moves whenever the meeting's sessions restart.
+pub fn generation_seam(runs: &Arc<AiRuns>) -> Arc<dyn Fn(&str, bool) -> u64 + Send + Sync> {
+    let runs = runs.clone();
+    Arc::new(move |meeting: &str, brief: bool| {
+        let scope = if brief { SessionScope::Brief(meeting.to_string()) } else { SessionScope::Notes(meeting.to_string()) };
+        runs.generation(&SessionKey::plain(scope, Tier::Fast))
+    })
 }
 
 /// Builds the runtimes from the state before it is handed to Tauri.
@@ -50,6 +54,7 @@ pub fn build(app: &AppHandle, state: &AppState) -> Option<Arc<LiveRuntimes>> {
         busy: Arc::new(move || gate.is_busy()),
         live_meeting: Arc::new(move || live_id.lock().ok().and_then(|m| m.as_ref().map(|m| m.id.clone()))),
         generation: generation_seam(&runs),
+        deleted: Arc::new(Mutex::new(std::collections::HashSet::new())),
         close_sessions: Arc::new(move |id: String| {
             let runs = close_runs.clone();
             tauri::async_runtime::spawn(async move { runs.close_meeting(&id).await });

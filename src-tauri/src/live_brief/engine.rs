@@ -338,6 +338,11 @@ impl<L: LlmCall, C: Clock, S: LocalSearch> BriefEngine<L, C, S> {
         Some(PreparedBrief { request, reason, sent, user_tokens: estimate_tokens(&user), epoch: self.epoch })
     }
 
+    /// Gives a prepared call up without parsing or publishing anything.
+    pub fn abort(&mut self, _p: PreparedBrief) {
+        self.trigger.end_err(LlmErrorKind::Cancelled, 0);
+    }
+
     pub fn complete(&mut self, p: PreparedBrief, result: Result<LlmReply, LlmError>) -> BriefOutcome {
         let now = self.clock.now_ms();
         // The scope changed while the call ran: whatever it says is about the old one.

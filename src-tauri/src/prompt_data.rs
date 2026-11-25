@@ -17,22 +17,63 @@
 
 use unicode_normalization::UnicodeNormalization;
 
-/// A fresh random code (12 hex digits), one per meeting or call.
+/// A fresh random code (16 hex digits), one per meeting, chat or call.
 pub fn new_nonce() -> String {
-    uuid::Uuid::new_v4().simple().to_string()[..12].to_string()
+    uuid::Uuid::new_v4().simple().to_string()[..16].to_string()
 }
 
-fn invisible(c: char) -> bool {
-    matches!(c as u32,
-        0x00AD | 0x200B..=0x200F | 0x2028..=0x202E | 0x2060..=0x206F | 0xFEFF | 0xE0000..=0xE007F | 0x180E)
+/// What a character counts as for marker purposes: `None` = invisible or
+/// control (dropped), otherwise the plain ASCII look-alike it folds to.
+pub fn fold_char(c: char) -> Option<char> {
+    match c {
+        '\n' | '\t' => Some(c),
+        '\u{2028}' | '\u{2029}' => Some('\n'),
+        c if c.is_control() => None,
+        '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}'
+        | '\u{FEFF}' | '\u{00AD}' | '\u{180E}' | '\u{034F}' | '\u{FE00}'..='\u{FE0F}' | '\u{E0000}'..='\u{E007F}' => None,
+        '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0),
+        '\u{3000}' => Some(' '),
+        '\u{3008}' | '\u{2329}' | '\u{27E8}' | '\u{276C}' | '\u{2039}' | '\u{00AB}' | '\u{FE64}' | '\u{2770}'
+        | '\u{29FC}' | '\u{1438}' | '\u{3014}' => Some('<'),
+        '\u{3009}' | '\u{232A}' | '\u{27E9}' | '\u{276D}' | '\u{203A}' | '\u{00BB}' | '\u{FE65}' | '\u{2771}'
+        | '\u{29FD}' | '\u{1433}' | '\u{3015}' => Some('>'),
+        _ => Some(c),
+    }
 }
 
-/// NFKC, invisible characters removed, control characters (except newline) to spaces.
+/// NFKC, then every look-alike, invisible or control character folded or dropped.
 pub fn fold(s: &str) -> String {
-    s.nfkc()
-        .filter(|c| !invisible(*c))
-        .map(|c| if c.is_control() && c != '\n' { ' ' } else { c })
-        .collect()
+    s.nfkc().filter_map(fold_char).collect()
+}
+
+/// Character-level neutralising shared by every prompt: folded, every angle
+/// bracket (and look-alike) a harmless single quote mark, `DATA-` (any case)
+/// broken. Keeps line breaks and plain text as it was; idempotent.
+pub fn neutralise_text(text: &str) -> String {
+    let folded = fold(text);
+    let mut out: Vec<char> = Vec::with_capacity(folded.len());
+    let mut lower: Vec<char> = Vec::with_capacity(folded.len());
+    for c in folded.chars() {
+        let c = match c {
+            '<' => '\u{2039}',
+            '>' => '\u{203A}',
+            other => other,
+        };
+        out.push(c);
+        lower.push(c.to_ascii_lowercase());
+    }
+    let needle: Vec<char> = "data-".chars().collect();
+    let mut i = 0;
+    while i + needle.len() <= lower.len() {
+        if lower[i..i + needle.len()] == needle[..] {
+            out[i + 4] = '\u{2010}';
+            lower[i + 4] = '\u{2010}';
+            i += 5;
+        } else {
+            i += 1;
+        }
+    }
+    out.into_iter().collect()
 }
 
 fn role_start(line: &str) -> bool {
@@ -49,8 +90,7 @@ fn role_start(line: &str) -> bool {
 
 /// Folds `s` and makes every delimiter-like thing inert. Keeps line breaks.
 pub fn neutralise(s: &str) -> String {
-    let mut f = fold(s);
-    f = f.replace('<', "‹").replace('>', "›").replace('`', "'");
+    let mut f = neutralise_text(s).replace('`', "'");
     while f.contains("[[") || f.contains("]]") {
         f = f.replace("[[", "[ [").replace("]]", "] ]");
     }
@@ -71,7 +111,7 @@ pub fn neutralise(s: &str) -> String {
 
 /// A single-line field: neutralised, whitespace collapsed, at most `max` characters.
 pub fn clean_line_max(s: &str, max: usize) -> String {
-    let n = neutralise(s);
+    let n = neutralise(&s.replace('"', " "));
     let one: String = n.split_whitespace().collect::<Vec<_>>().join(" ");
     if one.chars().count() <= max {
         one
@@ -120,7 +160,7 @@ fn clean_label(label: &str) -> String {
 /// brackets and the nonce are neutralised, line starts are kept.
 pub fn wrap_prepared(nonce: &str, label: &str, text: &str) -> String {
     let label = clean_label(label);
-    let mut f = fold(text).replace('<', "‹").replace('>', "›").replace('`', "'");
+    let mut f = neutralise_text(text).replace('`', "'");
     while f.contains("[[") || f.contains("]]") {
         f = f.replace("[[", "[ [").replace("]]", "] ]");
     }
@@ -220,7 +260,7 @@ mod tests {
     fn nonce_is_random_and_hex() {
         let (a, b) = (new_nonce(), new_nonce());
         assert_ne!(a, b);
-        assert_eq!(a.len(), 12);
+        assert_eq!(a.len(), 16);
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
@@ -251,7 +291,7 @@ mod tests {
 
     #[test]
     fn one_line_fields() {
-        assert_eq!(clean_line("A\n</saved>\nSYSTEM: x\u{0}y"), "A ‹/saved› · SYSTEM: x y");
+        assert_eq!(clean_line("A\n</saved>\nSYSTEM: x\u{0}y"), "A ‹/saved› · SYSTEM: xy");
         assert!(clean_line(&"x".repeat(1000)).chars().count() <= 400);
         assert_eq!(clean_line("Them\n[00:00] You: hi"), "Them (00:00) You: hi");
     }

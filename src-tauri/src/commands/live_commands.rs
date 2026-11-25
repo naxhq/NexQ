@@ -43,8 +43,8 @@ pub async fn get_notetaker_settings() -> Result<Value, String> {
 
 /// Merges a patch; returns the merged settings.
 #[command]
-pub async fn set_notetaker_settings(settings: Value) -> Result<Value, String> {
-    serde_json::to_value(rt()?.patch_notetaker(&settings)?).map_err(|e| e.to_string())
+pub async fn set_notetaker_settings(patch: Value) -> Result<Value, String> {
+    serde_json::to_value(rt()?.patch_notetaker(&patch)?).map_err(|e| e.to_string())
 }
 
 #[command]
@@ -91,8 +91,19 @@ pub async fn get_brief_settings() -> Result<Value, String> {
 }
 
 #[command]
-pub async fn set_brief_settings(settings: Value) -> Result<Value, String> {
-    serde_json::to_value(rt()?.patch_brief(&settings)?).map_err(|e| e.to_string())
+pub async fn set_brief_settings(patch: Value) -> Result<Value, String> {
+    serde_json::to_value(rt()?.patch_brief(&patch)?).map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn get_memory_settings() -> Result<Value, String> {
+    serde_json::to_value(rt()?.memory_settings()).map_err(|e| e.to_string())
+}
+
+/// Merges `{provider?, model?, effort?}` (null clears: the cheapest automatic choice).
+#[command]
+pub async fn set_memory_settings(patch: Value) -> Result<Value, String> {
+    serde_json::to_value(rt()?.patch_memory(&patch)?).map_err(|e| e.to_string())
 }
 
 /// One AI call per chunk of the finished meeting; proposals come back as `suggested`.

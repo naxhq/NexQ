@@ -316,6 +316,8 @@ pub struct MemoryCreate {
     pub source_ms: Option<i64>,
     /// `saved` when absent (the user typed it).
     pub status: Option<String>,
+    /// A suggestion whose names or numbers are not in the transcript near its source.
+    pub unsupported: bool,
 }
 
 /// What `update_memory` changes: only the fields present.
@@ -346,6 +348,9 @@ pub struct MemoryItem {
     pub status: String,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Suggested from a meeting but not found in its transcript (the UI says so).
+    #[serde(default)]
+    pub unsupported: bool,
 }
 
 /// What `resolve_memory` may change on the way.
@@ -499,10 +504,11 @@ mod contract {
             status: "saved".into(),
             created_at: 0,
             updated_at: 0,
+            unsupported: false,
         };
         assert_eq!(
             keys(&memory),
-            expect(&["id", "workspace_id", "kind", "title", "text", "source_meeting", "source_ms", "status", "created_at", "updated_at"])
+            expect(&["id", "workspace_id", "kind", "title", "text", "source_meeting", "source_ms", "status", "created_at", "updated_at", "unsupported"])
         );
     }
 

@@ -889,6 +889,10 @@ pub async fn delete_meeting(
         .as_ref()
         .ok_or_else(|| "Database not initialized".to_string())?;
 
+    // Its notes and brief stop first and save nothing (a save never recreates a row anyway).
+    if let Some(rt) = crate::live_runtime::global() {
+        rt.meeting_deleted(&meeting_id);
+    }
     // Everything about the meeting goes in one step: rows of every table
     // (cached translations, notes, brief, search passages, borrowed ...).
     let files = {

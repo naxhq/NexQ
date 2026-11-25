@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use rusqlite::Connection;
 use serde_json::json;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 // ---------------------------------------------------------------- fakes
 
@@ -80,22 +80,55 @@ struct FakeFactory(Arc<FakeState>);
 impl LlmFactory for FakeFactory {
     fn make(&self, purpose: AiPurpose, meeting_id: &str, _sel: &Selection) -> Result<LlmSlot, String> {
         let cancel = Arc::new(CancelToken::new());
-        Ok(LlmSlot { llm: Arc::new(FakeLlm { st: self.0.clone(), purpose, meeting: meeting_id.to_string(), cancel: cancel.clone() }), cancel })
+        Ok(LlmSlot { llm: Arc::new(FakeLlm { st: self.0.clone(), purpose, meeting: meeting_id.to_string(), cancel: cancel.clone() }), cancel, expected: Arc::new(std::sync::atomic::AtomicU64::new(super::llm::NO_GENERATION)) })
     }
 }
 
 #[derive(Default)]
-struct Events(Mutex<Vec<(String, Value)>>);
+struct Events {
+    all: Mutex<Vec<(String, Value)>>,
+    /// Set by the property test: every published sheet is checked against the scope in force at that moment.
+    watch: Mutex<Option<(Arc<Mutex<Connection>>, String)>>,
+    violations: Mutex<Vec<String>>,
+}
+
+/// The workspaces (by letter in their names) a meeting's scope draws material from right now.
+fn allowed_letters(conn: &Connection, meeting: &str) -> Vec<char> {
+    let scope = crate::workspace::scope::scope_for(conn, crate::workspace::scope::ScopeOwner::Meeting(meeting)).unwrap();
+    scope
+        .material_workspaces
+        .iter()
+        .filter_map(|w| conn.query_row("SELECT name FROM workspaces WHERE id = ?1", [w], |r| r.get::<_, String>(0)).ok())
+        .filter_map(|n| n.chars().next())
+        .collect()
+}
+
+fn foreign_canaries(text: &str, allowed: &[char]) -> Vec<char> {
+    ['A', 'B', 'C']
+        .into_iter()
+        .filter(|l| !allowed.contains(l) && (text.contains(&format!("DOCCANARY{l}")) || text.contains(&format!("MEMCANARY{l}"))))
+        .collect()
+}
 
 impl Emitter for Events {
     fn emit(&self, event: &str, payload: Value) {
-        self.0.lock().unwrap().push((event.to_string(), payload));
+        if event == "brief_sheet" && !payload["sheet"].is_null() {
+            let watch = self.watch.lock().unwrap().clone();
+            if let Some((conn, meeting)) = watch {
+                let allowed = allowed_letters(&conn.lock().unwrap(), &meeting);
+                let bad = foreign_canaries(&payload.to_string(), &allowed);
+                if !bad.is_empty() {
+                    self.violations.lock().unwrap().push(format!("sheet with {bad:?} while only {allowed:?} were in scope"));
+                }
+            }
+        }
+        self.all.lock().unwrap().push((event.to_string(), payload));
     }
 }
 
 impl Events {
     fn of(&self, name: &str) -> Vec<Value> {
-        self.0.lock().unwrap().iter().filter(|(n, _)| n == name).map(|(_, v)| v.clone()).collect()
+        self.all.lock().unwrap().iter().filter(|(n, _)| n == name).map(|(_, v)| v.clone()).collect()
     }
     fn last_status(&self, name: &str, meeting: &str) -> Option<Value> {
         self.of(name).into_iter().filter(|v| v["meeting_id"] == meeting).last()
@@ -111,6 +144,8 @@ struct H {
     busy: Arc<AtomicBool>,
     closed: Arc<Mutex<Vec<String>>>,
     conn: Arc<Mutex<Connection>>,
+    /// The AI run service's scope generation (bump = the sessions restarted).
+    gen: Arc<std::sync::atomic::AtomicU64>,
 }
 
 fn harness_on(conn: Arc<Mutex<Connection>>) -> H {
@@ -120,7 +155,8 @@ fn harness_on(conn: Arc<Mutex<Connection>>) -> H {
     let live: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let busy = Arc::new(AtomicBool::new(false));
     let closed = Arc::new(Mutex::new(Vec::new()));
-    let (l2, b2, c2) = (live.clone(), busy.clone(), closed.clone());
+    let gen = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let (l2, b2, c2, g2) = (live.clone(), busy.clone(), closed.clone(), gen.clone());
     let deps = Deps {
         db: LiveDb::new(conn.clone() as Arc<dyn db::ConnProvider>),
         emitter: events.clone(),
@@ -128,25 +164,25 @@ fn harness_on(conn: Arc<Mutex<Connection>>) -> H {
         clock: Arc::new(clock.clone()),
         busy: Arc::new(move || b2.load(Ordering::SeqCst)),
         live_meeting: Arc::new(move || l2.lock().unwrap().clone()),
-        generation: Arc::new(|_| 0),
+        generation: Arc::new(move |_, _| g2.load(Ordering::SeqCst)),
+        deleted: Arc::new(Mutex::new(std::collections::HashSet::new())),
         close_sessions: Arc::new(move |id| c2.lock().unwrap().push(id)),
         tick: Duration::from_millis(10),
         scope_check: Duration::from_millis(25),
         final_timeout: Duration::from_millis(300),
     };
-    H { rt: LiveRuntimes::new(deps), fake, events, clock, live, busy, closed, conn }
+    H { rt: LiveRuntimes::new(deps), fake, events, clock, live, busy, closed, conn, gen }
 }
 
 fn harness() -> H {
-    let mut conn = memory_db();
-    let tx = conn.transaction().unwrap();
-    crate::workspace_search::migrate::migrate_search(&tx).unwrap();
-    tx.commit().unwrap();
-    harness_on(Arc::new(Mutex::new(conn)))
+    // memory_db runs every step of STEPS, search (v10) included
+    harness_on(Arc::new(Mutex::new(memory_db())))
 }
 
 impl H {
     fn start_meeting(&self, id: &str) {
+        // a save never creates a row for a meeting that does not exist
+        self.conn.lock().unwrap().execute("INSERT OR IGNORE INTO meetings (id, title, start_time, transcript, ai_interactions) VALUES (?1, 'm', 't', '[]', '[]')", [id]).unwrap();
         *self.live.lock().unwrap() = Some(id.to_string());
     }
     fn enable_notes(&self) {
@@ -170,6 +206,24 @@ async fn until(what: &str, f: impl Fn() -> bool) {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("timed out waiting for: {what}");
+}
+
+fn add_memory(c: &Connection, ws: &str, title: &str, text: &str, status: &str, updated_at: i64) {
+    let item = crate::workspace::memory::create_memory(
+        c,
+        crate::workspace::types::MemoryCreate {
+            workspace_id: ws.to_string(),
+            kind: "fact".into(),
+            title: title.into(),
+            text: text.into(),
+            source_meeting: None,
+            source_ms: None,
+            status: Some(status.into()),
+            unsupported: false,
+        },
+    )
+    .unwrap();
+    c.execute("UPDATE workspace_memory SET updated_at = ?2 WHERE id = ?1", rusqlite::params![item.id, updated_at]).unwrap();
 }
 
 fn make_meeting(h: &H, ws: &str) -> String {
@@ -478,22 +532,7 @@ async fn notes_prompts_carry_no_workspace_text_or_secrets() {
     {
         let c = h.conn.lock().unwrap();
         c.execute("UPDATE workspaces SET instructions = 'WORKSPACE_INSTRUCTIONS_CANARY' WHERE id = ?1", [&ws]).unwrap();
-        crate::workspace::memory::save_memory(
-            &c,
-            crate::workspace::types::MemoryItem {
-                id: String::new(),
-                workspace_id: ws.clone(),
-                kind: "fact".into(),
-                title: "t".into(),
-                text: "MEMORY_CANARY".into(),
-                source_meeting: None,
-                source_ms: None,
-                status: "saved".into(),
-                created_at: 0,
-                updated_at: 0,
-            },
-        )
-        .unwrap();
+        add_memory(&c, &ws, "t", "MEMORY_CANARY", "saved", 1);
     }
     index_doc(&h, &ws, "d1", "Secrets.pdf", "DOCUMENT_CANARY Acme pays 12 dollars per seat in the annual pricing plan");
     let m = make_meeting(&h, &ws);
@@ -603,22 +642,14 @@ async fn memory_reaches_answers_only_as_fenced_core_text() {
     {
         let c = h.conn.lock().unwrap();
         for i in 0..40 {
-            crate::workspace::memory::save_memory(
+            add_memory(
                 &c,
-                crate::workspace::types::MemoryItem {
-                    id: String::new(),
-                    workspace_id: ws.clone(),
-                    kind: "fact".into(),
-                    title: format!("Item {i}"),
-                    text: format!("Fact number {i} about the project, with some length to it so the budget is reached soon enough"),
-                    source_meeting: None,
-                    source_ms: None,
-                    status: if i % 5 == 0 { "suggested" } else { "saved" }.into(),
-                    created_at: 0,
-                    updated_at: i,
-                },
-            )
-            .unwrap();
+                &ws,
+                &format!("Item {i}"),
+                &format!("Fact number {i} about the project, with some length to it so the budget is reached soon enough"),
+                if i % 5 == 0 { "suggested" } else { "saved" },
+                i as i64,
+            );
         }
     }
     let m = make_meeting(&h, &ws);
@@ -747,4 +778,317 @@ fn contract_doc_shape() {
     assert_eq!(v["blocks"][1]["parent"], json!(t));
     assert_eq!(v["blocks"][0]["type"], "topic");
     assert_eq!(v["blocks"][0]["t"], 5_000);
+}
+
+// ---------------------------------------------------------------- scope: one object, synchronous invalidation
+
+fn publish_a_sheet(h: &H, m: &str) {
+    let line = "we talk about the annual pricing plan and the Acme seat renewal";
+    for i in 0..8u64 {
+        h.clock.set(1_000 + i * 5_000);
+        h.rt.feed(m, "Them", line, i * 5_000);
+        std::thread::sleep(Duration::from_millis(15));
+    }
+}
+
+async fn brief_with_sheet(h: &H) -> (String, String) {
+    let ws = brief_workspace(h);
+    index_doc(h, &ws, "d1", "Pricing.pdf", "DOCCANARYA Acme pays 12 dollars per seat in the annual pricing plan.");
+    let m = make_meeting(h, &ws);
+    h.start_meeting(&m);
+    h.rt.patch_brief(&json!({"enabled": true})).unwrap();
+    h.rt.brief_start(&m).unwrap();
+    publish_a_sheet(h, &m);
+    until("a published sheet", || h.events.of("brief_sheet").iter().any(|e| !e["sheet"].is_null())).await;
+    (ws, m)
+}
+
+#[tokio::test]
+async fn the_scope_fingerprint_changes_with_every_part_of_the_scope() {
+    let h = harness();
+    let ws = brief_workspace(&h);
+    let m = make_meeting(&h, &ws);
+    let fp = || h.rt.deps().db.scope(&m).unwrap().fingerprint;
+    let base = fp();
+    assert_eq!(base, fp(), "stable while nothing changes");
+    index_doc(&h, &ws, "d1", "Pricing.pdf", "text");
+    let with_doc = fp();
+    assert_ne!(base, with_doc, "a document");
+    {
+        let c = h.conn.lock().unwrap();
+        c.execute("INSERT INTO workspace_items (workspace_id, kind, ref_id, added_at, index_opt_in) VALUES (?1, 'folder', 'f1', 0, 0)", [&ws]).unwrap();
+    }
+    assert_eq!(with_doc, fp(), "a folder the user did not opt in to is not in the scope");
+    h.conn.lock().unwrap().execute("UPDATE workspace_items SET index_opt_in = 1 WHERE ref_id = 'f1'", []).unwrap();
+    let with_folder = fp();
+    assert_ne!(with_doc, with_folder, "an opted-in folder");
+    {
+        let c = h.conn.lock().unwrap();
+        add_memory(&c, &ws, "t", "MEMCANARYA fact", "saved", 1);
+    }
+    let with_memory = fp();
+    assert_ne!(with_folder, with_memory, "saved memory");
+    {
+        let c = h.conn.lock().unwrap();
+        c.execute("INSERT INTO workspace_meeting_prefs (workspace_id, chat_id, meeting_id, included) VALUES (?1, '', 'old-meeting', 0)", [&ws]).unwrap();
+    }
+    let with_exclusion = fp();
+    assert_ne!(with_memory, with_exclusion, "a meeting switched off for the workspace");
+    let scope = h.rt.deps().db.scope(&m).unwrap();
+    assert!(scope.search.excluded_meeting_ids.contains(&"old-meeting".to_string()) && scope.search.excluded_meeting_ids.contains(&m));
+    assert_eq!(scope.search.folder_ids, vec!["f1".to_string()], "search uses exactly the scope's folders");
+    let other = {
+        let c = h.conn.lock().unwrap();
+        new_ws(&c, "Other", false, false)
+    };
+    h.conn.lock().unwrap().execute("UPDATE meetings SET workspace_id = ?2 WHERE id = ?1", [&m, &other]).unwrap();
+    assert_ne!(with_exclusion, fp(), "the home");
+}
+
+#[tokio::test]
+async fn invalidation_is_synchronous_and_never_waits_for_the_database() {
+    let h = harness();
+    let (_ws, m) = brief_with_sheet(&h).await;
+    assert!(h.rt.answer_extras(&m, "Assist", None).is_some());
+    // another thread holds the database while the scope changes
+    let conn = h.conn.clone();
+    let holder = std::thread::spawn(move || {
+        let _g = conn.lock().unwrap();
+        std::thread::sleep(Duration::from_millis(400));
+    });
+    std::thread::sleep(Duration::from_millis(30));
+    let t0 = Instant::now();
+    h.rt.scope_changed(&m);
+    assert!(t0.elapsed() < Duration::from_millis(100), "scope_changed does not wait for the database");
+    // nothing of the old sheet is reachable before the actor has done anything
+    let shared = h.rt.inner.lock().unwrap().briefs.get(&m).map(|b| b.shared.clone()).unwrap();
+    assert!(shared.holder.lock().unwrap().view(h.clock.now_ms()).sheet.is_none(), "the holder is already empty");
+    holder.join().unwrap();
+    assert!(h.rt.answer_extras(&m, "Assist", None).map(|t| !t.contains("Acme pays")).unwrap_or(true));
+    until("null sheet event", || h.events.of("brief_sheet").last().map(|e| e["sheet"].is_null()).unwrap_or(false)).await;
+}
+
+#[tokio::test]
+async fn a_generation_bump_during_a_run_drops_the_reply() {
+    let h = harness();
+    let ws = brief_workspace(&h);
+    index_doc(&h, &ws, "d1", "Pricing.pdf", "DOCCANARYA Acme pays 12 dollars per seat in the annual pricing plan.");
+    let m = make_meeting(&h, &ws);
+    h.start_meeting(&m);
+    h.rt.patch_brief(&json!({"enabled": true})).unwrap();
+    h.rt.brief_start(&m).unwrap();
+    *h.fake.delay.lock().unwrap() = Duration::from_millis(300);
+    publish_a_sheet(&h, &m);
+    until("call in flight", || h.fake.inflight.load(Ordering::SeqCst) == 1).await;
+    h.gen.fetch_add(1, Ordering::SeqCst); // the sessions restarted under it
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(h.events.of("brief_sheet").iter().all(|e| e["sheet"].is_null()), "the overtaken reply was never published");
+    assert!(h.rt.answer_extras(&m, "Assist", None).map(|t| !t.contains("Acme pays")).unwrap_or(true));
+    // notes: same rule, and their lines go back to be sent again
+    h.enable_notes();
+    h.rt.notetaker_start(&m).unwrap();
+    h.speak(&m, 120, 100_000).await;
+    until("notes call", || h.fake.count(AiPurpose::Notes) == 1).await;
+    h.gen.fetch_add(1, Ordering::SeqCst);
+    until("second notes call (the lines were kept)", || {
+        h.clock.advance(30_000);
+        h.fake.count(AiPurpose::Notes) >= 2
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_new_scope_with_the_brief_off_clears_saves_an_empty_sheet_and_stops() {
+    let h = harness();
+    let (ws, m) = brief_with_sheet(&h).await;
+    h.conn.lock().unwrap().execute("UPDATE workspaces SET brief_default = 0 WHERE id = ?1", [&ws]).unwrap();
+    h.rt.scope_changed(&m);
+    until("the actor ended", || h.rt.inner.lock().unwrap().briefs.get(&m).is_none()).await;
+    assert!(h.events.of("brief_sheet").last().unwrap()["sheet"].is_null());
+    let stored = h.rt.deps().db.load_brief(&m).unwrap();
+    assert!(stored.sheet.is_none() && stored.status == "off");
+    assert!(h.rt.get_brief(&m).await.is_none());
+    assert!(h.rt.answer_extras(&m, "Assist", None).map(|t| !t.contains("Acme pays")).unwrap_or(true));
+}
+
+#[tokio::test]
+async fn a_saved_sheet_is_shown_only_under_its_own_scope() {
+    let h = harness();
+    let (ws, m) = brief_with_sheet(&h).await;
+    h.rt.on_meeting_end(&m);
+    until("saved with a fingerprint", || h.rt.deps().db.load_brief(&m).map(|b| !b.fingerprint.is_empty() && b.sheet.is_some()).unwrap_or(false)).await;
+    *h.live.lock().unwrap() = None;
+    until("actor gone", || h.rt.inner.lock().unwrap().briefs.get(&m).is_none()).await;
+    assert!(h.rt.get_brief(&m).await.is_some(), "same scope: shown");
+    index_doc(&h, &ws, "d2", "More.pdf", "a new document joins the scope");
+    assert!(h.rt.get_brief(&m).await.is_none(), "the scope changed since: not shown");
+}
+
+#[tokio::test]
+async fn memory_is_suggested_only_for_the_meetings_own_workspace() {
+    let h = harness();
+    let (a, b) = {
+        let c = h.conn.lock().unwrap();
+        (new_ws(&c, "A", false, false), new_ws(&c, "B", false, false))
+    };
+    let m = make_meeting(&h, &a);
+    h.conn
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO transcript_segments (id, meeting_id, text, speaker, timestamp_ms, is_final, created_at) VALUES ('s1',?1,'Acme pays 12 dollars per seat today','Them',5000,1,'t')",
+            [&m],
+        )
+        .unwrap();
+    assert!(h.rt.suggest_memory(&b, &m).await.is_err(), "not the meeting's workspace");
+    // the meeting moves while the model works
+    *h.fake.delay.lock().unwrap() = Duration::from_millis(250);
+    let rt = h.rt.clone();
+    let (a2, m2) = (a.clone(), m.clone());
+    let task = tokio::spawn(async move { rt.suggest_memory(&a2, &m2).await });
+    until("the call", || h.fake.inflight.load(Ordering::SeqCst) == 1).await;
+    h.conn.lock().unwrap().execute("UPDATE meetings SET workspace_id = ?2 WHERE id = ?1", [&m, &b]).unwrap();
+    let out = task.await.unwrap().unwrap();
+    assert!(out.is_empty(), "nothing is saved for a meeting that moved");
+    let n: i64 = h.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM workspace_memory", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 0);
+}
+
+#[tokio::test]
+async fn a_deleted_meeting_leaves_no_rows_and_no_events() {
+    let h = harness();
+    let (_ws, m) = brief_with_sheet(&h).await;
+    h.enable_notes();
+    h.rt.notetaker_start(&m).unwrap();
+    h.speak(&m, 120, 50_000).await;
+    until("a notes run", || h.fake.count(AiPurpose::Notes) == 1).await;
+    until("notes saved", || h.rt.deps().db.load_notes(&m).is_some()).await;
+    *h.fake.delay.lock().unwrap() = Duration::from_millis(300);
+    h.speak(&m, 120, 100_000).await;
+    until("a run in flight", || h.fake.inflight.load(Ordering::SeqCst) >= 1).await;
+    let seen = h.events.all.lock().unwrap().len();
+    // the user deletes the meeting: actors stop first, then the rows go
+    h.rt.meeting_deleted(&m);
+    {
+        let c = h.conn.lock().unwrap();
+        let tx = c.unchecked_transaction().unwrap();
+        crate::workspace::purge::purge_meeting(&tx, &m).unwrap();
+        tx.commit().unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    {
+        let c = h.conn.lock().unwrap();
+        for table in ["meeting_notes", "meeting_briefs"] {
+            let n: i64 = c.query_row(&format!("SELECT COUNT(*) FROM {table} WHERE meeting_id = ?1"), [&m], |r| r.get(0)).unwrap();
+            assert_eq!(n, 0, "{table} was recreated");
+        }
+    }
+    let late: Vec<String> = h.events.all.lock().unwrap().iter().skip(seen).filter(|(n, v)| n != "memory_changed" && v["meeting_id"] == json!(m)).map(|(n, _)| n.clone()).collect();
+    assert!(late.is_empty(), "events after the delete: {late:?}");
+    // a late save from anywhere is a no-op
+    assert!(h.rt.deps().db.save_notes(&m, &crate::live_notes::doc::NoteDoc::new(), "running", 1, 1).is_ok());
+    assert!(h.rt.deps().db.load_notes(&m).is_none());
+}
+
+#[tokio::test]
+async fn memory_settings_pick_the_model_for_suggestions() {
+    let h = harness();
+    let m = h.rt.patch_memory(&json!({"provider": "openai", "model": "small"})).unwrap();
+    assert_eq!((m.provider.as_deref(), m.model.as_deref()), (Some("openai"), Some("small")));
+    assert_eq!(h.events.of("memory_settings_changed").len(), 1);
+    assert!(h.rt.patch_memory(&json!({"nonsense": 1})).is_err());
+    assert_eq!(h.rt.memory_settings().model.as_deref(), Some("small"));
+    assert_eq!(harness_on(h.conn.clone()).rt.memory_settings().provider.as_deref(), Some("openai"));
+}
+
+/// Random changes of the meeting's workspace and material while notes, the
+/// brief and answers run: nothing published or handed to an answer ever
+/// carries material that was not in the scope in force at that moment.
+#[tokio::test]
+async fn random_scope_changes_never_leak_material_across_workspaces() {
+    let h = harness();
+    let (a, b) = {
+        let c = h.conn.lock().unwrap();
+        let a = new_ws(&c, "A", false, false);
+        let b = new_ws(&c, "B", false, false);
+        c.execute("UPDATE workspaces SET brief_default = 1", []).unwrap();
+        add_memory(&c, &a, "mem a", "MEMCANARYA fact in a", "saved", 1);
+        add_memory(&c, &b, "mem b", "MEMCANARYB fact in b", "saved", 1);
+        (a, b)
+    };
+    index_doc(&h, &a, "da", "A.pdf", "DOCCANARYA Acme pays 12 dollars per seat in the annual pricing plan renewal");
+    index_doc(&h, &b, "db", "B.pdf", "DOCCANARYB Acme pays 99 dollars per seat in the annual pricing plan renewal");
+    let m = make_meeting(&h, &a);
+    h.start_meeting(&m);
+    *h.events.watch.lock().unwrap() = Some((h.conn.clone(), m.clone()));
+    h.rt.patch_brief(&json!({"enabled": true})).unwrap();
+    h.enable_notes();
+    h.rt.brief_start(&m).unwrap();
+    h.rt.notetaker_start(&m).unwrap();
+    *h.fake.delay.lock().unwrap() = Duration::from_millis(40);
+    let mut seed = 0x2545F4914F6CDD1Du64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let mut answers_checked = 0;
+    for step in 0..60u64 {
+        match next() % 4 {
+            0 => {
+                let to = if next() % 2 == 0 { &a } else { &b };
+                h.conn.lock().unwrap().execute("UPDATE meetings SET workspace_id = ?2 WHERE id = ?1", [&m, to]).unwrap();
+                h.rt.scope_changed(&m);
+                h.gen.fetch_add(1, Ordering::SeqCst);
+            }
+            1 => {
+                let other = if next() % 2 == 0 { b.clone() } else { a.clone() };
+                let borrowed: Vec<String> = if next() % 2 == 0 { vec![] } else { vec![other] };
+                let _ = {
+                    let c = h.conn.lock().unwrap();
+                    crate::workspace::meetings::set_meeting_scope(&c, &m, &borrowed)
+                };
+                h.rt.scope_changed(&m);
+            }
+            2 => {
+                let in_a = next() % 2 == 0;
+                let ws = if in_a { &a } else { &b };
+                let letter = if in_a { 'A' } else { 'B' };
+                {
+                    let c = h.conn.lock().unwrap();
+                    add_memory(&c, ws, "more", &format!("MEMCANARY{letter} extra {step}"), "saved", 100 + step as i64);
+                }
+                h.rt.scope_changed(&m);
+            }
+            _ => {}
+        }
+        h.fake.push(Ok(LlmReply {
+            text: r#"{"now":"Acme pricing","facts":[{"text":"Acme pays 12 dollars per seat DOCCANARYA","source":"P1"},{"text":"Acme pays 99 dollars per seat DOCCANARYB","source":"P2"}]}"#.into(),
+            ..Default::default()
+        }));
+        publish_a_sheet(&h, &m);
+        h.clock.advance(60_000);
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        // answers at any moment: only what the scope in force allows
+        let allowed = allowed_letters(&h.conn.lock().unwrap(), &m);
+        if let Some(t) = h.rt.answer_extras(&m, "Assist", None) {
+            answers_checked += 1;
+            let bad = foreign_canaries(&t, &allowed);
+            assert!(bad.is_empty(), "step {step}: an answer carried {bad:?} with only {allowed:?} in scope\n{t}");
+        }
+        // what is saved is shown only under its own scope
+        if let Some(sheet) = h.rt.get_brief(&m).await {
+            let bad = foreign_canaries(&sheet.to_string(), &allowed);
+            assert!(bad.is_empty(), "step {step}: the saved sheet carried {bad:?}");
+        }
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let v = h.events.violations.lock().unwrap().clone();
+    assert!(v.is_empty(), "{v:?}");
+    // notes prompts never carried any workspace material at all
+    for p in h.fake.prompts(AiPurpose::Notes) {
+        assert!(!p.contains("CANARY"), "a notes prompt carried workspace text");
+    }
+    assert!(answers_checked > 5, "the answers were really exercised ({answers_checked})");
 }

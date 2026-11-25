@@ -25,7 +25,7 @@ use crate::live_runtime::brief::{BriefCmd, BriefHandle, BriefParams};
 use crate::live_runtime::db::{LiveDb, LiveScope};
 use crate::live_runtime::llm::LlmFactory;
 use crate::live_runtime::notes::{NoteEdit, NotesCmd, NotesHandle, NotesParams};
-use crate::live_runtime::settings::{merge, BriefSettings, NotetakerSettings, BRIEF_KEY, NOTETAKER_KEY};
+use crate::live_runtime::settings::{merge, BriefSettings, MemorySettings, NotetakerSettings, BRIEF_KEY, MEMORY_KEY, NOTETAKER_KEY};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
@@ -48,8 +48,10 @@ pub struct Deps {
     pub busy: Arc<dyn Fn() -> bool + Send + Sync>,
     /// The id of the running meeting, if any.
     pub live_meeting: Arc<dyn Fn() -> Option<String> + Send + Sync>,
-    /// The scope generation of the AI run service.
-    pub generation: Arc<dyn Fn(&str) -> u64 + Send + Sync>,
+    /// The scope generation of the AI run service for (meeting, is_brief).
+    pub generation: Arc<dyn Fn(&str, bool) -> u64 + Send + Sync>,
+    /// Meetings that are gone: suggestions and saves for them are dropped.
+    pub deleted: Arc<Mutex<std::collections::HashSet<String>>>,
     /// A meeting's notes and brief sessions may end.
     pub close_sessions: Arc<dyn Fn(String) + Send + Sync>,
     pub tick: Duration,
@@ -64,7 +66,6 @@ struct Inner {
     briefs: HashMap<String, BriefHandle>,
     /// What each CLI session was last given: `meeting|session` -> token.
     session_tokens: HashMap<String, String>,
-    core_cache: HashMap<String, (Instant, String)>,
 }
 
 pub struct LiveRuntimes {
@@ -100,7 +101,6 @@ impl LiveRuntimes {
                 notes: HashMap::new(),
                 briefs: HashMap::new(),
                 session_tokens: HashMap::new(),
-                core_cache: HashMap::new(),
             })),
         })
     }
@@ -135,6 +135,20 @@ impl LiveRuntimes {
             let _ = tx.send(NotesCmd::Stop);
         }
         self.deps.emitter.emit("notetaker_settings_changed", serde_json::to_value(&merged).unwrap_or(Value::Null));
+        Ok(merged)
+    }
+
+    pub fn memory_settings(&self) -> MemorySettings {
+        self.deps.db.kv_get(MEMORY_KEY).and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default()
+    }
+
+    /// Which model proposes memory (shared by the button and auto-suggest).
+    pub fn patch_memory(&self, patch: &Value) -> Result<MemorySettings, String> {
+        let _g = self.inner.lock().unwrap();
+        let merged = merge(&self.memory_settings(), patch)?;
+        self.deps.db.kv_set(MEMORY_KEY, &serde_json::to_string(&merged).map_err(|e| e.to_string())?)?;
+        drop(_g);
+        self.deps.emitter.emit("memory_settings_changed", serde_json::to_value(&merged).unwrap_or(Value::Null));
         Ok(merged)
     }
 
@@ -187,10 +201,31 @@ impl LiveRuntimes {
         }
     }
 
-    /// The meeting's scope changed: the brief looks it up at once and clears.
+    /// The meeting's scope changed. Synchronous and never blocks on the
+    /// database: before this returns the brief's sheet is gone, its running
+    /// call is cancelled and its answer will be dropped; answers never see the
+    /// old sheet. The actor then resolves the new scope.
     pub fn scope_changed(&self, meeting_id: &str) {
-        self.brief_cmd(meeting_id, BriefCmd::ScopeChanged);
-        self.inner.lock().unwrap().core_cache.remove(meeting_id);
+        let g = self.inner.lock().unwrap();
+        if let Some(h) = g.briefs.get(meeting_id) {
+            h.shared.invalidate();
+            let _ = h.tx.send(BriefCmd::ScopeChanged);
+        }
+    }
+
+    /// The meeting is being deleted: its actors stop at once and save
+    /// nothing, and suggestions still in flight for it are dropped.
+    pub fn meeting_deleted(&self, meeting_id: &str) {
+        self.deps.deleted.lock().unwrap().insert(meeting_id.to_string());
+        let mut g = self.inner.lock().unwrap();
+        if let Some(h) = g.notes.remove(meeting_id) {
+            let _ = h.tx.send(NotesCmd::Discard);
+        }
+        if let Some(h) = g.briefs.remove(meeting_id) {
+            h.shared.invalidate();
+            let _ = h.tx.send(BriefCmd::Discard);
+        }
+        g.session_tokens.retain(|k, _| !k.starts_with(&format!("{meeting_id}|")));
     }
 
     // ---------------------------------------------------------------- notes
@@ -236,6 +271,7 @@ impl LiveRuntimes {
             factory: self.deps.factory.clone(),
             clock: self.deps.clock.clone(),
             busy: self.deps.busy.clone(),
+            generation: self.deps.generation.clone(),
             on_exit,
             tick: self.deps.tick,
             final_timeout: self.deps.final_timeout,
@@ -309,7 +345,8 @@ impl LiveRuntimes {
             }
             g.brief.clone()
         };
-        let scope = self.deps.db.scope(meeting_id).ok_or_else(|| "Workspaces are unavailable".to_string())?;
+        let mut scope = self.deps.db.scope(meeting_id).ok_or_else(|| "Workspaces are unavailable".to_string())?;
+        scope.generation = (self.deps.generation)(meeting_id, true);
         if !scope.brief_enabled {
             return Err("The brief is off in this workspace".into());
         }
@@ -372,7 +409,13 @@ impl LiveRuntimes {
                 }
             }
         }
-        self.deps.db.load_brief(meeting_id).and_then(|b| b.sheet).map(|s| brief::sheet_to_contract(&s, 0))
+        // a saved sheet is shown only under the scope it was made for
+        let stored = self.deps.db.load_brief(meeting_id)?;
+        let fresh = self.deps.db.scope(meeting_id)?;
+        if stored.fingerprint != fresh.fingerprint {
+            return None;
+        }
+        stored.sheet.map(|s| brief::sheet_to_contract(&s, 0))
     }
 
     // ---------------------------------------------------------------- meeting life
@@ -454,38 +497,25 @@ impl LiveRuntimes {
         if !ANSWER_MODES.contains(&mode) {
             return None;
         }
+        // Freshly resolved: what is shown is what this scope allows right now.
+        let fresh = self.deps.db.scope(meeting_id)?;
+        let generation = (self.deps.generation)(meeting_id, true);
         let now = self.deps.clock.now_ms();
-        let (sheet_text, rev, nonce, scope_key, brief_memory) = {
+        let (sheet_text, rev, nonce) = {
             let g = self.inner.lock().ok()?;
             match g.briefs.get(meeting_id) {
-                Some(h) => {
-                    let key = h.shared.scope_key.lock().ok()?.clone();
-                    let holder = h.shared.holder.lock().ok()?;
-                    let found = holder.changed_since(now, &key, None);
-                    let (text, rev) = found.map(|(t, r)| (Some(t), r)).unwrap_or((None, 0));
-                    (text, rev, h.shared.nonce.clone(), Some(key), h.shared.memory.lock().ok().map(|m| m.clone()))
-                }
-                None => (None, 0, crate::prompt_data::new_nonce(), None, None),
-            }
-        };
-        let _ = scope_key;
-        // memory: from the running brief's scope, else looked up (and kept for a while)
-        let memory = match brief_memory {
-            Some(m) => m,
-            None => {
-                let mut g = self.inner.lock().ok()?;
-                match g.core_cache.get(meeting_id) {
-                    Some((at, text)) if at.elapsed() < Duration::from_secs(30) => text.clone(),
-                    _ => {
-                        drop(g);
-                        let text = self.deps.db.scope(meeting_id).map(|s| s.memory_text).unwrap_or_default();
-                        let mut g = self.inner.lock().ok()?;
-                        g.core_cache.insert(meeting_id.to_string(), (Instant::now(), text.clone()));
-                        text
+                Some(h) if !h.finished.load(Ordering::SeqCst) => {
+                    let key = brief::scope_key(&fresh.fingerprint, h.shared.counter.load(Ordering::SeqCst), generation);
+                    let found = h.shared.holder.lock().ok()?.changed_since(now, &key, None);
+                    match found {
+                        Some((t, r)) => (Some(t), r, h.shared.nonce.clone()),
+                        None => (None, 0, h.shared.nonce.clone()),
                     }
                 }
+                _ => (None, 0, crate::prompt_data::new_nonce()),
             }
         };
+        let memory = fresh.memory_text;
         if sheet_text.is_none() && memory.trim().is_empty() {
             return None;
         }

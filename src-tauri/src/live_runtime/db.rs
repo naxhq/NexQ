@@ -1,20 +1,21 @@
 //! Everything the live runtimes read and write in SQLite, behind one small
 //! provider trait so tests use an in-memory database and the app its shared
 //! connection (locked only for the length of one statement group).
+//!
+//! `LiveScope` is the ONE description of what a meeting may use: search, the
+//! brief, memory and every fingerprint comparison are made from it.
 
 use crate::live_brief::search::Passage;
 use crate::live_brief::sheet::Sheet;
-use crate::live_common::estimate_tokens;
 use crate::live_notes::db as notes_db;
 use crate::live_notes::doc::NoteDoc;
-use crate::prompt_data::clean_line_max;
 use crate::workspace::memory as ws_memory;
-use crate::workspace::scope::{scope_for, ScopeOwner};
 use crate::workspace::store;
-use crate::workspace::types::MemoryItem;
+use crate::workspace::types::{MemoryCreate, MemoryItem};
 use crate::workspace_memory::{MemLine, MemoryKind, SavedItem};
 use crate::workspace_search::{self as wsearch, MeetingScope, PassageKind, SearchScope};
 use rusqlite::{params, Connection, OptionalExtension};
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
 /// Gives a closure the shared connection. False when it could not be had.
@@ -49,9 +50,14 @@ impl ConnProvider for Mutex<Connection> {
 /// What one meeting may search and which memory it may see.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LiveScope {
-    /// Changes whenever the scope does (see `EffectiveScope::fingerprint`).
+    /// The AI run service's generation of the meeting's scope when this was
+    /// resolved (filled in by the runtime, 0 from the database).
+    pub generation: u64,
+    /// Changes whenever anything below does (home, material workspaces,
+    /// documents, opted-in folders, talking points, memory, excluded meetings).
     pub fingerprint: String,
     pub home: String,
+    /// Exactly what search uses.
     pub search: SearchScope,
     /// Saved memory of the scope, newest first, at most about 300 tokens, one item per line.
     pub memory_text: String,
@@ -65,6 +71,8 @@ pub struct StoredBrief {
     pub status: String,
     pub tokens_used: u64,
     pub cap: u64,
+    /// The scope fingerprint the sheet was made under.
+    pub fingerprint: String,
 }
 
 #[derive(Clone)]
@@ -87,6 +95,12 @@ pub fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
+fn hash_of(parts: &[String]) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    parts.hash(&mut h);
+    h.finish()
+}
+
 impl LiveDb {
     pub fn new(conn: Arc<dyn ConnProvider>) -> Self {
         Self { conn }
@@ -107,7 +121,11 @@ impl LiveDb {
             .unwrap_or_else(|| Err("The database is busy".into()))
     }
 
-    // ---- notes
+    pub fn meeting_exists(&self, meeting_id: &str) -> bool {
+        self.with(|c| c.query_row("SELECT 1 FROM meetings WHERE id = ?1", params![meeting_id], |_| Ok(())).optional().ok().flatten().is_some()).unwrap_or(false)
+    }
+
+    // ---- notes (a save never creates a row for a meeting that is gone)
 
     pub fn load_notes(&self, meeting_id: &str) -> Option<notes_db::StoredNotes> {
         self.with(|c| notes_db::load_notes(c, meeting_id).ok().flatten()).flatten()
@@ -122,30 +140,32 @@ impl LiveDb {
 
     pub fn load_brief(&self, meeting_id: &str) -> Option<StoredBrief> {
         self.with(|c| {
-            c.query_row("SELECT sheet_json, status, tokens_used, cap FROM meeting_briefs WHERE meeting_id = ?1", params![meeting_id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?))
+            c.query_row("SELECT sheet_json, status, tokens_used, cap, fingerprint FROM meeting_briefs WHERE meeting_id = ?1", params![meeting_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, String>(4)?))
             })
             .optional()
             .ok()
             .flatten()
-            .map(|(json, status, used, cap)| StoredBrief {
+            .map(|(json, status, used, cap, fingerprint)| StoredBrief {
                 sheet: serde_json::from_str::<Sheet>(&json).ok(),
                 status,
                 tokens_used: used.max(0) as u64,
                 cap: cap.max(0) as u64,
+                fingerprint,
             })
         })
         .flatten()
     }
 
-    pub fn save_brief(&self, meeting_id: &str, sheet: Option<&Sheet>, status: &str, used: u64, cap: u64) -> Result<(), String> {
+    pub fn save_brief(&self, meeting_id: &str, sheet: Option<&Sheet>, status: &str, used: u64, cap: u64, fingerprint: &str) -> Result<(), String> {
         let json = sheet.map(|s| serde_json::to_string(s).unwrap_or_else(|_| "{}".into())).unwrap_or_else(|| "{}".into());
         self.with(|c| {
             c.execute(
-                "INSERT INTO meeting_briefs (meeting_id, sheet_json, status, tokens_used, cap, updated_at) VALUES (?1,?2,?3,?4,?5,?6)
+                "INSERT INTO meeting_briefs (meeting_id, sheet_json, status, tokens_used, cap, updated_at, fingerprint)
+                 SELECT ?1,?2,?3,?4,?5,?6,?7 WHERE EXISTS (SELECT 1 FROM meetings WHERE id = ?1)
                  ON CONFLICT(meeting_id) DO UPDATE SET sheet_json=excluded.sheet_json, status=excluded.status,
-                   tokens_used=excluded.tokens_used, cap=excluded.cap, updated_at=excluded.updated_at",
-                params![meeting_id, json, status, used as i64, cap as i64, now_ms()],
+                   tokens_used=excluded.tokens_used, cap=excluded.cap, updated_at=excluded.updated_at, fingerprint=excluded.fingerprint",
+                params![meeting_id, json, status, used as i64, cap as i64, now_ms(), fingerprint],
             )
             .map(|_| ())
             .map_err(|e| e.to_string())
@@ -167,25 +187,21 @@ impl LiveDb {
 
     pub fn scope(&self, meeting_id: &str) -> Option<LiveScope> {
         self.with(|c| {
-            let scope = scope_for(c, ScopeOwner::Meeting(meeting_id)).ok()?;
-            if scope.unrestricted {
-                return None;
-            }
-            let brief_enabled = store::get_workspace(c, &scope.home).map(|w| w.brief_default).unwrap_or(false);
-            let memory_text = core_memory(c, &scope);
+            // the one place the live fingerprint is made
+            let p = crate::workspace::access::live_parts(c, meeting_id)?;
             let search = SearchScope {
-                meetings: MeetingScope::HomeWorkspace(scope.home.clone()),
-                document_ids: scope.document_ids.clone(),
-                folder_ids: scope.folder_ids.clone(),
-                talking_point_ids: scope.talking_point_ids.clone(),
-                excluded_meeting_ids: vec![meeting_id.to_string()],
+                meetings: MeetingScope::HomeWorkspace(p.home.clone()),
+                document_ids: p.document_ids,
+                folder_ids: p.folder_ids,
+                talking_point_ids: p.talking_point_ids,
+                excluded_meeting_ids: p.excluded_meetings,
             };
-            Some(LiveScope { fingerprint: scope.fingerprint(), home: scope.home.clone(), search, memory_text, brief_enabled })
+            Some(LiveScope { generation: 0, fingerprint: p.fingerprint, home: p.home, search, memory_text: p.memory_text, brief_enabled: p.brief_enabled })
         })
         .flatten()
     }
 
-    /// The local search the brief uses (no tool calls, never the current meeting).
+    /// The local search the brief uses (no tool calls), over exactly `scope.search`.
     pub fn search(&self, scope: &LiveScope, query: &str, max: usize) -> Vec<Passage> {
         if query.trim().is_empty() {
             return Vec::new();
@@ -240,26 +256,26 @@ impl LiveDb {
         .unwrap_or_default()
     }
 
-    /// Stores proposals as `suggested` (never `saved`).
-    pub fn save_suggestions(&self, items: Vec<MemoryItem>) -> Vec<MemoryItem> {
-        self.with(|c| items.into_iter().filter_map(|i| ws_memory::save_memory(c, i).ok()).collect()).unwrap_or_default()
+    /// Stores proposals as `suggested`, in one transaction that first checks
+    /// the meeting still exists and is still filed in `workspace_id`: a
+    /// meeting that moved or went while the model worked gets nothing saved.
+    pub fn save_suggestions(&self, meeting_id: &str, workspace_id: &str, items: Vec<MemoryCreate>) -> Vec<MemoryItem> {
+        self.with(|c| {
+            let Ok(tx) = c.unchecked_transaction() else { return Vec::new() };
+            let home: Option<String> = tx.query_row("SELECT workspace_id FROM meetings WHERE id = ?1", params![meeting_id], |r| r.get(0)).ok();
+            if home.as_deref() != Some(workspace_id) {
+                return Vec::new();
+            }
+            let saved: Vec<MemoryItem> = items
+                .into_iter()
+                .filter(|i| i.workspace_id == workspace_id)
+                .filter_map(|i| ws_memory::create_memory(&tx, i).ok())
+                .collect();
+            if tx.commit().is_err() {
+                return Vec::new();
+            }
+            saved
+        })
+        .unwrap_or_default()
     }
-}
-
-/// Saved memory of the scope, newest first, trimmed to about 300 tokens.
-fn core_memory(conn: &Connection, scope: &crate::workspace::scope::EffectiveScope) -> String {
-    let mut items = ws_memory::saved_for_scope(conn, scope).unwrap_or_default();
-    items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    let mut out = String::new();
-    let mut used = 0u32;
-    for m in items {
-        let line = format!("- {}: {}\n", clean_line_max(&m.title, 80), clean_line_max(&m.text, 240));
-        let t = estimate_tokens(&line);
-        if used + t > 300 {
-            break;
-        }
-        used += t;
-        out.push_str(&line);
-    }
-    out.trim_end().to_string()
 }
