@@ -65,6 +65,13 @@ pub(crate) fn live_session_record(
     finals: &[Seg],
     with_sources: bool,
 ) -> Result<SessionRecord, String> {
+    // Stamp first: the generation and sources epoch this record is built under.
+    // If the scope restarts while it is built, the record is refused at insert.
+    let live_id = state.live_meeting.lock().ok().and_then(|m| m.as_ref().map(|m| m.id.clone()));
+    let stamp = live_id
+        .as_ref()
+        .map(|id| record_stamp(state, &SessionKey { scope: SessionScope::Live(id.clone()), tier, with_sources }))
+        .unwrap_or_default();
     let (scenario_prompt, speaker_context) = state
         .active_scenario
         .read()
@@ -72,7 +79,10 @@ pub(crate) fn live_session_record(
         .unwrap_or_default();
     // The running meeting's own scope: its workspace, what it borrows, and
     // General when its workspace includes it.
-    let scoped = runtime::for_live_or_default(state);
+    let scoped = match live_id.as_deref() {
+        Some(id) => runtime::for_meeting(state, id),
+        None => runtime::for_default(state),
+    };
     let documents = state
         .context
         .as_ref()
@@ -94,6 +104,8 @@ pub(crate) fn live_session_record(
         preload,
         sent,
         rag_mode,
+        generation: stamp.0,
+        sources_epoch: stamp.1,
         ..SessionRecord::default()
     };
     if with_sources {
@@ -101,6 +113,11 @@ pub(crate) fn live_session_record(
     } else {
         Ok(record)
     }
+}
+
+/// The generation and sources epoch a record for `key` starts to be built under.
+fn record_stamp(state: &AppState, key: &SessionKey) -> (u64, u64) {
+    (state.agent_sessions.generation_for(key), state.meeting_sessions.sources_epoch(&key.scope))
 }
 
 /// What the AI gets about a past meeting: its summary, its final
@@ -152,6 +169,10 @@ pub(crate) fn past_session_record(
     meeting_id: &str,
     with_sources: bool,
 ) -> Result<SessionRecord, String> {
+    let stamp = record_stamp(
+        state,
+        &SessionKey { scope: SessionScope::Past(meeting_id.to_string()), tier: Tier::Deep, with_sources },
+    );
     let context = past_meeting_context(state, meeting_id)?;
     let mut preload = build_preload_messages(
         &context.transcript,
@@ -168,6 +189,8 @@ pub(crate) fn past_session_record(
             &scoped.scope,
         )),
         preload,
+        generation: stamp.0,
+        sources_epoch: stamp.1,
         ..SessionRecord::default()
     };
     if with_sources {
@@ -253,7 +276,7 @@ fn start_session_attempt(
 ) {
     let (epoch, generation) = {
         let state = app.state::<AppState>();
-        (state.meeting_sessions.epoch(&key.scope), state.agent_sessions.generation(&key.scope))
+        (state.meeting_sessions.epoch(&key.scope), state.agent_sessions.generation_for(&key))
     };
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -278,8 +301,13 @@ fn start_session_attempt(
                 return;
             }
         };
-        if !state.meeting_sessions.insert_if_current(key.clone(), record, epoch) {
-            return; // closed while the record was built
+        if !state.meeting_sessions.insert_checked(key.clone(), record, epoch, Some(generation)) {
+            // Closed while the record was built: nothing to start. Restarted
+            // while it was built (same epoch): build it again, once.
+            if retry && state.meeting_sessions.epoch(&key.scope) == epoch {
+                start_session_attempt(&app, key, build, false);
+            }
+            return;
         }
         let Some(record) = state.meeting_sessions.get(&key) else {
             return;
@@ -311,6 +339,8 @@ fn start_session_attempt(
             Err(e) if crate::llm::cli_agent::manager::is_scope_changed(&e) => {
                 // Restarted while it started: that record is gone. Build a new one, once.
                 log::info!("Claude session {label} was restarted while it started");
+                // The record this attempt stored is from before the restart: gone.
+                state.meeting_sessions.remove_if_generation(&key, generation);
                 if retry {
                     start_session_attempt(&app, key, build, false);
                 }
@@ -591,12 +621,17 @@ pub async fn start_meeting(
         )
     });
 
+    // A requested workspace that is unknown or archived is refused with a clear
+    // message (only no id at all means the default workspace), before anything
+    // is created.
+    let home = if crate::workspace::available() {
+        Some(crate::workspace::store::requested_home(db.connection(), workspace_id.as_deref())?)
+    } else {
+        None
+    };
     let mut meeting = meetings::create_meeting(db.connection(), &title)
         .map_err(|e| format!("Failed to create meeting: {}", e))?;
-    // File it in the requested workspace; an unknown or archived one means the
-    // default workspace.
-    if crate::workspace::available() {
-        let home = crate::workspace::store::resolve_home(db.connection(), workspace_id.as_deref());
+    if let Some(home) = home {
         crate::workspace::meetings::set_home(db.connection(), &meeting.id, &home)?;
         meeting.workspace_id = home;
     }

@@ -395,6 +395,12 @@ pub struct SessionRecord {
     /// What a with-sources session launches with (also on a restart); `None`
     /// for a plain session.
     pub sources: Option<SourcesLaunch>,
+    /// `AgentSessionManager::generation_for` of the key when the builder started
+    /// (0 when unstamped). A record whose generation is not the current one was
+    /// built from a scope that has since restarted and is never used.
+    pub generation: u64,
+    /// The scope's sources epoch when the builder started (with-sources records).
+    pub sources_epoch: u64,
 }
 
 impl SessionRecord {
@@ -422,9 +428,33 @@ pub struct MeetingSessions {
     /// Whether the latest answer of each scope came from a with-sources
     /// session: Shorten and FollowUp follow it.
     last_answer_sources: Mutex<HashMap<SessionScope, bool>>,
+    /// Bumped by `clear_sources`; a with-sources record built before it is
+    /// refused by `insert_if_current`.
+    sources_epochs: Mutex<HashMap<SessionScope, u64>>,
 }
 
 impl MeetingSessions {
+    /// How many times the sources of `scope` were cleared.
+    pub fn sources_epoch(&self, scope: &SessionScope) -> u64 {
+        self.sources_epochs.lock().unwrap().get(scope).copied().unwrap_or(0)
+    }
+
+    /// The generation `key`'s record was built under.
+    pub fn record_generation(&self, key: &SessionKey) -> Option<u64> {
+        self.records.lock().unwrap().get(key).map(|r| r.generation)
+    }
+
+    /// Drops `key`'s record if it is the one built under `generation` (an
+    /// attempt removing its own stale record, never a newer one).
+    pub fn remove_if_generation(&self, key: &SessionKey, generation: u64) -> bool {
+        let mut records = self.records.lock().unwrap();
+        if records.get(key).is_some_and(|r| r.generation == generation) {
+            records.remove(key);
+            return true;
+        }
+        false
+    }
+
     /// Record `key`'s session unless it already has a record. True if inserted.
     pub fn insert_if_absent(&self, key: SessionKey, record: SessionRecord) -> bool {
         let mut records = self.records.lock().unwrap();
@@ -444,8 +474,21 @@ impl MeetingSessions {
     /// `key`'s session (unless already recorded) and return true; else
     /// discard `record` and return false.
     pub fn insert_if_current(&self, key: SessionKey, record: SessionRecord, epoch: u64) -> bool {
+        self.insert_checked(key, record, epoch, None)
+    }
+
+    /// [`MeetingSessions::insert_if_current`] that also refuses a record built
+    /// under another generation than `current` (its scope restarted since), and
+    /// a with-sources record built before the sources were last cleared.
+    pub fn insert_checked(&self, key: SessionKey, record: SessionRecord, epoch: u64, current: Option<u64>) -> bool {
         let epochs = self.epochs.lock().unwrap();
         if epochs.get(&key.scope).copied().unwrap_or(0) != epoch {
+            return false;
+        }
+        if current.is_some_and(|g| g != record.generation) {
+            return false;
+        }
+        if key.with_sources && record.sources_epoch != self.sources_epoch(&key.scope) {
             return false;
         }
         self.records.lock().unwrap().entry(key).or_insert(record);
@@ -463,14 +506,32 @@ impl MeetingSessions {
         epoch: u64,
         build: impl FnOnce() -> Result<SessionRecord, String>,
     ) -> Result<bool, String> {
+        self.ensure_current_at(key, epoch, None, build)
+    }
+
+    /// [`MeetingSessions::ensure_current`] with `current`, the key's generation
+    /// read when the request began: a record built under another generation is
+    /// dropped and built again, and a new one built under another is refused.
+    pub fn ensure_current_at(
+        &self,
+        key: &SessionKey,
+        epoch: u64,
+        current: Option<u64>,
+        build: impl FnOnce() -> Result<SessionRecord, String>,
+    ) -> Result<bool, String> {
         if self.epoch(&key.scope) != epoch {
             return Ok(false);
         }
-        if self.contains(key) {
+        if let (Some(have), Some(now)) = (self.record_generation(key), current) {
+            if have == now {
+                return Ok(true);
+            }
+            self.remove_if_generation(key, have);
+        } else if self.contains(key) {
             return Ok(true);
         }
         let record = build()?;
-        Ok(self.insert_if_current(key.clone(), record, epoch))
+        Ok(self.insert_checked(key.clone(), record, epoch, current))
     }
 
     fn is_stateless_only(&self, key: &SessionKey) -> bool {
@@ -502,6 +563,7 @@ impl MeetingSessions {
     /// settings): the next request builds them again from the new settings.
     /// Plain records and the scope's epoch stay.
     pub fn clear_sources(&self, scope: &SessionScope) {
+        *self.sources_epochs.lock().unwrap().entry(scope.clone()).or_insert(0) += 1;
         self.records
             .lock()
             .unwrap()
@@ -747,10 +809,18 @@ pub async fn ask_meeting_session(
     loop {
         // Read before the record: a restart of the scope in between makes this
         // generation stale, and nothing starts from a record built before it.
-        let generation = manager.generation(&key.scope);
+        let generation = manager.generation_for(key);
         let Some(init) = sessions.restart_init(key) else {
             return Err(AskFailure::Closed);
         };
+        // A record built under an older generation is from a scope that has
+        // restarted: never used (and removed, if nothing replaced it).
+        if let Some(built) = sessions.record_generation(key) {
+            if built != generation {
+                sessions.remove_if_generation(key, built);
+                return Err(AskFailure::Closed);
+            }
+        }
         if sessions.is_stateless_only(key) {
             return Err(AskFailure::ContextFull(AgentError::Cli(
                 AgentErrorKind::ContextOverflow,
@@ -2038,6 +2108,57 @@ mod tests {
             earlier_exchange(" When? ", "Friday.\n"),
             "## Earlier question about this meeting\nWhen?\n\n## Your answer\nFriday."
         );
+    }
+
+    #[test]
+    fn routing_a_record_built_under_another_generation_or_before_the_sources_cleared_is_refused() {
+        let sessions = MeetingSessions::default();
+        let plain = SessionKey::plain(live(), Tier::Fast);
+        let with_sources = SessionKey::sources(live(), Tier::Fast);
+        let epoch = sessions.epoch(&live());
+        let record = |generation, sources_epoch| SessionRecord { generation, sources_epoch, ..Default::default() };
+        // Built under generation 3, but the scope is at 4: refused. At 4: kept.
+        assert!(!sessions.insert_checked(plain.clone(), record(3, 0), epoch, Some(4)));
+        assert!(sessions.insert_checked(plain.clone(), record(4, 0), epoch, Some(4)));
+        // A with-sources record built before the sources were cleared is refused.
+        let before = sessions.sources_epoch(&live());
+        sessions.clear_sources(&live());
+        assert!(!sessions.insert_checked(with_sources.clone(), record(0, before), epoch, None));
+        assert!(sessions.insert_checked(with_sources.clone(), record(0, sessions.sources_epoch(&live())), epoch, None));
+        // An attempt removes only its own record.
+        assert!(!sessions.remove_if_generation(&plain, 3));
+        assert!(sessions.remove_if_generation(&plain, 4));
+        assert!(!sessions.contains(&plain));
+    }
+
+    #[test]
+    fn routing_ensure_current_drops_a_stale_record_and_builds_a_new_one() {
+        let sessions = MeetingSessions::default();
+        let key = SessionKey::plain(live(), Tier::Fast);
+        let epoch = sessions.epoch(&live());
+        sessions.insert_checked(key.clone(), SessionRecord { generation: 1, system_prompt: "old".into(), ..Default::default() }, epoch, Some(1));
+        // Same generation: kept, never rebuilt.
+        assert_eq!(sessions.ensure_current_at(&key, epoch, Some(1), || Err("must not rebuild".into())), Ok(true));
+        // The scope moved on: the old record goes and the new one is built.
+        let ready = sessions.ensure_current_at(&key, epoch, Some(2), || {
+            Ok(SessionRecord { generation: 2, system_prompt: "new".into(), ..Default::default() })
+        });
+        assert_eq!(ready, Ok(true));
+        assert_eq!(sessions.get(&key).unwrap().system_prompt, "new");
+        // A build that raced a further restart is refused.
+        let raced = sessions.ensure_current_at(&key, epoch, Some(3), || Ok(SessionRecord { generation: 2, ..Default::default() }));
+        assert_eq!(raced, Ok(false));
+        assert!(!sessions.contains(&key));
+    }
+
+    #[tokio::test]
+    async fn routing_a_record_from_before_a_scope_restart_is_never_used() {
+        let (manager, sessions, script, key) = setup(&["old documents"]);
+        manager.detach_scope(&live());
+        let result = ask(&manager, &sessions, &key, &[seg("a", 0)]).await;
+        assert!(matches!(result, Err(AskFailure::Closed)), "{result:?}");
+        assert_eq!(script.spawns.load(Ordering::SeqCst), 0, "nothing started from the old material");
+        assert!(!sessions.contains(&key), "and the stale record is gone");
     }
 
     #[tokio::test]

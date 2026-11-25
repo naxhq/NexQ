@@ -6,7 +6,7 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use super::scope::EffectiveScope;
 use super::store::{get_workspace, now_ms, touch};
-use super::types::{MemoryItem, MemoryPatch, MEMORY_KINDS, MEMORY_STATUSES};
+use super::types::{MemoryCreate, MemoryItem, MemoryPatch, MemoryUpdate, MEMORY_KINDS, MEMORY_STATUSES, NOT_FOUND};
 
 const COLUMNS: &str = "id, workspace_id, kind, title, text, source_meeting, source_ms, status, created_at, updated_at";
 
@@ -56,36 +56,55 @@ pub fn list_memory(conn: &Connection, workspace_id: &str) -> Result<Vec<MemoryIt
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| err("Couldn't read the memory", e))
 }
 
-/// Saves an item: one whose id is already stored is changed, any other is
-/// added (under the given id, or a new one when it is empty). The times are the
-/// database's own.
-pub fn save_memory(conn: &Connection, input: MemoryItem) -> Result<MemoryItem, String> {
+/// Creates an item under a new id (a deleted id never comes back through here).
+pub fn create_memory(conn: &Connection, input: MemoryCreate) -> Result<MemoryItem, String> {
     get_workspace(conn, &input.workspace_id)?;
     check_kind(&input.kind)?;
-    check_status(&input.status)?;
+    let status = input.status.unwrap_or_else(|| "saved".to_string());
+    check_status(&status)?;
     if input.text.trim().is_empty() && input.title.trim().is_empty() {
         return Err("Write what to remember".to_string());
     }
+    let id = uuid::Uuid::new_v4().to_string();
     let now = now_ms();
-    let id = if !input.id.is_empty() && get_memory(conn, &input.id)?.is_some() {
-        conn.execute(
-            "UPDATE workspace_memory SET kind = ?2, title = ?3, text = ?4, status = ?5, updated_at = ?6 WHERE id = ?1",
-            params![input.id, input.kind, input.title.trim(), input.text.trim(), input.status, now],
-        )
-        .map_err(|e| err("Couldn't save the memory", e))?;
-        input.id
-    } else {
-        let id = if input.id.is_empty() { uuid::Uuid::new_v4().to_string() } else { input.id };
-        conn.execute(
-            "INSERT INTO workspace_memory (id, workspace_id, kind, title, text, source_meeting, source_ms, status, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
-            params![id, input.workspace_id, input.kind, input.title.trim(), input.text.trim(), input.source_meeting, input.source_ms, input.status, now],
-        )
-        .map_err(|e| err("Couldn't save the memory", e))?;
-        id
-    };
+    conn.execute(
+        "INSERT INTO workspace_memory (id, workspace_id, kind, title, text, source_meeting, source_ms, status, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+        params![id, input.workspace_id, input.kind, input.title.trim(), input.text.trim(), input.source_meeting, input.source_ms, status, now],
+    )
+    .map_err(|e| err("Couldn't save the memory", e))?;
     touch(conn, &input.workspace_id);
     get_memory(conn, &id)?.ok_or_else(|| "The memory was not saved".to_string())
+}
+
+/// Changes the fields present of an item that exists; a missing (forgotten)
+/// id fails with `not_found` and is never recreated.
+pub fn update_memory(conn: &Connection, id: &str, update: MemoryUpdate) -> Result<MemoryItem, String> {
+    let mut item = get_memory(conn, id)?.ok_or_else(|| NOT_FOUND.to_string())?;
+    if let Some(kind) = update.kind {
+        check_kind(&kind)?;
+        item.kind = kind;
+    }
+    if let Some(status) = update.status {
+        check_status(&status)?;
+        item.status = status;
+    }
+    if let Some(title) = update.title {
+        item.title = title.trim().to_string();
+    }
+    if let Some(text) = update.text {
+        item.text = text.trim().to_string();
+    }
+    if item.text.is_empty() && item.title.is_empty() {
+        return Err("Write what to remember".to_string());
+    }
+    conn.execute(
+        "UPDATE workspace_memory SET kind = ?2, title = ?3, text = ?4, status = ?5, updated_at = ?6 WHERE id = ?1",
+        params![id, item.kind, item.title, item.text, item.status, now_ms()],
+    )
+    .map_err(|e| err("Couldn't save the memory", e))?;
+    touch(conn, &item.workspace_id);
+    get_memory(conn, id)?.ok_or_else(|| NOT_FOUND.to_string())
 }
 
 /// Forgets an item.
@@ -97,7 +116,7 @@ pub fn delete_memory(conn: &Connection, id: &str) -> Result<(), String> {
 
 /// Approves (`save`) or dismisses a suggestion, with the user's edits.
 pub fn resolve_memory(conn: &Connection, id: &str, action: &str, patch: Option<MemoryPatch>) -> Result<MemoryItem, String> {
-    let mut item = get_memory(conn, id)?.ok_or_else(|| "This memory no longer exists".to_string())?;
+    let mut item = get_memory(conn, id)?.ok_or_else(|| NOT_FOUND.to_string())?;
     let status = match action {
         "save" => "saved",
         "dismiss" => "dismissed",
@@ -145,28 +164,25 @@ mod tests {
     use super::*;
     use crate::workspace::test_support::*;
 
-    fn input(ws: &str, text: &str) -> MemoryItem {
-        MemoryItem {
-            id: String::new(),
-            created_at: 0,
-            updated_at: 0,
+    fn input(ws: &str, text: &str) -> MemoryCreate {
+        MemoryCreate {
             workspace_id: ws.into(),
             kind: "fact".into(),
             title: "t".into(),
             text: text.into(),
             source_meeting: None,
             source_ms: None,
-            status: "saved".into(),
+            status: None,
         }
     }
 
     #[test]
-    fn memory_is_saved_edited_resolved_and_forgotten() {
+    fn memory_is_created_updated_resolved_and_forgotten_and_a_forgotten_id_never_returns() {
         let conn = memory_db();
         let a = new_ws(&conn, "A", false, false);
-        let saved = save_memory(&conn, input(&a, "Erin owns billing")).unwrap();
+        let saved = create_memory(&conn, input(&a, "Erin owns billing")).unwrap();
         assert_eq!(saved.status, "saved");
-        let suggested = save_memory(&conn, MemoryItem { status: "suggested".into(), ..input(&a, "Launch is May") }).unwrap();
+        let suggested = create_memory(&conn, MemoryCreate { status: Some("suggested".into()), ..input(&a, "Launch is May") }).unwrap();
         assert_eq!(list_memory(&conn, &a).unwrap().len(), 2);
         let approved = resolve_memory(
             &conn,
@@ -178,9 +194,15 @@ mod tests {
         assert_eq!((approved.status.as_str(), approved.kind.as_str(), approved.text.as_str()), ("saved", "decision", "Launch is in May"));
         resolve_memory(&conn, &saved.id, "dismiss", None).unwrap();
         assert_eq!(list_memory(&conn, &a).unwrap().len(), 1);
-        assert!(save_memory(&conn, MemoryItem { kind: "nonsense".into(), ..input(&a, "x") }).is_err());
-        assert!(save_memory(&conn, MemoryItem { title: String::new(), ..input(&a, "  ") }).is_err());
+        assert!(create_memory(&conn, MemoryCreate { kind: "nonsense".into(), ..input(&a, "x") }).is_err());
+        assert!(create_memory(&conn, MemoryCreate { title: String::new(), ..input(&a, "  ") }).is_err());
+        let edited = update_memory(&conn, &approved.id, MemoryUpdate { title: Some("Plan".into()), ..Default::default() }).unwrap();
+        assert_eq!((edited.title.as_str(), edited.text.as_str()), ("Plan", "Launch is in May"));
         delete_memory(&conn, &approved.id).unwrap();
+        assert!(list_memory(&conn, &a).unwrap().is_empty());
+        // A late save of the forgotten item fails and does not resurrect it.
+        assert_eq!(update_memory(&conn, &approved.id, MemoryUpdate::default()), Err("not_found".to_string()));
+        assert_eq!(resolve_memory(&conn, &approved.id, "save", None), Err("not_found".to_string()));
         assert!(list_memory(&conn, &a).unwrap().is_empty());
     }
 
@@ -189,9 +211,9 @@ mod tests {
         let conn = memory_db();
         let a = new_ws(&conn, "A", false, false);
         let b = new_ws(&conn, "B", false, false);
-        save_memory(&conn, input(&a, "CANARY_MEMORY_A")).unwrap();
-        save_memory(&conn, input(&b, "CANARY_MEMORY_B")).unwrap();
-        save_memory(&conn, MemoryItem { status: "suggested".into(), ..input(&a, "CANARY_SUGGESTED") }).unwrap();
+        create_memory(&conn, input(&a, "CANARY_MEMORY_A")).unwrap();
+        create_memory(&conn, input(&b, "CANARY_MEMORY_B")).unwrap();
+        create_memory(&conn, MemoryCreate { status: Some("suggested".into()), ..input(&a, "CANARY_SUGGESTED") }).unwrap();
         let alone = crate::workspace::scope::scope_for_home(&conn, &a, &[]).unwrap();
         let texts: Vec<String> = saved_for_scope(&conn, &alone).unwrap().into_iter().map(|m| m.text).collect();
         assert_eq!(texts, vec!["CANARY_MEMORY_A"]);

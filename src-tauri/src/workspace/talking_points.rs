@@ -6,7 +6,9 @@ use serde_json::Value;
 
 use super::scope::EffectiveScope;
 use super::store::{get_workspace, now_ms, touch};
-use super::types::{PointProgress, PointSaid, TalkingPoint};
+use super::types::{
+    PointProgress, PointSaid, TalkingContent, TalkingPoint, TalkingPointPatch, CONFLICT, NOT_FOUND,
+};
 
 const COLUMNS: &str = "id, workspace_id, title, doc_json, markdown, plain_text, in_context, sort, created_at, updated_at";
 
@@ -73,41 +75,100 @@ pub fn get_talking_point(conn: &Connection, id: &str) -> Result<Option<TalkingPo
         .map_err(|e| err("Couldn't read the talking point", e))
 }
 
-/// Saves a talking point: one whose id is stored is changed, any other is
-/// added (under its id, or a new one when empty). The plain text is derived
-/// from the document when the caller sent none.
-pub fn save_talking_point(conn: &Connection, input: TalkingPoint) -> Result<TalkingPoint, String> {
-    get_workspace(conn, &input.workspace_id)?;
-    let plain = if input.plain_text.trim().is_empty() {
-        serde_json::from_str::<Value>(&input.doc_json).map(|d| plain_text_of_doc(&d)).unwrap_or_default()
-    } else {
-        input.plain_text.clone()
-    };
-    let doc = if input.doc_json.trim().is_empty() { "{}".to_string() } else { input.doc_json.clone() };
+fn plain_from(doc_json: &str) -> String {
+    serde_json::from_str::<Value>(doc_json).map(|d| plain_text_of_doc(&d)).unwrap_or_default()
+}
+
+fn insert_point(
+    conn: &Connection,
+    workspace_id: &str,
+    title: &str,
+    doc_json: &str,
+    markdown: &str,
+    plain_text: &str,
+    in_context: bool,
+) -> Result<TalkingPoint, String> {
+    get_workspace(conn, workspace_id)?;
+    let id = uuid::Uuid::new_v4().to_string();
     let now = now_ms();
-    let id = if !input.id.is_empty() && get_talking_point(conn, &input.id)?.is_some() {
-        conn.execute(
-            "UPDATE talking_points SET title = ?2, doc_json = ?3, markdown = ?4, plain_text = ?5,
-                in_context = ?6, updated_at = ?7 WHERE id = ?1",
-            params![input.id, input.title, doc, input.markdown, plain, input.in_context, now],
-        )
-        .map_err(|e| err("Couldn't save the talking point", e))?;
-        input.id
-    } else {
-        let id = if input.id.is_empty() { uuid::Uuid::new_v4().to_string() } else { input.id };
-        let sort: i64 = conn
-            .query_row("SELECT COALESCE(MAX(sort), 0) + 1 FROM talking_points WHERE workspace_id = ?1", params![input.workspace_id], |r| r.get(0))
-            .unwrap_or(1);
-        conn.execute(
-            "INSERT INTO talking_points (id, workspace_id, title, doc_json, markdown, plain_text, in_context, sort, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
-            params![id, input.workspace_id, input.title, doc, input.markdown, plain, input.in_context, sort, now],
-        )
-        .map_err(|e| err("Couldn't save the talking point", e))?;
-        id
-    };
-    touch(conn, &input.workspace_id);
+    let sort: i64 = conn
+        .query_row("SELECT COALESCE(MAX(sort), 0) + 1 FROM talking_points WHERE workspace_id = ?1", params![workspace_id], |r| r.get(0))
+        .unwrap_or(1);
+    conn.execute(
+        "INSERT INTO talking_points (id, workspace_id, title, doc_json, markdown, plain_text, in_context, sort, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+        params![id, workspace_id, title, doc_json, markdown, plain_text, in_context, sort, now],
+    )
+    .map_err(|e| err("Couldn't create the talking point", e))?;
+    touch(conn, workspace_id);
     get_talking_point(conn, &id)?.ok_or_else(|| "The talking point was not saved".to_string())
+}
+
+/// Creates a talking point with a new id, its content and "use as AI context"
+/// in one insert. The plain text is read from the document when not given.
+pub fn create_talking_point(
+    conn: &Connection,
+    workspace_id: &str,
+    title: Option<String>,
+    content: TalkingContent,
+) -> Result<TalkingPoint, String> {
+    let doc = content.doc_json.filter(|d| !d.trim().is_empty()).unwrap_or_else(|| "{}".to_string());
+    let plain = content.plain_text.unwrap_or_else(|| plain_from(&doc));
+    insert_point(
+        conn,
+        workspace_id,
+        title.as_deref().unwrap_or(""),
+        &doc,
+        content.markdown.as_deref().unwrap_or(""),
+        &plain,
+        content.in_context,
+    )
+}
+
+/// Changes the fields present in `patch` of a point that exists. A missing
+/// (or deleted) id fails with `not_found`: a late save never brings it back. A
+/// change of the content (title, document, Markdown, plain text) made on a
+/// version older than `expected_updated_at` fails with `conflict` (read the
+/// current row with `get_talking_point`). `in_context` changes only when
+/// present, and never conflicts.
+pub fn patch_talking_point(
+    conn: &Connection,
+    id: &str,
+    patch: TalkingPointPatch,
+    expected_updated_at: Option<i64>,
+) -> Result<TalkingPoint, String> {
+    let point = get_talking_point(conn, id)?.ok_or_else(|| NOT_FOUND.to_string())?;
+    let content_changes = patch.title.is_some()
+        || patch.doc_json.is_some()
+        || patch.markdown.is_some()
+        || patch.plain_text.is_some();
+    if content_changes && expected_updated_at.is_some_and(|at| at != point.updated_at) {
+        return Err(CONFLICT.to_string());
+    }
+    let doc = patch.doc_json.clone().filter(|d| !d.trim().is_empty()).unwrap_or(point.doc_json.clone());
+    let plain = match (&patch.plain_text, &patch.doc_json) {
+        (Some(p), _) => p.clone(),
+        (None, Some(_)) => plain_from(&doc),
+        (None, None) => point.plain_text.clone(),
+    };
+    conn.execute(
+        "UPDATE talking_points SET title = ?2, doc_json = ?3, markdown = ?4, plain_text = ?5, in_context = ?6, updated_at = ?7
+         WHERE id = ?1",
+        params![
+            id,
+            patch.title.as_deref().unwrap_or(&point.title),
+            doc,
+            patch.markdown.as_deref().unwrap_or(&point.markdown),
+            plain,
+            patch.in_context.unwrap_or(point.in_context),
+            // The version only moves with the content: a context toggle must not
+            // make a save made on the old version look stale.
+            if content_changes { now_ms().max(point.updated_at + 1) } else { point.updated_at }
+        ],
+    )
+    .map_err(|e| err("Couldn't save the talking point", e))?;
+    touch(conn, &point.workspace_id);
+    get_talking_point(conn, id)?.ok_or_else(|| NOT_FOUND.to_string())
 }
 
 /// Deletes a talking point with its per-meeting edits and progress.
@@ -126,7 +187,7 @@ pub fn delete_talking_point(conn: &Connection, id: &str) -> Result<(), String> {
 /// A copy of a point in another workspace (or the same one).
 pub fn copy_talking_point(conn: &Connection, id: &str, workspace_id: &str) -> Result<TalkingPoint, String> {
     let source = get_talking_point(conn, id)?.ok_or_else(|| "This talking point no longer exists".to_string())?;
-    save_talking_point(conn, TalkingPoint { id: String::new(), workspace_id: workspace_id.to_string(), ..source })
+    insert_point(conn, workspace_id, &source.title, &source.doc_json, &source.markdown, &source.plain_text, source.in_context)
 }
 
 /// Puts a workspace's points in the order of `ids`.
@@ -273,19 +334,23 @@ mod tests {
                 {"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"two"}]}]}]}]})
     }
 
-    fn input(ws: &str, title: &str, text: &str, ctx: bool) -> TalkingPoint {
-        TalkingPoint {
-            id: String::new(),
-            workspace_id: ws.into(),
-            title: title.into(),
-            doc_json: doc(text).to_string(),
-            markdown: format!("# Plan\n{text}"),
-            plain_text: String::new(),
-            in_context: ctx,
-            sort: 0,
-            created_at: 0,
-            updated_at: 0,
-        }
+    fn make(conn: &Connection, ws: &str, title: &str, text: &str, ctx: bool) -> TalkingPoint {
+        create_talking_point(
+            conn,
+            ws,
+            Some(title.to_string()),
+            TalkingContent {
+                doc_json: Some(doc(text).to_string()),
+                markdown: Some(format!("# Plan\n{text}")),
+                plain_text: None,
+                in_context: ctx,
+            },
+        )
+        .unwrap()
+    }
+
+    fn blank_content(ctx: bool) -> TalkingContent {
+        TalkingContent { doc_json: None, markdown: None, plain_text: None, in_context: ctx }
     }
 
     #[test]
@@ -295,16 +360,25 @@ mod tests {
     }
 
     #[test]
-    fn points_save_update_order_copy_and_delete_with_their_meeting_data() {
+    fn points_are_created_patched_ordered_copied_and_deleted_with_their_meeting_data() {
         let conn = memory_db();
         let a = new_ws(&conn, "A", false, false);
-        let p1 = save_talking_point(&conn, input(&a, "First", "alpha", true)).unwrap();
-        let p2 = save_talking_point(&conn, input(&a, "Second", "beta", false)).unwrap();
+        let p1 = make(&conn, &a, "First", "alpha", true);
+        let p2 = make(&conn, &a, "Second", "beta", false);
         assert!(p1.sort < p2.sort);
         assert_eq!(p1.plain_text, "Plan\nalpha now\none\ntwo");
-        let edited = save_talking_point(&conn, TalkingPoint { id: p1.id.clone(), ..input(&a, "First!", "gamma", true) }).unwrap();
-        assert_eq!(edited.title, "First!");
-        assert_eq!(list_talking_points(&conn, &a).unwrap().len(), 2);
+        let blank = create_talking_point(&conn, &a, None, blank_content(false)).unwrap();
+        assert!(!blank.in_context && blank.title.is_empty());
+        let edited = patch_talking_point(
+            &conn,
+            &p1.id,
+            TalkingPointPatch { title: Some("First!".into()), doc_json: Some(doc("gamma").to_string()), ..Default::default() },
+            Some(p1.updated_at),
+        )
+        .unwrap();
+        assert_eq!((edited.title.as_str(), edited.in_context), ("First!", true));
+        assert!(edited.plain_text.contains("gamma"), "plain text follows the document");
+        assert!(edited.updated_at > p1.updated_at);
         reorder_talking_points(&conn, &a, &[p2.id.clone(), p1.id.clone()]).unwrap();
         assert_eq!(list_talking_points(&conn, &a).unwrap()[0].id, p2.id);
 
@@ -327,13 +401,58 @@ mod tests {
     }
 
     #[test]
+    fn creating_needs_in_context_and_a_copy_carries_the_sources_value_in_its_insert() {
+        // in_context is required by the shape: a request without it does not parse.
+        assert!(serde_json::from_str::<TalkingContent>(r#"{"doc_json":"{}"}"#).is_err());
+        assert!(serde_json::from_str::<TalkingContent>(r#"{"in_context":false}"#).is_ok());
+        let conn = memory_db();
+        let a = new_ws(&conn, "A", false, false);
+        let off = make(&conn, &a, "Off", "text", false);
+        let copy = copy_talking_point(&conn, &off.id, "general").unwrap();
+        assert!(!copy.in_context, "never on first and then off");
+        let on = make(&conn, &a, "On", "text", true);
+        assert!(copy_talking_point(&conn, &on.id, "general").unwrap().in_context);
+    }
+
+    #[test]
+    fn a_late_save_of_a_deleted_point_fails_and_does_not_bring_it_back() {
+        let conn = memory_db();
+        let a = new_ws(&conn, "A", false, false);
+        let point = make(&conn, &a, "Gone", "text", true);
+        delete_talking_point(&conn, &point.id).unwrap();
+        let late = patch_talking_point(&conn, &point.id, TalkingPointPatch { title: Some("x".into()), ..Default::default() }, None);
+        assert_eq!(late, Err("not_found".to_string()));
+        assert!(get_talking_point(&conn, &point.id).unwrap().is_none());
+        assert_eq!(patch_talking_point(&conn, "never-existed", TalkingPointPatch::default(), None), Err("not_found".to_string()));
+    }
+
+    #[test]
+    fn a_content_change_on_an_old_version_conflicts_but_a_context_toggle_does_not() {
+        let conn = memory_db();
+        let a = new_ws(&conn, "A", false, false);
+        let point = make(&conn, &a, "T", "text", true);
+        let newer = patch_talking_point(&conn, &point.id, TalkingPointPatch { markdown: Some("v2".into()), ..Default::default() }, Some(point.updated_at)).unwrap();
+        // A second writer still holding the first version.
+        let stale = patch_talking_point(&conn, &point.id, TalkingPointPatch { markdown: Some("v3".into()), ..Default::default() }, Some(point.updated_at));
+        assert_eq!(stale, Err("conflict".to_string()));
+        assert_eq!(get_talking_point(&conn, &point.id).unwrap().unwrap().markdown, "v2");
+        // in_context changes only when present, never conflicts, and leaves the version.
+        let toggled = patch_talking_point(&conn, &point.id, TalkingPointPatch { in_context: Some(false), ..Default::default() }, Some(point.updated_at)).unwrap();
+        assert!(!toggled.in_context);
+        assert_eq!((toggled.markdown.as_str(), toggled.updated_at), ("v2", newer.updated_at));
+        // A patch without in_context leaves it alone.
+        let kept = patch_talking_point(&conn, &point.id, TalkingPointPatch { title: Some("n".into()), ..Default::default() }, Some(newer.updated_at)).unwrap();
+        assert!(!kept.in_context);
+    }
+
+    #[test]
     fn the_context_text_uses_only_flagged_points_of_the_scope_and_the_meetings_own_edit() {
         let conn = memory_db();
         let a = new_ws(&conn, "A", false, false);
         let b = new_ws(&conn, "B", false, false);
-        let flagged = save_talking_point(&conn, input(&a, "Flagged", "CANARY_FLAGGED", true)).unwrap();
-        save_talking_point(&conn, input(&a, "Hidden", "CANARY_NOT_CONTEXT", false)).unwrap();
-        save_talking_point(&conn, input(&b, "Other", "CANARY_OTHER_WORKSPACE", true)).unwrap();
+        let flagged = make(&conn, &a, "Flagged", "CANARY_FLAGGED", true);
+        make(&conn, &a, "Hidden", "CANARY_NOT_CONTEXT", false);
+        make(&conn, &b, "Other", "CANARY_OTHER_WORKSPACE", true);
         let scope = crate::workspace::scope::scope_for_home(&conn, &a, &[]).unwrap();
         let texts = context_texts(&conn, None, &scope).unwrap();
         assert_eq!(texts.len(), 1);

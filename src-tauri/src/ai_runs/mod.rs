@@ -519,8 +519,8 @@ impl AiRuns {
 
     /// The generation of a CLI session scope: read it before building the
     /// context of a run for that scope (see [`AiRunRequest::expected_generation`]).
-    pub fn generation(&self, scope: &SessionScope) -> u64 {
-        self.cli.generation(scope)
+    pub fn generation(&self, key: &SessionKey) -> u64 {
+        self.cli.generation_for(key)
     }
 
     pub fn gate(&self) -> &Arc<LiveGate> {
@@ -736,7 +736,7 @@ impl AiRuns {
         let key = req.session_key.clone().unwrap_or_else(|| {
             SessionKey::plain(SessionScope::Workspace(format!("run-{}", uuid::Uuid::new_v4())), Tier::Fast)
         });
-        let expected = req.expected_generation.unwrap_or_else(|| self.cli.generation(&key.scope));
+        let expected = req.expected_generation.unwrap_or_else(|| self.cli.generation_for(&key));
         let overrides = SessionOverride {
             kind: Some(kind),
             model: Some(req.selection.model.clone()).filter(|m| !m.trim().is_empty()),

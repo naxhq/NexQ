@@ -91,6 +91,9 @@ pub struct WorkspaceDetail {
     pub instructions: String,
     pub recaps_with_ai: bool,
     pub suggest_memory: bool,
+    /// The brief starts by itself in this workspace's meetings (the model and
+    /// cap are global, in `BriefSettings`). Off by default.
+    pub brief_enabled: bool,
     pub items: Vec<WorkspaceItem>,
 }
 
@@ -148,6 +151,9 @@ pub struct LibraryItem {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CreateWorkspaceInput {
+    /// Optional id chosen by the caller: a UUID v4 nobody uses (never "general");
+    /// otherwise one is generated. Anything else is refused.
+    pub id: Option<String>,
     pub name: String,
     pub icon: Option<String>,
     pub color: Option<String>,
@@ -186,6 +192,21 @@ pub struct WorkspacePatch {
     pub pinned: Option<bool>,
     pub recaps_with_ai: Option<bool>,
     pub suggest_memory: Option<bool>,
+    pub brief_enabled: Option<bool>,
+}
+
+/// Why a meeting of `delete_workspace_meetings` was not deleted.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FailedMeeting {
+    pub id: String,
+    pub reason: String,
+}
+
+/// The outcome of `delete_workspace_meetings`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeleteMeetingsReport {
+    pub deleted: usize,
+    pub failed: Vec<FailedMeeting>,
 }
 
 /// What `update_workspace_item` changes.
@@ -257,6 +278,54 @@ pub struct PointProgress {
     pub meeting_id: String,
     pub point_id: String,
     pub said: Vec<PointSaid>,
+}
+
+/// The content a new talking point is created with, in one step. `in_context`
+/// ("use as AI context") has no default: a request without it is refused.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TalkingContent {
+    pub doc_json: Option<String>,
+    pub markdown: Option<String>,
+    pub plain_text: Option<String>,
+    pub in_context: bool,
+}
+
+/// What `patch_talking_point` changes: only the fields present.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TalkingPointPatch {
+    pub title: Option<String>,
+    pub doc_json: Option<String>,
+    pub markdown: Option<String>,
+    pub plain_text: Option<String>,
+    pub in_context: Option<bool>,
+}
+
+/// Stable error texts of the talking point and memory commands.
+pub const NOT_FOUND: &str = "not_found";
+pub const CONFLICT: &str = "conflict";
+
+/// What `create_memory` takes (the id is made here; a deleted one never comes back).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryCreate {
+    pub workspace_id: String,
+    pub kind: String,
+    pub title: String,
+    pub text: String,
+    pub source_meeting: Option<String>,
+    pub source_ms: Option<i64>,
+    /// `saved` when absent (the user typed it).
+    pub status: Option<String>,
+}
+
+/// What `update_memory` changes: only the fields present.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MemoryUpdate {
+    pub kind: Option<String>,
+    pub title: Option<String>,
+    pub text: Option<String>,
+    pub status: Option<String>,
 }
 
 /// A memory kind.
@@ -369,10 +438,11 @@ mod contract {
             instructions: String::new(),
             recaps_with_ai: false,
             suggest_memory: false,
+            brief_enabled: false,
             items: vec![],
         };
         let mut with_detail = base.to_vec();
-        with_detail.extend(["instructions", "recaps_with_ai", "suggest_memory", "items"]);
+        with_detail.extend(["instructions", "recaps_with_ai", "suggest_memory", "brief_enabled", "items"]);
         assert_eq!(keys(&detail), expect(&with_detail));
         let item_keys = ["workspace_id", "kind", "ref_id", "label", "name", "pinned", "status", "detail", "tokens", "added_at"];
         assert_eq!(keys(&item(ItemKind::Document)), expect(&item_keys));

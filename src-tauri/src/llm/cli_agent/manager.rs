@@ -518,6 +518,9 @@ pub struct AgentSessionManager {
     /// change of what they were started with (see [`AgentSessionManager::generation`]).
     /// Lock order: `entries`, then `scope_gen`.
     scope_gen: Mutex<HashMap<SessionScope, u64>>,
+    /// Bumped when a scope's with-sources sessions are closed for a change of
+    /// the sources (only with-sources keys see it). Same lock order.
+    sources_gen: Mutex<HashMap<SessionScope, u64>>,
     cursors: Mutex<HashMap<SessionKey, Arc<AsyncMutex<DeltaCursor>>>>,
     usage: Mutex<HashMap<SessionScope, SessionUsage>>,
     shutting_down: AtomicBool,
@@ -548,6 +551,7 @@ impl AgentSessionManager {
             spawn_locks: Mutex::new(HashMap::new()),
             retiring: Mutex::new(Vec::new()),
             scope_gen: Mutex::new(HashMap::new()),
+            sources_gen: Mutex::new(HashMap::new()),
             cursors: Mutex::new(HashMap::new()),
             usage: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
@@ -628,9 +632,28 @@ impl AgentSessionManager {
         self.scope_gen.lock().unwrap().get(scope).copied().unwrap_or(0)
     }
 
-    /// Whether `scope` changed since `expected` was read.
-    fn changed_since(&self, scope: &SessionScope, expected: Option<u64>) -> bool {
-        expected.is_some_and(|g| self.generation(scope) != g)
+    /// The generation a session of `key` is started under: the scope's, and for
+    /// a with-sources key also the sources' (a change of the sources makes a
+    /// with-sources start stale but leaves plain ones alone). Read it before
+    /// building the init, as [`AgentSessionManager::generation`].
+    pub fn generation_for(&self, key: &SessionKey) -> u64 {
+        let scope = self.generation(&key.scope);
+        if key.with_sources {
+            let sources = self.sources_gen.lock().unwrap().get(&key.scope).copied().unwrap_or(0);
+            scope + (sources << 32)
+        } else {
+            scope
+        }
+    }
+
+    /// Whether the generation of `key` moved since `expected` was read.
+    fn changed_since(&self, key: &SessionKey, expected: Option<u64>) -> bool {
+        expected.is_some_and(|g| self.generation_for(key) != g)
+    }
+
+    fn bump_sources(&self, scope: &SessionScope) {
+        let _entries = self.entries.lock().unwrap();
+        *self.sources_gen.lock().unwrap().entry(scope.clone()).or_insert(0) += 1;
     }
 
     /// Bumps the generation of `scope`; the caller holds the `entries` lock, so
@@ -663,7 +686,7 @@ impl AgentSessionManager {
         if self.shutting_down.load(Ordering::SeqCst) {
             return Err(shut_down_error());
         }
-        if self.changed_since(&key.scope, expected) {
+        if self.changed_since(key, expected) {
             return Err(scope_changed());
         }
 
@@ -754,7 +777,7 @@ impl AgentSessionManager {
             let mut stale = false;
             let inserted = {
                 let mut entries = self.entries.lock().unwrap();
-                if self.changed_since(&key.scope, expected) {
+                if self.changed_since(key, expected) {
                     // The scope was restarted while this session started: it
                     // was built from material that is no longer current.
                     stale = true;
@@ -954,8 +977,8 @@ impl AgentSessionManager {
     /// Close every tier of `scope` (meeting ended / left the meeting view). A
     /// session still starting for that scope is waited for and closed too.
     pub async fn close_scope(&self, scope: &SessionScope) {
-        // A request that built its record before this must not start a session with it.
-        self.bump_scope(scope);
+        // (No generation bump: closing ends the scope or follows a restart that
+        // already bumped it; the records and the epoch guard an ended meeting.)
         for with_sources in [false, true] {
             self.close_variant(scope, with_sources).await;
         }
@@ -965,7 +988,7 @@ impl AgentSessionManager {
     /// Close both tiers' with-sources sessions of `scope` and leave the plain
     /// ones (the sources changed in settings; usage is kept).
     pub async fn close_sources(&self, scope: &SessionScope) {
-        self.bump_scope(scope);
+        self.bump_sources(scope);
         self.close_variant(scope, true).await;
     }
 
@@ -2875,11 +2898,11 @@ mod tests {
         let scope = SessionScope::Workspace("c".into());
         let k = key(scope.clone(), Tier::Deep);
         let mut last = mgr.generation(&scope);
-        mgr.close_scope(&scope).await;
-        assert!(mgr.generation(&scope) > last);
-        last = mgr.generation(&scope);
+        let with_sources = SessionKey::sources(scope.clone(), Tier::Deep);
+        let sources_before = mgr.generation_for(&with_sources);
         mgr.close_sources(&scope).await;
-        assert!(mgr.generation(&scope) > last);
+        assert!(mgr.generation_for(&with_sources) > sources_before, "a with-sources start built earlier is stale");
+        assert_eq!(mgr.generation(&scope), last, "plain sessions and their records are not affected");
         last = mgr.generation(&scope);
         mgr.close_scope_graceful(&scope, Duration::from_millis(10)).await;
         assert!(mgr.generation(&scope) > last);

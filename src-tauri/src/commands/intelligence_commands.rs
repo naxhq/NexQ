@@ -568,7 +568,7 @@ pub(crate) async fn session_assist(state: &AppState, app: &AppHandle, req: Sessi
     };
     let interim_text = crate::llm::cli_agent::context::transcript_lines(&interim, false);
 
-    let ready = state.meeting_sessions.ensure_current(key, req.epoch, || match &key.scope {
+    let ready = state.meeting_sessions.ensure_current_at(key, req.epoch, Some(state.agent_sessions.generation_for(key)), || match &key.scope {
         SessionScope::Live(_) => {
             crate::commands::meeting_commands::live_session_record(state, key.tier, &finals, key.with_sources)
         }

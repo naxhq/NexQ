@@ -879,6 +879,19 @@ pub fn set_personal_sources(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
+    use crate::commands::workspace_commands::{change_and_restart, Touch};
+    // What is filed is part of a workspace's material: the sessions that use
+    // that workspace start again (the sources' own restart is below).
+    let touched = filing.as_ref().map(|f| Touch::ws(&f.workspace_id)).unwrap_or_default();
+    change_and_restart(&state, &app, |_| touched.clone(), || set_personal_sources_now(config, filing, &state, &app))
+}
+
+fn set_personal_sources_now(
+    config: PersonalSourcesConfig,
+    filing: Option<crate::workspace::sources_seed::Filing>,
+    state: &AppState,
+    app: &AppHandle,
+) -> Result<(), String> {
     validate_sources(&config)?;
     // A filing names the workspace and the ids the user just added. An unknown
     // or archived workspace refuses the push before anything is saved.
@@ -934,7 +947,7 @@ pub fn set_personal_sources(
         restart
     };
     if restart {
-        crate::commands::meeting_commands::restart_sources_sessions(&app);
+        crate::commands::meeting_commands::restart_sources_sessions(app);
     }
     Ok(())
 }

@@ -858,7 +858,7 @@ async fn a_run_built_before_its_scope_restarted_starts_no_session() {
     let r = rig();
     let key = chat_key("c1");
     let scope = key.scope.clone();
-    let before = r.runs.generation(&scope);
+    let before = r.runs.generation(&key);
     r.cli.detach_scope(&scope); // the workspace changed: the chat's sessions restart
     let mut stale = cli_req("claude_cli", "sonnet", None, &key, "question");
     stale.expected_generation = Some(before);
@@ -867,6 +867,6 @@ async fn a_run_built_before_its_scope_restarted_starts_no_session() {
     assert!(r.spawner.spawned.lock().unwrap().is_empty(), "nothing started from the old context");
     // The same run built after the change goes through.
     let mut fresh = cli_req("claude_cli", "sonnet", None, &key, "question");
-    fresh.expected_generation = Some(r.runs.generation(&scope));
+    fresh.expected_generation = Some(r.runs.generation(&key));
     assert!(r.runs.run(fresh, None).await.is_ok());
 }

@@ -125,6 +125,20 @@ fn summarize(w: Workspace, meetings: i64, items: i64, latest_meeting: Option<Str
     }
 }
 
+/// Where a meeting asked to start is filed. No id (or an empty one) means the
+/// default workspace; an id that is unknown or archived is refused, never
+/// replaced by another workspace.
+pub fn requested_home(conn: &Connection, requested: Option<&str>) -> Result<String, String> {
+    let Some(id) = requested.filter(|id| !id.is_empty()) else {
+        return Ok(default_workspace_id(conn));
+    };
+    let ws = find_workspace(conn, id)?.ok_or_else(|| "That workspace no longer exists".to_string())?;
+    if ws.archived {
+        return Err(format!("\"{}\" is archived. Restore it or pick another workspace", ws.name));
+    }
+    Ok(ws.id)
+}
+
 /// Every workspace with counts and last activity, in the user's order.
 pub fn list_summaries(conn: &Connection) -> Result<Vec<WorkspaceSummary>, String> {
     let chats = chat_stats(conn);
@@ -166,6 +180,24 @@ fn clean_name(name: &str) -> Result<String, String> {
     Ok(name.to_string())
 }
 
+/// The id of a new workspace: the caller's when it is a UUID v4 that nothing
+/// uses (and not "general"), a fresh one when none was given.
+pub fn chosen_id(conn: &Connection, wanted: Option<&str>) -> Result<String, String> {
+    let Some(wanted) = wanted else {
+        return Ok(uuid::Uuid::new_v4().to_string());
+    };
+    let parsed = uuid::Uuid::parse_str(wanted).ok().filter(|u| u.get_version() == Some(uuid::Version::Random));
+    let Some(parsed) = parsed else {
+        return Err("A workspace id must be a UUID v4".to_string());
+    };
+    // Only the canonical lower-case form is stored, so one id has one spelling.
+    let id = parsed.hyphenated().to_string();
+    if id != wanted || id == GENERAL_ID || find_workspace(conn, &id)?.is_some() {
+        return Err("This workspace id can't be used".to_string());
+    }
+    Ok(id)
+}
+
 fn clean_opt(value: Option<String>) -> Option<String> {
     value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
 }
@@ -178,7 +210,7 @@ fn next_sort(conn: &Connection) -> i64 {
 /// separate.
 pub fn create_workspace(conn: &Connection, input: CreateWorkspaceInput) -> Result<Workspace, String> {
     let name = clean_name(&input.name)?;
-    let id = uuid::Uuid::new_v4().to_string();
+    let id = chosen_id(conn, input.id.as_deref())?;
     let (include_general, keep_separate) = rules::normalize_flags(&id, input.include_general, input.keep_separate)?;
     let now = now_ms();
     conn.execute(
@@ -234,6 +266,9 @@ pub fn update_workspace(conn: &Connection, id: &str, patch: WorkspacePatch) -> R
     if let Some(v) = patch.suggest_memory {
         ws.suggest_memory = v;
     }
+    if let Some(v) = patch.brief_enabled {
+        ws.brief_default = v;
+    }
     let was_separate = ws.keep_separate;
     let (include_general, keep_separate) = rules::normalize_flags(
         id,
@@ -245,11 +280,12 @@ pub fn update_workspace(conn: &Connection, id: &str, patch: WorkspacePatch) -> R
     conn.execute(
         "UPDATE workspaces SET name = ?2, icon = ?3, color = ?4, description = ?5, instructions = ?6,
             include_general = ?7, keep_separate = ?8, default_scenario = ?9, pinned = ?10, updated_at = ?11,
-            recaps_with_ai = ?12, suggest_memory = ?13
+            recaps_with_ai = ?12, suggest_memory = ?13, brief_default = ?14
          WHERE id = ?1",
         params![
             id, ws.name, ws.icon, ws.color, ws.description, ws.instructions, ws.include_general,
-            ws.keep_separate, ws.default_scenario, ws.pinned, now_ms(), ws.recaps_with_ai, ws.suggest_memory
+            ws.keep_separate, ws.default_scenario, ws.pinned, now_ms(), ws.recaps_with_ai, ws.suggest_memory,
+            ws.brief_default
         ],
     )
     .map_err(|e| db_err("Couldn't save the workspace", e))?;
@@ -261,12 +297,13 @@ pub fn update_workspace(conn: &Connection, id: &str, patch: WorkspacePatch) -> R
 
 /// A copy with the same name look, instructions, settings, library items and
 /// talking points; not the meetings, chats, memory or secrets.
-pub fn clone_workspace(conn: &Connection, id: &str, name: &str) -> Result<Workspace, String> {
+pub fn clone_workspace(conn: &Connection, id: &str, name: &str, new_id: Option<String>) -> Result<Workspace, String> {
     let source = get_workspace(conn, id)?;
     let tx = conn.unchecked_transaction().map_err(|e| db_err("Couldn't copy the workspace", e))?;
     let copy = create_workspace(
         &tx,
         CreateWorkspaceInput {
+            id: new_id,
             name: name.to_string(),
             icon: source.icon.clone(),
             color: source.color.clone(),
@@ -430,6 +467,17 @@ pub fn add_item(conn: &Connection, workspace_id: &str, kind: ItemKind, ref_id: &
 
 /// Changes an item's label or pin.
 pub fn update_item(conn: &Connection, workspace_id: &str, kind: ItemKind, ref_id: &str, patch: ItemPatch) -> Result<(), String> {
+    let exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM workspace_items WHERE workspace_id = ?1 AND kind = ?2 AND ref_id = ?3)",
+            params![workspace_id, kind.as_str(), ref_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| db_err("Couldn't change the item", e))?;
+    if !exists {
+        // Changing an item never creates it: it may have been removed meanwhile.
+        return Err(NOT_FOUND.to_string());
+    }
     if let Some(label) = patch.label {
         conn.execute(
             "UPDATE workspace_items SET label = ?4 WHERE workspace_id = ?1 AND kind = ?2 AND ref_id = ?3",
@@ -538,6 +586,50 @@ mod tests {
     }
 
     #[test]
+    fn a_meeting_asked_for_a_missing_archived_or_unknown_workspace_is_refused_and_only_no_id_means_the_default() {
+        let conn = memory_db();
+        let a = new_ws(&conn, "Old", false, false);
+        assert_eq!(requested_home(&conn, None).unwrap(), "general");
+        assert_eq!(requested_home(&conn, Some("")).unwrap(), "general");
+        assert_eq!(requested_home(&conn, Some(&a)).unwrap(), a);
+        assert!(requested_home(&conn, Some("nope")).unwrap_err().contains("no longer exists"));
+        archive_workspace(&conn, &a, true).unwrap();
+        assert!(requested_home(&conn, Some(&a)).unwrap_err().contains("archived"));
+    }
+
+    #[test]
+    fn the_brief_switch_of_a_workspace_is_saved_in_its_patch() {
+        let conn = memory_db();
+        let a = new_ws(&conn, "A", false, false);
+        assert!(!get_workspace(&conn, &a).unwrap().brief_default);
+        update_workspace(&conn, &a, WorkspacePatch { brief_enabled: Some(true), ..Default::default() }).unwrap();
+        assert!(get_workspace(&conn, &a).unwrap().brief_default);
+        update_workspace(&conn, &a, WorkspacePatch { name: Some("B".into()), ..Default::default() }).unwrap();
+        assert!(get_workspace(&conn, &a).unwrap().brief_default, "a patch without it leaves it");
+    }
+
+    #[test]
+    fn a_caller_chosen_id_must_be_an_unused_uuid_v4_and_anything_else_is_refused() {
+        let conn = memory_db();
+        let id = uuid::Uuid::new_v4().to_string();
+        let made = create_workspace(&conn, CreateWorkspaceInput { id: Some(id.clone()), ..input("Mine") }).unwrap();
+        assert_eq!(made.id, id);
+        for bad in [
+            id.clone(),                                      // already used
+            "general".to_string(),
+            "not-a-uuid".to_string(),
+            uuid::Uuid::nil().to_string(),                   // not v4
+            "6F1E2D3C-AAAA-4BBB-8CCC-0123456789AB".to_string(), // not the canonical spelling
+        ] {
+            assert!(create_workspace(&conn, CreateWorkspaceInput { id: Some(bad.clone()), ..input("X") }).is_err(), "{bad}");
+        }
+        let copy_id = uuid::Uuid::new_v4().to_string();
+        assert_eq!(clone_workspace(&conn, &id, "Copy", Some(copy_id.clone())).unwrap().id, copy_id);
+        assert!(clone_workspace(&conn, &id, "Again", Some(copy_id)).is_err());
+        assert_ne!(create_workspace(&conn, input("Generated")).unwrap().id, id);
+    }
+
+    #[test]
     fn a_new_workspace_does_not_use_general_unless_asked_and_never_when_separate() {
         let conn = memory_db();
         let plain = create_workspace(&conn, input("Plain")).unwrap();
@@ -596,7 +688,7 @@ mod tests {
             params![a.id],
         )
         .unwrap();
-        let copy = clone_workspace(&conn, &a.id, "A copy").unwrap();
+        let copy = clone_workspace(&conn, &a.id, "A copy", None).unwrap();
         assert_eq!(copy.instructions, "be brief");
         assert_eq!(copy.color.as_deref(), Some("#123456"));
         let summary = get_summary(&conn, &copy.id).unwrap();
@@ -644,6 +736,7 @@ mod tests {
             [],
         )
         .unwrap();
+        assert_eq!(update_item(&conn, &a, ItemKind::Document, "d", ItemPatch::default()), Err("not_found".to_string()));
         add_item(&conn, &a, ItemKind::Document, "d", Some("Brief")).unwrap();
         add_item(&conn, &a, ItemKind::Document, "d", None).unwrap();
         assert_eq!(list_items(&conn, &a).unwrap().len(), 1);

@@ -15,6 +15,9 @@ pub mod store;
 pub mod talking_points;
 pub mod types;
 
+#[cfg(test)]
+mod property_tests;
+
 pub use crate::db::workspace_migrations::{available, last_error};
 pub use scope::{scope_for, EffectiveScope, ScopeOwner};
 pub use types::GENERAL_ID;
