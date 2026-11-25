@@ -1,0 +1,321 @@
+/*
+ * Dock styles. Quiet by default: tabs are plain text (the active one carries weight and a
+ * hairline), separators are invisible until hovered or focused, and the drop preview is the
+ * one expressive moment.
+ *
+ * Contract with the host:
+ *   --dock-surface-alpha   panel surface alpha (default .2, today's bg-card/20)
+ *   --dock-reading-alpha   alpha of "reading" panels; Dock sets it from windowOpacity so the
+ *                          window plus the panel always reach an 85% backing.
+ * No element in the dock carries data-tauri-drag-region.
+ */
+.nq-dock {
+  --dock-surface-alpha: 0.2;
+  --dock-reading-alpha: 0.85;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  isolation: isolate;
+}
+.nq-dock-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.nq-dock-layer > * {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: auto;
+}
+
+.nq-dock-surface {
+  border-radius: 12px;
+  background: hsl(var(--card) / var(--dock-surface-alpha));
+  pointer-events: none !important;
+}
+.nq-dock-surface[data-reading="true"] {
+  background: hsl(var(--card) / var(--dock-reading-alpha));
+}
+
+.nq-dock-panel {
+  overflow: hidden;
+  border-radius: 0 0 12px 12px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.nq-dock-panel[data-visible="false"] {
+  visibility: hidden;
+  pointer-events: none !important;
+}
+
+/* ---- tabs ---- */
+.nq-dock-tabbar {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid hsl(var(--border) / 0.2);
+  border-radius: 12px 12px 0 0;
+  overflow: hidden;
+}
+.nq-dock-tabscroll {
+  display: flex;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.nq-dock-tabscroll::-webkit-scrollbar {
+  display: none;
+}
+.nq-dock-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 0 12px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: hsl(var(--muted-foreground) / 0.65);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: color 120ms ease;
+}
+.nq-dock-tab:hover {
+  color: hsl(var(--foreground) / 0.85);
+}
+.nq-dock-tab[aria-selected="true"] {
+  color: hsl(var(--foreground));
+  font-weight: 650;
+}
+.nq-dock-tab[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: -1px;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.55;
+}
+/* reserve the bold width so selecting a tab never shifts its neighbours */
+.nq-dock-tab-label {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+}
+.nq-dock-tab-label::after {
+  content: attr(data-label);
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  font-weight: 650;
+}
+.nq-dock-tab[data-dragging="true"] {
+  opacity: 0.45;
+}
+.nq-dock-tab:focus-visible,
+.nq-dock-more:focus-visible,
+.nq-dock-strip:focus-visible,
+.nq-dock-sep:focus-visible {
+  outline: 1px solid hsl(var(--primary) / 0.75);
+  outline-offset: -2px;
+}
+.nq-dock-more {
+  flex: 0 0 auto;
+  width: 26px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: hsl(var(--muted-foreground) / 0.6);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.nq-dock-tabbar:hover .nq-dock-more,
+.nq-dock-tabbar:focus-within .nq-dock-more,
+.nq-dock-more[aria-expanded="true"] {
+  opacity: 1;
+}
+.nq-dock-extra {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  padding-right: 4px;
+}
+
+/* ---- collapsed strip ---- */
+.nq-dock-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+  background: hsl(var(--card) / var(--dock-surface-alpha));
+  color: hsl(var(--muted-foreground) / 0.5);
+  font: inherit;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  transition:
+    background 150ms ease,
+    color 150ms ease;
+}
+.nq-dock-strip:hover {
+  background: hsl(var(--card) / 0.32);
+  color: hsl(var(--foreground) / 0.8);
+}
+.nq-dock-strip[data-thin="x"] > span {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+}
+
+/* ---- separators: invisible until hovered or focused ---- */
+.nq-dock-sep {
+  background: none;
+  touch-action: none;
+}
+.nq-dock-sep::after {
+  content: "";
+  position: absolute;
+  border-radius: 1px;
+  background: hsl(var(--primary) / 0);
+  transition: background 140ms ease;
+}
+.nq-dock-sep[data-axis="x"] {
+  cursor: col-resize;
+}
+.nq-dock-sep[data-axis="y"] {
+  cursor: row-resize;
+}
+.nq-dock-sep[data-axis="x"]::after {
+  left: 4px;
+  right: 4px;
+  top: 8px;
+  bottom: 8px;
+}
+.nq-dock-sep[data-axis="y"]::after {
+  top: 4px;
+  bottom: 4px;
+  left: 8px;
+  right: 8px;
+}
+.nq-dock-sep:hover::after,
+.nq-dock-sep:focus-visible::after,
+.nq-dock-sep[data-active="true"]::after {
+  background: hsl(var(--primary) / 0.55);
+}
+.nq-dock-sep:focus-visible {
+  outline: none;
+}
+
+/* ---- drop preview: the one expressive moment ---- */
+.nq-dock-drop {
+  border-radius: 12px;
+  background: hsl(var(--primary) / 0.13);
+  box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0.38);
+  opacity: 0;
+  pointer-events: none !important;
+  will-change: transform, width, height, opacity;
+  transition:
+    transform 240ms cubic-bezier(0.16, 1, 0.3, 1),
+    width 240ms cubic-bezier(0.16, 1, 0.3, 1),
+    height 240ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 120ms ease;
+}
+.nq-dock-caret {
+  width: 2px;
+  height: 18px;
+  border-radius: 1px;
+  background: hsl(var(--primary) / 0.85);
+  opacity: 0;
+  pointer-events: none !important;
+}
+.nq-dock-ghost {
+  display: none;
+  padding: 3px 9px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: hsl(var(--foreground));
+  background: hsl(var(--background) / 0.92);
+  box-shadow: 0 0 0 1px hsl(var(--border) / 0.4);
+  pointer-events: none !important;
+}
+.nq-dock[data-dragging="true"],
+.nq-dock[data-dragging="true"] * {
+  cursor: grabbing !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+/* ---- menus ---- */
+.nq-dock-menu {
+  min-width: 190px;
+  max-width: 280px;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: 10px;
+  font-size: 12px;
+  color: hsl(var(--foreground));
+  background: hsl(var(--background) / 0.97);
+  box-shadow:
+    0 0 0 1px hsl(var(--border) / 0.4),
+    0 12px 32px -8px rgb(0 0 0 / 0.45);
+  backdrop-filter: blur(12px);
+}
+.nq-dock-menuitem {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.nq-dock-menuitem:hover,
+.nq-dock-menuitem:focus-visible {
+  background: hsl(var(--foreground) / 0.08);
+  outline: none;
+}
+.nq-dock-menuitem[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: default;
+}
+.nq-dock-menusep {
+  height: 1px;
+  margin: 4px 6px;
+  background: hsl(var(--border) / 0.3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nq-dock-drop,
+  .nq-dock-tab,
+  .nq-dock-more,
+  .nq-dock-strip,
+  .nq-dock-sep::after {
+    transition: none !important;
+  }
+}
