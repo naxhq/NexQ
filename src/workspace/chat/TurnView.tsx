@@ -183,6 +183,8 @@ export const SavedTurn = memo(function SavedTurn({
             </ul>
           )}
           <SourcesDisclosure citations={answer.citations} activity={extras?.activity ?? []} onOpen={ctx.onOpenCitation} />
+          {/* a tool that was refused keeps its line (and the way to fix it) after the answer is saved */}
+          <Notices activity={extras?.activity ?? []} />
           <ReportNotices notices={withoutSessionNote(answer.context?.notices)} />
           {missed > 0 && (
             <p className="ui-meta mt-2 text-muted-foreground">
