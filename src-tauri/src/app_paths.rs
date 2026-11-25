@@ -49,6 +49,15 @@ fn set() -> Option<(&'static Path, &'static str)> {
     RESOLVED.get().map(|r| (r.data_dir.as_path(), r.identifier.as_str()))
 }
 
+/// The app's data folder (the one holding `nexq.db`). In unit tests, a private
+/// temporary folder.
+pub fn data_dir() -> PathBuf {
+    if cfg!(test) {
+        return test_root().join("data");
+    }
+    RESOLVED.get().map(|r| r.data_dir.clone()).unwrap_or_else(|| data_dir_for(DEFAULT_IDENTIFIER))
+}
+
 /// Where the recordings go (`.../recordings`).
 pub fn recordings_dir() -> PathBuf {
     recordings_impl(set(), &Env::current(), cfg!(test))

@@ -80,6 +80,8 @@ use commands::updater_commands;
 // == MODULE COMMANDS: claude cli ==
 use commands::claude_cli_commands;
 use commands::cli_agent_commands;
+// == MODULE COMMANDS: database recovery ==
+use commands::db_recovery_commands;
 // == MODULE COMMANDS: workspaces ==
 use commands::workspace_chat_commands;
 use commands::live_commands;
@@ -268,13 +270,15 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .expect("Failed to resolve app data directory");
-            match db::DatabaseManager::new(app_data_dir.clone()) {
+            match db::open_or_problem(app_data_dir.clone()) {
                 Ok(db_mgr) => {
                     app_state.database = Some(Arc::new(Mutex::new(db_mgr)));
                     log::info!("Database initialized successfully");
                 }
-                Err(e) => {
-                    log::error!("Failed to initialize database: {}", e);
+                Err(problem) => {
+                    // Nothing was created or changed: the UI shows why and the copies to restore.
+                    log::error!("The database did not open ({:?}): {}", problem.kind, problem.message);
+                    app_state.db_problem = Some(problem);
                 }
             }
 
@@ -854,6 +858,10 @@ pub fn run() {
             sources_commands::delete_mcp_secrets,
             sources_commands::open_source_file,
             workspace_commands::get_workspaces_status,
+            db_recovery_commands::restore_database_copy,
+            db_recovery_commands::start_with_new_database,
+            db_recovery_commands::open_data_folder,
+            db_recovery_commands::restart_app,
             live_commands::notetaker_start,
             live_commands::notetaker_stop,
             live_commands::notetaker_update_now,
@@ -910,6 +918,7 @@ pub fn run() {
             workspace_commands::update_memory,
             workspace_chat_commands::search_workspace,
             workspace_chat_commands::get_index_status,
+            workspace_chat_commands::search_workspace_page,
             workspace_chat_commands::rescan_workspace,
             workspace_chat_commands::list_workspace_chats,
             workspace_chat_commands::create_workspace_chat,

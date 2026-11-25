@@ -635,10 +635,15 @@ pub async fn start_meeting(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<String, String> {
-    let db = state
-        .database
-        .as_ref()
-        .ok_or_else(|| "Database not initialized".to_string())?;
+    // Before anything starts (audio, recording): no database, no meeting, and a
+    // sentence that says why. The page calls this before it opens the microphone.
+    let db = state.database.as_ref().ok_or_else(|| match &state.db_problem {
+        Some(problem) => format!(
+            "NexQ can't start a meeting because it can't open its meetings file. {}",
+            problem.message
+        ),
+        None => "NexQ can't start a meeting: the meetings file isn't open yet.".to_string(),
+    })?;
 
     let db = db
         .lock()
@@ -909,7 +914,9 @@ pub async fn get_meeting(
 pub async fn delete_meeting(
     meeting_id: String,
     state: State<'_, AppState>,
+    app: AppHandle,
 ) -> Result<(), String> {
+    use crate::commands::workspace_commands::{change_and_restart, delete_touch};
     let db = state
         .database
         .as_ref()
@@ -920,8 +927,10 @@ pub async fn delete_meeting(
         rt.meeting_deleted(&meeting_id);
     }
     // Everything about the meeting goes in one step: rows of every table
-    // (cached translations, notes, brief, search passages, borrowed ...).
-    let files = {
+    // (cached translations, notes, brief, search passages, borrowed ...). Its
+    // sessions end and the chats of its workspace stop using it (a change of
+    // access like any other).
+    let files = change_and_restart(&state, &app, |conn| delete_touch(conn, &meeting_id), || {
         let db = db
             .lock()
             .map_err(|e| format!("Failed to lock database: {}", e))?;
@@ -931,8 +940,8 @@ pub async fn delete_meeting(
             .map_err(|e| format!("Failed to delete meeting: {}", e))?;
         let files = crate::workspace::purge::purge_meeting(&tx, &meeting_id)?;
         tx.commit().map_err(|e| format!("Failed to delete meeting: {}", e))?;
-        files
-    };
+        Ok(files)
+    })?;
     // Then the recording and waveform, only if they are in NexQ's recordings folder.
     if let Some(dir) = crate::workspace::purge::recordings_dir() {
         crate::workspace::purge::delete_files_inside(&dir, &files);

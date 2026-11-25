@@ -363,11 +363,13 @@ pub struct MemoryPatch {
 }
 
 /// Why workspaces may be unavailable in this run.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct WorkspacesStatus {
     pub available: bool,
     /// The recorded error of a failed upgrade, shown to the user.
     pub error: Option<String>,
+    /// Set when the database itself did not open (nothing was changed).
+    pub db: Option<crate::db::health::DbProblem>,
 }
 
 #[cfg(test)]

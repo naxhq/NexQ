@@ -456,8 +456,12 @@ where
 // ── Workspaces ───────────────────────────────────────────────────────────────
 
 #[command]
-pub async fn get_workspaces_status() -> Result<WorkspacesStatus, String> {
-    Ok(WorkspacesStatus { available: crate::workspace::available(), error: crate::workspace::last_error() })
+pub async fn get_workspaces_status(state: State<'_, AppState>) -> Result<WorkspacesStatus, String> {
+    Ok(WorkspacesStatus {
+        available: crate::workspace::available(),
+        error: crate::workspace::last_error(),
+        db: state.db_problem.clone(),
+    })
 }
 
 #[command]
@@ -799,9 +803,33 @@ pub async fn add_workspace_text(
 
 // ── Meetings ─────────────────────────────────────────────────────────────────
 
+/// What moving a meeting touches: the meeting, the chats of the workspace it is
+/// filed in at this moment (read before the move: the one it leaves; after: the
+/// one it joins), and the chats of the destination.
+pub(crate) fn move_touch(conn: &Connection, meeting_id: &str, destination: &str) -> Touch {
+    let touch = Touch::meeting(meeting_id).also(Touch::chats(destination));
+    match store::home_of(conn, meeting_id) {
+        Ok(Some(home)) => touch.also(Touch::chats(&home)),
+        _ => touch,
+    }
+}
+
+/// What deleting a meeting touches: the meeting and the chats of its workspace.
+pub(crate) fn delete_touch(conn: &Connection, meeting_id: &str) -> Touch {
+    let touch = Touch::meeting(meeting_id);
+    match store::home_of(conn, meeting_id) {
+        Ok(Some(home)) => touch.also(Touch::chats(&home)),
+        _ => touch,
+    }
+}
+
 #[command]
 pub async fn move_meeting(meeting_id: String, workspace_id: String, state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
-    change_and_restart(&state, &app, |_| Touch::meeting(&meeting_id), || {
+    // The meeting's own sessions, and the chats of the workspace it leaves (read
+    // before the change) and of the one it joins (read after): the meeting
+    // leaves the first chats' meetings, which is a revocation for them.
+    let touched = |conn: &Connection| move_touch(conn, &meeting_id, &workspace_id);
+    change_and_restart(&state, &app, touched, || {
         with_conn(&state, |conn| meetings::move_meeting_atomic(conn, &meeting_id, &workspace_id))
     })?;
     emit_changed(&app, None);
@@ -1302,6 +1330,143 @@ mod tests {
             assert!(found.iter().any(|f| f == name), "{name} is listed but is not a command");
             assert!(lib.contains(&format!("live_commands::{name},")), "{name} is not registered in lib.rs");
         }
+    }
+
+    // ── every write path of the other command files, classified ───────────────
+
+    #[derive(Clone, Copy)]
+    enum Rule {
+        /// Changes what a scope may use: must go through `change_and_restart`.
+        Must,
+        /// Only reads.
+        Read,
+        /// Writes, but not what a scope may use; the reason is the audit.
+        Exempt(&'static str),
+    }
+    use Rule::{Exempt, Must, Read};
+
+    /// (file, command, rule) for every command of the files below.
+    const OTHER_COMMANDS: &[(&str, &str, Rule)] = &[
+        ("meeting_commands", "retry_sources_session", Exempt("restarts sessions of the sources, changes no data")),
+        ("meeting_commands", "start_past_meeting_session", Exempt("session of a view")),
+        ("meeting_commands", "close_past_meeting_session", Exempt("session of a view")),
+        ("meeting_commands", "save_meeting_ai_interactions", Exempt("the meeting's own log")),
+        ("meeting_commands", "start_meeting", Exempt("a new meeting has no session to restart")),
+        ("meeting_commands", "end_meeting", Exempt("ends the meeting's own sessions itself")),
+        ("meeting_commands", "list_meetings", Read),
+        ("meeting_commands", "get_meeting", Read),
+        ("meeting_commands", "delete_meeting", Must),
+        ("meeting_commands", "search_meetings", Read),
+        ("meeting_commands", "rename_meeting", Exempt("the meeting's own title")),
+        ("meeting_commands", "update_meeting_summary", Exempt("the meeting's own text, read when a request is built")),
+        ("meeting_commands", "append_transcript_segment", Exempt("the live transcript itself")),
+        ("meeting_commands", "save_meeting_speakers", Exempt("the meeting's own content")),
+        ("meeting_commands", "save_meeting_bookmarks", Exempt("the meeting's own content")),
+        ("meeting_commands", "add_meeting_bookmark", Exempt("the meeting's own content")),
+        ("meeting_commands", "update_meeting_bookmark", Exempt("the meeting's own content")),
+        ("meeting_commands", "delete_meeting_bookmark", Exempt("the meeting's own content")),
+        ("meeting_commands", "save_meeting_action_items", Exempt("the meeting's own content")),
+        ("meeting_commands", "update_action_item", Exempt("the meeting's own content")),
+        ("meeting_commands", "delete_action_item", Exempt("the meeting's own content")),
+        ("meeting_commands", "save_meeting_topic_sections", Exempt("the meeting's own content")),
+        ("meeting_commands", "update_meeting_mode", Exempt("audio mode and scenario of the meeting")),
+        ("meeting_commands", "rename_speaker", Exempt("the meeting's own content")),
+        ("context_commands", "load_context_file", Must),
+        ("context_commands", "remove_context_file", Must),
+        ("context_commands", "list_context_resources", Read),
+        ("context_commands", "set_custom_instructions", Exempt("global instruction text, an edit for every meeting, not access")),
+        ("context_commands", "get_token_budget", Read),
+        ("sources_commands", "discard_pending_mcp_servers", Exempt("staged servers, not yet in any config")),
+        ("sources_commands", "inspect_notes_folder", Read),
+        ("sources_commands", "open_source_file", Read),
+        ("sources_commands", "classify_secret_names", Read),
+        ("sources_commands", "import_mcp_servers_json", Exempt("staged until set_personal_sources")),
+        ("sources_commands", "list_claude_code_mcp_servers", Read),
+        ("sources_commands", "import_claude_code_mcp_servers", Exempt("staged until set_personal_sources")),
+        ("sources_commands", "save_mcp_server_form", Exempt("staged until set_personal_sources")),
+        ("sources_commands", "check_mcp_server", Read),
+        ("sources_commands", "delete_mcp_secrets", Exempt("secrets only; the sources restart follows their revision")),
+        ("sources_commands", "set_personal_sources", Must),
+        ("workspace_chat_commands", "search_workspace", Read),
+        ("workspace_chat_commands", "search_workspace_page", Read),
+        ("workspace_chat_commands", "get_index_status", Read),
+        ("workspace_chat_commands", "rescan_workspace", Exempt("re-indexes what is already in scope")),
+        ("workspace_chat_commands", "list_workspace_chats", Read),
+        ("workspace_chat_commands", "create_workspace_chat", Exempt("a new chat has no session")),
+        ("workspace_chat_commands", "update_workspace_chat", Must),
+        ("workspace_chat_commands", "delete_workspace_chat", Exempt("ends the chat's own sessions in engine::delete_chat")),
+        ("workspace_chat_commands", "list_workspace_messages", Read),
+        ("workspace_chat_commands", "set_chat_meeting_included", Must),
+        ("workspace_chat_commands", "list_chat_meeting_prefs", Read),
+        ("workspace_chat_commands", "set_chat_item_pref", Must),
+        ("workspace_chat_commands", "list_chat_item_prefs", Read),
+        ("workspace_chat_commands", "preview_chat_context", Read),
+        ("workspace_chat_commands", "get_chat_capabilities", Read),
+        ("workspace_chat_commands", "ask_workspace", Exempt("a request, not a change of access")),
+        ("workspace_chat_commands", "cancel_workspace_request", Exempt("stops a request")),
+        ("workspace_chat_commands", "save_answer_to_library", Must),
+        ("workspace_chat_commands", "add_answer_to_instructions", Must),
+    ];
+
+    fn other_sources() -> Vec<(&'static str, String)> {
+        fn code(text: &str) -> String {
+            text.split("#[cfg(test)]").next().unwrap_or(text).to_string()
+        }
+        vec![
+            ("meeting_commands", code(include_str!("meeting_commands.rs"))),
+            ("context_commands", code(include_str!("context_commands.rs"))),
+            ("sources_commands", code(include_str!("sources_commands.rs"))),
+            ("workspace_chat_commands", code(include_str!("workspace_chat_commands.rs"))),
+        ]
+    }
+
+    #[test]
+    fn every_command_of_the_other_files_is_classified_and_the_writers_use_the_helper() {
+        for (file, code) in other_sources() {
+            let found = commands(&code);
+            for name in &found {
+                assert!(
+                    OTHER_COMMANDS.iter().any(|(f, n, _)| *f == file && n == name),
+                    "{file}::{name} is a new command: classify it in OTHER_COMMANDS (Must, Read or Exempt with a reason)"
+                );
+            }
+            for (f, name, _) in OTHER_COMMANDS.iter().filter(|(f, _, _)| *f == file) {
+                assert!(found.iter().any(|c| c == name), "{f}::{name} is classified but is not a command");
+            }
+        }
+        let sources = other_sources();
+        for (file, name, rule) in OTHER_COMMANDS {
+            let code = &sources.iter().find(|(f, _)| f == file).unwrap().1;
+            let text = body(code, name).unwrap_or_else(|| panic!("{file}: no command {name}"));
+            match rule {
+                Must => assert!(
+                    text.contains("change_and_restart(") || text.contains("change_and_restart_async("),
+                    "{file}::{name} changes what a scope may use but does not use change_and_restart"
+                ),
+                Read => {}
+                Exempt(reason) => assert!(!reason.trim().is_empty(), "{file}::{name} needs a reason"),
+            }
+        }
+    }
+
+    #[test]
+    fn moving_or_deleting_a_meeting_touches_the_chats_of_both_workspaces() {
+        let conn = crate::workspace::test_support::memory_db();
+        let a = crate::workspace::test_support::new_ws(&conn, "A", false, false);
+        let b = crate::workspace::test_support::new_ws(&conn, "B", false, false);
+        conn.execute("INSERT INTO meetings (id, title, start_time, workspace_id) VALUES ('m', 't', 'x', ?1)", rusqlite::params![a]).unwrap();
+        // Before the move the source is A: both chats are touched.
+        let before = move_touch(&conn, "m", &b);
+        assert!(before.meetings == vec!["m".to_string()]);
+        assert!(before.chats_of.contains(&a) && before.chats_of.contains(&b), "{before:?}");
+        // After it the source is B; the destination is still named, so A's chats were read before.
+        conn.execute("UPDATE meetings SET workspace_id = ?1 WHERE id = 'm'", rusqlite::params![b]).unwrap();
+        assert!(move_touch(&conn, "m", &b).chats_of.contains(&b));
+        // Deleting reads the home while the meeting is there.
+        conn.execute("UPDATE meetings SET workspace_id = ?1 WHERE id = 'm'", rusqlite::params![a]).unwrap();
+        assert!(delete_touch(&conn, "m").chats_of.contains(&a));
+        conn.execute("DELETE FROM meetings WHERE id = 'm'", []).unwrap();
+        assert_eq!(delete_touch(&conn, "m").meetings, vec!["m".to_string()], "gone: the meeting itself still named");
     }
 
     #[test]

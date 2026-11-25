@@ -127,6 +127,9 @@ pub struct AppState {
     pub gemini_cache: Arc<Mutex<Option<ScopedCache>>>,
     /// The app handle, set once at startup (for events from code that has none).
     pub app_handle: std::sync::OnceLock<tauri::AppHandle>,
+    /// Why the database did not open (None when it did). While it is set nothing
+    /// is created, upgraded or written to the database.
+    pub db_problem: Option<crate::db::health::DbProblem>,
     /// Settings files that could not be read at start (shown to the user once).
     pub store_findings: Mutex<Vec<crate::store_guard::StoreRecovery>>,
     /// Restarts caused by grants wait and coalesce (see `workspace::restart`).
@@ -223,6 +226,7 @@ impl AppState {
             openrouter_cache: Arc::new(Mutex::new(None)),
             tray_manager: Arc::new(Mutex::new(None)),
             gemini_cache: Arc::new(Mutex::new(None)),
+            db_problem: None,
             store_findings: Mutex::new(Vec::new()),
             restarts: Arc::new(Default::default()),
             app_handle: std::sync::OnceLock::new(),

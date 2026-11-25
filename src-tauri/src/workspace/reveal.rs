@@ -100,6 +100,23 @@ pub fn linux_argv(path: &Path) -> Vec<OsString> {
     vec![OsString::from("--"), dir.as_os_str().to_os_string()]
 }
 
+/// Opens `dir` itself in the file manager (a folder NexQ chose, never one from the webview).
+pub fn open_directory(dir: &Path) -> Result<(), String> {
+    let (program, args) = if cfg!(windows) {
+        let root = std::env::var_os("SystemRoot").unwrap_or_else(|| OsString::from(r"C:\Windows"));
+        (PathBuf::from(root).join("explorer.exe"), vec![dir.as_os_str().to_os_string()])
+    } else if cfg!(target_os = "macos") {
+        (PathBuf::from("/usr/bin/open"), vec![OsString::from("--"), dir.as_os_str().to_os_string()])
+    } else {
+        (PathBuf::from("xdg-open"), vec![OsString::from("--"), dir.as_os_str().to_os_string()])
+    };
+    std::process::Command::new(&program)
+        .args(&args)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Couldn't open the folder: {e}"))
+}
+
 /// Starts the file manager on `path` with an argument list.
 pub fn reveal(path: &Path) -> Result<(), String> {
     let (program, args) = reveal_command(path);
