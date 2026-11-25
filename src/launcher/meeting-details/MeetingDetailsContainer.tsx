@@ -30,6 +30,8 @@ import { SpeakersTab } from "./SpeakersTab";
 import { ActionItemsTab } from "./ActionItemsTab";
 import { BookmarksTab } from "./BookmarksTab";
 import { AskMeetingTab } from "./AskMeetingTab";
+import { NotesTab } from "./NotesTab";
+import { segmentAt } from "../../live-notes/jump";
 import { AudioPlayer, AudioPlayerSkeleton } from "../../components/AudioPlayer";
 import { Loader2 } from "lucide-react";
 import { isCliAgent } from "../../lib/cliAgents";
@@ -475,6 +477,18 @@ export function MeetingDetails({ meetingId, onBack }: MeetingDetailsProps) {
         </div>
         {activeTab === "summary" && (
           <SummaryView meeting={meeting} generation={summaryGeneration} onExport={handleExport} />
+        )}
+        {activeTab === "notes" && (
+          <NotesTab
+            meetingId={meeting.id}
+            title={meeting.title}
+            onJump={(ms) => {
+              const seg = segmentAt(meeting.transcript, ms, new Date(meeting.start_time).getTime());
+              const idx = seg ? meeting.transcript.indexOf(seg) : -1;
+              setScrollToSegmentIndex(idx >= 0 ? idx : null);
+              setActiveTab("transcript");
+            }}
+          />
         )}
         {activeTab === "ask" && showAsk && (
           <AskMeetingTab

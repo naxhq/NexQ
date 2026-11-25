@@ -1,8 +1,8 @@
 import type { Meeting } from "../../lib/types";
-import { FileText, Sparkles, MessageSquare, MessageCircleQuestion, Users, ListTodo, Bookmark, Loader2 } from "lucide-react";
+import { FileText, NotebookText, Sparkles, MessageSquare, MessageCircleQuestion, Users, ListTodo, Bookmark, Loader2 } from "lucide-react";
 import { ExportDropdown } from "./ExportDropdown";
 
-export type MeetingTab = "transcript" | "summary" | "ask" | "ai" | "speakers" | "actions" | "bookmarks";
+export type MeetingTab = "transcript" | "summary" | "notes" | "ask" | "ai" | "speakers" | "actions" | "bookmarks";
 
 interface MeetingTabBarProps {
   activeTab: MeetingTab;
@@ -42,6 +42,12 @@ export function MeetingTabBar({ activeTab, setActiveTab, meeting, onGenerateSumm
           icon={<Sparkles className="h-3.5 w-3.5" />}
           label="Summary"
           indicator={!!meeting.summary}
+        />
+        <TabButton
+          active={activeTab === "notes"}
+          onClick={() => setActiveTab("notes")}
+          icon={<NotebookText className="h-3.5 w-3.5" />}
+          label="Notes"
         />
         {showAsk && (
           <TabButton

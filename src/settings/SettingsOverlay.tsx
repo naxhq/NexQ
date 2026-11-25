@@ -29,10 +29,11 @@ import {
 import { ContextStrategySettings } from "./ContextStrategySettings";
 import { AIActionsSettings } from "./AIActionsSettings";
 import { TranslationSettings } from "./TranslationSettings";
-import { Sparkles, BookOpen } from "lucide-react";
+import { Sparkles, BookOpen, NotebookText } from "lucide-react";
+import { LiveNotesSettings } from "./LiveNotesSettings";
 import { PersonalSourcesEditor } from "../sources/PersonalSourcesEditor";
 
-type SettingsTab = "meeting_audio" | "llm" | "stt" | "translation" | "ai_actions" | "context_strategy" | "scenarios" | "noise_presets" | "confidence" | "personal_sources" | "hotkeys" | "general" | "about";
+type SettingsTab = "meeting_audio" | "llm" | "stt" | "translation" | "ai_actions" | "context_strategy" | "scenarios" | "noise_presets" | "confidence" | "personal_sources" | "live_notes" | "hotkeys" | "general" | "about";
 
 // ── Tab groups for sidebar (contextually organized, importance-ordered) ──
 interface TabItem {
@@ -67,6 +68,7 @@ const TAB_GROUPS: TabGroup[] = [
       { id: "ai_actions", label: "AI Actions", icon: <Sparkles className="h-4 w-4" /> },
       { id: "context_strategy", label: "Context Strategy", icon: <Database className="h-4 w-4" /> },
       { id: "personal_sources", label: "Personal Sources", icon: <BookOpen className="h-4 w-4" /> },
+      { id: "live_notes", label: "Live Notes and Brief", icon: <NotebookText className="h-4 w-4" /> },
       { id: "scenarios", label: "AI Scenarios", icon: <Theater className="h-4 w-4" /> },
       { id: "noise_presets", label: "Noise Presets", icon: <Volume2 className="h-4 w-4" /> },
       { id: "confidence", label: "Confidence", icon: <BarChart2 className="h-4 w-4" /> },
@@ -161,6 +163,8 @@ export function SettingsOverlay({ isModal = false }: SettingsOverlayProps) {
         return <ContextStrategySettings />;
       case "personal_sources":
         return <PersonalSourcesEditor variant="full" />;
+      case "live_notes":
+        return <LiveNotesSettings />;
       case "scenarios":
         return <ScenarioSettings />;
       case "noise_presets":

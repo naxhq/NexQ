@@ -44,6 +44,7 @@ export function PointsPanel() {
   const meeting = useMeetingStore((s) => s.activeMeeting);
   const audioMode = useMeetingStore((s) => s.audioMode);
   const mutedYou = useConfigStore((s) => s.mutedYou);
+  const youEngine = useConfigStore((s) => s.meetingAudioConfig?.you?.stt_provider);
   const meetingId = meeting?.id ?? "";
   const home = meeting?.workspace_id ?? "general";
 
@@ -130,7 +131,7 @@ export function PointsPanel() {
   const availability = followAvailability({
     audioMode,
     mutedYou,
-    youEngine: meeting?.config_snapshot?.stt_provider,
+    youEngine,
   });
 
   const p = usePrompter({
@@ -198,6 +199,7 @@ export function PointsPanel() {
 
   const startFirstNote = async () => {
     const created = await store.getState().create(home, { title: "Talking points" });
+    if (!created) return;
     store.getState().rememberNote(home, created.id);
     setSelectedId(created.id);
     setEditing(true);

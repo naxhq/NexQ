@@ -1,0 +1,233 @@
+import { useEffect, useState } from "react";
+import { FileText, MoreHorizontal, Pause, Play, RefreshCw } from "lucide-react";
+import { Dialog, Menu, buttonClass, type MenuItemSpec } from "../ui";
+import { cn } from "../lib/utils";
+import type { BriefFact } from "../lib/types";
+import { searchWorkspace } from "../lib/ipc";
+import { useMeetingStore } from "../stores/meetingStore";
+import { sheetTimeMs, useLiveBriefStore } from "../stores/liveBriefStore";
+import { formatTokens } from "../live-notes/NotesSettingsForm";
+import { NoteText } from "../live-notes/NoteBlockRow";
+import { Age } from "./Age";
+import { BriefSettingsForm } from "./BriefSettingsForm";
+import "../live-notes/liveNotes.css";
+
+/** A sheet older than this is no longer handed to live answers (spec 6b). */
+export const ANSWER_FRESH_MS = 4 * 60_000;
+
+/** DOM event: the host should open this source (a meeting at a time, or a document). */
+export const OPEN_SOURCE_EVENT = "nexq:open-source";
+
+export function briefStatusWords(status: string | undefined, enabled: boolean): string {
+  if (!enabled) return "Brief is off";
+  switch (status) {
+    case "running":
+      return "Looking";
+    case "paused":
+    case "capped":
+      return "Paused";
+    case "error":
+      return "Stopped";
+    default:
+      return "Listening";
+  }
+}
+
+/** Find the passage a fact cites and ask the host to open it. */
+async function openSource(workspaceId: string | undefined, fact: BriefFact): Promise<void> {
+  if (!workspaceId) return;
+  try {
+    const hits = await searchWorkspace(workspaceId, fact.source, null, 10);
+    const hit = hits.find((p) => p.id === fact.passage_id) ?? hits.find((p) => p.title === fact.source) ?? hits[0];
+    if (!hit) return;
+    if (hit.kind === "transcript") useMeetingStore.getState().setSelectedMeetingId(hit.ref_id);
+    window.dispatchEvent(new CustomEvent(OPEN_SOURCE_EVENT, { detail: hit }));
+  } catch {
+    /* Nothing to open: the chip stays as a label. */
+  }
+}
+
+function SourceChip({ fact, workspaceId }: { fact: BriefFact; workspaceId?: string }) {
+  const inner = (
+    <>
+      <FileText className="mr-1 h-3 w-3 shrink-0" aria-hidden />
+      <span>{fact.source}</span>
+    </>
+  );
+  if (!workspaceId) return <span className="lb-chip">{inner}</span>;
+  return (
+    <button type="button" className="lb-chip" onClick={() => void openSource(workspaceId, fact)} aria-label={`Open source: ${fact.source}`}>
+      {inner}
+    </button>
+  );
+}
+
+/** The brief panel of the meeting window. Takes no props. */
+export function BriefPanel() {
+  const meetingId = useMeetingStore((s) => s.activeMeeting?.id ?? "");
+  const workspaceId = useMeetingStore((s) => s.activeMeeting?.workspace_id ?? undefined);
+  const store = useLiveBriefStore;
+  const sheet = store((s) => s.sheet);
+  const hidden = store((s) => s.hidden);
+  const run = store((s) => s.run);
+  const settings = store((s) => s.settings);
+  const error = store((s) => s.error);
+  const [dialog, setDialog] = useState(false);
+
+  useEffect(() => {
+    if (!meetingId) return;
+    let off: (() => void) | null = null;
+    let gone = false;
+    void store
+      .getState()
+      .attach(meetingId)
+      .then((u) => {
+        if (gone) u();
+        else off = u;
+      });
+    return () => {
+      gone = true;
+      off?.();
+    };
+  }, [meetingId, store]);
+
+  if (!meetingId) {
+    return <div className="ln-root"><p className="ln-empty text-muted-foreground">The brief appears here once a meeting has started.</p></div>;
+  }
+
+  const enabled = !!settings?.enabled;
+  const paused = run?.status === "paused" || run?.status === "capped";
+  const capped = run?.status === "capped";
+  const failed = run?.status === "error" || (run?.status === "paused" && !!run.reason);
+  const at = sheet ? sheetTimeMs(sheet) : 0;
+  const stale = sheet ? Date.now() - at > ANSWER_FRESH_MS : false;
+
+  const menu: MenuItemSpec[] = [
+    { id: "settings", label: "Model and limit", onSelect: () => setDialog(true) },
+    { id: "off", label: "Turn the brief off", danger: true, separatorBefore: true, disabled: !enabled, onSelect: () => void store.getState().turnOff() },
+  ];
+
+  return (
+    <div className="ln-root" data-testid="brief-panel">
+      <header className="ln-head">
+        <h2 className="ln-status" aria-live="polite">{briefStatusWords(run?.status, enabled)}</h2>
+        {enabled && (
+          <>
+            <button type="button" className="ln-tool ln-tool-solid" disabled={run?.status === "running" || capped} onClick={() => void store.getState().refresh()}>
+              <RefreshCw className="h-3 w-3" aria-hidden />
+              Refresh
+            </button>
+            <button
+              type="button"
+              className="ln-tool"
+              disabled={capped}
+              onClick={() => void (paused ? store.getState().resume() : store.getState().pause())}
+              aria-label={paused ? "Resume the brief" : "Pause the brief"}
+            >
+              {paused ? <Play className="h-3 w-3" aria-hidden /> : <Pause className="h-3 w-3" aria-hidden />}
+              {paused ? "Resume" : "Pause"}
+            </button>
+          </>
+        )}
+        <Menu
+          items={menu}
+          label="Brief options"
+          align="end"
+          renderTrigger={(props) => (
+            <button {...props} type="button" className="ln-tool h-[1.625rem] w-[1.625rem] justify-center px-0" aria-label="Brief options">
+              <MoreHorizontal className="h-3.5 w-3.5" aria-hidden />
+            </button>
+          )}
+        />
+      </header>
+
+      {capped && (
+        <div className="ln-notice" role="group" aria-labelledby="lb-cap-title">
+          <div id="lb-cap-title" className="ln-notice-title">Keep the brief going?</div>
+          <p>It used {formatTokens(run?.tokens_used ?? 0)} tokens, the limit you set. Keep going adds {formatTokens(settings?.cap ?? run?.cap ?? 0)} more.</p>
+          <div className="ln-notice-actions">
+            <button type="button" className={cn(buttonClass.base, buttonClass.primary, "h-7")} onClick={() => void store.getState().keepGoing()}>Keep going</button>
+            <button type="button" className={cn(buttonClass.base, buttonClass.quiet, "h-7")} onClick={() => void store.getState().pause()}>Stop</button>
+          </div>
+        </div>
+      )}
+      {failed && !capped && (
+        <div className="ln-notice" role="alert">
+          <div className="ln-notice-title">{run?.status === "error" ? "The brief stopped" : "The brief paused"}</div>
+          <p>{run?.reason || "The model could not answer."}</p>
+          <div className="ln-notice-actions">
+            <button type="button" className="ln-tool ln-tool-solid" onClick={() => setDialog(true)}>Change model</button>
+            <button type="button" className="ln-tool" onClick={() => void store.getState().resume()}>Try again</button>
+          </div>
+        </div>
+      )}
+      {error && (
+        <div className="ln-notice" role="alert">
+          <div className="ln-notice-title">That did not work</div>
+          <p>{error}</p>
+          <div className="ln-notice-actions">
+            <button type="button" className="ln-tool" onClick={() => store.getState().clearError()}>Dismiss</button>
+          </div>
+        </div>
+      )}
+
+      <div className="ln-scroll" role="region" aria-label="Brief">
+        {!enabled && settings ? (
+          <div className="ln-empty">
+            <h3>Brief</h3>
+            <p>While you talk, NexQ looks through this workspace for what is known about the topic and keeps a short sheet. Live answers use it. It sends the transcript and the matching passages to your chosen model.</p>
+            <button type="button" className={cn(buttonClass.base, buttonClass.primary, "mt-3")} onClick={() => void store.getState().turnOn()}>
+              Turn on the brief
+            </button>
+          </div>
+        ) : !sheet ? (
+          <div className="ln-empty" role="status">
+            <h3>{hidden ? "Finding what’s known about the new topic" : "Listening for the topic"}</h3>
+            <p>{hidden ? "The old sheet is hidden so answers do not use it." : "The first sheet appears after a minute or so of conversation."}</p>
+          </div>
+        ) : (
+          <>
+            <div className="lb-now">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-2">
+                <h3 className="lb-now-text">{sheet.now}</h3>
+                <Age at={at} />
+              </div>
+            </div>
+            {sheet.facts.length === 0 ? (
+              <p className="lb-uses">Nothing in the workspace matches this topic.</p>
+            ) : (
+              <ul className="lb-facts" aria-label="Facts about this topic">
+                {sheet.facts.slice(0, 6).map((f, i) => (
+                  <li key={`${f.passage_id ?? "x"}-${i}`} className="lb-fact">
+                    <div className="lb-fact-text"><NoteText text={f.text} /></div>
+                    <SourceChip fact={f} workspaceId={workspaceId} />
+                  </li>
+                ))}
+              </ul>
+            )}
+            {sheet.earlier.length > 0 && (
+              <details className="lb-earlier">
+                <summary>Earlier points ({sheet.earlier.length})</summary>
+                <ul>
+                  {sheet.earlier.map((e, i) => (
+                    <li key={i}>{e}</li>
+                  ))}
+                </ul>
+              </details>
+            )}
+            <p className="lb-uses">{stale ? "Too old for answers. Refresh to use it again." : "Answers use this brief while it is fresh."}</p>
+          </>
+        )}
+      </div>
+
+      <Dialog
+        open={dialog}
+        onClose={() => setDialog(false)}
+        title="Brief settings"
+        footer={<button type="button" className={cn(buttonClass.base, buttonClass.primary)} onClick={() => setDialog(false)}>Done</button>}
+      >
+        {settings && <BriefSettingsForm settings={settings} onChange={(p) => void store.getState().patchSettings(p)} />}
+      </Dialog>
+    </div>
+  );
+}
