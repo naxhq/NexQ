@@ -106,9 +106,17 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
   // -- note changes: new index, reset position, load saved "said it" ------------------------
 
   const savedKey = useMemo(() => JSON.stringify(opts.savedSaid ?? []), [opts.savedSaid]);
+  // The index the follower and the tracker work on. A line of speech can arrive between a note being
+  // drawn and its effects running (store events are not React updates), so the speech path checks it too.
+  const appliedIndex = useRef(index);
+  const syncIndex = useCallback(() => {
+    if (appliedIndex.current === indexRef.current) return;
+    appliedIndex.current = indexRef.current;
+    follower.current!.setIndex(indexRef.current);
+    said.current!.setIndex(indexRef.current);
+  }, []);
   useEffect(() => {
-    follower.current!.setIndex(index);
-    said.current!.setIndex(index);
+    syncIndex();
     ctrl.current.setMetrics({ lines: [], contentHeight: 0, viewportHeight: 0 });
     scheduleMeasure();
     bump();
@@ -194,6 +202,7 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     }
     if (wantVoice) setFollowState(follower.current!.snapshot().state);
     const unsub = useTranscriptStore.subscribe((s) => {
+      syncIndex();
       if (bridge.current.push(s.segments) > 0) publishVoiceState();
     });
     // "paused" is the absence of speech: nothing arrives, so look again now and then
@@ -202,7 +211,7 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
       unsub();
       if (tick) clearInterval(tick);
     };
-  }, [wantVoice, wantSaid, publishVoiceState, noteKey, shown]);
+  }, [wantVoice, wantSaid, publishVoiceState, syncIndex, noteKey, shown]);
 
   // -- scroll mode and the frame loop ---------------------------------------------------------
 

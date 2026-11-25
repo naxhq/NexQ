@@ -70,7 +70,9 @@ export function useJumpOffers(env: JumpEnv) {
       }
       lastPos.current = snap.position;
     }
-    const sg = snap.state === "unsure" ? snap.suggestion : null;
+    // unsure, lost or paused: a long off-script line makes the follower "lost" and silence makes it "paused",
+    // and the offer is just as useful then; only a sure follower has no need of one
+    const sg = snap.state !== "following" ? snap.suggestion : null;
     if (!sg || !enabledRef.current) {
       rawSuggest.current = null;
       dismissed.current = null;
@@ -146,7 +148,7 @@ export function useJumpOffers(env: JumpEnv) {
   }, []);
 
   const suggestion = useMemo<GoToSuggestion | null>(() => {
-    if (!suggestBlock || !wantVoice || followState !== "unsure") return null;
+    if (!suggestBlock || !wantVoice || followState === "following" || followState === "off") return null;
     const i = blocks.findIndex((b) => b.id === suggestBlock);
     if (i < 0) return null;
     const text = blocks[i].text.trim().split(/\s+/).slice(0, 6).join(" ") || "next point";

@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import { useTalkingPointsStore } from "../stores/talkingPointsStore";
-import { SlideOver } from "../ui";
+import { ModalLayer } from "../ui";
 import { cn } from "../lib/utils";
 import { TalkingPointsEditor } from "./TalkingPointsEditor";
 import "./talkingPoints.css";
@@ -71,9 +71,17 @@ export function TalkingPointsSection({ workspaceId }: { workspaceId: string }) {
           ))}
         </ul>
       )}
-      <SlideOver open={open} onClose={() => setOpen(false)} title="Talking points" description="Write, reorder and import the notes of this workspace.">
+      {/* the editor needs room: a list beside a full editor column, not the 26 rem of a plain sheet */}
+      <ModalLayer
+        open={open}
+        onClose={() => setOpen(false)}
+        title="Talking points"
+        description="Write, reorder and import the notes of this workspace."
+        placement="right"
+        className="w-[min(62rem,100%)]"
+      >
         <TalkingPointsEditor workspaceId={workspaceId} className="min-h-[60vh]" />
-      </SlideOver>
+      </ModalLayer>
     </section>
   );
 }
