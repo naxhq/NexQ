@@ -15,7 +15,6 @@ import { onBriefSettingsChanged, onBriefSheet, onBriefState } from "../lib/event
 import { useMeetingStore } from "./meetingStore";
 
 export const DEFAULT_BRIEF_SETTINGS: BriefSettings = {
-  enabled: false,
   provider: null,
   model: null,
   effort: null,

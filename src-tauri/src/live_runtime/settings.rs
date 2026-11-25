@@ -47,8 +47,10 @@ impl Default for NotetakerSettings {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+/// Which model writes the brief and how much it may use. Whether the brief runs is
+/// the workspace's own switch (`brief_enabled`), nothing else: a saved file that
+/// still has an `enabled` key loads and the key is ignored.
 pub struct BriefSettings {
-    pub enabled: bool,
     pub provider: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -57,7 +59,7 @@ pub struct BriefSettings {
 
 impl Default for BriefSettings {
     fn default() -> Self {
-        Self { enabled: false, provider: None, model: None, effort: None, cap: DEFAULT_CAP }
+        Self { provider: None, model: None, effort: None, cap: DEFAULT_CAP }
     }
 }
 
@@ -149,7 +151,7 @@ mod tests {
         assert!(merge(&s, &json!({"nope": 1})).is_err());
         let cleared = merge(&m, &json!({"provider": null})).unwrap();
         assert_eq!(cleared.provider, None);
-        assert!(merge(&BriefSettings::default(), &json!({"enabled": true})).unwrap().enabled);
+        assert_eq!(merge(&BriefSettings::default(), &json!({"cap": 50_000})).unwrap().cap, 50_000);
     }
 
     #[test]
@@ -165,6 +167,9 @@ mod tests {
         let s: NotetakerSettings = serde_json::from_str(r#"{"enabled":true}"#).unwrap();
         assert_eq!((s.cap, s.detail.as_str()), (DEFAULT_CAP, "standard"));
         let b: BriefSettings = serde_json::from_str("{}").unwrap();
-        assert!(!b.enabled);
+        assert_eq!(b.cap, DEFAULT_CAP);
+        // a file saved by an earlier build still has `enabled`: it loads, the key is dropped
+        let old: BriefSettings = serde_json::from_str(r#"{"enabled":true,"cap":9000,"provider":"openai"}"#).unwrap();
+        assert_eq!((old.cap, old.provider.as_deref()), (9000, Some("openai")));
     }
 }

@@ -538,7 +538,6 @@ async fn notes_prompts_carry_no_workspace_text_or_secrets() {
     let m = make_meeting(&h, &ws);
     h.start_meeting(&m);
     h.enable_notes();
-    h.rt.patch_brief(&json!({"enabled": true})).unwrap();
     h.rt.notetaker_start(&m).unwrap();
     h.rt.brief_start(&m).unwrap();
     let text = "Acme annual pricing plan seat discussion ".repeat(30);
@@ -563,9 +562,6 @@ async fn brief_searches_the_scope_calls_once_and_feeds_live_answers() {
     index_doc(&h, &ws, "d1", "Pricing.pdf", "Acme pays 12 dollars per seat in the annual pricing plan. Renewal is in November.");
     let m = make_meeting(&h, &ws);
     h.start_meeting(&m);
-    // off globally: no start
-    assert!(h.rt.brief_start(&m).is_err());
-    h.rt.patch_brief(&json!({"enabled": true})).unwrap();
     h.rt.brief_start(&m).unwrap();
     let line = "we talk about the annual pricing plan and the Acme seat renewal";
     for i in 0..8u64 {
@@ -599,7 +595,6 @@ async fn brief_is_off_in_a_workspace_that_has_it_off() {
     let ws = { let c = h.conn.lock().unwrap(); new_ws(&c, "Quiet", false, false) };
     let m = make_meeting(&h, &ws);
     h.start_meeting(&m);
-    h.rt.patch_brief(&json!({"enabled": true})).unwrap();
     assert!(h.rt.brief_start(&m).is_err());
 }
 
@@ -611,7 +606,6 @@ async fn a_scope_switch_mid_run_clears_the_sheet_and_the_late_reply_is_dropped()
     let other = { let c = h.conn.lock().unwrap(); new_ws(&c, "Other", false, false) };
     let m = make_meeting(&h, &ws);
     h.start_meeting(&m);
-    h.rt.patch_brief(&json!({"enabled": true})).unwrap();
     h.rt.brief_start(&m).unwrap();
     *h.fake.delay.lock().unwrap() = Duration::from_millis(400);
     let line = "we talk about the annual pricing plan and the Acme seat renewal";
@@ -756,7 +750,7 @@ async fn auto_suggest_only_when_the_workspace_turned_it_on() {
     let ws = { let c = h.conn.lock().unwrap(); new_ws(&c, "Auto", false, false) };
     let m = make_meeting(&h, &ws);
     h.conn.lock().unwrap().execute(
-        "INSERT INTO transcript_segments (id, meeting_id, text, speaker, timestamp_ms, is_final, created_at) VALUES ('s1',?1,'Acme pays 12 dollars per seat today','Them',5000,1,'t')",
+        "INSERT INTO transcript_segments (id, meeting_id, text, speaker, timestamp_ms, is_final, created_at) VALUES ('s1',?1,'Acme pays 12 dollars per seat today','Them',10000,1,'t')",
         [&m],
     ).unwrap();
     h.start_meeting(&m);
@@ -796,7 +790,6 @@ async fn brief_with_sheet(h: &H) -> (String, String) {
     index_doc(h, &ws, "d1", "Pricing.pdf", "DOCCANARYA Acme pays 12 dollars per seat in the annual pricing plan.");
     let m = make_meeting(h, &ws);
     h.start_meeting(&m);
-    h.rt.patch_brief(&json!({"enabled": true})).unwrap();
     h.rt.brief_start(&m).unwrap();
     publish_a_sheet(h, &m);
     until("a published sheet", || h.events.of("brief_sheet").iter().any(|e| !e["sheet"].is_null())).await;
@@ -875,7 +868,6 @@ async fn a_generation_bump_during_a_run_drops_the_reply() {
     index_doc(&h, &ws, "d1", "Pricing.pdf", "DOCCANARYA Acme pays 12 dollars per seat in the annual pricing plan.");
     let m = make_meeting(&h, &ws);
     h.start_meeting(&m);
-    h.rt.patch_brief(&json!({"enabled": true})).unwrap();
     h.rt.brief_start(&m).unwrap();
     *h.fake.delay.lock().unwrap() = Duration::from_millis(300);
     publish_a_sheet(&h, &m);
@@ -936,7 +928,7 @@ async fn memory_is_suggested_only_for_the_meetings_own_workspace() {
         .lock()
         .unwrap()
         .execute(
-            "INSERT INTO transcript_segments (id, meeting_id, text, speaker, timestamp_ms, is_final, created_at) VALUES ('s1',?1,'Acme pays 12 dollars per seat today','Them',5000,1,'t')",
+            "INSERT INTO transcript_segments (id, meeting_id, text, speaker, timestamp_ms, is_final, created_at) VALUES ('s1',?1,'Acme pays 12 dollars per seat today','Them',10000,1,'t')",
             [&m],
         )
         .unwrap();
@@ -1021,7 +1013,6 @@ async fn random_scope_changes_never_leak_material_across_workspaces() {
     let m = make_meeting(&h, &a);
     h.start_meeting(&m);
     *h.events.watch.lock().unwrap() = Some((h.conn.clone(), m.clone()));
-    h.rt.patch_brief(&json!({"enabled": true})).unwrap();
     h.enable_notes();
     h.rt.brief_start(&m).unwrap();
     h.rt.notetaker_start(&m).unwrap();
@@ -1143,7 +1134,6 @@ async fn after_a_revoke_no_later_prompt_carries_anything_old() {
     index_doc(&h, &b, "db", "B.pdf", "DOCCANARYB Acme pays 99 dollars per seat in the annual pricing plan renewal");
     let m = make_meeting(&h, &a);
     h.start_meeting(&m);
-    h.rt.patch_brief(&json!({"enabled": true})).unwrap();
     h.rt.brief_start(&m).unwrap();
     let old_line = "OLDLINEMARK we talk about the annual pricing plan and the Acme seat renewal";
     for i in 0..8u64 {
@@ -1176,4 +1166,166 @@ async fn after_a_revoke_no_later_prompt_carries_anything_old() {
     if let Some(t) = h.rt.answer_extras(&m, "Assist", None) {
         assert!(!t.contains("MEMCANARYA") && !t.contains("DOCCANARYA"));
     }
+}
+
+// ---------------------------------------------------------------- from a fresh install to the first result
+//
+// Each test uses only what the UI's controls call, in the order the UI calls
+// them, and lists the conditions the backend checks and the control behind each:
+//
+// LIVE NOTES (src/stores/liveNotesStore.ts `turnOn` / `turnOff`, the settings page):
+//   1. settings.enabled      <- "Turn on" in the panel: set_notetaker_settings({enabled: true, scope})
+//   2. scope meeting|every   <- the same call ("This meeting" / "Every meeting")
+//   3. the meeting is the running one <- start_meeting (notetaker_start refuses any other id)
+//   4. a model               <- notes provider in the settings page, else the app's active provider
+//   5. update_mode           <- settings page (automatic by default; manual waits for "Update now")
+//   6. enough new speech and a pause (100 words, 2 s) <- the conversation itself
+//   7. under the token cap, no live answer running <- "Keep going" in the panel / nothing to set
+// BRIEF (src/stores/liveBriefStore.ts `turnOn` / `turnOff`):
+//   1. the workspace's brief switch <- "Turn on the brief": update_workspace({brief_enabled: true}); the only switch
+//   2. the meeting is the running one, a model, under the cap <- as for notes (brief model in the settings page)
+// MEMORY SUGGESTIONS (src/memory/MemorySection.tsx):
+//   1. the meeting has ended (not the running one) <- the button only shows after a meeting
+//   2. the meeting is filed in that workspace <- the meeting's own workspace (the section is that workspace's)
+//   3. a saved transcript <- recording a meeting
+//   4. a model <- memory model picker (set_memory_settings), else the app's active provider
+//   automatic after a meeting: the workspace's suggest_memory switch <- the toggle in MemorySection (update_workspace)
+
+fn set_workspace(h: &H, ws: &str, patch: crate::workspace::types::WorkspacePatch) {
+    let c = h.conn.lock().unwrap();
+    crate::workspace::store::update_workspace(&c, ws, patch).unwrap();
+}
+
+#[tokio::test]
+async fn fresh_install_live_notes_this_meeting_every_meeting_and_off_stays_off() {
+    let h = harness();
+    assert!(!h.rt.notetaker_settings().enabled, "off on a fresh install");
+    h.start_meeting("A");
+    let err = h.rt.notetaker_start("A").unwrap_err();
+    assert!(err.contains("turned off"), "{err}");
+    // the panel's "This meeting": set the settings, then start
+    h.rt.patch_notetaker(&json!({"enabled": true, "scope": "meeting"})).unwrap();
+    h.rt.notetaker_start("A").unwrap();
+    h.speak("A", 120, 1_000).await;
+    until("the first notes", || h.events.of("notetaker_doc").iter().any(|e| !e["doc"]["blocks"].as_array().unwrap().is_empty())).await;
+    assert_eq!(h.fake.count(AiPurpose::Notes), 1);
+    // "this meeting" ends with the meeting
+    h.rt.on_meeting_end("A");
+    until("A finished", || h.events.last_status("notetaker_state", "A").map(|v| v["status"] == "finished").unwrap_or(false)).await;
+    *h.live.lock().unwrap() = None;
+    h.start_meeting("B");
+    h.rt.on_meeting_start("B");
+    assert!(h.rt.inner.lock().unwrap().notes.get("B").is_none(), "the next meeting starts with notes off");
+    // "every meeting": the next meeting starts by itself
+    h.rt.patch_notetaker(&json!({"enabled": true, "scope": "every"})).unwrap();
+    h.rt.on_meeting_end("B");
+    *h.live.lock().unwrap() = None;
+    h.start_meeting("C");
+    h.rt.on_meeting_start("C");
+    assert!(h.rt.inner.lock().unwrap().notes.get("C").is_some());
+    h.speak("C", 120, 200_000).await;
+    until("notes for C", || h.fake.calls.lock().unwrap().iter().any(|c| c.1 == "C")).await;
+    // turn off (the panel: set_notetaker_settings({enabled:false}) and stop): it stops and stays off after a restart
+    h.rt.patch_notetaker(&json!({"enabled": false})).unwrap();
+    until("C is off", || h.events.last_status("notetaker_state", "C").map(|v| v["status"] == "off").unwrap_or(false)).await;
+    let calls = h.fake.calls.lock().unwrap().len();
+    let restarted = harness_on(h.conn.clone());
+    restarted.start_meeting("D");
+    restarted.rt.on_meeting_start("D");
+    assert!(restarted.rt.inner.lock().unwrap().notes.get("D").is_none(), "off stays off after a restart");
+    assert!(restarted.rt.notetaker_start("D").is_err());
+    restarted.speak("D", 150, 1_000).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(restarted.fake.calls.lock().unwrap().len(), 0);
+    assert_eq!(h.fake.calls.lock().unwrap().len(), calls);
+}
+
+#[tokio::test]
+async fn fresh_install_brief_follows_only_the_workspace_switch_and_off_stays_off() {
+    let h = harness();
+    let (ws, other) = {
+        let c = h.conn.lock().unwrap();
+        (new_ws(&c, "Sales", false, false), new_ws(&c, "Quiet", false, false))
+    };
+    index_doc(&h, &ws, "d1", "Pricing.pdf", "Acme pays 12 dollars per seat in the annual pricing plan.");
+    // nothing global to set: a fresh install has no brief setting that could be off
+    let fresh = h.rt.brief_settings();
+    assert!(serde_json::to_value(&fresh).unwrap().get("enabled").is_none());
+    let m = make_meeting(&h, &ws);
+    h.start_meeting(&m);
+    let err = h.rt.brief_start(&m).unwrap_err();
+    assert!(err.contains("off in this workspace"), "{err}");
+    // the panel's "Turn on the brief": update_workspace({brief_enabled: true}), then brief_start
+    set_workspace(&h, &ws, crate::workspace::types::WorkspacePatch { brief_enabled: Some(true), ..Default::default() });
+    h.rt.brief_start(&m).unwrap();
+    publish_a_sheet(&h, &m);
+    until("the first brief", || h.events.of("brief_sheet").iter().any(|e| !e["sheet"].is_null())).await;
+    // the next meeting in that workspace starts it by itself
+    h.rt.on_meeting_end(&m);
+    *h.live.lock().unwrap() = None;
+    until("sessions closed", || h.closed.lock().unwrap().contains(&m)).await;
+    let m2 = make_meeting(&h, &ws);
+    h.start_meeting(&m2);
+    h.rt.on_meeting_start(&m2);
+    assert!(h.rt.inner.lock().unwrap().briefs.get(&m2).is_some(), "on in the workspace: it starts with the meeting");
+    // another workspace is not affected
+    h.rt.on_meeting_end(&m2);
+    *h.live.lock().unwrap() = None;
+    let m3 = make_meeting(&h, &other);
+    h.start_meeting(&m3);
+    h.rt.on_meeting_start(&m3);
+    assert!(h.rt.inner.lock().unwrap().briefs.get(&m3).is_none());
+    // "Turn the brief off": the workspace switch off and the run stops (the same update_workspace call pokes the runtime)
+    *h.live.lock().unwrap() = Some(m2.clone());
+    set_workspace(&h, &ws, crate::workspace::types::WorkspacePatch { brief_enabled: Some(false), ..Default::default() });
+    h.rt.scope_changed(&m2);
+    until("the brief stopped", || h.rt.inner.lock().unwrap().briefs.get(&m2).is_none()).await;
+    assert!(h.rt.brief_start(&m2).is_err());
+    // after a restart it is still off
+    let restarted = harness_on(h.conn.clone());
+    restarted.start_meeting(&m2);
+    restarted.rt.on_meeting_start(&m2);
+    assert!(restarted.rt.inner.lock().unwrap().briefs.get(&m2).is_none());
+    assert!(restarted.rt.brief_start(&m2).is_err());
+    assert_eq!(restarted.fake.count(AiPurpose::Brief), 0);
+}
+
+#[tokio::test]
+async fn fresh_install_memory_suggestions_need_no_switch_and_auto_follows_the_workspace_toggle() {
+    let h = harness();
+    let ws = {
+        let c = h.conn.lock().unwrap();
+        new_ws(&c, "Notes", false, false)
+    };
+    let m = make_meeting(&h, &ws);
+    h.conn
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO transcript_segments (id, meeting_id, text, speaker, timestamp_ms, is_final, created_at) VALUES ('s1',?1,'Acme pays 12 dollars per seat today','Them',10000,1,'t')",
+            [&m],
+        )
+        .unwrap();
+    // during the meeting the button is not offered and the command refuses
+    h.start_meeting(&m);
+    assert!(h.rt.suggest_memory(&ws, &m).await.is_err());
+    *h.live.lock().unwrap() = None;
+    // after it: no setting to turn on; the section's own button is the whole path
+    let items = h.rt.suggest_memory(&ws, &m).await.unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].status, "suggested", "proposals only, never saved");
+    // automatic: only the workspace's toggle (update_workspace({suggest_memory: true})), off by default
+    let calls = h.fake.count(AiPurpose::Memory);
+    super::memory::auto_suggest_after(Arc::new(h.rt.deps().clone()), m.clone(), Duration::from_millis(10));
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(h.fake.count(AiPurpose::Memory), calls, "off by default");
+    set_workspace(&h, &ws, crate::workspace::types::WorkspacePatch { suggest_memory: Some(true), ..Default::default() });
+    super::memory::auto_suggest_after(Arc::new(h.rt.deps().clone()), m.clone(), Duration::from_millis(10));
+    until("the automatic suggestion", || h.fake.count(AiPurpose::Memory) == calls + 1).await;
+    // off again, and after a restart it is still off
+    set_workspace(&h, &ws, crate::workspace::types::WorkspacePatch { suggest_memory: Some(false), ..Default::default() });
+    let restarted = harness_on(h.conn.clone());
+    super::memory::auto_suggest_after(Arc::new(restarted.rt.deps().clone()), m.clone(), Duration::from_millis(10));
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(restarted.fake.count(AiPurpose::Memory), 0);
 }

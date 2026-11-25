@@ -19,10 +19,10 @@ vi.mock("../lib/ipc", () => {
   };
   return {
     getMeetingBrief: async () => h.sheet,
-    getBriefSettings: async () => ({ enabled: true, provider: null, model: null, effort: null, cap: 60000 }),
+    getBriefSettings: async () => ({ provider: null, model: null, effort: null, cap: 60000 }),
     setBriefSettings: async (patch: object) => {
       h.calls.push("set_settings:" + JSON.stringify(patch));
-      return { enabled: false, provider: null, model: null, effort: null, cap: 60000, ...patch };
+      return { provider: null, model: null, effort: null, cap: 60000, ...patch };
     },
     getWorkspace: async () => {
       if (h.failOnly.has("get_ws")) throw "offline";

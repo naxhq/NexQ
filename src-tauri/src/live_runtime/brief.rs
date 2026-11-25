@@ -314,6 +314,16 @@ async fn run(
         swap.set_expected(Some(gen0));
         let (_tick, prepared) = engine.step();
         if let Some(prep) = prepared {
+            // the workspace's switch is read again before every run: off (or a new scope) means this prompt is never sent
+            let before = engine.scope();
+            refresh_scope!();
+            if quitting || engine.scope() != before {
+                engine.abort(prep);
+                if quitting {
+                    break;
+                }
+                continue;
+            }
             let req = prep.request.clone();
             let fut = swap.call(&req);
             tokio::pin!(fut);

@@ -152,19 +152,20 @@ impl LiveRuntimes {
         Ok(merged)
     }
 
+    /// The brief's model settings. (Whether it runs is the workspace's switch, not a setting here.)
     pub fn patch_brief(&self, patch: &Value) -> Result<BriefSettings, String> {
-        let (merged, stop): (BriefSettings, Vec<tokio::sync::mpsc::UnboundedSender<BriefCmd>>) = {
-            let mut g = self.inner.lock().unwrap();
-            let merged = merge(&g.brief, patch)?;
-            self.deps.db.kv_set(BRIEF_KEY, &serde_json::to_string(&merged).map_err(|e| e.to_string())?)?;
-            let turning_off = g.brief.enabled && !merged.enabled;
-            g.brief = merged.clone();
-            let stop = if turning_off { g.briefs.values().map(|h| h.tx.clone()).collect() } else { Vec::new() };
-            (merged, stop)
-        };
-        for tx in stop {
-            let _ = tx.send(BriefCmd::Stop);
+        // an older caller may still send `enabled`: it means nothing any more
+        let mut patch = patch.clone();
+        if let Some(o) = patch.as_object_mut() {
+            o.remove("enabled");
         }
+        let merged = {
+            let mut g = self.inner.lock().unwrap();
+            let merged = merge(&g.brief, &patch)?;
+            self.deps.db.kv_set(BRIEF_KEY, &serde_json::to_string(&merged).map_err(|e| e.to_string())?)?;
+            g.brief = merged.clone();
+            merged
+        };
         self.deps.emitter.emit("brief_settings_changed", serde_json::to_value(&merged).unwrap_or(Value::Null));
         Ok(merged)
     }
@@ -337,9 +338,6 @@ impl LiveRuntimes {
         self.require_live(meeting_id)?;
         let settings = {
             let g = self.inner.lock().unwrap();
-            if !g.brief.enabled {
-                return Err("The brief is turned off".into());
-            }
             if g.briefs.get(meeting_id).map(|h| !h.finished.load(Ordering::SeqCst)).unwrap_or(false) {
                 return Ok(());
             }
@@ -362,8 +360,7 @@ impl LiveRuntimes {
                 close(id.to_string());
             }
         });
-        let inner2 = self.inner.clone();
-        let still: Arc<dyn Fn(&LiveScope) -> bool + Send + Sync> = Arc::new(move |s: &LiveScope| s.brief_enabled && inner2.lock().map(|g| g.brief.enabled).unwrap_or(false));
+        let still: Arc<dyn Fn(&LiveScope) -> bool + Send + Sync> = Arc::new(move |s: &LiveScope| s.brief_enabled);
         let handle = brief::spawn(BriefParams {
             meeting_id: meeting_id.to_string(),
             settings,
@@ -423,7 +420,7 @@ impl LiveRuntimes {
     pub fn on_meeting_start(&self, meeting_id: &str) {
         let (n, b) = {
             let g = self.inner.lock().unwrap();
-            (g.notetaker.enabled && g.notetaker.scope == "every", g.brief.enabled)
+            (g.notetaker.enabled && g.notetaker.scope == "every", true)
         };
         if n {
             if let Err(e) = self.notetaker_start(meeting_id) {
@@ -431,7 +428,7 @@ impl LiveRuntimes {
             }
         }
         if b {
-            // only where the workspace has the brief on
+            // the workspace's own switch decides (checked again inside)
             let _ = self.brief_start(meeting_id);
         }
     }
