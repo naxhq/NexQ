@@ -18,7 +18,7 @@ import { languageNote as langNote, resolveLanguage } from "../../talking-points/
 import { Switcher, type SwitcherNote } from "../../talking-points/prompter/Switcher";
 import { ReadingSettingsPopover } from "../../talking-points/prompter/ReadingSettingsPopover";
 import { PromptEditor } from "../../talking-points/prompter/PromptEditor";
-import { Tooltip } from "../../ui";
+import { Popover, Tooltip } from "../../ui";
 import { ReaderControls } from "../../talking-points/prompter/ReaderControls";
 import { ReaderOffers } from "../../talking-points/prompter/ReaderOffers";
 import { PanelEmpty } from "../../talking-points/prompter/PanelEmpty";
@@ -68,6 +68,7 @@ export function PointsPanel() {
   const contentRef = useRef<HTMLDivElement | null>(null);
   const progressRef = useRef<HTMLSpanElement | null>(null);
   const titleBtn = useRef<HTMLButtonElement | null>(null);
+  const settingsBtn = useRef<HTMLButtonElement | null>(null);
   const savedTop = useRef(0);
 
   // Which workspaces' notes this meeting may use: its own plus any it borrows.
@@ -278,7 +279,7 @@ export function PointsPanel() {
           <Tooltip content="Reading settings">
             <button
               type="button"
-              data-reading-trigger=""
+              ref={settingsBtn}
               aria-label="Reading settings"
               aria-haspopup="dialog"
               aria-expanded={settings}
@@ -292,7 +293,7 @@ export function PointsPanel() {
             </button>
           </Tooltip>
         </div>
-        {switcher && (
+        <Popover open={switcher} onClose={() => setSwitcher(false)} anchorRef={titleBtn} label="Notes" align="start" prefer="below">
           <Switcher
             notes={switcherNotes}
             recent={recent ?? []}
@@ -303,16 +304,15 @@ export function PointsPanel() {
               titleBtn.current?.focus();
             }}
           />
-        )}
-        {settings && (
+        </Popover>
+        <Popover open={settings} onClose={() => setSettings(false)} anchorRef={settingsBtn} label="Reading settings" align="end" prefer="below">
           <ReadingSettingsPopover
             reading={reading}
             onChange={(patch) => store.getState().setReading(patch)}
-            onClose={() => setSettings(false)}
             saidItNote={reading.saidIt ? voiceNote : null}
             languageNote={honesty}
           />
-        )}
+        </Popover>
       </div>
 
       {!editing && (

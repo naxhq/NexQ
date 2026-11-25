@@ -26,7 +26,7 @@ import { StreamLatency } from "./StreamLatency";
 import { CLI_AGENTS, cliAgentInfo, cliTierLabel, isCliAgent } from "../lib/cliAgents";
 import { openUpdateDialog } from "../hooks/useUpdater";
 import { SideLanguagePicker } from "../overlay/SideLanguagePicker";
-import { useKeepInWindow } from "../ui/portal";
+import { AnchoredBox } from "../ui/Popover";
 import { useElementSize } from "../overlay/useElementSize";
 
 // ── Human-friendly provider labels ──
@@ -333,8 +333,8 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
       ) : (
         <>
           {/* Online mode: You STT — interactive during recording */}
-          <div className="flex items-center gap-1">
-            <div className="relative">
+          <div className={`flex items-center gap-1 ${narrow ? "min-w-0 shrink" : ""}`}>
+            <div className={`relative ${narrow ? "min-w-0 shrink" : ""}`}>
               <STTChip
                 icon={<Mic className="h-3.5 w-3.5" />}
                 provider={youStt.provider}
@@ -369,8 +369,8 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
           {!narrow && <Divider />}
 
           {/* Online mode: Them STT — interactive during recording */}
-          <div className="flex items-center gap-1">
-            <div className="relative">
+          <div className={`flex items-center gap-1 ${narrow ? "min-w-0 shrink" : ""}`}>
+            <div className={`relative ${narrow ? "min-w-0 shrink" : ""}`}>
               <STTChip
                 icon={<Volume2 className="h-3.5 w-3.5" />}
                 provider={themStt.provider}
@@ -566,7 +566,7 @@ function STTChip({
 
   return (
     <div
-      className={`flex min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 transition-all duration-200 ${
+      className={`flex min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 transition-all duration-200 ${hideModel ? "overflow-hidden" : ""} ${
         muted
           ? "bg-destructive/5 border border-destructive/10"
           : active
@@ -595,7 +595,7 @@ function STTChip({
 
       {/* Text */}
       <div className="flex items-center gap-1 min-w-0">
-        {label && (
+        {label && !hideModel && (
           <span className={`shrink-0 text-meta font-semibold uppercase tracking-wide transition-colors duration-200 ${
             muted ? "text-destructive/50" : active ? c.active : "text-muted-foreground/60"
           }`}>
@@ -617,7 +617,7 @@ function STTChip({
       </div>
 
       {/* Chevron — visible only when interactive */}
-      {interactive && (
+      {interactive && !hideModel && (
         <ChevronUp className={`h-2.5 w-2.5 shrink-0 transition-all duration-200 ${
           pickerOpen ? "text-foreground/60 rotate-0" : "text-muted-foreground/50 rotate-180"
         }`} />
@@ -675,7 +675,6 @@ function STTPickerDropdown({
   otherPartyLabel: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  useKeepInWindow(ref);
   const [apiKeyStatus, setApiKeyStatus] = useState<Record<string, boolean>>({});
   const [localEngines, setLocalEngines] = useState<LocalSTTEngineInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -817,9 +816,9 @@ function STTPickerDropdown({
   })).filter((group) => group.options.length > 0);
 
   return (
-    <div
-      ref={ref}
-      className="absolute bottom-full left-0 mb-2 min-w-[200px] rounded-xl border border-border/30 bg-popover/90 backdrop-blur-md shadow-2xl z-50 overflow-hidden animate-in slide-in-from-bottom-2 fade-in duration-150"
+    <AnchoredBox
+      boxRef={ref}
+      className="min-w-[200px] rounded-xl border border-border/30 bg-popover/90 backdrop-blur-md shadow-2xl z-50 overflow-hidden animate-in slide-in-from-bottom-2 fade-in duration-150"
     >
       {loading ? (
         <div className="px-4 py-3 text-xs text-muted-foreground">Loading providers...</div>
@@ -908,7 +907,7 @@ function STTPickerDropdown({
           )}
         </>
       )}
-    </div>
+    </AnchoredBox>
   );
 }
 
@@ -933,7 +932,6 @@ function LLMPickerDropdown({
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  useKeepInWindow(ref);
   const verifiedProviders = useConfigStore((s) => s.verifiedCloudProviders);
   const cliAgentConfigs = useConfigStore((s) => s.cliAgentConfigs);
   const cliAgentModels = useConfigStore((s) => s.cliAgentModels);
@@ -1019,9 +1017,9 @@ function LLMPickerDropdown({
   const cloudOpts = available.filter((o) => !o.isLocal);
 
   return (
-    <div
-      ref={ref}
-      className="absolute bottom-full left-0 mb-2 min-w-[240px] rounded-xl border border-border/30 bg-popover/90 backdrop-blur-md shadow-2xl z-50 overflow-hidden animate-in slide-in-from-bottom-2 fade-in duration-150"
+    <AnchoredBox
+      boxRef={ref}
+      className="min-w-[240px] rounded-xl border border-border/30 bg-popover/90 backdrop-blur-md shadow-2xl z-50 overflow-hidden animate-in slide-in-from-bottom-2 fade-in duration-150"
     >
       {/* ── Provider section ── */}
       {localOpts.length > 0 && (
@@ -1176,7 +1174,7 @@ function LLMPickerDropdown({
           ) : null}
         </div>
       )}
-    </div>
+    </AnchoredBox>
   );
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { cn } from "../lib/utils";
 import { Portal, anchorOf, placeBox, useDismiss, useMeasured } from "./portal";
 
@@ -67,5 +67,83 @@ export function Popover({ open, onClose, anchorRef, label, align = "start", pref
         {children}
       </div>
     </Portal>
+  );
+}
+
+/**
+ * A floating box that belongs to its parent element (the opener's wrapper) but is drawn in the
+ * window's root, so no `overflow` ancestor can clip it. Placed with the shared `placeBox`
+ * (above by default, flipped/shifted/capped to stay inside the window). Put it where the old
+ * `absolute` box was; pass the same `id`/`role`/`data-*`.
+ */
+export function AnchoredBox({
+  className,
+  prefer = "above",
+  align = "start",
+  boxRef,
+  children,
+  ...rest
+}: {
+  className?: string;
+  prefer?: "below" | "above";
+  align?: "start" | "end" | "center";
+  boxRef?: { current: HTMLDivElement | null };
+  children: ReactNode;
+} & Omit<React.HTMLAttributes<HTMLDivElement>, "style" | "className">) {
+  const ph = useRef<HTMLSpanElement | null>(null);
+  // The box is measured and watched (its content loads and changes), so the placement follows its real size.
+  const [el, setEl] = useState<HTMLDivElement | null>(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  const setRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (boxRef) boxRef.current = node;
+      setEl(node);
+    },
+    [boxRef],
+  );
+  useLayoutEffect(() => {
+    if (!el) return;
+    const measure = () => {
+      const r = el.getBoundingClientRect();
+      setSize((p) => (p.width === r.width && p.height === r.height ? p : { width: r.width, height: r.height }));
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [el]);
+  const [, again] = useState(0);
+  useLayoutEffect(() => {
+    again((n) => n + 1);
+    const on = () => again((n) => n + 1);
+    window.addEventListener("resize", on);
+    return () => window.removeEventListener("resize", on);
+  }, []);
+  const anchor = ph.current?.parentElement ?? null;
+  const pos = anchor ? placeBox(anchorOf(anchor), size, { prefer, align, gap: 8 }) : null;
+  return (
+    <>
+      <span ref={ph} hidden />
+      <Portal>
+        <div
+          {...rest}
+          ref={setRef}
+          style={{
+            position: "fixed",
+            left: pos?.left ?? 0,
+            top: pos?.top ?? 0,
+            zIndex: 60,
+            maxHeight: pos?.maxHeight,
+            maxWidth: pos?.maxWidth,
+            overflowY: "auto",
+            visibility: pos ? "visible" : "hidden",
+          }}
+          className={className}
+        >
+          {children}
+        </div>
+      </Portal>
+    </>
   );
 }

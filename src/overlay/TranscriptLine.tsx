@@ -3,6 +3,7 @@
 // Speaker color is dynamic via speakerStore; confidence underline when enabled.
 // SP2 Task 7: Hover bookmark icon, right-click context menu, bookmarked line indicator.
 
+import { readingTextColor } from "../lib/themeText";
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Bookmark as BookmarkIcon } from "lucide-react";
@@ -304,7 +305,7 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
               ? "border-b border-dotted border-white/30 opacity-70"
               : ""
           }`}
-          style={{ fontSize: `${transcriptFontSize}px`, color: segment.is_final ? transcriptTextColor : undefined }}
+          style={{ fontSize: `${transcriptFontSize}px`, color: segment.is_final ? readingTextColor(transcriptTextColor) : undefined }}
           title={
             isLowConfidence
               ? `Confidence: ${Math.round(segment.confidence * 100)}%`

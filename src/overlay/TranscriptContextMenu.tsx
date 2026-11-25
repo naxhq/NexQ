@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useKeepInWindow } from "../ui/portal";
 import { Bookmark, BookmarkX, MessageSquarePlus, Copy } from "lucide-react";
 
 interface TranscriptContextMenuProps {
@@ -15,6 +16,7 @@ export function TranscriptContextMenu({
   x, y, isBookmarked, onBookmark, onAddNote, onCopy, onClose,
 }: TranscriptContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
+  useKeepInWindow(ref);
 
   // Close on outside click or Escape
   useEffect(() => {

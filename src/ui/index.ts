@@ -14,5 +14,5 @@ export { EmptyState, type EmptyStateProps } from "./EmptyState";
 export { Kbd } from "./Kbd";
 export { WORKSPACE_HUES, hueColor, hueName, isWorkspaceHue, type WorkspaceHue, type WorkspaceHueId } from "./hues";
 export { Portal, getPortalRoot, placeBox, anchorOf, type Placement } from "./portal";
-export { Popover, type PopoverProps } from "./Popover";
+export { Popover, AnchoredBox, type PopoverProps } from "./Popover";
 export { useFocusTrap } from "./useFocusTrap";

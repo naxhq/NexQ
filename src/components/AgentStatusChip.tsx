@@ -3,8 +3,8 @@
 // effort and thinking per tier, and the meeting's usage and response times.
 // Rendered by ServiceStatusBar in both windows.
 
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { useKeepInWindow } from "../ui/portal";
+import { useEffect, useId, useState, type ReactNode } from "react";
+import { AnchoredBox } from "../ui/Popover";
 import { ChevronUp } from "lucide-react";
 import { ProviderLogo } from "./icons/ProviderLogos";
 import { useAgentStore } from "../stores/agentStore";
@@ -171,16 +171,13 @@ function HoverCard({
   const avg = avgLatencyMs(usage);
   const avgFirst = avgFirstTokenMs(usage);
   const agent = cliAgentInfo(kind);
-  const cardRef = useRef<HTMLDivElement>(null);
-  useKeepInWindow(cardRef);
 
   return (
-    <div
-      ref={cardRef}
+    <AnchoredBox
       id={id}
       role="tooltip"
       data-testid="agent-hover-card"
-      className="absolute bottom-full left-0 z-50 mb-2 w-72 rounded-xl border border-border/40 bg-popover p-3 text-meta shadow-lg animate-in fade-in-0 slide-in-from-bottom-1 duration-150"
+      className="w-72 rounded-xl border border-border/40 bg-popover p-3 text-meta shadow-lg animate-in fade-in-0 slide-in-from-bottom-1 duration-150"
     >
       <div className="flex items-baseline justify-between gap-3">
         <span className="text-xs font-semibold text-foreground">
@@ -227,7 +224,7 @@ function HoverCard({
           {detail ?? note}
         </p>
       )}
-    </div>
+    </AnchoredBox>
   );
 }
 

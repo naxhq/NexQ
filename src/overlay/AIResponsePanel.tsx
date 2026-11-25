@@ -1,3 +1,4 @@
+import { readingTextColor } from "../lib/themeText";
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useStreamStore } from "../stores/streamStore";
 import { useMeetingStore } from "../stores/meetingStore";
@@ -60,7 +61,7 @@ export function AIResponsePanel({ short = false }: { short?: boolean } = {}) {
 
   const proseStyle = {
     fontSize: `${aiResponseFontSize}px`,
-    color: aiResponseTextColor,
+    color: readingTextColor(aiResponseTextColor),
     lineHeight: aiResponseLineHeight,
     paddingLeft: `${aiResponseHPad}px`,
     paddingRight: `${aiResponseHPad}px`,

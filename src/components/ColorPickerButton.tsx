@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useKeepInWindow } from "../ui/portal";
 import { createPortal } from "react-dom";
 
 const PALETTE = [
@@ -28,6 +29,7 @@ interface ColorPickerButtonProps {
 export function ColorPickerButton({ value, onChange, label }: ColorPickerButtonProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  useKeepInWindow(ref);
   const btnRef = useRef<HTMLButtonElement>(null);
   const [pos, setPos] = useState({ x: 0, y: 0 });
 
