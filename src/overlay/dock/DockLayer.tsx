@@ -41,7 +41,8 @@ export function DockLayer({ geo, panels, panelIds, lastRects, hiddenOrInactive }
               key={p}
               id={`nq-panel-${p}`}
               role="tabpanel"
-              aria-labelledby={`nq-tab-${p}`}
+              // A hidden panel has no tab to name it: it carries its own name instead.
+              {...(visible ? { "aria-labelledby": `nq-tab-${p}` } : { "aria-label": panels[p].title })}
               data-dock-panel={p}
               data-visible={visible}
               className="nq-dock-panel"

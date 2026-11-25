@@ -22,7 +22,7 @@ import { useConfigStore } from "../stores/configStore";
 
 function open() {
   render(<ServiceStatusBar compact />);
-  fireEvent.click(screen.getByTitle(/^LLM:/));
+  fireEvent.click(screen.getByRole("button", { name: /^LLM:/ }));
 }
 
 describe("the AI provider picker in the footer", () => {
@@ -67,8 +67,8 @@ describe("the AI provider picker in the footer", () => {
     open();
     await screen.findByRole("button", { name: /Ollama/ });
     const first = invoke.mock.calls.filter((c) => c[0] === "list_models").length;
-    fireEvent.click(screen.getByTitle(/^LLM:/)); // close
-    fireEvent.click(screen.getByTitle(/^LLM:/)); // open again
+    fireEvent.click(screen.getByRole("button", { name: /^LLM:/ })); // close
+    fireEvent.click(screen.getByRole("button", { name: /^LLM:/ })); // open again
     await waitFor(() => expect(invoke.mock.calls.filter((c) => c[0] === "list_models").length).toBeGreaterThan(first));
   });
 
@@ -77,5 +77,25 @@ describe("the AI provider picker in the footer", () => {
     open();
     await screen.findByRole("button", { name: /Ollama/ });
     expect(screen.queryByRole("button", { name: /Custom/ })).toBeNull();
+  });
+
+  it("the chip is a real button; opening moves focus into the picker, arrows move inside it, Escape closes it and returns to the chip", async () => {
+    render(<ServiceStatusBar compact />);
+    const chip = screen.getByRole("button", { name: /^LLM:/ });
+    expect(chip.tagName).toBe("BUTTON");
+    expect(chip).toHaveAttribute("aria-haspopup", "dialog");
+    expect(chip).toHaveAttribute("aria-expanded", "false");
+    chip.focus();
+    fireEvent.click(chip);
+    expect(chip).toHaveAttribute("aria-expanded", "true");
+    await waitFor(() => expect(document.activeElement).not.toBe(chip));
+    const first = document.activeElement as HTMLElement;
+    expect(first.tagName).toBe("BUTTON");
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    expect(document.activeElement).not.toBe(first);
+    fireEvent.keyDown(document.activeElement!, { key: "Home" });
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(document.activeElement).toBe(chip));
   });
 });

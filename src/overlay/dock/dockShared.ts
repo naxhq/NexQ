@@ -33,6 +33,8 @@ export type TabDrag = {
   sx: number;
   sy: number;
   started: boolean;
+  /** The chip's words were set once for this drag. */
+  said?: boolean;
   hit: DropHit | null;
   index?: number;
 };

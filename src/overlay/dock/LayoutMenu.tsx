@@ -77,7 +77,7 @@ export function LayoutMenu({ state, dispatch, panels, onClose }: MenuProps) {
 
   return (
     <div className="text-foreground" aria-label="Layout" onKeyDown={onKeyDown}>
-      <p className="px-2 pt-1 ui-meta text-muted-foreground">Drag panels by their dots</p>
+      {!locked && <p className="px-2 pt-1 ui-meta text-muted-foreground">Drag panels by their dots</p>}
       <div className={sectionCls}>Layouts</div>
       <div className="grid grid-cols-3 gap-1 px-1">
         {PRESET_IDS.map((id) => (

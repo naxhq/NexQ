@@ -1,5 +1,5 @@
 import { useReducer, useState, type ReactNode } from "react";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Dock, type DockPanelDef } from "./Dock";
 import { LayoutMenu } from "./LayoutMenu";
@@ -444,29 +444,41 @@ describe("Dock: the drag affordances", () => {
     expect(screen.getByRole("tab", { name: "Transcript" })).toBeTruthy();
   });
 
-  it("a locked layout shows a lock, not dots, and clicking it unlocks", () => {
+  it("a locked layout shows a lock, not dots; clicking it opens the Move menu, which holds Unlock", () => {
     const { container } = render(<Harness />);
     run({ type: "lock", locked: true });
     expect(container.querySelector(".nq-grip-l")).toBeNull();
     const lock = container.querySelector(".nq-dock-lock")!;
     expect(lock).toBeTruthy();
     fireEvent.click(lock.closest(".nq-dock-grip-slot")!);
+    // it did not unlock silently
+    expect(stateRef.layout.locked).toBe(true);
+    const menu = screen.getByRole("menu");
+    expect(menu.textContent).toMatch(/locked/i);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Unlock layout" }));
     expect(stateRef.layout.locked).toBe(false);
     expect(container.querySelector(".nq-grip-l")).toBeTruthy();
   });
 
-  it("a keyboard-focused tab explains itself with the real keys, and the tip is gone once a drag starts", () => {
-    render(<Harness />);
+  it("a keyboard-focused tab always explains itself with the real keys; a press hides it; the grip shows it on hover only", async () => {
+    const { container } = render(<Harness />);
     const tab = screen.getByRole("tab", { name: "Assistant" });
-    tab.focus();
+    // focus from the keyboard: the tip is there at once
     fireEvent.focus(tab);
-    const tip = screen.queryByRole("tooltip");
-    if (tip) {
-      expect(tip.textContent).toContain("Drag to move");
-      expect(tip.textContent).toContain("Shift+F10");
-      ptr("pointerDown", tab, 600, 20);
-      expect(screen.queryByRole("tooltip")).toBeNull();
-    }
+    const tip = screen.getByRole("tooltip");
+    expect(tip.textContent).toContain("Drag to move");
+    expect(tip.textContent).toContain("Shift+F10");
+    // a press (the start of a drag) takes it away
+    ptr("pointerDown", tab, 600, 20);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    fireEvent.pointerUp(tab, { pointerId: 1, button: 0, clientX: 600, clientY: 20, isPrimary: true });
+    fireEvent.blur(tab);
+    // hovering the label does nothing; hovering the grip does, after a moment
+    fireEvent.mouseEnter(tab.querySelector(".nq-dock-tab-label")!);
+    await new Promise((r) => setTimeout(r, 450));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    fireEvent.mouseEnter(container.querySelector(".nq-dock-grip-slot")!);
+    await waitFor(() => expect(screen.getByRole("tooltip").textContent).toContain("Drag to move"), { timeout: 1200 });
   });
 
   it("while dragging, the chip and the status text say the same thing, from the drop target; the box carries no second label, taken from the drop target", () => {
@@ -482,8 +494,7 @@ describe("Dock: the drag affordances", () => {
     expect(dock.getAttribute("data-hit")).toBe("true");
     const label = "Right of Assistant";
     expect(container.querySelector(".nq-dock-ghost-do")!.textContent).toBe(label);
-    // the words live on the chip only during a pointer drag
-    expect((container.querySelector(".nq-dock-drop-label") as HTMLElement).style.display).toBe("none");
+    expect(container.querySelector(".nq-dock-drop-label")).toBeNull();
     expect(screen.getByRole("status").textContent).toBe(`Transcript: ${label}`);
     ptr("pointerUp", tab, a.rect.x + a.rect.w - 14, 300);
     expect(panelsOf(stateRef.layout.root)).toEqual(["assistant", "transcript"]);
@@ -524,3 +535,22 @@ describe("Dock: the drag affordances", () => {
     expect(stateRef.drags).toBe(1);
   });
 });
+
+describe("Dock: one wording over a panel's own centre", () => {
+  const ptr = (type: "pointerDown" | "pointerMove" | "pointerUp", el: Element, x: number, y: number) =>
+    fireEvent[type](el, { pointerId: 1, button: 0, clientX: x, clientY: y, isPrimary: true });
+
+  it("says 'No change here' there from the first move, and does not alternate with the starting hint", () => {
+    const { container } = render(<Harness />);
+    const tab = screen.getByRole("tab", { name: "Transcript" });
+    const words = () => container.querySelector(".nq-dock-ghost-do")!.textContent;
+    ptr("pointerDown", tab, 100, 25);
+    ptr("pointerMove", tab, 130, 60); // inside its own panel
+    expect(words()).toBe("No change here");
+    ptr("pointerMove", tab, 160, 200);
+    ptr("pointerMove", tab, 140, 300);
+    expect(words()).toBe("No change here");
+    fireEvent.keyDown(window, { key: "Escape" });
+  });
+});
+

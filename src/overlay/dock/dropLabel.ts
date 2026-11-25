@@ -20,8 +20,7 @@ export function dropLabel(
   const stackId = to.target.stackId;
   const stack = findStackOf(layout.root, panel);
   const into = leafById(layout, stackId);
-  // Dropping beside the stack the panel is in names a panel that stays, not the one being moved.
-  const stays = into ? (into.active !== panel ? into.active : into.panels.find((p) => p !== panel) ?? into.active) : null;
+  const stays = targetPanel(layout, to, panel);
   const name = stays ? title(stays) : "panel";
   if (to.zone === "center") return stack && stack.id === stackId ? "Reorder" : `Tab in ${name}`;
   return { left: `Left of ${name}`, right: `Right of ${name}`, top: `Above ${name}`, bottom: `Below ${name}` }[to.zone];
@@ -43,3 +42,11 @@ function leafById(layout: Layout, id: string) {
 /** The first few successful drags carry a short note; after that only the chip. */
 export const DRAG_NOTE_LIMIT = 5;
 export const showDragNote = (drags: number | undefined): boolean => (drags ?? 0) < DRAG_NOTE_LIMIT;
+
+/** The panel a drop is "of": beside the stack the panel is in, it is one that stays, not the one being moved. */
+export function targetPanel(layout: Layout, to: DropTargetLike, panel: PanelId): PanelId | null {
+  if (to.target.kind !== "stack") return null;
+  const into = leafById(layout, to.target.stackId);
+  if (!into) return null;
+  return into.active !== panel ? into.active : (into.panels.find((p) => p !== panel) ?? into.active);
+}

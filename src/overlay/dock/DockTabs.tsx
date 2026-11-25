@@ -1,6 +1,7 @@
-import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import { useRef, useState, type KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { MoreHorizontal } from "lucide-react";
-import { Tooltip } from "../../ui/Tooltip";
+import { Tooltip, TooltipBubble } from "../../ui/Tooltip";
+import { anchorOf } from "../../ui/portal";
 import { DockGrip } from "./DockGrip";
 import type { Geometry, StackGeo } from "./layoutGeometry";
 import type { DockAction, PanelId } from "./layoutModel";
@@ -47,8 +48,26 @@ export function DockTabs({
   locked = false,
   touch = false,
 }: Props) {
+  const pointerFocus = useRef(false);
+  const [kbTip, setKbTip] = useState<PanelId | null>(null);
+  const tip = locked ? (
+    <>
+      <div className="font-medium">Layout is locked</div>
+      <div className="text-muted-foreground">Click the lock for the unlock option</div>
+    </>
+  ) : (
+    <>
+      <div className="font-medium">Drag to move</div>
+      <div className="text-muted-foreground">Right-click or Shift+F10 for options</div>
+    </>
+  );
+  const kbAnchor =
+    kbTip && typeof document !== "undefined"
+      ? document.getElementById(`nq-tab-${kbTip}`)?.querySelector(".nq-dock-grip-slot")
+      : null;
   const extraOf = (p: PanelId) => (renderTabExtra ? renderTabExtra(p) : null);
   return (
+    <>
       <div className="nq-dock-layer" data-dock-layer="tabs">
         {geo.stacks.map((s) =>
           s.strip ? (
@@ -78,24 +97,8 @@ export function DockTabs({
                 {s.panels.map((p) => {
                   const sel = p === s.active;
                   return (
-                    <Tooltip
-                      key={p}
-                      disabled={touch || s.virtual}
-                      content={
-                        locked ? (
-                          <>
-                            <div className="font-medium">Layout is locked</div>
-                            <div className="text-muted-foreground">Click the lock to unlock</div>
-                          </>
-                        ) : (
-                          <>
-                            <div className="font-medium">Drag to move</div>
-                            <div className="text-muted-foreground">Right-click or Shift+F10 for options</div>
-                          </>
-                        )
-                      }
-                    >
                     <button
+                      key={p}
                       id={`nq-tab-${p}`}
                       type="button"
                       role="tab"
@@ -103,11 +106,26 @@ export function DockTabs({
                       aria-controls={`nq-panel-${p}`}
                       tabIndex={sel ? 0 : -1}
                       className="nq-dock-tab"
-                      onPointerDown={(e) => tabPointerDown(e, p, s)}
+                      onPointerDown={(e) => {
+                        pointerFocus.current = true;
+                        setKbTip(null);
+                        tabPointerDown(e, p, s);
+                      }}
+                      onFocus={() => {
+                        // Keyboard focus always explains itself; focus that came from a press does not.
+                        if (!pointerFocus.current && !touch && !s.virtual) setKbTip(p);
+                      }}
+                      onBlur={() => {
+                        pointerFocus.current = false;
+                        setKbTip(null);
+                      }}
                       onPointerMove={tabPointerMove}
                       onPointerUp={(e) => tabPointerUp(e, p)}
                       onPointerCancel={tabPointerCancel}
-                      onKeyDown={(e) => tabKeyDown(e, p, s)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") setKbTip(null);
+                        tabKeyDown(e, p, s);
+                      }}
                       onContextMenu={(e) => {
                         e.preventDefault();
                         openMenu(p);
@@ -121,21 +139,24 @@ export function DockTabs({
                       }}
                     >
                       {!s.virtual && (
-                        <span
-                          className="nq-dock-grip-slot"
-                          onPointerDown={locked ? (e) => e.stopPropagation() : undefined}
-                          onPointerUp={locked ? (e) => e.stopPropagation() : undefined}
-                          onClick={
-                            locked
-                              ? (e) => {
-                                  e.stopPropagation();
-                                  act({ type: "lock", locked: false }, "Layout unlocked");
-                                }
-                              : undefined
-                          }
-                        >
-                          <DockGrip locked={locked} />
-                        </span>
+                        <Tooltip disabled={touch} content={tip} delay={350}>
+                          <span
+                            className="nq-dock-grip-slot"
+                            onPointerDown={locked ? (e) => e.stopPropagation() : undefined}
+                            onPointerUp={locked ? (e) => e.stopPropagation() : undefined}
+                            onClick={
+                              locked
+                                ? (e) => {
+                                    // The lock opens the Move menu, which says why and holds Unlock.
+                                    e.stopPropagation();
+                                    openMenu(p);
+                                  }
+                                : undefined
+                            }
+                          >
+                            <DockGrip locked={locked} />
+                          </span>
+                        </Tooltip>
                       )}
                       <span className="nq-dock-tab-icon" data-tab-icon>
                         {panels[p]?.icon}
@@ -144,7 +165,6 @@ export function DockTabs({
                         {title(p)}
                       </span>
                     </button>
-                    </Tooltip>
                   );
                 })}
               </div>
@@ -165,5 +185,7 @@ export function DockTabs({
           ),
         )}
       </div>
+      {kbAnchor && <TooltipBubble anchor={anchorOf(kbAnchor)}>{tip}</TooltipBubble>}
+    </>
   );
 }

@@ -4,3 +4,4 @@ export * from "./layoutPresets";
 export * from "./layoutSanitize";
 export * from "./layoutReducer";
 export * from "./dropLabel";
+export * from "./dropPreview";

@@ -27,6 +27,8 @@ import { CLI_AGENTS, cliAgentInfo, cliTierLabel, isCliAgent } from "../lib/cliAg
 import { openUpdateDialog } from "../hooks/useUpdater";
 import { SideLanguagePicker } from "../overlay/SideLanguagePicker";
 import { AnchoredBox } from "../ui/Popover";
+import { Tooltip } from "../ui/Tooltip";
+import { usePickerKeys } from "./usePickerKeys";
 import { useElementSize } from "../overlay/useElementSize";
 
 // ── Human-friendly provider labels ──
@@ -426,7 +428,7 @@ export function UpdatePill() {
       <Divider />
       <button
         onClick={openUpdateDialog}
-        title={`See what's new in v${version} and install it`}
+        aria-label={`See what's new in v${version} and install it`}
         className="flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15"
       >
         <ArrowUpCircle className="h-3 w-3" />
@@ -564,16 +566,18 @@ function STTChip({
 }) {
   const c = COLOR_MAP[color];
 
-  return (
-    <div
-      className={`flex min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 transition-all duration-200 ${hideModel ? "overflow-hidden" : ""} ${
+  const Root = interactive ? "button" : "div";
+  const chip = (
+    <Root
+      {...(interactive ? { type: "button" as const, "aria-haspopup": "dialog" as const, "aria-expanded": pickerOpen } : {})}
+      aria-label={tooltip}
+      className={`flex min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-left transition-all duration-200 ui-focus ${hideModel ? "overflow-hidden" : ""} ${
         muted
           ? "bg-destructive/5 border border-destructive/10"
           : active
             ? `${c.bg} border ${c.border} shadow-sm ${c.glow}`
             : "bg-secondary/30 border border-transparent"
       } ${interactive ? "cursor-pointer hover:brightness-110" : ""}`}
-      title={tooltip}
       onClick={interactive ? onClick : undefined}
     >
       {/* Status dot */}
@@ -594,7 +598,7 @@ function STTChip({
       </span>
 
       {/* Text */}
-      <div className="flex items-center gap-1 min-w-0">
+      <span className="flex items-center gap-1 min-w-0">
         {label && !hideModel && (
           <span className={`shrink-0 text-meta font-semibold uppercase tracking-wide transition-colors duration-200 ${
             muted ? "text-destructive/50" : active ? c.active : "text-muted-foreground/60"
@@ -614,7 +618,7 @@ function STTChip({
             {model}
           </span>
         )}
-      </div>
+      </span>
 
       {/* Chevron — visible only when interactive */}
       {interactive && !hideModel && (
@@ -622,8 +626,9 @@ function STTChip({
           pickerOpen ? "text-foreground/60 rotate-0" : "text-muted-foreground/50 rotate-180"
         }`} />
       )}
-    </div>
+    </Root>
   );
+  return <Tooltip content={tooltip}>{chip}</Tooltip>;
 }
 
 // ── Mute Button ─────────────────────────────────────────────────────
@@ -639,21 +644,24 @@ function MuteButton({
   onToggle: () => void;
   label: string;
 }) {
+  const name = muted ? `Unmute ${label}` : `Mute ${label}`;
   return (
+    <Tooltip content={name}>
     <button
       onClick={onToggle}
-      className={`shrink-0 rounded-full p-1 transition-all duration-150 cursor-pointer ${
+      className={`shrink-0 rounded-full p-1 transition-all duration-150 cursor-pointer ui-focus ${
         muted
           ? "bg-red-500/10 text-red-400 hover:bg-red-500/20"
           : "text-muted-foreground/60 hover:text-foreground/70 hover:bg-accent/40"
       }`}
-      title={muted ? `Unmute ${label}` : `Mute ${label}`}
+      aria-label={muted ? `Unmute ${label}` : `Mute ${label}`}
     >
       {type === "mic"
         ? (muted ? <MicOff className="h-3 w-3" /> : <Mic className="h-3 w-3" />)
         : (muted ? <VolumeX className="h-3 w-3" /> : <Volume2 className="h-3 w-3" />)
       }
     </button>
+    </Tooltip>
   );
 }
 
@@ -675,6 +683,7 @@ function STTPickerDropdown({
   otherPartyLabel: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  usePickerKeys(ref);
   const [apiKeyStatus, setApiKeyStatus] = useState<Record<string, boolean>>({});
   const [localEngines, setLocalEngines] = useState<LocalSTTEngineInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -818,7 +827,7 @@ function STTPickerDropdown({
   return (
     <AnchoredBox
       boxRef={ref}
-      className="min-w-[200px] rounded-xl border border-border/30 bg-popover/90 backdrop-blur-md shadow-2xl z-50 overflow-hidden animate-in slide-in-from-bottom-2 fade-in duration-150"
+      className="min-w-[200px] rounded-xl border border-border/30 bg-popover shadow-2xl z-50 overflow-hidden animate-in slide-in-from-bottom-2 fade-in duration-150"
     >
       {loading ? (
         <div className="px-4 py-3 text-xs text-muted-foreground">Loading providers...</div>
@@ -932,6 +941,7 @@ function LLMPickerDropdown({
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  usePickerKeys(ref);
   const verifiedProviders = useConfigStore((s) => s.verifiedCloudProviders);
   const cliAgentConfigs = useConfigStore((s) => s.cliAgentConfigs);
   const cliAgentModels = useConfigStore((s) => s.cliAgentModels);
@@ -949,7 +959,12 @@ function LLMPickerDropdown({
   // ready while the app ran shows up now, not after a restart. These are cheap local checks
   // (no model call).
   useEffect(() => {
-    for (const { id } of CLI_AGENTS) void refreshAgentStatus(id);
+    // A subscription status younger than a minute is reused (it was just looked at).
+    const checkedAt = useAgentStore.getState().checkedAt;
+    for (const { id } of CLI_AGENTS) {
+      const at = checkedAt[id];
+      if (at == null || Date.now() - at > 60_000) void refreshAgentStatus(id);
+    }
     let cancelled = false;
     (async () => {
       const { listModels } = await import("../lib/ipc");
@@ -1068,7 +1083,7 @@ function LLMPickerDropdown({
   return (
     <AnchoredBox
       boxRef={ref}
-      className="min-w-[240px] rounded-xl border border-border/30 bg-popover/90 backdrop-blur-md shadow-2xl z-50 overflow-hidden animate-in slide-in-from-bottom-2 fade-in duration-150"
+      className="min-w-[240px] rounded-xl border border-border/30 bg-popover shadow-2xl z-50 overflow-hidden animate-in slide-in-from-bottom-2 fade-in duration-150"
     >
       {/* ── Provider section ── */}
       {localOpts.length > 0 && (

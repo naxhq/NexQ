@@ -14,7 +14,7 @@ export type ButtonSize = "sm" | "md" | "lg";
  *    reach 3:1 on the page in both themes. `quiet` has a quiet edge because its label already says what it is.
  */
 const BASE =
-  "ui-body ui-focus inline-flex shrink-0 select-none items-center justify-center gap-1.5 whitespace-nowrap font-medium outline-none transition-colors duration-150 disabled:pointer-events-none disabled:opacity-50";
+  "ui-body ui-focus inline-flex shrink-0 select-none items-center justify-center gap-1.5 whitespace-nowrap font-medium outline-none transition-colors duration-150 disabled:pointer-events-none";
 
 const SIZE: Record<ButtonSize, string> = {
   sm: "ui-r-md h-7 rounded-md px-2.5",
@@ -25,10 +25,10 @@ const SIZE: Record<ButtonSize, string> = {
 const VARIANT: Record<ButtonVariant, string> = {
   primary: "ui-solid",
   /** A secondary action: field surface with a quiet edge. */
-  quiet: "ui-field text-foreground",
+  quiet: "ui-field text-foreground disabled:text-muted-foreground",
   /** Text only, for actions inside a list or a footer. */
-  ghost: "text-muted-foreground hover:bg-accent hover:text-foreground",
-  danger: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
+  ghost: "text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-60",
+  danger: "bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:bg-muted disabled:text-muted-foreground",
 };
 
 const ICON_SIZE: Record<Exclude<ButtonSize, "lg">, string> = {

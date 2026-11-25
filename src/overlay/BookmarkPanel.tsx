@@ -78,7 +78,7 @@ function BookmarkRow({
       <button
         onClick={() => scrollToSegment(bookmark.segment_id)}
         className="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 hover:bg-primary/20 transition-colors cursor-pointer"
-        title="Jump to line"
+        aria-label="Jump to line"
       >
         <span className="tabular-nums text-[10px] font-semibold text-primary">
           {formatDurationLong(elapsedMs)}

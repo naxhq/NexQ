@@ -3,6 +3,7 @@
 // Speaker color is dynamic via speakerStore; confidence underline when enabled.
 // SP2 Task 7: Hover bookmark icon, right-click context menu, bookmarked line indicator.
 
+import { Tooltip } from "../ui/Tooltip";
 import { readableOn, readingTextColor, useIsLight } from "../lib/themeText";
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
@@ -260,12 +261,11 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
       onContextMenu={handleContextMenu}
     >
       {/* Timestamp */}
-      <span
-        className="mt-[3px] shrink-0 text-[0.6875rem] tabular-nums text-muted-foreground/45 font-medium tracking-tight"
-        title={fullTimestamp}
-      >
-        {isHovered ? fullTimestamp : shortTimestamp}
-      </span>
+      <Tooltip content={fullTimestamp}>
+        <span className="mt-[3px] shrink-0 text-[0.6875rem] tabular-nums text-muted-foreground/45 font-medium tracking-tight">
+          {isHovered ? fullTimestamp : shortTimestamp}
+        </span>
+      </Tooltip>
 
       {/* Speaker label — click to rename */}
       {isEditing ? (
@@ -288,7 +288,7 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
           className={`mt-[3px] shrink-0 text-[0.6875rem] font-semibold tracking-tight ${canRename ? "cursor-pointer hover:underline" : ""} ${isPending ? "animate-pulse" : ""}`}
           style={{ color: readableOn(speakerHex, isLight ? "light" : "dark") }}
           onClick={startEditing}
-          title={canRename ? "Click to rename" : undefined}
+          aria-label={canRename ? "Click to rename" : undefined}
         >
           {speakerLabel}
         </span>
@@ -375,8 +375,8 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
       <div className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
           onClick={handleToggleBookmark}
-          className="rounded p-0.5 hover:bg-accent/50 transition-colors"
-          title={isBookmarked ? "Remove bookmark" : "Bookmark this line"}
+          className="-m-1 rounded p-1.5 hover:bg-accent/50 transition-colors ui-focus"
+          aria-label={isBookmarked ? "Remove bookmark" : "Bookmark this line"}
         >
           <BookmarkIcon className={`h-3 w-3 ${isBookmarked ? "fill-primary text-primary" : "text-muted-foreground/40"}`} />
         </button>

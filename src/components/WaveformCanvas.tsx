@@ -41,11 +41,11 @@ interface WaveformCanvasProps {
 // Colors are fixed literals (not CSS variables), so the cached bar layers do
 // not depend on the app theme. If these ever become theme-driven, resolve them
 // at render time and add them to the layer useMemo deps below.
-const COLOR_PLAYED = "#818cf8";                          // indigo — played bars
-const COLOR_UNPLAYED = "rgba(255, 255, 255, 0.10)";     // subtle white — unplayed bars
-const COLOR_PLAYHEAD = "#818cf8";                        // indigo — playhead line
-const COLOR_BOOKMARK = "#f59e0b";                        // amber — bookmark dots
-const COLOR_TOPIC = "rgba(16, 185, 129, 0.40)";         // emerald — topic dividers
+const COLOR_PLAYED = "#6366f1";                          // indigo 500, 3:1 or better on both themes
+const COLOR_UNPLAYED = "rgba(100, 116, 139, 0.45)";      // slate, visible on light and dark
+const COLOR_PLAYHEAD = "#6366f1";
+const COLOR_BOOKMARK = "#d97706";                        // amber 600
+const COLOR_TOPIC = "rgba(5, 150, 105, 0.55)";           // emerald 600
 
 const BAR_GAP_RATIO = 0.08;   // minimal gap for smooth continuous look
 const BAR_STRIDE_PX = 3;      // device px per bar slot — caps bar count to canvas resolution

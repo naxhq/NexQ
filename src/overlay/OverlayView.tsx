@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { OVERLAY_CONTRAST_CSS, OVERLAY_MOTION_CSS } from "./overlayMotion";
+import { ACCENT_TEXT, OVERLAY_CONTRAST_CSS, OVERLAY_MOTION_CSS } from "./overlayMotion";
 import { readableOn, useIsLight } from "../lib/themeText";
+import { backingFor, hslVarToRgb, readThemeColours, rgbToHslVar, surfaceAlphaFor } from "./backing";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useScenarioStore } from "../stores/scenarioStore";
 import { useTranslationStore } from "../stores/translationStore";
@@ -66,7 +67,7 @@ import {
   ScreenShare,
   ScreenShareOff,
 } from "lucide-react";
-import { Kbd, Menu, type MenuItemSpec } from "../ui";
+import { Kbd, Menu, Tooltip, type MenuItemSpec } from "../ui";
 import { toggleStealthMode } from "../hooks/useGlobalShortcut";
 import { formatShortcut, isMacPlatform } from "../lib/shortcutLabel";
 import { formatDuration } from "../lib/utils";
@@ -93,6 +94,20 @@ export function OverlayView() {
   const scenarioName = useScenarioStore((s) => s.getActiveTemplate().name);
   const meetingId = activeMeeting?.id ?? "";
   const isLight = useIsLight();
+  const overlayOpacity = useConfigStore((s) => s.overlayOpacity);
+  // What the window needs so text and icons read over any background at this transparency (see backing.ts).
+  // Where the theme's colours cannot be read (no CSS), nothing is changed.
+  const backing = useMemo(() => {
+    const t = ACCENT_TEXT[isLight ? "light" : "dark"] as Record<string, string>;
+    const c = readThemeColours(Object.values(t).map(hslVarToRgb));
+    return c.background[0] + c.background[1] + c.background[2] === 0 && c.foreground[0] === 0 ? null : backingFor(c, overlayOpacity);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overlayOpacity, isLight]);
+  const backingVars = backing && backing.muted > 0 ? ({ "--muted-foreground": rgbToHslVar(backing.mutedRgb) } as React.CSSProperties) : undefined;
+  const chromeBacking =
+    backing && backing.alpha > overlayOpacity
+      ? { background: `hsl(var(--background) / ${surfaceAlphaFor(overlayOpacity, backing.alpha, 0).toFixed(3)})` }
+      : undefined;
 
   useEffect(() => {
     if (!returnFocusToSettings) return;
@@ -223,7 +238,6 @@ export function OverlayView() {
   const mutedThem = useConfigStore((s) => s.mutedThem);
   const toggleMuteYou = useConfigStore((s) => s.toggleMuteYou);
   const toggleMuteThem = useConfigStore((s) => s.toggleMuteThem);
-  const overlayOpacity = useConfigStore((s) => s.overlayOpacity);
   const stealthMode = useConfigStore((s) => s.stealthMode);
   const stealthShortcut = useConfigStore((s) => s.stealthShortcut);
   const setOverlayOpacity = useConfigStore((s) => s.setOverlayOpacity);
@@ -389,7 +403,7 @@ export function OverlayView() {
   );
 
   return (
-    <div className="overlay-bg flex h-full flex-col rounded-xl border border-border/20 shadow-xl" style={{ background: `hsl(var(--background) / ${overlayOpacity})`, backdropFilter: overlayOpacity > 0.7 ? "blur(12px) saturate(1.1)" : "none" }}>
+    <div className="overlay-bg flex h-full flex-col rounded-xl border border-border/20 shadow-xl" style={{ background: `hsl(var(--background) / ${overlayOpacity})`, backdropFilter: overlayOpacity > 0.7 ? "blur(12px) saturate(1.1)" : "none", ...backingVars }}>
 
       <style>{`${OVERLAY_MOTION_CSS} ${OVERLAY_CONTRAST_CSS}`}</style>
       {/* ═══ HEADER ═══ */}
@@ -397,11 +411,11 @@ export function OverlayView() {
         ref={headerRef}
         className="no-select flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-2 cursor-move"
         data-tauri-drag-region
-        style={{ borderBottom: "1px solid hsl(var(--border) / 0.12)" }}
+        style={{ borderBottom: "1px solid hsl(var(--border) / 0.12)", ...chromeBacking }}
       >
         <div className="flex min-w-0 items-center gap-2.5" data-tauri-drag-region>
           <GripHorizontal className="h-3 w-3 text-muted-foreground/40" />
-          <span className="text-xs font-semibold text-foreground/90 truncate max-w-[160px]" title={meetingTitle}>
+          <span className="text-xs font-semibold text-foreground/90 truncate max-w-[160px]">
             {meetingTitle}
           </span>
           {recordingEnabled && (
@@ -430,6 +444,7 @@ export function OverlayView() {
 
         <div className="flex flex-wrap items-center justify-end gap-1">
           {/* Mute controls */}
+          <Tooltip content={mutedYou ? "Unmute mic (You)" : "Mute mic (You)"}>
           <button
             onClick={toggleMuteYou}
             className={`rounded-lg p-2 transition-all duration-150 cursor-pointer ${
@@ -439,10 +454,11 @@ export function OverlayView() {
             }`}
             aria-label={mutedYou ? "Unmute mic (You)" : "Mute mic (You)"}
             aria-pressed={mutedYou}
-            title={mutedYou ? "Unmute mic (You)" : "Mute mic (You)"}
           >
             {mutedYou ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
           </button>
+          </Tooltip>
+          <Tooltip content={mutedThem ? "Unmute them" : "Mute them"}>
           <button
             onClick={toggleMuteThem}
             className={`rounded-lg p-2 transition-all duration-150 cursor-pointer ${
@@ -452,10 +468,10 @@ export function OverlayView() {
             }`}
             aria-label={mutedThem ? "Unmute them" : "Mute them"}
             aria-pressed={mutedThem}
-            title={mutedThem ? "Unmute them" : "Mute them"}
           >
             {mutedThem ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
           </button>
+          </Tooltip>
           <div className="w-px h-3.5 bg-border/20 mx-0.5" />
           {!compactHeader && <HeaderBtn
             icon={mode === "split" ? <Columns2 className="h-3.5 w-3.5" /> : mode === "ai" ? <PanelLeftClose className="h-3.5 w-3.5" /> : <PanelRightClose className="h-3.5 w-3.5" />}
@@ -504,7 +520,7 @@ export function OverlayView() {
                 ? "bg-primary/10 text-primary ring-1 ring-primary/20"
                 : "text-muted-foreground hover:bg-accent"
             }`}
-            title="Toggle auto-translate"
+            aria-label="Toggle auto-translate"
             aria-pressed={autoTranslateActive}
           >
             <Globe className="h-3 w-3" aria-hidden="true" />
@@ -535,7 +551,7 @@ export function OverlayView() {
                 onClick={handleTranslateAll}
                 disabled={isBatchTranslating}
                 className="flex items-center gap-1 rounded-md border border-primary/20 bg-primary/5 px-1.5 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/10 transition-colors disabled:opacity-50 cursor-pointer"
-                title="Translate all past transcript segments"
+                aria-label="Translate all past transcript segments"
               >
                 {isBatchTranslating ? "Translating..." : "Translate All"}
               </button>
@@ -565,6 +581,7 @@ export function OverlayView() {
             state={dock}
             dispatch={dockDispatch}
             windowOpacity={overlayOpacity}
+            surfaceAlpha={backing ? surfaceAlphaFor(overlayOpacity, backing.alpha) : undefined}
             renderTabExtra={(p) => (p === "transcript" && shortTranscript ? <TranscriptTabMeters /> : null)}
           />
         </div>
@@ -574,7 +591,7 @@ export function OverlayView() {
       <BookmarkToast />
 
       {/* ═══ FOOTER: Service Status ═══ */}
-      <div className="border-t border-border/20">
+      <div className="border-t border-border/20" style={chromeBacking}>
         <ServiceStatusBar compact />
       </div>
     </div>
@@ -597,16 +614,18 @@ function ElapsedClock() {
 // ── Header Button ──
 function HeaderBtn({ icon, active, onClick, tooltip }: { icon: React.ReactNode; active?: boolean; onClick: () => void; tooltip: string }) {
   return (
-    <button
-      onClick={onClick}
-      className={`rounded-lg p-2 transition-all duration-150 cursor-pointer ${
-        active ? "bg-primary/10 text-primary" : "text-muted-foreground/60 hover:bg-accent/60 hover:text-foreground"
-      }`}
-      aria-label={tooltip}
-      aria-pressed={active}
-    >
-      {icon}
-    </button>
+    <Tooltip content={tooltip}>
+      <button
+        onClick={onClick}
+        className={`rounded-lg p-2 transition-all duration-150 cursor-pointer ui-focus ${
+          active ? "bg-primary/10 text-primary" : "text-muted-foreground/60 hover:bg-accent/60 hover:text-foreground"
+        }`}
+        aria-label={tooltip}
+        aria-pressed={active}
+      >
+        {icon}
+      </button>
+    </Tooltip>
   );
 }
 

@@ -131,7 +131,7 @@ export function SideLanguagePicker({ side }: { side: LanguageSide }) {
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={summary}
-        title={summary}
+        
         className={`flex shrink-0 cursor-pointer items-center gap-1 rounded-full px-1.5 py-0.5 text-meta font-medium tabular-nums transition-colors duration-150 ${
           open
             ? "bg-accent/50 text-foreground"
@@ -156,7 +156,7 @@ export function SideLanguagePicker({ side }: { side: LanguageSide }) {
             aria-label={name}
             onKeyDown={onPopoverKeyDown}
             style={{ top: pos.top, left: pos.left, width: POPOVER_WIDTH, maxHeight: pos.maxHeight, overflowY: "auto" }}
-            className="scope-pop-enter fixed z-50 rounded-xl border border-border/30 bg-popover/95 p-1.5 shadow-2xl backdrop-blur-md"
+            className="scope-pop-enter fixed z-50 rounded-xl border border-border/30 bg-popover p-1.5 shadow-2xl"
           >
             <p className="px-2 pb-1 pt-0.5 text-[0.6rem] font-medium uppercase tracking-widest text-muted-foreground/45">
               {info.label} speaks

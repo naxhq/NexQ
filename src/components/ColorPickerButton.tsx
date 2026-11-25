@@ -56,7 +56,7 @@ export function ColorPickerButton({ value, onChange, label }: ColorPickerButtonP
         ref={btnRef}
         onClick={handleOpen}
         className="flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-white/5 transition-colors cursor-pointer"
-        title={label || "Pick color"}
+        aria-label={label || "Pick color"}
       >
         <div
           className="h-3.5 w-3.5 rounded border border-white/15"
@@ -70,7 +70,7 @@ export function ColorPickerButton({ value, onChange, label }: ColorPickerButtonP
       {open && createPortal(
         <div
           ref={ref}
-          className="fixed z-[9999] rounded-lg border border-white/10 p-2.5 shadow-2xl shadow-black/60"
+          className="dark fixed z-[9999] rounded-lg border border-white/10 p-2.5 text-foreground shadow-2xl shadow-black/60"
           style={{
             backgroundColor: '#111122',
             left: `${Math.max(90, Math.min(pos.x - 90, window.innerWidth - 195))}px`,
@@ -89,7 +89,7 @@ export function ColorPickerButton({ value, onChange, label }: ColorPickerButtonP
                     : "hover:brightness-110 hover:ring-1 hover:ring-white/25 hover:ring-offset-1 hover:ring-offset-[#111122]"
                 }`}
                 style={{ backgroundColor: c.value }}
-                title={c.name}
+                aria-label={c.name}
               />
             ))}
           </div>

@@ -65,7 +65,7 @@ function InlineRename({ speakerId, displayName, color }: { speakerId: string; di
     <button
       onClick={() => { setValue(displayName); setEditing(true); }}
       className="group/rename flex items-center gap-1 shrink-0 w-24 truncate cursor-pointer"
-      title={`${displayName} — click to rename`}
+      aria-label={`${displayName} — click to rename`}
     >
       <span className="text-xs font-semibold truncate" style={{ color }}>{displayName}</span>
       <Pencil className="h-2.5 w-2.5 text-muted-foreground/30 opacity-0 group-hover/rename:opacity-100 transition-opacity shrink-0" />

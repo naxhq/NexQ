@@ -293,12 +293,12 @@ describe("ModeButtons hints follow the hotkey bindings", () => {
     useConfigStore.getState().setHotkeys(DEFAULT_HOTKEYS);
   });
 
-  it("shows the default keys, and a rebinding changes the title", () => {
+  it("shows the default keys, and a rebinding changes the name", () => {
     render(<ModeButtons />);
-    expect(button(/^Assist/).title).toContain("(Space)");
-    expect(button(/^Recap/).title).toContain("(4)");
+    expect(button(/^Assist/).getAttribute("aria-label")!).toContain("(Space)");
+    expect(button(/^Recap/).getAttribute("aria-label")!).toContain("(4)");
     act(() => useConfigStore.getState().setHotkeys({ ...useConfigStore.getState().hotkeys, mode_assist: "Q" }));
-    expect(button(/^Assist/).title).toContain("Assist (Q)");
-    expect(button(/^Assist/).title).not.toContain("Space");
+    expect(button(/^Assist/).getAttribute("aria-label")!).toContain("Assist (Q)");
+    expect(button(/^Assist/).getAttribute("aria-label")!).not.toContain("Space");
   });
 });

@@ -16,7 +16,9 @@ import {
   type DockState,
   type PanelId,
   type Zone,
+  visibleDropLabel,
 } from "./layoutModel";
+import { computeGeometry } from "./layoutGeometry";
 
 function rng(seed: number) {
   let a = seed >>> 0;
@@ -54,6 +56,9 @@ function randomState(seed: number): DockState {
   return s;
 }
 
+const kinds = new Set<string>();
+let total = 0;
+
 describe("the label shown while dragging says where the panel really ends up", () => {
   for (let seed = 1; seed <= 25; seed++) {
     it(`random layout ${seed}: every stack zone and every window edge`, () => {
@@ -74,6 +79,8 @@ describe("the label shown while dragging says where the panel really ends up", (
           const after = next.layout;
           const mine = findStackOf(after.root, P)!;
           checked++;
+          total++;
+          kinds.add(to.target.kind === "edge" ? `${to.zone} edge` : to.zone === "center" ? (label === "Reorder" ? "Reorder" : "Tab") : to.zone);
           if (to.target.kind === "edge") {
             const dir = to.zone === "left" || to.zone === "right" ? "row" : "col";
             expect(after.root!.kind).toBe("split");
@@ -106,9 +113,16 @@ describe("the label shown while dragging says where the panel really ends up", (
           expect(label).toBe({ left: `Left of ${A}`, right: `Right of ${A}`, top: `Above ${A}`, bottom: `Below ${A}` }[to.zone as "left"]);
         }
       }
-      expect(checked).toBeGreaterThanOrEqual(0);
+      if (docked.length > 1) expect(checked).toBeGreaterThan(0);
     });
   }
+
+  it("exercised every kind of drop, many times (so the checks above cannot be vacuous)", () => {
+    expect(total).toBeGreaterThan(500);
+    for (const k of ["left", "right", "top", "bottom", "Tab", "Reorder", "left edge", "right edge", "top edge", "bottom edge"]) {
+      expect([...kinds], k).toContain(k);
+    }
+  });
 
   it("nothing under the pointer says so", () => {
     expect(dropLabel(initialDockState(DEFAULT_PANELS).layout, null, "transcript", title)).toBe("No change here");
@@ -133,5 +147,71 @@ describe("the first few drags carry a note", () => {
     expect(showDragNote(saved.drags)).toBe(true);
     s = dockReducer(s, { type: "countDrag" });
     expect(showDragNote(s.drags)).toBe(false);
+  });
+});
+
+describe("in a small window the words describe what will be seen there", () => {
+  const SIZES: Array<[number, number]> = [
+    [420, 480],
+    [500, 700],
+    [900, 700],
+    [1400, 900],
+  ];
+  let stackedSeen = 0;
+  let checked = 0;
+  for (const [w, h] of SIZES) {
+    for (let seed = 1; seed <= 15; seed++) {
+      it(`${w}x${h}, random layout ${seed}`, () => {
+        const s = randomState(seed * 31 + w);
+        const root = s.layout.root;
+        if (!root) return;
+        const docked = panelsOf(root);
+        for (const P of docked) {
+          const targets: Array<{ target: { kind: "stack"; stackId: string } | { kind: "edge" }; zone: Zone }> = [];
+          for (const t of leaves(root)) for (const z of ZONES) targets.push({ target: { kind: "stack", stackId: t.id }, zone: z });
+          if (docked.length > 1) for (const z of ["left", "right", "top", "bottom"] as Zone[]) targets.push({ target: { kind: "edge" }, zone: z });
+          for (const to of targets) {
+            const label = visibleDropLabel(s.layout, to, P, title, { w, h }, {});
+            const next = dockReducer(s, { type: "dock", panel: P, target: to.target, zone: to.zone });
+            if (next === s) {
+              expect(label).toBe("No change here");
+              continue;
+            }
+            checked++;
+            const g = computeGeometry(next.layout, { w, h }, {});
+            const mine = g.panels[P];
+            if (!mine || !mine.visible && g.compact === false) continue;
+            const r = mine.rect;
+            if (label.includes("(window too small to split)")) {
+              // merged into tabs: its group holds other panels
+              expect(g.stacks.find((x) => x.id === mine.stackId)!.panels.length).toBeGreaterThan(1);
+              continue;
+            }
+            if (label.endsWith("(stacked here)")) stackedSeen++;
+            const m = /^(Left of|Right of|Above|Below) (.+?)( \(stacked here\))?$/.exec(label);
+            if (m) {
+              const a = g.panels[m[2]];
+              expect(a, label).toBeTruthy();
+              const A = a.rect;
+              const rel =
+                m[1] === "Left of" ? r.x + r.w <= A.x + 1 : m[1] === "Right of" ? r.x >= A.x + A.w - 1 : m[1] === "Above" ? r.y + r.h <= A.y + 1 : r.y >= A.y + A.h - 1;
+              expect(rel, `${label} in ${w}x${h}`).toBe(true);
+              continue;
+            }
+            const e = /^(Left|Right|Top|Bottom) edge of the window/.exec(label);
+            if (e) {
+              const inner = g.inner;
+              const full = r.w >= inner.w - 2;
+              const where = full ? (r.y <= inner.y + 1 ? "Top" : "Bottom") : r.x <= inner.x + 1 ? "Left" : "Right";
+              expect(where, `${label} in ${w}x${h}`).toBe(e[1]);
+            }
+          }
+        }
+      });
+    }
+  }
+  it("a narrow window really does say 'stacked here' for some drops (so the checks cannot be vacuous)", () => {
+    expect(checked).toBeGreaterThan(500);
+    expect(stackedSeen).toBeGreaterThan(0);
   });
 });

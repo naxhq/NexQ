@@ -2,52 +2,32 @@
 // separator handling. Moved out of Dock.tsx unchanged; Dock owns the state it works on.
 import {
   useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
   useRef,
-  useState,
-  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
-  type ReactNode,
 } from "react";
-import { MoreHorizontal } from "lucide-react";
 import {
   type DockAction,
-  type DockState,
   type Layout,
   type PanelId,
-  allPanels,
   describeDock,
-  dropLabel,
+  visibleDropLabel,
   findNode,
-  leaves,
-  moveOptions,
   panelsOf,
 } from "./layoutModel";
 import {
   type DropHit,
   type Geometry,
   type PanelMeta,
-  type Rect,
   type SepGeo,
   type StackGeo,
   computeGeometry,
   hitTest,
-  readingBackingAlpha,
   resizeFromDelta,
   resizeBounds,
   sameHit,
   snapCandidates,
 } from "./layoutGeometry";
-import { DockMenu, type DockMenuItem } from "./DockMenu";
-import { rectStyle } from "./dockShared";
-import { DockLayer } from "./DockLayer";
-import { DockTabs } from "./DockTabs";
-import { DockSeparators } from "./DockSeparators";
-import { DockDropLayer } from "./DockDropLayer";
-
 
 import type { DockPanelDef } from "./Dock";
 import { DRAG_THRESHOLD, KEY_STEP, KEY_STEP_BIG, setRect, withSizes, type SepDrag, type TabDrag } from "./dockShared";
@@ -73,20 +53,18 @@ export interface InteractionCtx {
   ghostRef: React.RefObject<HTMLDivElement>;
   previewShown: React.MutableRefObject<boolean>;
   cleanup: React.MutableRefObject<(() => void) | null>;
-  previewLabelRef: React.RefObject<HTMLSpanElement>;
   ghostIconRef: React.RefObject<HTMLSpanElement>;
   ghostNameRef: React.RefObject<HTMLSpanElement>;
   ghostDoRef: React.RefObject<HTMLDivElement>;
-  noteRef: React.RefObject<HTMLDivElement>;
   /** The first few successful drags show the one-line note. */
   showNote: boolean;
 }
 
 export function useDockInteractions(ctx: InteractionCtx) {
   const {
-    layout, panels, dispatch, rootRef, geoRef, metas, focusPanel, setFocusPanel, menu, setMenu,
+    layout, dispatch, rootRef, geoRef, metas, focusPanel, setFocusPanel, setMenu,
     act, say, focusTabAfter, title, dragRef, previewRef, caretRef, ghostRef, previewShown, cleanup,
-    previewLabelRef, ghostIconRef, ghostNameRef, ghostDoRef, noteRef: _noteRef, showNote,
+    ghostIconRef, ghostNameRef, ghostDoRef, showNote,
   } = ctx;
   const ghostW = useRef(0);
   const ghostH = useRef(0);
@@ -228,11 +206,15 @@ export function useDockInteractions(ctx: InteractionCtx) {
     const docked = panelsOf(layout.root).length;
     const hit = hitTest(g, x, y, d.panel, docked > 1);
     const index = hit?.onTabBar && hit.stackId ? insertionIndex(hit.stackId, e.clientX, d.panel) : undefined;
-    if (!sameHit(hit, d.hit) || index !== d.index) {
-      if (!sameHit(hit, d.hit)) {
-        // One object makes the highlight, the chip's second line, the box label and the spoken text.
+    if (!sameHit(hit, d.hit) || index !== d.index || !d.said) {
+      if (!sameHit(hit, d.hit) || !d.said) {
+        // One object makes the highlight, the chip's second line and the spoken text, and the words
+        // describe what this window will show (a small one may stack what a big one puts side by side).
+        d.said = true;
         const over = x >= 0 && y >= 0 && x < g.size.w && y < g.size.h;
-        const label = hit || over ? dropLabel(layout, hit, d.panel, title) : "Move over a highlighted area";
+        const label = over
+          ? visibleDropLabel(layout, hit ? { target: hit.target, zone: hit.zone } : null, d.panel, title, g.size, metas)
+          : "Move over an outlined area";
         lastSaid.current = `${title(d.panel)}: ${label}`;
         say(lastSaid.current);
         if (ghostDoRef.current) ghostDoRef.current.textContent = label;
@@ -241,9 +223,6 @@ export function useDockInteractions(ctx: InteractionCtx) {
           ghostH.current = ghostRef.current.offsetHeight;
         }
         root.setAttribute("data-hit", hit ? "true" : "false");
-        // A pointer drag says it once, on the chip. The box label is for moves without a chip.
-        const pl = previewLabelRef.current;
-        if (pl) pl.style.display = "none";
       }
       d.hit = hit;
       d.index = index;
@@ -303,7 +282,7 @@ export function useDockInteractions(ctx: InteractionCtx) {
       root?.setAttribute("data-hit", "false");
       root?.setAttribute("data-note", showNote ? "true" : "false");
       if (ghostNameRef.current) ghostNameRef.current.textContent = title(d.panel);
-      if (ghostDoRef.current) ghostDoRef.current.textContent = "Move over a highlighted area";
+      if (ghostDoRef.current) ghostDoRef.current.textContent = "Move over an outlined area";
       if (ghostIconRef.current) {
         const icon = (e.currentTarget as HTMLElement).querySelector("[data-tab-icon]");
         ghostIconRef.current.innerHTML = icon?.innerHTML ?? "";

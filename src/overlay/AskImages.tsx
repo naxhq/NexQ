@@ -148,7 +148,7 @@ export function AskImageChips({
                 type="button"
                 onClick={() => onRemove(i)}
                 className="absolute right-0 top-0 flex h-6 w-6 items-start justify-end rounded-bl-md p-0.5 text-white/80 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
-                title="Remove image"
+                
                 aria-label={`Remove image ${i + 1}`}
               >
                 <X className="h-3 w-3 rounded-bl-md bg-black/60 p-px hover:bg-black/80" aria-hidden="true" />

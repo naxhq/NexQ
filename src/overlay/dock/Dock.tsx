@@ -6,42 +6,27 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import { MoreHorizontal } from "lucide-react";
 import "./dock.css";
 import {
   type DockAction,
   type DockState,
-  type Layout,
   type PanelId,
   allPanels,
   describeDock,
   showDragNote,
-  findNode,
   leaves,
   moveOptions,
   panelsOf,
 } from "./layoutModel";
 import {
-  type DropHit,
-  type Geometry,
   type PanelMeta,
   type Rect,
-  type SepGeo,
-  type StackGeo,
   computeGeometry,
-  hitTest,
   readingBackingAlpha,
-  resizeFromDelta,
-  resizeBounds,
-  sameHit,
-  snapCandidates,
 } from "./layoutGeometry";
 import { DockMenu, type DockMenuItem } from "./DockMenu";
-import { rectStyle } from "./dockShared";
 import type { SepDrag, TabDrag } from "./dockShared";
 import { useDockInteractions } from "./useDockInteractions";
 import { DockLayer } from "./DockLayer";
@@ -69,6 +54,8 @@ export interface DockProps {
   dispatch: (a: DockAction) => void;
   /** 0..1 overlay window opacity; drives --dock-reading-alpha. Default 1. */
   windowOpacity?: number;
+  /** Panel surface alpha (0..1) when the window needs more backing to stay readable; default is today's 0.2. */
+  surfaceAlpha?: number;
   /** Fixed container size (tests); otherwise measured. */
   size?: { w: number; h: number };
   className?: string;
@@ -104,6 +91,7 @@ export function Dock({
   state,
   dispatch,
   windowOpacity = 1,
+  surfaceAlpha,
   size: sizeOverride,
   className,
   renderTabExtra,
@@ -123,11 +111,9 @@ export function Dock({
   const previewRef = useRef<HTMLDivElement>(null);
   const caretRef = useRef<HTMLDivElement>(null);
   const ghostRef = useRef<HTMLDivElement>(null);
-  const previewLabelRef = useRef<HTMLSpanElement>(null);
   const ghostIconRef = useRef<HTMLSpanElement>(null);
   const ghostNameRef = useRef<HTMLSpanElement>(null);
   const ghostDoRef = useRef<HTMLDivElement>(null);
-  const noteRef = useRef<HTMLDivElement>(null);
   const previewShown = useRef(false);
   const cleanup = useRef<(() => void) | null>(null);
 
@@ -244,7 +230,7 @@ export function Dock({
   } = useDockInteractions({
     layout, panels, dispatch, rootRef, geoRef, metas, focusPanel, setFocusPanel, menu, setMenu,
     act, say, focusTabAfter, title, dragRef, previewRef, caretRef, ghostRef, previewShown, cleanup,
-    previewLabelRef, ghostIconRef, ghostNameRef, ghostDoRef, noteRef, showNote: showDragNote(state.drags),
+    ghostIconRef, ghostNameRef, ghostDoRef, showNote: showDragNote(state.drags),
   });
 
   /* ---- move menu ---- */
@@ -308,7 +294,8 @@ export function Dock({
     return !v || !v.visible;
   };
   const rootStyle = {
-    "--dock-reading-alpha": String(readingBackingAlpha(windowOpacity)),
+    "--dock-reading-alpha": String(Math.max(readingBackingAlpha(windowOpacity), surfaceAlpha ?? 0)),
+    ...(surfaceAlpha !== undefined ? { "--dock-surface-alpha": String(surfaceAlpha) } : {}),
   } as CSSProperties;
 
   const panelIds = Object.keys(panels).filter((p) => known.includes(p));
@@ -379,13 +366,11 @@ export function Dock({
         geo={geo}
         refs={{
           preview: previewRef,
-          previewLabel: previewLabelRef,
           caret: caretRef,
           ghost: ghostRef,
           ghostIcon: ghostIconRef,
           ghostName: ghostNameRef,
           ghostDo: ghostDoRef,
-          note: noteRef,
         }}
       />
 

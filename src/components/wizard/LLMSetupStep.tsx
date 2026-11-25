@@ -95,7 +95,7 @@ export function LLMSetupStep({
   const agentChecking = useAgentStore((s) => s.checking);
   const refreshAgentStatus = useAgentStore((s) => s.refreshStatus);
   useEffect(() => {
-    for (const { id } of CLI_AGENTS) void refreshAgentStatus(id);
+    for (const { id } of CLI_AGENTS) void refreshAgentStatus(id, { refresh: true });
   }, [refreshAgentStatus]);
   const installedAgents = CLI_AGENTS.filter((a) => !!agentStatuses[a.id]?.installed);
 
@@ -368,7 +368,7 @@ export function LLMSetupStep({
                   </button>
                 )}
                 <button
-                  onClick={() => refreshAgentStatus(agent.id)}
+                  onClick={() => refreshAgentStatus(agent.id, { refresh: true })}
                   disabled={agentChecked}
                   className="inline-flex items-center gap-2 rounded-xl border border-border/40 bg-background px-4 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
                 >

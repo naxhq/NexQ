@@ -4,18 +4,16 @@ import { rectStyle } from "./dockShared";
 
 export interface DropRefs {
   preview: RefObject<HTMLDivElement>;
-  previewLabel: RefObject<HTMLSpanElement>;
   caret: RefObject<HTMLDivElement>;
   ghost: RefObject<HTMLDivElement>;
   ghostIcon: RefObject<HTMLSpanElement>;
   ghostName: RefObject<HTMLSpanElement>;
   ghostDo: RefObject<HTMLDivElement>;
-  note: RefObject<HTMLDivElement>;
 }
 
 /**
  * Everything drawn while a panel is dragged (ours; no HTML5 drag, no OS drag image):
- * dashed hints of the areas it can land on, the highlight box with its label, the caret, the chip that
+ * dashed hints of the areas it can land on, the highlight box, the caret, the chip that
  * follows the pointer (name, and what dropping here does) and the one-line note. All of it is positioned
  * and worded imperatively, only when the target changes.
  */
@@ -27,9 +25,7 @@ export function DockDropLayer({ refs, geo }: { refs: DropRefs; geo: Geometry }) 
         .map((s) => (
           <div key={s.id} className="nq-dock-hint" style={rectStyle(s.rect)} />
         ))}
-      <div ref={refs.preview} className="nq-dock-drop" data-dock-drop>
-        <span ref={refs.previewLabel} dir="auto" className="nq-dock-drop-label" />
-      </div>
+      <div ref={refs.preview} className="nq-dock-drop" data-dock-drop />
       <div ref={refs.caret} className="nq-dock-caret" />
       <div ref={refs.ghost} className="nq-dock-ghost">
         <div className="nq-dock-ghost-head">
@@ -46,7 +42,7 @@ export function DockDropLayer({ refs, geo }: { refs: DropRefs; geo: Geometry }) 
         </div>
         <div ref={refs.ghostDo} dir="auto" className="nq-dock-ghost-do" />
       </div>
-      <div ref={refs.note} className="nq-dock-note">
+      <div className="nq-dock-note">
         <span>Drop on a highlighted area to rearrange.</span>
         <kbd>Esc</kbd>
         <span>cancels.</span>

@@ -338,7 +338,7 @@ export function QuestionDetector() {
                 role="button"
                 tabIndex={0}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleAssist(realIdx); } }}
-                title={q.text}
+               
               >
                 <div className="shrink-0">
                   {q.assisted ? (

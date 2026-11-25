@@ -357,10 +357,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  /* 24 x 24: a hit area for the tip (and the lock), without moving the label */
   width: 10px;
   height: 24px;
-  margin: 0 -2px 0 -2px;
-  padding: 0 4px;
+  margin: 0 -3px 0 -5px;
+  padding: 0 7px;
   box-sizing: content-box;
 }
 .nq-dock-grip {
@@ -432,36 +433,15 @@
 /* ---- while dragging ---- */
 .nq-dock-hint {
   border-radius: 12px;
-  box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0.35);
-  background-image: none;
   opacity: 0;
   pointer-events: none !important;
   transition: opacity 140ms ease;
-  /* a dashed outline that stays light: a 1px dashed border drawn as an inset mask */
+  /* a light dashed outline: nothing heavy */
   outline: 1px dashed hsl(var(--primary) / 0.5);
   outline-offset: -3px;
-  box-shadow: none;
 }
 .nq-dock[data-dragging="true"]:not([data-hit="true"]) .nq-dock-hint {
   opacity: 1;
-}
-.nq-dock-drop-label {
-  display: none;
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  max-width: calc(100% - 16px);
-  padding: 3px 9px;
-  border-radius: 8px;
-  font-size: 0.71875rem;
-  line-height: 1.4;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: hsl(var(--primary-foreground, var(--foreground)));
-  background: hsl(var(--primary) / 0.92);
 }
 .nq-dock-ghost {
   padding: 5px 10px 5px 8px;

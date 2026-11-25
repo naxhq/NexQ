@@ -181,7 +181,7 @@ export function ContextScopePicker() {
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={`Transcript scope: ${chipLabel}${oneOff ? ", next action only" : ""}`}
-        title={`Transcript scope: ${chipLabel}${oneOff ? " (next action only)" : ""}`}
+        
         className={`ml-auto flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-meta font-medium transition-colors duration-150 cursor-pointer ${
           active
             ? "bg-primary/10 text-primary/90 ring-1 ring-inset ring-primary/20 hover:bg-primary/15"
@@ -203,7 +203,7 @@ export function ContextScopePicker() {
             aria-label="Transcript scope"
             onKeyDown={onPopoverKeyDown}
             style={{ top: pos.top, left: pos.left, width: POPOVER_WIDTH, maxHeight: pos.maxHeight, overflowY: "auto" }}
-            className="scope-pop-enter fixed z-50 rounded-xl border border-border/30 bg-popover/95 p-1.5 shadow-2xl backdrop-blur-md"
+            className="scope-pop-enter fixed z-50 rounded-xl border border-border/30 bg-popover p-1.5 shadow-2xl"
           >
             <p className="px-2 pb-1 pt-0.5 text-[0.6rem] font-medium uppercase tracking-widest text-muted-foreground/45">
               Focus the next answers on
