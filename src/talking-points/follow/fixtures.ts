@@ -208,10 +208,12 @@ export function runScenario(sc: Scenario, seed = 1): ScenarioResult {
   const sink = {
     onInterim: (x: string, id: string) => {
       follower.onInterim(x, id);
+      tracker.setPlace(follower.snapshot().position);
       tracker.onInterim(x, id);
     },
     onFinal: (x: string, id: string) => {
       follower.onFinal(x, id);
+      tracker.setPlace(follower.snapshot().position);
       tracker.onFinal(x, id);
     },
   };

@@ -49,6 +49,8 @@ export interface NoteIndex {
   vocabW: Float32Array;
   /** 1 for vocab entries that are values that can contradict (numbers, months). */
   vocabNum: Uint8Array;
+  /** 1 for content units (everything outside CJK; kanji/katakana/hangul bigrams inside it), 0 for function material. */
+  vocabContent: Uint8Array;
   postings: number[][];
   blocks: BlockSpan[];
   /** Note tokens per spoken word, roughly (1 for spaced scripts, ~2 for bigram scripts). */
@@ -155,6 +157,16 @@ function parseKanji(run: string): number | null {
 /** Replaces kanji numeral runs with digits where context says it is a number. Keeps an offset map. */
 function convertKanji(raw: string): { s: string; map: number[] | null } {
   if (!/[〇零一二三四五六七八九十百千万億亿]/u.test(raw)) return { s: raw, map: null };
+  const pct = /百分之([〇零一二三四五六七八九十百千0-9.]+)/u.exec(raw);
+  if (pct) {
+    const v = /^[0-9.]+$/.test(pct[1]) ? pct[1] : String(parseKanji(pct[1]) ?? "");
+    if (v) {
+      const rest = convertKanji(raw.slice(pct.index + pct[0].length));
+      const head = convertKanji(raw.slice(0, pct.index));
+      const s = head.s + v + "%" + rest.s;
+      return { s, map: null };
+    }
+  }
   let s = "";
   const map: number[] = [];
   let last = 0;
@@ -184,6 +196,21 @@ function convertKanji(raw: string): { s: string; map: number[] | null } {
   }
   push(raw.slice(last), last, true);
   return changed ? { s, map } : { s: raw, map: null };
+}
+
+const KO_ENDINGS = [
+  "했습니다", "습니다", "입니다", "합니다", "했어요", "에서는", "에서", "으로", "로는", "에게", "까지", "부터",
+  "이다", "였다", "했다", "해요", "은", "는", "이", "가", "을", "를", "의", "에", "도", "로", "와", "과", "만", "요",
+].map((s) => Array.from(s));
+
+/** Drops a common particle or ending from a Hangul word (kept when it would leave under 2 syllables). */
+function stripKorean(chars: string[]): string[] {
+  for (const suf of KO_ENDINGS) {
+    if (chars.length - suf.length >= 2 && suf.every((c, i) => chars[chars.length - suf.length + i] === c)) {
+      return chars.slice(0, chars.length - suf.length);
+    }
+  }
+  return chars;
 }
 
 // -- CJK weights -------------------------------------------------------------
@@ -228,7 +255,8 @@ function rawTokens(text: string): RawToken[] {
       const start = off(r.index);
       const end = map ? off(r.index + run.length - 1) + 1 : start + run.length;
       if (CJK_TEST.test(run[0])) {
-        const orig = Array.from(run.normalize("NFKC"));
+        let orig = Array.from(run.normalize("NFKC"));
+        if (HANGUL.test(orig[0])) orig = stripKorean(orig);
         const chars = orig.map((c) => kataToHira(c));
         if (chars.length === 1) {
           out.push({ t: chars[0], start, end, cjk: true, cw: 0.25 });
@@ -253,6 +281,10 @@ function rawTokens(text: string): RawToken[] {
         continue;
       }
       let mm: RegExpExecArray | null;
+      if ((mm = /^([0-9][0-9.]*)%$/.exec(norm))) {
+        out.push({ t: canonNumber(mm[1]), start, end, cjk: false }, { t: "pct", start, end, cjk: false });
+        continue;
+      }
       if ((mm = ORD_SUFFIX_RE.exec(norm))) {
         out.push({ t: mm[1], start, end, cjk: false });
         continue;
@@ -480,7 +512,7 @@ function normalisePhrases(toks: RawToken[]): RawToken[] {
   for (let i = 0; i < toks.length; i++) {
     const t = toks[i];
     const nx = toks[i + 1];
-    if (nx && /^\d+(\.\d+)?$/.test(t.t) && nx.start === t.end && AMOUNT_WORD[nx.t] && nx.t.length <= 2) {
+    if (nx && /^\d+(\.\d+)?$/.test(t.t) && nx.start - t.end <= 1 && nx.start >= t.end && AMOUNT_WORD[nx.t] && nx.t.length <= 2) {
       a.push(t, { ...nx, t: AMOUNT_WORD[nx.t] });
       i++;
     } else a.push(t);
@@ -520,7 +552,19 @@ export function tokenizeText(text: string): RawToken[] {
   const raw = rawTokens(text)
     .map((t) => (t.t === "percent" || t.t === "prozent" || t.t === "porciento" || t.t === "procent" ? { ...t, t: "pct" } : t))
     .filter((t) => !FILLERS.has(t.t));
-  return normalisePhrases(mergeNumbers(joinLetters(raw)));
+  const toks = joinLetters(raw);
+  const prepared: RawToken[] = [];
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    const nx = toks[i + 1];
+    if (t.t === "per" && nx && nx.t === "cent") {
+      prepared.push({ ...t, t: "pct", end: nx.end });
+      i++;
+    } else if (t.t === "a" && nx && (nx.t === "hundred" || nx.t === "thousand" || nx.t === "million" || nx.t === "billion")) {
+      prepared.push({ ...t, t: "one" });
+    } else prepared.push(t);
+  }
+  return normalisePhrases(mergeNumbers(prepared));
 }
 
 /** Spoken text to word strings. */
@@ -596,10 +640,12 @@ export function buildNoteIndex(blocks: NoteBlock[]): NoteIndex {
   const denom = Math.log(1 + (units + 1) / 1.5);
   const vocabW = new Float32Array(vocab.length);
   const vocabNum = new Uint8Array(vocab.length);
+  const vocabContent = new Uint8Array(vocab.length);
   for (let id = 0; id < vocab.length; id++) {
     const idf = Math.log(1 + (units + 1) / (df[id] + 0.5)) / denom;
     const isC = CJK_TEST.test(vocab[id][0]);
     vocabW[id] = Math.max(0.05, idf * lenFactor(vocab[id], isC, vcw[id], vacr[id]));
+    vocabContent[id] = !isC || vcw[id] >= 0.6 ? 1 : 0;
     vocabNum[id] = /^[0-9]/.test(vocab[id]) || MONTHS.has(vocab[id]) ? 1 : 0;
   }
   const weights = new Float32Array(tokens.length);
@@ -612,5 +658,5 @@ export function buildNoteIndex(blocks: NoteBlock[]): NoteIndex {
     s.distinct = s.all.filter((id) => vocabW[id] >= DISTINCT_W);
   }
 
-  return { tokens, ids, weights, vocab, vocabIdx, vocabW, vocabNum, postings, blocks: spans, scale, cjk };
+  return { tokens, ids, weights, vocab, vocabIdx, vocabW, vocabNum, vocabContent, postings, blocks: spans, scale, cjk };
 }

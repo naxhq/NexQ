@@ -30,8 +30,8 @@ describe("number and phrase normalisation", () => {
     expect(toks("第一四半期")).not.toContain("14");
   });
   it("Hangul and Han bigrams carry weights", () => {
-    const t = tokenizeText("매출은 성장했습니다");
-    expect(t.length).toBeGreaterThan(3);
+    expect(toks("매출은 성장했습니다")).toEqual(["매출", "성장"]); // particle and ending stripped
+    expect(toks("百分之二十")).toEqual(["20", "pct"]);
     expect(tokenizeText("の").length).toBe(1);
   });
 });

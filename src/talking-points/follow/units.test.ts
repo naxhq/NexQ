@@ -111,6 +111,23 @@ describe("follower", () => {
     expect(Math.abs(f.snapshot().position - idx.blocks[7].end)).toBeLessThanOrEqual(8);
   });
 
+  it("scattered vocabulary never jumps; a sustained ordered run does (or is offered as a suggestion)", () => {
+    const { f } = mkF();
+    for (let i = 0; i < 4; i++) f.onFinal(NOTES.en[i].text, `s${i}`);
+    const pos = f.snapshot().position;
+    f.onFinal("honestly the board said hiring dollars were approved in march for the slides and the demo recording somewhere", "d1");
+    expect(f.snapshot().position).toBe(pos);
+    expect(f.snapshot().state).not.toBe("following");
+    // back to bullet 2 in the same words, far enough back to count as a jump
+    for (let i = 4; i < 9; i++) f.onFinal(NOTES.en[i].text, `s${i}`);
+    f.onInterim(NOTES.en[1].text, "back");
+    const early = f.snapshot();
+    expect(early.position).toBeGreaterThan(idx.blocks[7].first); // not yet: needs sustained evidence
+    f.onFinal(NOTES.en[1].text + " " + NOTES.en[2].text, "back");
+    const late = f.snapshot();
+    expect(Math.abs(late.position - idx.blocks[2].end) <= 8 || late.suggestion !== undefined || late.state !== "following").toBe(true);
+  });
+
   it("a late interim never overrides a final", () => {
     const { f } = mkF();
     f.onFinal(NOTES.en[1].text, "s1");

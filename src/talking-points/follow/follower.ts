@@ -20,6 +20,8 @@ export interface FollowSnapshot {
   /** 0..1. */
   confidence: number;
   state: FollowState;
+  /** A plausible but unconfirmed other place; never moves by itself ("Go to ...?"). */
+  suggestion?: { blockId: string; confidence: number };
 }
 
 export interface FollowerOptions {
@@ -52,6 +54,17 @@ interface Cand {
   k: number;
   /** Spoken index (1-based) of the last meaningful match, 0 when none. */
   l: number;
+  /** First meaningful match (note index). */
+  s: number;
+  /** Meaningful matches among the newest 8 spoken words. */
+  q: number;
+}
+
+const CONTENT_CJK = /[\p{Script=Han}\p{Script=Katakana}\p{Script=Hangul}]/u;
+function isContent(w: string): boolean {
+  if (/^[0-9]/.test(w)) return w.length >= 2;
+  if (w.charCodeAt(0) >= 0x3000) return CONTENT_CJK.test(w);
+  return w.length >= 5;
 }
 
 export class VoiceFollower {
@@ -65,6 +78,9 @@ export class VoiceFollower {
   private since = 10;
   private lastAdded = 0;
   private lastFar = 0;
+  private suggest: { blockId: string; conf: number; until: number } | null = null;
+  /** 4-grams of the note: end index when unique in the note, -1 otherwise. */
+  private grams = new Map<string, number>();
   /** A candidate rejected for a contradicting number stays rejected while its words are still in the tail. */
   private blocked: { e: number; until: number } | null = null;
   private lastInputAt = -Infinity;
@@ -74,6 +90,8 @@ export class VoiceFollower {
   private bufK = new Int16Array(0);
   private bufL = new Int16Array(0);
   private bufE = new Int32Array(0);
+  private bufS = new Int32Array(0);
+  private bufQ = new Int16Array(0);
   private tailLen: number;
   private debug?: FollowerOptions["debug"];
 
@@ -83,6 +101,7 @@ export class VoiceFollower {
     this.pauseMs = opts.pauseMs ?? 3500;
     this.debug = opts.debug;
     this.tailLen = Math.round(TAIL_WORDS * index.scale);
+    this.buildGrams();
   }
 
   /** Replace the note (edited mid-meeting); keeps the place as a token index. */
@@ -90,6 +109,7 @@ export class VoiceFollower {
     this.index = index;
     this.matcher = new VocabMatcher(index.vocab, index.vocabIdx);
     this.tailLen = Math.round(TAIL_WORDS * index.scale);
+    this.buildGrams();
     this.pos = Math.min(this.pos, index.tokens.length);
     this.pending = null;
   }
@@ -106,6 +126,7 @@ export class VoiceFollower {
   seek(tokenIndex: number): void {
     this.pos = Math.max(0, Math.min(this.index.tokens.length, tokenIndex));
     this.pending = null;
+    this.suggest = null;
     this.since = 8;
     this.baseState = "unsure";
     this.conf = 0.3;
@@ -125,10 +146,13 @@ export class VoiceFollower {
 
   snapshot(): FollowSnapshot {
     const paused = this.lastInputAt > -Infinity && this.clock() - this.lastInputAt > this.pauseMs;
+    const sg = this.suggest;
+    const live = sg && this.stream.added <= sg.until && this.index.blocks.findIndex((b) => b.id === sg.blockId) !== this.blockAt(this.pos);
     return {
       position: this.pos,
       confidence: this.conf,
       state: paused ? "paused" : this.baseState,
+      ...(live && sg ? { suggestion: { blockId: sg.blockId, confidence: sg.conf } } : {}),
     };
   }
 
@@ -156,6 +180,7 @@ export class VoiceFollower {
     const near = this.align(rows, Math.max(0, p - Math.round(BACK_WORDS * sc)), Math.min(N, p + Math.round(FWD_WORDS * sc)), p);
     let ev: Cand | null = near;
     let proposed = false;
+    if (this.suggest && this.stream.added > this.suggest.until) this.suggest = null;
 
     this.debug?.({ words, p, near, pos: this.pos });
     let nearConflict = !!near && near.k > 0 && this.conflicts(words, near.e);
@@ -163,34 +188,43 @@ export class VoiceFollower {
       if (nearConflict) this.blocked = { e: near.e, until: this.stream.added + this.tailLen };
       else if (this.blocked && this.stream.added < this.blocked.until && Math.abs(near.e - this.blocked.e) <= 10 * sc && near.e !== p) nearConflict = true;
     }
-    if (near && near.k > 0 && !nearConflict) {
-      const dd = (near.e - p) / sc;
-      if (dd >= -4 && dd <= 0.001) {
-        // consistent with where we are (repeat, same place): hold
-      } else if (dd > 0 && dd <= 8) {
-        if (near.g >= 0.55 && near.f >= 0.4) this.moveTo(near.e);
-      } else if (dd > 8 && dd <= JUMP_WORDS) {
-        // further than a natural continuation: needs two distinctive matches, in order
-        if (near.g >= 0.9 && near.k >= 2 && near.f >= 0.5) this.moveTo(near.e);
-      } else if (dd > JUMP_WORDS) {
-        if (near.g >= 1.2 && near.k >= 2 && near.f >= 0.8) proposed = this.propose(near, words);
-      } else if (near.g >= 1.2 && near.k >= 2 && near.f >= 0.6) {
-        // back reference: being lost is fine, being confidently wrong is not, so it must persist
-        proposed = this.propose(near, words);
+    const blocks = this.index.blocks;
+    const cb = this.blockAt(p);
+    const nbFirst = blocks[cb]?.first ?? 0;
+    const nbEnd = blocks[Math.min(cb + 1, blocks.length - 1)]?.end ?? N;
+    const inNear = (e: number) => e >= nbFirst && e <= nbEnd;
+    let sawPlausible = false;
+    const classify = (c: Cand) => {
+      const dd = (c.e - p) / sc;
+      if (dd >= -4 && dd <= 0.001) return; // same place (repeat): hold
+      if (dd > 0 && inNear(c.e)) {
+        // same or next block: moves as soon as the evidence is there
+        if (dd <= 8) {
+          if (c.g >= 0.55 && c.f >= 0.4) this.moveTo(c.e);
+        } else if (c.g >= 0.9 && c.k >= 2 && c.f >= 0.5) this.moveTo(c.e);
+        return;
       }
-    }
+      if (dd < 0 && inNear(c.e)) {
+        if (c.g >= 1.2 && c.k >= 2 && c.f >= 0.6) proposed = this.propose(c, words, 3) || proposed;
+        return;
+      }
+      // anywhere else: an ordered, contiguous run of distinctive words, sustained, or it is only a suggestion
+      if (this.strongRun(c, words)) proposed = this.propose(c, words, 8) || proposed;
+      else if (c.k >= Math.round(3 * (sc > 1 ? 1.6 : 1)) && c.g >= 1.2 && !sawPlausible) {
+        sawPlausible = true;
+        const blk = this.index.tokens[Math.max(0, Math.min(N - 1, c.e - 1))].block;
+        const dw = this.index.blocks[blk].distinct.reduce((s, id) => s + this.index.vocabW[id], 0) || 1;
+        this.suggest = { blockId: this.index.blocks[blk].id, conf: Math.min(1, c.g / dw), until: this.stream.added + 8 };
+      }
+    };
+    if (near && near.k > 0 && !nearConflict) classify(near);
 
     if ((!near || near.g < 1.5) && this.stream.added >= this.lastFar + 2) {
       this.lastFar = this.stream.added;
       const far = this.farCandidate(rows, words, p);
-      if (far && !this.conflicts(words, far.e)) {
-        const back = far.e < p;
-        const lost = this.since > 16;
-        const need = back ? { g: 1.3, k: 2 } : lost ? { g: 1.6, k: 2 } : { g: 2.0, k: 3 };
-        if (far.g >= need.g && far.k >= need.k && far.g > (near ? near.g : 0) + 0.6) {
-          if (this.propose(far, words)) proposed = true;
-          if (Math.abs(this.pos - far.e) < 1) ev = far;
-        }
+      if (far && far.k > 0 && !this.conflicts(words, far.e)) {
+        classify(far);
+        if (Math.abs(this.pos - far.e) < 1) ev = far;
       }
     }
     if (!proposed && this.pending && ++this.pending.miss > 3) this.pending = null;
@@ -204,7 +238,14 @@ export class VoiceFollower {
     else this.since += Math.max(0, added - this.lastAdded);
     this.lastAdded = added;
     const g = ev ? ev.g : 0;
-    this.baseState = this.since <= 6 && strong ? "following" : this.since <= 16 ? "unsure" : "lost";
+    // out-of-script content dominates the recent speech: never "following", even when the place is held
+    const recent = words.slice(-8);
+    const content = recent.filter(isContent).length;
+    const explained = ev && !pointsElsewhere ? ev.q : 0;
+    const offScript = content >= 3 && explained / content < 0.35;
+    if (this.suggest && this.pos >= (blocks[this.index.blocks.findIndex((b) => b.id === this.suggest!.blockId)]?.first ?? 1e9)
+      && this.pos <= (blocks[this.index.blocks.findIndex((b) => b.id === this.suggest!.blockId)]?.end ?? -1)) this.suggest = null;
+    this.baseState = this.since <= 6 && strong && !offScript && !this.suggest ? "following" : this.since <= 16 ? "unsure" : "lost";
     this.conf = Math.max(0, Math.min(1, g / 2.5)) * Math.max(0, Math.min(1, 1 - this.since / 16));
   }
 
@@ -232,21 +273,22 @@ export class VoiceFollower {
   }
 
   /** Large moves must persist while at least two more words arrive. */
-  private propose(c: Cand, words: string[]): boolean {
-    const sc = this.index.scale;
+  private propose(c: Cand, words: string[], need: number): boolean {
     const added = this.stream.added;
-    if (c.g >= 3.5) {
+    if (c.g >= 3.5 && need <= 3) {
       this.pos = c.e;
       this.pending = null;
       return true;
     }
     const pend = this.pending;
+    const sc = this.index.scale;
     if (pend && Math.abs(pend.e - c.e) <= 25 * sc) {
       pend.miss = 0;
-      const need = c.e < this.pos ? 3 : 5;
-      if (added >= pend.added + need && !this.conflicts(words, c.e)) {
+      const recent = c.l >= words.length - 4 && c.q >= 3;
+      if (added >= pend.added + need && recent && !this.conflicts(words, c.e)) {
         this.pos = c.e;
         this.pending = null;
+        this.suggest = null;
       } else {
         pend.e = c.e;
       }
@@ -254,6 +296,37 @@ export class VoiceFollower {
       this.pending = { e: c.e, added, miss: 0 };
     }
     return true;
+  }
+
+  private blockAt(token: number): number {
+    const { tokens } = this.index;
+    if (tokens.length === 0) return 0;
+    return tokens[Math.max(0, Math.min(tokens.length - 1, Math.round(token) >= tokens.length ? tokens.length - 1 : Math.round(token)))].block;
+  }
+
+  /** Ordered, contiguous run of >= 5 distinctive units covering >= 35% of the target block, or a unique verbatim 4-gram. */
+  private strongRun(c: Cand, words: string[]): boolean {
+    const { index } = this;
+    const sc = index.scale;
+    const blk = index.blocks[this.blockAt(c.e - 1)];
+    const dw = blk.distinct.reduce((s, id) => s + index.vocabW[id], 0) || 1;
+    const spanWords = Math.max(1, (c.e - c.s) / sc);
+    const k = Math.round(5 * (sc > 1 ? 1.6 : 1));
+    if (c.k >= k && c.g >= 0.35 * dw && c.k / spanWords >= 0.25) return true;
+    for (let i = 0; i + 3 < words.length; i++) {
+      const end = this.grams.get(words.slice(i, i + 4).join(" "));
+      if (end !== undefined && end >= 0 && Math.abs(end - c.e) <= 12 * sc) return true;
+    }
+    return false;
+  }
+
+  private buildGrams(): void {
+    this.grams.clear();
+    const t = this.index.tokens;
+    for (let i = 0; i + 3 < t.length; i++) {
+      const g = `${t[i].t} ${t[i + 1].t} ${t[i + 2].t} ${t[i + 3].t}`;
+      this.grams.set(g, this.grams.has(g) ? -1 : i + 4);
+    }
   }
 
   /** Whole-note vote on distinctive words, then align around the best cluster outside the near window. */
@@ -313,12 +386,16 @@ export class VoiceFollower {
       this.bufK = new Int16Array(size);
       this.bufL = new Int16Array(size);
       this.bufE = new Int32Array(size);
+      this.bufS = new Int32Array(size);
+      this.bufQ = new Int16Array(size);
     }
     const H = this.bufH;
     const G = this.bufG;
     const K = this.bufK;
     const L = this.bufL;
     const E = this.bufE;
+    const S = this.bufS;
+    const Q = this.bufQ;
     const ids = this.index.ids;
     const weights = this.index.weights;
     for (let j = 0; j <= n; j++) {
@@ -327,6 +404,8 @@ export class VoiceFollower {
       K[j] = 0;
       L[j] = 0;
       E[j] = 0;
+      S[j] = 0;
+      Q[j] = 0;
     }
     for (let i = 1; i <= m; i++) {
       const base = i * W;
@@ -336,6 +415,8 @@ export class VoiceFollower {
       K[base] = K[pb];
       L[base] = L[pb];
       E[base] = E[pb];
+      S[base] = S[pb];
+      Q[base] = Q[pb];
       const dense = rows[i - 1];
       for (let j = 1; j <= n; j++) {
         const d = pb + j - 1;
@@ -345,6 +426,8 @@ export class VoiceFollower {
         let k: number;
         let l: number;
         let en: number;
+        let sn: number;
+        let qn: number;
         if (s >= MATCH_MIN) {
           const gain = s * weights[lo + j - 1];
           h = H[d] + gain;
@@ -354,11 +437,15 @@ export class VoiceFollower {
             k = K[d] + 1;
             l = i;
             en = lo + j;
+            sn = K[d] === 0 ? lo + j - 1 : S[d];
+            qn = Q[d] + (i > m - 8 ? 1 : 0);
           } else {
             g = G[d];
             k = K[d];
             l = L[d];
             en = E[d];
+            sn = S[d];
+            qn = Q[d];
           }
         } else {
           h = H[d] - SUB;
@@ -366,6 +453,8 @@ export class VoiceFollower {
           k = K[d];
           l = L[d];
           en = E[d];
+          sn = S[d];
+          qn = Q[d];
         }
         const u = pb + j;
         const hu = H[u] - GS;
@@ -375,6 +464,8 @@ export class VoiceFollower {
           k = K[u];
           l = L[u];
           en = E[u];
+          sn = S[u];
+          qn = Q[u];
         }
         const lf = base + j - 1;
         const hl = H[lf] - GN;
@@ -384,6 +475,8 @@ export class VoiceFollower {
           k = K[lf];
           l = L[lf];
           en = E[lf];
+          sn = S[lf];
+          qn = Q[lf];
         }
         const c = base + j;
         H[c] = h;
@@ -391,6 +484,8 @@ export class VoiceFollower {
         K[c] = k;
         L[c] = l;
         E[c] = en;
+        S[c] = sn;
+        Q[c] = qn;
       }
     }
     const sc = this.index.scale;
@@ -403,7 +498,7 @@ export class VoiceFollower {
       const dd = (e - p) / sc;
       const prior = dd > 6 ? 0.04 * (dd - 6) : dd < -4 ? Math.min(0.9, 0.02 * (-4 - dd)) : 0;
       const f = H[c] - prior;
-      if (!best || f > best.f) best = { e, f, g: G[c], k: K[c], l: L[c] };
+      if (!best || f > best.f) best = { e, f, g: G[c], k: K[c], l: L[c], s: S[c], q: Q[c] };
     }
     return best;
   }

@@ -37,6 +37,7 @@ export class SaidTracker {
   private notePos: Array<Map<number, number>> = [];
   private discriminators: number[][] = [];
   private blockNums: Array<Set<number>> = [];
+  private place = -1;
 
   constructor(private index: NoteIndex, opts: SaidOptions = {}) {
     this.matcher = new VocabMatcher(index.vocab, index.vocabIdx);
@@ -54,6 +55,12 @@ export class SaidTracker {
     this.prepare();
     const ids = new Set(index.blocks.map((b) => b.id));
     for (const id of [...this.state.keys()]) if (!ids.has(id)) this.state.delete(id);
+  }
+
+  /** Where the follower thinks the speaker is (token index): blocks far from it need stronger evidence. */
+  setPlace(token: number): void {
+    const t = this.index.tokens;
+    this.place = t.length === 0 ? -1 : t[Math.max(0, Math.min(t.length - 1, Math.round(token)))].block;
   }
 
   private prepare(): void {
@@ -200,18 +207,26 @@ export class SaidTracker {
     const { index } = this;
     const len = b.end - b.first;
     if (len <= 3) return this.tinyDone(b);
-    const span = Math.max(14, Math.ceil((2.2 * len) / index.scale));
+    // the current block and its neighbours are likely; blocks far from the place need stronger, ordered evidence
+    const far = this.place >= 0 && Math.abs(bi - this.place) > 1;
+    const nearCjk = index.cjk && this.place >= 0 && bi >= this.place && bi <= this.place + 1;
+    const ids = index.cjk ? b.all.filter((id) => index.vocabContent[id]) : b.all;
+    if (ids.length === 0) return false;
+    const coverage = far ? Math.max(this.coverage, 0.7) : nearCjk ? 0.5 : this.coverage;
+    const minWords = far ? Math.max(this.minWords, 4) : nearCjk ? 2 : this.minWords;
+    const span = far ? Math.max(12, Math.ceil((1.6 * len) / index.scale)) : Math.max(14, Math.ceil((2.2 * len) / index.scale));
     const events: Array<[number, number, number]> = []; // pos, vocab id, sim
-    for (const id of b.all) {
+    for (const id of ids) {
       const arr = hits.get(id);
       if (arr) for (const [pos, sim] of arr) events.push([pos, id, sim]);
     }
     if (events.length === 0) return false;
     events.sort((a, c) => a[0] - c[0]);
     let totalW = 0;
-    for (const id of b.all) totalW += index.vocabW[id];
-    const short = b.distinct.length < this.minWords;
-    const distinctSet = new Set(b.distinct);
+    for (const id of ids) totalW += index.vocabW[id];
+    const distinctIds = index.cjk ? b.distinct.filter((id) => index.vocabContent[id]) : b.distinct;
+    const short = distinctIds.length < minWords;
+    const distinctSet = new Set(distinctIds);
     const needSim = short ? STRICT_SIM : SOFT_SIM;
     const winLen = short ? Math.min(span, 12) : span;
     for (let s = 0; s < events.length; s++) {
@@ -233,10 +248,10 @@ export class SaidTracker {
         if (distinctSet.has(id)) covDistinct++;
       }
       const basic = short
-        ? covDistinct === b.distinct.length && best.size >= 2 && covW / totalW >= 0.75
-        : covW / totalW >= this.coverage && covDistinct >= this.minWords;
+        ? covDistinct === distinctIds.length && best.size >= 2 && covW / totalW >= 0.75
+        : covW / totalW >= coverage && covDistinct >= minWords;
       if (!basic) continue;
-      if (this.extraChecks(bi, b, best, first, start, winLen, flat, totalW, short)) return true;
+      if (this.extraChecks(bi, b, best, first, start, winLen, flat, totalW, short, far ? 0.6 : 0.45)) return true;
     }
     return false;
   }
@@ -252,6 +267,7 @@ export class SaidTracker {
     flat: string[],
     totalW: number,
     short: boolean,
+    lisMin: number,
   ): boolean {
     const { index } = this;
     // 1. a sibling bullet shares most words: the words only this bullet has must be said
@@ -293,7 +309,7 @@ export class SaidTracker {
         dp[i] = m + items[i].w;
         if (dp[i] > lis) lis = dp[i];
       }
-      if (lis / totalW < 0.45) return false;
+      if (lis / totalW < lisMin) return false;
     }
     return true;
   }
