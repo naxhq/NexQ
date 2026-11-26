@@ -1541,6 +1541,7 @@ mod tests {
         ("sources_commands", "check_mcp_server", Read),
         ("sources_commands", "delete_mcp_secrets", Exempt("secrets only; the sources restart follows their revision")),
         ("sources_commands", "set_personal_sources", Must),
+        ("sources_commands", "repair_personal_sources", Exempt("merges the same server saved twice; every workspace keeps its link")),
         ("workspace_chat_commands", "get_index_status", Read),
         ("workspace_chat_commands", "get_meeting_recap", Read),
         ("workspace_chat_commands", "retry_recaps", Exempt("re-runs recaps of material already in scope")),

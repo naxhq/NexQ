@@ -8,7 +8,7 @@ import type { McpServer, PersonalSourcesConfig } from "../lib/types";
 const saved = vi.hoisted(() => new Map<string, unknown>());
 const keyListeners = vi.hoisted(() => [] as Array<{ key: string; cb: (v: unknown) => void }>);
 const invokeCalls = vi.hoisted(() => [] as Array<{ cmd: string; args: unknown }>);
-const backend = vi.hoisted(() => ({ reject: null as string | null, startingFor: 0 }));
+const backend = vi.hoisted(() => ({ reject: null as string | null, startingFor: 0, repair: null as unknown, repairFails: false }));
 const writes = vi.hoisted(() => ({ count: 0 }));
 
 vi.mock("@tauri-apps/plugin-store", () => ({
@@ -39,6 +39,10 @@ vi.mock("@tauri-apps/api/core", () => ({
       throw "state not managed for field `state` on command `set_personal_sources`. You must call `.manage()` before using this command";
     }
     if (cmd === "set_personal_sources" && backend.reject) throw new Error(backend.reject);
+    if (cmd === "repair_personal_sources") {
+      if (backend.repairFails) throw new Error("boom");
+      return backend.repair;
+    }
     return null;
   }),
 }));
@@ -87,6 +91,8 @@ beforeEach(() => {
   invokeCalls.length = 0;
   backend.reject = null;
   backend.startingFor = 0;
+  backend.repair = null;
+  backend.repairFails = false;
   writes.count = 0;
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -144,6 +150,33 @@ describe("sourcesStore", () => {
     expect(pushes()).toHaveLength(2);
     expect((pushes()[1].args as { config: PersonalSourcesConfig }).config.notes_folders).toEqual([]);
     expect(saved.get("personalSources")).toEqual(next);
+  });
+
+  it("a server saved twice is merged at startup: the repaired config is kept, saved and pushed", async () => {
+    const twice = config({ mcp_servers: [server({ id: "keep" }), server({ id: "drop", key: "mira-2", enabled: false, last_check: null })] });
+    saved.set("personalSources", twice);
+    const repaired = config({ mcp_servers: [server({ id: "keep" })] });
+    backend.repair = { config: repaired, merged_servers: 1, merged_folders: 0 };
+    const w = await openWindow();
+    expect(w.useSourcesStore.getState().config.mcp_servers.map((s) => s.id)).toEqual(["keep"]);
+    expect(saved.get("personalSources")).toEqual(repaired);
+    expect(pushes()).toHaveLength(1);
+    expect((pushes()[0].args as { config: PersonalSourcesConfig }).config.mcp_servers.map((s) => s.id)).toEqual(["keep"]);
+  });
+
+  it("with nothing to merge, or a repair that fails, the saved config is untouched", async () => {
+    const original = config();
+    saved.set("personalSources", original);
+    backend.repair = { config: config({ mcp_servers: [] }), merged_servers: 0, merged_folders: 0 };
+    const w = await openWindow();
+    expect(w.useSourcesStore.getState().config.mcp_servers).toHaveLength(1);
+    expect(writes.count).toBe(0);
+
+    backend.repairFails = true;
+    const w2 = await openWindow();
+    expect(w2.useSourcesStore.getState().config.mcp_servers).toHaveLength(1);
+    expect(writes.count).toBe(0);
+    expect(pushes().length).toBe(2);
   });
 
   it("an old install pushes an empty config at startup without writing the file", async () => {

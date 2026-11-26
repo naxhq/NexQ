@@ -53,7 +53,7 @@ import type {
   McpServer,
   McpServerForm,
   NotesFolderInfo,
-  PersonalSourcesConfig,
+  PersonalSourcesConfig, SourcesRepairResult,
   SourceToggles,
 } from "./types";
 
@@ -1026,6 +1026,15 @@ export interface SourcesFiling {
 /** `loaded` is true only once the sources store has read its config from disk: an earlier push could wipe what the backend holds. */
 export async function setPersonalSources(config: PersonalSourcesConfig, filing?: SourcesFiling, loaded?: boolean): Promise<void> {
   return invoke("set_personal_sources", { config, ...(filing ? { filing } : {}), ...(loaded ? { loaded: true } : {}) });
+}
+
+/**
+ * Once, when the saved sources have been read and before they go to the backend:
+ * merges servers and folders saved twice (the same thing in two workspaces) into
+ * one, in the workspaces' links too. The result's config is the one to keep.
+ */
+export async function repairPersonalSources(config: PersonalSourcesConfig): Promise<SourcesRepairResult> {
+  return invoke<SourcesRepairResult>("repair_personal_sources", { config });
 }
 
 /** After a folder or server was removed from the saved sources: it leaves every workspace. */

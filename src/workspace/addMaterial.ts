@@ -109,7 +109,7 @@ export async function addFolderToWorkspace(workspaceId: string): Promise<FolderA
   const { open } = await import("@tauri-apps/plugin-dialog");
   const { inspectNotesFolder } = await import("../lib/ipc");
   const { useSourcesStore } = await import("../stores/sourcesStore");
-  const { addNotesFolder, errorText, folderNameOf } = await import("../sources/sourcesActions");
+  const { addNotesFolder, errorText, folderNameOf, samePath } = await import("../sources/sourcesActions");
   let picked: string | string[] | null;
   try {
     picked = await open({ directory: true, title: "Choose a folder" });
@@ -118,7 +118,7 @@ export async function addFolderToWorkspace(workspaceId: string): Promise<FolderA
   }
   if (!picked || typeof picked !== "string") return { cancelled: true };
   try {
-    const known = useSourcesStore.getState().config.notes_folders.find((f) => f.path.toLowerCase() === picked.toLowerCase());
+    const known = useSourcesStore.getState().config.notes_folders.find((f) => samePath(f.path, picked));
     if (known) {
       await addWorkspaceItem(workspaceId, "folder", known.id, known.label);
       await useWorkspaceStore.getState().refresh();

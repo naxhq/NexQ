@@ -81,9 +81,10 @@ pub fn check_filing(conn: &Connection, filing: &Filing) -> Result<(), String> {
 }
 
 /// Files the listed folders and servers in the workspace. Only an id that is in
-/// `cfg` and has no membership anywhere is filed; every other id is ignored
-/// (an unknown id, one already in a workspace, a document). Returns how many
-/// were filed.
+/// `cfg` is filed; every other id is ignored (an unknown id, a document). An
+/// item already in another workspace is linked here too: a server or folder
+/// exists once in Settings, and adding what is already there only links it.
+/// Returns how many were newly filed here.
 pub fn file_explicit(conn: &Connection, cfg: &PersonalSourcesConfig, filing: &Filing) -> Result<usize, String> {
     check_filing(conn, filing)?;
     let mut filed = 0;
@@ -91,14 +92,14 @@ pub fn file_explicit(conn: &Connection, cfg: &PersonalSourcesConfig, filing: &Fi
         if item.kind == ItemKind::Document || !is_configured(cfg, item.kind, &item.ref_id) {
             continue;
         }
-        let has_membership: bool = conn
+        let here: bool = conn
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM workspace_items WHERE kind = ?1 AND ref_id = ?2)",
-                params![item.kind.as_str(), item.ref_id],
+                "SELECT EXISTS(SELECT 1 FROM workspace_items WHERE workspace_id = ?1 AND kind = ?2 AND ref_id = ?3)",
+                params![filing.workspace_id, item.kind.as_str(), item.ref_id],
                 |row| row.get(0),
             )
             .map_err(tx_err)?;
-        if has_membership {
+        if here {
             continue;
         }
         super::store::add_item(conn, &filing.workspace_id, item.kind, &item.ref_id, None)?;
@@ -125,6 +126,84 @@ pub fn remove_item_everywhere(
         super::purge::purge_search_rows(conn, "folder", ref_id)?;
     }
     Ok(())
+}
+
+/// Repair of duplicates (see `sources::dedupe`): every membership and per-chat
+/// choice that names a dropped item moves to the one kept, in one transaction.
+/// Two memberships that become the same row in one workspace are merged (pinned
+/// and "search its text" win, the kept label is kept unless it has none). What
+/// was indexed from a dropped folder goes; the kept one's index stays.
+/// Idempotent. Returns how many rows moved or merged.
+pub fn repoint_duplicates(conn: &Connection, kind: ItemKind, map: &[(String, String)]) -> Result<usize, String> {
+    if map.is_empty() || kind == ItemKind::Document {
+        return Ok(0);
+    }
+    let tx = crate::db::immediate_tx(conn).map_err(tx_err)?;
+    let kind_text = kind.as_str();
+    let mut changed = 0;
+    for (dropped, kept) in map {
+        if dropped == kept {
+            continue;
+        }
+        let rows: Vec<(String, Option<String>, i64, i64, i64)> = {
+            let mut stmt = tx
+                .prepare("SELECT workspace_id, label, pinned, index_opt_in, added_at FROM workspace_items WHERE kind = ?1 AND ref_id = ?2")
+                .map_err(tx_err)?;
+            let found = stmt
+                .query_map(params![kind_text, dropped], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+                .map_err(tx_err)?;
+            found.collect::<Result<_, _>>().map_err(tx_err)?
+        };
+        for (workspace_id, label, pinned, opt_in, added_at) in rows {
+            let has_kept: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM workspace_items WHERE workspace_id = ?1 AND kind = ?2 AND ref_id = ?3)",
+                    params![workspace_id, kind_text, kept],
+                    |r| r.get(0),
+                )
+                .map_err(tx_err)?;
+            if has_kept {
+                tx.execute(
+                    "UPDATE workspace_items SET label = COALESCE(label, ?4), pinned = MAX(pinned, ?5),
+                        index_opt_in = MAX(index_opt_in, ?6), added_at = MIN(added_at, ?7)
+                     WHERE workspace_id = ?1 AND kind = ?2 AND ref_id = ?3",
+                    params![workspace_id, kind_text, kept, label, pinned, opt_in, added_at],
+                )
+                .map_err(tx_err)?;
+                tx.execute(
+                    "DELETE FROM workspace_items WHERE workspace_id = ?1 AND kind = ?2 AND ref_id = ?3",
+                    params![workspace_id, kind_text, dropped],
+                )
+                .map_err(tx_err)?;
+            } else {
+                tx.execute(
+                    "UPDATE workspace_items SET ref_id = ?4 WHERE workspace_id = ?1 AND kind = ?2 AND ref_id = ?3",
+                    params![workspace_id, kind_text, dropped, kept],
+                )
+                .map_err(tx_err)?;
+            }
+            changed += 1;
+        }
+        if kind == ItemKind::Folder {
+            // A chat's pin or exclude of a folder follows the folder that stays.
+            let has_prefs: bool = tx
+                .query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workspace_chat_item_prefs')", [], |r| r.get(0))
+                .map_err(tx_err)?;
+            if has_prefs {
+                changed += tx
+                    .execute(
+                        "UPDATE OR IGNORE workspace_chat_item_prefs SET ref_id = ?1 WHERE kind = 'folder' AND ref_id = ?2",
+                        params![kept, dropped],
+                    )
+                    .map_err(tx_err)?;
+                tx.execute("DELETE FROM workspace_chat_item_prefs WHERE kind = 'folder' AND ref_id = ?1", params![dropped])
+                    .map_err(tx_err)?;
+            }
+            super::purge::purge_search_rows(&tx, "folder", dropped)?;
+        }
+    }
+    tx.commit().map_err(tx_err)?;
+    Ok(changed)
 }
 
 /// Whether a folder or server is known by a workspace's items (used by the
@@ -218,10 +297,11 @@ mod tests {
     }
 
     #[test]
-    fn explicit_filing_files_only_configured_ids_with_no_membership() {
+    fn explicit_filing_files_configured_ids_and_links_ones_filed_elsewhere() {
         let conn = memory_db();
         let a = new_ws(&conn, "A", false, false);
-        // f1 is seeded into General; f2, s1 are new; "ghost" is not configured; a document is ignored.
+        // f1 is seeded into General (adding it again links it here too); f2, s1 are new;
+        // "ghost" is not configured; a document is ignored.
         sync_with_config(&conn, &cfg(&["f1"], &[]), true).unwrap();
         let config = cfg(&["f1", "f2"], &["s1"]);
         let filing = Filing {
@@ -234,10 +314,11 @@ mod tests {
                 item(ItemKind::Document, "d1"),
             ],
         };
-        assert_eq!(file_explicit(&conn, &config, &filing).unwrap(), 2);
+        assert_eq!(file_explicit(&conn, &config, &filing).unwrap(), 3);
         let mine: Vec<_> = members(&conn).into_iter().filter(|m| m.0 == a).map(|m| m.2).collect();
-        assert_eq!(mine, vec!["f2", "s1"]);
-        // Filing again changes nothing: they now have a membership.
+        assert_eq!(mine, vec!["f1", "f2", "s1"]);
+        assert!(members(&conn).contains(&("general".into(), "folder".into(), "f1".into())), "General keeps it");
+        // Filing again changes nothing.
         assert_eq!(file_explicit(&conn, &config, &filing).unwrap(), 0);
     }
 
@@ -269,6 +350,25 @@ mod tests {
     fn the_filing_shape_matches_what_the_webview_sends() {
         let filing: Filing = serde_json::from_str(r#"{"workspace_id":"w","items":[{"kind":"folder","ref_id":"f"}]}"#).unwrap();
         assert_eq!((filing.workspace_id.as_str(), filing.items.len()), ("w", 1));
+    }
+
+    #[test]
+    fn a_dropped_duplicate_is_replaced_by_the_one_kept_in_every_workspace() {
+        let conn = memory_db();
+        let (a, b) = (new_ws(&conn, "A", false, false), new_ws(&conn, "B", false, false));
+        file(&conn, &a, "server", "keep");
+        file(&conn, &a, "server", "drop");
+        file(&conn, &b, "server", "drop");
+        file(&conn, &b, "folder", "drop");
+        let map = vec![("drop".to_string(), "keep".to_string())];
+        assert_eq!(repoint_duplicates(&conn, ItemKind::Server, &map).unwrap(), 2);
+        let all = members(&conn);
+        assert!(all.iter().all(|m| !(m.1 == "server" && m.2 == "drop")));
+        assert!(all.contains(&(a.clone(), "server".into(), "keep".into())) && all.contains(&(b.clone(), "server".into(), "keep".into())));
+        assert_eq!(all.iter().filter(|m| m.0 == a && m.1 == "server").count(), 1, "two rows became one");
+        assert!(all.contains(&(b, "folder".into(), "drop".into())), "another kind is not touched");
+        // Again: nothing moves.
+        assert_eq!(repoint_duplicates(&conn, ItemKind::Server, &map).unwrap(), 0);
     }
 
     #[test]

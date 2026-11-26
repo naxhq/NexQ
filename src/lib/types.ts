@@ -1300,6 +1300,13 @@ export interface PersonalSourcesConfig {
   mcp_notice_seen: boolean;
 }
 
+/** What `repair_personal_sources` did with servers and folders that were saved twice. */
+export interface SourcesRepairResult {
+  config: PersonalSourcesConfig;
+  merged_servers: number;
+  merged_folders: number;
+}
+
 export interface NotesFolderInfo {
   exists: boolean;
   md_count: number;

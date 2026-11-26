@@ -36,6 +36,29 @@ describe("personal sources and workspaces", () => {
     });
   });
 
+  it("the same server added in a second workspace stays one server in Settings and is linked in both libraries", async () => {
+    const b = mockBackend();
+    // The backend finds the second add is the first one and hands that server back.
+    const mira = server("mira-id");
+    const first = await addMcpServers([mira], "acme");
+    const second = await addMcpServers([{ ...mira }], "general");
+    expect(first).toEqual([]);
+    expect(second.map((s) => s.id)).toEqual(["mira-id"]);
+    expect(useSourcesStore.getState().config.mcp_servers.filter((s) => s.id === "mira-id")).toHaveLength(1);
+    const filings = b.called("set_personal_sources").map((c) => c.args.filing);
+    expect(filings).toEqual([
+      { workspace_id: "acme", items: [{ kind: "server", ref_id: "mira-id" }] },
+      { workspace_id: "general", items: [{ kind: "server", ref_id: "mira-id" }] },
+    ]);
+  });
+
+  it("a folder at a path Settings already has is linked, not added again", async () => {
+    const b = mockBackend();
+    await addNotesFolder({ id: "new", label: "n", path: "/N/", enabled: true });
+    expect(useSourcesStore.getState().config.notes_folders).toHaveLength(1);
+    expect(b.called("set_personal_sources")[0].args.filing).toEqual({ workspace_id: "acme", items: [{ kind: "folder", ref_id: "f1" }] });
+  });
+
   it("from Settings an add goes to the default workspace", async () => {
     useMeetingStore.setState({ currentView: "settings" });
     expect(explicitWorkspaceId()).toBe("general");

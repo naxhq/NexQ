@@ -1011,6 +1011,7 @@ pub fn run() {
             workspace_commands::delete_memory,
             workspace_commands::resolve_memory,
             sources_commands::set_personal_sources,
+            sources_commands::repair_personal_sources,
             claude_cli_commands::open_claude_login_terminal,
             settings_commands::take_store_recovery,
         ]))

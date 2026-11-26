@@ -30,12 +30,32 @@ function current(): PersonalSourcesConfig {
   return useSourcesStore.getState().config;
 }
 
-/** Add servers the backend has already taken in (they come back with no secret values). */
-export function addMcpServers(servers: McpServer[], workspaceId: string = explicitWorkspaceId()): Promise<void> {
-  return update((c) => {
+/**
+ * Add servers the backend has already taken in (they come back with no secret
+ * values). A server exists once: when the backend found that one it was given
+ * is already saved, it hands that one back, and it is only linked into the
+ * workspace. Resolves with those servers that were already in Settings.
+ */
+export async function addMcpServers(servers: McpServer[], workspaceId: string = explicitWorkspaceId()): Promise<McpServer[]> {
+  let already: McpServer[] = [];
+  await update((c) => {
     const known = new Set(c.mcp_servers.map((s) => s.id));
+    already = servers.filter((s) => known.has(s.id));
     return { ...c, mcp_servers: [...c.mcp_servers, ...servers.filter((s) => !known.has(s.id))] };
   }, { workspace_id: workspaceId, items: servers.map((s) => ({ kind: "server" as const, ref_id: s.id })) });
+  return already;
+}
+
+/** What the person is told when what they added was already in Settings. */
+export const ALREADY_IN_SETTINGS = "Already in Settings, added to this workspace";
+
+/** A folder path as the system compares it: slashes unified, no trailing slash, no case. Same rule as the backend's. */
+export function normalizedPath(path: string): string {
+  return path.trim().replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+export function samePath(a: string, b: string): boolean {
+  return normalizedPath(a) === normalizedPath(b);
 }
 
 /** Swap in a server's new state (after an edit or a Check). A server removed meanwhile stays removed. */
@@ -106,7 +126,10 @@ export async function removeMcpServerDurably(id: string, afterSave?: () => Promi
   leaveLibrary("server", id);
 }
 
+/** A folder exists once too: one at the same path is only linked into the workspace. */
 export function addNotesFolder(folder: NotesFolder, workspaceId: string = explicitWorkspaceId()): Promise<void> {
+  const same = current().notes_folders.find((f) => samePath(f.path, folder.path));
+  if (same) return update((c) => c, { workspace_id: workspaceId, items: [{ kind: "folder", ref_id: same.id }] });
   return update((c) => ({ ...c, notes_folders: [...c.notes_folders, folder] }), { workspace_id: workspaceId, items: [{ kind: "folder", ref_id: folder.id }] });
 }
 
