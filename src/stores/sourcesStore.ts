@@ -135,7 +135,8 @@ export function normalizeSourcesConfig(raw: unknown): PersonalSourcesConfig {
  */
 export function normalizeToggles(raw: unknown): SourceToggles {
   if (!isObject(raw)) return { ...DEFAULT_SOURCE_TOGGLES };
-  const knowledge = typeof raw.library === "boolean" ? raw.library : typeof raw.notes === "boolean" ? raw.notes : true;
+  // An old `notes: false` turned off folders only (documents were always used), so it never turns Knowledge off.
+  const knowledge = typeof raw.library === "boolean" ? raw.library : true;
   return { library: knowledge, tools: typeof raw.tools === "boolean" ? raw.tools : true };
 }
 

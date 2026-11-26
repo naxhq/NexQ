@@ -207,10 +207,10 @@ describe("sourcesStore", () => {
     expect(w.useSourcesStore.getState().pushError).toBeNull();
   });
 
-  it("an older saved pill pair is read as the default of a new meeting: notes is the Knowledge pill, and nothing is rewritten", async () => {
+  it("an older saved pill pair is read as the default of a new meeting: an old notes off (folders only) never turns Knowledge off, and nothing is rewritten", async () => {
     saved.set("sourceToggles", { notes: false, tools: true });
     const w = await openWindow();
-    expect(w.useSourcesStore.getState().toggles).toEqual({ library: false, tools: true });
+    expect(w.useSourcesStore.getState().toggles).toEqual({ library: true, tools: true });
     expect(saved.get("sourceToggles")).toEqual({ notes: false, tools: true }); // loading never writes
     expect(writes.count).toBe(0);
   });
