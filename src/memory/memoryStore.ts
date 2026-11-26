@@ -114,17 +114,6 @@ export const useMemoryStore = create<MemoryState>((set, get) => ({
   clearSuggest: (workspaceId) => set((s) => ({ suggest: { ...s.suggest, [workspaceId]: undefined } })),
 }));
 
-/** Saved items grouped by kind, in reading order; empty groups left out. `query` filters title and text. */
-export function groupSaved(items: MemoryRow[], query: string): Array<{ kind: MemoryKind; plural: string; items: MemoryRow[] }> {
-  const q = query.trim().toLowerCase();
-  const saved = items.filter((m) => m.status === "saved" && (!q || m.title.toLowerCase().includes(q) || m.text.toLowerCase().includes(q)));
-  return MEMORY_KINDS.map((k) => ({
-    kind: k.kind,
-    plural: k.plural,
-    items: saved.filter((m) => m.kind === k.kind).sort((a, b) => b.updated_at - a.updated_at),
-  })).filter((g) => g.items.length > 0);
-}
-
 let watching: Promise<() => void> | null = null;
 
 /** Memory changes (from either window, or the automatic suggestions after a meeting) reload the list. */

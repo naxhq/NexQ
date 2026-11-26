@@ -248,14 +248,19 @@ describe("library row details", () => {
     expect(screen.getByRole("switch", { name: /Search its text/ })).toHaveAttribute("aria-checked", "true");
   });
 
-  it("shows no pin until hover, and a filled one when pinned", () => {
+  it("hides the row's menu until hover or focus, offers Pin in it, and marks a pinned row with a filled pin", async () => {
     row(item());
-    expect(screen.getByRole("button", { name: /^Pin / })).toHaveClass("opacity-0");
+    const menu = screen.getByRole("button", { name: /^Actions for / });
+    expect(menu).toHaveClass("opacity-0", "group-hover:opacity-100", "group-focus-within:opacity-100", "focus-visible:opacity-100");
+    expect(screen.queryByRole("img", { name: "Pinned" })).toBeNull();
+    await userEvent.click(menu);
+    expect(screen.getByRole("menuitem", { name: "Pin to the top" })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
     cleanup();
     row(item({ pinned: true }));
-    const pinned = screen.getByRole("button", { name: /^Unpin / });
-    expect(pinned).not.toHaveClass("opacity-0");
-    expect(pinned.querySelector("svg")).toHaveAttribute("fill", "currentColor");
+    expect(screen.getByRole("img", { name: "Pinned" })).toHaveAttribute("fill", "currentColor");
+    await userEvent.click(screen.getByRole("button", { name: /^Actions for / }));
+    expect(screen.getByRole("menuitem", { name: "Unpin" })).toBeInTheDocument();
   });
 });
 

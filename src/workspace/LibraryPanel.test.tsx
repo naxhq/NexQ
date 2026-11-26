@@ -76,7 +76,8 @@ describe("the Library panel", () => {
   it("renames with the user's label, and pins", async () => {
     const b = backend();
     render(<LibraryPanel workspaceId="acme" />);
-    await userEvent.click(await screen.findByRole("button", { name: "Pin Slack" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Actions for Slack" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Pin to the top" }));
     await waitFor(() => expect(b.called("update_workspace_item")[0]?.args).toMatchObject({ refId: "s1", patch: { pinned: true } }));
 
     await userEvent.click(screen.getByRole("button", { name: "Rename Slack" }));
@@ -102,15 +103,16 @@ describe("the Library panel", () => {
     await waitFor(() => expect(b.called("remove_context_file")).toHaveLength(1));
   });
 
-  it("edits the instructions in place and saves them", async () => {
+  it("edits the instructions in a dialog and saves them", async () => {
     const b = backend({ update_workspace: detailOf(ACME, ITEMS, "Short.") });
     render(<LibraryPanel workspaceId="acme" />);
     expect(await screen.findByText("Be brief and name the client.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Edit instructions" }));
-    const field = screen.getByRole("textbox", { name: "Instructions for the AI" });
+    const dialog = await screen.findByRole("dialog", { name: "Instructions" });
+    const field = within(dialog).getByRole("textbox", { name: "Instructions for the AI" });
     await userEvent.clear(field);
     await userEvent.type(field, "Short.");
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(b.called("update_workspace")[0]?.args).toMatchObject({ id: "acme", patch: { instructions: "Short." } }));
   });
 
@@ -127,8 +129,10 @@ describe("the Library panel", () => {
   it("says what to do in an empty workspace, and what the meter needs", async () => {
     backend({ get_workspace: detailOf(ACME, []) });
     render(<LibraryPanel workspaceId="acme" />);
-    expect(await screen.findByText("Nothing here yet")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Add a folder" })).toBeInTheDocument();
+    expect(await screen.findByText("Nothing here yet.")).toBeInTheDocument();
+    // One short muted line, no paragraph and no row of buttons: the section's Add menu and its "i" do the rest.
+    expect(screen.getByRole("button", { name: "About the library" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add a folder" })).toBeNull();
     expect(await screen.findByText(/The first question shows how much/)).toBeInTheDocument();
   });
 
@@ -147,7 +151,7 @@ describe("the Library panel", () => {
       ],
     });
     render(<LibraryPanel workspaceId="acme" />);
-    await userEvent.click(await screen.findByRole("button", { name: "Add" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Add to this workspace" }));
     await userEvent.click(screen.getByRole("menuitem", { name: /From the library/ }));
     const dialog = await screen.findByRole("dialog", { name: "Add from library" });
     await userEvent.click(await within(dialog).findByRole("checkbox", { name: /other.pdf/ }));
@@ -159,7 +163,7 @@ describe("the Library panel", () => {
   it("pastes text as a note: the title follows the first line until the person writes their own", async () => {
     const b = backend({ add_workspace_text: "doc-1" });
     render(<LibraryPanel workspaceId="acme" />);
-    await userEvent.click(await screen.findByRole("button", { name: "Add" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Add to this workspace" }));
     await userEvent.click(screen.getByRole("menuitem", { name: "Paste text as a note" }));
     const dialog = await screen.findByRole("dialog", { name: "Add a note" });
     expect(within(dialog).getByRole("button", { name: "Add note" })).toBeDisabled();
@@ -172,7 +176,7 @@ describe("the Library panel", () => {
   it("keeps a title the person wrote, even when the text changes after", async () => {
     const b = backend({ add_workspace_text: "doc-1" });
     render(<LibraryPanel workspaceId="acme" />);
-    await userEvent.click(await screen.findByRole("button", { name: "Add" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Add to this workspace" }));
     await userEvent.click(screen.getByRole("menuitem", { name: "Paste text as a note" }));
     const dialog = await screen.findByRole("dialog", { name: "Add a note" });
     await userEvent.type(within(dialog).getByRole("textbox", { name: "Title" }), "Kickoff");
@@ -199,7 +203,8 @@ describe("a note in the Library", () => {
     expect(noteRow).not.toHaveTextContent("Document");
     expect(rows.find((r) => r.textContent?.includes("contract.pdf"))).toHaveTextContent("Document");
 
-    await userEvent.click(within(noteRow).getByRole("button", { name: "Edit note Kickoff" }));
+    await userEvent.click(within(noteRow).getByRole("button", { name: "Actions for Kickoff" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Edit note" }));
     const dialog = await screen.findByRole("dialog", { name: "Edit note" });
     const body = within(dialog).getByRole("textbox", { name: "Text" });
     await waitFor(() => expect(body).toHaveValue("Old text"));

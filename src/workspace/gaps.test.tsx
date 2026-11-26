@@ -173,7 +173,8 @@ describe("a memory source opens its moment", () => {
     useMemoryStore.setState({ byWorkspace: {}, loadError: {}, suggest: {} });
     useMeetingStore.setState({ recentMeetings: [meeting({ id: "hp", title: "Hiring panel" })], selectedMeetingId: null, selectedMeetingMoment: null });
     render(<MemorySection workspaceId="acme" />);
-    await userEvent.click(await screen.findByRole("button", { name: "From Hiring panel at 2:05" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Budget, Fact" }));
+    await userEvent.click(await screen.findByRole("button", { name: "From Hiring panel · 2:05" }));
     expect(useMeetingStore.getState().selectedMeetingId).toBe("hp");
     expect(useMeetingStore.getState().selectedMeetingMoment?.ms).toBe(125_000);
   });

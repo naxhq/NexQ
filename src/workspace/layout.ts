@@ -81,3 +81,6 @@ export function useElementSize(ref: RefObject<HTMLElement | null>): { width: num
  * (a name line and a small line), so 15.5 rem leaves the sixth row half in view as the cue to scroll.
  */
 export const LIBRARY_LIST_MAX_REM = 15.5;
+
+/** From this many rows a panel list says "Show all" (about the five that fit in `LIBRARY_LIST_MAX_REM`, plus the one half in view). */
+export const SHOW_ALL_FROM = 6;

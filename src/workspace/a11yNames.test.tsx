@@ -79,7 +79,7 @@ describe("every workspace screen names what a person can reach", () => {
     render(<LibraryPanel workspaceId="acme" />);
     await screen.findByRole("list", { name: "Library items" });
     expectNamed("library");
-    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add to this workspace" }));
     expectNamed("add menu");
   });
 
@@ -135,7 +135,10 @@ describe("every workspace screen names what a person can reach", () => {
     render(<MemorySection workspaceId="acme" />);
     await screen.findByRole("group", { name: "Suggestions" });
     expectNamed("memory");
-    await userEvent.click(screen.getByRole("button", { name: "Edit Cap" }));
+    await userEvent.click(screen.getByRole("button", { name: "Actions for Cap" }));
+    expectNamed("memory menu");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Edit" }));
+    await screen.findByRole("dialog", { name: "Edit memory" });
     expectNamed("memory edit");
   });
 

@@ -1,7 +1,7 @@
 import { useId, useState, type ReactNode } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, type LucideIcon } from "lucide-react";
 import { cn } from "../lib/utils";
-import { InfoTip } from "../ui";
+import { IconButton, InfoTip, Tooltip } from "../ui";
 
 const KEY = "nexq.rightPanel.closed";
 
@@ -24,12 +24,14 @@ function writeClosed(id: string, closed: boolean) {
 }
 
 /**
- * One block of the right panel: a quiet heading (the name, a count, a chevron that folds it), the
- * block's own action at the far end, a hairline above. The name is the fold button, so the whole
- * word is the target. Whether it is folded is remembered per block, not per workspace.
+ * One block of the right panel, the same for Library, Instructions, Talking points and Memory: a
+ * hairline above, then one line: a quiet icon, the name, a count and a chevron that folds it (all
+ * of that is one button, so the whole word is the target), the "i" with the longer help, and the
+ * block's one action at the far end. Whether it is folded is remembered per block, not per workspace.
  */
 export function PanelSection({
   id,
+  icon: Icon,
   title,
   count,
   info,
@@ -41,6 +43,8 @@ export function PanelSection({
   children,
 }: {
   id: string;
+  /** Says what the block is at a glance; decorative (the name is beside it). */
+  icon: LucideIcon;
   title: string;
   /** Shown beside the name when there is something to count. */
   count?: number | null;
@@ -74,6 +78,7 @@ export function PanelSection({
             aria-controls={bodyId}
             className="ui-focus ui-r-md -ml-1 inline-flex items-center gap-1 whitespace-nowrap rounded-md px-1 py-0.5 text-left outline-none transition-colors hover:bg-accent/60"
           >
+            <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
             <span>{title}</span>
             {count ? <span className="ui-meta font-normal tabular-nums text-muted-foreground">{count}</span> : null}
             <ChevronDown
@@ -85,9 +90,20 @@ export function PanelSection({
         {info && <InfoTip label={infoLabel ?? `About ${title.toLowerCase()}`}>{info}</InfoTip>}
         <div className="ml-auto flex shrink-0 items-center gap-1">{action}</div>
       </div>
-      <div id={bodyId} hidden={!open} className={cn("pt-1.5", bodyClassName)}>
+      <div id={bodyId} hidden={!open} className={cn("pt-1", bodyClassName)}>
         {children}
       </div>
     </section>
+  );
+}
+
+/** The block's one action as an icon, named for what it does and with its name in a tooltip. */
+export function PanelAction({ label, icon: Icon, onClick }: { label: string; icon: LucideIcon; onClick: () => void }) {
+  return (
+    <Tooltip content={label}>
+      <IconButton onClick={onClick} aria-label={label}>
+        <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+      </IconButton>
+    </Tooltip>
   );
 }

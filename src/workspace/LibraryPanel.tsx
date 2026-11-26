@@ -1,7 +1,6 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
-import { useRovingRows } from "./roving";
-import { ClipboardPaste, FolderPlus, Plus, Plug2 } from "lucide-react";
-import { ConfirmDialog, Menu, type MenuItemSpec, Button } from "../ui";
+import { Library, Plus } from "lucide-react";
+import { ConfirmDialog, IconButton, Menu, Tooltip, type MenuItemSpec } from "../ui";
 import { FileUpload } from "../context/FileUpload";
 import {
   rebuildFileIndex,
@@ -26,8 +25,8 @@ import { MemorySection, TalkingPointsSection } from "./slots";
 import { InstructionsBlock } from "./InstructionsBlock";
 import { messageOf } from "../lib/plainError";
 import { PanelSection } from "./PanelSection";
-import { libraryKindOf } from "./libraryKinds";
-import { LIBRARY_LIST_MAX_REM } from "./layout";
+import { PanelEmpty, PanelList, ShowAllDialog } from "./PanelRow";
+import { KIND_LOOK, libraryKindOf } from "./libraryKinds";
 import type { NoteTarget } from "./LibraryDialogs";
 
 // Dialogs load when first asked for.
@@ -44,8 +43,6 @@ const FromLibraryDialog = lazyNamed(() => import("./LibraryDialogs"), "FromLibra
  * knowledge base actions. Removing a row removes it from this workspace only.
  */
 export function LibraryPanel({ workspaceId, inSheet = false }: { workspaceId: string; inSheet?: boolean }) {
-  const [listEl, setListEl] = useState<HTMLDivElement | null>(null);
-  useRovingRows(listEl);
   const detail = useWorkspaceStore((s) => s.details[workspaceId]);
   const revision = useWorkspaceStore((s) => s.revision);
   const loadDetail = useWorkspaceStore((s) => s.loadDetail);
@@ -60,6 +57,7 @@ export function LibraryPanel({ workspaceId, inSheet = false }: { workspaceId: st
   const [editingNote, setEditingNote] = useState<NoteTarget | null>(null);
   const [confirmLibraryRemove, setConfirmLibraryRemove] = useState<WorkspaceItem | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
   const focus = useWorkspaceStore((s) => s.focus);
   const nonce = focus?.nonce;
   // A requested row stays marked for a moment, then goes back to normal.
@@ -140,6 +138,29 @@ export function LibraryPanel({ workspaceId, inSheet = false }: { workspaceId: st
     return menu;
   };
 
+  /** From the "Show all" dialog a choice that opens another dialog first closes this one: one at a time keeps focus where it belongs. */
+  const libraryRow = (i: WorkspaceItem, fromDialog: boolean) => {
+    const go = (fn: () => void) => () => {
+      if (fromDialog) setShowAll(false);
+      fn();
+    };
+    return (
+      <LibraryRow
+        key={`${i.kind}:${i.ref_id}`}
+        item={i}
+        progress={progress}
+        menuItems={rowMenu(i).map((m) => (["edit", "delete", "settings"].includes(m.id) ? { ...m, onSelect: go(m.onSelect) } : m))}
+        onRename={(label) => void act("rename it", () => updateWorkspaceItem(workspaceId, i.kind, i.ref_id, { label }))}
+        onTogglePin={() => void act("change the pin", () => updateWorkspaceItem(workspaceId, i.kind, i.ref_id, { pinned: !i.pinned }))}
+        onOptIn={(on) => void act("change searching", () => updateWorkspaceItem(workspaceId, i.kind, i.ref_id, { index_opt_in: on }))}
+        onRemove={() => void removeHere(i)}
+        highlighted={focus?.kind === i.kind && focus.refId === i.ref_id}
+        skipped={i.kind === "folder" ? byFolder.get(i.ref_id)?.length : undefined}
+        onShowSkipped={go(() => setSkippedOpen({ title: itemTitle(i), files: byFolder.get(i.ref_id) ?? [] }))}
+      />
+    );
+  };
+
   const addItems: MenuItemSpec[] = [
     { id: "files", label: "From the library: files, notes, folders, tools", onSelect: () => setDialog("library") },
     { id: "folder", label: "Folder", separatorBefore: true, onSelect: () => void addFolder() },
@@ -153,10 +174,11 @@ export function LibraryPanel({ workspaceId, inSheet = false }: { workspaceId: st
       items={addItems}
       align="end"
       renderTrigger={(props) => (
-        <Button {...props} size="sm" className="gap-1 px-2">
-          <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-          Add
-        </Button>
+        <Tooltip content="Add to this workspace">
+          <IconButton {...props} aria-label="Add to this workspace">
+            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+          </IconButton>
+        </Tooltip>
       )}
     />
   );
@@ -177,51 +199,20 @@ export function LibraryPanel({ workspaceId, inSheet = false }: { workspaceId: st
 
         <PanelSection
           id="library"
+          icon={Library}
           title={inSheet ? "Files, folders and tools" : "Library"}
           label="Files, folders and tools"
           count={items.length}
+          info="Files, folders and tools the AI can use in this workspace's meetings and chats. Removing one here removes it from this workspace only; the library keeps it."
+          infoLabel="About the library"
           action={addMenu}
         >
           {items.length === 0 ? (
-            <div className="py-1">
-              <p className="ui-section text-foreground">Nothing here yet</p>
-              <p className="ui-meta mt-0.5 text-muted-foreground">Add files, a folder or a tool. The AI uses them in this workspace's meetings and chats.</p>
-              <div className="mt-2.5 flex flex-wrap gap-1.5">
-                <Button size="sm" onClick={() => void addFolder()} className="gap-1.5">
-                  <FolderPlus className="h-3.5 w-3.5" aria-hidden="true" />
-                  Add a folder
-                </Button>
-                <Button size="sm" onClick={() => setDialog("server")} className="gap-1.5">
-                  <Plug2 className="h-3.5 w-3.5" aria-hidden="true" />
-                  Add a tool
-                </Button>
-                <Button size="sm" onClick={() => setDialog("paste")} className="gap-1.5">
-                  <ClipboardPaste className="h-3.5 w-3.5" aria-hidden="true" />
-                  Paste text
-                </Button>
-              </div>
-            </div>
+            <PanelEmpty>Nothing here yet.</PanelEmpty>
           ) : (
-            <div ref={setListEl} className="-mx-1.5 overflow-y-auto overscroll-contain" style={{ maxHeight: `${LIBRARY_LIST_MAX_REM}rem` }}>
-              <ul aria-label="Library items" className="space-y-px">
-                {items.map((i) => (
-                  <LibraryRow
-                    key={`${i.kind}:${i.ref_id}`}
-                    item={i}
-                    progress={progress}
-                    menuItems={rowMenu(i)}
-                    onRename={(label) => void act("rename it", () => updateWorkspaceItem(workspaceId, i.kind, i.ref_id, { label }))}
-                    onTogglePin={() => void act("change the pin", () => updateWorkspaceItem(workspaceId, i.kind, i.ref_id, { pinned: !i.pinned }))}
-                    onOptIn={(on) => void act("change searching", () => updateWorkspaceItem(workspaceId, i.kind, i.ref_id, { index_opt_in: on }))}
-                    onRemove={() => void removeHere(i)}
-                    onEditNote={libraryKindOf(i) === "note" ? () => openNote(i) : undefined}
-                    highlighted={focus?.kind === i.kind && focus.refId === i.ref_id}
-                    skipped={i.kind === "folder" ? byFolder.get(i.ref_id)?.length : undefined}
-                    onShowSkipped={() => setSkippedOpen({ title: itemTitle(i), files: byFolder.get(i.ref_id) ?? [] })}
-                  />
-                ))}
-              </ul>
-            </div>
+            <PanelList label="Library items" noun="library items" count={items.length} onShowAll={() => setShowAll(true)}>
+              {items.map((i) => libraryRow(i, false))}
+            </PanelList>
           )}
           {otherSkipped.length > 0 && (
             <button
@@ -239,10 +230,8 @@ export function LibraryPanel({ workspaceId, inSheet = false }: { workspaceId: st
         <InstructionsBlock workspaceId={workspaceId} instructions={detail?.instructions ?? ""} />
 
         <Suspense fallback={null}>
-          {/* Talking points draw their own heading: it takes this panel's spacing, not its own top margin. */}
-          <div className="border-t border-border/70 px-4 py-2.5 [&>section]:mt-0">
-            <TalkingPointsSection workspaceId={workspaceId} />
-          </div>
+          {/* Both draw their own PanelSection, so they look and fold like the others. */}
+          <TalkingPointsSection workspaceId={workspaceId} />
           <MemorySection workspaceId={workspaceId} />
         </Suspense>
 
@@ -253,6 +242,16 @@ export function LibraryPanel({ workspaceId, inSheet = false }: { workspaceId: st
 
       <LibraryFooter workspaceId={workspaceId} hasFolders={items.some((i) => i.kind === "folder")} progress={progress} />
 
+      <ShowAllDialog
+        open={showAll}
+        onClose={() => setShowAll(false)}
+        title="Library"
+        noun="library items"
+        items={items}
+        keyOf={(i) => `${i.kind}:${i.ref_id}`}
+        textOf={(i) => `${itemTitle(i)} ${i.name} ${KIND_LOOK[libraryKindOf(i)].word}`}
+        renderRow={(i) => libraryRow(i, true)}
+      />
       <Suspense fallback={null}>
         {skippedOpen && <SkippedFilesDialog folder={skippedOpen.title} files={skippedOpen.files} onClose={() => setSkippedOpen(null)} />}
         {dialog === "paste" && <NoteDialog workspaceId={workspaceId} open onClose={() => setDialog(null)} />}
