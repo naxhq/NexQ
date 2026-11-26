@@ -6,6 +6,7 @@ import type { TpDoc } from "../doc/model";
 import type { BlockState } from "../reader/DocView";
 import type { FollowAvailability } from "./voice";
 import type { PointSaid } from "../../lib/types";
+import type { SpokenEnd } from "./spoken";
 
 export const FOCUS_RATIO = 0.33;
 /** A suggestion must hold this long before it is shown, and goes after this long. */
@@ -75,6 +76,8 @@ export interface PrompterState {
   noteUserIntent: () => void;
   /** Token the speaker has reached (follower), for tests and the progress line. */
   followPosition: number;
+  /** The spoken part of the current block (null when not following): what the highlight and the strike draw. */
+  spoken: SpokenEnd | null;
   /** Scroll to the start. */
   restart: () => void;
   /** A quiet offer to jump to the point you seem to be on. */

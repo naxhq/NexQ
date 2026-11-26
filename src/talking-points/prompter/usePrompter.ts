@@ -23,6 +23,7 @@ import type { BlockState } from "../reader/DocView";
 import { useShown } from "../../overlay/useShown";
 import { useJumpOffers } from "./useJumpOffers";
 import { useNoteMeasure } from "./useNoteMeasure";
+import { spokenEnd, type SpokenEnd } from "./spoken";
 import { useSpokenHighlight } from "./useSpokenHighlight";
 import {
   FOCUS_RATIO,
@@ -59,6 +60,14 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
   if (!follower.current) follower.current = opts.follower ?? new VoiceFollower(index, { clock });
   if (!said.current) said.current = new SaidTracker(index, { clock });
   const bridge = useRef<VoiceBridge>(new VoiceBridge([]));
+  // Wakes the frame loop when it sleeps. Every controller made later (a new note, Resume) is wired to it,
+  // otherwise the loop would sleep for good and the note would stop following the voice.
+  const wakeRef = useRef<(() => void) | null>(null);
+  const adoptCtrl = useCallback((next: ScrollController) => {
+    ctrl.current = next;
+    next.onWake = wakeRef.current ?? undefined;
+    next.onWake?.();
+  }, []);
 
   const [rev, setRev] = useState(0);
   const bump = useCallback(() => setRev((n) => (n + 1) | 0), []);
@@ -132,7 +141,7 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
       said.current!.reset();
       bridge.current.reset();
       bridge.current.prime(useTranscriptStore.getState().segments);
-      ctrl.current = mkCtrl();
+      adoptCtrl(mkCtrl());
       ctrl.current.setWpm(reading.wpm);
       modeRef.current = null;
       voiceTarget.current = 0;
@@ -306,13 +315,14 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
       idle = 0;
       raf = requestAnimationFrame(frame);
     };
-    const c0 = ctrl.current;
-    c0.onWake = wake;
+    wakeRef.current = wake;
+    ctrl.current.onWake = wake;
     raf = requestAnimationFrame(frame);
     return () => {
       stopped = true;
       cancelAnimationFrame(raf);
-      if (c0.onWake === wake) c0.onWake = undefined;
+      if (wakeRef.current === wake) wakeRef.current = null;
+      if (ctrl.current.onWake === wake) ctrl.current.onWake = undefined;
     };
   }, [scrollRef, progressRef, updateCurrent, effMode, shown]);
 
@@ -360,14 +370,17 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     fresh.setMetrics({ lines: [], contentHeight: 0, viewportHeight: 0 });
     fresh.setWpm(old.getWpm());
     modeRef.current = null;
-    if (el) fresh.setWpmPosition(old.tokenAtScroll(el.scrollTop));
+    if (el) {
+      fresh.setWpmPosition(old.tokenAtScroll(el.scrollTop));
+      fresh.syncTo(el.scrollTop);
+    }
     fresh.setVoice(voiceTarget.current, "following");
     if (playingRef.current) fresh.play();
-    ctrl.current = fresh;
+    adoptCtrl(fresh);
     scheduleMeasure();
     yieldRef.current = false;
     setYielding(false);
-  }, [mkCtrl, scrollRef, scheduleMeasure]);
+  }, [mkCtrl, scrollRef, scheduleMeasure, adoptCtrl]);
 
   late.current = { resume, updateCurrent };
 
@@ -430,7 +443,12 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blocks, curBlock, reading.saidIt, rev]);
 
-  useSpokenHighlight({ blocks, index, curBlock, followPosition, followState, wantVoice, contentRef });
+  // How much of the current block is spoken. The highlight and the "Checked off" strike both read this one value.
+  const rawSpoken = spokenEnd({ blocks, index, curBlock, followPosition, followState, wantVoice });
+  const spokenId = rawSpoken?.blockId ?? null;
+  const spokenChar = rawSpoken?.endChar ?? 0;
+  const spoken = useMemo<SpokenEnd | null>(() => (spokenId ? { blockId: spokenId, endChar: spokenChar } : null), [spokenId, spokenChar]);
+  useSpokenHighlight(spoken, contentRef);
 
   // headings are structure, not things to say: they never count and are never ticked
   const leftToSay = useMemo(() => {
@@ -456,6 +474,7 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     onScroll,
     noteUserIntent,
     followPosition,
+    spoken,
     restart,
     suggestion: jump.suggestion,
     goToSuggestion: jump.goToSuggestion,

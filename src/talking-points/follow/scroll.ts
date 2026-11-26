@@ -214,6 +214,33 @@ export class ScrollController {
     return this.clampScroll(this.yForToken(token) - this.metrics.viewportHeight * this.focus);
   }
 
+  /**
+   * Scroll offset that puts the whole line holding `token` on the focus line. It changes only when
+   * the spoken line changes (never word by word), which is what a voice-followed note needs.
+   */
+  scrollForLine(token: number): number {
+    const lines = this.metrics.lines;
+    if (lines.length === 0) return 0;
+    let lo = 0;
+    let hi = lines.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (lines[mid].startToken <= token) lo = mid;
+      else hi = mid - 1;
+    }
+    return this.clampScroll(this.centre(lo) - this.metrics.viewportHeight * this.focus);
+  }
+
+  /**
+   * Adopt the real scroll offset: a controller made while the note is already scrolled must start
+   * from where the note is, not from the top.
+   */
+  syncTo(scrollTop: number): void {
+    this.cur = scrollTop;
+    this.target = scrollTop;
+    this.vel = 0;
+  }
+
   // -- tick ---------------------------------------------------------------
 
   /** Advance one frame; returns the scroll offset to apply. */
@@ -223,6 +250,8 @@ export class ScrollController {
     this.lastTick = now;
     if (this.isYielding()) return this.cur;
     if (this.mode === "off") return this.cur;
+    // nothing measured yet: any target would be the top of the note, so hold still
+    if (this.metrics.lines.length === 0) return this.cur;
     if (this.mode === "wpm") {
       if (this.playing && dt > 0) {
         const lines = this.metrics.lines;
@@ -231,7 +260,7 @@ export class ScrollController {
       }
       this.target = this.scrollForToken(this.wpmPos);
     } else if (this.voicePos !== null) {
-      this.target = this.scrollForToken(this.voicePos);
+      this.target = this.scrollForLine(this.voicePos);
     }
     if (this.reduced) {
       this.cur = this.target;

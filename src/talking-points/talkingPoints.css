@@ -180,6 +180,14 @@
   text-decoration-thickness: 1.5px;
   text-decoration-color: hsl(var(--success-text));
 }
+/* Word by word while you speak the line you are on: a strike draws across each word the moment it is heard.
+   The word index is the one the highlight uses; the draw is short (100 ms) so it never trails the voice. */
+.tp-read[data-style="checked"] .tp-w {
+  background: linear-gradient(hsl(var(--success-text)), hsl(var(--success-text))) no-repeat 0 58% / 0 1.5px;
+  transition: background-size 100ms linear;
+}
+.tp-read[data-style="checked"] .tp-w[data-struck] { background-size: 100% 1.5px; }
+.tp-read[data-style="checked"] [data-block-id] { transition-duration: 240ms, 240ms, 240ms, 240ms, 100ms; }
 
 /* Highlight: a soft blue wash on the current line, a soft green one on what you said */
 .tp-read[data-style="highlight"][data-dim="on"] [data-state="ahead"] { opacity: 1; }
@@ -232,4 +240,5 @@
 .tp-preview p { margin-block: 0.2em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (prefers-reduced-motion: reduce) {
   .tp-read[data-style] [data-block-id] { transition: none !important; }
+  .tp-read .tp-w { transition: none !important; }
 }
