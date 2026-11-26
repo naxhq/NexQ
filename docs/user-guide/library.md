@@ -79,7 +79,7 @@ Automatic answers, such as summaries and action items, never use your folders or
 - Adding a file and indexing a folder send nothing anywhere. NexQ searches on your PC.
 - When an answer uses your material, it goes to the provider that answers: the passages that matched, or, with a subscription, whatever the CLI reads itself. With Ollama or LM Studio on your PC it stays on your PC.
 - Tool results go to your AI provider as part of the answer. Add only tools you are happy to share with it.
-- A tool that could change something asks before it runs ([Workspace chat](workspace-chat.md#tool-approval)). There is no "always allow".
+- In a workspace chat, a tool that could change something asks before it runs ([Tool approval](workspace-chat.md#tool-approval)). There is no "always allow".
 - Other workspaces' files are never included. A workspace set to **Keep separate** cannot be borrowed and borrows nothing ([Workspaces](workspaces.md#keep-separate)).
 
 ## Tips

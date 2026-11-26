@@ -128,6 +128,10 @@ With a Claude, Codex or Antigravity subscription, the notes use your plan rather
 
 Notes are saved as you go, with the meeting. Open a past meeting and use the **Notes** tab: it shows the same page, editable, with **Copy as Markdown** and **Save as file** (a `.md` file). In the live panel, **Copy all as Markdown** is in the **...** menu.
 
+### Notes in your answers
+
+The **Recap** and **Follow-Up** answers carry a short outline of the notes so far, about 700 tokens at most, as reference data. The other actions don't. A live answer never waits for the notes.
+
 ### What notes see
 
 Live notes read **only the transcript**: the new lines with their time and speaker, and the notes so far. They never read your documents, folders, tools, memory or talking points, and they don't use the workspace at all. The transcript goes to the model you chose for notes. A local model keeps it on your PC.
