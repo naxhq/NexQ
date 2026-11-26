@@ -1265,6 +1265,10 @@ export async function setChatItemPref(chatId: string, kind: string, refId: strin
 export async function listChatItemPrefs(chatId: string): Promise<ItemPref[]> {
   return invoke<ItemPref[]>("list_chat_item_prefs", { chatId });
 }
+/** The budget and window a new chat would use, before any chat exists (the default model's own). */
+export async function getContextBudget(depth?: ContextDepth): Promise<ContextBudget> {
+  return invoke<ContextBudget>("get_context_budget", { depth });
+}
 /** What this chat's model can use now; `tools_off` says which tools are off and why. */
 export async function getChatCapabilities(chatId: string): Promise<ChatCapabilities> {
   return invoke<ChatCapabilities>("get_chat_capabilities", { chatId });
@@ -1272,10 +1276,6 @@ export async function getChatCapabilities(chatId: string): Promise<ChatCapabilit
 /** The estimate shown before sending. */
 export async function previewChatContext(chatId: string, question?: string): Promise<ContextReport> {
   return invoke<ContextReport>("preview_chat_context", { chatId, question });
-}
-/** The budget and window a new chat would use, before any chat exists (the default model's own). */
-export async function getContextBudget(depth?: ContextDepth): Promise<ContextBudget> {
-  return invoke<ContextBudget>("get_context_budget", { depth });
 }
 /**
  * Returns as soon as the request is accepted, not when the answer is saved: the answer comes as

@@ -1580,6 +1580,13 @@ export interface ContextBar {
 export type ContextDepth = "lean" | "balanced" | "deep";
 
 /** What was (or would be) sent for a question. Stored with every answer. */
+/** What a new chat would be drawn against (`get_context_budget`): the same rule as `ContextReport.budget`. */
+export interface ContextBudget {
+  depth: ContextDepth;
+  budget: number;
+  window: number;
+}
+
 export interface ContextReport {
   strategy: "full" | "ladder";
   depth: ContextDepth;
@@ -1589,13 +1596,6 @@ export interface ContextReport {
    */
   budget: number;
   /** The model's real context window in tokens. */
-/** What a new chat would be drawn against (`get_context_budget`): the same rule as `ContextReport.budget`. */
-export interface ContextBudget {
-  depth: ContextDepth;
-  budget: number;
-  window: number;
-}
-
   window: number;
   used: number;
   bars: ContextBar[];

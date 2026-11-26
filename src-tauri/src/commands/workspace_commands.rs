@@ -1556,6 +1556,7 @@ mod tests {
         ("workspace_chat_commands", "set_chat_item_pref", Must),
         ("workspace_chat_commands", "list_chat_item_prefs", Read),
         ("workspace_chat_commands", "preview_chat_context", Read),
+        ("workspace_chat_commands", "get_context_budget", Read),
         ("workspace_chat_commands", "get_chat_capabilities", Read),
         ("workspace_chat_commands", "ask_workspace", Exempt("a request, not a change of access")),
         ("workspace_chat_commands", "cancel_workspace_request", Exempt("stops a request")),
@@ -1609,7 +1610,6 @@ mod tests {
         let conn = crate::workspace::test_support::memory_db();
         let a = crate::workspace::test_support::new_ws(&conn, "A", false, false);
         let b = crate::workspace::test_support::new_ws(&conn, "B", false, false);
-        ("workspace_chat_commands", "get_context_budget", Read),
         conn.execute("INSERT INTO meetings (id, title, start_time, workspace_id) VALUES ('m', 't', 'x', ?1)", rusqlite::params![a]).unwrap();
         // Before the move the source is A: both chats are touched.
         let before = move_touch(&conn, "m", &b);
