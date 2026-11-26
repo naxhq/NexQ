@@ -25,7 +25,7 @@ describe("recap retry", () => {
         return null;
       },
     });
-    render(<LibraryFooter workspaceId="w" hasFolders={false} />);
+    render(<LibraryFooter workspaceId="w" />);
     expect(await screen.findByText("3 recaps failed: no key.")).toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(screen.getByText("All recaps are written.")).toBeInTheDocument());

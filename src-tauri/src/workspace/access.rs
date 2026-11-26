@@ -24,7 +24,7 @@ pub struct AccessView {
     pub material: BTreeSet<String>,
     pub items: BTreeSet<String>,
     pub memory: BTreeSet<String>,
-    /// Folders the user opted in to index (opting out takes access away).
+    /// Folders of the scope (taking one out of the Library takes access away).
     pub opted_folders: BTreeSet<String>,
     /// The live scope fingerprint of a meeting (see [`live_parts`]); empty for a chat.
     pub fingerprint: String,
@@ -35,7 +35,7 @@ pub struct AccessView {
     pub instructions: bool,
     /// Content hashes: instructions, each talking point (with the meeting's own
     /// edit), each document's cached text version, each saved memory text and
-    /// each opted-in folder's index. A changed or removed one is an edit of
+    /// each folder's index. A changed or removed one is an edit of
     /// something the dependent already used.
     pub hashes: BTreeMap<String, u64>,
 }
@@ -225,6 +225,8 @@ pub struct LiveParts {
     /// Saved memory of the scope, newest first, about 300 tokens at most.
     pub memory_text: String,
     pub brief_enabled: bool,
+    /// The home workspace's instructions (read as shown: no hidden characters).
+    pub instructions: String,
 }
 
 fn core_memory(conn: &Connection, scope: &EffectiveScope) -> Result<String, String> {
@@ -250,7 +252,7 @@ fn core_memory(conn: &Connection, scope: &EffectiveScope) -> Result<String, Stri
 pub fn live_parts_from(conn: &Connection, scope: &EffectiveScope, meeting_id: &str) -> Result<LiveParts, String> {
     // A meeting filed nowhere has no workspace to say the brief is on.
     let brief_enabled = if super::types::is_unfiled(&scope.home) { false } else { super::store::get_workspace(conn, &scope.home)?.brief_default };
-    let mut folders = crate::workspace_chat::scope_adapter::opted_in_folders(conn, scope)?;
+    let mut folders = crate::workspace_chat::scope_adapter::scope_folders(conn, scope)?;
     folders.sort();
     let mut excluded = vec![meeting_id.to_string()];
     let mut stmt = conn
@@ -284,6 +286,7 @@ pub fn live_parts_from(conn: &Connection, scope: &EffectiveScope, meeting_id: &s
         excluded_meetings: excluded,
         memory_text,
         brief_enabled,
+        instructions: crate::prompt_data::strip_hidden(&scope.instructions).trim().to_string(),
     })
 }
 
@@ -418,7 +421,6 @@ mod tests {
         meeting(&conn, "other", &a);
         file(&conn, &a, "document", "d1");
         file(&conn, &a, "folder", "f1");
-        conn.execute("UPDATE workspace_items SET index_opt_in = 1 WHERE ref_id = 'f1'", []).unwrap();
         conn.execute("INSERT INTO talking_points (id, workspace_id, title, in_context, created_at, updated_at) VALUES ('p', ?1, 't', 1, 0, 0)", params![a]).unwrap();
         let mem = crate::workspace::memory::create_memory(
             &conn,
@@ -431,7 +433,7 @@ mod tests {
         // (name, turn it off, turn it back on)
         type Flip<'a> = (&'a str, Box<dyn Fn(&Connection) + 'a>, Box<dyn Fn(&Connection) + 'a>);
         let flips: Vec<Flip> = vec![
-            ("folder opt-in", Box::new(|c| { c.execute("UPDATE workspace_items SET index_opt_in = 0 WHERE ref_id = 'f1'", []).unwrap(); }), Box::new(|c| { c.execute("UPDATE workspace_items SET index_opt_in = 1 WHERE ref_id = 'f1'", []).unwrap(); })),
+            ("folder in the workspace", Box::new(|c| { c.execute("DELETE FROM workspace_items WHERE ref_id = 'f1'", []).unwrap(); }), Box::new(|c| { file(c, &a, "folder", "f1"); })),
             ("talking point in context", Box::new(|c| { c.execute("UPDATE talking_points SET in_context = 0", []).unwrap(); }), Box::new(|c| { c.execute("UPDATE talking_points SET in_context = 1", []).unwrap(); })),
             ("document in the workspace", Box::new(|c| { c.execute("DELETE FROM workspace_items WHERE ref_id = 'd1'", []).unwrap(); }), Box::new(|c| { file(c, &a, "document", "d1"); })),
             ("memory saved", Box::new(|c| { crate::workspace::memory::update_memory(c, &mem.id, crate::workspace::types::MemoryUpdate { status: Some("dismissed".into()), ..Default::default() }).unwrap(); }), Box::new(|c| { crate::workspace::memory::update_memory(c, &mem.id, crate::workspace::types::MemoryUpdate { status: Some("saved".into()), ..Default::default() }).unwrap(); })),

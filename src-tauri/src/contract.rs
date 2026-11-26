@@ -146,6 +146,19 @@ mod tests {
     }
 
     #[test]
+    fn get_assist_sources_result() {
+        use crate::workspace::assist::*;
+        let sources = AssistSources {
+            workspace_id: "w1".into(),
+            documents: 3,
+            notes: 1,
+            folders: vec![AssistFolder { label: "DePaul".into(), used: true }],
+            servers: vec![AssistServer { label: "mira".into(), allowed_tools: 9, total_tools: 19, usable: true }],
+        };
+        assert_contract!("get_assist_sources_result", sources);
+    }
+
+    #[test]
     fn get_workspace_note_result() {
         let note = crate::commands::workspace_commands::NoteText { title: "Plan".into(), text: "# Plan
 Ship it.".into() };

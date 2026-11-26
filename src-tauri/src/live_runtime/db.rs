@@ -62,6 +62,8 @@ pub struct LiveScope {
     pub memory_text: String,
     /// The home workspace has the brief on.
     pub brief_enabled: bool,
+    /// The home workspace's instructions: the brief reads them to know what matters.
+    pub instructions: String,
 }
 
 #[derive(Debug, Clone)]
@@ -216,7 +218,7 @@ impl LiveDb {
                 talking_point_ids: p.talking_point_ids,
                 excluded_meeting_ids: p.excluded_meetings,
             };
-            Some(LiveScope { generation: 0, fingerprint: p.fingerprint, home: p.home, search, memory_text: p.memory_text, brief_enabled: p.brief_enabled })
+            Some(LiveScope { generation: 0, fingerprint: p.fingerprint, home: p.home, search, memory_text: p.memory_text, brief_enabled: p.brief_enabled, instructions: p.instructions })
         })
         .flatten()
     }

@@ -128,22 +128,51 @@ pub struct SessionKey {
     /// The with-sources variant: runs beside the plain session of the same
     /// scope and tier (notes folders and MCP tools, see `crate::sources`).
     pub with_sources: bool,
+    /// The session holds none of the scope's Library material (documents,
+    /// notes, folders): the Library pill was off when it was started.
+    pub no_library: bool,
+    /// A with-sources session started without the scope's servers: the Tools
+    /// pill was off. Always false for a plain session.
+    pub no_tools: bool,
 }
 
 impl SessionKey {
     /// The plain session of `scope` and `tier`.
     pub fn plain(scope: SessionScope, tier: Tier) -> Self {
-        Self { scope, tier, with_sources: false }
+        Self { scope, tier, with_sources: false, no_library: false, no_tools: false }
     }
 
     /// The with-sources session of `scope` and `tier`.
     pub fn sources(scope: SessionScope, tier: Tier) -> Self {
-        Self { scope, tier, with_sources: true }
+        Self { scope, tier, with_sources: true, no_library: false, no_tools: false }
     }
 
-    /// The other variant of the same scope and tier.
+    /// This key with the pills' locks: `no_library` (no documents, notes or
+    /// folders) and `no_tools` (a with-sources session without its servers).
+    pub fn locked(mut self, no_library: bool, no_tools: bool) -> Self {
+        self.no_library = no_library;
+        self.no_tools = no_tools && self.with_sources;
+        self
+    }
+
+    /// The other variant of the same scope and tier. The library lock follows.
     pub fn sibling(&self) -> Self {
-        Self { scope: self.scope.clone(), tier: self.tier, with_sources: !self.with_sources }
+        Self { scope: self.scope.clone(), tier: self.tier, with_sources: !self.with_sources, no_library: self.no_library, no_tools: false }
+    }
+
+    /// A session with a pill off: it runs beside the default ones and is not
+    /// reported to the pills (they show the default sessions).
+    pub fn is_locked_variant(&self) -> bool {
+        self.no_library || self.no_tools
+    }
+
+    /// Every key a scope and tier can have with or without sources.
+    pub fn variants(scope: &SessionScope, tier: Tier, with_sources: bool) -> Vec<SessionKey> {
+        let combos: &[(bool, bool)] = if with_sources { &[(false, false), (false, true), (true, false)] } else { &[(false, false), (true, false)] };
+        combos
+            .iter()
+            .map(|&(no_library, no_tools)| SessionKey { scope: scope.clone(), tier, with_sources, no_library, no_tools })
+            .collect()
     }
 }
 
@@ -1017,10 +1046,11 @@ impl AgentSessionManager {
 
     async fn close_variant(&self, scope: &SessionScope, with_sources: bool) {
         for tier in [Tier::Fast, Tier::Deep] {
-            let key = SessionKey { scope: scope.clone(), tier, with_sources };
-            let lock = self.spawn_lock(&key);
-            let _spawning = lock.lock().await;
-            self.close_key(&key).await;
+            for key in SessionKey::variants(scope, tier, with_sources) {
+                let lock = self.spawn_lock(&key);
+                let _spawning = lock.lock().await;
+                self.close_key(&key).await;
+            }
         }
     }
 
@@ -1103,7 +1133,7 @@ impl AgentSessionManager {
         let mut keys = Vec::new();
         for with_sources in [false, true] {
             for tier in [Tier::Fast, Tier::Deep] {
-                keys.push(SessionKey { scope: scope.clone(), tier, with_sources });
+                keys.extend(SessionKey::variants(scope, tier, with_sources));
             }
         }
         futures::future::join_all(keys.iter().map(|key| self.close_key_graceful(key, bound))).await;
@@ -1314,6 +1344,7 @@ impl AgentSessionManager {
             .lock()
             .unwrap()
             .iter()
+            .filter(|(key, _)| !key.is_locked_variant())
             .map(|(key, e)| (key.clone(), e.state, e.handle.model(), e.error.clone()))
             .collect();
         rows.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1369,6 +1400,10 @@ impl AgentSessionManager {
     }
 
     fn emit(&self, key: &SessionKey, state: SessionState, model: &str, error: Option<TurnError>) {
+        // A session with a pill off is not what the pills show.
+        if key.is_locked_variant() {
+            return;
+        }
         self.sink.emit(&self.status(key, state, model, error));
     }
 }
@@ -1940,6 +1975,26 @@ mod tests {
         assert_eq!(v["usage"]["last_request_at_ms"], 5);
         assert!(v["error_kind"].is_null());
         assert_eq!(v["with_sources"], true);
+    }
+
+    #[test]
+    fn a_session_with_a_pill_off_is_its_own_key_and_stays_out_of_the_pills_status() {
+        let live = SessionScope::Live("m".into());
+        let default = SessionKey::sources(live.clone(), Tier::Fast);
+        let no_tools = default.clone().locked(false, true);
+        let no_library = default.clone().locked(true, false);
+        let plain_no_library = SessionKey::plain(live.clone(), Tier::Fast).locked(true, true);
+        assert!(!default.is_locked_variant() && no_tools.is_locked_variant() && no_library.is_locked_variant());
+        assert_ne!(default, no_tools);
+        assert_ne!(default, no_library);
+        assert!(!plain_no_library.no_tools, "a plain session has no servers to leave out");
+        // the library lock follows to the sibling; the tools lock does not
+        assert!(no_library.sibling().no_library && !no_tools.sibling().no_tools);
+        // every variant is closed with its scope
+        let all = SessionKey::variants(&live, Tier::Fast, true);
+        assert_eq!(all.len(), 3);
+        assert!(all.contains(&default) && all.contains(&no_tools) && all.contains(&no_library));
+        assert!(SessionKey::variants(&live, Tier::Deep, false).contains(&SessionKey::plain(live, Tier::Deep).locked(true, false)));
     }
 
     #[test]

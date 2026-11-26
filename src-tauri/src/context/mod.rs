@@ -521,9 +521,27 @@ impl ContextManager {
     /// fit is shortened inside its fence (and says so), the rest are left
     /// out. None when there is nothing.
     pub fn get_resources_context_capped_for(&self, ctx: &ScopedContext, max_chars: usize) -> Option<String> {
+        self.capped_blocks(ctx, max_chars, true, true)
+    }
+
+    /// Only the scope's documents (no talking points), capped like
+    /// [`get_resources_context_capped_for`]: the Library's share.
+    pub fn documents_context_capped_for(&self, ctx: &ScopedContext, max_chars: usize) -> Option<String> {
+        self.capped_blocks(ctx, max_chars, false, true)
+    }
+
+    /// Only the scope's talking points marked as context, in at most
+    /// `max_chars`: their reserved share, which no document can take.
+    pub fn points_context_capped_for(&self, ctx: &ScopedContext, max_chars: usize) -> Option<String> {
+        self.capped_blocks(ctx, max_chars, true, false)
+    }
+
+    fn capped_blocks(&self, ctx: &ScopedContext, max_chars: usize, points: bool, documents: bool) -> Option<String> {
         let nonce = document_nonce(&ctx.scope);
-        let mut blocks = point_blocks(ctx);
-        blocks.extend(self.document_blocks(&ctx.scope));
+        let mut blocks = if points { point_blocks(ctx) } else { Vec::new() };
+        if documents {
+            blocks.extend(self.document_blocks(&ctx.scope));
+        }
         if blocks.is_empty() {
             return None;
         }
@@ -537,7 +555,7 @@ impl ContextManager {
                 format!("{}:{}{}:{}{}:{}", b.id.len(), b.id, b.attrs.len(), b.attrs, body.len(), body)
             })
             .collect();
-        let key = format!("{}|{nonce}|{max_chars}|{}", self.revision, parts.join("|"));
+        let key = format!("{}|{nonce}|{max_chars}|{points}{documents}|{}", self.revision, parts.join("|"));
         if let Ok(kept) = self.capped.lock() {
             if let Some((k, v)) = kept.as_ref() {
                 if *k == key {
@@ -591,6 +609,31 @@ impl ContextManager {
         parts.extend(points_sections(ctx));
         parts.extend(self.document_sections(&ctx.scope));
         parts.join("\n")
+    }
+
+    /// What a session's preload starts with, in two parts: the head (custom
+    /// instructions, the workspace's instructions and the context talking
+    /// points: always given, never given up for the documents) and the
+    /// documents (empty when `include_documents` is false: the Library pill
+    /// was off). Together they are [`get_assembled_context_for`] (without the
+    /// documents when they are left out).
+    pub fn assembled_parts_for(&self, ctx: &ScopedContext, include_documents: bool) -> (String, String) {
+        let mut head: Vec<String> = Vec::new();
+        if !self.custom_instructions.is_empty() {
+            head.push(format!("## Custom Instructions
+{}
+", self.custom_instructions));
+        }
+        if !ctx.scope.instructions.trim().is_empty() {
+            head.push(format!("## Workspace Instructions
+{}
+", ctx.scope.instructions.trim()));
+        }
+        head.extend(points_sections(ctx));
+        let documents = if include_documents { self.document_sections(&ctx.scope).join("
+") } else { String::new() };
+        (head.join("
+"), documents)
     }
 
     /// The scope's documents and context talking points, without instructions
@@ -776,6 +819,36 @@ mod tests {
         assert!(at("CANARY_CUSTOM") < at("CANARY_WS_RULES"));
         assert!(at("CANARY_WS_RULES") < at("CANARY_POINT"));
         assert!(at("CANARY_POINT") < at("CANARY_DOC_A"));
+    }
+
+    #[test]
+    fn the_head_always_has_the_instructions_and_points_and_the_documents_leave_with_the_pill() {
+        let m = manager_with(&[("a", "CANARY_DOC_A"), ("b", "CANARY_DOC_B")]);
+        let ctx = scoped(&["a"], "CANARY_WS_RULES", &[("Opening", "CANARY_POINT")]);
+        let (head, docs) = m.assembled_parts_for(&ctx, true);
+        assert!(head.contains("CANARY_WS_RULES") && head.contains("CANARY_POINT") && !head.contains("CANARY_DOC_A"));
+        assert!(docs.contains("CANARY_DOC_A") && !docs.contains("CANARY_DOC_B"), "another workspace's document never appears");
+        // Knowledge off: no document text at all; the points and instructions stay
+        let (head, docs) = m.assembled_parts_for(&ctx, false);
+        assert!(docs.is_empty() && head.contains("CANARY_POINT") && head.contains("CANARY_WS_RULES"));
+        // together they are what the one-piece form gave
+        let (h, d) = m.assembled_parts_for(&ctx, true);
+        assert_eq!(format!("{h}
+{d}"), m.get_assembled_context_for(&ctx));
+    }
+
+    #[test]
+    fn the_points_have_a_share_of_their_own_that_no_document_can_take() {
+        let m = manager_with(&[("a", &"filler ".repeat(20_000))]);
+        let ctx = scoped(&["a"], "", &[("Opening", "CANARY_POINT")]);
+        let points = m.points_context_capped_for(&ctx, 2_000).unwrap();
+        assert!(points.contains("CANARY_POINT") && !points.contains("filler"));
+        let docs = m.documents_context_capped_for(&ctx, 2_000).unwrap();
+        assert!(docs.contains("filler") && !docs.contains("CANARY_POINT"));
+        assert!(docs.chars().count() <= 2_000);
+        // no points: nothing; no documents in scope: nothing
+        assert!(m.points_context_capped_for(&scoped(&["a"], "", &[]), 2_000).is_none());
+        assert!(m.documents_context_capped_for(&scoped(&[], "", &[("T", "x")]), 2_000).is_none());
     }
 
     #[test]

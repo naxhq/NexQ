@@ -3,6 +3,7 @@
 //! [`scope::scope_for`] decides what each meeting or chat may use.
 
 pub mod access;
+pub mod assist;
 pub mod derived;
 pub mod documents;
 pub mod library;

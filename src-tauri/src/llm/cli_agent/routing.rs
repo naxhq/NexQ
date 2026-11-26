@@ -96,6 +96,23 @@ pub fn choose_route(
     cfg: &ClaudeCliConfig,
     with_sources: bool,
 ) -> Route {
+    choose_route_locked(active, claude_health, scope, mode, cfg, with_sources, false, false)
+}
+
+/// [`choose_route`] for a request whose pills lock something out: the session
+/// it goes to holds no Library material (`no_library`) and, with sources, no
+/// servers (`no_tools`). See `workspace::assist::Plan::key_flags`.
+#[allow(clippy::too_many_arguments)]
+pub fn choose_route_locked(
+    active: &ProviderType,
+    claude_health: ClaudeHealth,
+    scope: &SessionScope,
+    mode: &str,
+    cfg: &ClaudeCliConfig,
+    with_sources: bool,
+    no_library: bool,
+    no_tools: bool,
+) -> Route {
     if !active.is_cli_agent() {
         return Route::Stateless;
     }
@@ -112,11 +129,14 @@ pub fn choose_route(
             | SessionScope::Brief(_) => Route::Stateless,
             SessionScope::Live(_) | SessionScope::Past(_) => {
                 let tier = tier_for(mode, scope, cfg);
-                Route::ClaudeSession(if with_sources {
-                    SessionKey::sources(scope.clone(), tier)
-                } else {
-                    SessionKey::plain(scope.clone(), tier)
-                })
+                Route::ClaudeSession(
+                    if with_sources {
+                        SessionKey::sources(scope.clone(), tier)
+                    } else {
+                        SessionKey::plain(scope.clone(), tier)
+                    }
+                    .locked(no_library, no_tools),
+                )
             }
         },
     }
@@ -238,6 +258,9 @@ pub const SOURCES_NOTE_HEADER: &str = "## Sources for this answer";
 /// 2. no toggles (automatic): never;
 /// 3. Shorten and FollowUp: whatever produced the answer they work on used;
 /// 4. any other request: when a pill is on.
+///
+/// (`workspace::assist::plan` decides what is actually launched, from this
+/// rule and what the meeting's workspace holds; this is the pills-only half.)
 pub fn wants_sources(mode: &str, toggles: Option<SourceToggles>, last_answer_with_sources: bool) -> bool {
     if BACKGROUND_MODES.contains(&mode) {
         return false;
@@ -247,17 +270,19 @@ pub fn wants_sources(mode: &str, toggles: Option<SourceToggles>, last_answer_wit
     };
     match mode {
         "Shorten" | "FollowUp" => last_answer_with_sources,
-        _ => toggles.notes || toggles.tools,
+        _ => toggles.library || toggles.tools,
     }
 }
 
-/// The per-request note saying which sources this answer may use. It is an
-/// instruction, not a lock (the user enabled both kinds in settings).
+/// The per-request note telling a with-sources session which sources this
+/// answer may use. The session is launched with exactly what is on, so this
+/// only states it.
 pub fn sources_note(t: SourceToggles) -> String {
     let word = |on: bool| if on { "on" } else { "off" };
     format!(
-        "{SOURCES_NOTE_HEADER}\nNotes: {}. Tools: {}. Use only the sources marked on.",
-        word(t.notes),
+        "{SOURCES_NOTE_HEADER}
+Knowledge: {}. Tools: {}. Use only the sources marked on.",
+        word(t.library),
         word(t.tools)
     )
 }
@@ -1031,6 +1056,23 @@ Earlier questions about this meeting and the answers you gave may also \
 arrive as context; use them for follow-up questions. Base your answers on \
 this meeting, answer directly without preamble, and respond in the language \
 used in the meeting.";
+
+/// Preload messages for what a session always starts with whatever the
+/// documents come to: the workspace's instructions and its context talking
+/// points. Never moved to retrieval.
+pub fn head_preload(head: &str) -> Vec<String> {
+    build_document_preload(head, PRELOAD_MESSAGE_CHARS)
+}
+
+/// A session's preload: the always-given head (instructions and context talking points), then the
+/// documents, and whether the documents are over the cap and go to retrieval instead (the head
+/// is preloaded either way).
+pub fn session_preload(head: &str, documents: &str) -> (Vec<String>, bool) {
+    let mut preload = head_preload(head);
+    let (docs, rag_mode) = document_preload(documents);
+    preload.extend(docs);
+    (preload, rag_mode)
+}
 
 /// Preload messages for the context documents, and whether the session must
 /// use RAG retrieval instead (documents over [`DOC_PRELOAD_TOKEN_CAP`]).
@@ -2184,7 +2226,7 @@ mod tests {
 
     #[test]
     fn wants_sources_table() {
-        let on = Some(SourceToggles { notes: true, tools: false });
+        let on = Some(SourceToggles { library: true, tools: false });
         let off = Some(SourceToggles::default());
         assert!(wants_sources("Assist", on, false));
         assert!(wants_sources("AskQuestion", on, false));
@@ -2233,11 +2275,11 @@ mod tests {
     #[test]
     fn sources_note_exact() {
         assert_eq!(
-            sources_note(SourceToggles { notes: true, tools: false }),
-            "## Sources for this answer\nNotes: on. Tools: off. Use only the sources marked on."
+            sources_note(SourceToggles { library: true, tools: false }),
+            "## Sources for this answer\nKnowledge: on. Tools: off. Use only the sources marked on."
         );
-        assert!(sources_note(SourceToggles::default()).contains("Notes: off. Tools: off."));
-        assert!(sources_note(SourceToggles { notes: false, tools: true }).starts_with(SOURCES_NOTE_HEADER));
+        assert!(sources_note(SourceToggles::default()).contains("Knowledge: off. Tools: off."));
+        assert!(sources_note(SourceToggles { library: false, tools: true }).starts_with(SOURCES_NOTE_HEADER));
     }
 
     #[test]
@@ -2371,8 +2413,8 @@ mod tests {
     #[test]
     fn sources_note_body_drops_the_header() {
         assert_eq!(
-            sources_note_body(SourceToggles { notes: false, tools: true }),
-            "Notes: off. Tools: on. Use only the sources marked on."
+            sources_note_body(SourceToggles { library: false, tools: true }),
+            "Knowledge: off. Tools: on. Use only the sources marked on."
         );
     }
 
@@ -2382,7 +2424,7 @@ mod tests {
         let other = SessionScope::Live("m2".into());
         for scope in [live(), other.clone()] {
             for with in [false, true] {
-                let key = SessionKey { scope: scope.clone(), tier: Tier::Fast, with_sources: with };
+                let key = SessionKey { scope: scope.clone(), tier: Tier::Fast, with_sources: with, no_library: false, no_tools: false };
                 sessions.insert_if_absent(key, SessionRecord::default());
             }
         }
@@ -2464,5 +2506,62 @@ mod tests {
         ask(&manager, &sessions, &plain, &finals).await.unwrap();
         let plain_prompt = last_prompt(&script);
         assert!(plain_prompt.contains("Them: s4") && !plain_prompt.contains("Them: s3"), "{plain_prompt}");
+    }
+
+    #[test]
+    fn the_talking_points_are_preloaded_even_when_the_documents_go_to_retrieval() {
+        let head = "## Workspace Instructions
+be brief
+[[DATA point n]]
+CANARY_POINT
+[[END point n]]";
+        let (small, rag) = session_preload(head, "short document");
+        assert!(!rag && small.iter().any(|m| m.contains("CANARY_POINT")) && small.iter().any(|m| m.contains("short document")));
+        let huge = "word ".repeat(DOC_PRELOAD_TOKEN_CAP);
+        let (preload, rag) = session_preload(head, &huge);
+        assert!(rag, "the documents are over the cap: retrieval");
+        assert!(preload.iter().any(|m| m.contains("CANARY_POINT")), "the points stay in the session");
+        assert!(!preload.iter().any(|m| m.contains("word word")), "the documents do not");
+        // nothing at all
+        assert_eq!(session_preload("", ""), (Vec::new(), false));
+    }
+
+    #[test]
+    fn a_locked_request_goes_to_a_session_of_its_own_and_its_fallback_keeps_the_lock() {
+        let cfg = ClaudeCliConfig::default();
+        let key_of = |with_sources, no_library, no_tools| match choose_route_locked(
+            &ProviderType::ClaudeCli,
+            ClaudeHealth::Healthy,
+            &live(),
+            "Assist",
+            &cfg,
+            with_sources,
+            no_library,
+            no_tools,
+        ) {
+            Route::ClaudeSession(key) => key,
+            other => panic!("{other:?}"),
+        };
+        let default = key_of(true, false, false);
+        let no_tools = key_of(true, false, true);
+        let no_library = key_of(true, true, false);
+        let plain_no_library = key_of(false, true, false);
+        assert_eq!(default, SessionKey::sources(live(), Tier::Fast));
+        let all = [&default, &no_tools, &no_library, &plain_no_library];
+        for (i, a) in all.iter().enumerate() {
+            for b in &all[i + 1..] {
+                assert_ne!(a, b, "each lock is its own session");
+            }
+        }
+        // a plain session has no servers to leave out
+        assert_eq!(key_of(false, false, true), SessionKey::plain(live(), Tier::Fast));
+        // the plain fallback of a sources session without the library has no library either
+        assert!(no_library.sibling().no_library && !no_library.sibling().with_sources);
+        assert!(!default.sibling().no_library);
+        // the default routing is unchanged
+        match choose_route(&ProviderType::ClaudeCli, ClaudeHealth::Healthy, &live(), "Assist", &cfg, false) {
+            Route::ClaudeSession(key) => assert_eq!(key, SessionKey::plain(live(), Tier::Fast)),
+            other => panic!("{other:?}"),
+        }
     }
 }

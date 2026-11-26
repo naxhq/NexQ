@@ -132,7 +132,7 @@ describe("AIResponsePanel", () => {
     openSourceFile.mockResolvedValue(undefined);
     render(<AIResponsePanel />);
     act(() => {
-      s().setPending("Assist", "r1", { notes: true, tools: false });
+      s().setPending("Assist", "r1", { library: true, tools: false });
       s().startStream("Assist", "m", "Claude CLI", { requestId: "r1" });
       s().addActivity("r1", {
         kind: "notes",

@@ -1,8 +1,8 @@
 import { Pin } from "lucide-react";
-import { InfoTip, InlineEdit, Switch, type MenuItemSpec } from "../ui";
+import { InlineEdit, type MenuItemSpec } from "../ui";
 import { cn } from "../lib/utils";
-import type { WorkspaceItem } from "../lib/types";
-import { FOLDER_OPT_IN_SENTENCE, itemStatus, itemTitle, type IndexProgress } from "./libraryStatus";
+import type { FolderIndexInfo, WorkspaceItem } from "../lib/types";
+import { itemStatus, itemTitle, type IndexProgress } from "./libraryStatus";
 import { KIND_LOOK, libraryKindOf } from "./libraryKinds";
 import { PanelRow } from "./PanelRow";
 
@@ -22,10 +22,10 @@ const TONE: Record<string, string> = {
 export function LibraryRow({
   item,
   progress,
+  folder,
   menuItems,
   onRename,
   onTogglePin,
-  onOptIn,
   onRemove,
   highlighted,
   skipped,
@@ -33,10 +33,11 @@ export function LibraryRow({
 }: {
   item: WorkspaceItem;
   progress?: IndexProgress | null;
+  /** The index's view of this folder: its files and when it was last updated. */
+  folder?: FolderIndexInfo | null;
   menuItems: MenuItemSpec[];
   onRename: (label: string | null) => void;
   onTogglePin: () => void;
-  onOptIn: (on: boolean) => void;
   /** Shown beside a missing item, so the next step is in view. */
   onRemove?: () => void;
   /** Asked for from elsewhere (a cited file): scrolled into view and marked for a moment. */
@@ -45,7 +46,7 @@ export function LibraryRow({
   skipped?: number;
   onShowSkipped?: () => void;
 }) {
-  const status = itemStatus(item, progress);
+  const status = itemStatus(item, progress, folder);
   const title = itemTitle(item);
   const kind = libraryKindOf(item);
   const look = KIND_LOOK[kind];
@@ -91,13 +92,6 @@ export function LibraryRow({
           )}
         </>
       }
-    >
-      {item.kind === "folder" && item.status !== "missing" && (
-        <div className="ml-8 mt-0.5 flex items-center gap-1">
-          <Switch checked={!!item.index_opt_in} onChange={onOptIn} aria-label={`Search the text of ${title}`} label="Search its text" />
-          <InfoTip label={`About searching the text of ${title}`}>{FOLDER_OPT_IN_SENTENCE}</InfoTip>
-        </div>
-      )}
-    </PanelRow>
+    />
   );
 }

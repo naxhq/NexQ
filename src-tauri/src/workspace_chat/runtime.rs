@@ -262,31 +262,32 @@ pub fn talking_points_changed(hub: &ChatHub) {
     hub.wake(Wake::Points);
 }
 
-/// A folder was opted in: it is indexed now.
-pub fn folder_opted_in(hub: &ChatHub, folder_id: &str) {
+/// A folder was linked to a workspace: it is indexed now.
+pub fn folder_linked(hub: &ChatHub, folder_id: &str) {
     hub.wake(Wake::Folder(folder_id.to_string()));
 }
 
-/// A folder item changed or was removed: when no workspace opts it in any
-/// more, its passages are deleted right now (not at the next pass).
-pub fn folder_opt_out_check(state: &AppState, is_folder: bool, folder_id: &str) {
+/// A folder item was added, changed or removed: when no workspace links it any
+/// more, its passages are deleted right now (not at the next pass); otherwise it
+/// is indexed now.
+pub fn folder_link_check(state: &AppState, is_folder: bool, folder_id: &str) {
     if !is_folder || !crate::workspace::available() {
         return;
     }
     let Ok(path) = db_path(state) else { return };
     let Ok(conn) = crate::db::open_writer(&path) else { return };
     let still: i64 = conn
-        .query_row("SELECT COUNT(*) FROM workspace_items WHERE kind = 'folder' AND ref_id = ?1 AND index_opt_in = 1", [folder_id], |r| r.get(0))
+        .query_row("SELECT COUNT(*) FROM workspace_items WHERE kind = 'folder' AND ref_id = ?1", [folder_id], |r| r.get(0))
         .unwrap_or(1);
     if still == 0 {
         let _ = crate::workspace_search::indexer::remove_folder_index(&conn, folder_id);
         folder_unindexed(&state.workspace_chat, folder_id);
     } else {
-        folder_opted_in(&state.workspace_chat, folder_id);
+        folder_linked(&state.workspace_chat, folder_id);
     }
 }
 
-/// A folder was opted out of or removed: its passages go at once.
+/// A folder was removed from every Library: its passages go at once.
 pub fn folder_unindexed(hub: &ChatHub, folder_id: &str) {
     hub.wake(Wake::RemoveFolder(folder_id.to_string()));
 }

@@ -12,7 +12,10 @@ import { runUserAction } from "./userAction";
 import { useQuestionStore, type AutoAnswerRef } from "../stores/questionStore";
 import { useStreamStore } from "../stores/streamStore";
 import { useConfigStore } from "../stores/configStore";
-import { DEFAULT_SOURCES_CONFIG, useSourcesStore } from "../stores/sourcesStore";
+import { useSourcesStore } from "../stores/sourcesStore";
+import { useAssistSourcesStore } from "../stores/assistSourcesStore";
+import { useMeetingStore } from "../stores/meetingStore";
+import type { AssistSources } from "./types";
 
 const ref = (over: Partial<AutoAnswerRef> = {}): AutoAnswerRef => ({
   requestId: "r1",
@@ -118,7 +121,7 @@ describe("an answer you ask for", () => {
 
   it("runs at once when nothing has to stop first", () => {
     void runYourAction("Recap");
-    expect(runUserAction).toHaveBeenCalledWith("Recap", undefined);
+    expect(runUserAction).toHaveBeenCalledWith("Recap", undefined, { sources: { library: true, tools: false } });
   });
 
   it("stops a running automatic answer, then runs yours", async () => {
@@ -128,7 +131,7 @@ describe("an answer you ask for", () => {
 
     await runYourAction("WhatToSay");
     expect(cancelGeneration).toHaveBeenCalledWith("auto-1");
-    expect(runUserAction).toHaveBeenCalledWith("WhatToSay", undefined);
+    expect(runUserAction).toHaveBeenCalledWith("WhatToSay", undefined, { sources: { library: true, tools: false } });
     expect(vi.mocked(cancelGeneration).mock.invocationCallOrder[0])
       .toBeLessThan(vi.mocked(runUserAction).mock.invocationCallOrder[0]);
   });
@@ -147,42 +150,63 @@ describe("an answer you ask for", () => {
   });
 });
 
-describe("runYourAction and the Notes / Tools pills", () => {
+describe("runYourAction and the Knowledge / Tools pills", () => {
   const providerBefore = useConfigStore.getState().llmProvider;
+  const meeting = (id: string) => useMeetingStore.setState({ activeMeeting: { id } as never });
 
-  function setUp(provider: string, toggles = { notes: true, tools: false }) {
+  function setUp(provider: string, toggles = { library: true, tools: false }, info: Partial<AssistSources> = {}) {
     useConfigStore.setState({ llmProvider: provider as never });
-    useSourcesStore.setState({
-      config: {
-        ...DEFAULT_SOURCES_CONFIG,
-        notes_folders: [{ id: "f1", label: "Vault", path: "D:\Vault", enabled: true }],
+    useSourcesStore.setState({ toggles });
+    useAssistSourcesStore.setState({
+      pills: {},
+      info: {
+        m1: {
+          workspace_id: "w1",
+          documents: 1,
+          notes: 0,
+          folders: [{ label: "Vault", used: true }],
+          servers: [{ label: "Mira", allowed_tools: 1, total_tools: 1, usable: true }],
+          ...info,
+        },
       },
-      toggles,
     });
+    meeting("m1");
   }
 
   afterEach(() => {
     useConfigStore.setState({ llmProvider: providerBefore });
-    useSourcesStore.setState({ config: DEFAULT_SOURCES_CONFIG, toggles: { notes: false, tools: false } });
+    useSourcesStore.setState({ toggles: { library: true, tools: true } });
+    useAssistSourcesStore.setState({ pills: {}, info: {} });
+    useMeetingStore.setState({ activeMeeting: null });
     vi.mocked(runUserAction).mockClear();
   });
 
-  it("an action button sends the pills that are on", async () => {
+  it("an action button sends the pills as the meeting has them", async () => {
     setUp("claude_cli");
     await runYourAction("Assist");
-    expect(runUserAction).toHaveBeenCalledWith("Assist", undefined, { sources: { notes: true, tools: false } });
+    expect(runUserAction).toHaveBeenCalledWith("Assist", undefined, { sources: { library: true, tools: false } });
   });
 
-  it("a pill on with nothing set up behind it is sent as off", async () => {
-    setUp("claude_cli", { notes: true, tools: true });
+  it("Tools on with no server behind it in this workspace is sent as off", async () => {
+    setUp("claude_cli", { library: true, tools: true }, { servers: [] });
     await runYourAction("WhatToSay");
-    expect(runUserAction).toHaveBeenCalledWith("WhatToSay", undefined, { sources: { notes: true, tools: false } });
+    expect(runUserAction).toHaveBeenCalledWith("WhatToSay", undefined, { sources: { library: true, tools: false } });
   });
 
-  it("pills off the Claude provider send nothing", async () => {
-    setUp("openai", { notes: true, tools: true });
+  it("an API provider still sends Knowledge (it works everywhere) and never Tools", async () => {
+    setUp("openai", { library: true, tools: true });
     await runYourAction("Assist", "q");
-    expect(runUserAction).toHaveBeenCalledWith("Assist", "q");
+    expect(runUserAction).toHaveBeenCalledWith("Assist", "q", { sources: { library: true, tools: false } });
+  });
+
+  it("each meeting has its own pills", async () => {
+    setUp("claude_cli", { library: true, tools: true });
+    useAssistSourcesStore.getState().setPill("m1", "library", false);
+    await runYourAction("Assist");
+    expect(runUserAction).toHaveBeenLastCalledWith("Assist", undefined, { sources: { library: false, tools: true } });
+    meeting("m2");
+    await runYourAction("Assist");
+    expect(runUserAction).toHaveBeenLastCalledWith("Assist", undefined, { sources: { library: true, tools: true } });
   });
 
   it("a pill flipped after the click applies to the next answer only", async () => {
@@ -191,10 +215,11 @@ describe("runYourAction and the Notes / Tools pills", () => {
     useQuestionStore.getState().setAutoAnswer(ref({ requestId: "auto-1" }));
     vi.mocked(cancelGeneration).mockImplementation(async () => {
       // The pill is flipped while your request waits for the automatic answer to stop.
-      useSourcesStore.getState().setToggles({ notes: false, tools: false });
+      useAssistSourcesStore.getState().setPill("m1", "library", false);
       useStreamStore.getState().endStream(0);
     });
     await runYourAction("Assist");
-    expect(runUserAction).toHaveBeenCalledWith("Assist", undefined, { sources: { notes: true, tools: false } });
+    expect(runUserAction).toHaveBeenCalledWith("Assist", undefined, { sources: { library: true, tools: false } });
   });
+
 });

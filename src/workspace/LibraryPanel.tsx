@@ -5,6 +5,7 @@ import { FileUpload } from "../context/FileUpload";
 import {
   rebuildFileIndex,
   removeWorkspaceItem,
+  rescanWorkspace,
   updateWorkspaceItem,
 } from "../lib/ipc";
 import { useConfigStore } from "../stores/configStore";
@@ -51,7 +52,7 @@ export function LibraryPanel({ workspaceId, inSheet = false }: { workspaceId: st
   const loadResources = useContextStore((s) => s.loadResources);
   const refreshIndexStatus = useRagStore((s) => s.refreshIndexStatus);
   const contextStrategy = useConfigStore((s) => s.contextStrategy);
-  const { progress, skipped } = useWorkspaceIndex(workspaceId);
+  const { progress, skipped, folders } = useWorkspaceIndex(workspaceId);
   const [skippedOpen, setSkippedOpen] = useState<{ title: string; files: SkippedFile[] } | null>(null);
   const [dialog, setDialog] = useState<"paste" | "library" | "server" | null>(null);
   const [editingNote, setEditingNote] = useState<NoteTarget | null>(null);
@@ -124,6 +125,18 @@ export function LibraryPanel({ workspaceId, inSheet = false }: { workspaceId: st
         },
       });
     }
+    // Folders keep themselves up to date; this is for when something looks wrong.
+    if (i.kind === "folder" && i.status !== "missing") {
+      menu.push({
+        id: "reindex-folder",
+        label: "Re-index now",
+        onSelect: () => {
+          rescanWorkspace(workspaceId)
+            .then(() => showToast(`Indexing ${itemTitle(i)} again`, "success"))
+            .catch(() => showToast("Couldn't start indexing. Try again in a moment.", "error"));
+        },
+      });
+    }
     menu.push({ id: "remove", label: "Remove from this workspace", onSelect: () => void removeHere(i) });
     if (i.kind === "document") {
       menu.push({ id: "delete", label: "Remove from library", danger: true, separatorBefore: true, onSelect: () => setConfirmLibraryRemove(i) });
@@ -149,10 +162,10 @@ export function LibraryPanel({ workspaceId, inSheet = false }: { workspaceId: st
         key={`${i.kind}:${i.ref_id}`}
         item={i}
         progress={progress}
+        folder={i.kind === "folder" ? folders.get(i.ref_id) : undefined}
         menuItems={rowMenu(i).map((m) => (["edit", "delete", "settings"].includes(m.id) ? { ...m, onSelect: go(m.onSelect) } : m))}
         onRename={(label) => void act("rename it", () => updateWorkspaceItem(workspaceId, i.kind, i.ref_id, { label }))}
         onTogglePin={() => void act("change the pin", () => updateWorkspaceItem(workspaceId, i.kind, i.ref_id, { pinned: !i.pinned }))}
-        onOptIn={(on) => void act("change searching", () => updateWorkspaceItem(workspaceId, i.kind, i.ref_id, { index_opt_in: on }))}
         onRemove={() => void removeHere(i)}
         highlighted={focus?.kind === i.kind && focus.refId === i.ref_id}
         skipped={i.kind === "folder" ? byFolder.get(i.ref_id)?.length : undefined}
@@ -240,7 +253,7 @@ export function LibraryPanel({ workspaceId, inSheet = false }: { workspaceId: st
         </div>
       </div>
 
-      <LibraryFooter workspaceId={workspaceId} hasFolders={items.some((i) => i.kind === "folder")} progress={progress} />
+      <LibraryFooter workspaceId={workspaceId} progress={progress} />
 
       <ShowAllDialog
         open={showAll}

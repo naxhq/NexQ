@@ -37,7 +37,7 @@ beforeEach(() => {
   mockBackend({
     list_workspaces: [GEN, ACME, BIO],
     list_workspace_meetings: { meetings: [meeting({ id: "m1" })], total: 1 },
-    get_workspace: detailOf(ACME, [item({ kind: "folder", ref_id: "f1", name: "C:/n", index_opt_in: false }), item({ ref_id: "d1" }), item({ kind: "server", ref_id: "s1", name: "Jira" })], "Be brief."),
+    get_workspace: detailOf(ACME, [item({ kind: "folder", ref_id: "f1", name: "C:/n" }), item({ ref_id: "d1" }), item({ kind: "server", ref_id: "s1", name: "Jira" })], "Be brief."),
     list_workspace_chats: [],
     list_memory: [
       { id: "k1", workspace_id: "acme", kind: "fact", title: "Cap", text: "40k", status: "saved", source_meeting: null, source_ms: null, created_at: 0, updated_at: 0 },

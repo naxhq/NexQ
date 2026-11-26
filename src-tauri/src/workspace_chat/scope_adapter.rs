@@ -1,6 +1,6 @@
 //! From a chat's effective scope to what search and the ladder take:
 //! meetings of the home workspace only (minus the ones switched off),
-//! material (documents, opted-in folders, context talking points) of home,
+//! material (documents, folders, context talking points) of home,
 //! borrowed and General as `scope_for` decides.
 
 use std::collections::{HashMap, HashSet};
@@ -57,22 +57,11 @@ pub fn home_meetings(conn: &Connection, workspace_id: &str) -> Result<Vec<HomeMe
     rows.collect::<Result<_, _>>().map_err(|e| format!("Couldn't read the meetings: {e}"))
 }
 
-/// Folders of the scope the user opted in to index (in any workspace the
-/// scope draws material from).
-pub fn opted_in_folders(conn: &Connection, eff: &EffectiveScope) -> Result<Vec<String>, String> {
-    let mut out = Vec::new();
-    for ws in &eff.material_workspaces {
-        for item in crate::workspace::store::list_items(conn, ws)? {
-            if item.kind == crate::workspace::types::ItemKind::Folder
-                && item.index_opt_in
-                && eff.allows_folder(&item.ref_id)
-                && !out.contains(&item.ref_id)
-            {
-                out.push(item.ref_id);
-            }
-        }
-    }
-    Ok(out)
+/// The folders of the scope: every folder linked to a workspace the scope draws
+/// material from is used (indexed and searched). Removing a folder from the
+/// Library is how to stop using it.
+pub fn scope_folders(_conn: &Connection, eff: &EffectiveScope) -> Result<Vec<String>, String> {
+    Ok(eff.folder_ids.clone())
 }
 
 fn search_scope(eff: &EffectiveScope, meetings: &[String], folders: &[String], excluded: Vec<String>) -> SearchScope {
@@ -108,7 +97,7 @@ pub fn chat_scope(conn: &Connection, chat: &ChatRow) -> Result<ChatScope, String
             excluded.push(m.id);
         }
     }
-    let folder_ids = opted_in_folders(conn, &eff)?;
+    let folder_ids = scope_folders(conn, &eff)?;
     let ids: Vec<String> = meetings.iter().map(|m| m.id.clone()).collect();
     let search = search_scope(&eff, &ids, &folder_ids, excluded);
     Ok(ChatScope { pins, eff, search, meetings, folder_ids })
@@ -118,7 +107,7 @@ pub fn chat_scope(conn: &Connection, chat: &ChatRow) -> Result<ChatScope, String
 pub fn workspace_search_scope(conn: &Connection, workspace_id: &str) -> Result<SearchScope, String> {
     let eff = scope_for_home(conn, workspace_id, &[])?;
     let ids: Vec<String> = home_meetings(conn, workspace_id)?.into_iter().map(|m| m.id).collect();
-    let folders = opted_in_folders(conn, &eff)?;
+    let folders = scope_folders(conn, &eff)?;
     Ok(search_scope(&eff, &ids, &folders, Vec::new()))
 }
 

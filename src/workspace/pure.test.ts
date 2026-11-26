@@ -4,7 +4,7 @@ import { filterMeetings, groupMeetingsByDate } from "./meetingGroups";
 import { MEDIUM_MIN, WIDE_MIN, clamp, shellModeFor } from "./layout";
 import { moveInOrder } from "./order";
 import { sortWorkspaces } from "./AllWorkspaces";
-import { FOLDER_OPT_IN_SENTENCE, READING, itemStatus, itemTitle, sortItems } from "./libraryStatus";
+import { READING, itemStatus, itemTitle, sortItems } from "./libraryStatus";
 import { extensionOf, supportedPaths } from "./addMaterial";
 import { filterWorkspaces } from "./WorkspaceSwitcher";
 import { borrowBlocker } from "./meetingScope";
@@ -108,8 +108,12 @@ describe("library rows", () => {
     expect(itemStatus(item({ status: "off" })).text).toBe("Off in Settings");
     expect(itemStatus(item({ status: "indexing" }), { done: 3, total: 12 }).text).toBe("Indexing 3 of 12");
     expect(itemStatus(item({ status: "indexing", detail: READING })).text).toBe("Reading its text");
-    expect(itemStatus(item({ kind: "folder", index_opt_in: false })).text).toMatch(/Needs your OK/);
-    expect(itemStatus(item({ kind: "folder", index_opt_in: true })).text).toBe("Indexed");
+    expect(itemStatus(item({ kind: "folder" })).text).toBe("Indexed");
+    const now = 10_000_000;
+    expect(itemStatus(item({ kind: "folder" }), null, { folder_id: "f", files: 638, indexed_at: now - 600_000 }, now).text).toBe("Indexed · 638 files");
+    expect(itemStatus(item({ kind: "folder" }), null, { folder_id: "f", files: 1, indexed_at: now - 600_000 }, now).text).toBe("Indexed · 1 file");
+    expect(itemStatus(item({ kind: "folder" }), null, { folder_id: "f", files: 638, indexed_at: now - 5_000 }, now).text).toBe("Updated just now");
+    expect(itemStatus(item({ kind: "folder", status: "indexing" }), { done: 120, total: 638 }, { folder_id: "f", files: 638, indexed_at: now }, now).text).toBe("Indexing 120 of 638");
     expect(itemStatus(item({ kind: "server" })).text).toBe("Ready");
   });
   it("uses the user's label and sorts pinned, then kind", () => {
@@ -121,9 +125,6 @@ describe("library rows", () => {
       item({ ref_id: "p", kind: "server", name: "Pinned", pinned: true }),
     ]);
     expect(sorted.map((i) => i.ref_id)).toEqual(["p", "d", "s"]);
-  });
-  it("keeps the folder sentence about where text goes", () => {
-    expect(FOLDER_OPT_IN_SENTENCE).toMatch(/AI provider/);
   });
 });
 

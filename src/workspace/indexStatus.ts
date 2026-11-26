@@ -1,32 +1,42 @@
 import { useEffect, useState } from "react";
 import { getIndexStatus } from "../lib/ipc";
 import { onWorkspaceIndexProgress } from "../lib/events";
-import type { SkippedFile, WorkspaceItem } from "../lib/types";
-import type { IndexProgress } from "./libraryStatus";
+import type { FolderIndexInfo, SkippedFile, WorkspaceItem } from "../lib/types";
+import { JUST_NOW_MS, type IndexProgress } from "./libraryStatus";
 
 export interface WorkspaceIndexView {
   /** Set while the index is still being built ("n of m"); null when it is done or idle. */
   progress: IndexProgress | null;
   /** Files the index left out, with a reason each. */
   skipped: SkippedFile[];
+  /** Each folder's indexed files and when it was last updated, by folder id. */
+  folders: Map<string, FolderIndexInfo>;
 }
+
 
 /**
  * The index of one workspace: how far it is (live, from `workspace_index_progress`) and which files it
  * skipped. The skipped list is read again whenever a run finishes.
  */
 export function useWorkspaceIndex(workspaceId: string): WorkspaceIndexView {
-  const [view, setView] = useState<WorkspaceIndexView>({ progress: null, skipped: [] });
+  const [view, setView] = useState<WorkspaceIndexView>({ progress: null, skipped: [], folders: new Map() });
   useEffect(() => {
-    setView({ progress: null, skipped: [] });
+    setView({ progress: null, skipped: [], folders: new Map() });
     let stop: (() => void) | undefined;
     let gone = false;
+    let late: ReturnType<typeof setTimeout> | undefined;
     const read = () =>
       getIndexStatus(workspaceId)
         .then((s) => {
           if (gone || !s) return;
           const running = s.state === "indexing" && s.total > 0;
-          setView({ progress: running ? { done: s.done, total: s.total } : null, skipped: Array.isArray(s.skipped) ? s.skipped : [] });
+          const folders = new Map((Array.isArray(s.folders) ? s.folders : []).map((f) => [f.folder_id, f] as const));
+          setView({ progress: running ? { done: s.done, total: s.total } : null, skipped: Array.isArray(s.skipped) ? s.skipped : [], folders });
+          // "Updated just now" ends by itself: draw the row again once it is no longer true.
+          if ([...folders.values()].some((f) => f.indexed_at && Date.now() - f.indexed_at < JUST_NOW_MS)) {
+            clearTimeout(late);
+            late = setTimeout(() => !gone && setView((v) => ({ ...v })), JUST_NOW_MS + 1_000);
+          }
         })
         .catch(() => {});
     void read();
@@ -40,6 +50,7 @@ export function useWorkspaceIndex(workspaceId: string): WorkspaceIndexView {
       .catch(() => {});
     return () => {
       gone = true;
+      clearTimeout(late);
       stop?.();
     };
   }, [workspaceId]);

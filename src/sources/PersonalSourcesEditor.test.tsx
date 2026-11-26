@@ -71,7 +71,7 @@ beforeEach(() => {
   storeFlags.failSet = false;
   useToastStore.setState({ toasts: [] });
   useConfigStore.setState({ llmProvider: "claude_cli" });
-  useSourcesStore.setState({ config: DEFAULT_SOURCES_CONFIG, toggles: { notes: false, tools: false }, pushError: null });
+  useSourcesStore.setState({ config: DEFAULT_SOURCES_CONFIG, toggles: { library: false, tools: false }, pushError: null });
 });
 
 afterEach(() => cleanup());

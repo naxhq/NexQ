@@ -156,6 +156,11 @@ pub fn sheet_to_contract(sheet: &Sheet, generated_at: i64) -> Value {
     })
 }
 
+/// How often the meeting's notes are read again for the brief.
+const NOTES_REFRESH: Duration = Duration::from_secs(5);
+/// Most tokens of the notes outline a brief prompt carries.
+const BRIEF_NOTES_TOKENS: u32 = 500;
+
 pub fn spawn(p: BriefParams) -> Result<BriefHandle, String> {
     let selection = Selection { provider: p.settings.provider.clone(), model: p.settings.model.clone(), effort: p.settings.effort.clone() };
     let swap = SwapLlm::new(p.factory.clone(), AiPurpose::Brief, &p.meeting_id, selection)?;
@@ -189,6 +194,8 @@ pub fn spawn(p: BriefParams) -> Result<BriefHandle, String> {
         quitting: false,
         interrupted: false,
         last_scope_check: std::time::Instant::now(),
+        notes_text: String::new(),
+        notes_read: None,
     };
     tokio::spawn(actor.run(rx));
     Ok(handle)
@@ -214,6 +221,9 @@ struct Actor {
     quitting: bool,
     interrupted: bool,
     last_scope_check: std::time::Instant,
+    /// The meeting's live notes as an outline, read at most every few seconds.
+    notes_text: String,
+    notes_read: Option<std::time::Instant>,
 }
 
 impl Actor {
@@ -274,8 +284,9 @@ impl Actor {
                 if key != self.engine.scope() {
                     self.swap.cancel_and_renew();
                     self.engine.set_scope(&key, &s.memory_text);
-                    *self.scope_cell.lock().unwrap() = s;
                 }
+                // the instructions can change without the scope (they are an edit, not access)
+                *self.scope_cell.lock().unwrap() = s;
             }
             other => {
                 self.stop_reason = Some(match &other {
@@ -292,6 +303,23 @@ impl Actor {
             }
         }
         self.last_scope_check = std::time::Instant::now();
+    }
+
+    /// The workspace's instructions and the meeting's live notes, as the next
+    /// prompt carries them (data, fenced like the rest). The notes are read at
+    /// most every few seconds.
+    fn refresh_context(&mut self) {
+        if self.notes_read.map_or(true, |t| t.elapsed() >= NOTES_REFRESH) {
+            self.notes_text = self
+                .p
+                .db
+                .load_notes(&self.p.meeting_id)
+                .map(|n| n.doc.outline(BRIEF_NOTES_TOKENS))
+                .unwrap_or_default();
+            self.notes_read = Some(std::time::Instant::now());
+        }
+        let instructions = self.scope_cell.lock().unwrap().instructions.clone();
+        self.engine.set_context(&instructions, &self.notes_text);
     }
 
     fn handle(&mut self, cmd: BriefCmd) {
@@ -364,6 +392,7 @@ impl Actor {
         let counter0 = self.shared.counter.load(Ordering::SeqCst);
         let gen0 = (self.p.generation)(&self.p.meeting_id, true);
         self.swap.set_expected(Some(gen0));
+        self.refresh_context();
         let (_tick, prepared) = self.engine.step();
         let Some(prep) = prepared else { return true };
         // the workspace's switch is read again before every run: off (or a new scope) means this prompt is never sent

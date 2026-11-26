@@ -30,27 +30,52 @@ fn custom_instructions(state: &AppState) -> String {
 }
 
 /// The launch of a with-sources session from the saved sources and secrets,
-/// cut down to what `scope` may use: `Ok(None)` when nothing usable is
-/// enabled, `Err` when something was enabled but every source was left out.
+/// cut down to what `scope` may use and what the pills left on (`folders`: the
+/// Library's searched folders, `servers`: the Tools): `Ok(None)` when nothing
+/// usable is enabled, `Err` when something was enabled but every source was
+/// left out.
 pub(crate) fn current_sources_launch(
     state: &AppState,
     scope: &EffectiveScope,
+    folders: bool,
+    servers: bool,
 ) -> Result<Option<SourcesLaunch>, String> {
-    let cfg = runtime::sources_for(state, scope)?;
+    let saved = state
+        .personal_sources
+        .read()
+        .map_err(|_| "Couldn't read your sources".to_string())?
+        .clone();
+    let cfg = crate::workspace::assist::session_sources(&saved, scope, folders, servers);
     build_sources_launch(&cfg, &crate::commands::sources_commands::saved_secret)
 }
 
 /// `record` as a with-sources session starts it: the sources launch, and the
-/// system prompt followed by what each source is.
+/// system prompt followed by what each source is. `key` says what is left out
+/// (a session with the Library off has no folders, one with Tools off no servers).
 fn with_sources_record(
     state: &AppState,
     mut record: SessionRecord,
     scope: &EffectiveScope,
+    key: &SessionKey,
 ) -> Result<SessionRecord, String> {
-    let launch = current_sources_launch(state, scope)?.ok_or_else(|| "No personal sources are enabled".to_string())?;
+    let launch = current_sources_launch(state, scope, !key.no_library, !key.no_tools)?
+        .ok_or_else(|| "No personal sources are enabled".to_string())?;
     record.system_prompt = format!("{}\n\n{}", record.system_prompt, launch.system_prompt_addition);
     record.sources = Some(launch);
     Ok(record)
+}
+
+/// What the scope holds of the Library and Tools right now (for deciding
+/// whether a with-sources session has anything to start with).
+pub(crate) fn held_sources(state: &AppState, scope: &EffectiveScope) -> crate::workspace::assist::Held {
+    let saved = state.personal_sources.read().map(|c| c.clone()).unwrap_or_default();
+    let resources = state
+        .context
+        .as_ref()
+        .and_then(|c| c.lock().ok())
+        .map(|c| c.list_resources())
+        .unwrap_or_default();
+    crate::workspace::assist::held(scope, &saved, &resources)
 }
 
 /// What a live-meeting Claude session starts with: the scenario prompt,
@@ -65,13 +90,36 @@ pub(crate) fn live_session_record(
     finals: &[Seg],
     with_sources: bool,
 ) -> Result<SessionRecord, String> {
+    live_session_record_flags(state, tier, finals, with_sources, false, false)
+}
+
+/// [`live_session_record`] for the session `key` names (its pills' locks).
+pub(crate) fn live_session_record_for(state: &AppState, key: &SessionKey, finals: &[Seg]) -> Result<SessionRecord, String> {
+    live_session_record_flags(state, key.tier, finals, key.with_sources, key.no_library, key.no_tools)
+}
+
+/// `no_library`: the session holds no documents, notes or folders (the
+/// Library pill was off); `no_tools`: a with-sources session without its servers.
+/// The workspace's instructions and context talking points are always in.
+pub(crate) fn live_session_record_flags(
+    state: &AppState,
+    tier: Tier,
+    finals: &[Seg],
+    with_sources: bool,
+    no_library: bool,
+    no_tools: bool,
+) -> Result<SessionRecord, String> {
     // Stamp first: the generation and sources epoch this record is built under.
     // If the scope restarts while it is built, the record is refused at insert.
     let live_id = state.live_meeting.lock().ok().and_then(|m| m.as_ref().map(|m| m.id.clone()));
-    let stamp = live_id
-        .as_ref()
-        .map(|id| record_stamp(state, &SessionKey { scope: SessionScope::Live(id.clone()), tier, with_sources }))
-        .unwrap_or_default();
+    let key = SessionKey {
+        scope: SessionScope::Live(live_id.clone().unwrap_or_default()),
+        tier,
+        with_sources,
+        no_library,
+        no_tools,
+    };
+    let stamp = live_id.as_ref().map(|_| record_stamp(state, &key)).unwrap_or_default();
     let (scenario_prompt, speaker_context) = state
         .active_scenario
         .read()
@@ -83,16 +131,21 @@ pub(crate) fn live_session_record(
         Some(id) => runtime::for_meeting(state, id),
         None => runtime::for_default(state),
     };
-    let (documents, document_rules) = state
+    let (head, documents, document_rules) = state
         .context
         .as_ref()
         .and_then(|c| c.lock().ok())
-        .map(|c| (c.get_assembled_context_for(&scoped), c.document_rules_for(&scoped)))
+        .map(|c| {
+            let (head, documents) = c.assembled_parts_for(&scoped, !no_library);
+            (head, documents, c.document_rules_for(&scoped))
+        })
         .unwrap_or_default();
     // Excerpts from local search can arrive in any turn (documents added later, the meeting's own
     // transcript): every live session says once, with the same words, that fenced blocks are data.
     let document_rules = if document_rules.is_empty() { crate::context::excerpt_rules(&scoped.scope) } else { document_rules };
-    let (mut preload, rag_mode) = routing::document_preload(&documents);
+    // The talking points and instructions are preloaded whatever the documents come to; only
+    // the documents go to retrieval when they are over the cap.
+    let (mut preload, rag_mode) = routing::session_preload(&head, &documents);
     let mut sent = HashMap::new();
     if tier == Tier::Deep {
         preload.extend(build_preload_messages(finals, None, PRELOAD_MESSAGE_CHARS, true));
@@ -113,7 +166,7 @@ pub(crate) fn live_session_record(
         ..SessionRecord::default()
     };
     if with_sources {
-        with_sources_record(state, record, &scoped.scope)
+        with_sources_record(state, record, &scoped.scope, &key)
     } else {
         Ok(record)
     }
@@ -173,10 +226,29 @@ pub(crate) fn past_session_record(
     meeting_id: &str,
     with_sources: bool,
 ) -> Result<SessionRecord, String> {
-    let stamp = record_stamp(
-        state,
-        &SessionKey { scope: SessionScope::Past(meeting_id.to_string()), tier: Tier::Deep, with_sources },
-    );
+    past_session_record_flags(state, meeting_id, with_sources, false, false)
+}
+
+/// [`past_session_record`] for the session `key` names (its pills' locks).
+pub(crate) fn past_session_record_for(state: &AppState, meeting_id: &str, key: &SessionKey) -> Result<SessionRecord, String> {
+    past_session_record_flags(state, meeting_id, key.with_sources, key.no_library, key.no_tools)
+}
+
+pub(crate) fn past_session_record_flags(
+    state: &AppState,
+    meeting_id: &str,
+    with_sources: bool,
+    no_library: bool,
+    no_tools: bool,
+) -> Result<SessionRecord, String> {
+    let key = SessionKey {
+        scope: SessionScope::Past(meeting_id.to_string()),
+        tier: Tier::Deep,
+        with_sources,
+        no_library,
+        no_tools,
+    };
+    let stamp = record_stamp(state, &key);
     let context = past_meeting_context(state, meeting_id)?;
     let mut preload = build_preload_messages(
         &context.transcript,
@@ -198,7 +270,7 @@ pub(crate) fn past_session_record(
         ..SessionRecord::default()
     };
     if with_sources {
-        with_sources_record(state, record, &scoped.scope)
+        with_sources_record(state, record, &scoped.scope, &key)
     } else {
         Ok(record)
     }
@@ -391,10 +463,10 @@ fn retry_sources_key(app: &AppHandle, key: SessionKey) {
     state.meeting_sessions.clear_sources(&key.scope);
     match key.scope.clone() {
         SessionScope::Live(_) => {
-            start_session_in_background(app, key.clone(), move |state| live_session_record(state, key.tier, &[], true))
+            start_session_in_background(app, key.clone(), move |state| live_session_record_for(state, &key, &[]))
         }
         SessionScope::Past(id) => {
-            start_session_in_background(app, key, move |state| past_session_record(state, &id, true))
+            start_session_in_background(app, key.clone(), move |state| past_session_record_for(state, &id, &key))
         }
         SessionScope::Utility | SessionScope::Workspace(_) | SessionScope::Notes(_) | SessionScope::Brief(_) => {}
     }
@@ -432,10 +504,8 @@ pub(crate) fn restart_sources_sessions(app: &AppHandle) {
     }
     let live = state.live_meeting.lock().ok().and_then(|m| m.as_ref().map(|m| m.id.clone()));
     let rewarm = live.filter(|id| {
-        routing::cli_agent_is_active(&state)
-            && runtime::sources_for(&state, &runtime::for_meeting(&state, id).scope)
-                .map(|c| c.has_enabled())
-                .unwrap_or(false)
+        let held = held_sources(&state, &runtime::for_meeting(&state, id).scope);
+        routing::cli_agent_is_active(&state) && (held.folders || held.servers)
     });
     let sessions = state.agent_sessions.clone();
     let app = app.clone();
@@ -482,10 +552,10 @@ pub(crate) fn restart_meeting_sessions(app: &AppHandle, meeting_id: &str) {
         state.agent_sessions.detach_scope(scope);
     }
     let rewarm = is_live && routing::cli_agent_is_active(&state);
-    let with_sources = rewarm
-        && runtime::sources_for(&state, &runtime::for_meeting(&state, meeting_id).scope)
-            .map(|c| c.has_enabled())
-            .unwrap_or(false);
+    let with_sources = rewarm && {
+        let held = held_sources(&state, &runtime::for_meeting(&state, meeting_id).scope);
+        held.folders || held.servers
+    };
     let sessions = state.agent_sessions.clone();
     let app = app.clone();
     let id = meeting_id.to_string();
@@ -711,7 +781,8 @@ pub async fn start_meeting(
         // The with-sources Fast session warms beside it, so the first answer
         // with a pill on finds it ready. Deep ones start on first use.
         let scope = runtime::for_meeting(&state, &meeting.id).scope;
-        let has_sources = runtime::sources_for(&state, &scope).map(|c| c.has_enabled()).unwrap_or(false);
+        let held = held_sources(&state, &scope);
+        let has_sources = held.folders || held.servers;
         if has_sources {
             let key = SessionKey::sources(SessionScope::Live(meeting.id.clone()), Tier::Fast);
             start_session_in_background(&app, key, |state| {

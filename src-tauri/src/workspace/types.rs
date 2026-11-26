@@ -118,7 +118,6 @@ pub struct ItemRow {
     pub ref_id: String,
     pub label: Option<String>,
     pub pinned: bool,
-    pub index_opt_in: bool,
     pub added_at: i64,
 }
 
@@ -139,9 +138,6 @@ pub struct WorkspaceItem {
     pub status: LibraryStatus,
     pub detail: Option<String>,
     pub tokens: Option<i64>,
-    /// Folders only: the user allowed indexing the folder text.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub index_opt_in: Option<bool>,
     pub added_at: i64,
 }
 
@@ -230,7 +226,6 @@ pub struct ItemPatch {
     #[serde(deserialize_with = "clearable")]
     pub label: Option<Option<String>>,
     pub pinned: Option<bool>,
-    pub index_opt_in: Option<bool>,
 }
 
 /// What happens to a workspace's meetings, chats and talking points when it
@@ -443,7 +438,6 @@ mod contract {
             status: "ready".into(),
             detail: None,
             tokens: None,
-            index_opt_in: (kind == ItemKind::Folder).then_some(false),
             added_at: 0,
         }
     }
@@ -469,9 +463,7 @@ mod contract {
         assert_eq!(keys(&detail), expect(&with_detail));
         let item_keys = ["workspace_id", "kind", "ref_id", "label", "name", "pinned", "status", "detail", "tokens", "added_at"];
         assert_eq!(keys(&item(ItemKind::Document)), expect(&item_keys));
-        let mut folder = item_keys.to_vec();
-        folder.push("index_opt_in");
-        assert_eq!(keys(&item(ItemKind::Folder)), expect(&folder));
+        assert_eq!(keys(&item(ItemKind::Folder)), expect(&item_keys));
     }
 
     #[test]
@@ -538,8 +530,8 @@ mod contract {
             serde_json::from_str(r#"{"recaps_with_ai":true,"suggest_memory":false,"default_scenario":null}"#).unwrap();
         assert_eq!(patch.recaps_with_ai, Some(true));
         assert_eq!(patch.default_scenario, Some(None));
-        let item: ItemPatch = serde_json::from_str(r#"{"label":null,"pinned":true,"index_opt_in":true}"#).unwrap();
-        assert_eq!(item.index_opt_in, Some(true));
+        let item: ItemPatch = serde_json::from_str(r#"{"label":null,"pinned":true}"#).unwrap();
+        assert_eq!(item.pinned, Some(true));
         let mode: DeleteMode = serde_json::from_str(r#""move""#).unwrap();
         assert_eq!(mode, DeleteMode::Move);
     }

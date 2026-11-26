@@ -68,6 +68,7 @@ const RESULT_OF_COMMAND: Record<string, string> = {
 /** Result fixtures (`<command>_result`): the TS type each is read as; `[]` after it means a list. */
 const RESULT_TYPES: Record<string, string> = {
   create_workspace_chat_result: "WorkspaceChat",
+  get_assist_sources_result: "AssistSources",
   get_chat_capabilities_result: "ChatCapabilities",
   get_db_integrity_result: "DbIntegrityFinding",
   get_index_status_result: "IndexStatus",

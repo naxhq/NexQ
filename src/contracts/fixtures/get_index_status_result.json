@@ -5,6 +5,13 @@
     "reason": "The model did not answer in time"
   },
   "done": 3,
+  "folders": [
+    {
+      "files": 638,
+      "folder_id": "f1",
+      "indexed_at": 1700000000000
+    }
+  ],
   "last_indexed_at": 1700000000000,
   "passages": 120,
   "skipped": [

@@ -15,7 +15,7 @@ const ACME = ws({ id: "acme", name: "Acme account", item_count: 4 });
 const ITEMS = [
   item({ ref_id: "d1", name: "contract.pdf", label: "The contract", pinned: true }),
   item({ ref_id: "d2", name: "gone.pdf", status: "missing" }),
-  item({ ref_id: "f1", kind: "folder", name: "C:\\notes", status: "ready", index_opt_in: false }),
+  item({ ref_id: "f1", kind: "folder", name: "C:\\notes", status: "ready" }),
   item({ ref_id: "s1", kind: "server", name: "Slack", status: "off" }),
 ];
 
@@ -46,7 +46,7 @@ describe("the Library panel", () => {
     expect(rows[0]).toHaveTextContent("The contract");
     expect(rows[0]).toHaveTextContent("contract.pdf");
     expect(list).toHaveTextContent("Missing");
-    expect(list).toHaveTextContent("Needs your OK to search its text");
+    expect(list).toHaveTextContent("Indexed");
     expect(list).toHaveTextContent("Off in Settings");
   });
 
@@ -61,16 +61,13 @@ describe("the Library panel", () => {
     await waitFor(() => expect(b.called("remove_workspace_item")[0]?.args).toMatchObject({ id: "acme", kind: "document", refId: "d9" }));
   });
 
-  it("keeps a folder's text unsearched until the person allows it, with one sentence about where it goes", async () => {
-    const b = backend();
+  it("uses every folder in the Library: no switch to search its text, and its row says Indexed", async () => {
+    backend();
     render(<LibraryPanel workspaceId="acme" />);
-    const sw = await screen.findByRole("switch", { name: /Search its text/ });
-    expect(sw).toHaveAttribute("aria-checked", "false");
-    expect(screen.queryByText(/sends the passages that match a question/)).toBeNull();
-    await userEvent.hover(screen.getByRole("button", { name: /^About searching the text of/ }));
-    expect(await screen.findByRole("tooltip")).toHaveTextContent(/sends the passages that match a question to the AI provider you use/);
-    await userEvent.click(sw);
-    await waitFor(() => expect(b.called("update_workspace_item")[0]?.args).toMatchObject({ id: "acme", kind: "folder", refId: "f1", patch: { index_opt_in: true } }));
+    const list = await screen.findByRole("list", { name: "Library items" });
+    expect(screen.queryByRole("switch", { name: /Search its text/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /About searching the text of/ })).toBeNull();
+    expect(list).toHaveTextContent("Indexed");
   });
 
   it("renames with the user's label, and pins", async () => {
@@ -123,7 +120,27 @@ describe("the Library panel", () => {
     vi.spyOn(useContextStore.getState(), "loadResources").mockResolvedValue();
     render(<LibraryPanel workspaceId="acme" />);
     expect(await screen.findByRole("button", { name: /Build the knowledge base/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Rescan folders" })).toBeInTheDocument();
+    // Folders keep themselves up to date: no rescan button
+    expect(screen.queryByRole("button", { name: /Rescan folders/ })).toBeNull();
+  });
+
+  it("offers Re-index now in a folder's menu, for troubleshooting", async () => {
+    const b = backend();
+    render(<LibraryPanel workspaceId="acme" />);
+    await userEvent.click(await screen.findByRole("button", { name: "Actions for C:\\notes" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Re-index now" }));
+    await waitFor(() => expect(b.called("rescan_workspace")[0]?.args).toMatchObject({ id: "acme" }));
+  });
+
+  it("shows a folder's state on its row: files indexed, still indexing, just updated", async () => {
+    const folderStatus = (over: object) => ({ workspace_id: "acme", state: "idle", done: 0, total: 0, passages: 5, skipped: [], last_indexed_at: null, ...over });
+    backend({ get_index_status: folderStatus({ folders: [{ folder_id: "f1", files: 638, indexed_at: 1 }] }) });
+    render(<LibraryPanel workspaceId="acme" />);
+    expect(await screen.findByText("Indexed · 638 files")).toBeInTheDocument();
+    cleanup();
+    backend({ get_index_status: folderStatus({ folders: [{ folder_id: "f1", files: 638, indexed_at: Date.now() - 2_000 }] }) });
+    render(<LibraryPanel workspaceId="acme" />);
+    expect(await screen.findByText("Updated just now")).toBeInTheDocument();
   });
 
   it("says what to do in an empty workspace, and what the meter needs", async () => {

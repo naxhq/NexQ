@@ -112,7 +112,7 @@ describe("ModeButtons Ask box with a pasted image", () => {
     await pasteImage("sent");
     fireEvent.click(button(/^Send question/));
     await waitFor(() => expect(runUserAction).toHaveBeenCalled());
-    expect(vi.mocked(runUserAction).mock.calls[0][2]).toEqual({ images: [{ media_type: "image/png", data: btoa("sent") }] });
+    expect(vi.mocked(runUserAction).mock.calls[0][2]).toMatchObject({ images: [{ media_type: "image/png", data: btoa("sent") }] });
 
     // A screenshot arrives while the answer is still pending.
     act(() => deliverScreenshot(new File(["shot"], "screen.png", { type: "image/png" })));
@@ -169,9 +169,9 @@ describe("ModeButtons Ask box with a pasted image", () => {
     await pasteImage("a");
     fireEvent.click(button(/^Send question/));
     await waitFor(() =>
-      expect(runUserAction).toHaveBeenCalledWith("AskQuestion", DEFAULT_IMAGE_QUESTION, {
+      expect(runUserAction).toHaveBeenCalledWith("AskQuestion", DEFAULT_IMAGE_QUESTION, expect.objectContaining({
         images: [{ media_type: "image/png", data: btoa("a") }],
-      }),
+      })),
     );
   });
 
@@ -266,7 +266,7 @@ describe("ModeButtons while an answer runs", () => {
     expect(recap.disabled).toBe(false);
 
     fireEvent.click(recap);
-    await waitFor(() => expect(runUserAction).toHaveBeenCalledWith("Recap", undefined));
+    await waitFor(() => expect(runUserAction).toHaveBeenCalledWith("Recap", undefined, expect.objectContaining({ sources: expect.any(Object) })));
     expect(cancelGeneration).toHaveBeenCalledWith("auto-1");
   });
 

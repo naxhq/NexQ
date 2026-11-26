@@ -164,6 +164,15 @@ pub struct SkippedFile {
     pub reason: String,
 }
 
+/// What the index holds of one Library folder: how many of its files, and when it was last brought up to date.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FolderIndexInfo {
+    pub folder_id: String,
+    /// Files indexed (not the ones skipped or that failed).
+    pub files: usize,
+    pub indexed_at: Option<i64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IndexStatus {
     pub workspace_id: String,
@@ -180,6 +189,9 @@ pub struct IndexStatus {
     /// Recaps that failed (they are not tried again until the transcript changes or you rescan), with the latest reason.
     #[serde(default)]
     pub ai_recaps_failed: RecapFailures,
+    /// Each folder of the workspace: its indexed files and when it was last updated.
+    #[serde(default)]
+    pub folders: Vec<FolderIndexInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

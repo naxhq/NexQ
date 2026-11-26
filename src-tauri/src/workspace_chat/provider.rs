@@ -1,5 +1,5 @@
 //! The indexer's inputs from the workspace data: documents (their saved
-//! text), folders the user opted in to index, talking points marked as AI
+//! text), folders linked to a workspace's Library, talking points marked as AI
 //! context. Each call reads the database fresh through its own connection. A
 //! read that fails is an error (the pass then leaves the index as it is).
 
@@ -43,9 +43,9 @@ impl IndexProvider for WorkspaceIndexProvider {
 
     fn folders(&self) -> Result<Vec<FolderInput>, String> {
         let conn = self.conn()?;
-        let opted: std::collections::HashSet<String> = {
+        let linked: std::collections::HashSet<String> = {
             let mut stmt = conn
-                .prepare("SELECT DISTINCT ref_id FROM workspace_items WHERE kind = 'folder' AND index_opt_in = 1")
+                .prepare("SELECT DISTINCT ref_id FROM workspace_items WHERE kind = 'folder'")
                 .map_err(|e| read_err("the folders", e))?;
             let rows = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(|e| read_err("the folders", e))?;
             rows.collect::<Result<_, _>>().map_err(|e| read_err("the folders", e))?
@@ -57,8 +57,8 @@ impl IndexProvider for WorkspaceIndexProvider {
             .map(|f| FolderInput {
                 id: f.id.clone(),
                 path: PathBuf::from(&f.path),
-                // a folder that is switched off in Settings stays off
-                index_enabled: f.enabled && opted.contains(&f.id),
+                // a folder that is switched off in Settings stays off; one linked to a workspace is used
+                index_enabled: f.enabled && linked.contains(&f.id),
             })
             .collect())
     }

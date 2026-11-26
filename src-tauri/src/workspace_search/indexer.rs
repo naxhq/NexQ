@@ -884,6 +884,9 @@ pub struct IndexerConfig {
     /// Rescan period (spec: every 10 minutes while a workspace is open).
     pub rescan_interval: Duration,
     pub initial_scan: bool,
+    /// Watch every folder the provider lists as indexed and index it again this long after its
+    /// files stop changing (None: no watching; the periodic pass is all there is).
+    pub watch_debounce: Option<Duration>,
     /// Asked before a timer-driven pass (None: always). The timer is for
     /// while a workspace is open; explicit requests always run.
     pub timer_enabled: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
@@ -895,6 +898,20 @@ pub struct IndexerService {
     passes: Arc<AtomicU64>,
     commands: Arc<AtomicU64>,
     handle: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
+    watching: super::watch::WatchStatus,
+}
+
+/// Watch the folders the provider says are indexed, and no others: a folder that was linked starts,
+/// one that was unlinked or switched off stops. A failed read leaves the watchers as they are.
+fn sync_watches(watchers: &mut Option<super::watch::FolderWatchers>, provider: &dyn IndexProvider) {
+    let Some(w) = watchers.as_mut() else { return };
+    match provider.folders() {
+        Ok(list) => {
+            let wanted: Vec<(String, PathBuf)> = list.into_iter().filter(|f| f.index_enabled).map(|f| (f.id, f.path)).collect();
+            w.sync(&wanted);
+        }
+        Err(e) => log::warn!("search indexer: the folders could not be read to watch them: {e}"),
+    }
 }
 
 impl IndexerService {
@@ -902,6 +919,18 @@ impl IndexerService {
         let mut conn = open_search_connection(&cfg.db_path)?;
         let ctl = RunControl { pace: Duration::from_millis(2), ..RunControl::new(cfg.meeting_active.clone()) };
         let (tx, rx) = mpsc::channel::<Cmd>();
+        // A change seen in a watched folder asks for that folder to be indexed, like the user would.
+        let mut watchers = cfg.watch_debounce.map(|debounce| {
+            let (tx_w, ctl_w) = (tx.clone(), ctl.clone());
+            super::watch::FolderWatchers::new(
+                debounce,
+                Arc::new(move |id: &str| {
+                    let _ = tx_w.send(Cmd::Folder(id.to_string()));
+                    ctl_w.request_priority();
+                }),
+            )
+        });
+        let watching = watchers.as_ref().map(|w| w.status()).unwrap_or_default();
         let passes = Arc::new(AtomicU64::new(0));
         let commands = Arc::new(AtomicU64::new(0));
         let (ctl2, passes2, commands2) = (ctl.clone(), passes.clone(), commands.clone());
@@ -912,6 +941,7 @@ impl IndexerService {
                 let full_ctl = ctl2.for_full_pass();
                 let mut backlog: VecDeque<Cmd> = VecDeque::new();
                 let mut full_pending = cfg.initial_scan;
+                sync_watches(&mut watchers, cfg.provider.as_ref());
                 loop {
                     if ctl2.stop.load(Ordering::SeqCst) {
                         break;
@@ -932,7 +962,11 @@ impl IndexerService {
                         }
                     }
                     if let Some(cmd) = backlog.pop_front() {
+                        let folders_changed = matches!(cmd, Cmd::Folder(_) | Cmd::RemoveFolder(_));
                         run_command(&mut conn, cfg.provider.as_ref(), &ctl2, &*cfg.on_progress, cmd);
+                        if folders_changed {
+                            sync_watches(&mut watchers, cfg.provider.as_ref());
+                        }
                         commands2.fetch_add(1, Ordering::SeqCst);
                         continue;
                     }
@@ -953,6 +987,7 @@ impl IndexerService {
                         full_pending = false;
                         full_ctl.reset_cancel();
                         let r = run_pass(&mut conn, cfg.provider.as_ref(), &full_ctl, &*cfg.on_progress);
+                        sync_watches(&mut watchers, cfg.provider.as_ref());
                         for e in &r.errors {
                             log::warn!("search indexer: {e}");
                         }
@@ -979,7 +1014,7 @@ impl IndexerService {
                 }
             })
             .map_err(|e| format!("start indexer: {e}"))?;
-        Ok(IndexerService { tx, ctl, passes, commands, handle: std::sync::Mutex::new(Some(handle)) })
+        Ok(IndexerService { tx, ctl, passes, commands, handle: std::sync::Mutex::new(Some(handle)), watching })
     }
 
     /// Queue a request and raise the flag that makes a full pass in flight
@@ -1000,6 +1035,10 @@ impl IndexerService {
     /// A talking point was saved.
     pub fn index_talking_points(&self) {
         self.send_priority(Cmd::Points);
+    }
+    /// The folders being watched for changes right now.
+    pub fn watched_folders(&self) -> Vec<String> {
+        self.watching.folders()
     }
     /// Requests handled so far (targeted ones; for tests and status).
     pub fn commands_completed(&self) -> u64 {
@@ -1398,6 +1437,7 @@ mod tests {
             }),
             rescan_interval: Duration::from_secs(600),
             initial_scan: true,
+            watch_debounce: None,
             timer_enabled: None,
         })
         .unwrap();
@@ -1430,6 +1470,7 @@ mod tests {
             on_progress: Arc::new(|_| {}),
             rescan_interval: Duration::from_secs(600),
             initial_scan: true,
+            watch_debounce: None,
             timer_enabled: None,
         })
         .unwrap();
@@ -1473,6 +1514,7 @@ mod tests {
             on_progress: Arc::new(|_| {}),
             rescan_interval: Duration::from_secs(600),
             initial_scan: true,
+            watch_debounce: None,
             timer_enabled: None,
         })
         .unwrap();
@@ -1614,6 +1656,7 @@ mod tests {
             on_progress: Arc::new(|_| {}),
             rescan_interval: Duration::from_secs(600),
             initial_scan: true,
+            watch_debounce: None,
             timer_enabled: None,
         })
         .unwrap();
@@ -1645,6 +1688,7 @@ mod tests {
             on_progress: Arc::new(|_| {}),
             rescan_interval: Duration::from_millis(60),
             initial_scan: false,
+            watch_debounce: None,
             timer_enabled: Some(Arc::new(move || o2.load(Ordering::SeqCst))),
         })
         .unwrap();
@@ -1664,9 +1708,83 @@ mod tests {
             on_progress: Arc::new(|_| {}),
             rescan_interval: Duration::from_secs(600),
             initial_scan,
+            watch_debounce: None,
             timer_enabled: None,
         })
         .unwrap()
+    }
+
+    /// A service that watches its folders and sweeps only every 10 minutes: what it learns in the
+    /// seconds a test waits, it learns from the watchers.
+    fn watching_service(db: &std::path::Path, prov: Arc<Prov>, debounce: Duration) -> IndexerService {
+        IndexerService::start(IndexerConfig {
+            db_path: db.to_path_buf(),
+            provider: prov,
+            meeting_active: Arc::new(|| false),
+            on_progress: Arc::new(|_| {}),
+            rescan_interval: Duration::from_secs(600),
+            initial_scan: true,
+            watch_debounce: Some(debounce),
+            timer_enabled: None,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn a_file_added_edited_and_deleted_in_a_watched_folder_is_searchable_within_seconds_and_unlinking_stops_it() {
+        let dir = temp_dir("idx-watch");
+        let db = file_db(&dir);
+        let root = dir.join("notes");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("first.md"), "# First
+The quokka plan.").unwrap();
+        let prov = Prov::new();
+        prov.folders.lock().unwrap().push(FolderInput { id: "f1".into(), path: root.clone(), index_enabled: true });
+        let svc = watching_service(&db, prov.clone(), Duration::from_millis(200));
+        assert!(svc.wait_for_passes(1, Duration::from_secs(10)));
+        assert_eq!(svc.watched_folders(), vec!["f1"], "linked and indexed: watched");
+        let reader = open_search_connection(&db).unwrap();
+        let scope = SearchScope { folder_ids: vec!["f1".into()], ..Default::default() };
+        let found = |w: &str| search(&reader, &scope, w, &[PassageKind::Folder], 5).unwrap().iter().map(|p| p.title.clone()).collect::<Vec<_>>();
+        assert_eq!(found("quokka").len(), 1);
+        let passes = svc.passes_completed();
+
+        // added
+        let took = { fs::write(root.join("second.md"), "# Second
+The wombat budget.").unwrap(); wait_until("the added file", 8, || !found("wombat").is_empty()) };
+        assert!(took < Duration::from_secs(6), "within seconds: {took:?}");
+        // edited: the new words appear and the old ones go
+        fs::write(root.join("second.md"), "# Second
+The numbat budget.").unwrap();
+        wait_until("the edit", 8, || !found("numbat").is_empty() && found("wombat").is_empty());
+        // renamed
+        fs::rename(root.join("second.md"), root.join("renamed.md")).unwrap();
+        wait_until("the rename", 8, || found("numbat").iter().any(|t| t.contains("renamed")));
+        // deleted
+        fs::remove_file(root.join("renamed.md")).unwrap();
+        wait_until("the delete", 8, || found("numbat").is_empty());
+        assert_eq!(found("quokka").len(), 1, "the other file is untouched");
+        assert_eq!(svc.passes_completed(), passes, "no full pass was needed: the watchers did it");
+
+        // a hidden file and a secret-looking one are never indexed, watched or not
+        fs::write(root.join(".hidden.md"), "# Hidden
+The ocelot secret.").unwrap();
+        fs::write(root.join("password list.md"), "# Pw
+The ocelot token.").unwrap();
+        std::thread::sleep(Duration::from_millis(1_200));
+        assert!(found("ocelot").is_empty());
+
+        // unlinked: it stops being watched, its text goes, and a new file is not picked up
+        prov.folders.lock().unwrap().clear();
+        svc.remove_folder("f1");
+        wait_until("it stops being watched", 8, || svc.watched_folders().is_empty());
+        wait_until("its text goes", 8, || found("quokka").is_empty());
+        fs::write(root.join("late.md"), "# Late
+The pangolin note.").unwrap();
+        std::thread::sleep(Duration::from_millis(1_000));
+        assert!(found("pangolin").is_empty());
+        svc.shutdown();
+        fs::remove_dir_all(&dir).ok();
     }
 
     fn wait_until(what: &str, secs: u64, f: impl Fn() -> bool) -> Duration {

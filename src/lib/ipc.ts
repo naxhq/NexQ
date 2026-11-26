@@ -55,6 +55,7 @@ import type {
   NotesFolderInfo,
   PersonalSourcesConfig, SourcesRepairResult,
   SourceToggles,
+  AssistSources,
 } from "./types";
 
 // == IPC: Audio (Sub-PRD 3) ==
@@ -1161,12 +1162,19 @@ export async function updateWorkspaceItem(
   id: string,
   kind: WorkspaceItemKind,
   refId: string,
-  patch: { label?: string | null; pinned?: boolean; index_opt_in?: boolean },
+  patch: { label?: string | null; pinned?: boolean },
 ): Promise<void> {
   return invoke("update_workspace_item", { id, kind, refId, patch });
 }
 export async function removeWorkspaceItem(id: string, kind: WorkspaceItemKind, refId: string): Promise<void> {
   return invoke("remove_workspace_item", { id, kind, refId });
+}
+/**
+ * What the assistant's Knowledge and Tools pills cover for a meeting: its own workspace's Library
+ * and tools. `meetingId` names a past meeting; omitted, it is the running meeting.
+ */
+export async function getAssistSources(meetingId?: string | null): Promise<AssistSources> {
+  return invoke<AssistSources>("get_assist_sources", { meetingId: meetingId ?? null });
 }
 export async function listLibrary(): Promise<LibraryItem[]> {
   return invoke<LibraryItem[]>("list_library");

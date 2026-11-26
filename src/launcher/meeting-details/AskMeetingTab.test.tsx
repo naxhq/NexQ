@@ -109,7 +109,7 @@ describe("AskMeetingTab", () => {
     const question = await screen.findByText("Who owns the launch?");
     expect(question.closest("[data-status]")).toHaveAttribute("data-status", "pending");
     await waitFor(() => expect(ipc.askMeeting).toHaveBeenCalledTimes(1));
-    expect(ipc.askMeeting).toHaveBeenCalledWith("m1", "Who owns the launch?", requestId);
+    expect(ipc.askMeeting).toHaveBeenCalledWith("m1", "Who owns the launch?", requestId, expect.objectContaining({ library: true }));
     expect(tokenListenersAtAsk).toBeGreaterThan(0); // subscribed before invoking
     expect(input).toHaveValue("");
 
@@ -215,7 +215,7 @@ describe("AskMeetingTab", () => {
     useConfigStore.setState({ llmProvider: "claude_cli" });
     useSourcesStore.setState({
       config: { ...DEFAULT_SOURCES_CONFIG, notes_folders: [{ id: "f", label: "Vault", path: "D:\V", enabled: true }] },
-      toggles: { notes: true, tools: false },
+      toggles: { library: true, tools: false },
     });
     const starting = {
       scope: "past",
@@ -237,6 +237,6 @@ describe("AskMeetingTab", () => {
     expect(await screen.findByText("Loading your sources…")).toBeInTheDocument();
     expect(screen.queryByText("Thinking…")).toBeNull();
     useAgentStore.setState({ sessions: {} });
-    useSourcesStore.setState({ config: DEFAULT_SOURCES_CONFIG, toggles: { notes: false, tools: false } });
+    useSourcesStore.setState({ config: DEFAULT_SOURCES_CONFIG, toggles: { library: false, tools: false } });
   });
 });

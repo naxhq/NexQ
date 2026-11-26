@@ -11,13 +11,12 @@ import type {
   SourceToggles,
 } from "../lib/types";
 import { repairPersonalSources, setPersonalSources, type SourcesFiling } from "../lib/ipc";
-import { useConfigStore } from "./configStore";
-import { isCliAgent } from "../lib/cliAgents";
 
 // Same plugin-store file as `configStore`, so the launcher and the overlay see
 // each other's changes through `onKeyChange`.
 const STORE_FILE = "config.json";
 const CONFIG_KEY = "personalSources";
+/** Saved by older versions as `{ notes, tools }` (the pills were global); now only read, as the default of a new meeting. */
 const TOGGLES_KEY = "sourceToggles";
 
 export const DEFAULT_SOURCES_CONFIG: PersonalSourcesConfig = {
@@ -26,7 +25,8 @@ export const DEFAULT_SOURCES_CONFIG: PersonalSourcesConfig = {
   mcp_notice_seen: false,
 };
 
-export const DEFAULT_SOURCE_TOGGLES: SourceToggles = { notes: false, tools: false };
+/** Both pills start on in every meeting. */
+export const DEFAULT_SOURCE_TOGGLES: SourceToggles = { library: true, tools: true };
 
 let storeInstance: Store | null = null;
 
@@ -129,9 +129,14 @@ export function normalizeSourcesConfig(raw: unknown): PersonalSourcesConfig {
   };
 }
 
-function normalizeToggles(raw: unknown): SourceToggles {
+/**
+ * The pills a meeting starts with, from what an older version saved. `notes` is the old name of
+ * the Knowledge pill (`library`); anything not understood, or never saved, is both on.
+ */
+export function normalizeToggles(raw: unknown): SourceToggles {
   if (!isObject(raw)) return { ...DEFAULT_SOURCE_TOGGLES };
-  return { notes: raw.notes === true, tools: raw.tools === true };
+  const knowledge = typeof raw.library === "boolean" ? raw.library : typeof raw.notes === "boolean" ? raw.notes : true;
+  return { library: knowledge, tools: typeof raw.tools === "boolean" ? raw.tools : true };
 }
 
 /** Which kinds of source have something an answer could use right now. */
@@ -155,6 +160,7 @@ function fingerprint(value: unknown): string {
 
 interface SourcesState {
   config: PersonalSourcesConfig;
+  /** What a meeting's pills start with (older saved pills, else both on). The pills of a meeting live in `assistSourcesStore`. */
   toggles: SourceToggles;
   loaded: boolean;
   /** Why the backend refused the last config (an invalid or duplicate server key); `null` when it took it. */
@@ -170,16 +176,10 @@ interface SourcesState {
    * the new config (it still has the old one then); it must not throw.
    */
   setConfigDurably: (c: PersonalSourcesConfig, afterSave?: () => Promise<void>) => Promise<void>;
-  /**
-   * Set and save. A pill flipped here applies to the next answer. Pass a
-   * function to change the latest value (two quick clicks each see the other's
-   * result).
-   */
-  setToggles: (t: SourceToggles | ((latest: SourceToggles) => SourceToggles)) => void;
 }
 
 /** Notices of our own saves come back through `onKeyChange`; skip them. */
-const ownSaves: Record<string, string[]> = { [CONFIG_KEY]: [], [TOGGLES_KEY]: [] };
+const ownSaves: Record<string, string[]> = { [CONFIG_KEY]: [] };
 const OWN_SAVES_KEPT = 16;
 
 function rememberOwnSave(key: string, value: unknown): string {
@@ -292,15 +292,6 @@ async function watchSaved(): Promise<void> {
       // The window that saved it already told the backend.
       useSourcesStore.setState({ config: normalizeSourcesConfig(saved) });
     }),
-    await store.onKeyChange<unknown>(TOGGLES_KEY, (saved) => {
-      if (saved === undefined || saved === null) return;
-      const own = ownSaves[TOGGLES_KEY].indexOf(fingerprint(saved));
-      if (own >= 0) {
-        ownSaves[TOGGLES_KEY].splice(own, 1);
-        return;
-      }
-      useSourcesStore.setState({ toggles: normalizeToggles(saved) });
-    }),
   );
 }
 
@@ -349,29 +340,4 @@ export const useSourcesStore = create<SourcesState>((set, get) => ({
     await afterSave?.();
     await pushToBackend(config);
   },
-
-  setToggles: (t) => {
-    let toggles: SourceToggles = { notes: false, tools: false };
-    set((state) => {
-      const next = typeof t === "function" ? t(state.toggles) : t;
-      toggles = { notes: next.notes === true, tools: next.tools === true };
-      return { toggles };
-    });
-    void persist(TOGGLES_KEY, toggles);
-  },
 }));
-
-/**
- * The pills as they are right now, for a request the user makes. `undefined`
- * off the CLI agents, or with no source set up at all (nothing to
- * send, so nobody who never set sources up sends anything new); otherwise each
- * pill that is on and has a source behind it. Both off still goes out when
- * sources exist: Shorten and FollowUp follow the answer they work on.
- */
-export function requestToggles(): SourceToggles | undefined {
-  if (!isCliAgent(useConfigStore.getState().llmProvider)) return undefined;
-  const { config, toggles } = useSourcesStore.getState();
-  const kinds = enabledKinds(config);
-  if (!kinds.notes && !kinds.tools) return undefined;
-  return { notes: toggles.notes && kinds.notes, tools: toggles.tools && kinds.tools };
-}

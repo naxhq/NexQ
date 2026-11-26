@@ -15,8 +15,9 @@ use crate::workspace_search::indexer::{IndexProgress, IndexProvider, IndexerConf
 /// Chat answers that may run at once, and while a meeting is active.
 pub const MAX_ANSWERS: usize = 2;
 pub const MAX_ANSWERS_IN_MEETING: usize = 1;
-/// How often an open workspace is rescanned.
-pub const RESCAN_EVERY: Duration = Duration::from_secs(600);
+/// How often an open workspace is rescanned: the safety net behind the folder watchers (a missed
+/// event, a network drive, a watch that could not start).
+pub const RESCAN_EVERY: Duration = Duration::from_secs(1800);
 
 // ── the tool seam ────────────────────────────────────────────────────────────
 
@@ -299,6 +300,7 @@ impl ChatHub {
             }),
             rescan_interval: RESCAN_EVERY,
             initial_scan,
+            watch_debounce: Some(crate::workspace_search::watch::WATCH_DEBOUNCE),
             timer_enabled: Some(Arc::new(move || hub2.open_workspace.lock().map(|w| w.is_some()).unwrap_or(false))),
         })?;
         let svc = Arc::new(svc);

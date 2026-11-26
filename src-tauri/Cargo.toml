@@ -38,6 +38,7 @@ thiserror = "2"
 log = "0.4"
 hound = "3.5"
 pdf-extract = "0.12"
+notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
 lopdf = "0.47"
 tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
 url = "2"

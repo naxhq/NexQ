@@ -1,10 +1,10 @@
 import { Suspense, useEffect, useState } from "react";
-import { CheckCircle2, FlaskConical, FolderSync, Loader2, TriangleAlert, Zap } from "lucide-react";
+import { CheckCircle2, FlaskConical, Loader2, TriangleAlert, Zap } from "lucide-react";
 import { lazyNamed } from "../lib/lazyNamed";
 import { Button } from "../ui";
 
 const TestSearchDialog = lazyNamed(() => import("../context/TestSearchDialog"), "TestSearchDialog");
-import { getIndexStatus, rescanWorkspace } from "../lib/ipc";
+import { getIndexStatus } from "../lib/ipc";
 import { RecapRetry, type RecapFailed } from "./RecapRetry";
 import { useConfigStore } from "../stores/configStore";
 import { useContextStore } from "../stores/contextStore";
@@ -16,9 +16,9 @@ import type { IndexProgress } from "./libraryStatus";
 /**
  * Knowledge base actions, as the old dashboard had them: build or update,
  * rebuild when settings changed, test a search, and the "indexing a file"
- * line. Only with the local knowledge base on. Plus a rescan of folders.
+ * line. Only with the local knowledge base on. Folders keep themselves up to date.
  */
-export function LibraryFooter({ workspaceId, hasFolders, progress }: { workspaceId: string; hasFolders: boolean; progress?: IndexProgress | null }) {
+export function LibraryFooter({ workspaceId, progress }: { workspaceId: string; progress?: IndexProgress | null }) {
   const contextStrategy = useConfigStore((s) => s.contextStrategy);
   const resources = useContextStore((s) => s.resources);
   const indexStatus = useRagStore((s) => s.indexStatus);
@@ -27,7 +27,6 @@ export function LibraryFooter({ workspaceId, hasFolders, progress }: { workspace
   const rebuildIndex = useRagStore((s) => s.rebuildIndex);
   const [rag, setRag] = useState<"idle" | "updating" | "done">("idle");
   const [testing, setTesting] = useState(false);
-  const [rescanning, setRescanning] = useState(false);
   const [recapFailed, setRecapFailed] = useState<RecapFailed>(null);
   // Where recaps are expected, say when some failed (read again when an index run ends).
   const running = !!progress;
@@ -57,19 +56,8 @@ export function LibraryFooter({ workspaceId, hasFolders, progress }: { workspace
     }
   };
 
-  const rescan = async () => {
-    setRescanning(true);
-    try {
-      await rescanWorkspace(workspaceId);
-    } catch {
-      /* progress and skipped files report themselves */
-    } finally {
-      setRescanning(false);
-    }
-  };
-
   const ragOn = resources.length > 0 && contextStrategy === "local_rag";
-  if (!ragOn && !hasFolders && !progress && !recapFailed && !retried) return null;
+  if (!ragOn && !progress && !recapFailed && !retried) return null;
 
   const hasIndex = (indexStatus?.total_chunks ?? 0) > 0;
   const label = indexStale ? "Settings changed, rebuild the knowledge base" : !hasIndex ? "Build the knowledge base" : "Update the knowledge base";
@@ -109,12 +97,6 @@ export function LibraryFooter({ workspaceId, hasFolders, progress }: { workspace
         <Button variant="ghost" size="sm" onClick={() => setTesting(true)} className="w-full justify-start">
           <FlaskConical className="h-3.5 w-3.5" aria-hidden="true" />
           Test a search
-        </Button>
-      )}
-      {hasFolders && (
-        <Button variant="ghost" size="sm" onClick={rescan} disabled={rescanning} className="w-full justify-start">
-          <FolderSync className="h-3.5 w-3.5" aria-hidden="true" />
-          {rescanning ? "Scanning folders" : "Rescan folders"}
         </Button>
       )}
       {testing && (

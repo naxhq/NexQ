@@ -639,6 +639,50 @@ async fn brief_searches_the_scope_calls_once_and_feeds_live_answers() {
 }
 
 #[tokio::test]
+async fn recap_and_follow_up_read_the_live_notes_as_fenced_data_and_the_other_modes_do_not() {
+    use crate::live_notes::doc::{BlockKind, NoteDoc};
+    let h = harness();
+    let ws = brief_workspace(&h);
+    let m = make_meeting(&h, &ws);
+    h.start_meeting(&m);
+    let mut doc = NoteDoc::new();
+    doc.started_at = Some(0);
+    doc.user_add(BlockKind::Topic, None, "NOTES_CANARY pricing decision", 0).unwrap();
+    h.rt.deps().db.save_notes(&m, &doc, "running", 1, 1).unwrap();
+    for mode in ["Recap", "FollowUp"] {
+        let t = h.rt.answer_extras(&m, mode, None).unwrap_or_else(|| panic!("{mode} gets the notes"));
+        assert!(t.contains("NOTES_CANARY") && t.contains("[[DATA notes "), "{mode}: {t}");
+    }
+    for mode in ["Assist", "WhatToSay", "Shorten", "AskQuestion", "MeetingSummary"] {
+        let t = h.rt.answer_extras(&m, mode, None).unwrap_or_default();
+        assert!(!t.contains("NOTES_CANARY"), "{mode} does not read the notes");
+    }
+    // a session that has them gets the changed notes again, and not the unchanged ones
+    let first = h.rt.session_extras(&m, "Recap", "live-deep#0").expect("a new session gets them");
+    h.rt.mark_session_sent(&first);
+    assert!(h.rt.session_extras(&m, "Recap", "live-deep#0").is_none());
+    doc.user_add(BlockKind::Topic, None, "NOTES_CANARY second topic", 5_000).unwrap();
+    h.rt.deps().db.save_notes(&m, &doc, "running", 1, 1).unwrap();
+    assert!(h.rt.session_extras(&m, "Recap", "live-deep#0").is_some(), "changed notes are sent again");
+    // another meeting's notes never reach this one
+    let other_ws = { let c = h.conn.lock().unwrap(); new_ws(&c, "Other", false, false) };
+    let other = make_meeting(&h, &other_ws);
+    assert!(!h.rt.answer_extras(&other, "Recap", None).unwrap_or_default().contains("NOTES_CANARY"));
+}
+
+#[tokio::test]
+async fn the_live_scope_carries_the_workspaces_instructions_for_the_brief() {
+    let h = harness();
+    let ws = brief_workspace(&h);
+    h.conn.lock().unwrap().execute("UPDATE workspaces SET instructions = 'BRIEF_INSTR_CANARY' WHERE id = ?1", [&ws]).unwrap();
+    let m = make_meeting(&h, &ws);
+    assert_eq!(h.rt.deps().db.scope(&m).unwrap().instructions, "BRIEF_INSTR_CANARY");
+    let other = { let c = h.conn.lock().unwrap(); new_ws(&c, "Other", false, false) };
+    let m2 = make_meeting(&h, &other);
+    assert_eq!(h.rt.deps().db.scope(&m2).unwrap().instructions, "", "another workspace's instructions never");
+}
+
+#[tokio::test]
 async fn brief_is_off_in_a_workspace_that_has_it_off() {
     let h = harness();
     let ws = { let c = h.conn.lock().unwrap(); new_ws(&c, "Quiet", false, false) };
@@ -858,12 +902,10 @@ async fn the_scope_fingerprint_changes_with_every_part_of_the_scope() {
     assert_ne!(base, with_doc, "a document");
     {
         let c = h.conn.lock().unwrap();
-        c.execute("INSERT INTO workspace_items (workspace_id, kind, ref_id, added_at, index_opt_in) VALUES (?1, 'folder', 'f1', 0, 0)", [&ws]).unwrap();
+        c.execute("INSERT INTO workspace_items (workspace_id, kind, ref_id, added_at) VALUES (?1, 'folder', 'f1', 0)", [&ws]).unwrap();
     }
-    assert_eq!(with_doc, fp(), "a folder the user did not opt in to is not in the scope");
-    h.conn.lock().unwrap().execute("UPDATE workspace_items SET index_opt_in = 1 WHERE ref_id = 'f1'", []).unwrap();
     let with_folder = fp();
-    assert_ne!(with_doc, with_folder, "an opted-in folder");
+    assert_ne!(with_doc, with_folder, "a folder in the Library is in the scope");
     {
         let c = h.conn.lock().unwrap();
         add_memory(&c, &ws, "t", "MEMCANARYA fact", "saved", 1);

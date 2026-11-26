@@ -1,4 +1,4 @@
-import type { WorkspaceItem } from "../lib/types";
+import type { FolderIndexInfo, WorkspaceItem } from "../lib/types";
 import { formatTokens } from "../voiceprint";
 import { useContextStore } from "../stores/contextStore";
 import { useSourcesStore } from "../stores/sourcesStore";
@@ -13,6 +13,9 @@ export interface ItemStatus {
   tone: StatusTone;
 }
 
+/** A folder updated this recently says "Updated just now". */
+export const JUST_NOW_MS = 90_000;
+
 export interface IndexProgress {
   done: number;
   total: number;
@@ -23,7 +26,7 @@ export interface IndexProgress {
  * every state has its own text (indexed, indexing n of m, missing, off, needs
  * your OK).
  */
-export function itemStatus(item: WorkspaceItem, progress?: IndexProgress | null): ItemStatus {
+export function itemStatus(item: WorkspaceItem, progress?: IndexProgress | null, folder?: FolderIndexInfo | null, now: number = Date.now()): ItemStatus {
   switch (item.status) {
     case "missing":
       return { text: item.detail ? `Missing. ${item.detail}` : "Missing. The file moved or was deleted.", tone: "error" };
@@ -41,7 +44,9 @@ export function itemStatus(item: WorkspaceItem, progress?: IndexProgress | null)
       break;
   }
   if (item.kind === "folder") {
-    if (!item.index_opt_in) return { text: "Needs your OK to search its text", tone: "warn" };
+    // A folder in the Library is used as it is, and kept up to date by itself.
+    if (folder && folder.indexed_at && now - folder.indexed_at < JUST_NOW_MS) return { text: "Updated just now", tone: "ok" };
+    if (folder && folder.files > 0) return { text: `Indexed · ${folder.files} ${folder.files === 1 ? "file" : "files"}`, tone: "ok" };
     return { text: "Indexed", tone: "ok" };
   }
   if (item.kind === "server") return { text: "Ready", tone: "ok" };
@@ -86,7 +91,3 @@ export function readableName(kind: WorkspaceItem["kind"], refId: string, name: s
 export function itemTitle(item: Pick<WorkspaceItem, "label" | "name"> & Partial<Pick<WorkspaceItem, "kind" | "ref_id">>): string {
   return item.label?.trim() || (item.kind && item.ref_id ? readableName(item.kind, item.ref_id, item.name) : item.name);
 }
-
-/** The one sentence shown next to the folder switch: where its text can go. */
-export const FOLDER_OPT_IN_SENTENCE =
-  "Searching reads the files in this folder and sends the passages that match a question to the AI provider you use.";

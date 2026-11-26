@@ -99,11 +99,11 @@ beforeEach(() => {
 });
 
 describe("sourcesStore", () => {
-  it("an old config.json without the new keys loads empty sources and both pills off, and leaves other keys alone", async () => {
+  it("an old config.json without the new keys loads empty sources and both pills on, and leaves other keys alone", async () => {
     saved.set("llmProvider", "claude_cli"); // nothing else
     const w = await openWindow();
     expect(w.useSourcesStore.getState().config).toEqual(w.DEFAULT_SOURCES_CONFIG);
-    expect(w.useSourcesStore.getState().toggles).toEqual({ notes: false, tools: false });
+    expect(w.useSourcesStore.getState().toggles).toEqual({ library: true, tools: true });
     expect(saved.has("personalSources")).toBe(false); // loading never writes
     expect(saved.has("sourceToggles")).toBe(false);
     expect(saved.get("llmProvider")).toBe("claude_cli");
@@ -136,7 +136,7 @@ describe("sourcesStore", () => {
     expect(c.mcp_servers).toHaveLength(1);
     expect(c.mcp_servers[0].env[0].value).toBeNull();
     expect(c.mcp_servers[0].transport).toEqual({ type: "stdio", command: "n", args: [] });
-    expect(w.useSourcesStore.getState().toggles).toEqual({ notes: false, tools: false });
+    expect(w.useSourcesStore.getState().toggles).toEqual({ library: true, tools: true });
   });
 
   it("pushes the config to the backend on load and on every change", async () => {
@@ -207,22 +207,21 @@ describe("sourcesStore", () => {
     expect(w.useSourcesStore.getState().pushError).toBeNull();
   });
 
-  it("a pill flipped in the overlay reaches the launcher and the next start", async () => {
-    const overlay = await openWindow();
-    // The launcher is a second window with its own store, listening on the same file.
-    const launcherListeners = keyListeners.length;
-    vi.resetModules();
-    const launcherMod = await import("./sourcesStore");
-    await launcherMod.useSourcesStore.getState().load();
-    expect(keyListeners.length).toBeGreaterThan(launcherListeners);
+  it("an older saved pill pair is read as the default of a new meeting: notes is the Knowledge pill, and nothing is rewritten", async () => {
+    saved.set("sourceToggles", { notes: false, tools: true });
+    const w = await openWindow();
+    expect(w.useSourcesStore.getState().toggles).toEqual({ library: false, tools: true });
+    expect(saved.get("sourceToggles")).toEqual({ notes: false, tools: true }); // loading never writes
+    expect(writes.count).toBe(0);
+  });
 
-    overlay.useSourcesStore.getState().setToggles({ notes: true, tools: false });
-    await vi.waitFor(() => expect(launcherMod.useSourcesStore.getState().toggles).toEqual({ notes: true, tools: false }));
-    // Its own copy is not clobbered by the echo of its own save.
-    expect(overlay.useSourcesStore.getState().toggles).toEqual({ notes: true, tools: false });
-
-    const next = await openWindow();
-    expect(next.useSourcesStore.getState().toggles).toEqual({ notes: true, tools: false });
+  it("a saved pair in the new names, a half-saved one and a damaged one all load", async () => {
+    saved.set("sourceToggles", { library: false });
+    expect((await openWindow()).useSourcesStore.getState().toggles).toEqual({ library: false, tools: true });
+    saved.set("sourceToggles", { notes: "yes", tools: 3 });
+    expect((await openWindow()).useSourcesStore.getState().toggles).toEqual({ library: true, tools: true });
+    saved.set("sourceToggles", [1, 2]);
+    expect((await openWindow()).useSourcesStore.getState().toggles).toEqual({ library: true, tools: true });
   });
 
   it("a config changed in another window arrives here without telling the backend again", async () => {
@@ -256,21 +255,5 @@ describe("sourcesStore", () => {
     expect(
       enabledKinds(config({ mcp_servers: [server({ tools: [{ name: "x", full_name: "mcp__mira__x", allowed: false }] })] })).tools,
     ).toBe(false);
-  });
-
-  it("requestToggles is undefined off Claude and masks kinds with nothing enabled", async () => {
-    const w = await openWindow();
-    await w.useSourcesStore.getState().setConfig(config({ mcp_servers: [] }));
-    w.useSourcesStore.getState().setToggles({ notes: true, tools: true });
-
-    await w.setProvider("openai");
-    expect(w.requestToggles()).toBeUndefined();
-
-    await w.setProvider("claude_cli");
-    expect(w.requestToggles()).toEqual({ notes: true, tools: false }); // no usable server behind Tools
-
-    // Nothing set up at all: nothing to send.
-    await w.useSourcesStore.getState().setConfig(config({ notes_folders: [], mcp_servers: [] }));
-    expect(w.requestToggles()).toBeUndefined();
   });
 });

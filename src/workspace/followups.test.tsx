@@ -232,20 +232,13 @@ describe("the middle header gives room to the answers", () => {
 });
 
 describe("library row details", () => {
-  const folder = (opt: boolean) => item({ kind: "folder", ref_id: "f", name: "C:\\notes", index_opt_in: opt });
   const row = (i: ReturnType<typeof item>) =>
-    render(<ul><LibraryRow item={i} menuItems={[]} onRename={() => {}} onTogglePin={() => {}} onOptIn={() => {}} /></ul>);
+    render(<ul><LibraryRow item={i} menuItems={[]} onRename={() => {}} onTogglePin={() => {}} /></ul>);
 
-  it("keeps where a folder's text goes behind a small info button, on or off", async () => {
-    row(folder(false));
-    expect(screen.queryByText(/sends the passages that match a question/)).toBeNull();
-    await userEvent.hover(screen.getByRole("button", { name: /^About searching the text of/ }));
-    expect(await screen.findByRole("tooltip")).toHaveTextContent(/sends the passages that match a question/);
-    cleanup();
-    row(folder(true));
-    expect(screen.queryByText(/sends the passages that match a question/)).toBeNull();
-    expect(screen.getByRole("button", { name: /^About searching the text of/ })).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: /Search its text/ })).toHaveAttribute("aria-checked", "true");
+  it("has no switch for searching a folder's text: a folder in the Library is used", () => {
+    row(item({ kind: "folder", ref_id: "f", name: "C:\notes" }));
+    expect(screen.queryByRole("switch", { name: /Search its text/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /About searching the text of/ })).toBeNull();
   });
 
   it("hides the row's menu until hover or focus, offers Pin in it, and marks a pinned row with a filled pin", async () => {

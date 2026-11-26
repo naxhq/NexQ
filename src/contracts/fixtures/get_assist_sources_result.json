@@ -1,0 +1,19 @@
+{
+  "documents": 3,
+  "folders": [
+    {
+      "label": "DePaul",
+      "used": true
+    }
+  ],
+  "notes": 1,
+  "servers": [
+    {
+      "allowed_tools": 9,
+      "label": "mira",
+      "total_tools": 19,
+      "usable": true
+    }
+  ],
+  "workspace_id": "w1"
+}

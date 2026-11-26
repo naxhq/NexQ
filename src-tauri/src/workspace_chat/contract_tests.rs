@@ -180,6 +180,7 @@ fn result_get_index_status() {
         last_indexed_at: Some(1_700_000_000_000),
         ai_recaps: 2,
         ai_recaps_failed: RecapFailures { count: 1, reason: Some("The model did not answer in time".into()) },
+        folders: vec![FolderIndexInfo { folder_id: "f1".into(), files: 638, indexed_at: Some(1_700_000_000_000) }],
     };
     assert_contract!("get_index_status_result", s);
 }

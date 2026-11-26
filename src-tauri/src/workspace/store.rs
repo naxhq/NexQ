@@ -469,8 +469,7 @@ fn read_item(row: &Row<'_>) -> rusqlite::Result<ItemRow> {
         ref_id: row.get(1)?,
         label: row.get(2)?,
         pinned: row.get(3)?,
-        index_opt_in: row.get(4)?,
-        added_at: row.get(5)?,
+        added_at: row.get(4)?,
     })
 }
 
@@ -478,7 +477,7 @@ fn read_item(row: &Row<'_>) -> rusqlite::Result<ItemRow> {
 pub fn list_items(conn: &Connection, workspace_id: &str) -> Result<Vec<ItemRow>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT kind, ref_id, label, pinned, index_opt_in, added_at FROM workspace_items
+            "SELECT kind, ref_id, label, pinned, added_at FROM workspace_items
              WHERE workspace_id = ?1 ORDER BY pinned DESC, added_at, ref_id",
         )
         .map_err(|e| db_err("Couldn't read the items", e))?;
@@ -534,13 +533,6 @@ pub fn update_item(conn: &Connection, workspace_id: &str, kind: ItemKind, ref_id
         conn.execute(
             "UPDATE workspace_items SET pinned = ?4 WHERE workspace_id = ?1 AND kind = ?2 AND ref_id = ?3",
             params![workspace_id, kind.as_str(), ref_id, pinned],
-        )
-        .map_err(|e| db_err("Couldn't change the item", e))?;
-    }
-    if let Some(opt_in) = patch.index_opt_in {
-        conn.execute(
-            "UPDATE workspace_items SET index_opt_in = ?4 WHERE workspace_id = ?1 AND kind = ?2 AND ref_id = ?3",
-            params![workspace_id, kind.as_str(), ref_id, opt_in],
         )
         .map_err(|e| db_err("Couldn't change the item", e))?;
     }
@@ -821,9 +813,9 @@ mod tests {
         add_item(&conn, &a, ItemKind::Document, "d", None).unwrap();
         assert_eq!(list_items(&conn, &a).unwrap().len(), 1);
         assert!(add_item(&conn, &a, ItemKind::Document, "missing", None).is_err());
-        update_item(&conn, &a, ItemKind::Document, "d", ItemPatch { pinned: Some(true), index_opt_in: Some(true), ..Default::default() }).unwrap();
+        update_item(&conn, &a, ItemKind::Document, "d", ItemPatch { pinned: Some(true), ..Default::default() }).unwrap();
         let item = &list_items(&conn, &a).unwrap()[0];
-        assert!(item.pinned && item.index_opt_in);
+        assert!(item.pinned);
         assert_eq!(item.label.as_deref(), Some("Brief"));
         add_item(&conn, "general", ItemKind::Document, "d", None).unwrap();
         remove_memberships(&conn, ItemKind::Document, "d").unwrap();

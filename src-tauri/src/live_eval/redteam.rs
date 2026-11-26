@@ -116,6 +116,7 @@ fn brief_prompt_fences_passages_titles_memory_and_conversation() {
         let mut e = brief_with(found.clone());
         e.nonce = nonce.clone();
         e.set_memory(&format!("- {p}\n{p}"));
+        e.set_context(&format!("{p}\n{p}"), &format!("[b1] 00:00 topic: {p}"));
         e.feed(BriefLine { start_ms: 0, end_ms: Some(4_000), text: format!("{p} some words here") });
         let run = e.prepare(CallReason::Manual, &found).expect("a call");
         assert_fenced("brief system", &run.request.system, &nonce, &p);

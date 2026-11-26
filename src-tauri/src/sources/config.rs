@@ -129,11 +129,15 @@ pub struct McpCheckStatus {
     pub checked_at_ms: u64,
 }
 
-/// The two overlay pills: which sources this one answer may use.
+/// The two overlay pills: what this one answer may use of its workspace's
+/// Library (documents, notes, searched folders) and Tools (MCP servers). A pill
+/// that is off is a lock, not a hint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SourceToggles {
-    pub notes: bool,
+    /// Saved as `notes` by older versions of the pill; still read.
+    #[serde(alias = "notes")]
+    pub library: bool,
     pub tools: bool,
 }
 

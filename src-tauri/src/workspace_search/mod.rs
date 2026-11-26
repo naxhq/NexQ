@@ -16,6 +16,7 @@ pub mod passages;
 pub mod safe_open;
 pub mod search;
 pub mod store;
+pub mod watch;
 
 #[cfg(test)]
 pub(crate) mod test_support;

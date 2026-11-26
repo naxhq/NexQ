@@ -842,7 +842,7 @@ export interface GenerateAssistOptions {
   /** Images pasted into Ask; only a Claude (subscription) answer can use them. */
   images?: ImageAttachment[];
   /**
-   * The Notes / Tools pills as they are when the user asks. Leave it out for an
+   * The Knowledge / Tools pills as they are when the user asks. Leave it out for an
    * automatic answer (Auto-Answer, summaries, action items, bookmark
    * suggestions): those never use sources.
    */
@@ -1237,10 +1237,39 @@ export interface WindowMeetingEndedEvent {
 // field for field. Secret values never live in these: a secret env var or
 // header has no value here and sits in Windows Credential Manager.
 
-/** Which sources one answer may use: the two overlay pills. */
+/**
+ * What one answer may use of its meeting's workspace: the two overlay pills, Knowledge (named
+ * `library` here: documents, notes and folders of the workspace's Library) and Tools (its MCP
+ * servers). A pill that is off is a lock. Mirrors Rust `sources::config::SourceToggles`; the old
+ * name of `library` was `notes`.
+ */
 export interface SourceToggles {
-  notes: boolean;
+  library: boolean;
   tools: boolean;
+}
+
+/** A folder of the meeting's Library; `used` unless it is switched off in Settings. Mirrors Rust `AssistFolder`. */
+export interface AssistFolder {
+  label: string;
+  used: boolean;
+}
+
+/** A tool server of the meeting's workspace. Mirrors Rust `AssistServer`. */
+export interface AssistServer {
+  label: string;
+  allowed_tools: number;
+  total_tools: number;
+  /** Switched on, signed in and with an allowed tool. */
+  usable: boolean;
+}
+
+/** What the Knowledge and Tools pills cover for one meeting's workspace. Mirrors Rust `AssistSources`. */
+export interface AssistSources {
+  workspace_id: string;
+  documents: number;
+  notes: number;
+  folders: AssistFolder[];
+  servers: AssistServer[];
 }
 
 export interface NotesFolder {
@@ -1429,8 +1458,6 @@ export interface WorkspaceItem {
   /** Why it is missing/off/errored, for the row's second line. A document's is its file type: `note` for text written in the app. */
   detail: string | null;
   tokens: number | null;
-  /** Folders only: the user allowed indexing the folder text. */
-  index_opt_in?: boolean;
   added_at: number;
 }
 
@@ -1537,6 +1564,15 @@ export interface SkippedFile {
   folder_id?: string | null;
 }
 
+/** What the index holds of one Library folder. Mirrors Rust `FolderIndexInfo`. */
+export interface FolderIndexInfo {
+  folder_id: string;
+  /** Files indexed (not the ones skipped or that failed). */
+  files: number;
+  /** When the folder was last brought up to date; null when nothing is indexed. */
+  indexed_at: number | null;
+}
+
 export interface IndexStatus {
   workspace_id: string;
   state: "idle" | "indexing" | "paused";
@@ -1549,6 +1585,8 @@ export interface IndexStatus {
   ai_recaps?: number;
   /** Recaps that failed, with the latest short reason; not tried again until the transcript changes or you rescan. */
   ai_recaps_failed?: { count: number; reason: string | null };
+  /** Each folder of the workspace: its indexed files and when it was last updated; absent from older backends. */
+  folders?: FolderIndexInfo[];
 }
 
 /** `workspace_index_progress` */

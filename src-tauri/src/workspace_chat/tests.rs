@@ -955,14 +955,8 @@ async fn the_index_provider_reads_documents_opted_in_folders_and_context_points(
     let p = super::provider::WorkspaceIndexProvider { db_path: rig.deps.db_path.clone(), sources: rig.sources.clone() };
     assert_eq!(p.documents().unwrap().len(), 1);
     assert_eq!(p.talking_points().unwrap().len(), 1);
-    assert!(!p.folders().unwrap()[0].index_enabled, "off until the user opts in");
-    crate::workspace::store::update_item(
-        &rig.conn(), &rig.ws, crate::workspace::types::ItemKind::Folder, "f1",
-        crate::workspace::types::ItemPatch { index_opt_in: Some(true), ..Default::default() },
-    )
-    .unwrap();
-    assert!(p.folders().unwrap()[0].index_enabled);
-    // switched off in Settings: stays off even when opted in
+    assert!(p.folders().unwrap()[0].index_enabled, "a folder in the Library is used without any opt-in");
+    // switched off in Settings: stays off even when linked
     rig.sources.write().unwrap().notes_folders[0].enabled = false;
     assert!(!p.folders().unwrap()[0].index_enabled);
     rig.sources.write().unwrap().notes_folders[0].enabled = true;
@@ -972,12 +966,8 @@ async fn the_index_provider_reads_documents_opted_in_folders_and_context_points(
     assert_eq!(hits[0].kind, "folder");
     assert_eq!(ops::search_workspace(&reader, &rig.ws, "quokkas", None, 5).unwrap()[0].kind, "document");
     assert_eq!(ops::search_workspace(&reader, &rig.ws, "aardvark", None, 5).unwrap()[0].kind, "talking_point");
-    // opting out removes the folder's passages at once
-    crate::workspace::store::update_item(
-        &rig.conn(), &rig.ws, crate::workspace::types::ItemKind::Folder, "f1",
-        crate::workspace::types::ItemPatch { index_opt_in: Some(false), ..Default::default() },
-    )
-    .unwrap();
+    // taking the folder out of the Library removes its passages at once
+    crate::workspace::store::remove_item(&rig.conn(), &rig.ws, crate::workspace::types::ItemKind::Folder, "f1").unwrap();
     crate::workspace_search::indexer::remove_folder_index(&rig.conn(), "f1").unwrap();
     assert!(ops::search_workspace(&ops::reader(&rig.deps.db_path).unwrap(), &rig.ws, "ibex migration", None, 5).unwrap().is_empty());
 }
@@ -1142,10 +1132,6 @@ async fn a_change_before_the_indexer_runs_is_kept_and_starts_it_at_once() {
     {
         let conn = rig.conn();
         crate::workspace::store::add_item(&conn, &rig.ws, crate::workspace::types::ItemKind::Folder, "f1", None).unwrap();
-        crate::workspace::store::update_item(
-            &conn, &rig.ws, crate::workspace::types::ItemKind::Folder, "f1",
-            crate::workspace::types::ItemPatch { index_opt_in: Some(true), ..Default::default() },
-        ).unwrap();
     }
     let hub = rig.deps.hub.clone();
     let (h2, path, sources) = (hub.clone(), rig.deps.db_path.clone(), rig.sources.clone());
@@ -1265,10 +1251,6 @@ async fn citations_carry_what_the_ui_needs_to_open_each_source() {
         };
         crate::workspace::documents::add_document(&conn, &res, "Guide about quokkas", Some(&rig.ws)).unwrap();
         crate::workspace::store::add_item(&conn, &rig.ws, crate::workspace::types::ItemKind::Folder, "f1", None).unwrap();
-        crate::workspace::store::update_item(
-            &conn, &rig.ws, crate::workspace::types::ItemKind::Folder, "f1",
-            crate::workspace::types::ItemPatch { index_opt_in: Some(true), ..Default::default() },
-        ).unwrap();
         crate::workspace::talking_points::create_talking_point(
             &conn, &rig.ws, Some("Opening".into()),
             crate::workspace::types::TalkingContent { doc_json: None, markdown: None, plain_text: Some("Greet the aardvark".into()), in_context: true },
@@ -2051,10 +2033,6 @@ fn everything() -> Everything {
         ] {
             crate::workspace::store::add_item(&conn, &rig.ws, kind, id, None).unwrap();
         }
-        crate::workspace::store::update_item(
-            &conn, &rig.ws, crate::workspace::types::ItemKind::Folder, "f1",
-            crate::workspace::types::ItemPatch { index_opt_in: Some(true), ..Default::default() },
-        ).unwrap();
         let point = crate::workspace::talking_points::create_talking_point(
             &conn, &rig.ws, Some("Opening".into()),
             crate::workspace::types::TalkingContent { doc_json: None, markdown: None, plain_text: Some("Greet the aardvark".into()), in_context: true },
@@ -2081,10 +2059,7 @@ fn revoke_kind(e: &Everything, kind: Kind) {
         }
         Kind::MeetingSwitchedOff => store::set_item_pref(&conn, &e.chat, "meeting", "m1", Some("exclude")).unwrap(),
         Kind::Document => crate::workspace::store::remove_item(&conn, &e.rig.ws, ItemKind::Document, "d1").unwrap(),
-        Kind::IndexedFolder => crate::workspace::store::update_item(
-            &conn, &e.rig.ws, ItemKind::Folder, "f1",
-            crate::workspace::types::ItemPatch { index_opt_in: Some(false), ..Default::default() },
-        ).unwrap(),
+        Kind::IndexedFolder => crate::workspace::store::remove_item(&conn, &e.rig.ws, ItemKind::Folder, "f1").unwrap(),
         Kind::LaunchFolder => crate::workspace::store::remove_item(&conn, &e.rig.ws, ItemKind::Folder, "f-launch").unwrap(),
         Kind::Server => crate::workspace::store::remove_item(&conn, &e.rig.ws, ItemKind::Server, "s1").unwrap(),
         Kind::TalkingPoint => {
@@ -2347,10 +2322,6 @@ async fn a_resumed_cli_session_that_holds_material_that_left_the_scope_is_ended(
     let (rig, _) = exposed_rig(cli_sources(&tmp));
     // an indexed folder: opting out does not change the session's fingerprint
     std::fs::write(tmp.join("notes-in").join("a.md"), "# Plan\nThe ibex migration starts in May.").unwrap();
-    crate::workspace::store::update_item(
-        &rig.conn(), &rig.ws, crate::workspace::types::ItemKind::Folder, "f-in",
-        crate::workspace::types::ItemPatch { index_opt_in: Some(true), ..Default::default() },
-    ).unwrap();
     rig.index();
     *rig.selection.lock().unwrap() = ModelSelection::new("claude_cli", "", None);
     let chat = store::create_chat(&rig.conn(), &rig.ws, Some("claude_cli"), None, None).unwrap().id;
@@ -2361,11 +2332,8 @@ async fn a_resumed_cli_session_that_holds_material_that_left_the_scope_is_ended(
     assert_eq!(rig.spawner.spawned.lock().unwrap().len(), 1, "one session so far");
     let held = rig.deps.hub.session_provenance(&chat).expect("the session holds what it was given");
     assert!(!held.ids.is_empty());
-    // the folder is opted out: the session's fingerprint is the same, but it holds the folder's text
-    crate::workspace::store::update_item(
-        &rig.conn(), &rig.ws, crate::workspace::types::ItemKind::Folder, "f-in",
-        crate::workspace::types::ItemPatch { index_opt_in: Some(false), ..Default::default() },
-    ).unwrap();
+    // the folder leaves the Library: the session holds the folder's text, so it ends
+    crate::workspace::store::remove_item(&rig.conn(), &rig.ws, crate::workspace::types::ItemKind::Folder, "f-in").unwrap();
     rig.ask(&chat, "One more question?").await;
     assert!(rig.events_named("workspace_chat_error").is_empty(), "{:?}", rig.events_named("workspace_chat_error"));
     let spawned = rig.spawner.spawned.lock().unwrap();

@@ -48,7 +48,7 @@ describe("skipped files", () => {
 
   it("a folder with skipped files says how many, and the count opens the list with a reason for each", async () => {
     mockBackend({
-      get_workspace: detailOf(ACME, [item({ kind: "folder", ref_id: "f1", name: "C:/notes", label: "Client notes", index_opt_in: true })]),
+      get_workspace: detailOf(ACME, [item({ kind: "folder", ref_id: "f1", name: "C:/notes", label: "Client notes" })]),
       get_index_status: status([
         { path: "C:/notes/big.pdf", reason: "too large" },
         { path: "C:/notes/.env", reason: "secret-looking name" },
@@ -74,9 +74,9 @@ describe("skipped files", () => {
   });
 
   it("says nothing when nothing was skipped", async () => {
-    mockBackend({ get_workspace: detailOf(ACME, [item({ kind: "folder", ref_id: "f1", name: "C:/notes", index_opt_in: true })]), get_index_status: status([]), list_workspace_chats: [] });
+    mockBackend({ get_workspace: detailOf(ACME, [item({ kind: "folder", ref_id: "f1", name: "C:/notes" })]), get_index_status: status([]), list_workspace_chats: [] });
     render(<LibraryPanel workspaceId="acme" />);
-    await screen.findByRole("switch", { name: /Search its text/ });
+    await screen.findByText("Indexed");
     expect(screen.queryByRole("button", { name: /skipped/ })).toBeNull();
   });
 });
@@ -146,7 +146,7 @@ describe("still indexing", () => {
 
   it("is also in the Library footer and next to the context estimate", async () => {
     mockBackend({
-      get_workspace: detailOf(ACME, [item({ kind: "folder", ref_id: "f1", name: "C:/n", index_opt_in: true })]),
+      get_workspace: detailOf(ACME, [item({ kind: "folder", ref_id: "f1", name: "C:/n" })]),
       get_index_status: { workspace_id: "acme", state: "indexing", done: 1, total: 9, passages: 0, skipped: [], last_indexed_at: null },
       list_workspace_chats: [],
     });

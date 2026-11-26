@@ -109,6 +109,10 @@ pub fn init(rt: Arc<LiveRuntimes>) {
 
 /// Modes whose answers may carry the brief: live answers for the user, never
 /// translation, summaries, action items or bookmarks.
+/// The answers that also read the meeting's live notes.
+pub const NOTES_MODES: &[&str] = &["Recap", "FollowUp"];
+/// Most tokens of the notes outline an answer carries.
+const ANSWER_NOTES_TOKENS: u32 = 700;
 pub const ANSWER_MODES: &[&str] = &["Assist", "WhatToSay", "Shorten", "FollowUp", "Recap", "AskQuestion"];
 
 impl LiveRuntimes {
@@ -878,10 +882,21 @@ impl LiveRuntimes {
             }
         };
         let memory = fresh.memory_text;
-        if sheet_text.is_none() && memory.trim().is_empty() {
+        // Recap and a follow-up read the notes the meeting has so far (an outline, as data).
+        let notes = if NOTES_MODES.contains(&mode) {
+            self.deps
+                .db
+                .load_notes(meeting_id)
+                .map(|n| n.doc.outline(ANSWER_NOTES_TOKENS))
+                .filter(|t| !t.trim().is_empty())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        if sheet_text.is_none() && memory.trim().is_empty() && notes.trim().is_empty() {
             return None;
         }
-        let token = format!("{rev}:{:x}", fnv(&memory));
+        let token = format!("{rev}:{:x}:{:x}", fnv(&memory), fnv(&notes));
         let mut out = crate::prompt_data::rules(&nonce);
         if let Some(t) = sheet_text {
             out.push('\n');
@@ -890,6 +905,10 @@ impl LiveRuntimes {
         if !memory.trim().is_empty() {
             out.push('\n');
             out.push_str(&crate::prompt_data::wrap(&nonce, "memory", &memory));
+        }
+        if !notes.trim().is_empty() {
+            out.push('\n');
+            out.push_str(&crate::prompt_data::wrap(&nonce, "notes", &notes));
         }
         Some(SessionExtras { text: out, token, key: String::new() })
     }

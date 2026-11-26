@@ -102,9 +102,9 @@ describe("runUserAction", () => {
     expect(useStreamStore.getState().phase).toBe("idle");
   });
   it("sends the pills that were on and keeps them for the progress line", async () => {
-    await runUserAction("Assist", "q", { sources: { notes: true, tools: false } });
-    expect((generateAssist.mock.calls[0][2] as { sources: unknown }).sources).toEqual({ notes: true, tools: false });
-    expect(useStreamStore.getState().requestSources).toEqual({ notes: true, tools: false });
+    await runUserAction("Assist", "q", { sources: { library: true, tools: false } });
+    expect((generateAssist.mock.calls[0][2] as { sources: unknown }).sources).toEqual({ library: true, tools: false });
+    expect(useStreamStore.getState().requestSources).toEqual({ library: true, tools: false });
   });
 
   it("sends no sources key for an automatic answer", async () => {

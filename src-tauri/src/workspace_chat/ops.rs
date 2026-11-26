@@ -99,7 +99,24 @@ pub fn index_status(conn: &Connection, hub: &ChatHub, workspace_id: &str, meetin
         last_indexed_at: last,
         ai_recaps: ai_recaps.max(0) as usize,
         ai_recaps_failed: RecapFailures { count: failed, reason },
+        folders: folder_infos(conn, &scope.folder_ids)?,
     })
+}
+
+/// For each folder: the files the index holds and when it was last updated.
+fn folder_infos(conn: &Connection, folder_ids: &[String]) -> Result<Vec<FolderIndexInfo>, String> {
+    let mut out = Vec::new();
+    for id in folder_ids {
+        let (files, at): (i64, Option<i64>) = conn
+            .query_row(
+                "SELECT COUNT(*), MAX(indexed_at) FROM search_sources WHERE kind = 'folder' AND ref_id = ?1 AND status = 'ok'",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(|e| format!("Couldn't read the index: {e}"))?;
+        out.push(FolderIndexInfo { folder_id: id.clone(), files: files.max(0) as usize, indexed_at: at.filter(|_| files > 0) });
+    }
+    Ok(out)
 }
 
 /// The AI-written recap of a meeting (not the meeting's own summary), if there is one.

@@ -107,7 +107,6 @@ pub fn resolve_items(workspace_id: &str, items: &[ItemRow], library: &LibrarySna
                 status: entry.map(|e| e.status.clone()).unwrap_or_else(|| "missing".to_string()),
                 detail: entry.and_then(|e| e.detail.clone()),
                 tokens: entry.and_then(|e| e.tokens),
-                index_opt_in: (item.kind == ItemKind::Folder).then_some(item.index_opt_in),
                 added_at: item.added_at,
             }
         })
@@ -176,9 +175,8 @@ mod tests {
     #[test]
     fn a_membership_of_a_vanished_item_shows_as_missing_with_its_own_label() {
         let lib = LibrarySnapshot::default();
-        let item = ItemRow { kind: ItemKind::Folder, ref_id: "gone".into(), label: Some("Old notes".into()), pinned: false, index_opt_in: true, added_at: 1 };
+        let item = ItemRow { kind: ItemKind::Folder, ref_id: "gone".into(), label: Some("Old notes".into()), pinned: false, added_at: 1 };
         let resolved = resolve_items("w", &[item], &lib);
         assert_eq!((resolved[0].name.as_str(), resolved[0].status.as_str()), ("Old notes", "missing"));
-        assert_eq!(resolved[0].index_opt_in, Some(true));
     }
 }

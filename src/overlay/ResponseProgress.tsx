@@ -46,7 +46,7 @@ export function ResponseProgress() {
   if (!running) return null;
 
   const loadingSources =
-    !!asked && (asked.notes || asked.tools) && sourcesStarting && (phase === "sending" || phase === "waiting");
+    !!asked && (asked.library || asked.tools) && sourcesStarting && (phase === "sending" || phase === "waiting");
   const phaseText = loadingSources ? "Loading your sources" : PHASE_TEXT[phase];
   const label = mode ? actionLabel(mode) || getModeLabel(mode) : "Answer";
   const details = meta

@@ -145,6 +145,7 @@ impl Touch {
     }
 
     /// Marks the change as taking access away, as a backstop over the views.
+    #[allow(dead_code)] // a change that is a revocation whatever the views say (kept for the next one)
     pub fn revoking(mut self) -> Self {
         self.revoke = true;
         self
@@ -578,18 +579,10 @@ pub(crate) fn workspace_patch_matters(current: &Workspace, patch: &WorkspacePatc
         || patch.keep_separate.is_some_and(|v| v != current.keep_separate)
 }
 
-/// What an item patch touches: nothing for a label or pin; the workspace for an
-/// index opt-in change; and an opt-out (`index_opt_in: false`) is declared as a
-/// revocation, so it restarts at once even if the views looked the same.
-pub(crate) fn item_touch(workspace_id: &str, patch: &ItemPatch) -> Touch {
-    let touch = Touch::ws_if(item_patch_matters(patch), workspace_id);
-    if patch.index_opt_in == Some(false) { touch.revoking() } else { touch }
-}
-
-/// Whether an item patch changes what answers can use: the folder index opt-in.
-/// A label or a pin never does.
-pub(crate) fn item_patch_matters(patch: &ItemPatch) -> bool {
-    patch.index_opt_in.is_some()
+/// What an item patch touches: nothing (a label or a pin never changes what
+/// answers can use).
+pub(crate) fn item_touch(_workspace_id: &str, _patch: &ItemPatch) -> Touch {
+    Touch::none()
 }
 
 #[command]
@@ -786,6 +779,8 @@ pub async fn add_workspace_item(
     change_and_restart(&state, &app, |_| Touch::ws(&id), || {
         with_conn(&state, |conn| store::add_item(conn, &id, kind, &ref_id, label.as_deref()))
     })?;
+    // a folder in the Library is used: it is indexed now
+    crate::workspace_chat::runtime::folder_link_check(&state, kind == ItemKind::Folder, &ref_id);
     emit_changed(&app, Some(&id));
     Ok(())
 }
@@ -805,7 +800,7 @@ pub async fn update_workspace_item(
     change_and_restart(&state, &app, |_| touch.clone(), || {
         with_conn(&state, |conn| store::update_item(conn, &id, kind, &ref_id, patch))
     })?;
-    crate::workspace_chat::runtime::folder_opt_out_check(&state, kind == ItemKind::Folder, &ref_id);
+    crate::workspace_chat::runtime::folder_link_check(&state, kind == ItemKind::Folder, &ref_id);
     emit_changed(&app, Some(&id));
     Ok(())
 }
@@ -821,7 +816,7 @@ pub async fn remove_workspace_item(
     change_and_restart(&state, &app, |_| Touch::ws(&id), || {
         with_conn(&state, |conn| store::remove_item(conn, &id, kind, &ref_id))
     })?;
-    crate::workspace_chat::runtime::folder_opt_out_check(&state, kind == ItemKind::Folder, &ref_id);
+    crate::workspace_chat::runtime::folder_link_check(&state, kind == ItemKind::Folder, &ref_id);
     emit_changed(&app, Some(&id));
     Ok(())
 }
@@ -853,6 +848,25 @@ pub async fn remove_library_item(
     })?;
     emit_changed(&app, None);
     Ok(())
+}
+
+/// What the assistant's Knowledge and Tools pills cover for a meeting: its own
+/// workspace's Library and tools, never the global list. `meeting_id` names a
+/// past meeting; without one it is the running meeting (else the default workspace).
+#[command]
+pub async fn get_assist_sources(
+    meeting_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<crate::workspace::assist::AssistSources, String> {
+    let scoped = crate::workspace::runtime::for_request(&state, meeting_id.as_deref());
+    let saved = state.personal_sources.read().map(|c| c.clone()).unwrap_or_default();
+    let resources = state
+        .context
+        .as_ref()
+        .and_then(|c| c.lock().ok())
+        .map(|c| c.list_resources())
+        .unwrap_or_default();
+    Ok(crate::workspace::assist::summarize(&scoped.scope, &saved, &resources))
 }
 
 #[command]
@@ -1305,6 +1319,7 @@ mod tests {
         "get_workspaces_status", "list_workspaces", "get_workspace", "list_library", "list_workspace_meetings",
         "get_meeting_scope", "count_unfiled_meetings", "list_talking_points", "get_point_progress",
         "get_meeting_point_edit", "get_workspace_note", "list_memory", "get_library_file_path", "reveal_library_file",
+        "get_assist_sources",
     ];
 
     /// The text of command `name`: from its `fn` to the next `#[command]`
@@ -1456,8 +1471,6 @@ mod tests {
         for json in [r#"{"instructions":"be long"}"#, r#"{"include_general":false}"#, r#"{"keep_separate":true}"#] {
             assert!(workspace_patch_matters(&ws, &patch(json)), "{json} changes access");
         }
-        assert!(!item_patch_matters(&ItemPatch { pinned: Some(true), label: Some(Some("x".into())), ..Default::default() }));
-        assert!(item_patch_matters(&ItemPatch { index_opt_in: Some(false), ..Default::default() }));
     }
 
     /// The live commands change no material (settings, start/stop, suggestions
@@ -1627,13 +1640,10 @@ mod tests {
     }
 
     #[test]
-    fn an_index_opt_out_is_declared_a_revocation_and_a_label_or_pin_touches_nothing() {
-        let off = item_touch("w", &ItemPatch { index_opt_in: Some(false), ..Default::default() });
-        assert!(off.revoke && off.workspaces == vec!["w".to_string()]);
-        let on = item_touch("w", &ItemPatch { index_opt_in: Some(true), ..Default::default() });
-        assert!(!on.revoke && on.workspaces == vec!["w".to_string()]);
+    fn a_label_or_pin_touches_nothing_and_a_declared_revocation_forces_every_dependent_to_revoke() {
         let cosmetic = item_touch("w", &ItemPatch { pinned: Some(true), label: Some(None), ..Default::default() });
         assert!(cosmetic.workspaces.is_empty() && cosmetic.meetings.is_empty() && cosmetic.chats_of.is_empty() && !cosmetic.revoke, "restarts nothing");
+        let off = Touch::ws("w").revoking();
         // The declaration survives combining and forces every dependent to revoke
         // even where the views are identical (so the kind would be Grant or Edit).
         assert!(Touch::ws("a").also(off.clone()).revoke);
