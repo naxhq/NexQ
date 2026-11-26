@@ -4,6 +4,7 @@ import { anchorOf, placeBox } from "../ui/portal";
 import { Clock3 } from "lucide-react";
 import { useConfigStore } from "../stores/configStore";
 import { useMeetingStore } from "../stores/meetingStore";
+import { CHIP_BASE, CHIP_OFF, CHIP_OPEN } from "./chipStyles";
 import {
   DEFAULT_CONTEXT_SCOPE,
   MAX_MINUTES,
@@ -182,12 +183,13 @@ export function ContextScopePicker() {
         aria-expanded={open}
         aria-label={`Transcript scope: ${chipLabel}${oneOff ? ", next action only" : ""}`}
         
-        className={`ml-auto flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-meta font-medium transition-colors duration-150 cursor-pointer ${
+        data-chip=""
+        className={`ml-auto shrink-0 ${CHIP_BASE} ${
           active
             ? "bg-primary/10 text-primary/90 ring-1 ring-inset ring-primary/20 hover:bg-primary/15"
             : open
-              ? "bg-accent/50 text-foreground"
-              : "text-muted-foreground/60 hover:bg-accent/50 hover:text-foreground"
+              ? CHIP_OPEN
+              : CHIP_OFF
         }`}
       >
         <Clock3 className="h-3 w-3" aria-hidden="true" />

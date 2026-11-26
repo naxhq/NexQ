@@ -6,6 +6,7 @@ import { useAgentStore } from "../stores/agentStore";
 import { useConfigStore } from "../stores/configStore";
 import { enabledKinds, useSourcesStore } from "../stores/sourcesStore";
 import { showToast } from "../stores/toastStore";
+import { CHIP_BASE, CHIP_OFF } from "../overlay/chipStyles";
 
 interface SourcePillsProps {
   /** `live`: the overlay's Fast with-sources session. `past`: that meeting's Deep one. */
@@ -18,8 +19,7 @@ const ON_STYLE = {
   tools: "bg-primary/20 text-primary ring-1 ring-primary/30 shadow-sm shadow-primary/10",
 } as const;
 
-const PILL_BASE =
-  "flex items-center gap-1 min-h-6 rounded-lg px-2 py-1 text-meta font-medium transition-all duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
+const PILL_BASE = CHIP_BASE;
 
 function styleOf(kind: "notes" | "tools", state: PillState): string {
   switch (state) {
@@ -29,7 +29,7 @@ function styleOf(kind: "notes" | "tools", state: PillState): string {
     case "error":
       return "bg-destructive/10 text-destructive ring-1 ring-destructive/25";
     default:
-      return "bg-transparent text-muted-foreground/60 hover:bg-accent/50 hover:text-foreground";
+      return CHIP_OFF;
   }
 }
 
@@ -90,6 +90,7 @@ export function SourcePills({ scope, meetingId = null }: SourcePillsProps) {
           <button
             type="button"
             role="switch"
+            data-chip=""
             aria-checked={toggles[kind]}
             title={tooltip(kind)}
             aria-describedby={`${baseId}-${kind}`}

@@ -95,6 +95,18 @@ describe("SourcePills", () => {
     expect(useSourcesStore.getState().toggles.notes).toBe(false);
   });
 
+  it("an off pill is a plain outline chip: opted out of the switch track, muted opaque text", () => {
+    render(<SourcePills scope="live" />);
+    for (const name of ["Notes", "Tools"]) {
+      const pill = screen.getByRole("switch", { name });
+      expect(pill).toHaveAttribute("aria-checked", "false");
+      expect(pill).toHaveAttribute("data-chip");
+      expect(pill.className).toContain("text-muted-foreground");
+      expect(pill.className).not.toMatch(/text-muted-foreground\/\d/);
+      expect(pill.className).not.toContain("bg-accent ");
+    }
+  });
+
   it("two quick clicks on different pills both count", () => {
     render(<SourcePills scope="live" />);
     const notes = screen.getByRole("switch", { name: "Notes" });

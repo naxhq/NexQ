@@ -161,3 +161,29 @@ describe("text-only controls keep hover feedback", () => {
     }
   });
 });
+
+// ---- assistant footer chips (Last N min, Notes, Tools) ----------------------------------------------------
+
+import { CHIP_OFF } from "../overlay/chipStyles";
+
+describe("an off footer chip is a plain outline with readable text", () => {
+  const classes = CHIP_OFF.split(/\s+/);
+  it("has no fill and no highlight on its label (only a hover wash)", () => {
+    for (const c of classes) {
+      if (c.startsWith("hover:")) continue;
+      expect(c, c).not.toMatch(/^(bg-(?!transparent$)|shadow|backdrop|select)/);
+    }
+  });
+  it("uses the muted text token unfaded", () => {
+    expect(classes).toContain("text-muted-foreground");
+    expect(classes.some((c) => /^text-[\w-]+\/\d+/.test(c))).toBe(false);
+  });
+  it.each(Object.entries(THEMES))("%s: the muted label reads 4.5:1 on the surfaces a chip sits on", (_n, t) => {
+    for (const s of SURFACES) expect(ratio(hsl(t["muted-foreground"]), hsl(t[s])), `muted on ${s}`).toBeGreaterThanOrEqual(4.5);
+  });
+  it("index.css does not dress a chip as a switch track (that put a grey box over the label)", () => {
+    expect(css).toContain('[role="switch"][aria-checked="false"]:not([data-chip])');
+    expect(css).toContain('[role="switch"][aria-checked="false"]:not([data-chip]) > span');
+    expect(css).not.toMatch(/\n\[role="switch"\]\[aria-checked="false"\](?:\s|>)/);
+  });
+});

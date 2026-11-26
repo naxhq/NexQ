@@ -820,12 +820,13 @@ select option {
 /* A combobox is a field: its edge reaches 3:1 (buttons keep the quiet edge, their label names them). */
 .ui-field[role="combobox"] { border-color: hsl(var(--input)); }
 
-/* Every switch in the app (role="switch"): an off switch has a visible track and an edge-coloured knob in both themes. */
-[role="switch"][aria-checked="false"] {
+/* Every switch in the app (role="switch"): an off switch has a visible track and an edge-coloured knob in both themes.
+   A chip that toggles (data-chip, the assistant footer) is not a track: its label must stay plain. */
+[role="switch"][aria-checked="false"]:not([data-chip]) {
   background-color: hsl(var(--ui-field));
   box-shadow: inset 0 0 0 1px hsl(var(--control-edge));
 }
-[role="switch"][aria-checked="false"] > span {
+[role="switch"][aria-checked="false"]:not([data-chip]) > span {
   background-color: hsl(var(--control-edge));
 }
 .toggle-switch[data-checked="false"] {
