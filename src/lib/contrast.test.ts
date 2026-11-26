@@ -187,3 +187,52 @@ describe("an off footer chip is a plain outline with readable text", () => {
     expect(css).not.toMatch(/\n\[role="switch"\]\[aria-checked="false"\](?:\s|>)/);
   });
 });
+
+// ---- talking points text style presets --------------------------------------------------------------------
+
+import tpCss from "../talking-points/talkingPoints.css?raw";
+import { TEXT_STYLE_IDS } from "../stores/talkingPointsStore";
+
+/** Opacity of a state in a preset, read from talkingPoints.css (Classic: the base reader rules). */
+function stateOpacity(style: string, state: string): number {
+  const text = tpCss.replace(/\r\n/g, "\n");
+  const wanted =
+    style === "classic"
+      ? [`.tp-read[data-dim="on"] [data-state="${state}"]`, `.tp-read [data-state="${state}"]`]
+      : [`.tp-read[data-style="${style}"][data-dim="on"] [data-state="${state}"]`, `.tp-read[data-style="${style}"] [data-state="${state}"]`];
+  for (const sel of wanted) {
+    for (const m of text.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+      if (!m[1].split(",").some((x) => x.trim() === sel)) continue;
+      const o = /opacity:\s*([\d.]+)/.exec(m[2]);
+      if (o) return Number(o[1]);
+    }
+  }
+  return 1;
+}
+
+describe.each(Object.entries(THEMES))("%s theme: every text style stays legible", (_name, t) => {
+  const fg = hsl(t.foreground);
+  const surfaces = ["background", "popover", "card"].map((k) => hsl(t[k]));
+  it.each(TEXT_STYLE_IDS)("%s: the lines you read (current, ahead) reach 4.5:1, the ones you passed 2.2:1", (id) => {
+    for (const surface of surfaces) {
+      const at = (a: number) => ratio(mix(fg, surface, a), surface);
+      for (const st of ["current", "ahead"]) expect(at(stateOpacity(id, st)), `${id} ${st}`).toBeGreaterThanOrEqual(4.5);
+      for (const st of ["past", "said"]) expect(at(stateOpacity(id, st)), `${id} ${st}`).toBeGreaterThanOrEqual(id === "contrast" ? 4.5 : 2.2);
+    }
+  });
+  it("marks (current wash, said wash) keep the text over them at 4.5:1", () => {
+    const wash = (token: string, a: number, state: string, id: string) => {
+      for (const surface of surfaces) {
+        const under = mix(hsl(t[token]), surface, a);
+        expect(ratio(mix(fg, under, stateOpacity(id, state)), under), `${id} ${state}`).toBeGreaterThanOrEqual(4.5);
+      }
+    };
+    wash("primary", 0.16, "current", "highlight");
+    wash("success", 0.16, "said", "highlight");
+    wash("primary", 0.2, "current", "contrast");
+  });
+  it("the green strike-through colour is the readable success text token", () => {
+    for (const surface of surfaces) expect(ratio(hsl(t["success-text"]), surface)).toBeGreaterThanOrEqual(4.5);
+    expect(tpCss).toContain("text-decoration-color: hsl(var(--success-text))");
+  });
+});

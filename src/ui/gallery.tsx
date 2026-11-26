@@ -24,6 +24,7 @@ import {
 import { ContextWave, MeetingWave, VoiceprintMark } from "../voiceprint";
 import type { ContextBar, ContextLayer } from "../lib/types";
 import { cn } from "../lib/utils";
+import { ChipsBlock, OffersBlock, TextStylesBlock } from "./galleryTalkingPoints";
 
 function Block({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -206,6 +207,18 @@ export default function UiGallery() {
         <SlideOver open={dialog === "sheet"} onClose={() => setDialog(null)} title="Library">
           <p className="ui-body text-muted-foreground">Documents, folders and tools.</p>
         </SlideOver>
+      </Block>
+
+      <Block title="Talking points: text styles">
+        <TextStylesBlock />
+      </Block>
+
+      <Block title="Talking points: the reader's offers">
+        <OffersBlock />
+      </Block>
+
+      <Block title="Assistant footer chips (off, then on)">
+        <ChipsBlock />
       </Block>
 
       <Block title="Empty state">

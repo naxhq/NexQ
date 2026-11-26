@@ -607,6 +607,18 @@ describe("what the panel remembers", () => {
     expect(r.wpm).toBe(60);
   });
 
+  it("the text style is remembered, and a saved config from before it existed keeps the current look", () => {
+    expect(DEFAULT_READING.textStyle).toBe("classic");
+    localStorage.setItem("nexq-talking-points-v1", JSON.stringify({ reading: { fontSize: 30, mode: "auto", saidIt: true, suggest: true, wpm: 150, lineSpacing: 1.5 } }));
+    expect(loadPrefs().reading.textStyle).toBe("classic");
+    expect(loadPrefs().reading.fontSize).toBe(30);
+    localStorage.setItem("nexq-talking-points-v1", JSON.stringify({ reading: { textStyle: "neon" } }));
+    expect(loadPrefs().reading.textStyle).toBe("classic");
+    S().setReading({ textStyle: "focus" });
+    expect(S().reading.textStyle).toBe("focus");
+    expect(loadPrefs().reading.textStyle).toBe("focus");
+  });
+
   it("resetMeeting forgets meeting-only state", () => {
     useStore.setState({ meetingEdits: { a: "x" }, progress: { a: [] } });
     S().resetMeeting();

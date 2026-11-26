@@ -159,3 +159,77 @@
 
 /* The focus marker: a 2 px rule the height of a line, in the gutter */
 .tp-focus-mark { width: 2px; border-radius: 1px; left: 0; opacity: 1; }
+
+/* ---- Text style presets (Settings: reading, "Text style") ----------------------------------------
+   Classic is the look above and has no rules of its own. Each preset restyles the same four states:
+   current (the line you are on), ahead (what is left), past (scrolled over) and said / autosaid.
+   Opacity steps apply only where the reader dims (data-dim="on"); the said marks apply everywhere.
+   Specificity (0,4,0) beats the Classic rules (0,3,0). */
+.tp-read[data-style]:not([data-style="classic"]) [data-block-id] {
+  transition: opacity 240ms cubic-bezier(0.22, 1, 0.36, 1), transform 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 240ms ease, box-shadow 240ms ease, text-decoration-color 240ms ease;
+}
+
+/* Checked off: what you said is struck through in green; what you passed settles back */
+.tp-read[data-style="checked"][data-dim="on"] [data-state="ahead"] { opacity: 1; }
+.tp-read[data-style="checked"][data-dim="on"] [data-state="past"] { opacity: 0.5; }
+.tp-read[data-style="checked"] [data-state="said"],
+.tp-read[data-style="checked"] [data-state="autosaid"] {
+  opacity: 0.72;
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+  text-decoration-color: hsl(var(--success-text));
+}
+
+/* Highlight: a soft blue wash on the current line, a soft green one on what you said */
+.tp-read[data-style="highlight"][data-dim="on"] [data-state="ahead"] { opacity: 1; }
+.tp-read[data-style="highlight"][data-dim="on"] [data-state="past"] { opacity: 0.66; }
+.tp-read[data-style="highlight"][data-dim="on"] [data-state="current"],
+.tp-read[data-style="highlight"] [data-state="said"],
+.tp-read[data-style="highlight"] [data-state="autosaid"] {
+  border-radius: 0.3em;
+  background-color: var(--tp-mark);
+  box-shadow: -0.35em 0 0 var(--tp-mark), 0.35em 0 0 var(--tp-mark);
+}
+.tp-read[data-style="highlight"][data-dim="on"] [data-state="current"] { --tp-mark: hsl(var(--primary) / 0.16); }
+.tp-read[data-style="highlight"] [data-state="said"],
+.tp-read[data-style="highlight"] [data-state="autosaid"] { --tp-mark: hsl(var(--success) / 0.16); opacity: 0.85; }
+
+/* Focus: the current line is a touch bigger (scaled, so nothing reflows), the rest recedes */
+.tp-read[data-style="focus"][data-dim="on"] [data-state="current"] { opacity: 1; transform: scale(1.06); transform-origin: 0 50%; }
+.tp-read[data-style="focus"][data-dim="on"] [data-state="ahead"] { opacity: 0.64; }
+.tp-read[data-style="focus"][data-dim="on"] [data-state="past"] { opacity: 0.4; }
+.tp-read[data-style="focus"] [data-state="said"],
+.tp-read[data-style="focus"] [data-state="autosaid"] { opacity: 0.4; }
+
+/* High contrast: everything stays near full strength; the state is told by lines, not by fading */
+.tp-read[data-style="contrast"][data-dim="on"] [data-state="ahead"] { opacity: 1; }
+.tp-read[data-style="contrast"][data-dim="on"] [data-state="past"] { opacity: 0.8; }
+.tp-read[data-style="contrast"][data-dim="on"] [data-state="current"] {
+  opacity: 1;
+  border-radius: 0.3em;
+  background-color: hsl(var(--primary) / 0.2);
+  box-shadow: -0.35em 0 0 hsl(var(--primary) / 0.2), 0.35em 0 0 hsl(var(--primary) / 0.2), 0 0 0 2px hsl(var(--primary) / 0.7);
+}
+.tp-read[data-style="contrast"] [data-state="said"],
+.tp-read[data-style="contrast"] [data-state="autosaid"] {
+  opacity: 0.8;
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+  text-decoration-color: hsl(var(--foreground));
+}
+
+/* The preview box on a style card */
+.tp-preview {
+  padding: 0.4rem 0.6rem;
+  font-size: 11px;
+  line-height: 1.4;
+  border-radius: 0.5rem;
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
+  overflow: hidden;
+}
+.tp-preview p { margin-block: 0.2em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (prefers-reduced-motion: reduce) {
+  .tp-read[data-style] [data-block-id] { transition: none !important; }
+}

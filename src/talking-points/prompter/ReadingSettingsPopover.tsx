@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { Minus, Plus } from "lucide-react";
 import { READING_LIMITS, type ReadingSettings } from "../../stores/talkingPointsStore";
 import { Switch } from "../../ui";
+import { TextStylePicker } from "./TextStylePicker";
 
 interface Props {
   reading: ReadingSettings;
@@ -90,7 +91,7 @@ export function ReadingSettingsPopover({ reading, onChange, saidItNote, language
     <div
       ref={ref}
       onKeyDown={(e) => e.stopPropagation()}
-      className="w-72 max-w-full space-y-3 p-3"
+      className="w-80 max-w-full space-y-3 p-3"
     >
       <Stepper
         label="Text size"
@@ -146,6 +147,11 @@ export function ReadingSettingsPopover({ reading, onChange, saidItNote, language
         label="Suggest where I am"
         description="When you wander to another point, offer a jump instead of moving on its own."
       />
+      <div role="group" aria-labelledby="tp-text-style-label" className="space-y-1.5 pt-1">
+        <p id="tp-text-style-label" className="ui-body font-medium">Text style</p>
+        <p className="ui-meta -mt-0.5 text-muted-foreground">How lines look as you go: what is left, what you passed, what you said.</p>
+        <TextStylePicker value={reading.textStyle} onChange={(textStyle) => onChange({ textStyle })} />
+      </div>
     </div>
   );
 }

@@ -8,6 +8,7 @@ import { Fragment, memo, useMemo, type ReactNode } from "react";
 import { Check } from "lucide-react";
 import { sanitizeDoc, type TpBlock, type TpDoc, type TpHeading, type TpInline, type TpListItem, type TpParagraph } from "../doc/model";
 import { cn } from "../../lib/utils";
+import type { TextStyleId } from "../../stores/talkingPointsStore";
 import "../talkingPoints.css";
 
 /** "autosaid": ticked by voice (softer, easy to spot and untick); "said": ticked by hand. */
@@ -21,6 +22,8 @@ export interface DocViewProps {
   ticks?: boolean;
   /** Current line full, ahead and behind dimmed (Auto and My voice). Manual reads at full contrast. */
   focusDim?: boolean;
+  /** Style preset for the line states (see talkingPoints.css); Classic when missing. */
+  textStyle?: TextStyleId;
   onToggleSaid?: (blockId: string) => void;
   className?: string;
 }
@@ -115,11 +118,11 @@ function renderList(
   );
 }
 
-export const DocView = memo(function DocView({ doc, states, ticks = false, focusDim = true, onToggleSaid, className }: DocViewProps) {
+export const DocView = memo(function DocView({ doc, states, ticks = false, focusDim = true, textStyle = "classic", onToggleSaid, className }: DocViewProps) {
   // A document that did not come through the sanitiser is cleaned here, never trusted.
   const safe = useMemo(() => sanitizeDoc(doc, undefined), [doc]);
   return (
-    <div className={cn("tp-doc tp-read", ticks && "tp-ticks", className)} data-dim={focusDim ? "on" : "off"}>
+    <div className={cn("tp-doc tp-read", ticks && "tp-ticks", className)} data-dim={focusDim ? "on" : "off"} data-style={textStyle}>
       {safe.content.map((b) =>
         b.type === "paragraph" || b.type === "heading" ? (
           <Block key={b.attrs.id} block={b} depth={0} state={states?.get(b.attrs.id) ?? "ahead"} ticks={ticks} onToggleSaid={onToggleSaid} />

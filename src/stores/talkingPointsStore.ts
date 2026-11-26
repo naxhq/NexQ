@@ -35,6 +35,10 @@ import { onWorkspacesChanged } from "../lib/events";
 
 export type SaveState = "saved" | "dirty" | "saving" | "failed" | "conflict";
 export type ScrollKind = "manual" | "auto" | "voice";
+/** How the three states of a line (what is left, what is covered, what you said) are drawn. */
+export type TextStyleId = "classic" | "checked" | "highlight" | "focus" | "contrast";
+export const TEXT_STYLE_IDS: readonly TextStyleId[] = ["classic", "checked", "highlight", "focus", "contrast"];
+export const DEFAULT_TEXT_STYLE: TextStyleId = "classic";
 
 export interface ReadingSettings {
   /** Reading text size in px (the unit the user sees). */
@@ -47,6 +51,8 @@ export interface ReadingSettings {
   saidIt: boolean;
   /** Offer "Go to" when you stray to another point. */
   suggest: boolean;
+  /** Style preset for the line states; Classic is the look from before the setting existed. */
+  textStyle: TextStyleId;
 }
 
 export const READING_LIMITS = {
@@ -55,7 +61,7 @@ export const READING_LIMITS = {
   wpm: { min: 60, max: 260, step: 10 },
 } as const;
 
-export const DEFAULT_READING: ReadingSettings = { fontSize: 26, lineSpacing: 1.5, wpm: 140, mode: "manual", saidIt: true, suggest: true };
+export const DEFAULT_READING: ReadingSettings = { fontSize: 26, lineSpacing: 1.5, wpm: 140, mode: "manual", saidIt: true, suggest: true, textStyle: DEFAULT_TEXT_STYLE };
 
 const PREFS_KEY = "nexq-talking-points-v1";
 const AUTOSAVE_MS = 800;
@@ -88,6 +94,7 @@ export function loadPrefs(): Prefs {
       mode: r.mode === "auto" || r.mode === "voice" || r.mode === "manual" ? r.mode : "manual",
       saidIt: r.saidIt !== false,
       suggest: r.suggest !== false,
+      textStyle: TEXT_STYLE_IDS.includes(r.textStyle as TextStyleId) ? (r.textStyle as TextStyleId) : DEFAULT_TEXT_STYLE,
     };
     if (p.lastNote && typeof p.lastNote === "object") {
       for (const [k, v] of Object.entries(p.lastNote)) if (typeof v === "string") base.lastNote[k] = v;
