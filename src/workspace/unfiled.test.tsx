@@ -191,8 +191,9 @@ describe("honest recap and memory texts", () => {
     });
     useWorkspaceStore.setState({ details: { acme: detailOf(ACME, []) } });
     render(<MemorySection workspaceId="acme" />);
-    expect(await screen.findByText(/in up to 4 calls \(a very long meeting keeps its start and end\)\. It proposes up to 8 items/)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText(/goes to Automatic: Claude Haiku \(cheapest\) in up to 4 calls/)).toBeInTheDocument());
+    await userEvent.hover(await screen.findByRole("button", { name: "About suggesting after meetings" }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(/in up to 4 calls \(a very long meeting keeps its start and end\)\. It proposes up to 8 items/);
+    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent(/goes to Automatic: Claude Haiku \(cheapest\) in up to 4 calls/));
   });
 });
 

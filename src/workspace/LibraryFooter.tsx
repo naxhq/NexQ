@@ -76,13 +76,13 @@ export function LibraryFooter({ workspaceId, hasFolders, progress }: { workspace
   const Icon = indexStale ? TriangleAlert : !hasIndex ? Zap : CheckCircle2;
 
   return (
-    <div className="space-y-1 border-t border-border px-3 py-2" role="group" aria-label="Knowledge base">
+    <div className="space-y-0.5 border-t border-border px-3 py-1.5" role="group" aria-label="Knowledge base">
       <div className="px-2.5">
         <IndexingNote workspaceId={workspaceId} progress={progress ?? null} compact />
       </div>
       <RecapRetry workspaceId={workspaceId} failed={recapFailed} onChange={(f) => setRecapFailed(f)} compact />
       {ragOn && rag === "idle" && (
-        <Button variant="ghost" onClick={update} className={cn("w-full justify-start", indexStale && "text-warning hover:text-warning")}>
+        <Button variant="ghost" size="sm" onClick={update} className={cn("w-full justify-start", indexStale && "text-warning hover:text-warning")}>
           <Icon className="h-3.5 w-3.5" aria-hidden="true" />
           {label}
         </Button>
@@ -106,13 +106,13 @@ export function LibraryFooter({ workspaceId, hasFolders, progress }: { workspace
         </p>
       )}
       {ragOn && hasIndex && rag !== "updating" && (
-        <Button variant="ghost" onClick={() => setTesting(true)} className="w-full justify-start">
+        <Button variant="ghost" size="sm" onClick={() => setTesting(true)} className="w-full justify-start">
           <FlaskConical className="h-3.5 w-3.5" aria-hidden="true" />
           Test a search
         </Button>
       )}
       {hasFolders && (
-        <Button variant="ghost" onClick={rescan} disabled={rescanning} className="w-full justify-start">
+        <Button variant="ghost" size="sm" onClick={rescan} disabled={rescanning} className="w-full justify-start">
           <FolderSync className="h-3.5 w-3.5" aria-hidden="true" />
           {rescanning ? "Scanning folders" : "Rescan folders"}
         </Button>

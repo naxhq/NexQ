@@ -74,3 +74,10 @@ export function useElementSize(ref: RefObject<HTMLElement | null>): { width: num
   }, [ref]);
   return size;
 }
+
+/**
+ * The Library list of the right panel shows about five rows and scrolls inside itself, so a long
+ * library never pushes Instructions, Talking points and Memory out of sight. A row is about 2.8 rem
+ * (a name line and a small line), so 15.5 rem leaves the sixth row half in view as the cue to scroll.
+ */
+export const LIBRARY_LIST_MAX_REM = 15.5;

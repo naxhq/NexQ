@@ -1,6 +1,6 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRovingRows } from "./roving";
-import { ClipboardPaste, FolderPlus, Library as LibraryIcon, Plus, Plug2 } from "lucide-react";
+import { ClipboardPaste, FolderPlus, Plus, Plug2 } from "lucide-react";
 import { ConfirmDialog, Menu, type MenuItemSpec, Button } from "../ui";
 import { FileUpload } from "../context/FileUpload";
 import {
@@ -25,11 +25,15 @@ import { READING, itemTitle, sortItems, type IndexProgress } from "./libraryStat
 import { MemorySection, TalkingPointsSection } from "./slots";
 import { InstructionsBlock } from "./InstructionsBlock";
 import { messageOf } from "../lib/plainError";
+import { PanelSection } from "./PanelSection";
+import { libraryKindOf } from "./libraryKinds";
+import { LIBRARY_LIST_MAX_REM } from "./layout";
+import type { NoteTarget } from "./LibraryDialogs";
 
 // Dialogs load when first asked for.
 const AddMcpServerDialog = lazyNamed(() => import("../sources/AddMcpServerDialog"), "AddMcpServerDialog");
 const SkippedFilesDialog = lazyNamed(() => import("./LibraryDialogs"), "SkippedFilesDialog");
-const PasteTextDialog = lazyNamed(() => import("./LibraryDialogs"), "PasteTextDialog");
+const NoteDialog = lazyNamed(() => import("./LibraryDialogs"), "NoteDialog");
 const FromLibraryDialog = lazyNamed(() => import("./LibraryDialogs"), "FromLibraryDialog");
 
 
@@ -53,6 +57,7 @@ export function LibraryPanel({ workspaceId, inSheet = false }: { workspaceId: st
   const { progress, skipped } = useWorkspaceIndex(workspaceId);
   const [skippedOpen, setSkippedOpen] = useState<{ title: string; files: SkippedFile[] } | null>(null);
   const [dialog, setDialog] = useState<"paste" | "library" | "server" | null>(null);
+  const [editingNote, setEditingNote] = useState<NoteTarget | null>(null);
   const [confirmLibraryRemove, setConfirmLibraryRemove] = useState<WorkspaceItem | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const focus = useWorkspaceStore((s) => s.focus);
@@ -102,8 +107,11 @@ export function LibraryPanel({ workspaceId, inSheet = false }: { workspaceId: st
 
   const removeHere = (i: WorkspaceItem) => act("remove it", () => removeWorkspaceItem(workspaceId, i.kind, i.ref_id));
 
+  const openNote = (i: WorkspaceItem) => setEditingNote({ item: { kind: i.kind, ref_id: i.ref_id, label: i.label }, title: itemTitle(i) });
+
   const rowMenu = (i: WorkspaceItem): MenuItemSpec[] => {
     const menu: MenuItemSpec[] = [];
+    if (libraryKindOf(i) === "note") menu.push({ id: "edit", label: "Edit note", onSelect: () => openNote(i) });
     if (i.kind === "document" && contextStrategy === "local_rag") {
       menu.push({
         id: "reindex",
@@ -133,117 +141,122 @@ export function LibraryPanel({ workspaceId, inSheet = false }: { workspaceId: st
   };
 
   const addItems: MenuItemSpec[] = [
-    { id: "files", label: "Files, folders and tools in the library", onSelect: () => setDialog("library") },
+    { id: "files", label: "From the library: files, notes, folders, tools", onSelect: () => setDialog("library") },
     { id: "folder", label: "Folder", separatorBefore: true, onSelect: () => void addFolder() },
     { id: "server", label: "Tool (MCP server)", onSelect: () => setDialog("server") },
-    { id: "paste", label: "Paste text", onSelect: () => setDialog("paste") },
+    { id: "paste", label: "Paste text as a note", onSelect: () => setDialog("paste") },
   ];
+
+  const addMenu = (
+    <Menu
+      label="Add to this workspace"
+      items={addItems}
+      align="end"
+      renderTrigger={(props) => (
+        <Button {...props} size="sm" className="gap-1 px-2">
+          <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+          Add
+        </Button>
+      )}
+    />
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex items-center justify-between px-4 pb-1 pt-3">
-        {inSheet ? (
-          // The sheet's own title already says "Library of ...".
-          <p className="ui-meta tabular-nums text-muted-foreground">{items.length === 1 ? "1 item" : `${items.length} items`}</p>
-        ) : (
-          <h2 className="ui-section flex items-center gap-1.5 text-foreground">
-            <LibraryIcon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
-            Library
-            <span className="ui-meta font-normal tabular-nums text-muted-foreground">{items.length || ""}</span>
-          </h2>
-        )}
-        <Menu
-          label="Add to this workspace"
-          items={addItems}
-          align="end"
-          renderTrigger={(props) => (
-            <Button {...props} className="gap-1 px-2">
-              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-              Add
-            </Button>
-          )}
-        />
-      </header>
-
-      <div ref={setListEl} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-3 pb-4 pt-2">
+      <div className="min-h-0 flex-1 overflow-y-auto pb-3">
         {unavailable && (
-          <p className="ui-meta rounded-lg bg-accent px-3 py-2 text-foreground" role="note">
+          <p className="ui-meta m-3 rounded-lg bg-accent px-3 py-2 text-foreground" role="note">
             Workspaces aren't available right now, so everything is in General and works as before.
           </p>
         )}
         {problem && (
-          <p role="alert" className="ui-meta px-2 text-destructive">
+          <p role="alert" className="ui-meta px-4 pt-2 text-destructive">
             {problem}
           </p>
         )}
 
-        <section aria-label="Files, folders and tools">
+        <PanelSection
+          id="library"
+          title={inSheet ? "Files, folders and tools" : "Library"}
+          label="Files, folders and tools"
+          count={items.length}
+          action={addMenu}
+        >
           {items.length === 0 ? (
-            <div className="px-2 py-3">
+            <div className="py-1">
               <p className="ui-section text-foreground">Nothing here yet</p>
-              <p className="ui-body mt-1 text-muted-foreground">Add files, a folder or a tool. The AI uses them in this workspace's meetings and chats.</p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Button onClick={() => void addFolder()} className="gap-1.5">
+              <p className="ui-meta mt-0.5 text-muted-foreground">Add files, a folder or a tool. The AI uses them in this workspace's meetings and chats.</p>
+              <div className="mt-2.5 flex flex-wrap gap-1.5">
+                <Button size="sm" onClick={() => void addFolder()} className="gap-1.5">
                   <FolderPlus className="h-3.5 w-3.5" aria-hidden="true" />
                   Add a folder
                 </Button>
-                <Button onClick={() => setDialog("server")} className="gap-1.5">
+                <Button size="sm" onClick={() => setDialog("server")} className="gap-1.5">
                   <Plug2 className="h-3.5 w-3.5" aria-hidden="true" />
                   Add a tool
                 </Button>
-                <Button onClick={() => setDialog("paste")} className="gap-1.5">
+                <Button size="sm" onClick={() => setDialog("paste")} className="gap-1.5">
                   <ClipboardPaste className="h-3.5 w-3.5" aria-hidden="true" />
                   Paste text
                 </Button>
               </div>
             </div>
           ) : (
-            <ul aria-label="Library items" className="space-y-0.5">
-              {items.map((i) => (
-                <LibraryRow
-                  key={`${i.kind}:${i.ref_id}`}
-                  item={i}
-                  progress={progress}
-                  menuItems={rowMenu(i)}
-                  onRename={(label) => void act("rename it", () => updateWorkspaceItem(workspaceId, i.kind, i.ref_id, { label }))}
-                  onTogglePin={() => void act("change the pin", () => updateWorkspaceItem(workspaceId, i.kind, i.ref_id, { pinned: !i.pinned }))}
-                  onOptIn={(on) => void act("change searching", () => updateWorkspaceItem(workspaceId, i.kind, i.ref_id, { index_opt_in: on }))}
-                  onRemove={() => void removeHere(i)}
-                  highlighted={focus?.kind === i.kind && focus.refId === i.ref_id}
-                  skipped={i.kind === "folder" ? byFolder.get(i.ref_id)?.length : undefined}
-                  onShowSkipped={() => setSkippedOpen({ title: itemTitle(i), files: byFolder.get(i.ref_id) ?? [] })}
-                />
-              ))}
-            </ul>
+            <div ref={setListEl} className="-mx-1.5 overflow-y-auto overscroll-contain" style={{ maxHeight: `${LIBRARY_LIST_MAX_REM}rem` }}>
+              <ul aria-label="Library items" className="space-y-px">
+                {items.map((i) => (
+                  <LibraryRow
+                    key={`${i.kind}:${i.ref_id}`}
+                    item={i}
+                    progress={progress}
+                    menuItems={rowMenu(i)}
+                    onRename={(label) => void act("rename it", () => updateWorkspaceItem(workspaceId, i.kind, i.ref_id, { label }))}
+                    onTogglePin={() => void act("change the pin", () => updateWorkspaceItem(workspaceId, i.kind, i.ref_id, { pinned: !i.pinned }))}
+                    onOptIn={(on) => void act("change searching", () => updateWorkspaceItem(workspaceId, i.kind, i.ref_id, { index_opt_in: on }))}
+                    onRemove={() => void removeHere(i)}
+                    onEditNote={libraryKindOf(i) === "note" ? () => openNote(i) : undefined}
+                    highlighted={focus?.kind === i.kind && focus.refId === i.ref_id}
+                    skipped={i.kind === "folder" ? byFolder.get(i.ref_id)?.length : undefined}
+                    onShowSkipped={() => setSkippedOpen({ title: itemTitle(i), files: byFolder.get(i.ref_id) ?? [] })}
+                  />
+                ))}
+              </ul>
+            </div>
           )}
           {otherSkipped.length > 0 && (
             <button
               type="button"
               onClick={() => setSkippedOpen({ title: "your folders", files: otherSkipped })}
               aria-haspopup="dialog"
-              className="ui-meta mt-2 rounded px-2 text-muted-foreground underline underline-offset-2 outline-none hover:text-foreground ui-focus ui-focus-sm"
+              className="ui-meta mt-1.5 rounded px-1 text-muted-foreground underline underline-offset-2 outline-none hover:text-foreground ui-focus ui-focus-sm"
             >
               {otherSkipped.length} {otherSkipped.length === 1 ? "file" : "files"} skipped
             </button>
           )}
-          <FileUpload workspaceId={workspaceId} className="mt-2" />
-        </section>
+          <FileUpload workspaceId={workspaceId} className="mt-2" compact />
+        </PanelSection>
 
         <InstructionsBlock workspaceId={workspaceId} instructions={detail?.instructions ?? ""} />
 
         <Suspense fallback={null}>
-          <TalkingPointsSection workspaceId={workspaceId} />
+          {/* Talking points draw their own heading: it takes this panel's spacing, not its own top margin. */}
+          <div className="border-t border-border/70 px-4 py-2.5 [&>section]:mt-0">
+            <TalkingPointsSection workspaceId={workspaceId} />
+          </div>
           <MemorySection workspaceId={workspaceId} />
         </Suspense>
 
-        <ContextMeter workspaceId={workspaceId} />
+        <div className="border-t border-border/70 px-4 py-2.5 [&>section]:space-y-1.5">
+          <ContextMeter workspaceId={workspaceId} />
+        </div>
       </div>
 
       <LibraryFooter workspaceId={workspaceId} hasFolders={items.some((i) => i.kind === "folder")} progress={progress} />
 
       <Suspense fallback={null}>
         {skippedOpen && <SkippedFilesDialog folder={skippedOpen.title} files={skippedOpen.files} onClose={() => setSkippedOpen(null)} />}
-        {dialog === "paste" && <PasteTextDialog workspaceId={workspaceId} open onClose={() => setDialog(null)} />}
+        {dialog === "paste" && <NoteDialog workspaceId={workspaceId} open onClose={() => setDialog(null)} />}
+        {editingNote && <NoteDialog workspaceId={workspaceId} open note={editingNote} onClose={() => setEditingNote(null)} />}
         {dialog === "library" && <FromLibraryDialog workspaceId={workspaceId} open onClose={() => setDialog(null)} />}
         {dialog === "server" && (
           // The server joins the library and this workspace together (the add carries the workspace).

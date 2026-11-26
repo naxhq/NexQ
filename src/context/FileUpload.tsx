@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { addFilesToWorkspace, supportedPaths } from "../workspace/addMaterial";
 import { cn } from "../lib/utils";
 import { useWorkspaceStore } from "../stores/workspaceStore";
+import { InfoTip } from "../ui";
 
 type DragState = { dragging: boolean };
 
@@ -66,7 +67,7 @@ export function describeAdd(added: number, failed: number, skipped: number): str
  * (library and workspace together). Dropping files on the window does the same
  * (see `useTauriFileDrop`, wired where the window's content lives).
  */
-export function FileUpload({ workspaceId: given, className }: { workspaceId?: string; className?: string }) {
+export function FileUpload({ workspaceId: given, className, compact = false }: { workspaceId?: string; className?: string; compact?: boolean }) {
   const openId = useWorkspaceStore((s) => s.openId);
   const workspaceId = given ?? openId;
   const [busy, setBusy] = useState(false);
@@ -98,21 +99,28 @@ export function FileUpload({ workspaceId: given, className }: { workspaceId?: st
     return () => clearTimeout(t);
   }, [message]);
 
+  const hint = "PDF, text, Markdown or Word. You can also drop them on this window.";
   return (
     <div className={cn("w-full", className)}>
-      <button
-        type="button"
-        onClick={browse}
-        disabled={busy}
-        aria-busy={busy}
-        className="ui-body flex w-full items-center gap-2 rounded-lg border border-dashed border-border px-3 py-2.5 text-left text-muted-foreground outline-none transition-colors hover:border-foreground/30 hover:bg-accent/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-60"
-      >
-        {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <FilePlus2 className="h-4 w-4" aria-hidden="true" />}
-        <span>
-          <span className="block font-medium text-foreground">{busy ? "Adding files" : "Choose files"}</span>
-          <span className="ui-meta block">PDF, text, Markdown or Word. You can also drop them on this window.</span>
-        </span>
-      </button>
+      <div className={compact ? "flex items-center gap-1" : undefined}>
+        <button
+          type="button"
+          onClick={browse}
+          disabled={busy}
+          aria-busy={busy}
+          className={cn(
+            "ui-body flex w-full items-center gap-2 rounded-lg border border-dashed border-border text-left text-muted-foreground outline-none transition-colors hover:border-foreground/30 hover:bg-accent/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-60",
+            compact ? "min-w-0 flex-1 px-2.5 py-1.5" : "px-3 py-2.5",
+          )}
+        >
+          {busy ? <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" /> : <FilePlus2 className="h-4 w-4 shrink-0" aria-hidden="true" />}
+          <span className="min-w-0">
+            <span className="block font-medium text-foreground">{busy ? "Adding files" : "Choose files"}</span>
+            {!compact && <span className="ui-meta block">{hint}</span>}
+          </span>
+        </button>
+        {compact && <InfoTip label="About adding files">{hint}</InfoTip>}
+      </div>
       {message && (
         <p role="status" className="ui-meta mt-1.5 text-muted-foreground">
           {message}

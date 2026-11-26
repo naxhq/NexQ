@@ -1,4 +1,5 @@
-import { addWorkspaceItem, addWorkspaceText } from "../lib/ipc";
+import { addWorkspaceItem, addWorkspaceText, rebuildFileIndex, updateWorkspaceItem, updateWorkspaceNote } from "../lib/ipc";
+import type { WorkspaceItem } from "../lib/types";
 import { useConfigStore } from "../stores/configStore";
 import { useContextStore } from "../stores/contextStore";
 import { useRagStore } from "../stores/ragStore";
@@ -53,11 +54,44 @@ export async function addFilesToWorkspace(paths: string[], workspaceId: string):
   return result;
 }
 
-/** Pasted text becomes a Markdown document in the workspace. */
+/** The most characters a note's title keeps (the backend cuts at the same length). */
+export const NOTE_TITLE_MAX = 80;
+
+/**
+ * A title for text that has none: its first line that says something, without the Markdown
+ * markers in front of it, on one line. The same rule the backend applies (`note_title`).
+ */
+export function deriveNoteTitle(text: string): string {
+  for (const line of text.split(/\r?\n/)) {
+    const first = line.trim().replace(/^[#>\-*+\s]+/, "").replace(/\s+/g, " ").trim();
+    if (first) return [...first].slice(0, NOTE_TITLE_MAX).join("").trim();
+  }
+  return "";
+}
+
+/** Pasted text becomes a note in the workspace, named by its title (its first line when none is given). */
 export async function addPastedText(workspaceId: string, title: string, text: string): Promise<string> {
-  const id = await addWorkspaceText(workspaceId, title.trim() || "Pasted text", text);
+  const id = await addWorkspaceText(workspaceId, title.trim() || deriveNoteTitle(text) || "Note", text);
   await useWorkspaceStore.getState().refresh();
   return id;
+}
+
+/**
+ * Saves an edited note. The library's own name changes with it, and a label the person had put
+ * on it in this workspace would hide the new title, so it goes (the title is what they just chose).
+ * The text is indexed again when the knowledge base is on.
+ */
+export async function saveNoteEdit(workspaceId: string, item: Pick<WorkspaceItem, "kind" | "ref_id" | "label">, title: string, text: string): Promise<void> {
+  const name = title.trim() || deriveNoteTitle(text) || "Note";
+  await updateWorkspaceNote(item.ref_id, name, text);
+  if (item.label) await updateWorkspaceItem(workspaceId, item.kind, item.ref_id, { label: null });
+  await useContextStore.getState().loadResources();
+  if (useConfigStore.getState().contextStrategy === "local_rag") {
+    void rebuildFileIndex(item.ref_id)
+      .then(() => useRagStore.getState().refreshIndexStatus())
+      .catch(() => {});
+  }
+  await useWorkspaceStore.getState().refresh();
 }
 
 export interface FolderAddResult {

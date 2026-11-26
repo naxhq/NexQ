@@ -148,7 +148,10 @@ describe("MemorySection", () => {
     useWorkspaceStore.setState({ details: { acme: detailOf(ACME) } });
     render(<MemorySection workspaceId="acme" />);
     const sw = await screen.findByRole("switch", { name: /Suggest after meetings/ });
-    expect(screen.getByText(/in up to 4 calls .*It proposes up to 8 items/)).toBeInTheDocument();
+    // The long help is one hover or Tab away, not a paragraph under the switch.
+    expect(screen.queryByText(/in up to 4 calls/)).toBeNull();
+    await userEvent.hover(screen.getByRole("button", { name: "About suggesting after meetings" }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(/in up to 4 calls .*It proposes up to 8 items/);
     await userEvent.click(sw);
     await waitFor(() => expect(b.called("update_workspace")[0]?.args).toMatchObject({ id: "acme", patch: { suggest_memory: true } }));
   });

@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Plus, Search } from "lucide-react";
-import { Select, Switch, Button, IconButton } from "../ui";
+import { Select, Switch, Button, IconButton, InfoTip } from "../ui";
 import { useMeetingStore } from "../stores/meetingStore";
 import { showToast } from "../stores/toastStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import type { MemoryKind } from "../lib/types";
 import { cn } from "../lib/utils";
 import { fieldClass, hintClass } from "../workspace/styles";
+import { PanelSection } from "../workspace/PanelSection";
 import { onMemoryChanged } from "../lib/events";
 import { MEMORY_KINDS, UNSUPPORTED_TEXT, groupSaved, useMemoryStore, type MemoryRow } from "./memoryStore";
 import { ModelField, describeModel } from "../models/ModelField";
@@ -305,15 +306,17 @@ export function MemorySection({ workspaceId }: { workspaceId: string }) {
   };
 
   return (
-    <section aria-label="Memory" className="space-y-2">
-      <div className="flex items-center justify-between">
-        <h3 className="ui-section text-foreground">
-          Memory <span className="ui-meta font-normal tabular-nums text-muted-foreground">{savedCount || ""}</span>
-        </h3>
-        <IconButton onClick={() => setAdding(true)}  aria-label="Add to memory">
+    <PanelSection
+      id="memory"
+      title="Memory"
+      count={savedCount}
+      action={
+        <IconButton onClick={() => setAdding(true)} aria-label="Add to memory">
           <Plus className="h-3.5 w-3.5" aria-hidden="true" />
         </IconButton>
-      </div>
+      }
+      bodyClassName="space-y-2"
+    >
 
       {suggest?.status === "running" && (
         <p role="status" className="ui-body flex items-center gap-2 text-muted-foreground">
@@ -416,17 +419,21 @@ export function MemorySection({ workspaceId }: { workspaceId: string }) {
       {savedCount > 0 && groups.length === 0 && <p className="ui-body text-muted-foreground">Nothing in memory matches that.</p>}
 
       <div className="pt-1">
-        <Switch
-          checked={!!detail?.suggest_memory}
-          onChange={(on) => void update(workspaceId, { suggest_memory: on }).catch((e) => showToast(`Couldn't change it: ${messageOf(e)}`, "error"))}
-          label="Suggest after meetings"
-          description={`After a meeting here, its transcript goes to ${modelName} in up to 4 calls (a very long meeting keeps its start and end). It proposes up to 8 items. Nothing is kept until you save it.`}
-        />
+        <div className="flex items-center gap-1">
+          <Switch
+            checked={!!detail?.suggest_memory}
+            onChange={(on) => void update(workspaceId, { suggest_memory: on }).catch((e) => showToast(`Couldn't change it: ${messageOf(e)}`, "error"))}
+            label="Suggest after meetings"
+          />
+          <InfoTip label="About suggesting after meetings">
+            {`After a meeting here, its transcript goes to ${modelName} in up to 4 calls (a very long meeting keeps its start and end). It proposes up to 8 items. Nothing is kept until you save it.`}
+          </InfoTip>
+        </div>
         <div className="mt-2 max-w-sm">
           <ModelField label="Model for memory suggestions" value={memoryModel.value} onChange={(v) => void memoryModel.change(v)} />
           {memoryModel.error && <p className="ui-meta mt-1 text-muted-foreground" role="alert">{memoryModel.error}</p>}
         </div>
       </div>
-    </section>
+    </PanelSection>
   );
 }

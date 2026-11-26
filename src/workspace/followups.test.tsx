@@ -236,12 +236,15 @@ describe("library row details", () => {
   const row = (i: ReturnType<typeof item>) =>
     render(<ul><LibraryRow item={i} menuItems={[]} onRename={() => {}} onTogglePin={() => {}} onOptIn={() => {}} /></ul>);
 
-  it("explains where text goes only under a folder that is not on yet", () => {
+  it("keeps where a folder's text goes behind a small info button, on or off", async () => {
     row(folder(false));
-    expect(screen.getByText(/sends the passages that match a question/)).toBeInTheDocument();
+    expect(screen.queryByText(/sends the passages that match a question/)).toBeNull();
+    await userEvent.hover(screen.getByRole("button", { name: /^About searching the text of/ }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(/sends the passages that match a question/);
     cleanup();
     row(folder(true));
     expect(screen.queryByText(/sends the passages that match a question/)).toBeNull();
+    expect(screen.getByRole("button", { name: /^About searching the text of/ })).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: /Search its text/ })).toHaveAttribute("aria-checked", "true");
   });
 

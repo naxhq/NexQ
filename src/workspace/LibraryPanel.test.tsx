@@ -66,7 +66,9 @@ describe("the Library panel", () => {
     render(<LibraryPanel workspaceId="acme" />);
     const sw = await screen.findByRole("switch", { name: /Search its text/ });
     expect(sw).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByText(/sends the passages that match a question to the AI provider you use/)).toBeInTheDocument();
+    expect(screen.queryByText(/sends the passages that match a question/)).toBeNull();
+    await userEvent.hover(screen.getByRole("button", { name: /^About searching the text of/ }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(/sends the passages that match a question to the AI provider you use/);
     await userEvent.click(sw);
     await waitFor(() => expect(b.called("update_workspace_item")[0]?.args).toMatchObject({ id: "acme", kind: "folder", refId: "f1", patch: { index_opt_in: true } }));
   });
@@ -146,7 +148,7 @@ describe("the Library panel", () => {
     });
     render(<LibraryPanel workspaceId="acme" />);
     await userEvent.click(await screen.findByRole("button", { name: "Add" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: /in the library/ }));
+    await userEvent.click(screen.getByRole("menuitem", { name: /From the library/ }));
     const dialog = await screen.findByRole("dialog", { name: "Add from library" });
     await userEvent.click(await within(dialog).findByRole("checkbox", { name: /other.pdf/ }));
     expect(within(dialog).getByText(/not in any workspace/)).toBeInTheDocument();
@@ -154,17 +156,92 @@ describe("the Library panel", () => {
     await waitFor(() => expect(b.called("add_workspace_item")[0]?.args).toMatchObject({ id: "acme", kind: "document", refId: "x1" }));
   });
 
-  it("pastes text into the workspace", async () => {
+  it("pastes text as a note: the title follows the first line until the person writes their own", async () => {
     const b = backend({ add_workspace_text: "doc-1" });
     render(<LibraryPanel workspaceId="acme" />);
     await userEvent.click(await screen.findByRole("button", { name: "Add" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: "Paste text" }));
-    const dialog = await screen.findByRole("dialog", { name: "Paste text" });
-    expect(within(dialog).getByRole("button", { name: "Add to workspace" })).toBeDisabled();
-    await userEvent.type(within(dialog).getByRole("textbox", { name: "Text" }), "Kickoff notes");
-    await userEvent.type(within(dialog).getByRole("textbox", { name: "Name" }), "Kickoff");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Add to workspace" }));
-    await waitFor(() => expect(b.called("add_workspace_text")[0]?.args).toMatchObject({ id: "acme", title: "Kickoff", markdown: "Kickoff notes" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Paste text as a note" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add a note" });
+    expect(within(dialog).getByRole("button", { name: "Add note" })).toBeDisabled();
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Text" }), "## Kickoff notes{enter}Agenda follows");
+    expect(within(dialog).getByRole("textbox", { name: "Title" })).toHaveValue("Kickoff notes");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add note" }));
+    await waitFor(() => expect(b.called("add_workspace_text")[0]?.args).toMatchObject({ id: "acme", title: "Kickoff notes", markdown: "## Kickoff notes\nAgenda follows" }));
+  });
+
+  it("keeps a title the person wrote, even when the text changes after", async () => {
+    const b = backend({ add_workspace_text: "doc-1" });
+    render(<LibraryPanel workspaceId="acme" />);
+    await userEvent.click(await screen.findByRole("button", { name: "Add" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Paste text as a note" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add a note" });
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Title" }), "Kickoff");
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Text" }), "Something else entirely");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add note" }));
+    await waitFor(() => expect(b.called("add_workspace_text")[0]?.args).toMatchObject({ title: "Kickoff", markdown: "Something else entirely" }));
+  });
+});
+
+describe("a note in the Library", () => {
+  const NOTE = item({ ref_id: "n1", name: "Kickoff", detail: "note", tokens: 40 });
+
+  it("is tagged Note, not Document, and opens in an edit dialog that saves the change", async () => {
+    const b = backend({
+      get_workspace: detailOf(ACME, [NOTE, item({ ref_id: "d1", name: "contract.pdf", detail: "pdf" })], ""),
+      get_workspace_note: { title: "Kickoff", text: "Old text" },
+      update_workspace_note: null,
+    });
+    render(<LibraryPanel workspaceId="acme" />);
+    const list = await screen.findByRole("list", { name: "Library items" });
+    const rows = within(list).getAllByRole("listitem");
+    const noteRow = rows.find((r) => r.textContent?.includes("Kickoff"))!;
+    expect(noteRow).toHaveTextContent("Note");
+    expect(noteRow).not.toHaveTextContent("Document");
+    expect(rows.find((r) => r.textContent?.includes("contract.pdf"))).toHaveTextContent("Document");
+
+    await userEvent.click(within(noteRow).getByRole("button", { name: "Edit note Kickoff" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit note" });
+    const body = within(dialog).getByRole("textbox", { name: "Text" });
+    await waitFor(() => expect(body).toHaveValue("Old text"));
+    await userEvent.clear(body);
+    await userEvent.type(body, "New text");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save note" }));
+    await waitFor(() => expect(b.called("update_workspace_note")[0]?.args).toMatchObject({ refId: "n1", title: "Kickoff", markdown: "New text" }));
+  });
+
+  it("opens from the row's menu too, and a document has no such item", async () => {
+    backend({
+      get_workspace: detailOf(ACME, [NOTE, item({ ref_id: "d1", name: "contract.pdf", detail: "pdf" })], ""),
+      get_workspace_note: { title: "Kickoff", text: "Old text" },
+    });
+    render(<LibraryPanel workspaceId="acme" />);
+    await userEvent.click(await screen.findByRole("button", { name: "Actions for Kickoff" }));
+    expect(screen.getByRole("menuitem", { name: "Edit note" })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(screen.getByRole("button", { name: "Actions for contract.pdf" }));
+    expect(screen.queryByRole("menuitem", { name: "Edit note" })).toBeNull();
+  });
+
+  it("scrolls inside its own box so a long library does not push the other sections down", async () => {
+    const many = Array.from({ length: 14 }, (_, n) => item({ ref_id: `x${n}`, name: `file ${n}.pdf` }));
+    backend({ get_workspace: detailOf(ACME, many, "") });
+    render(<LibraryPanel workspaceId="acme" />);
+    const list = await screen.findByRole("list", { name: "Library items" });
+    const box = list.parentElement!;
+    expect(box.style.maxHeight).toBe("15.5rem");
+    expect(box).toHaveClass("overflow-y-auto");
+  });
+
+  it("folds a section and remembers it", async () => {
+    backend();
+    render(<LibraryPanel workspaceId="acme" />);
+    const fold = await screen.findByRole("button", { name: /^Instructions/ });
+    expect(fold).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(fold);
+    expect(fold).toHaveAttribute("aria-expanded", "false");
+    cleanup();
+    render(<LibraryPanel workspaceId="acme" />);
+    expect(await screen.findByRole("button", { name: /^Instructions/ })).toHaveAttribute("aria-expanded", "false");
   });
 });
 

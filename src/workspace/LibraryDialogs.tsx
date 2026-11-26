@@ -1,38 +1,72 @@
 import { useEffect, useRef, useState } from "react";
 import { Dialog, Button } from "../ui";
-import { addWorkspaceItem, listLibrary } from "../lib/ipc";
+import { addWorkspaceItem, getWorkspaceNote, listLibrary } from "../lib/ipc";
+import { messageOf } from "../lib/plainError";
 import { useWorkspaceStore } from "../stores/workspaceStore";
-import type { LibraryItem, SkippedFile } from "../lib/types";
-import { addPastedText } from "./addMaterial";
+import type { LibraryItem, SkippedFile, WorkspaceItem } from "../lib/types";
+import { NOTE_TITLE_MAX, addPastedText, deriveNoteTitle, saveNoteEdit } from "./addMaterial";
 import { readableName } from "./libraryStatus";
+import { KIND_LOOK, libraryKindOf } from "./libraryKinds";
 import { fieldClass, hintClass, labelClass } from "./styles";
 
-/** Paste text: it becomes a Markdown document in this workspace. */
-export function PasteTextDialog({ workspaceId, open, onClose }: { workspaceId: string; open: boolean; onClose: () => void }) {
+/** A note being edited: the library item and the title it shows now. */
+export interface NoteTarget {
+  item: Pick<WorkspaceItem, "kind" | "ref_id" | "label">;
+  title: string;
+}
+
+/**
+ * Paste text and it becomes a note of this workspace; open a note and it is the same dialog to
+ * change it. The title follows the first line of the text until the person writes their own.
+ */
+export function NoteDialog({ workspaceId, open, onClose, note }: { workspaceId: string; open: boolean; onClose: () => void; note?: NoteTarget | null }) {
+  const editing = !!note;
   const [title, setTitle] = useState("");
+  const [titleTouched, setTitleTouched] = useState(false);
   const [text, setText] = useState("");
+  const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const titleRef = useRef<HTMLInputElement | null>(null);
+  const bodyRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
-    if (open) {
-      setTitle("");
-      setText("");
-      setBusy(false);
-      setError(null);
-    }
-  }, [open]);
+    if (!open) return;
+    setTitle(note?.title ?? "");
+    setTitleTouched(!!note);
+    setText("");
+    setBusy(false);
+    setError(null);
+    if (!note) return;
+    let live = true;
+    setLoading(true);
+    getWorkspaceNote(note.item.ref_id)
+      .then((n) => {
+        if (!live) return;
+        setTitle(n.title);
+        setText(n.text);
+      })
+      .catch((e) => live && setError(messageOf(e)))
+      .finally(() => live && setLoading(false));
+    return () => {
+      live = false;
+    };
+  }, [open, note]);
+
+  const suggested = deriveNoteTitle(text);
+  const shownTitle = titleTouched ? title : suggested;
+  const canSave = !!text.trim() && !busy && !loading;
 
   const save = async () => {
-    if (!text.trim() || busy) return;
+    if (!canSave) return;
     setBusy(true);
     setError(null);
     try {
-      await addPastedText(workspaceId, title, text);
+      if (note) await saveNoteEdit(workspaceId, note.item, shownTitle, text);
+      else await addPastedText(workspaceId, shownTitle, text);
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(messageOf(e));
       setBusy(false);
     }
   };
@@ -41,33 +75,54 @@ export function PasteTextDialog({ workspaceId, open, onClose }: { workspaceId: s
     <Dialog
       open={open}
       onClose={() => !busy && onClose()}
-      title="Paste text"
-      description="Notes, a brief, an email thread. It is saved as a document in this workspace."
-      initialFocusRef={titleRef}
+      title={editing ? "Edit note" : "Add a note"}
+      description={editing ? "Every workspace that uses this note sees the change." : "Paste notes, a brief or an email thread. It is kept as a note in this workspace."}
+      initialFocusRef={editing ? bodyRef : titleRef}
       dismissible={!busy}
       footer={
         <>
-          <Button  onClick={onClose} disabled={busy}>
+          <Button onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button variant="primary"  onClick={save} disabled={busy || !text.trim()}>
-            {busy ? "Saving" : "Add to workspace"}
+          <Button variant="primary" onClick={save} disabled={!canSave}>
+            {busy ? "Saving" : editing ? "Save note" : "Add note"}
           </Button>
         </>
       }
     >
       <div className="space-y-4">
         <div>
-          <label htmlFor="paste-title" className={labelClass}>
-            Name
+          <label htmlFor="note-title" className={labelClass}>
+            Title
           </label>
-          <input id="paste-title" ref={titleRef} value={title} onChange={(e) => setTitle(e.target.value)} maxLength={80} placeholder="Pasted text" className={fieldClass} />
+          <input
+            id="note-title"
+            ref={titleRef}
+            value={shownTitle}
+            onChange={(e) => {
+              setTitle(e.target.value);
+              setTitleTouched(true);
+            }}
+            maxLength={NOTE_TITLE_MAX}
+            placeholder="Note"
+            className={fieldClass}
+          />
+          {!editing && !titleTouched && <p className={`${hintClass} mt-1`}>Taken from the first line. Change it if you like.</p>}
         </div>
         <div>
-          <label htmlFor="paste-body" className={labelClass}>
+          <label htmlFor="note-body" className={labelClass}>
             Text
           </label>
-          <textarea id="paste-body" value={text} onChange={(e) => setText(e.target.value)} rows={9} className={`${fieldClass} resize-y`} />
+          <textarea
+            id="note-body"
+            ref={bodyRef}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={9}
+            disabled={loading}
+            placeholder={loading ? "Opening the note" : undefined}
+            className={`${fieldClass} resize-y`}
+          />
         </div>
         {error && (
           <p role="alert" className="ui-body text-destructive">
@@ -85,8 +140,6 @@ export function usedIn(ids: string[], workspaces: Array<{ id: string; name: stri
   if (names.length === 0) return "another workspace";
   return names.length <= 3 ? names.join(", ") : `${names.slice(0, 3).join(", ")} and ${names.length - 3} more`;
 }
-
-const KIND_WORD = { document: "Document", folder: "Folder", server: "Tool" } as const;
 
 /** "Add from library": things already in the library that this workspace doesn't use yet. */
 export function FromLibraryDialog({ workspaceId, open, onClose }: { workspaceId: string; open: boolean; onClose: () => void }) {
@@ -173,7 +226,7 @@ export function FromLibraryDialog({ workspaceId, open, onClose }: { workspaceId:
                   <span className="min-w-0">
                     <span className="ui-body block truncate font-medium text-foreground">{readableName(i.kind, i.ref_id, i.name)}</span>
                     <span className={`${hintClass} block`}>
-                      {KIND_WORD[i.kind]}
+                      {KIND_LOOK[libraryKindOf(i)].word}
                       {i.unfiled ? ", not in any workspace" : `, used in ${usedIn(i.workspace_ids, workspaces)}`}
                     </span>
                   </span>

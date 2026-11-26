@@ -4,6 +4,7 @@ import { Button, IconButton } from "../ui";
 import { showToast } from "../stores/toastStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { fieldClass, hintClass } from "./styles";
+import { PanelSection } from "./PanelSection";
 
 /** Rough size the way the old custom instructions counted it: characters over four. */
 export const estimateTokens = (text: string) => Math.ceil(text.length / 4);
@@ -33,15 +34,18 @@ export function InstructionsBlock({ workspaceId, instructions }: { workspaceId: 
   };
 
   return (
-    <section aria-label="Instructions" className="space-y-1.5">
-      <div className="flex items-center justify-between">
-        <h3 className="ui-section text-foreground">Instructions</h3>
-        {!editing && (
-          <IconButton onClick={() => setEditing(true)}  aria-label="Edit instructions">
+    <PanelSection
+      id="instructions"
+      title="Instructions"
+      action={
+        !editing && (
+          <IconButton onClick={() => setEditing(true)} aria-label="Edit instructions">
             <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
           </IconButton>
-        )}
-      </div>
+        )
+      }
+      bodyClassName="space-y-1.5"
+    >
       {editing ? (
         <div className="space-y-2">
           <textarea
@@ -57,25 +61,25 @@ export function InstructionsBlock({ workspaceId, instructions }: { workspaceId: 
             <span className={hintClass}>About {estimateTokens(draft)} tokens</span>
             <span className="flex gap-1.5">
               <Button
-                
                 onClick={() => {
                   setDraft(instructions);
                   setEditing(false);
                 }}
-                disabled={busy}>
+                disabled={busy}
+              >
                 Cancel
               </Button>
-              <Button variant="primary"  onClick={save} disabled={busy || draft === instructions}>
+              <Button variant="primary" onClick={save} disabled={busy || draft === instructions}>
                 {busy ? "Saving" : "Save"}
               </Button>
             </span>
           </div>
         </div>
       ) : instructions.trim() ? (
-        <p className="ui-body line-clamp-4 whitespace-pre-wrap text-muted-foreground">{instructions}</p>
+        <p className="ui-body line-clamp-3 whitespace-pre-wrap text-muted-foreground">{instructions}</p>
       ) : (
-        <p className="ui-body text-muted-foreground">None yet. Say how the AI should work here: who the people are, what to focus on.</p>
+        <p className="ui-meta text-muted-foreground">None yet. Say how the AI should work here: who the people are, what to focus on.</p>
       )}
-    </section>
+    </PanelSection>
   );
 }

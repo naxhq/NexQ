@@ -3,6 +3,7 @@
 export { Menu, type MenuItemSpec, type MenuProps, type MenuTriggerProps } from "./Menu";
 export { Select, Combobox, type SelectOption, type SelectProps } from "./Select";
 export { Tooltip, TooltipBubble, type TooltipProps } from "./Tooltip";
+export { InfoTip, type InfoTipProps } from "./InfoTip";
 export { Button, IconButton, buttonBase, buttonClasses, iconButtonClasses, type ButtonProps, type IconButtonProps, type ButtonVariant, type ButtonSize } from "./Button";
 export { Dialog, ConfirmDialog, ModalLayer, buttonClass, type DialogProps, type ConfirmDialogProps } from "./Dialog";
 export { SlideOver, type SlideOverProps } from "./SlideOver";
