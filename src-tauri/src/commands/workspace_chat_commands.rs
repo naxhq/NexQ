@@ -193,6 +193,13 @@ pub async fn preview_chat_context(
     engine::preview(&deps, &chat_id, question.as_deref()).await
 }
 
+/// The budget and window a new chat would use for `depth` (default balanced), before a chat exists.
+#[command]
+pub async fn get_context_budget(depth: Option<String>, state: State<'_, AppState>, app: AppHandle) -> Result<ContextBudget, String> {
+    let deps = runtime::build_deps(&app, &state)?;
+    Ok(engine::default_budget(&deps, depth.as_deref().unwrap_or("balanced")).await)
+}
+
 /// Which tools are off in this chat and why (nothing runs).
 #[command]
 pub async fn get_chat_capabilities(

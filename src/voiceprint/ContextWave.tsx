@@ -25,6 +25,11 @@ export interface ContextWaveProps {
   window: number;
   /** The token allowance the wave is drawn against. */
   budget: number;
+  /**
+   * What the answer used, as the report counts it (the whole prompt). Said in the summary so the
+   * number reads the same as in the composer and the panel; the bars still draw their own tokens.
+   */
+  used?: number;
   /** Click or Enter on a bar, a group, or a layer in the legend. */
   onSelect?: (selection: ContextSelection) => void;
   /** Height of the wave in px. */
@@ -62,7 +67,7 @@ function useWidth(ref: React.RefObject<HTMLElement | null>, fallback = 640) {
  * room left. Bars move only when the data changes. Everything is also a list
  * ("View as list"), and the bars are reachable with the arrow keys.
  */
-export function ContextWave({ bars, window: modelWindow, budget, onSelect, height = 64, className }: ContextWaveProps) {
+export function ContextWave({ bars, window: modelWindow, budget, used, onSelect, height = 64, className }: ContextWaveProps) {
   const box = useRef<HTMLElement | null>(null);
   const width = useWidth(box);
   const [asList, setAsList] = useState(false);
@@ -98,7 +103,7 @@ export function ContextWave({ bars, window: modelWindow, budget, onSelect, heigh
     }
   };
 
-  const summary = `Using ${formatTokens(layout.used)} of ${formatTokens(budget)} tokens`;
+  const summary = `Using ${formatTokens(used ?? layout.used)} of ${formatTokens(budget)} tokens`;
   const sub = `Model window ${formatTokens(modelWindow)}${layout.cut.length ? `, ${layout.cut.length} found but cut` : ""}`;
 
   return (

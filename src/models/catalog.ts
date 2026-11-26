@@ -35,6 +35,13 @@ const GROUP_OF: Record<string, ProviderGroup> = {
   codex_cli: "subscription",
 };
 
+/**
+ * Providers that can run a chat model through the API: the ones in GROUP_OF other than the CLI
+ * agents and the custom server. A key can be stored for a provider that only transcribes
+ * (Deepgram, AssemblyAI ...), and such a provider must never be offered as a model.
+ */
+export const isLlmApiProvider = (provider: string): boolean => provider in GROUP_OF && !isCliAgent(provider) && provider !== "custom";
+
 export const GROUP_NAMES: Record<ProviderGroup, string> = {
   subscription: "Subscriptions",
   cloud: "Cloud",
@@ -155,8 +162,8 @@ export function useModelCatalog(open: boolean, current: { provider: string; mode
   }, [open, refreshStatus]);
 
   const apiProviders = useMemo(() => {
-    const out = new Set(verified.filter((p) => !isCliAgent(p) && p !== "custom"));
-    if (curProvider && !isCliAgent(curProvider) && curProvider !== "custom") out.add(curProvider);
+    const out = new Set(verified.filter(isLlmApiProvider));
+    if (curProvider && isLlmApiProvider(curProvider)) out.add(curProvider);
     return [...out];
   }, [verified, curProvider]);
 

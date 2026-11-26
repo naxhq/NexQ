@@ -18,7 +18,7 @@ vi.mock("../lib/ipc", () => ({
 
 import { ModelField, describeModel } from "./ModelField";
 import { providerLabel } from "./labels";
-import { resetModelCacheForTests } from "./catalog";
+import { isLlmApiProvider, resetModelCacheForTests } from "./catalog";
 import { useConfigStore } from "../stores/configStore";
 
 beforeEach(() => {
@@ -66,5 +66,30 @@ describe("ModelField", () => {
     await userEvent.keyboard("{Escape}");
     await userEvent.click(screen.getByRole("button", { name: "Choose the model automatically" }));
     expect(onChange).toHaveBeenCalledWith({ provider: null, model: null, effort: null });
+  });
+});
+
+describe("providers that cannot run a chat model", () => {
+  it("knows which providers are LLM providers", () => {
+    for (const p of ["openai", "anthropic", "groq", "gemini", "openrouter", "ollama", "lm_studio"]) expect(isLlmApiProvider(p), p).toBe(true);
+    for (const p of ["deepgram", "assemblyai", "whisper_api", "azure_speech", "claude_cli", "custom", ""]) expect(isLlmApiProvider(p), p).toBe(false);
+  });
+
+  it("never lists a speech-to-text provider with a stored key", async () => {
+    useConfigStore.setState({ verifiedCloudProviders: ["deepgram", "openai", "assemblyai"] } as never);
+    render(<ModelField value={{ provider: null, model: null, effort: null }} onChange={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Model" }));
+    expect(await screen.findByRole("option", { name: "GPT Mini" })).toBeInTheDocument();
+    expect(screen.queryByText(/Deepgram|AssemblyAI/i)).toBeNull();
+    expect(screen.queryByText(/Couldn't list models/)).toBeNull();
+    expect(h.configs.map((c) => JSON.parse(c).provider_type)).toEqual(["openai"]);
+  });
+
+  it("does not offer a speech provider even when a chat holds it as its model", async () => {
+    render(<ModelField value={{ provider: "deepgram", model: "nova", effort: null }} onChange={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Model" }));
+    await screen.findByRole("option", { name: "GPT Mini" });
+    expect(screen.queryByRole("option", { name: "nova" })).toBeNull();
+    expect(h.configs.map((c) => JSON.parse(c).provider_type)).toEqual(["openai"]);
   });
 });

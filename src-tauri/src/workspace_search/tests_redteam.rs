@@ -133,6 +133,7 @@ fn input(question: &str) -> ContextInput {
         depth: Depth::Balanced,
         model_window: None,
         cli_agent: false,
+        free_tokens: false,
         instructions: "Be brief.".into(),
         memory: vec![],
         pinned: vec![],

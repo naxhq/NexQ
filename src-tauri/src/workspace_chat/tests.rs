@@ -619,6 +619,29 @@ async fn windows_of_4k_8k_128k_and_1m_set_the_budget() {
 }
 
 #[tokio::test]
+async fn a_subscription_or_local_model_gets_a_budget_that_grows_with_its_window() {
+    // (provider, window the API lists, budget, window)
+    for (provider, window, budget, expect_window) in [
+        ("claude_cli", None, 60_000usize, 200_000usize),
+        ("ollama", None, 38_400, 128_000), // window unknown: 128k, 30% of it
+        ("lm_studio", Some(1_000_000), 64_000, 1_000_000),
+        ("openai", Some(200_000), 24_000, 200_000),
+    ] {
+        let r = Rig::new();
+        r.meeting("m1", "Kestrel planning", 5, &budget_lines());
+        r.index();
+        *r.api.window.lock().unwrap() = window;
+        *r.selection.lock().unwrap() = ModelSelection::new(provider, "gpt-test", None);
+        let c = store::create_chat(&r.conn(), &r.ws, Some(provider), Some("gpt-test"), None).unwrap().id;
+        let report = engine::preview(&r.deps, &c, Some("Kestrel budget?")).await.unwrap();
+        assert_eq!((report.window, report.budget), (expect_window, budget), "{provider}");
+        // the estimate before any chat names the same numbers
+        let b = engine::default_budget(&r.deps, "balanced").await;
+        assert_eq!((b.window, b.budget), (expect_window, budget), "{provider} before a chat");
+    }
+}
+
+#[tokio::test]
 async fn a_500_meeting_workspace_stays_inside_the_budget() {
     let rig = Rig::new();
     let filler = "We reviewed the roadmap and the quarterly numbers with the whole team today and agreed to follow up soon.";
@@ -1778,7 +1801,7 @@ fn exposed_rig(sources: Arc<RwLock<PersonalSourcesConfig>>) -> (Rig, Arc<Mutex<O
     }
     {
         let conn = rig.conn();
-        let big = "word ".repeat(30_000);
+        let big = "word ".repeat(70_000);
         let res = crate::context::ContextResource {
             id: "dbig".into(), name: "big.txt".into(), file_type: "txt".into(), file_path: "x".into(), size_bytes: 3,
             token_count: 2, preview: "p".into(), loaded_at: "now".into(), status: "ready".into(),

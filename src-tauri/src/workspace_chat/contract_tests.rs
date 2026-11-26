@@ -184,6 +184,11 @@ fn result_preview_chat_context() {
 }
 
 #[test]
+fn result_get_context_budget() {
+    assert_contract!("get_context_budget_result", ContextBudget { depth: "balanced".into(), budget: 60_000, window: 200_000 });
+}
+
+#[test]
 fn result_chat_crud() {
     assert_contract!("list_workspace_chats_result", vec![chat()]);
     assert_contract!("create_workspace_chat_result", chat());
@@ -245,6 +250,7 @@ fn command_arguments() {
     assert_contract!("set_chat_item_pref", json!({ "chatId": "c1", "kind": "document", "refId": "d1", "pref": "pin" }));
     assert_contract!("list_chat_item_prefs", json!({ "chatId": "c1" }));
     assert_contract!("preview_chat_context", json!({ "chatId": "c1", "question": "What was agreed?" }));
+    assert_contract!("get_context_budget", json!({ "depth": "balanced" }));
     assert_contract!("get_chat_capabilities", json!({ "chatId": "c1" }));
     assert_contract!("ask_workspace", json!({ "chatId": "c1", "question": "What was agreed?", "requestId": "ask-1", "deeper": false }));
     // "Search deeper" asks the same question again with `deeper`; "Leave out of this chat" is pref "exclude".
@@ -274,4 +280,5 @@ fn results_read_back_into_their_types() {
     assert_eq!(kinds, ["transcript", "document", "folder", "talking_point"]);
     let _: IndexStatus = serde_json::from_value(read("get_index_status_result")).unwrap();
     let _: ContextReport = serde_json::from_value(read("preview_chat_context_result")).unwrap();
+    let _: ContextBudget = serde_json::from_value(read("get_context_budget_result")).unwrap();
 }

@@ -93,6 +93,7 @@ export function ContextPanel({
                 bars={bars}
                 window={report.window}
                 budget={report.budget}
+                used={report.used}
                 height={22}
                 onSelect={(sel) => {
                   setSelection(sel);
@@ -111,9 +112,9 @@ export function ContextPanel({
             <p className="ui-meta pb-1 font-medium text-foreground">{HEADINGS[subject]}</p>
             {report ? (
               <>
-                <ContextWave bars={bars} window={report.window} budget={report.budget} height={52} onSelect={setSelection} />
+                <ContextWave bars={bars} window={report.window} budget={report.budget} used={report.used} height={52} onSelect={setSelection} />
                 <p className="ui-meta mt-1.5 text-muted-foreground">
-                  {report.strategy === "full" ? "Everything included fit." : "Picked the most relevant material."} The model's window is {formatTokens(report.window)}.
+                  {report.strategy === "full" ? "Everything included fit." : "Picked the most relevant material."}
                   {report.omitted > 0 ? ` ${report.omitted} smaller ${report.omitted === 1 ? "item was" : "items were"} left out.` : ""}
                 </p>
                 {report.notices.map((n) => (

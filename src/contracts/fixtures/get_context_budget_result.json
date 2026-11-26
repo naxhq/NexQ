@@ -1,0 +1,5 @@
+{
+  "budget": 60000,
+  "depth": "balanced",
+  "window": 200000
+}

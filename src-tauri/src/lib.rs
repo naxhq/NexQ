@@ -1002,6 +1002,7 @@ pub fn run() {
             workspace_chat_commands::preview_chat_context,
             workspace_chat_commands::get_chat_capabilities,
             workspace_chat_commands::ask_workspace,
+            workspace_chat_commands::get_context_budget,
             workspace_chat_commands::cancel_workspace_request,
             workspace_chat_commands::save_answer_to_library,
             workspace_chat_commands::add_answer_to_instructions,

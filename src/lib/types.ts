@@ -1577,9 +1577,19 @@ export type ContextDepth = "lean" | "balanced" | "deep";
 export interface ContextReport {
   strategy: "full" | "ladder";
   depth: ContextDepth;
-  /** Token budget used for this report: min(depth budget, 60% of window). */
+  /**
+   * Token budget used for this report. A paid API model: 8k, 24k or 80k by depth; a subscription
+   * or local model: 16k, 30% of the window (up to 64k) or 60% (up to 150k). Never above 60% of the window.
+   */
   budget: number;
   /** The model's real context window in tokens. */
+/** What a new chat would be drawn against (`get_context_budget`): the same rule as `ContextReport.budget`. */
+export interface ContextBudget {
+  depth: ContextDepth;
+  budget: number;
+  window: number;
+}
+
   window: number;
   used: number;
   bars: ContextBar[];

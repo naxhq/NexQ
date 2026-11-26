@@ -49,7 +49,7 @@ fn read_chat(row: &rusqlite::Row) -> rusqlite::Result<ChatRow> {
     })
 }
 
-fn clean_depth(depth: &str) -> &'static str {
+pub fn clean_depth(depth: &str) -> &'static str {
     match depth {
         "lean" => "lean",
         "deep" => "deep",

@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { ContextWave, formatTokens, CONTEXT_LAYER_NAMES, type ContextSelection } from "../voiceprint";
-import { listWorkspaceChats, previewChatContext } from "../lib/ipc";
+import { getContextBudget, listWorkspaceChats, previewChatContext } from "../lib/ipc";
 import { useWorkspaceStore } from "../stores/workspaceStore";
-import type { ContextBar, ContextReport, WorkspaceDetail } from "../lib/types";
+import type { ContextBar, ContextBudget, ContextReport, WorkspaceDetail } from "../lib/types";
 
-/** The balanced budget and a default window, used before any chat names a model. */
+/** Used only until the backend has said what the default model gets (or when it cannot). */
 export const ESTIMATE_BUDGET = 24_000;
 export const ESTIMATE_WINDOW = 128_000;
 
@@ -49,13 +49,22 @@ export function ContextMeter({ workspaceId }: { workspaceId: string }) {
     error: null,
   });
   const [selection, setSelection] = useState<ContextSelection | null>(null);
+  const [fallback, setFallback] = useState<ContextBudget | null>(null);
 
   useEffect(() => {
     let live = true;
     (async () => {
       try {
         const chats = await listWorkspaceChats(workspaceId);
-        if (!chats.length) return live && setState({ report: null, chat: false, error: null });
+        if (!chats.length) {
+          // No chat yet: draw the library against what the default model would get.
+          const b = await getContextBudget("balanced").catch(() => null);
+          if (live) {
+            setFallback(b);
+            setState({ report: null, chat: false, error: null });
+          }
+          return;
+        }
         const report = await previewChatContext(chats[0].id);
         if (live) setState({ report, chat: true, error: null });
       } catch (e) {
@@ -81,7 +90,7 @@ export function ContextMeter({ workspaceId }: { workspaceId: string }) {
         <>
           {estimate.length > 0 ? (
             <>
-              <ContextWave bars={estimate} window={ESTIMATE_WINDOW} budget={ESTIMATE_BUDGET} height={52} />
+              <ContextWave bars={estimate} window={fallback?.window ?? ESTIMATE_WINDOW} budget={fallback?.budget ?? ESTIMATE_BUDGET} height={52} />
               <p className={hintClass}>
                 About {formatTokens(estimated)} tokens from the instructions and files. Meetings and the conversation join in when you ask something.
               </p>
@@ -94,10 +103,7 @@ export function ContextMeter({ workspaceId }: { workspaceId: string }) {
       {!report && !state.error && state.chat && <p className={hintClass}>Estimating</p>}
       {report && (
         <>
-          <ContextWave bars={report.bars} window={report.window} budget={report.budget} onSelect={setSelection} height={52} />
-          <p className={hintClass}>
-            {formatTokens(report.used)} of {formatTokens(report.budget)} tokens, in a window of {formatTokens(report.window)}.
-          </p>
+          <ContextWave bars={report.bars} window={report.window} budget={report.budget} used={report.used} onSelect={setSelection} height={52} />
           {report.notices.map((n) => (
             <p key={n} className={hintClass}>
               {n}

@@ -86,6 +86,15 @@ pub struct ContextReport {
     pub estimate: bool,
 }
 
+/// What a new chat would be drawn against: the default model's window and the budget of
+/// a depth for it (the same rule as [`ContextReport`], before any chat exists).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ContextBudget {
+    pub depth: String,
+    pub budget: usize,
+    pub window: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkspaceMessage {
     pub id: i64,

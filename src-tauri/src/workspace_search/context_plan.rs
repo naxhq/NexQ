@@ -28,6 +28,10 @@ pub const RECENT_CARDS: usize = 10;
 pub const VERBATIM_TURNS: usize = 8;
 pub const MIN_RELEVANCE: f32 = 0.15;
 pub const RELATIVE_TO_TOP: f32 = 0.35;
+/// Budgets for providers with no cost per token (see [`Depth::budget_for`]).
+pub const FREE_LEAN_BUDGET: usize = 16_000;
+pub const FREE_BALANCED_CAP: usize = 64_000;
+pub const FREE_DEEP_CAP: usize = 150_000;
 const WRAP_OVERHEAD_TOKENS: usize = 24;
 const MAX_DROPPED_LISTED: usize = 100;
 
@@ -46,6 +50,25 @@ impl Depth {
             Depth::Balanced => 24_000,
             Depth::Deep => 80_000,
         }
+    }
+    /// The budget for a model of `window` tokens. A provider with no cost per
+    /// token (the Claude CLI on a subscription, a local model) gets room that
+    /// grows with the window: lean 16k, balanced 30% (up to 64k), deep 60% (up
+    /// to 150k), never less than a paid provider gets. A paid API provider
+    /// keeps the fixed 8k, 24k and 80k. Either way, at most 60% of the window.
+    pub fn budget_for(&self, window: usize, free_tokens: bool) -> usize {
+        let paid = self.budget();
+        let wanted = if free_tokens {
+            let scaled = match self {
+                Depth::Lean => FREE_LEAN_BUDGET,
+                Depth::Balanced => (window * 30 / 100).min(FREE_BALANCED_CAP),
+                Depth::Deep => (window * 60 / 100).min(FREE_DEEP_CAP),
+            };
+            scaled.max(paid)
+        } else {
+            paid
+        };
+        wanted.min(window * 60 / 100)
     }
     pub fn parse(s: &str) -> Self {
         match s {
@@ -113,6 +136,8 @@ pub struct ContextInput {
     /// The model's real window; unknown uses 128k (200k for CLI agents).
     pub model_window: Option<usize>,
     pub cli_agent: bool,
+    /// The provider costs nothing per token (CLI subscription, local model).
+    pub free_tokens: bool,
     pub instructions: String,
     pub memory: Vec<MemoryItem>,
     pub pinned: Vec<PinnedItem>,
@@ -374,9 +399,14 @@ fn memory_rank(question: &str, m: &MemoryItem) -> usize {
         + q.cjk_runs.iter().filter(|r| hay.contains(r.as_str())).count() * 2
 }
 
+/// The window a plan is drawn against: the model's own, else 128k (200k for CLI agents).
+pub fn plan_window(model_window: Option<usize>, cli_agent: bool) -> usize {
+    model_window.filter(|w| *w > 0).unwrap_or(if cli_agent { 200_000 } else { 128_000 })
+}
+
 pub fn build_context(input: &ContextInput, env: &ContextEnv) -> ContextPlan {
-    let window = input.model_window.filter(|w| *w > 0).unwrap_or(if input.cli_agent { 200_000 } else { 128_000 });
-    let budget = input.depth.budget().min(window * 60 / 100);
+    let window = plan_window(input.model_window, input.cli_agent);
+    let budget = input.depth.budget_for(window, input.free_tokens);
     let question_tokens = tok(&input.question) + 4;
 
     let excluded: HashSet<&str> = input.meetings.iter().filter(|m| m.excluded).map(|m| m.meeting_id.as_str()).collect();
@@ -1004,6 +1034,7 @@ mod tests {
             depth: Depth::Balanced,
             model_window: None,
             cli_agent: false,
+            free_tokens: false,
             instructions: "Answer briefly.".into(),
             memory: vec![],
             pinned: vec![],
@@ -1048,6 +1079,46 @@ mod tests {
         assert_eq!(p.budget, 4_800);
         i.model_window = Some(2_000);
         assert!(build_context(&i, &env(s, l)).notices.iter().any(|n| n.contains("small")));
+    }
+
+    #[test]
+    fn free_providers_scale_with_the_window_and_paid_ones_stay_fixed() {
+        let mut i = base_input();
+        let s = &no_search;
+        let l = &load_text;
+        let budget = |i: &ContextInput| build_context(i, &env(s, l)).budget;
+        i.cli_agent = true;
+        i.free_tokens = true;
+        i.model_window = Some(200_000);
+        i.depth = Depth::Lean;
+        assert_eq!(budget(&i), 16_000);
+        i.depth = Depth::Balanced;
+        assert_eq!(budget(&i), 60_000, "30% of 200k");
+        i.depth = Depth::Deep;
+        assert_eq!(budget(&i), 120_000, "60% of 200k");
+        i.model_window = Some(1_000_000);
+        i.depth = Depth::Balanced;
+        assert_eq!(budget(&i), 64_000, "capped");
+        i.depth = Depth::Deep;
+        assert_eq!(budget(&i), 150_000, "capped");
+        // a small local window: never above 60% of it, never below what a paid provider gets
+        i.cli_agent = false;
+        i.model_window = Some(32_768);
+        i.depth = Depth::Balanced;
+        assert_eq!(budget(&i), 19_660, "30% of 32k is below the paid 24k, so the paid share is used, then capped at 60%");
+        i.model_window = Some(8_000);
+        i.depth = Depth::Lean;
+        assert_eq!(budget(&i), 4_800);
+        // a paid provider keeps 8k / 24k / 80k whatever the window
+        i.free_tokens = false;
+        i.model_window = Some(200_000);
+        for (d, b) in [(Depth::Lean, 8_000), (Depth::Balanced, 24_000), (Depth::Deep, 80_000)] {
+            i.depth = d;
+            assert_eq!(budget(&i), b);
+        }
+        i.model_window = Some(1_000_000);
+        i.depth = Depth::Deep;
+        assert_eq!(budget(&i), 80_000);
     }
 
     #[test]

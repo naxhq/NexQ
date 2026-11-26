@@ -82,6 +82,12 @@ fn is_cli(selection: &ModelSelection) -> bool {
     ProviderType::from_str(&selection.provider).map(|p| p.is_cli_agent()).unwrap_or(false)
 }
 
+/// The provider costs nothing per token (a CLI subscription or a local model), so a
+/// bigger window is worth filling.
+fn is_free(selection: &ModelSelection) -> bool {
+    ProviderType::from_str(&selection.provider).map(|p| p.is_local()).unwrap_or(false)
+}
+
 fn selection_of(deps: &ChatDeps, row: &ChatRow) -> Result<ModelSelection, String> {
     match row.chat.provider.as_deref().filter(|p| !p.trim().is_empty()) {
         Some(p) => Ok(ModelSelection::new(p, row.chat.model.as_deref().unwrap_or(""), row.chat.effort.as_deref())),
@@ -306,6 +312,7 @@ pub fn build(
         depth,
         model_window: window,
         cli_agent: is_cli(&selection),
+        free_tokens: is_free(&selection),
         instructions: scope.eff.instructions.clone(),
         memory,
         pinned,
@@ -448,6 +455,22 @@ pub fn clean_question(question: &str) -> String {
     crate::prompt_data::strip_hidden(question).trim().to_string()
 }
 
+/// The budget and window the next chat would use, before any chat exists:
+/// the default model's own, else the 128k default.
+pub async fn default_budget(deps: &Arc<ChatDeps>, depth: &str) -> ContextBudget {
+    let selection = (deps.default_selection)();
+    let window = match &selection {
+        Some(s) => deps.ai.model_window(s).await.map(|w| w as usize),
+        None => None,
+    };
+    let cli = selection.as_ref().map(is_cli).unwrap_or(false);
+    let free = selection.as_ref().map(is_free).unwrap_or(false);
+    let depth_name = store::clean_depth(depth);
+    let depth = Depth::parse(depth_name);
+    let window = plan_window(window, cli);
+    ContextBudget { depth: depth_name.into(), budget: depth.budget_for(window, free), window }
+}
+
 pub async fn preview(deps: &Arc<ChatDeps>, chat_id: &str, question: Option<&str>) -> Result<ContextReport, String> {
     let (selection, depth) = {
         let conn = deps.conn()?;
@@ -487,8 +510,8 @@ async fn maybe_condense(deps: &ChatDeps, chat_id: &str, selection: &ModelSelecti
         let from = if prev_ok { row.chat.condensed_upto.unwrap_or(0) } else { 0 };
         let older: Vec<&WorkspaceMessage> = messages[..older_end].iter().filter(|m| m.id > from).collect();
         let turns: Vec<ChatTurn> = older.iter().map(|m| ChatTurn { role: m.role.clone(), content: m.content.clone() }).collect();
-        let win = window.unwrap_or(if is_cli(selection) { 200_000 } else { 128_000 });
-        let budget = Depth::parse(&row.chat.depth).budget().min(win * 60 / 100);
+        let win = plan_window(window, is_cli(selection));
+        let budget = Depth::parse(&row.chat.depth).budget_for(win, is_free(selection));
         if turns.is_empty() || needs_condensing_older(&turns, budget).is_none() {
             return Condensed::Nothing;
         }
