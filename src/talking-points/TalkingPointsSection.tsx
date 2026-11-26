@@ -1,18 +1,18 @@
 /**
  * The Library's talking points block: the panel's shared section and rows (a note's name, its size and whether
- * the AI draws on it), "New note", and the full editor in a wide sheet. Found by file name by
+ * the AI draws on it), "New note", and the full editor in its own dialog. Found by file name by
  * `src/workspace/slots.ts`; the full editor is the same component the slot also finds.
  */
 import { useEffect, useState } from "react";
 import { ListChecks, Plus, StickyNote } from "lucide-react";
 import { useTalkingPointsStore } from "../stores/talkingPointsStore";
-import { ConfirmDialog, ModalLayer, type MenuItemSpec } from "../ui";
+import { ConfirmDialog, type MenuItemSpec } from "../ui";
 import { PanelAction, PanelSection } from "../workspace/PanelSection";
 import { PanelEmpty, PanelList, PanelRow, ShowAllDialog } from "../workspace/PanelRow";
 import type { KindLook } from "../workspace/libraryKinds";
 import type { TalkingPoint } from "../lib/types";
 import { countWords } from "./doc/model";
-import { TalkingPointsEditor } from "./TalkingPointsEditor";
+import { TalkingPointsDialog } from "./TalkingPointsDialog";
 import "./talkingPoints.css";
 
 const NOTE_LOOK: KindLook = { word: "Note", Icon: StickyNote, text: "text-muted-foreground", tile: "bg-muted" };
@@ -105,17 +105,8 @@ export function TalkingPointsSection({ workspaceId }: { workspaceId: string }) {
         textOf={(n) => `${n.title} ${n.plain_text}`}
         renderRow={(n) => row(n, true)}
       />
-      {/* the editor needs room: a list beside a full editor column, not the 26 rem of a plain sheet */}
-      <ModalLayer
-        open={editor !== null}
-        onClose={() => setEditor(null)}
-        title="Talking points"
-        description="Write, reorder and import the notes of this workspace."
-        placement="right"
-        className="w-[min(62rem,100%)]"
-      >
-        <TalkingPointsEditor key={editor?.id ?? "first"} workspaceId={workspaceId} initialId={editor?.id ?? null} className="min-h-[60vh]" />
-      </ModalLayer>
+      {/* the editor needs room: a dialog of its own, with the list beside the writing surface */}
+      <TalkingPointsDialog key={editor?.id ?? "first"} open={editor !== null} onClose={() => setEditor(null)} workspaceId={workspaceId} initialId={editor?.id ?? null} />
       <ConfirmDialog
         open={deleting !== null}
         title={deleting ? `Delete "${deleting.title}"?` : "Delete note"}

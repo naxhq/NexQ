@@ -2,15 +2,17 @@
  * The TipTap editor. This file and everything it imports from @tiptap is one lazy
  * chunk (see `LazyRichEditor`); the reader and the lists never load it.
  *
- * Quiet by design: no permanent toolbar. A small floating bar follows the caret
- * while the editor has focus (shortcuts are in every tooltip), and a footer line
- * carries the word count and speaking time.
+ * The formatting bar is part of the layout and never follows the caret: docked in the
+ * host the page gives it (`toolbarHost`), or at the top of the editor when there is none
+ * (the meeting panel). The word count and speaking time sit in a quiet footer line
+ * (`footerHost`, or under the text).
  */
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
+import { createPortal } from "react-dom";
 import { EditorContent, useEditor } from "@tiptap/react";
 import type { Editor } from "@tiptap/core";
 import { createExtensions } from "./extensions";
-import { FloatingToolbar } from "./FloatingToolbar";
+import { FormatToolbar } from "./FormatToolbar";
 import {
   countWords,
   DEFAULT_WPM,
@@ -41,8 +43,16 @@ export interface RichEditorProps {
   onChange: (doc: TpDoc) => void;
   ariaLabel: string;
   autoFocus?: boolean;
-  /** Narrow places (the meeting panel): tighter type, toolbar docked at the top. */
+  /** Narrow places (the meeting panel): tighter type, a boxed toolbar above the text. */
   compact?: boolean;
+  /**
+   * Where the formatting bar is drawn: an element the page keeps pinned above the text.
+   * `null` means the page's element is not there yet (nothing is drawn); leave it out to
+   * dock the bar at the top of the editor itself.
+   */
+  toolbarHost?: HTMLElement | null;
+  /** Where the word count goes (same rule as `toolbarHost`). */
+  footerHost?: HTMLElement | null;
   className?: string;
   showCounts?: boolean;
   wpm?: number;
@@ -56,6 +66,8 @@ export default function RichEditor({
   ariaLabel,
   autoFocus,
   compact,
+  toolbarHost,
+  footerHost,
   className,
   showCounts = true,
   wpm = DEFAULT_WPM,
@@ -129,15 +141,25 @@ export default function RichEditor({
   }, []);
 
   if (!editor) return null;
+  const countsLine = (
+    <p className={cn("ui-meta text-muted-foreground", footerHost === undefined && "mt-3")} aria-live="off">
+      {counts} {counts === 1 ? "word" : "words"}, about {speakingTime(counts, wpm)} to say
+    </p>
+  );
+  const bar = <FormatToolbar editor={editor as Editor} compact={compact} />;
   return (
     <div ref={wrapRef} className={cn("tp-editor relative", compact && "tp-editor-compact", className)} onKeyDown={keyDown}>
-      <FloatingToolbar editor={editor as Editor} container={wrapRef} compact={compact} />
-      <EditorContent editor={editor} />
-      {showCounts && (
-        <p className="ui-meta mt-3 text-muted-foreground" aria-live="off">
-          {counts} {counts === 1 ? "word" : "words"}, about {speakingTime(counts, wpm)} to say
-        </p>
+      {toolbarHost === undefined ? (
+        compact ? (
+          <div className="sticky top-0 z-10 bg-popover">{bar}</div>
+        ) : (
+          <div className="sticky top-0 z-10 border-b border-border bg-background">{bar}</div>
+        )
+      ) : (
+        toolbarHost && createPortal(bar, toolbarHost)
       )}
+      <EditorContent editor={editor} />
+      {showCounts && (footerHost === undefined ? countsLine : footerHost && createPortal(countsLine, footerHost))}
     </div>
   );
 }

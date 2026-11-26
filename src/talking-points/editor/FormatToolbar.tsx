@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { Editor } from "@tiptap/core";
 import { Bold, Heading1, Heading2, Heading3, Italic, List, ListOrdered, Palette, Redo2, Type, Underline, Undo2 } from "lucide-react";
 import { Kbd, Tooltip } from "../../ui";
@@ -9,13 +9,12 @@ type Pop = "color" | "size" | null;
 
 interface Props {
   editor: Editor;
-  container: RefObject<HTMLElement | null>;
-  /** Narrow panel: the bar sits at the top of the editor instead of floating at the caret. */
+  /** Narrow panel (the meeting window): tighter buttons. */
   compact?: boolean;
 }
 
 const btn =
-  "inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors duration-150 hover:bg-accent hover:text-foreground ui-focus ui-r-md aria-pressed:bg-accent aria-pressed:text-foreground";
+  "inline-flex items-center justify-center rounded-md text-muted-foreground outline-none transition-colors duration-150 hover:bg-accent hover:text-foreground ui-focus ui-r-md aria-pressed:bg-primary/15 aria-pressed:text-primary-text";
 
 function Tip({ label, keys, children }: { label: string; keys?: string; children: ReactNode }) {
   return (
@@ -49,31 +48,14 @@ function useEditorTick(editor: Editor): number {
   return tick;
 }
 
-export function FloatingToolbar({ editor, container, compact }: Props) {
-  const tick = useEditorTick(editor);
-  const barRef = useRef<HTMLDivElement | null>(null);
-  const [within, setWithin] = useState(false);
+/**
+ * The formatting bar. It is part of the layout: docked at the top of the editor surface, always
+ * there, never following the caret. Buttons keep the selection (mouse down does not move focus).
+ */
+export function FormatToolbar({ editor, compact }: Props) {
+  useEditorTick(editor);
   const [pop, setPop] = useState<Pop>(null);
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const [roving, setRoving] = useState(0);
-
-  const visible = compact || editor.isFocused || within || pop !== null;
-
-  useLayoutEffect(() => {
-    if (compact || !visible || !container.current || !barRef.current) return;
-    try {
-      const c = container.current.getBoundingClientRect();
-      const caret = editor.view.coordsAtPos(editor.state.selection.from);
-      const barW = barRef.current.offsetWidth;
-      const barH = barRef.current.offsetHeight;
-      let top = caret.top - c.top - barH - 8;
-      if (top < -barH) top = caret.bottom - c.top + 8;
-      const left = Math.max(0, Math.min(caret.left - c.left - 8, c.width - barW));
-      setPos({ top, left });
-    } catch {
-      setPos({ top: 0, left: 0 });
-    }
-  }, [tick, visible, compact, editor, container]);
 
   const run = useCallback(
     (fn: (chain: ReturnType<Editor["chain"]>) => ReturnType<Editor["chain"]>) => {
@@ -141,7 +123,7 @@ export function FloatingToolbar({ editor, container, compact }: Props) {
           disabled={disabled}
           tabIndex={roving === i ? 0 : -1}
           onClick={onClick}
-          className={cn(btn, disabled && "opacity-40")}
+          className={cn(btn, compact ? "h-7 w-7" : "h-8 w-8", disabled && "opacity-40")}
         >
           {icon}
         </button>
@@ -151,10 +133,8 @@ export function FloatingToolbar({ editor, container, compact }: Props) {
   const sep = (k: string) => <span key={k} aria-hidden className="mx-0.5 h-4 w-px bg-border" />;
   const ic = "h-4 w-4";
 
-  if (!visible) return null;
   return (
     <div
-      ref={barRef}
       role="toolbar"
       aria-label="Text formatting"
       aria-orientation="horizontal"
@@ -162,15 +142,11 @@ export function FloatingToolbar({ editor, container, compact }: Props) {
       onMouseDown={(e) => {
         if ((e.target as HTMLElement).closest("button")) e.preventDefault();
       }}
-      onFocus={() => setWithin(true)}
-      onBlur={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setWithin(false);
-      }}
       onKeyDown={onKey}
-      style={compact ? undefined : { position: "absolute", top: pos?.top ?? 0, left: pos?.left ?? 0, opacity: pos ? 1 : 0 }}
+      data-tp-toolbar=""
       className={cn(
-        "tp-toolbar z-20 flex max-w-full flex-wrap items-center gap-0.5 rounded-lg border border-border bg-popover/95 p-0.5 shadow-sm backdrop-blur-sm",
-        compact && "mb-2 w-full",
+        "tp-toolbar flex w-full flex-wrap items-center gap-0.5",
+        compact ? "mb-2 rounded-lg border border-border bg-popover p-0.5" : "px-3 py-1.5",
       )}
     >
       {make("Bold", "Ctrl B", <Bold className={ic} />, editor.isActive("bold"), () => run((c) => c.toggleBold()))}

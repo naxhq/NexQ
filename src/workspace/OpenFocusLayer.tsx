@@ -1,8 +1,8 @@
 import { Suspense, useEffect, useState } from "react";
-import { Dialog, SlideOver, Button } from "../ui";
+import { Dialog, Button } from "../ui";
 import { getLibraryFilePath, revealLibraryFile } from "../lib/ipc";
 import { useWorkspaceStore } from "../stores/workspaceStore";
-import { TalkingPointsEditor } from "./slots";
+import { TalkingPointsDialog } from "./slots";
 import { hintClass } from "./styles";
 import { messageOf } from "../lib/plainError";
 
@@ -82,12 +82,10 @@ export function OpenFocusLayer() {
 
   if (focus.kind === "talking_point") {
     return (
-      <SlideOver open onClose={close} title="Talking points" description="Write, reorder and import the notes of this workspace.">
-        <Suspense fallback={null}>
-          {/* The slot resolves to the editor when it exists; `initialId` opens on the note that was cited. */}
-          <TalkingPointsEditor workspaceId={focus.workspaceId} {...({ initialId: focus.refId } as object)} />
-        </Suspense>
-      </SlideOver>
+      <Suspense fallback={null}>
+        {/* The slot resolves to the dialog when it exists; `initialId` opens on the note that was cited. */}
+        <TalkingPointsDialog workspaceId={focus.workspaceId} {...({ open: true, onClose: close, initialId: focus.refId } as object)} />
+      </Suspense>
     );
   }
 

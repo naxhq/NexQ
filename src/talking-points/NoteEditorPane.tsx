@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { MoreHorizontal } from "lucide-react";
+import { Check, MoreHorizontal } from "lucide-react";
 import type { TalkingPoint } from "../lib/types";
 import { useTalkingPointsStore, type SaveState } from "../stores/talkingPointsStore";
-import { Menu, Switch, Button } from "../ui";
+import { Button, InfoTip, Menu, Switch } from "../ui";
 import { LazyRichEditor } from "./editor/LazyRichEditor";
+import type { RichEditorHandle } from "./editor/RichEditor";
 import { docToMarkdown } from "./doc/markdown";
 import { cleanTitle, parseDoc } from "./doc/model";
 import { saveExportFile } from "../lib/export";
@@ -25,7 +26,7 @@ export function SaveStatus({
   if (state === "conflict") {
     const b = "rounded-md px-1.5 py-0.5 font-medium underline underline-offset-2 outline-none hover:bg-accent ui-focus ui-r-md";
     return (
-      <span className="ui-meta inline-flex items-center gap-2 text-destructive" role="alert">
+      <span className="ui-meta inline-flex flex-wrap items-center gap-2 text-destructive" role="alert">
         Changed in another window.
         <button type="button" className={b} onClick={() => onResolve?.("mine")}>
           Keep mine
@@ -43,7 +44,7 @@ export function SaveStatus({
   }
   if (state === "failed") {
     return (
-      <span className="ui-meta inline-flex items-center gap-2 text-destructive" role="alert">
+      <span className="ui-meta inline-flex flex-wrap items-center gap-2 text-destructive" role="alert">
         Not saved{error ? `: ${error}` : ""}. It keeps trying.
         <button type="button" onClick={onRetry} className="rounded-md px-1.5 py-0.5 font-medium underline underline-offset-2 outline-none hover:bg-accent ui-focus ui-r-md">
           Try now
@@ -51,7 +52,7 @@ export function SaveStatus({
       </span>
     );
   }
-  const text = state === "saving" ? "Saving" : state === "dirty" ? "Unsaved changes" : "Saved";
+  const text = state === "saving" ? "Saving…" : state === "dirty" ? "Unsaved changes" : "Saved";
   return (
     <span className="ui-meta text-muted-foreground" role="status" aria-live="polite">
       {text}
@@ -59,8 +60,39 @@ export function SaveStatus({
   );
 }
 
-/** One note: title, "Use as AI context", the editor and its save state. */
-export function NoteEditorPane({ note }: { note: TalkingPoint }) {
+/**
+ * The quiet save state for a dialog header. What went wrong with a failed save or a conflict, and what
+ * to do about it, is drawn by the note itself (`SaveStatus`); the badge only says that it needs a look.
+ */
+export function SaveBadge({ noteId }: { noteId: string | null }) {
+  const state = useTalkingPointsStore((s) => (noteId ? s.saveState[noteId] : undefined));
+  if (!noteId) return null;
+  const bad = state === "failed" || state === "conflict";
+  const text = state === "saving" ? "Saving…" : state === "dirty" ? "Unsaved changes" : state === "failed" ? "Not saved" : state === "conflict" ? "Needs a look" : "Saved";
+  return (
+    <span className={cn("ui-meta inline-flex items-center gap-1.5", bad ? "font-medium text-destructive" : "text-muted-foreground")} role="status" aria-live="polite">
+      {state === "saving" ? (
+        <span aria-hidden className="progress-breathe h-1.5 w-1.5 rounded-full bg-primary" />
+      ) : state === "dirty" ? (
+        <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-warning" />
+      ) : bad ? (
+        <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-destructive" />
+      ) : (
+        <Check className="h-3 w-3 text-success" aria-hidden />
+      )}
+      {text}
+    </span>
+  );
+}
+
+const DEFAULT_TITLE = "Untitled note";
+
+/**
+ * One note on a writing surface: the formatting bar pinned at the top, a large title and the text in
+ * the scrolling middle, the word count in a quiet footer. The editor draws the bar and the count into
+ * the two hosts below, so they stay put while a long note scrolls.
+ */
+export function NoteEditorPane({ note, autoFocusTitle = false }: { note: TalkingPoint; autoFocusTitle?: boolean }) {
   const edit = useTalkingPointsStore((s) => s.edit);
   const retry = useTalkingPointsStore((s) => s.retry);
   const setInContext = useTalkingPointsStore((s) => s.setInContext);
@@ -71,100 +103,150 @@ export function NoteEditorPane({ note }: { note: TalkingPoint }) {
   const rev = useTalkingPointsStore((s) => s.docRev[note.id] ?? 0);
   const state = useTalkingPointsStore((s) => s.saveState[note.id]);
   const error = useTalkingPointsStore((s) => s.saveError[note.id]);
-  const [title, setTitle] = useState(note.title);
+  // the default name shows as the placeholder: an untouched note invites a title instead of looking named
+  const [title, setTitle] = useState(note.title === DEFAULT_TITLE ? "" : note.title);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latest = useRef({ title, note });
+  latest.current = { title, note };
   const [copied, setCopied] = useState(false);
+  const [toolbarHost, setToolbarHost] = useState<HTMLElement | null>(null);
+  const [footerHost, setFooterHost] = useState<HTMLElement | null>(null);
+  const editorRef = useRef<RichEditorHandle | null>(null);
+  const titleRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    setTitle(note.title);
+    setTitle(note.title === DEFAULT_TITLE ? "" : note.title);
   }, [note.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (autoFocusTitle) titleRef.current?.focus();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const commitTitle = (value: string) => {
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
-    const clean = cleanTitle(value, "Untitled note");
+    const clean = cleanTitle(value, DEFAULT_TITLE);
     if (clean !== note.title) edit(note.id, { title: clean });
   };
+  // closing the dialog right after typing a title must not drop it
   useEffect(
     () => () => {
-      if (timer.current) clearTimeout(timer.current);
+      if (!timer.current) return;
+      clearTimeout(timer.current);
+      const { title: t, note: n } = latest.current;
+      const clean = cleanTitle(t, DEFAULT_TITLE);
+      if (clean !== n.title) useTalkingPointsStore.getState().edit(n.id, { title: clean });
     },
     [],
   );
 
   const markdown = () => docToMarkdown(parseDoc(note.doc_json));
+  const trouble = state === "failed" || state === "conflict";
 
   return (
-    <section aria-label={`Editing ${note.title}`} className="flex min-h-0 flex-1 flex-col">
-      <header className="flex flex-wrap items-center gap-x-4 gap-y-2 pb-3">
-        <input
-          type="text"
-          value={title}
-          maxLength={160}
-          aria-label="Note title"
-          placeholder="Untitled note"
-          onChange={(e) => {
-            setTitle(e.target.value);
-            if (timer.current) clearTimeout(timer.current);
-            const v = e.target.value;
-            timer.current = setTimeout(() => commitTitle(v), 600);
-          }}
-          onBlur={(e) => commitTitle(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-          }}
-          className="ui-title min-w-[10rem] flex-1 truncate rounded-md bg-transparent px-1 py-0.5 outline-none transition-colors hover:bg-accent/50 focus-visible:bg-accent/60 ui-focus ui-r-md"
-        />
-        <SaveStatus state={state} error={error} onRetry={() => retry(note.id)} onResolve={(w) => void resolve(note.id, w)} onSeeBoth={() => { setBoth((v) => !v); void loadTheirs(note.id); }} />
-        <Menu
-          label="More for this note"
-          align="end"
-          items={[
-            {
-              id: "export",
-              label: "Export as Markdown",
-              onSelect: () => void saveExportFile({ defaultName: note.title, extension: "md", filterLabel: "Markdown", content: markdown() }),
-            },
-            {
-              id: "copy",
-              label: copied ? "Copied" : "Copy Markdown",
-              onSelect: () => {
-                void navigator.clipboard?.writeText(markdown()).then(() => {
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 1500);
-                });
+    <section
+      aria-label={`Editing ${note.title}`}
+      className="tp-paper flex min-h-0 flex-1 flex-col rounded-xl border border-border bg-background shadow-sm transition-colors focus-within:border-input dark:bg-[hsl(var(--ui-field))]"
+    >
+      <div data-tp-toolbar-dock="" className="flex shrink-0 items-start border-b border-border">
+        <div ref={setToolbarHost} className="min-h-[2.75rem] min-w-0 flex-1" />
+        <div className="p-1.5">
+          <Menu
+            label="More for this note"
+            align="end"
+            items={[
+              {
+                id: "export",
+                label: "Export as Markdown",
+                onSelect: () => void saveExportFile({ defaultName: note.title, extension: "md", filterLabel: "Markdown", content: markdown() }),
               },
-            },
-          ]}
-          renderTrigger={(props) => (
-            <Button variant="ghost"
-              {...props}
-              aria-label="More for this note" className="w-8 px-0">
-              <MoreHorizontal className="h-4 w-4" aria-hidden />
-            </Button>
-          )}
-        />
-      </header>
-      {state === "conflict" && both && (
-        <p className="ui-body mb-3 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg bg-muted p-2.5" aria-label="Their version">
-          {theirs ? theirs.plain_text || "(empty)" : "Loading their version"}
-        </p>
-      )}
-      <Switch
-        className="pb-3"
-        checked={note.in_context}
-        onChange={(v) => void setInContext(note.id, v)}
-        label="Use as AI context"
-        description="Live answers and the workspace chat can draw on this note."
-      />
-      <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-        <LazyRichEditor
-          docJson={note.doc_json}
-          resetKey={`${note.id}:${rev}`}
-          ariaLabel={`Text of ${note.title}`}
-          onChange={(doc) => edit(note.id, { doc })}
-        />
+              {
+                id: "copy",
+                label: copied ? "Copied" : "Copy Markdown",
+                onSelect: () => {
+                  void navigator.clipboard?.writeText(markdown()).then(() => {
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1500);
+                  });
+                },
+              },
+            ]}
+            renderTrigger={(props) => (
+              <Button variant="ghost" size="sm" {...props} aria-label="More for this note" className="w-8 px-0">
+                <MoreHorizontal className="h-4 w-4" aria-hidden />
+              </Button>
+            )}
+          />
+        </div>
       </div>
+      {trouble && (
+        <div className="shrink-0 border-b border-destructive/30 bg-destructive/10 px-4 py-2">
+          <SaveStatus
+            state={state}
+            error={error}
+            onRetry={() => retry(note.id)}
+            onResolve={(w) => void resolve(note.id, w)}
+            onSeeBoth={() => {
+              setBoth((v) => !v);
+              void loadTheirs(note.id);
+            }}
+          />
+          {state === "conflict" && both && (
+            <p className="ui-body mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap rounded-lg bg-muted p-2.5" aria-label="Their version">
+              {theirs ? theirs.plain_text || "(empty)" : "Loading their version"}
+            </p>
+          )}
+        </div>
+      )}
+      <div data-tp-scroll="" className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto flex min-h-full w-full max-w-[46rem] flex-col px-6 pb-6 pt-7 sm:px-10">
+          <input
+            ref={titleRef}
+            type="text"
+            value={title}
+            maxLength={160}
+            aria-label="Note title"
+            placeholder={DEFAULT_TITLE}
+            onChange={(e) => {
+              setTitle(e.target.value);
+              if (timer.current) clearTimeout(timer.current);
+              const v = e.target.value;
+              timer.current = setTimeout(() => commitTitle(v), 600);
+            }}
+            onBlur={(e) => commitTitle(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                editorRef.current?.focus();
+              }
+            }}
+            className="ui-r-md -mx-2 w-[calc(100%+1rem)] rounded-md bg-transparent px-2 py-1 text-[1.625rem] font-semibold leading-tight tracking-tight text-foreground outline-none transition-colors placeholder:text-muted-foreground hover:bg-accent/50 focus-visible:bg-accent/40 ui-focus"
+          />
+          <div className="mb-5 mt-1 flex items-center gap-0.5">
+            <Switch checked={note.in_context} onChange={(v) => void setInContext(note.id, v)} label="Use as AI context" />
+            <InfoTip label="About using this note as AI context">Live answers and the workspace chat can draw on this note.</InfoTip>
+          </div>
+          <LazyRichEditor
+            docJson={note.doc_json}
+            resetKey={`${note.id}:${rev}`}
+            ariaLabel={`Text of ${note.title}`}
+            toolbarHost={toolbarHost}
+            footerHost={footerHost}
+            handleRef={editorRef}
+            onChange={(doc) => edit(note.id, { doc })}
+          />
+          {/* the empty page below the text is still the page: a click there puts the caret at the end */}
+          <div
+            aria-hidden
+            className="min-h-16 flex-1 cursor-text"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              editorRef.current?.focus();
+            }}
+          />
+        </div>
+      </div>
+      <footer ref={setFooterHost} className="flex min-h-9 shrink-0 items-center border-t border-border px-6 py-2 sm:px-10" />
     </section>
   );
 }

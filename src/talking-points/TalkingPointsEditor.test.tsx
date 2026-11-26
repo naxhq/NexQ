@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +22,7 @@ vi.mock("../lib/ipc", () => ipc);
 vi.mock("../lib/export", () => ({ saveExportFile: vi.fn(async () => true) }));
 
 import { TalkingPointsEditor } from "./TalkingPointsEditor";
+import { TalkingPointsDialog } from "./TalkingPointsDialog";
 import { __resetTalkingPointsForTests, useTalkingPointsStore } from "../stores/talkingPointsStore";
 import { docBlocks, docFromText, parseDoc } from "./doc/model";
 import { dropIndex, moveItem } from "./reorder";
@@ -86,6 +88,9 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+/** The editor inside its dialog: the heading, the close button and the save state live there. */
+const renderDialog = (onClose: () => void = () => {}) => render(<TalkingPointsDialog workspaceId="w1" open onClose={onClose} />);
+
 describe("reorder helpers", () => {
   it("moves an item", () => {
     expect(moveItem(["a", "b", "c"], 0, 2)).toEqual(["b", "c", "a"]);
@@ -117,7 +122,7 @@ describe("the notes list", () => {
     ipc.listTalkingPoints.mockResolvedValue([]);
     render(<TalkingPointsEditor workspaceId="w1" />);
     expect(await screen.findByText("Write your first talking points")).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /Import/ }).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Import Markdown" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Write a note" }));
     expect(await screen.findByLabelText("Note title")).toBeInTheDocument();
     expect(ipc.createTalkingPoint).toHaveBeenCalledTimes(1);
@@ -217,7 +222,7 @@ describe("the notes list", () => {
 describe("the editor", () => {
   it("saves after a pause and says so", async () => {
     const user = userEvent.setup();
-    render(<TalkingPointsEditor workspaceId="w1" />);
+    renderDialog();
     const box = await screen.findByRole("textbox", { name: "Text of Opening" });
     await user.click(box);
     await user.keyboard(" and more");
@@ -230,7 +235,7 @@ describe("the editor", () => {
   it("shows a failed save, keeps trying and lets you retry now", async () => {
     const user = userEvent.setup();
     ipc.patchTalkingPoint.mockRejectedValueOnce("offline");
-    render(<TalkingPointsEditor workspaceId="w1" />);
+    renderDialog();
     await user.click(await screen.findByRole("textbox", { name: "Text of Opening" }));
     await user.keyboard("!");
     const alert = await screen.findByRole("alert", undefined, { timeout: 3000 });
@@ -261,7 +266,7 @@ describe("the editor", () => {
     expect(sw).toHaveAttribute("aria-checked", "true");
     await waitFor(() => expect(saveCalls()).toBeGreaterThan(0));
     expect(lastSaved().in_context).toBe(true);
-    expect(screen.getByText(/used as AI context/)).toBeInTheDocument();
+    expect(within(screen.getByRole("list", { name: "Notes" })).getByText("AI context")).toBeInTheDocument();
   });
 
   it("shows words and speaking time, and the formatting bar with shortcuts on focus", async () => {
@@ -312,7 +317,7 @@ describe("Markdown import", () => {
     const user = userEvent.setup();
     render(<TalkingPointsEditor workspaceId="w1" />);
     await screen.findByLabelText("Note title");
-    await user.click(screen.getByRole("button", { name: "Import" }));
+    await user.click(screen.getByRole("button", { name: "Import Markdown" }));
     return { user, dlg: await screen.findByRole("dialog", { name: "Import Markdown" }) };
   };
 
@@ -368,7 +373,7 @@ describe("Persian and pasted text", () => {
 
   it("typing after a half space with an autosave in the middle of the word keeps every character and the caret", async () => {
     const user = userEvent.setup();
-    render(<TalkingPointsEditor workspaceId="w1" />);
+    renderDialog();
     const box = await screen.findByRole("textbox", { name: "Text of Opening" });
     await user.click(box);
     await user.keyboard(` می${ZWNJ}`);
@@ -411,5 +416,166 @@ describe("Persian and pasted text", () => {
     await waitFor(() => expect(box.textContent).toContain("abcdefg"));
     expect(box.textContent).toContain(`می${ZWNJ}خواهم`);
     expect(box.textContent).not.toMatch(/[​‮﻿]/);
+  });
+});
+
+describe("the dialog", () => {
+  it("has one heading, named Talking points, with the workspace beside it", async () => {
+    renderDialog();
+    const dlg = await screen.findByRole("dialog", { name: "Talking points" });
+    expect(within(dlg).getAllByRole("heading", { name: "Talking points" })).toHaveLength(1);
+    expect(within(dlg).getByLabelText("Note title")).toBeInTheDocument();
+    // the list has no heading of its own
+    expect(within(within(dlg).getByRole("complementary", { name: "All notes" })).queryByRole("heading")).not.toBeInTheDocument();
+  });
+
+  it("closes with the Close button", async () => {
+    const onClose = vi.fn();
+    renderDialog(onClose);
+    await screen.findByRole("list", { name: "Notes" });
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes with Escape, from the list and from inside the text", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    renderDialog(onClose);
+    const box = await screen.findByRole("textbox", { name: "Text of Opening" });
+    await user.click(box);
+    await user.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(1);
+    screen.getByRole("button", { name: /^Pricing/ }).focus();
+    await user.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it("moves focus in, keeps Tab inside and gives focus back to what opened it", async () => {
+    const user = userEvent.setup();
+    function Host() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button onClick={() => setOpen(true)}>Open notes</button>
+          <TalkingPointsDialog workspaceId="w1" open={open} onClose={() => setOpen(false)} />
+        </>
+      );
+    }
+    render(<Host />);
+    const opener = screen.getByRole("button", { name: "Open notes" });
+    await user.click(opener);
+    const dlg = await screen.findByRole("dialog", { name: "Talking points" });
+    await waitFor(() => expect(dlg).toHaveFocus());
+    await screen.findByRole("textbox", { name: "Text of Opening" });
+    for (let i = 0; i < 40; i++) {
+      await user.tab();
+      expect(dlg.contains(document.activeElement)).toBe(true);
+    }
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Talking points" })).not.toBeInTheDocument());
+    expect(opener).toHaveFocus();
+  });
+
+  it("a title typed just before closing is not lost", async () => {
+    const user = userEvent.setup();
+    const { unmount } = renderDialog();
+    const title = await screen.findByLabelText("Note title");
+    await user.clear(title);
+    await user.type(title, "Last minute");
+    unmount();
+    await waitFor(() => expect(saveCalls()).toBeGreaterThan(0));
+    expect(lastSaved().title).toBe("Last minute");
+  });
+
+  it("shows the save state in the header, not in the note", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    const dlg = await screen.findByRole("dialog", { name: "Talking points" });
+    const header = dlg.querySelector("header") as HTMLElement;
+    expect(await within(header).findByText("Saved")).toBeInTheDocument();
+    await user.click(await screen.findByRole("textbox", { name: "Text of Opening" }));
+    await user.keyboard("!");
+    expect(await within(header).findByText("Unsaved changes")).toBeInTheDocument();
+    expect(await within(header).findByText("Saved", undefined, { timeout: 3000 })).toBeInTheDocument();
+  });
+});
+
+describe("the formatting bar", () => {
+  it("is part of the layout: there before the text has focus, in the pinned dock, never placed at the caret", async () => {
+    const user = userEvent.setup();
+    render(<TalkingPointsEditor workspaceId="w1" />);
+    const bar = await screen.findByRole("toolbar", { name: "Text formatting" });
+    const dock = bar.closest("[data-tp-toolbar-dock]") as HTMLElement;
+    expect(dock).not.toBeNull();
+    // the scrolling text is not the bar's parent: the bar cannot scroll away or follow the caret
+    expect(dock.closest("[data-tp-scroll]")).toBeNull();
+    expect(document.querySelector("[data-tp-scroll]")?.contains(bar)).toBe(false);
+    const placed = (el: HTMLElement) => [el.style.position, el.style.top, el.style.left, el.style.transform].join("|");
+    expect(placed(bar)).toBe("|||");
+    expect(bar.className).not.toMatch(/\babsolute\b|\bfixed\b/);
+    const box = screen.getByRole("textbox", { name: "Text of Opening" });
+    await user.click(box);
+    await user.keyboard(" and then some more words after a while");
+    expect(placed(bar)).toBe("|||");
+    expect(bar.closest("[data-tp-toolbar-dock]")).toBe(dock);
+    expect(screen.getAllByRole("toolbar")).toHaveLength(1);
+  });
+
+  it("keeps working: the buttons act on the selection", async () => {
+    const user = userEvent.setup();
+    render(<TalkingPointsEditor workspaceId="w1" />);
+    const bar = await screen.findByRole("toolbar", { name: "Text formatting" });
+    await user.click(screen.getByRole("textbox", { name: "Text of Opening" }));
+    await user.keyboard("{Control>}a{/Control}");
+    await user.click(within(bar).getByRole("button", { name: "Italic" }));
+    expect(within(bar).getByRole("button", { name: "Italic" })).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
+describe("the list", () => {
+  const many = Array.from({ length: 8 }, (_, i) => note(`n${i}`, i === 5 ? "Roadmap" : `Note ${i}`, i === 5 ? "Ship the new editor" : `text ${i}`, i));
+
+  it("gets a search field when there are many notes, and reordering waits while it filters", async () => {
+    const user = userEvent.setup();
+    ipc.listTalkingPoints.mockResolvedValue(many);
+    render(<TalkingPointsEditor workspaceId="w1" />);
+    const list = await screen.findByRole("list", { name: "Notes" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(8);
+    expect(within(list).getAllByRole("button", { name: /^Reorder / })).toHaveLength(8);
+    await user.type(screen.getByRole("searchbox", { name: "Search notes" }), "editor");
+    expect(within(screen.getByRole("list", { name: "Notes" })).getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /^Reorder / })).not.toBeInTheDocument();
+    await user.clear(screen.getByRole("searchbox", { name: "Search notes" }));
+    await user.type(screen.getByRole("searchbox", { name: "Search notes" }), "zzz");
+    expect(screen.getByText(/No note matches/)).toBeInTheDocument();
+  });
+
+  it("has no search field for a short list", async () => {
+    render(<TalkingPointsEditor workspaceId="w1" />);
+    await screen.findByRole("list", { name: "Notes" });
+    expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+  });
+
+  it("marks the notes the AI draws on, and has a way back to the list for narrow windows", async () => {
+    const user = userEvent.setup();
+    ipc.listTalkingPoints.mockResolvedValue([{ ...NOTES[0], in_context: true }, NOTES[1]]);
+    render(<TalkingPointsEditor workspaceId="w1" initialId="a" />);
+    const list = await screen.findByRole("list", { name: "Notes" });
+    expect(within(list).getAllByText("AI context")).toHaveLength(1);
+    const aside = screen.getByRole("complementary", { name: "All notes" });
+    expect(aside.className).toMatch(/(^|\s)hidden(\s|$)/); // a note is open: narrow windows show it, not the list
+    await user.click(screen.getByRole("button", { name: "All notes" }));
+    expect(aside.className).not.toMatch(/(^|\s)hidden(\s|$)/);
+  });
+
+  it("a new note starts in the title, with the placeholder", async () => {
+    const user = userEvent.setup();
+    render(<TalkingPointsEditor workspaceId="w1" />);
+    await screen.findByRole("list", { name: "Notes" });
+    await user.click(screen.getByRole("button", { name: "New note" }));
+    const title = await screen.findByLabelText("Note title");
+    expect(title).toHaveValue("");
+    expect(title).toHaveAttribute("placeholder", "Untitled note");
+    await waitFor(() => expect(title).toHaveFocus());
   });
 });

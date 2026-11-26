@@ -9,6 +9,7 @@ import { lazy, type ComponentType, type LazyExoticComponent } from "react";
  *   src/memory/MemorySection.tsx                       export function MemorySection
  *   src/talking-points/TalkingPointsSection.tsx        export function TalkingPointsSection
  *   src/talking-points/TalkingPointsEditor.tsx         export function TalkingPointsEditor
+ *   src/talking-points/TalkingPointsDialog.tsx         export function TalkingPointsDialog
  *
  * (Any sub folder works: `src/talking-points/editor/TalkingPointsEditor.tsx`.)
  */
@@ -40,12 +41,15 @@ function slot(loaders: Loader[], name: string): LazyExoticComponent<ComponentTyp
 const memoryFiles = import.meta.glob<Record<string, unknown>>("../memory/**/MemorySection.tsx");
 const pointSectionFiles = import.meta.glob<Record<string, unknown>>("../talking-points/**/TalkingPointsSection.tsx");
 const pointEditorFiles = import.meta.glob<Record<string, unknown>>("../talking-points/**/TalkingPointsEditor.tsx");
+const pointDialogFiles = import.meta.glob<Record<string, unknown>>("../talking-points/**/TalkingPointsDialog.tsx");
 
 export const MemorySection = slot(Object.values(memoryFiles), "MemorySection");
 /** The talking points list of the workspace (the editor opens from it). */
 export const TalkingPointsSection = slot(Object.values(pointSectionFiles), "TalkingPointsSection");
 /** The editor itself, for a place that wants to open a note directly; absent until it exists. */
 export const TalkingPointsEditor = slot(Object.values(pointEditorFiles), "TalkingPointsEditor");
+/** The editor in a dialog of its own (props: `workspaceId`, `open`, `onClose`, `initialId`); absent until it exists. */
+export const TalkingPointsDialog = slot(Object.values(pointDialogFiles), "TalkingPointsDialog");
 
 /** Whether each slot has a file (for tests and for hiding an empty section's frame). */
 export const slotAvailability = {

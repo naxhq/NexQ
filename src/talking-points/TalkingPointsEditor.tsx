@@ -1,14 +1,16 @@
 /**
- * The talking points of one workspace, for the workspace page: a list on the left
- * (reorder, duplicate, copy, delete) and the editor on the right. Reading the notes
- * in a meeting is a different surface (the Points panel).
+ * The talking points of one workspace: the list of notes on the left (search when there are many,
+ * reorder, duplicate, copy, delete, import) and the writing surface on the right. Under 640 px the
+ * two take turns, with a way back to the list. The heading, the close button and the save state
+ * belong to the dialog around it (`TalkingPointsDialog`); reading the notes in a meeting is a
+ * different surface (the Points panel).
  */
-import { useEffect, useMemo, useState } from "react";
-import { FileText, Plus } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, FileText, FileUp, Plus, Search } from "lucide-react";
 import { useTalkingPointsStore } from "../stores/talkingPointsStore";
 import { listWorkspaces } from "../lib/ipc";
 import type { WorkspaceSummary } from "../lib/types";
-import { ConfirmDialog, Dialog, EmptyState, Select, Button } from "../ui";
+import { ConfirmDialog, Dialog, EmptyState, IconButton, Select, Button, Tooltip } from "../ui";
 import { cn } from "../lib/utils";
 import { NoteList } from "./NoteList";
 import { NoteEditorPane } from "./NoteEditorPane";
@@ -16,20 +18,30 @@ import { ImportDialog } from "./ImportDialog";
 import { emptyDoc } from "./doc/model";
 import "./talkingPoints.css";
 
+/** With this many notes the list gets a search field. */
+const SEARCH_FROM = 6;
+
 export interface TalkingPointsEditorProps {
   workspaceId: string;
   /** Open on this note instead of the first. */
   initialId?: string | null;
+  /** Told which note is open (null: none), so the dialog can show its save state. */
+  onSelect?: (id: string | null) => void;
   className?: string;
 }
 
-export function TalkingPointsEditor({ workspaceId, className, initialId = null }: TalkingPointsEditorProps) {
+export function TalkingPointsEditor({ workspaceId, className, initialId = null, onSelect }: TalkingPointsEditorProps) {
   const store = useTalkingPointsStore;
   const notes = store((s) => s.byWorkspace[workspaceId]);
   const loading = store((s) => s.loading[workspaceId]);
   const loadError = store((s) => s.loadError[workspaceId]);
   const actionError = store((s) => s.actionError);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  /** Narrow windows show the list or the note, not both. */
+  const [view, setView] = useState<"list" | "note">(initialId ? "note" : "list");
+  const [query, setQuery] = useState("");
+  /** A note made a moment ago: the caret starts in its title. */
+  const [freshId, setFreshId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [copyId, setCopyId] = useState<string | null>(null);
@@ -52,10 +64,31 @@ export function TalkingPointsEditor({ workspaceId, className, initialId = null }
   }, [list, selectedId]);
 
   const selected = list.find((n) => n.id === selectedId) ?? null;
+  useEffect(() => {
+    onSelect?.(selected?.id ?? null);
+  }, [selected?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // the open note went away (deleted here or elsewhere): a narrow window goes back to the list
+  const hadSelected = useRef(false);
+  useEffect(() => {
+    if (hadSelected.current && !selected) setView("list");
+    hadSelected.current = !!selected;
+  }, [selected]);
+
+  const q = query.trim().toLowerCase();
+  const shown = useMemo(() => (q ? list.filter((n) => `${n.title} ${n.plain_text}`.toLowerCase().includes(q)) : list), [list, q]);
+
+  const open = (id: string) => {
+    setSelectedId(id);
+    setView("note");
+  };
 
   const create = async (init?: Parameters<ReturnType<typeof store.getState>["create"]>[1]) => {
     const p = await store.getState().create(workspaceId, init ?? { title: "Untitled note", doc: emptyDoc() });
-    if (p) setSelectedId(p.id);
+    if (p) {
+      setQuery("");
+      setFreshId(init ? null : p.id);
+      open(p.id);
+    }
   };
 
   const openCopy = (id: string) => {
@@ -92,7 +125,7 @@ export function TalkingPointsEditor({ workspaceId, className, initialId = null }
         title="Talking points did not load"
         body={loadError}
         action={
-          <Button variant="primary"  onClick={() => void store.getState().load(workspaceId)}>
+          <Button variant="primary" onClick={() => void store.getState().load(workspaceId)}>
             Try again
           </Button>
         }
@@ -100,58 +133,100 @@ export function TalkingPointsEditor({ workspaceId, className, initialId = null }
     );
   }
 
+  const importButton = (
+    <Tooltip content="Import Markdown">
+      <IconButton variant="quiet" size="md" aria-label="Import Markdown" onClick={() => setImportOpen(true)}>
+        <FileUp className="h-4 w-4" aria-hidden />
+      </IconButton>
+    </Tooltip>
+  );
+
   return (
-    <div className={cn("flex min-h-0 flex-col gap-4 md:flex-row", className)}>
-      <aside aria-label="Talking points" className="flex shrink-0 flex-col md:w-64">
-        <div className="mb-2 flex items-center justify-between gap-2 px-1">
-          <h2 className="ui-section">Talking points</h2>
-          <span className="flex items-center gap-1">
-            <Button variant="ghost" size="sm"  onClick={() => setImportOpen(true)}>
-              Import
-            </Button>
-            <Button variant="primary" size="sm"  onClick={() => void create()} className="gap-1">
+    <div className={cn("flex min-h-0 flex-1 gap-4", className)}>
+      {list.length > 0 && (
+        <aside aria-label="All notes" className={cn("min-h-0 w-full shrink-0 flex-col gap-2 sm:flex sm:w-64", view === "list" ? "flex" : "hidden")}>
+          <div className="flex items-center gap-1.5">
+            <Button variant="primary" className="flex-1 gap-1" onClick={() => void create()}>
               <Plus className="h-3.5 w-3.5" aria-hidden />
               New note
             </Button>
-          </span>
-        </div>
-        {actionError && (
-          <p role="alert" className="ui-meta mb-2 px-1 text-destructive">
-            {actionError}
-          </p>
-        )}
-        {list.length > 0 && (
-          <NoteList
-            notes={list}
-            selectedId={selectedId}
-            onSelect={setSelectedId}
-            onReorder={(ids) => void store.getState().reorder(workspaceId, ids)}
-            onDuplicate={(id) => void store.getState().duplicate(id).then((c) => c && setSelectedId(c.id))}
-            onCopy={openCopy}
-            onDelete={setDeleteId}
-          />
-        )}
-      </aside>
+            {importButton}
+          </div>
+          {list.length >= SEARCH_FROM && (
+            <label className="relative block">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden />
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                aria-label="Search notes"
+                placeholder="Search notes"
+                className="ui-body ui-r-lg ui-focus h-8 w-full rounded-lg border bg-background pl-8 pr-2 outline-none placeholder:text-muted-foreground"
+              />
+            </label>
+          )}
+          {actionError && (
+            <p role="alert" className="ui-meta px-1 text-destructive">
+              {actionError}
+            </p>
+          )}
+          <div className="-mr-1 min-h-0 flex-1 overflow-y-auto pr-1">
+            {shown.length > 0 ? (
+              <NoteList
+                notes={shown}
+                selectedId={selectedId}
+                reorderable={!q}
+                onSelect={open}
+                onReorder={(ids) => void store.getState().reorder(workspaceId, ids)}
+                onDuplicate={(id) =>
+                  void store
+                    .getState()
+                    .duplicate(id)
+                    .then((c) => c && open(c.id))
+                }
+                onCopy={openCopy}
+                onDelete={setDeleteId}
+              />
+            ) : (
+              <p className="ui-body px-2 py-3 text-muted-foreground" role="status">
+                No note matches "{query.trim()}".
+              </p>
+            )}
+          </div>
+        </aside>
+      )}
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className={cn("min-h-0 min-w-0 flex-1 flex-col sm:flex", list.length === 0 || view === "note" ? "flex" : "hidden")}>
         {selected ? (
-          <NoteEditorPane key={selected.id} note={selected} />
+          <>
+            <button
+              type="button"
+              onClick={() => setView("list")}
+              className="ui-body ui-focus ui-r-md mb-2 inline-flex h-8 w-fit items-center gap-1.5 rounded-md px-2 text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground sm:hidden"
+            >
+              <ArrowLeft className="h-4 w-4" aria-hidden />
+              All notes
+            </button>
+            <NoteEditorPane key={selected.id} note={selected} autoFocusTitle={freshId === selected.id} />
+          </>
         ) : (
-          <EmptyState
-            mark={<FileText className="h-6 w-6" aria-hidden />}
-            title="Write your first talking points"
-            body="Keep what you want to say in front of you during a call. Paste Markdown to start from something you already have."
-            action={
-              <span className="flex items-center gap-2">
-                <Button variant="primary"  onClick={() => void create()}>
-                  Write a note
-                </Button>
-                <Button variant="ghost"  onClick={() => setImportOpen(true)}>
-                  Import Markdown
-                </Button>
-              </span>
-            }
-          />
+          <div className="flex flex-1 items-center justify-center">
+            <EmptyState
+              mark={<FileText className="h-6 w-6" aria-hidden />}
+              title="Write your first talking points"
+              body="What you want to say, in front of you during a call."
+              action={
+                <span className="flex items-center gap-2">
+                  <Button variant="primary" onClick={() => void create()}>
+                    Write a note
+                  </Button>
+                  <Button variant="ghost" onClick={() => setImportOpen(true)}>
+                    Import Markdown
+                  </Button>
+                </span>
+              }
+            />
+          </div>
         )}
       </div>
 
@@ -185,10 +260,10 @@ export function TalkingPointsEditor({ workspaceId, className, initialId = null }
         dismissible={!copyBusy}
         footer={
           <>
-            <Button  onClick={() => setCopyId(null)} disabled={copyBusy}>
+            <Button onClick={() => setCopyId(null)} disabled={copyBusy}>
               Cancel
             </Button>
-            <Button variant="primary"  onClick={() => void doCopy()} disabled={!target || copyBusy}>
+            <Button variant="primary" onClick={() => void doCopy()} disabled={!target || copyBusy}>
               Copy note
             </Button>
           </>
