@@ -30,7 +30,7 @@ Under the box you can change:
 |---------|--------------|
 | **Model** | Which provider and model answers. Each chat has its own. A new chat uses the model you set in Settings. With a subscription (Claude, Codex or Antigravity) it starts on your **Deep** model |
 | **Effort** | How hard the model thinks, for models that have it |
-| **Depth** | **Lean**: quick and cheap, about 8k tokens of your material. **Balanced**: for most questions, up to 24k tokens, and it stops when nothing more is relevant. **Deep**: searches widely, up to 80k tokens, slower and costs more |
+| **Depth** | **Lean**: quick and cheap, about 8k tokens of your material. **Balanced**: for most questions, up to 24k tokens, and it stops when nothing more is relevant. **Deep**: searches widely, up to 80k tokens, slower and costs more. Those are the sizes with an API provider. With a subscription or a local model, which cost nothing per token, the room grows with the model: Lean 16k, Balanced up to 64k, Deep up to 150k |
 | **All meetings** | Which past meetings the chat may use. Turn **Use past meetings** off, or untick single meetings. **Use all again** brings them back |
 
 In a chat that already has messages, depth, effort and meetings sit behind one button that shows what is set, for example **Balanced, All meetings**.
