@@ -246,6 +246,22 @@ export function rememberSetup(entries: SetupEntry[], entry: SetupEntry): SetupEn
   return [entry, ...entries.filter((e) => e.key !== entry.key)].slice(0, MAX_SETUPS);
 }
 
+/**
+ * The same relative spot, and the same size in logical pixels, on another monitor: what a window that
+ * was on `from` gets when it has to go to `to`. Not yet clamped; `resolvePlacement` does that.
+ */
+export function carryOver(p: WindowPlacement, from: Rect, to: WorkArea): WindowPlacement {
+  const fx = (p.x - from.x) / from.w;
+  const fy = (p.y - from.y) / from.h;
+  return {
+    x: Math.round(to.x + clamp(fx, 0, 1) * to.w),
+    y: Math.round(to.y + clamp(fy, 0, 1) * to.h),
+    w: Math.round((p.w / p.scale) * to.scale),
+    h: Math.round((p.h / p.scale) * to.scale),
+    scale: to.scale,
+  };
+}
+
 export interface RestorePlan {
   rect: Rect;
   maximized: boolean;
@@ -278,18 +294,7 @@ export function planRestore(
   if (newest && newest.area) {
     const home = primary ?? areas[0];
     const p = newest.placement;
-    const fx = (p.x - newest.area.x) / newest.area.w;
-    const fy = (p.y - newest.area.y) / newest.area.h;
-    const lw = p.w / p.scale;
-    const lh = p.h / p.scale;
-    const guess: WindowPlacement = {
-      x: Math.round(home.x + clamp(fx, 0, 1) * home.w),
-      y: Math.round(home.y + clamp(fy, 0, 1) * home.h),
-      w: Math.round(lw * home.scale),
-      h: Math.round(lh * home.scale),
-      scale: home.scale,
-    };
-    const rect = resolvePlacement(guess, areas, home, o);
+    const rect = resolvePlacement(carryOver(p, newest.area, home), areas, home, o);
     return rect ? { rect, maximized: !!p.maximized, known: false } : null;
   }
   const old = newest?.placement ?? legacy;
@@ -324,10 +329,41 @@ export async function applyRect(win: MovableWindow, rect: Rect, tolerance = 2): 
   return attempt();
 }
 
+/** The window as it was before the monitors changed: where it sat, and the monitors it sat among. */
+export interface ChangeContext {
+  /** The monitors connected before the change. */
+  areas: WorkArea[];
+  /** The last place the user left the window at (not maximised). */
+  placement: WindowPlacement;
+}
+
+/**
+ * Whether the monitor `old` is still connected: some monitor sits at the same corner of the desktop. A
+ * resolution or scale change on a monitor that stays put does not make it "gone"; two identical monitors
+ * are told apart by where they are.
+ */
+export function monitorSurvives(old: WorkArea, areas: WorkArea[]): boolean {
+  const om = old.mon ?? old;
+  return areas.some((a) => {
+    const m = a.mon ?? a;
+    return Math.abs(m.x - om.x) <= 2 && Math.abs(m.y - om.y) <= 2;
+  });
+}
+
+/** The monitor the window was on before the change, when it is no longer connected. */
+export function lostHome(before: ChangeContext | null | undefined, areas: WorkArea[]): WorkArea | null {
+  if (!before) return null;
+  const home = pickArea(before.areas, before.placement);
+  return home && !monitorSurvives(home, areas) ? home : null;
+}
+
 /**
  * What to do with a window that is on screen when the monitors change. A setup with a saved place: go
- * there. Anything else (a setup never seen): stay where it is, and only when its title bar could no longer
- * be reached, bring it back inside a screen. Null means leave it alone.
+ * there (so the window returns to a monitor that comes back). The monitor it sat on is gone and the setup
+ * is new: the primary monitor, the same relative spot and logical size, inside its work area. Anything
+ * else (a monitor added, a work area or scale tweak): stay where it is, and only when its title bar could
+ * no longer be reached, bring it back inside a screen. Null means leave it alone.
+ * Nothing here is saved: the saved places of the other setups are never touched.
  */
 export function planOnChange(
   entries: SetupEntry[],
@@ -335,6 +371,7 @@ export function planOnChange(
   window: Rect,
   primary: WorkArea | null,
   o: PlacementOptions,
+  before?: ChangeContext | null,
 ): RestorePlan | null {
   if (areas.length === 0) return null;
   const exact = entries.find((e) => entryMatches(e, areas));
@@ -342,6 +379,11 @@ export function planOnChange(
   if (exact) {
     const rect = resolvePlacement(exact.placement, areas, fallback, o);
     return rect ? { rect, maximized: !!exact.placement.maximized, known: true } : null;
+  }
+  const lost = lostHome(before, areas);
+  if (lost && before) {
+    const rect = resolvePlacement(carryOver(before.placement, lost, fallback), areas, fallback, o);
+    return rect ? { rect, maximized: false, known: false } : null;
   }
   // Reachable: enough of the window is on a screen to find and drag it.
   if (pickArea(areas, window)) return null;

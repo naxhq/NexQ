@@ -10,10 +10,12 @@ import {
   setupKey,
   snapshotPlacement,
   samePlacement,
+  type ChangeContext,
   type MonitorLike,
   type PlacementOptions,
   type SetupEntry,
   type WindowPlacement,
+  type WorkArea,
 } from "./windowPlacement";
 
 /** The window as the controller needs it: the Tauri window, or a fake in tests. Physical pixels. */
@@ -64,7 +66,7 @@ export interface ControllerOptions {
   /** False: only learn the current monitor setup (a second start in the same page, e.g. after demo mode). */
   restoreFirst?: boolean;
   saveDelayMs?: number;
-  /** How often to look for a changed monitor setup (dock, undock) while nothing is being dragged. */
+  /** How often to look for a changed monitor setup (dock, undock, a monitor unplugged) while the window is visible. */
   pollMs?: number;
   /** A setup change waits until this long after the last move (a drag in progress). */
   dragQuietMs?: number;
@@ -83,7 +85,7 @@ export interface ControllerOptions {
 export function startPlacement(c: ControllerOptions): PlacementController {
   const { label, win, store, options } = c;
   const saveDelay = c.saveDelayMs ?? 600;
-  const pollMs = c.pollMs ?? 15000;
+  const pollMs = c.pollMs ?? 3000;
   const dragQuiet = c.dragQuietMs ?? 1500;
   const now = c.now ?? Date.now;
 
@@ -100,12 +102,30 @@ export function startPlacement(c: ControllerOptions): PlacementController {
   let pendingMaximize = false;
   /** The last normal (not maximised) place seen: what to keep behind a maximised window with nothing saved yet. */
   let lastNormal: WindowPlacement | null = null;
+  /**
+   * Where the window was last seen sitting still, and the monitors then. Only ever taken while the monitors
+   * are the ones the window was restored for, so when a monitor leaves it still says where the window was
+   * (the OS moves the window as it goes) and which monitor that was.
+   */
+  let trusted: ChangeContext | null = null;
   const unlisten: Array<() => void> = [];
 
   const readAreas = async () => {
     const monitors = await win.monitors();
     return monitors.map(areaOf);
   };
+
+  /** Remember the window's place for the monitors `areas`; skipped while maximised, minimised or parked. */
+  async function rememberHome(areas: WorkArea[]): Promise<void> {
+    try {
+      if ((await win.isMaximized()) || (await win.isMinimized())) return;
+      const [pos, size, scale] = await Promise.all([win.outerPosition(), win.innerSize(), win.scaleFactor()]);
+      const snap = snapshotPlacement({ x: pos.x, y: pos.y }, { w: size.w, h: size.h }, scale);
+      if (snap && pickArea(areas, snap)) trusted = { areas, placement: snap };
+    } catch {
+      /* the next look tries again */
+    }
+  }
 
   async function captureNormal(): Promise<void> {
     try {
@@ -140,6 +160,7 @@ export function startPlacement(c: ControllerOptions): PlacementController {
       quietUntil = now() + 1500;
       await applyRect(win, plan.rect);
       await captureNormal();
+      await rememberHome(areas);
       // A hidden window is maximised only by its style (it then does not fill the work area), so wait until
       // it is on screen.
       if (plan.maximized) {
@@ -194,6 +215,7 @@ export function startPlacement(c: ControllerOptions): PlacementController {
       }
       const home = pickArea(areas, item.placement);
       if (!home) return;
+      trusted = { areas, placement: item.placement };
       const existing = store.entries().find((e) => entryMatches(e, areas));
       if (existing && existing.key === key && samePlacement(existing.placement, item.placement)) return;
       const entry: SetupEntry = { key, placement: item.placement, area: home, at: now() };
@@ -213,19 +235,27 @@ export function startPlacement(c: ControllerOptions): PlacementController {
     saveTimer = setTimeout(() => void commit(), saveDelay);
   };
 
-  /** The monitors changed: a setup with a saved place gets its window there; any other leaves it where it is. */
-  async function moveForNewSetup(areas: ReturnType<typeof areaOf>[]): Promise<void> {
+  /**
+   * The monitors changed: a setup with a saved place gets its window there; a window whose monitor is gone
+   * goes to the primary one; any other leaves it where it is. Never saves anything.
+   */
+  async function moveForNewSetup(areas: WorkArea[]): Promise<void> {
     currentKey = setupKey(areas);
     setupChanged = false;
     if (await win.isMinimized().catch(() => false)) return;
     const [pos, size] = await Promise.all([win.outerPosition(), win.innerSize()]);
     const primaryM = await win.primary().catch(() => null);
-    const plan = planOnChange(store.entries(), areas, { x: pos.x, y: pos.y, w: size.w, h: size.h }, primaryM ? areaOf(primaryM) : null, options);
-    if (!plan) return;
-    quietUntil = now() + 1500;
-    await applyRect(win, plan.rect);
-    if (plan.maximized && (await win.isVisible().catch(() => false))) await win.maximize().catch(() => {});
-    quietUntil = now() + 800;
+    // A maximised window is kept on a screen by the OS itself; only its place behind it matters, and that is saved.
+    const before = (await win.isMaximized().catch(() => false)) ? null : trusted;
+    const plan = planOnChange(store.entries(), areas, { x: pos.x, y: pos.y, w: size.w, h: size.h }, primaryM ? areaOf(primaryM) : null, options, before);
+    if (plan) {
+      quietUntil = now() + 1500;
+      await applyRect(win, plan.rect);
+      if (plan.maximized && (await win.isVisible().catch(() => false))) await win.maximize().catch(() => {});
+      quietUntil = now() + 800;
+    }
+    trusted = null;
+    await rememberHome(areas);
   }
 
   async function checkSetup(): Promise<void> {
@@ -237,7 +267,11 @@ export function startPlacement(c: ControllerOptions): PlacementController {
       }
       const areas = await readAreas();
       if (areas.length === 0) return;
-      if (!setupChanged && setupKey(areas) === currentKey) return;
+      if (!setupChanged && setupKey(areas) === currentKey) {
+        // Same monitors: this is where the window sits, for when one of them goes.
+        if (await win.isVisible().catch(() => false)) await rememberHome(areas);
+        return;
+      }
       // Never in the middle of a drag or a resize.
       if (now() - lastMoveAt < dragQuiet) return;
       // Nothing from before the change may be saved under the new setup.
@@ -251,8 +285,11 @@ export function startPlacement(c: ControllerOptions): PlacementController {
   }
 
   const ready = (async () => {
-    if (c.restoreFirst === false) currentKey = setupKey(await readAreas().catch(() => []));
-    else await restore();
+    if (c.restoreFirst === false) {
+      const areas = await readAreas().catch(() => []);
+      currentKey = setupKey(areas);
+      await rememberHome(areas);
+    } else await restore();
     // Nothing was saved or restored (a fresh install, the overlay): the place it opened at is the normal one.
     if (!lastNormal) await captureNormal();
     if (c.showAfterRestore && !stopped) {

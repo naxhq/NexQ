@@ -6,6 +6,10 @@ import {
   planOnChange,
   applyRect,
   areaOf,
+  carryOver,
+  lostHome,
+  monitorSurvives,
+  type ChangeContext,
   planRestore,
   rememberSetup,
   sanitizeSetups,
@@ -370,5 +374,105 @@ describe("planOnChange", () => {
   it("goes to the saved place of a setup it has seen", () => {
     const e: SetupEntry = { key: setupKey(A), placement: { x: 60, y: 70, w: 500, h: 700, scale: 1 }, area: A[0], at: 1 };
     expect(planOnChange([e], A, { x: 900, y: 100, w: 500, h: 700 }, A[0], OPTS)!.rect).toMatchObject({ x: 60, y: 70 });
+  });
+});
+
+describe("a monitor that is unplugged (J4: the window goes to the main one)", () => {
+  // The owner's machine: a 5120x1440 main at 125% and a 4K at 150% above it.
+  const main: WorkArea = { x: 0, y: 0, w: 5120, h: 1400, scale: 1.25, mon: { x: 0, y: 0, w: 5120, h: 1440 } };
+  const above: WorkArea = { x: 812, y: -2160, w: 3840, h: 2120, scale: 1.5, mon: { x: 812, y: -2160, w: 3840, h: 2160 } };
+  const both = [main, above];
+  const solo = [main];
+  const before = (placement: { x: number; y: number; w: number; h: number; scale: number }, areas = both): ChangeContext => ({ areas, placement });
+  const onAbove = { x: 1500, y: -1800, w: 750, h: 1050, scale: 1.5 };
+  const onMain = { x: 300, y: 200, w: 625, h: 875, scale: 1.25 };
+
+  it("the monitor survives when something sits at its corner, whatever its size or scale now", () => {
+    expect(monitorSurvives(main, solo)).toBe(true);
+    expect(monitorSurvives(above, solo)).toBe(false);
+    expect(monitorSurvives(above, [main, { ...above, w: 1920, scale: 1, mon: { x: 812, y: -2160, w: 1920, h: 1080 } }])).toBe(true);
+  });
+
+  it("two identical monitors are told apart by where they are", () => {
+    const a: WorkArea = { x: 0, y: 0, w: 1920, h: 1040, scale: 1, mon: { x: 0, y: 0, w: 1920, h: 1080 } };
+    const b: WorkArea = { x: 1920, y: 0, w: 1920, h: 1040, scale: 1, mon: { x: 1920, y: 0, w: 1920, h: 1080 } };
+    expect(monitorSurvives(b, [a])).toBe(false);
+    expect(monitorSurvives(a, [a])).toBe(true);
+  });
+
+  it("finds the home monitor only when it is gone", () => {
+    expect(lostHome(before(onAbove), solo)).toEqual(above);
+    expect(lostHome(before(onAbove), both)).toBeNull();
+    expect(lostHome(before(onMain), solo)).toBeNull();
+    expect(lostHome(null, solo)).toBeNull();
+  });
+
+  it("a window on the monitor that went moves to the main one, inside its work area", () => {
+    const plan = planOnChange([], solo, { x: 1500, y: -1800, w: 750, h: 1050 }, main, overlayOpts, before(onAbove))!;
+    expect(plan.known).toBe(false);
+    expect(plan.maximized).toBe(false);
+    expect(inside(plan.rect, main)).toBe(true);
+    // the same size in logical pixels (500 x 700), at the main monitor's scale
+    expect(plan.rect.w).toBe(625);
+    expect(plan.rect.h).toBe(875);
+  });
+
+  it("even when the OS left a sliver of it on the main monitor", () => {
+    // 130 x 60 px visible at the bottom edge: reachable by the old rule, so it stayed there
+    const os = { x: 2000, y: 1340, w: 750, h: 1050 };
+    expect(planOnChange([], solo, os, main, overlayOpts)).toBeNull();
+    const plan = planOnChange([], solo, os, main, overlayOpts, before(onAbove))!;
+    expect(inside(plan.rect, main)).toBe(true);
+  });
+
+  it("a window that is bigger than the main monitor's work area is clamped to it", () => {
+    const small: WorkArea = { x: 0, y: 0, w: 1366, h: 728, scale: 1, mon: { x: 0, y: 0, w: 1366, h: 768 } };
+    const big = { x: 1500, y: 200, w: 1200, h: 900, scale: 1 };
+    const wide: WorkArea = { x: 1366, y: 0, w: 2560, h: 1400, scale: 1, mon: { x: 1366, y: 0, w: 2560, h: 1440 } };
+    const plan = planOnChange([], [small], big, small, launcherOpts, before(big, [small, wide]) )!;
+    expect(plan).not.toBeNull();
+    // the window sat at x 500..1700 on `small` and 1366..: pickArea gives the larger overlap, `wide`
+    expect(inside(plan.rect, small)).toBe(true);
+    expect(plan.rect.h + 40).toBeLessThanOrEqual(small.h);
+    expect(plan.rect.w + 16).toBeLessThanOrEqual(small.w);
+  });
+
+  it("a window on the main monitor stays put when the other one goes", () => {
+    expect(planOnChange([], solo, { x: 300, y: 200, w: 625, h: 875 }, main, overlayOpts, before(onMain))).toBeNull();
+  });
+
+  it("the saved place of the other setup is used when the monitor comes back, never the primary rule", () => {
+    const e: SetupEntry = { key: setupKey(both), placement: onAbove, area: above, at: 1 };
+    const plan = planOnChange([e], both, { x: 300, y: 200, w: 625, h: 875 }, main, overlayOpts, before(onMain, solo))!;
+    expect(plan.known).toBe(true);
+    expect(plan.rect).toMatchObject({ x: 1500, y: -1800 });
+  });
+
+  it("a saved place for the setup it is now in wins over the primary rule", () => {
+    const e: SetupEntry = { key: setupKey(solo), placement: { x: 40, y: 50, w: 625, h: 875, scale: 1.25 }, area: main, at: 1 };
+    const plan = planOnChange([e], solo, { x: 1500, y: -1800, w: 750, h: 1050 }, main, overlayOpts, before(onAbove))!;
+    expect(plan.known).toBe(true);
+    expect(plan.rect).toMatchObject({ x: 40, y: 50 });
+  });
+
+  it("moves nothing when a monitor is added, or its resolution changes", () => {
+    const sixty = [main, { ...above, w: 1920, scale: 1, mon: { x: 812, y: -2160, w: 1920, h: 1080 } }];
+    expect(planOnChange([], sixty, { x: 1500, y: -1800, w: 750, h: 1050 }, main, overlayOpts, before(onAbove))).toBeNull();
+    expect(planOnChange([], both, { x: 300, y: 200, w: 625, h: 875 }, main, overlayOpts, before(onMain, solo))).toBeNull();
+  });
+
+  it("is never outside the main monitor, for any monitor that is lost", () => {
+    for (let i = 0; i < 200; i++) {
+      const r = (n: number) => Math.floor(Math.random() * n);
+      const sc = [1, 1.25, 1.5, 2][r(4)];
+      const w = 1000 + r(3000);
+      const h = 700 + r(1500);
+      const left: WorkArea = { x: -w, y: r(300) - 150, w, h, scale: sc, mon: { x: -w, y: r(300) - 150, w, h: h + 40 } };
+      const prim: WorkArea = { x: 0, y: 0, w: 1920 + r(3000), h: 1040 + r(400), scale: [1, 1.5][r(2)], mon: { x: 0, y: 0, w: 1920, h: 1080 } };
+      const placement = { x: left.x + r(Math.max(1, left.w - 500 * sc)), y: left.y, w: 500 * sc, h: 700 * sc, scale: sc };
+      const plan = planOnChange([], [prim], { x: placement.x, y: placement.y, w: placement.w, h: placement.h }, prim, overlayOpts, before(placement, [left, prim]));
+      expect(plan).not.toBeNull();
+      expect(inside(plan!.rect, prim)).toBe(true);
+    }
   });
 });

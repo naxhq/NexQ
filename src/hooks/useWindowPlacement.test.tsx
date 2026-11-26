@@ -363,6 +363,109 @@ describe("useWindowPlacement", () => {
     expect(win.pos).toEqual({ x: 2300, y: 120 });
   });
 
+  describe("a monitor is unplugged (J4)", () => {
+    const solo = [mon(0, 0, 1920, 1080)];
+    const docked = [mon(0, 0, 1920, 1080), mon(1920, 0, 1920, 1080)];
+    const seedDocked = () =>
+      useConfigStore.setState({
+        overlaySetups: [{ key: keyOf(docked), placement: { x: 2500, y: 100, w: 500, h: 700, scale: 1 }, area: areaOf(docked[1] as never), at: 1 }],
+      });
+    const insideSolo = () => win.pos.x >= 0 && win.pos.y >= 0 && win.pos.x + win.size.width <= 1920 && win.pos.y + win.size.height <= 1040;
+
+    it("moves a window that was on it to the main monitor, even when the OS left a sliver of it there, and keeps the saved place", async () => {
+      seedDocked();
+      world.monitors = docked;
+      renderHook(() => useWindowPlacement("overlay"));
+      await settle();
+      expect(win.pos).toEqual({ x: 2500, y: 100 });
+      world.monitors = solo;
+      // The OS slides it to the edge of the main monitor: still "reachable" by 50 px.
+      win.pos = { x: 1750, y: 990 };
+      await settle(16000);
+      expect(insideSolo()).toBe(true);
+      expect(win.size).toEqual({ width: 500, height: 700 });
+      // Nothing was saved for the one-monitor setup, and the two-monitor place is untouched.
+      expect(saved).not.toHaveBeenCalled();
+      expect(useConfigStore.getState().overlaySetups[0].placement).toMatchObject({ x: 2500, y: 100 });
+      // The monitor comes back: the window returns to its place on it.
+      world.monitors = docked;
+      await settle(16000);
+      expect(win.pos).toEqual({ x: 2500, y: 100 });
+    });
+
+    it("keeps the size inside the work area of the smaller main monitor", async () => {
+      useConfigStore.setState({
+        overlaySetups: [{ key: keyOf(docked), placement: { x: 2100, y: 50, w: 1800, h: 1000, scale: 1 }, area: areaOf(docked[1] as never), at: 1 }],
+      });
+      world.monitors = [mon(0, 0, 1920, 1080), mon(1920, 0, 3840, 2160)];
+      useConfigStore.setState({
+        overlaySetups: [{ key: keyOf(world.monitors as FakeMonitor[]), placement: { x: 2100, y: 50, w: 1800, h: 1000, scale: 1 }, area: areaOf((world.monitors as FakeMonitor[])[1] as never), at: 1 }],
+      });
+      renderHook(() => useWindowPlacement("overlay"));
+      await settle();
+      world.monitors = [mon(0, 0, 1366, 768)];
+      win.pos = { x: 1300, y: 20 };
+      await settle(16000);
+      expect(win.pos.x).toBeGreaterThanOrEqual(0);
+      expect(win.pos.x + win.size.width).toBeLessThanOrEqual(1366);
+      expect(win.pos.y + win.size.height).toBeLessThanOrEqual(768 - 40);
+    });
+
+    it("leaves a window that was on the main monitor alone", async () => {
+      renderHook(() => useWindowPlacement("overlay"));
+      await settle();
+      win.pos = { x: 300, y: 200 };
+      world.monitors = docked;
+      await settle(16000);
+      const calls = win.setPosition.mock.calls.length;
+      world.monitors = solo;
+      await settle(16000);
+      expect(win.setPosition.mock.calls.length).toBe(calls);
+      expect(win.pos).toEqual({ x: 300, y: 200 });
+    });
+
+    it("does not touch a hidden window; it is dealt with once it is shown", async () => {
+      seedDocked();
+      world.monitors = docked;
+      renderHook(() => useWindowPlacement("overlay"));
+      await settle();
+      win.visible = false;
+      world.monitors = solo;
+      win.pos = { x: 1750, y: 990 };
+      const calls = win.setPosition.mock.calls.length;
+      await settle(16000);
+      expect(win.setPosition.mock.calls.length).toBe(calls);
+      win.visible = true;
+      await settle(6000);
+      expect(insideSolo()).toBe(true);
+    });
+
+    it("keeps a maximised window as the OS has it", async () => {
+      seedDocked();
+      world.monitors = docked;
+      renderHook(() => useWindowPlacement("overlay"));
+      await settle();
+      win.maximized = true;
+      win.pos = { x: 0, y: 0 };
+      win.size = { width: 1920, height: 1040 };
+      const calls = win.setPosition.mock.calls.length;
+      world.monitors = solo;
+      await settle(16000);
+      expect(win.setPosition.mock.calls.length).toBe(calls);
+    });
+
+    it("moves nothing while the monitors stay the same, however long it runs", async () => {
+      seedDocked();
+      world.monitors = docked;
+      renderHook(() => useWindowPlacement("overlay"));
+      await settle();
+      const calls = win.setPosition.mock.calls.length;
+      await settle(60000);
+      expect(win.setPosition.mock.calls.length).toBe(calls);
+      expect(saved).not.toHaveBeenCalled();
+    });
+  });
+
   it("a place saved under the older work-area key is still used", async () => {
     const m = world.monitors as FakeMonitor[];
     const legacyKey = setupKey(m.map((x) => ({ ...areaOf(x as never), mon: undefined })));

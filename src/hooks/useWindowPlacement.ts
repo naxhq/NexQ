@@ -104,13 +104,14 @@ export function useWindowPlacement(label: string, opts: { enabled?: boolean; pau
     restoredLabels.add(label);
     active = controller;
     const flush = () => void controller.flush();
+    // Coming back to a window: a monitor change or a pending maximise is looked at now, not at the next poll.
+    const recheck = () => void controller.check();
     const onHidden = () => {
       if (document.visibilityState === "hidden") flush();
+      else recheck();
     };
     window.addEventListener("pagehide", flush);
     window.addEventListener("blur", flush);
-    // Coming back to a window: a monitor change or a pending maximise is looked at now, not at the next poll.
-    const recheck = () => void controller.check();
     window.addEventListener("focus", recheck);
     document.addEventListener("visibilitychange", onHidden);
     const unlisten: Array<() => void> = [];
