@@ -99,11 +99,11 @@ beforeEach(() => {
 });
 
 describe("sourcesStore", () => {
-  it("an old config.json without the new keys loads empty sources and both pills on, and leaves other keys alone", async () => {
+  it("an old config.json without the new keys loads empty sources and Knowledge on and Tools off, and leaves other keys alone", async () => {
     saved.set("llmProvider", "claude_cli"); // nothing else
     const w = await openWindow();
     expect(w.useSourcesStore.getState().config).toEqual(w.DEFAULT_SOURCES_CONFIG);
-    expect(w.useSourcesStore.getState().toggles).toEqual({ library: true, tools: true });
+    expect(w.useSourcesStore.getState().toggles).toEqual({ library: true, tools: false });
     expect(saved.has("personalSources")).toBe(false); // loading never writes
     expect(saved.has("sourceToggles")).toBe(false);
     expect(saved.get("llmProvider")).toBe("claude_cli");
@@ -136,7 +136,7 @@ describe("sourcesStore", () => {
     expect(c.mcp_servers).toHaveLength(1);
     expect(c.mcp_servers[0].env[0].value).toBeNull();
     expect(c.mcp_servers[0].transport).toEqual({ type: "stdio", command: "n", args: [] });
-    expect(w.useSourcesStore.getState().toggles).toEqual({ library: true, tools: true });
+    expect(w.useSourcesStore.getState().toggles).toEqual({ library: true, tools: false });
   });
 
   it("pushes the config to the backend on load and on every change", async () => {
@@ -217,11 +217,11 @@ describe("sourcesStore", () => {
 
   it("a saved pair in the new names, a half-saved one and a damaged one all load", async () => {
     saved.set("sourceToggles", { library: false });
-    expect((await openWindow()).useSourcesStore.getState().toggles).toEqual({ library: false, tools: true });
+    expect((await openWindow()).useSourcesStore.getState().toggles).toEqual({ library: false, tools: false });
     saved.set("sourceToggles", { notes: "yes", tools: 3 });
-    expect((await openWindow()).useSourcesStore.getState().toggles).toEqual({ library: true, tools: true });
+    expect((await openWindow()).useSourcesStore.getState().toggles).toEqual({ library: true, tools: false });
     saved.set("sourceToggles", [1, 2]);
-    expect((await openWindow()).useSourcesStore.getState().toggles).toEqual({ library: true, tools: true });
+    expect((await openWindow()).useSourcesStore.getState().toggles).toEqual({ library: true, tools: false });
   });
 
   it("a config changed in another window arrives here without telling the backend again", async () => {

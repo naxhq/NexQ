@@ -26,7 +26,8 @@ export const DEFAULT_SOURCES_CONFIG: PersonalSourcesConfig = {
 };
 
 /** Both pills start on in every meeting. */
-export const DEFAULT_SOURCE_TOGGLES: SourceToggles = { library: true, tools: true };
+/** Knowledge is on (documents were always used); Tools start nothing until the person turns them on, as in 2.45. */
+export const DEFAULT_SOURCE_TOGGLES: SourceToggles = { library: true, tools: false };
 
 let storeInstance: Store | null = null;
 
@@ -131,13 +132,13 @@ export function normalizeSourcesConfig(raw: unknown): PersonalSourcesConfig {
 
 /**
  * The pills a meeting starts with, from what an older version saved. `notes` is the old name of
- * the Knowledge pill (`library`); anything not understood, or never saved, is both on.
+ * the Knowledge pill (`library`); anything not understood, or never saved, is Knowledge on and Tools off.
  */
 export function normalizeToggles(raw: unknown): SourceToggles {
   if (!isObject(raw)) return { ...DEFAULT_SOURCE_TOGGLES };
   // An old `notes: false` turned off folders only (documents were always used), so it never turns Knowledge off.
   const knowledge = typeof raw.library === "boolean" ? raw.library : true;
-  return { library: knowledge, tools: typeof raw.tools === "boolean" ? raw.tools : true };
+  return { library: knowledge, tools: raw.tools === true };
 }
 
 /** Which kinds of source have something an answer could use right now. */
