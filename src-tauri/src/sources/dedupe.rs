@@ -133,7 +133,9 @@ pub struct SecretMove {
     pub to: String,
 }
 
-/// What a repair of the saved sources decided. Nothing has been changed yet.
+/// A proposal to merge servers and notes folders saved twice. Pure: it changes
+/// nothing, and nothing in it is acted on because the webview sent it (see
+/// [`plan_saved_merges`] for what is).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SourcesRepair {
     /// The config without the duplicates.
@@ -142,12 +144,27 @@ pub struct SourcesRepair {
     pub server_map: Vec<(String, String)>,
     /// `(dropped id, kept id)` for notes folders.
     pub folder_map: Vec<(String, String)>,
-    pub secret_moves: Vec<SecretMove>,
-    /// Credential ids of the dropped servers, forgotten once the moves are done.
-    pub secret_drops: Vec<String>,
 }
 
 impl SourcesRepair {
+    pub fn is_empty(&self) -> bool {
+        self.server_map.is_empty() && self.folder_map.is_empty()
+    }
+}
+
+/// The side effects a save may have for items that left the config because they
+/// were merged into one that stays. Decided only from what the backend already
+/// held, see [`plan_saved_merges`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MergePlan {
+    /// `(dropped id, kept id)` for servers.
+    pub server_map: Vec<(String, String)>,
+    /// `(dropped id, kept id)` for notes folders.
+    pub folder_map: Vec<(String, String)>,
+    pub secret_moves: Vec<SecretMove>,
+}
+
+impl MergePlan {
     pub fn is_empty(&self) -> bool {
         self.server_map.is_empty() && self.folder_map.is_empty()
     }
@@ -160,28 +177,23 @@ fn keep_rank(s: &McpServer) -> (bool, bool, bool, usize) {
     (ok && s.enabled, ok, s.enabled, s.tools.len())
 }
 
-fn secret_moves(dropped: &McpServer, kept: &McpServer) -> (Vec<SecretMove>, Vec<String>) {
+fn secret_moves(dropped: &McpServer, kept: &McpServer) -> Vec<SecretMove> {
     let mut moves = Vec::new();
-    let mut drops = Vec::new();
     for var in dropped.env.iter().filter(|e| e.secret) {
-        let from = credential_id(&dropped.key, &var.name);
         if let Some(to_var) = kept.env.iter().find(|e| e.secret && e.name.trim().eq_ignore_ascii_case(var.name.trim())) {
-            moves.push(SecretMove { from: from.clone(), to: credential_id(&kept.key, &to_var.name) });
+            moves.push(SecretMove { from: credential_id(&dropped.key, &var.name), to: credential_id(&kept.key, &to_var.name) });
         }
-        drops.push(from);
     }
     if let (McpTransport::Http { header_names: from_names, .. }, McpTransport::Http { header_names: to_names, .. }) =
         (&dropped.transport, &kept.transport)
     {
         for name in from_names {
-            let from = header_credential_id(&dropped.key, name);
             if let Some(to_name) = to_names.iter().find(|n| n.trim().eq_ignore_ascii_case(name.trim())) {
-                moves.push(SecretMove { from: from.clone(), to: header_credential_id(&kept.key, to_name) });
+                moves.push(SecretMove { from: header_credential_id(&dropped.key, name), to: header_credential_id(&kept.key, to_name) });
             }
-            drops.push(from);
         }
     }
-    (moves, drops)
+    moves
 }
 
 /// Groups of equal items (by `identity`) among `items`, each group as indexes
@@ -200,9 +212,10 @@ fn groups<T, K: std::hash::Hash + Eq + Clone>(items: &[T], identity: impl Fn(&T)
     order.into_iter().filter_map(|k| by.remove(&k)).filter(|g| g.len() > 1).collect()
 }
 
-/// Plan the removal of duplicate servers and notes folders from `cfg`. Servers
-/// with no id or no comparable launch, and any whose details differ, are never
-/// touched. Pure: nothing is changed until the caller applies the plan.
+/// Propose `cfg` without its duplicate servers and notes folders. Servers with
+/// no id or no comparable launch, and any whose details differ, are never
+/// touched. Pure: nothing is changed, and a proposal made from a config the
+/// webview sent must never be acted on (see [`plan_saved_merges`]).
 pub fn plan_repair(cfg: &PersonalSourcesConfig) -> SourcesRepair {
     let mut out = SourcesRepair { config: cfg.clone(), ..Default::default() };
 
@@ -222,9 +235,6 @@ pub fn plan_repair(cfg: &PersonalSourcesConfig) -> SourcesRepair {
                 continue;
             }
             merged.enabled = merged.enabled || dropped.enabled;
-            let (moves, drops) = secret_moves(dropped, &merged);
-            out.secret_moves.extend(moves);
-            out.secret_drops.extend(drops);
             out.server_map.push((dropped.id.clone(), kept_id.clone()));
             drop_servers.push(i);
         }
@@ -260,6 +270,51 @@ pub fn plan_repair(cfg: &PersonalSourcesConfig) -> SourcesRepair {
         at += 1;
         keep
     });
+    out
+}
+
+/// What saving `new` over `old` may do besides replacing the config: carry
+/// secrets and workspace links from an item that left to the one that took its
+/// place. `old` is what the backend already held; `new` is what the webview
+/// sent and is trusted for nothing but which ids are still there. An item counts
+/// as merged only when it was in `old`, is not in `new`, and a different item
+/// that is in both `old` and `new` was the same thing in `old` (equal
+/// identity of the held copies, and unchanged in `new`). Anything else is a
+/// plain removal and this plan says nothing about it, so a made-up duplicate,
+/// an id the backend never held, or a changed server never moves or deletes
+/// anything.
+pub fn plan_saved_merges(old: &PersonalSourcesConfig, new: &PersonalSourcesConfig) -> MergePlan {
+    let mut out = MergePlan::default();
+    for dropped in &old.mcp_servers {
+        if dropped.id.is_empty() || new.mcp_servers.iter().any(|s| s.id == dropped.id || s.key == dropped.key) {
+            continue;
+        }
+        let Some(identity) = dropped.identity() else { continue };
+        let kept = old.mcp_servers.iter().find(|k| {
+            !k.id.is_empty()
+                && k.id != dropped.id
+                && k.identity().as_ref() == Some(&identity)
+                && new.mcp_servers.iter().any(|n| n.id == k.id && n.key == k.key && n.identity().as_ref() == Some(&identity))
+        });
+        let Some(kept) = kept else { continue };
+        out.server_map.push((dropped.id.clone(), kept.id.clone()));
+        out.secret_moves.extend(secret_moves(dropped, kept));
+    }
+    for dropped in &old.notes_folders {
+        if dropped.id.is_empty() || new.notes_folders.iter().any(|f| f.id == dropped.id) {
+            continue;
+        }
+        let Some(identity) = folder_identity(&dropped.path) else { continue };
+        let kept = old.notes_folders.iter().find(|k| {
+            !k.id.is_empty()
+                && k.id != dropped.id
+                && folder_identity(&k.path).as_ref() == Some(&identity)
+                && new.notes_folders.iter().any(|n| n.id == k.id && folder_identity(&n.path).as_ref() == Some(&identity))
+        });
+        if let Some(kept) = kept {
+            out.folder_map.push((dropped.id.clone(), kept.id.clone()));
+        }
+    }
     out
 }
 
@@ -379,8 +434,6 @@ mod tests {
         let plan = plan_repair(&cfg);
         assert_eq!(plan.server_map, vec![("fresh".to_string(), "ok".to_string())]);
         assert_eq!(plan.config.mcp_servers, vec![ok]);
-        assert_eq!(plan.secret_moves, vec![SecretMove { from: "mcp:mira-2:API_KEY".into(), to: "mcp:mira:API_KEY".into() }]);
-        assert_eq!(plan.secret_drops, vec!["mcp:mira-2:API_KEY".to_string()]);
     }
 
     #[test]
@@ -431,5 +484,64 @@ mod tests {
         assert_eq!(folder_identity(r"D:\Notes\"), folder_identity("d:/NOTES"));
         assert_ne!(folder_identity(r"D:\Notes"), folder_identity(r"D:\Notes2"));
         assert_eq!(folder_identity("  "), None);
+    }
+
+    // ── plan_saved_merges: only what the backend already held counts ──
+
+    fn cfg_of(servers: Vec<McpServer>) -> PersonalSourcesConfig {
+        PersonalSourcesConfig { mcp_servers: servers, ..Default::default() }
+    }
+
+    #[test]
+    fn a_real_duplicate_that_leaves_is_merged_into_the_one_that_stays() {
+        let old = cfg_of(vec![mira("keep", "mira"), mira("drop", "mira-2")]);
+        let new = cfg_of(vec![mira("keep", "mira")]);
+        let plan = plan_saved_merges(&old, &new);
+        assert_eq!(plan.server_map, vec![("drop".to_string(), "keep".to_string())]);
+        assert_eq!(plan.secret_moves, vec![SecretMove { from: "mcp:mira-2:API_KEY".into(), to: "mcp:mira:API_KEY".into() }]);
+        // Nothing to merge once the duplicate is gone from what is held.
+        assert!(plan_saved_merges(&new, &new).is_empty());
+    }
+
+    #[test]
+    fn a_made_up_duplicate_or_an_id_never_held_merges_nothing() {
+        let old = cfg_of(vec![mira("keep", "mira")]);
+        // The webview sends a server the backend never held: not a drop at all.
+        let new = cfg_of(vec![mira("keep", "mira"), mira("fake", "mira-2")]);
+        assert!(plan_saved_merges(&old, &new).is_empty());
+        // An id the held config never had cannot be a dropped one.
+        assert!(plan_saved_merges(&old, &cfg_of(vec![mira("keep", "mira")])).is_empty());
+        // A server that only left (nothing equal stays) is a removal.
+        assert!(plan_saved_merges(&cfg_of(vec![mira("a", "mira")]), &cfg_of(vec![])).is_empty());
+    }
+
+    #[test]
+    fn a_kept_server_the_old_copies_do_not_match_merges_nothing() {
+        // Same command in the incoming config, but the held copies differ.
+        let mut other = mira("keep", "mira");
+        other.env[1] = plain("MODE", "rw");
+        let old = cfg_of(vec![other, mira("drop", "mira-2")]);
+        let new = cfg_of(vec![mira("keep", "mira")]);
+        assert!(plan_saved_merges(&old, &new).is_empty());
+        // The held copies match but the incoming kept one was changed.
+        let old = cfg_of(vec![mira("keep", "mira"), mira("drop", "mira-2")]);
+        let mut changed = mira("keep", "mira");
+        changed.env[1] = plain("MODE", "rw");
+        assert!(plan_saved_merges(&old, &cfg_of(vec![changed])).is_empty());
+        // A dropped server whose key lives on under another id is a rename.
+        assert!(plan_saved_merges(&old, &cfg_of(vec![mira("keep", "mira"), mira("renamed", "mira-2")])).is_empty());
+    }
+
+    #[test]
+    fn folders_merge_only_by_the_held_paths() {
+        let f = |id: &str, path: &str| NotesFolder { id: id.into(), label: id.into(), path: path.into(), enabled: true };
+        let folders = |v: Vec<NotesFolder>| PersonalSourcesConfig { notes_folders: v, ..Default::default() };
+        let old = folders(vec![f("f1", r"D:\Notes"), f("f2", "d:/notes/")]);
+        let plan = plan_saved_merges(&old, &folders(vec![f("f2", "d:/notes/")]));
+        assert_eq!(plan.folder_map, vec![("f1".to_string(), "f2".to_string())]);
+        // Incoming f2 now points elsewhere: no merge.
+        assert!(plan_saved_merges(&old, &folders(vec![f("f2", r"D:\Other")])).is_empty());
+        // A different folder is just removed.
+        assert!(plan_saved_merges(&folders(vec![f("f1", r"D:\A"), f("f2", r"D:\B")]), &folders(vec![f("f2", r"D:\B")])).is_empty());
     }
 }

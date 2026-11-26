@@ -239,24 +239,24 @@ async function whenBackendReady<T>(call: () => Promise<T>): Promise<T> {
 
 /**
  * A server or folder saved twice (added in two workspaces by an older version)
- * becomes one, in the saved config and in every workspace's links. The backend
- * does the merge; this keeps what it returns. Never throws: on any trouble the
- * config stays as it was and the next start tries again.
+ * becomes one, in the saved config and in every workspace's links. Call it after
+ * the first push: the backend merges what it holds (it takes nothing from here,
+ * so this window can't make it move or delete a secret) and this keeps what it
+ * returns. Never throws: on any trouble the config stays as it was and the next
+ * start tries again.
  */
-async function mergeSavedDuplicates(config: PersonalSourcesConfig): Promise<PersonalSourcesConfig> {
+async function mergeSavedDuplicates(config: PersonalSourcesConfig): Promise<void> {
   try {
-    const result = await whenBackendReady(() => repairPersonalSources(config));
+    const result = await whenBackendReady(() => repairPersonalSources());
     const merged = (result?.merged_servers ?? 0) + (result?.merged_folders ?? 0);
-    if (merged === 0 || !result.config) return config;
+    if (merged === 0 || !result.config) return;
     // Something changed it while the backend worked: leave it, the next start repairs.
-    if (useSourcesStore.getState().config !== config) return useSourcesStore.getState().config;
+    if (useSourcesStore.getState().config !== config) return;
     const repaired = normalizeSourcesConfig(result.config);
     useSourcesStore.setState({ config: repaired });
     await persist(CONFIG_KEY, repaired);
-    return repaired;
   } catch (e) {
     console.warn("[sourcesStore] Couldn't merge duplicate sources:", e);
-    return config;
   }
 }
 
@@ -318,10 +318,10 @@ export const useSourcesStore = create<SourcesState>((set, get) => ({
       const toggles = normalizeToggles(await store.get<unknown>(TOGGLES_KEY));
       set({ config, toggles, loaded: true });
       await watchSaved();
-      // The same server saved twice becomes one before the backend gets it.
-      const kept = await mergeSavedDuplicates(config);
       // The backend is the source of truth for answers: give it what we have.
-      await pushToBackend(kept);
+      await pushToBackend(config);
+      // The same server saved twice becomes one, from what the backend now holds.
+      await mergeSavedDuplicates(config);
     } catch (e) {
       console.error("[sourcesStore] Failed to load:", e);
       set({ loaded: true });

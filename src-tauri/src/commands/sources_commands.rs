@@ -18,7 +18,7 @@ use crate::llm::cli_agent::mcp_check::list_server_tools_with_hints;
 use crate::sources::config::{
     is_valid_tool_full_name, EnvVar, McpCheckStatus, McpServer, McpTransport, PersonalSourcesConfig,
 };
-use crate::sources::dedupe::{find_duplicate, plan_repair};
+use crate::sources::dedupe::{find_duplicate, plan_repair, plan_saved_merges, MergePlan};
 use crate::sources::launch::folder_problem;
 use crate::sources::mcp_json::{
     credential_id, header_credential_id, into_server, is_secret_name, merge_checked_tools,
@@ -871,7 +871,7 @@ pub fn delete_mcp_secrets(server_id: String, state: State<'_, AppState>) -> Resu
     Ok(())
 }
 
-// ── Repair of duplicates saved by an older version ──────────────────────────
+// ── Merging servers and folders saved twice ────────────────────────────────
 
 /// Only one repair runs at a time (both windows load the sources at startup).
 static REPAIR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -879,88 +879,95 @@ static REPAIR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// What the repair of saved duplicates did, for the webview to keep.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SourcesRepairResult {
-    /// The sources without the duplicates (the same as given when nothing was merged).
+    /// The sources without the duplicates (the same as held when nothing was merged).
     pub config: PersonalSourcesConfig,
     pub merged_servers: usize,
     pub merged_folders: usize,
 }
 
-/// Merge servers and notes folders that are saved twice (same launch, same
-/// environment; same folder path): the one that was checked OK and is on stays,
-/// every workspace that listed another one lists it, and the others (with their
-/// secrets, moved first when only they had a value) go. Never merges when
-/// anything differs. On any failure nothing is removed and the given config
-/// comes back unchanged. Idempotent.
-fn repair_with(
-    store: &dyn SecretStore,
-    conn: Option<&rusqlite::Connection>,
-    cfg: PersonalSourcesConfig,
-) -> SourcesRepairResult {
-    let unchanged = |cfg: PersonalSourcesConfig| SourcesRepairResult { config: cfg, merged_servers: 0, merged_folders: 0 };
-    if validate_sources(&cfg).is_err() {
-        return unchanged(cfg);
-    }
-    let plan = plan_repair(&cfg);
-    if plan.is_empty() {
-        return unchanged(cfg);
-    }
-    let Some(conn) = conn else {
-        log::warn!("Duplicate sources found but the workspaces are not available: nothing merged");
-        return unchanged(cfg);
-    };
-    // 1. Copy secrets that only a dropped server had (nothing is deleted yet).
+/// Carry out what a merge needs besides the new config: copy the secrets that
+/// only a dropped server had (to the kept one, never over a value it has), then
+/// move every workspace link and per-chat choice to the item that stays, in one
+/// transaction. Nothing is deleted here (the removal of a server's secrets is
+/// the save's own cleanup, after this). On `Err` no link has moved. `plan` must
+/// come from `plan_saved_merges`, never from a webview.
+fn apply_merges(store: &dyn SecretStore, conn: &rusqlite::Connection, plan: &MergePlan) -> Result<usize, String> {
     for m in &plan.secret_moves {
         if store.get(&m.to).is_none() {
             if let Some(value) = store.get(&m.from) {
-                if let Err(e) = store.set(&m.to, &value) {
-                    log::warn!("Duplicate sources: couldn't carry a saved secret over ({e}): nothing merged");
-                    return unchanged(cfg);
-                }
+                store.set(&m.to, &value).map_err(|e| format!("couldn't carry a saved secret over ({e})"))?;
             }
         }
     }
-    // 2. Memberships and choices follow the item that stays, in one transaction each.
-    let moved_servers = sources_seed::repoint_duplicates(conn, ItemKind::Server, &plan.server_map);
-    let moved_folders = moved_servers.and_then(|n| {
-        sources_seed::repoint_duplicates(conn, ItemKind::Folder, &plan.folder_map).map(|m| n + m)
-    });
-    let moved = match moved_folders {
-        Ok(n) => n,
-        Err(e) => {
-            log::warn!("Duplicate sources: couldn't update the workspaces ({e}): nothing merged");
-            return unchanged(cfg);
-        }
-    };
-    // 3. Only now do the dropped servers' secrets go.
-    for id in &plan.secret_drops {
-        store.delete(id);
-    }
-    log::info!(
-        "Merged duplicate sources: {} server(s), {} folder(s), {} workspace row(s) moved",
-        plan.server_map.len(),
-        plan.folder_map.len(),
-        moved
-    );
-    SourcesRepairResult { merged_servers: plan.server_map.len(), merged_folders: plan.folder_map.len(), config: plan.config }
+    sources_seed::repoint_all(
+        conn,
+        &[(ItemKind::Server, plan.server_map.as_slice()), (ItemKind::Folder, plan.folder_map.as_slice())],
+    )
 }
 
-/// Called once when the webview has read its saved sources, before it gives them
-/// to the backend: merges servers and notes folders saved twice and returns the
-/// sources to keep. See [`repair_with`].
-#[command]
-pub fn repair_personal_sources(
-    config: PersonalSourcesConfig,
-    state: State<'_, AppState>,
-) -> Result<SourcesRepairResult, String> {
-    let _one_at_a_time = REPAIR_LOCK.lock().map_err(|_| "Couldn't look at your sources".to_string())?;
-    if !crate::workspace::available() {
-        return Ok(SourcesRepairResult { config, merged_servers: 0, merged_folders: 0 });
+/// What a save of `new` over the `held` config may do for items that were merged
+/// (see `plan_saved_merges`: only what `held` proves). Nothing to merge is
+/// `Ok` without touching the store or the database. `Err` leaves every link
+/// where it was.
+fn merge_for_save(
+    store: &dyn SecretStore,
+    conn: Option<&rusqlite::Connection>,
+    held: &PersonalSourcesConfig,
+    new: &PersonalSourcesConfig,
+) -> Result<(), String> {
+    let merges = plan_saved_merges(held, new);
+    if merges.is_empty() {
+        return Ok(());
     }
-    let Some(db) = state.database.as_ref() else {
-        return Ok(SourcesRepairResult { config, merged_servers: 0, merged_folders: 0 });
-    };
-    let db = db.lock().map_err(|e| format!("Failed to lock database: {e}"))?;
-    Ok(repair_with(&SystemSecrets::new(), Some(db.connection()), config))
+    let conn = conn.ok_or_else(|| "the workspaces are not available".to_string())?;
+    let moved = apply_merges(store, conn, &merges)?;
+    log::info!(
+        "Merged duplicate sources: {} server(s), {} folder(s), {} workspace row(s) moved",
+        merges.server_map.len(),
+        merges.folder_map.len(),
+        moved
+    );
+    Ok(())
+}
+
+/// Merge the servers and notes folders the backend itself holds twice (same
+/// launch, same environment; same folder path). The webview sends nothing: the
+/// proposal comes from the held config, and the side effects (secrets, links)
+/// happen in the save of that proposal, which acts only on what the held config
+/// proves (see `plan_saved_merges`). The kept server is the one that was checked
+/// OK and is on; every workspace that listed another one lists it. Never merges
+/// when anything differs. On any failure nothing is removed and the held config
+/// comes back unchanged. Idempotent. Call it after the first `set_personal_sources`
+/// of the session: before that nothing is held.
+#[command]
+pub fn repair_personal_sources(state: State<'_, AppState>, app: AppHandle) -> Result<SourcesRepairResult, String> {
+    use crate::commands::workspace_commands::{change_and_restart, Touch};
+    let _one_at_a_time = REPAIR_LOCK.lock().map_err(|_| "Couldn't look at your sources".to_string())?;
+    let held = state.personal_sources.read().map_err(|_| "Couldn't look at your sources".to_string())?.clone();
+    let unchanged = |config: PersonalSourcesConfig| SourcesRepairResult { config, merged_servers: 0, merged_folders: 0 };
+    if !crate::workspace::available() {
+        return Ok(unchanged(held));
+    }
+    let plan = plan_repair(&held);
+    if plan.is_empty() {
+        return Ok(unchanged(held));
+    }
+    let proposal = plan.config.clone();
+    // Strict: if a secret or a link can't move, the proposal is not saved and both stay.
+    let saved = change_and_restart(&state, &app, |_| Touch::none(), || {
+        set_personal_sources_now(proposal, None, true, true, &state, &app)
+    });
+    match saved {
+        Ok(()) => Ok(SourcesRepairResult {
+            merged_servers: plan.server_map.len(),
+            merged_folders: plan.folder_map.len(),
+            config: plan.config,
+        }),
+        Err(e) => {
+            log::warn!("Duplicate sources: nothing merged ({e})");
+            Ok(unchanged(held))
+        }
+    }
 }
 
 // ── Saving the sources, restarting sessions ─────────────────────────────────
@@ -1047,13 +1054,16 @@ pub fn set_personal_sources(
     // What is filed is part of a workspace's material: the sessions that use
     // that workspace start again (the sources' own restart is below).
     let touched = filing.as_ref().map(|f| Touch::ws(&f.workspace_id)).unwrap_or_default();
-    change_and_restart(&state, &app, |_| touched.clone(), || set_personal_sources_now(config, filing, loaded.unwrap_or(false), &state, &app))
+    change_and_restart(&state, &app, |_| touched.clone(), || set_personal_sources_now(config, filing, loaded.unwrap_or(false), false, &state, &app))
 }
 
+/// `strict_merge`: a failure to carry over what a merge needs refuses the save
+/// (the backend's own repair); otherwise the save stands, as the user's removal.
 fn set_personal_sources_now(
     mut config: PersonalSourcesConfig,
     filing: Option<crate::workspace::sources_seed::Filing>,
     loaded: bool,
+    strict_merge: bool,
     state: &AppState,
     app: &AppHandle,
 ) -> Result<(), String> {
@@ -1080,6 +1090,25 @@ fn set_personal_sources_now(
             }
         }
     }
+    let store = SystemSecrets::new();
+    // A server or folder the held config had twice and that is gone from the new
+    // one: its secrets and links go to the one that stays, before anything is
+    // forgotten. Decided from the held copies only, never from what was sent.
+    let held = state.personal_sources.read().map(|c| c.clone()).unwrap_or_default();
+    if !plan_saved_merges(&held, &config).is_empty() {
+        let merged = match (crate::workspace::available(), state.database.as_ref()) {
+            (true, Some(db)) => db
+                .lock()
+                .map_err(|e| format!("Failed to lock database: {e}"))
+                .and_then(|db| merge_for_save(&store, Some(db.connection()), &held, &config)),
+            _ => Err("the workspaces are not available".to_string()),
+        };
+        match merged {
+            Ok(()) => {}
+            Err(e) if strict_merge => return Err(e),
+            Err(e) => log::warn!("Duplicate sources: couldn't carry the links over ({e})"),
+        }
+    }
     let old = {
         let mut slot = state
             .personal_sources
@@ -1098,7 +1127,6 @@ fn set_personal_sources_now(
             }
         }
     }
-    let store = SystemSecrets::new();
     let pending: Vec<McpServer> = state
         .pending_servers
         .lock()
@@ -1133,6 +1161,8 @@ mod tests {
         values: Mutex<HashMap<String, String>>,
         /// `set` fails for this id.
         fail_on: Option<String>,
+        /// Every `set` and `delete` asked for, in order.
+        log: Mutex<Vec<String>>,
     }
 
     impl SecretStore for MemoryStore {
@@ -1144,11 +1174,13 @@ mod tests {
             if self.fail_on.as_deref() == Some(id) {
                 return Err("denied".into());
             }
+            self.log.lock().unwrap().push(format!("set {id}"));
             self.values.lock().unwrap().insert(id.into(), value.into());
             Ok(())
         }
 
         fn delete(&self, id: &str) {
+            self.log.lock().unwrap().push(format!("delete {id}"));
             self.values.lock().unwrap().remove(id);
         }
     }
@@ -1861,7 +1893,7 @@ mod tests {
         assert_eq!(edited.id, saved.id);
     }
 
-    // ── Repair of duplicates saved by an older version ──
+    // ── Merging what was saved twice: only what the backend held counts ──
 
     fn dup(id: &str, key: &str) -> McpServer {
         McpServer { id: id.into(), key: key.into(), label: key.into(), ..saved_mira() }
@@ -1872,8 +1904,17 @@ mod tests {
         stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect()
     }
 
+    fn servers(list: Vec<McpServer>) -> PersonalSourcesConfig {
+        PersonalSourcesConfig { mcp_servers: list, ..Default::default() }
+    }
+
+    /// A store that remembers every write and delete it was asked for.
+    fn writes(store: &MemoryStore) -> Vec<String> {
+        store.log.lock().unwrap().clone()
+    }
+
     #[test]
-    fn repair_merges_the_duplicate_moves_secrets_and_repoints_every_workspace() {
+    fn a_saved_duplicate_merges_moves_secrets_and_repoints_every_workspace() {
         use crate::workspace::test_support::*;
         let conn = memory_db();
         let (a, b) = (new_ws(&conn, "A", false, false), new_ws(&conn, "B", false, false));
@@ -1892,11 +1933,17 @@ mod tests {
         let store = MemoryStore::default();
         store.set("mcp:mira-2:API_KEY", "only-here").unwrap();
 
-        let cfg = PersonalSourcesConfig { mcp_servers: vec![dropped, kept.clone()], ..Default::default() };
-        let out = repair_with(&store, Some(&conn), cfg);
-        assert_eq!((out.merged_servers, out.merged_folders), (1, 0));
-        assert_eq!(out.config.mcp_servers, vec![kept]);
+        // The backend's repair proposes from what it holds ...
+        let held = servers(vec![dropped, kept.clone()]);
+        let plan = plan_repair(&held);
+        assert_eq!(plan.config.mcp_servers, vec![kept.clone()]);
+        // ... and the save of the proposal acts, from the held copies.
+        merge_for_save(&store, Some(&conn), &held, &plan.config).unwrap();
         assert_eq!(store.get("mcp:mira:API_KEY").as_deref(), Some("only-here"), "the value moved to the kept server");
+        // The old copy goes with the save's own cleanup of removed servers.
+        for id in secrets_to_drop(&held, &plan.config, &[]) {
+            store.delete(&id);
+        }
         assert!(store.get("mcp:mira-2:API_KEY").is_none(), "the dropped server's secret is gone");
         let mut expected = vec![
             ("general".to_string(), "server".to_string(), "kept".to_string()),
@@ -1910,32 +1957,102 @@ mod tests {
             .unwrap();
         assert_eq!(pinned, 1, "a pin on the merged row is kept");
 
-        // Running it again changes nothing.
-        let before = rows(&conn);
-        let again = repair_with(&store, Some(&conn), out.config.clone());
-        assert_eq!((again.merged_servers, again.merged_folders), (0, 0));
-        assert_eq!(again.config, out.config);
-        assert_eq!(rows(&conn), before);
+        // Idempotent: the proposal from the merged config is empty, and the same save again moves nothing.
+        let before = (rows(&conn), writes(&store).len());
+        assert!(plan_repair(&plan.config).is_empty());
+        merge_for_save(&store, Some(&conn), &held, &plan.config).unwrap();
+        merge_for_save(&store, Some(&conn), &plan.config, &plan.config).unwrap();
+        assert_eq!(rows(&conn), before.0);
+        assert_eq!(writes(&store).len(), before.1, "no secret was set again");
     }
 
     #[test]
-    fn repair_keeps_the_kept_servers_own_secret() {
+    fn a_merge_never_overwrites_the_kept_servers_own_secret() {
         use crate::workspace::test_support::*;
         let conn = memory_db();
         let store = MemoryStore::default();
         store.set("mcp:mira:API_KEY", "mine").unwrap();
         store.set("mcp:mira-2:API_KEY", "theirs").unwrap();
-        let mut a = dup("a", "mira");
-        a.enabled = true;
-        let b = dup("b", "mira-2");
-        let out = repair_with(&store, Some(&conn), PersonalSourcesConfig { mcp_servers: vec![a, b], ..Default::default() });
-        assert_eq!(out.merged_servers, 1);
+        let held = servers(vec![dup("a", "mira"), dup("b", "mira-2")]);
+        merge_for_save(&store, Some(&conn), &held, &servers(vec![dup("a", "mira")])).unwrap();
         assert_eq!(store.get("mcp:mira:API_KEY").as_deref(), Some("mine"));
-        assert!(store.get("mcp:mira-2:API_KEY").is_none());
     }
 
     #[test]
-    fn repair_keeps_both_when_the_environment_differs() {
+    fn a_forged_duplicate_in_the_incoming_config_moves_and_deletes_nothing() {
+        use crate::workspace::test_support::*;
+        let conn = memory_db();
+        file(&conn, "general", "server", "real");
+        file(&conn, "general", "server", "other");
+        let store = MemoryStore::default();
+        store.set("mcp:mira:API_KEY", "real-key").unwrap();
+        store.set("mcp:other:TOKEN", "other-key").unwrap();
+        store.log.lock().unwrap().clear();
+        let before = rows(&conn);
+        let real = dup("real", "mira");
+        let mut other = dup("other", "other");
+        other.transport = McpTransport::Stdio { command: "python".into(), args: vec!["o.py".into()] };
+        other.env = vec![EnvVar { name: "TOKEN".into(), value: None, secret: true }];
+        let held = servers(vec![real.clone(), other.clone()]);
+
+        let cases = [
+            // The webview makes up a "duplicate" of a held server and the server itself disappears.
+            servers(vec![dup("fake", "mira-x"), other.clone()]),
+            // A server id the backend never held stands in for the kept one.
+            servers(vec![dup("never-held", "mira"), other.clone()]),
+            // Same command in the incoming config, but the held copies are different servers.
+            servers(vec![dup("other", "other"), real.clone()]),
+            // The kept one is changed to look like the dropped one, and the dropped one leaves.
+            servers(vec![McpServer { transport: other.transport.clone(), env: other.env.clone(), ..real.clone() }]),
+            // One server leaves that is no duplicate of any held server.
+            servers(vec![real.clone()]),
+            // Everything removed.
+            servers(vec![]),
+        ];
+        for incoming in cases {
+            merge_for_save(&store, Some(&conn), &held, &incoming).unwrap();
+        }
+        assert!(writes(&store).is_empty(), "no secret was written or deleted: {:?}", writes(&store));
+        assert_eq!(rows(&conn), before, "no link moved");
+        assert_eq!(store.get("mcp:mira:API_KEY").as_deref(), Some("real-key"));
+        assert_eq!(store.get("mcp:other:TOKEN").as_deref(), Some("other-key"));
+    }
+
+    #[test]
+    fn nothing_is_held_on_the_first_push_so_nothing_is_merged() {
+        use crate::workspace::test_support::*;
+        let conn = memory_db();
+        file(&conn, "general", "server", "b");
+        let store = MemoryStore::default();
+        store.set("mcp:mira-2:API_KEY", "x").unwrap();
+        let before = rows(&conn);
+        // An empty held config (first push of a session) can't prove any duplicate.
+        merge_for_save(&store, Some(&conn), &PersonalSourcesConfig::default(), &servers(vec![dup("a", "mira")])).unwrap();
+        assert!(writes(&store).len() == 1 && rows(&conn) == before);
+        // Not even with no database at all: nothing to do is not an error.
+        merge_for_save(&store, None, &PersonalSourcesConfig::default(), &servers(vec![dup("a", "mira")])).unwrap();
+    }
+
+    #[test]
+    fn a_merge_that_cannot_complete_leaves_every_link_and_secret_where_it_was() {
+        use crate::workspace::test_support::*;
+        let conn = memory_db();
+        file(&conn, "general", "server", "b");
+        let held = servers(vec![dup("a", "mira"), dup("b", "mira-2")]);
+        let kept_only = servers(vec![dup("a", "mira")]);
+        let before = rows(&conn);
+        // No workspace database.
+        assert!(merge_for_save(&MemoryStore::default(), None, &held, &kept_only).is_err());
+        // The secret store refuses the write.
+        let failing = MemoryStore { fail_on: Some("mcp:mira:API_KEY".into()), ..Default::default() };
+        failing.values.lock().unwrap().insert("mcp:mira-2:API_KEY".into(), "x".into());
+        assert!(merge_for_save(&failing, Some(&conn), &held, &kept_only).is_err());
+        assert!(failing.get("mcp:mira-2:API_KEY").is_some());
+        assert_eq!(rows(&conn), before, "the link stayed on the server that was kept in the saved config");
+    }
+
+    #[test]
+    fn a_merge_is_refused_when_the_environment_differs() {
         use crate::workspace::test_support::*;
         let conn = memory_db();
         file(&conn, "general", "server", "a");
@@ -1945,32 +2062,15 @@ mod tests {
         let a = dup("a", "mira");
         let mut b = dup("b", "mira-2");
         b.env[1] = EnvVar { name: "MODE".into(), value: Some("rw".into()), secret: false };
-        let cfg = PersonalSourcesConfig { mcp_servers: vec![a, b], ..Default::default() };
-        let out = repair_with(&store, Some(&conn), cfg.clone());
-        assert_eq!(out.config, cfg);
+        let held = servers(vec![a, b]);
+        assert!(plan_repair(&held).is_empty(), "the proposal keeps both");
+        merge_for_save(&store, Some(&conn), &held, &servers(vec![dup("a", "mira")])).unwrap();
         assert_eq!(rows(&conn).len(), 2);
         assert_eq!(store.get("mcp:mira-2:API_KEY").as_deref(), Some("x"));
     }
 
     #[test]
-    fn repair_does_nothing_without_the_workspace_database_or_when_a_secret_cannot_move() {
-        use crate::workspace::test_support::*;
-        let cfg = PersonalSourcesConfig { mcp_servers: vec![dup("a", "mira"), dup("b", "mira-2")], ..Default::default() };
-        let store = MemoryStore::default();
-        store.set("mcp:mira-2:API_KEY", "x").unwrap();
-        assert_eq!(repair_with(&store, None, cfg.clone()).config, cfg);
-        assert!(store.get("mcp:mira-2:API_KEY").is_some());
-        // The secret store refuses the write: nothing is merged, nothing deleted.
-        let conn = memory_db();
-        let failing = MemoryStore { fail_on: Some("mcp:mira:API_KEY".into()), ..Default::default() };
-        failing.values.lock().unwrap().insert("mcp:mira-2:API_KEY".into(), "x".into());
-        let out = repair_with(&failing, Some(&conn), cfg.clone());
-        assert_eq!(out.config, cfg);
-        assert!(failing.get("mcp:mira-2:API_KEY").is_some());
-    }
-
-    #[test]
-    fn repair_merges_notes_folders_with_the_same_path() {
+    fn saved_notes_folders_with_the_same_path_merge_their_links() {
         use crate::workspace::test_support::*;
         let conn = memory_db();
         let a = new_ws(&conn, "A", false, false);
@@ -1983,10 +2083,11 @@ mod tests {
             NotesFolder { id: "f1".into(), label: "A".into(), path: r"D:\Notes".into(), enabled: false },
             NotesFolder { id: "f2".into(), label: "B".into(), path: "d:/notes/".into(), enabled: true },
         ];
-        let out = repair_with(&MemoryStore::default(), Some(&conn), PersonalSourcesConfig { notes_folders: folders, ..Default::default() });
-        assert_eq!(out.merged_folders, 1);
-        assert_eq!(out.config.notes_folders.len(), 1);
-        assert_eq!(out.config.notes_folders[0].id, "f2");
+        let held = PersonalSourcesConfig { notes_folders: folders, ..Default::default() };
+        let plan = plan_repair(&held);
+        assert_eq!(plan.config.notes_folders.len(), 1);
+        assert_eq!(plan.config.notes_folders[0].id, "f2");
+        merge_for_save(&MemoryStore::default(), Some(&conn), &held, &plan.config).unwrap();
         let mut expected = vec![
             ("general".to_string(), "folder".to_string(), "f2".to_string()),
             (a, "folder".to_string(), "f2".to_string()),
@@ -1999,5 +2100,20 @@ mod tests {
         assert_eq!(opt_in, 1, "search-its-text opt-in survives the merge");
         let pref_ref: String = conn.query_row("SELECT ref_id FROM workspace_chat_item_prefs WHERE chat_id = 'c'", [], |r| r.get(0)).unwrap();
         assert_eq!(pref_ref, "f2");
+    }
+
+    #[test]
+    fn a_forged_folder_duplicate_moves_no_link() {
+        use crate::workspace::test_support::*;
+        let conn = memory_db();
+        file(&conn, "general", "folder", "f1");
+        file(&conn, "general", "folder", "f2");
+        let before = rows(&conn);
+        let f = |id: &str, path: &str| NotesFolder { id: id.into(), label: id.into(), path: path.into(), enabled: true };
+        let held = PersonalSourcesConfig { notes_folders: vec![f("f1", r"D:\A"), f("f2", r"D:\B")], ..Default::default() };
+        // Incoming f2 pretends to be folder A's path while f1 leaves.
+        let incoming = PersonalSourcesConfig { notes_folders: vec![f("f2", r"D:\A")], ..Default::default() };
+        merge_for_save(&MemoryStore::default(), Some(&conn), &held, &incoming).unwrap();
+        assert_eq!(rows(&conn), before);
     }
 }

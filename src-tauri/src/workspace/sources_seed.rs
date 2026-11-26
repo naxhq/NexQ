@@ -135,10 +135,28 @@ pub fn remove_item_everywhere(
 /// was indexed from a dropped folder goes; the kept one's index stays.
 /// Idempotent. Returns how many rows moved or merged.
 pub fn repoint_duplicates(conn: &Connection, kind: ItemKind, map: &[(String, String)]) -> Result<usize, String> {
-    if map.is_empty() || kind == ItemKind::Document {
+    repoint_all(conn, &[(kind, map)])
+}
+
+/// [`repoint_duplicates`] for several kinds at once, in one transaction: either
+/// every dropped item's links move or none does.
+pub fn repoint_all(conn: &Connection, maps: &[(ItemKind, &[(String, String)])]) -> Result<usize, String> {
+    if maps.iter().all(|(kind, map)| map.is_empty() || *kind == ItemKind::Document) {
         return Ok(0);
     }
     let tx = crate::db::immediate_tx(conn).map_err(tx_err)?;
+    let mut changed = 0;
+    for (kind, map) in maps {
+        changed += repoint_in(&tx, *kind, map)?;
+    }
+    tx.commit().map_err(tx_err)?;
+    Ok(changed)
+}
+
+fn repoint_in(tx: &Connection, kind: ItemKind, map: &[(String, String)]) -> Result<usize, String> {
+    if map.is_empty() || kind == ItemKind::Document {
+        return Ok(0);
+    }
     let kind_text = kind.as_str();
     let mut changed = 0;
     for (dropped, kept) in map {
@@ -199,10 +217,9 @@ pub fn repoint_duplicates(conn: &Connection, kind: ItemKind, map: &[(String, Str
                 tx.execute("DELETE FROM workspace_chat_item_prefs WHERE kind = 'folder' AND ref_id = ?1", params![dropped])
                     .map_err(tx_err)?;
             }
-            super::purge::purge_search_rows(&tx, "folder", dropped)?;
+            super::purge::purge_search_rows(tx, "folder", dropped)?;
         }
     }
-    tx.commit().map_err(tx_err)?;
     Ok(changed)
 }
 

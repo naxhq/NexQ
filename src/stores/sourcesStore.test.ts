@@ -152,7 +152,7 @@ describe("sourcesStore", () => {
     expect(saved.get("personalSources")).toEqual(next);
   });
 
-  it("a server saved twice is merged at startup: the repaired config is kept, saved and pushed", async () => {
+  it("a server saved twice is merged at startup by the backend, from what it holds: the repaired config is kept and saved", async () => {
     const twice = config({ mcp_servers: [server({ id: "keep" }), server({ id: "drop", key: "mira-2", enabled: false, last_check: null })] });
     saved.set("personalSources", twice);
     const repaired = config({ mcp_servers: [server({ id: "keep" })] });
@@ -160,8 +160,11 @@ describe("sourcesStore", () => {
     const w = await openWindow();
     expect(w.useSourcesStore.getState().config.mcp_servers.map((s) => s.id)).toEqual(["keep"]);
     expect(saved.get("personalSources")).toEqual(repaired);
-    expect(pushes()).toHaveLength(1);
-    expect((pushes()[0].args as { config: PersonalSourcesConfig }).config.mcp_servers.map((s) => s.id)).toEqual(["keep"]);
+    // The backend gets the config first, then repairs it itself; the repair call carries no config.
+    expect(invokeCalls.map((c) => c.cmd)).toEqual(["set_personal_sources", "repair_personal_sources"]);
+    expect((pushes()[0].args as { config: PersonalSourcesConfig }).config.mcp_servers.map((s) => s.id)).toEqual(["keep", "drop"]);
+    const repair = invokeCalls.find((c) => c.cmd === "repair_personal_sources");
+    expect(repair?.args ?? {}).toEqual({});
   });
 
   it("with nothing to merge, or a repair that fails, the saved config is untouched", async () => {

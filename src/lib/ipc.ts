@@ -1029,12 +1029,14 @@ export async function setPersonalSources(config: PersonalSourcesConfig, filing?:
 }
 
 /**
- * Once, when the saved sources have been read and before they go to the backend:
- * merges servers and folders saved twice (the same thing in two workspaces) into
- * one, in the workspaces' links too. The result's config is the one to keep.
+ * Once, after the first `setPersonalSources` of the session: the backend merges
+ * the servers and folders it holds twice (the same thing in two workspaces) into
+ * one, in the workspaces' links too. It sends nothing and takes nothing from the
+ * webview: it works from what the backend already holds, so a webview can't
+ * make it move or delete anything. The result's config is the one to keep.
  */
-export async function repairPersonalSources(config: PersonalSourcesConfig): Promise<SourcesRepairResult> {
-  return invoke<SourcesRepairResult>("repair_personal_sources", { config });
+export async function repairPersonalSources(): Promise<SourcesRepairResult> {
+  return invoke<SourcesRepairResult>("repair_personal_sources");
 }
 
 /** After a folder or server was removed from the saved sources: it leaves every workspace. */

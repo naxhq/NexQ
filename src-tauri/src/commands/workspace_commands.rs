@@ -1281,7 +1281,7 @@ mod tests {
         vec![
             ("workspace_commands.rs", code(include_str!("workspace_commands.rs")), MUTATING),
             ("context_commands.rs", code(include_str!("context_commands.rs")), &["load_context_file", "remove_context_file"]),
-            ("sources_commands.rs", code(include_str!("sources_commands.rs")), &["set_personal_sources"]),
+            ("sources_commands.rs", code(include_str!("sources_commands.rs")), &["set_personal_sources", "repair_personal_sources"]),
             (
                 "workspace_chat_commands.rs",
                 code(include_str!("workspace_chat_commands.rs")),
@@ -1541,7 +1541,7 @@ mod tests {
         ("sources_commands", "check_mcp_server", Read),
         ("sources_commands", "delete_mcp_secrets", Exempt("secrets only; the sources restart follows their revision")),
         ("sources_commands", "set_personal_sources", Must),
-        ("sources_commands", "repair_personal_sources", Exempt("merges the same server saved twice; every workspace keeps its link")),
+        ("sources_commands", "repair_personal_sources", Must),
         ("workspace_chat_commands", "get_index_status", Read),
         ("workspace_chat_commands", "get_meeting_recap", Read),
         ("workspace_chat_commands", "retry_recaps", Exempt("re-runs recaps of material already in scope")),
