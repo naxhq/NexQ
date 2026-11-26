@@ -353,7 +353,7 @@ export function PointsPanel() {
             style={{ fontSize: reading.fontSize, lineHeight: reading.lineSpacing }}
           >
             <div ref={contentRef} className="pt-3">
-              {doc && <DocView doc={doc} states={p.states} ticks={reading.saidIt} focusDim={reading.mode !== "manual"} textStyle={reading.textStyle} spoken={p.spoken} onToggleSaid={p.toggleSaid} />}
+              {doc && <DocView doc={doc} states={p.states} ticks={reading.saidIt} focusDim={reading.mode !== "manual"} textStyle={reading.textStyle} spoken={p.spoken} struck={p.spokenRanges} onToggleSaid={p.toggleSaid} />}
             </div>
           </div>
           <span id="tp-reader-help" className="sr-only">

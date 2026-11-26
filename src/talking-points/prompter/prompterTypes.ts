@@ -6,7 +6,7 @@ import type { TpDoc } from "../doc/model";
 import type { BlockState } from "../reader/DocView";
 import type { FollowAvailability } from "./voice";
 import type { PointSaid } from "../../lib/types";
-import type { SpokenEnd } from "./spoken";
+import type { SpokenEnd, SpokenRanges } from "./spoken";
 
 export const FOCUS_RATIO = 0.33;
 /** A suggestion must hold this long before it is shown, and goes after this long. */
@@ -78,6 +78,8 @@ export interface PrompterState {
   followPosition: number;
   /** The spoken part of the current block (null when not following): what the highlight and the strike draw. */
   spoken: SpokenEnd | null;
+  /** The words spoken in every block so far (a record, kept after you move on): what the "Checked off" strike draws. */
+  spokenRanges: SpokenRanges;
   /** Scroll to the start. */
   restart: () => void;
   /** A quiet offer to jump to the point you seem to be on. */

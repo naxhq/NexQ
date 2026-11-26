@@ -23,7 +23,7 @@ import type { BlockState } from "../reader/DocView";
 import { useShown } from "../../overlay/useShown";
 import { useJumpOffers } from "./useJumpOffers";
 import { useNoteMeasure } from "./useNoteMeasure";
-import { spokenEnd, type SpokenEnd } from "./spoken";
+import { SpokenTracker, spokenEnd, type SpokenEnd, type SpokenRanges } from "./spoken";
 import { useSpokenHighlight } from "./useSpokenHighlight";
 import {
   FOCUS_RATIO,
@@ -59,6 +59,9 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
   if (!ctrl.current) ctrl.current = mkCtrl();
   if (!follower.current) follower.current = opts.follower ?? new VoiceFollower(index, { clock });
   if (!said.current) said.current = new SaidTracker(index, { clock });
+  const spokenWords = useRef<SpokenTracker | null>(null);
+  if (!spokenWords.current) spokenWords.current = new SpokenTracker();
+  const [spokenRanges, setSpokenRanges] = useState<SpokenRanges>(() => new Map());
   const bridge = useRef<VoiceBridge>(new VoiceBridge([]));
   // Wakes the frame loop when it sleeps. Every controller made later (a new note, Resume) is wired to it,
   // otherwise the loop would sleep for good and the note would stop following the voice.
@@ -123,6 +126,9 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     appliedIndex.current = indexRef.current;
     follower.current!.setIndex(indexRef.current);
     said.current!.setIndex(indexRef.current);
+    // character offsets of an edited note no longer fit the words recorded for it
+    spokenWords.current!.clear();
+    setSpokenRanges(spokenWords.current!.snapshot());
   }, []);
   useEffect(() => {
     syncIndex();
@@ -139,6 +145,8 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     if (newNote) {
       follower.current!.reset();
       said.current!.reset();
+      spokenWords.current!.clear();
+      setSpokenRanges(spokenWords.current!.snapshot());
       bridge.current.reset();
       bridge.current.prime(useTranscriptStore.getState().segments);
       adoptCtrl(mkCtrl());
@@ -188,6 +196,7 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     setFollowPosition(snap.position);
     jumpRef.current.observe(snap);
     said.current!.setPlace(snap.position);
+    if (snap.state === "following" && spokenWords.current!.advance(indexRef.current, snap.position)) setSpokenRanges(spokenWords.current!.snapshot());
     ctrl.current.setVoice(snap.position, snap.state);
     if (snap.state === "following") voiceTarget.current = snap.position;
     const marks = said.current!.marks();
@@ -409,6 +418,8 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
   const restart = useCallback(() => {
     const el = scrollRef.current;
     follower.current!.seek(0);
+    spokenWords.current!.clear();
+    setSpokenRanges(spokenWords.current!.snapshot());
     ctrl.current.setWpmPosition(0);
     voiceTarget.current = 0;
     ctrl.current.setVoice(0, "following");
@@ -475,6 +486,7 @@ export function usePrompter(opts: PrompterOptions): PrompterState {
     noteUserIntent,
     followPosition,
     spoken,
+    spokenRanges,
     restart,
     suggestion: jump.suggestion,
     goToSuggestion: jump.goToSuggestion,

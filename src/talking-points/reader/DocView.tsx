@@ -9,6 +9,7 @@ import { Check } from "lucide-react";
 import { sanitizeDoc, type TpBlock, type TpDoc, type TpHeading, type TpInline, type TpListItem, type TpParagraph } from "../doc/model";
 import { cn } from "../../lib/utils";
 import type { TextStyleId } from "../../stores/talkingPointsStore";
+import { isSpokenAt, type CharRange, type SpokenRanges } from "../prompter/spoken";
 import "../talkingPoints.css";
 
 /** "autosaid": ticked by voice (softer, easy to spot and untick); "said": ticked by hand. */
@@ -26,27 +27,45 @@ export interface DocViewProps {
   textStyle?: TextStyleId;
   /** The spoken part of the current block (from the prompter). Only the "Checked off" style draws it, as a strike. */
   spoken?: { blockId: string; endChar: number } | null;
+  /**
+   * The words actually spoken, per block (the prompter's record). Only the "Checked off" style draws it, a strike on
+   * exactly those words, in the block you are on and in the ones you left. A block without an entry falls back to `spoken`.
+   */
+  struck?: SpokenRanges | null;
   onToggleSaid?: (blockId: string) => void;
   className?: string;
 }
 
+/** Words of a block and how many of them were spoken (words with a letter or digit; punctuation never counts). */
+interface WordCount {
+  words: number;
+  struck: number;
+}
+
 /**
- * Text as one span per word, each marked struck once its first sound has been heard (offsets are
- * characters of the block text, the same ones the follower's word index maps to). Spaces stay plain text.
+ * Text as one span per word, each marked struck when it lies in a spoken range (offsets are characters of the block
+ * text, the same ones the follower's word index maps to). Spaces stay plain text.
  */
-function wordNodes(text: string, base: number, struckEnd: number): ReactNode[] {
+function wordNodes(text: string, base: number, struck: readonly CharRange[], count: WordCount): ReactNode[] {
   const out: ReactNode[] = [];
   let at = 0;
   for (const m of text.matchAll(/\S+|\s+/g)) {
     const w = m[0];
     if (/^\s/.test(w)) out.push(w);
-    else out.push(<span key={at} className="tp-w" data-struck={base + at < struckEnd ? "" : undefined}>{w}</span>);
+    else {
+      const on = isSpokenAt(struck, base + at);
+      if (/[\p{L}\p{N}]/u.test(w)) {
+        count.words++;
+        if (on) count.struck++;
+      }
+      out.push(<span key={at} className="tp-w" data-struck={on ? "" : undefined}>{w}</span>);
+    }
     at += w.length;
   }
   return out;
 }
 
-function inlineNodes(content: TpInline[] | undefined, struckEnd?: number): ReactNode[] {
+function inlineNodes(content: TpInline[] | undefined, struck?: readonly CharRange[], count?: WordCount): ReactNode[] {
   if (!content) return [];
   let off = 0;
   return content.map((n, i) => {
@@ -54,7 +73,7 @@ function inlineNodes(content: TpInline[] | undefined, struckEnd?: number): React
       off += 1;
       return <br key={i} />;
     }
-    let el: ReactNode = struckEnd === undefined ? n.text : wordNodes(n.text, off, struckEnd);
+    let el: ReactNode = struck && count ? wordNodes(n.text, off, struck, count) : n.text;
     off += n.text.length;
     for (const m of n.marks ?? []) {
       if (m.type === "bold") el = <strong>{el}</strong>;
@@ -79,19 +98,23 @@ interface BlockProps {
   ticks: boolean;
   /** Which kind of list the paragraph is in (a bullet's tick replaces its dot). */
   list?: "bullet" | "ordered";
-  /** Characters of this block already spoken, to strike them word by word ("Checked off" while following). */
-  struckEnd?: number;
+  /** The spoken character ranges of this block, to strike those words and only those ("Checked off"). */
+  struck?: readonly CharRange[];
   onToggleSaid?: (id: string) => void;
 }
 
-const Block = memo(function Block({ block, depth, state, ticks, list, struckEnd, onToggleSaid }: BlockProps) {
+const Block = memo(function Block({ block, depth, state, ticks, list, struck, onToggleSaid }: BlockProps) {
   const id = block.attrs.id;
   const auto = state === "autosaid";
   const said = state === "said" || auto;
+  // Words are wrapped only in a block that has spoken words. A whole-block strike (data-struck-all) only when every word was.
+  const count: WordCount = { words: 0, struck: 0 };
+  const content = inlineNodes(block.content, struck && struck.length > 0 ? struck : undefined, count);
   const common = {
     "data-block-id": id,
     "data-state": state,
     "data-list": list,
+    "data-struck-all": count.words > 0 && count.struck === count.words ? "" : undefined,
     style: { "--d": depth } as React.CSSProperties,
   };
   const body = (
@@ -110,7 +133,7 @@ const Block = memo(function Block({ block, depth, state, ticks, list, struckEnd,
           <Check className="h-3 w-3" strokeWidth={3} aria-hidden />
         </button>
       )}
-      {inlineNodes(block.content, said ? undefined : struckEnd)}
+      {content}
     </>
   );
   if (block.type === "heading") {
@@ -123,13 +146,13 @@ const Block = memo(function Block({ block, depth, state, ticks, list, struckEnd,
 function renderList(
   list: Extract<TpBlock, { type: "bulletList" | "orderedList" }>,
   depth: number,
-  p: Omit<BlockProps, "block" | "depth" | "state"> & { states?: ReadonlyMap<string, BlockState>; struckFor: (id: string) => number | undefined },
+  p: Omit<BlockProps, "block" | "depth" | "state"> & { states?: ReadonlyMap<string, BlockState>; struckFor: (id: string) => readonly CharRange[] | undefined },
 ): ReactNode {
   const items = list.content.map((li: TpListItem, i: number) => (
     <li key={i}>
       {li.content.map((c, k) =>
         c.type === "paragraph" ? (
-          <Block key={c.attrs.id} block={c} depth={depth} list={list.type === "bulletList" ? "bullet" : "ordered"} state={p.states?.get(c.attrs.id) ?? "ahead"} ticks={p.ticks} struckEnd={p.struckFor(c.attrs.id)} onToggleSaid={p.onToggleSaid} />
+          <Block key={c.attrs.id} block={c} depth={depth} list={list.type === "bulletList" ? "bullet" : "ordered"} state={p.states?.get(c.attrs.id) ?? "ahead"} ticks={p.ticks} struck={p.struckFor(c.attrs.id)} onToggleSaid={p.onToggleSaid} />
         ) : (
           <Fragment key={k}>{renderList(c, depth + 1, p)}</Fragment>
         ),
@@ -143,15 +166,17 @@ function renderList(
   );
 }
 
-export const DocView = memo(function DocView({ doc, states, ticks = false, focusDim = true, textStyle = "classic", spoken = null, onToggleSaid, className }: DocViewProps) {
+export const DocView = memo(function DocView({ doc, states, ticks = false, focusDim = true, textStyle = "classic", spoken = null, struck = null, onToggleSaid, className }: DocViewProps) {
   // A document that did not come through the sanitiser is cleaned here, never trusted.
   const safe = useMemo(() => sanitizeDoc(doc, undefined), [doc]);
-  const struckFor = (id: string) => (textStyle === "checked" && spoken && spoken.blockId === id ? spoken.endChar : undefined);
+  // The block being spoken, before the prompter has a record of it: everything up to the spoken end.
+  const current = useMemo<readonly CharRange[] | null>(() => (spoken ? [[0, spoken.endChar]] : null), [spoken]);
+  const struckFor = (id: string) => (textStyle !== "checked" ? undefined : struck?.get(id) ?? (spoken?.blockId === id ? current ?? undefined : undefined));
   return (
     <div className={cn("tp-doc tp-read", ticks && "tp-ticks", className)} data-dim={focusDim ? "on" : "off"} data-style={textStyle}>
       {safe.content.map((b) =>
         b.type === "paragraph" || b.type === "heading" ? (
-          <Block key={b.attrs.id} block={b} depth={0} state={states?.get(b.attrs.id) ?? "ahead"} ticks={ticks} struckEnd={struckFor(b.attrs.id)} onToggleSaid={onToggleSaid} />
+          <Block key={b.attrs.id} block={b} depth={0} state={states?.get(b.attrs.id) ?? "ahead"} ticks={ticks} struck={struckFor(b.attrs.id)} onToggleSaid={onToggleSaid} />
         ) : (
           <Fragment key={`${b.type}-${(b.content[0]?.content[0] as TpParagraph | undefined)?.attrs.id}`}>
             {renderList(b, 1, { ticks, onToggleSaid, states, struckFor })}

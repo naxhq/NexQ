@@ -12,7 +12,7 @@ import { docBlocks, docFromText } from "../doc/model";
 import { buildNoteIndex, type FollowState } from "../follow";
 import css from "../talkingPoints.css?raw";
 import { DocView } from "../reader/DocView";
-import { spokenEnd, spokenWordRanges } from "./spoken";
+import { SpokenTracker, isSpokenAt, spokenEnd, spokenWordRanges } from "./spoken";
 import { FOCUS_RATIO, usePrompter, type FollowerLike } from "./usePrompter";
 
 // No layout in jsdom: one line per block, 100 px apart.
@@ -249,5 +249,111 @@ describe("the Checked off strike follows the spoken word", () => {
     const ms = Number(/\.tp-w\s*\{[^}]*transition:\s*background-size\s*(\d+)ms/.exec(css)![1]);
     expect(ms).toBeLessThanOrEqual(120);
     expect(css.slice(css.lastIndexOf("prefers-reduced-motion"))).toMatch(/\.tp-w\s*\{\s*transition:\s*none/);
+  });
+});
+
+// -- Checked off: the strike is literal, in the block you are on and in the ones you left ---------------
+
+describe("the Checked off strike covers exactly the spoken words, also in blocks already left", () => {
+  const blocks = docBlocks(doc);
+  const wordsOf = (b: number) => blocks[b].text.split(/\s+/);
+  const blockEl = (root: HTMLElement, b: number) => root.querySelector(`[data-block-id="${blocks[b].id}"]`) as HTMLElement;
+  const struckWords = (root: HTMLElement, b: number) => Array.from(blockEl(root, b).querySelectorAll("[data-struck]")).map((e) => e.textContent);
+  const unstruckWords = (root: HTMLElement, b: number) => Array.from(blockEl(root, b).querySelectorAll(".tp-w:not([data-struck])")).map((e) => e.textContent);
+  const states = new Map(blocks.map((b, i) => [b.id, i < 2 ? "autosaid" : i === 2 ? "current" : "ahead"] as const));
+
+  /** Reads block 1 up to six words before its end, then carries on into block 2. */
+  function readLeavingTail() {
+    const t = new SpokenTracker();
+    const span = index.blocks[1];
+    t.advance(index, span.end - 6);
+    t.advance(index, index.blocks[2].first + 3);
+    return t;
+  }
+
+  it("the last six words of a left block stay unstruck, the rest are struck, though the block counts as said", () => {
+    const t = readLeavingTail();
+    const { container } = render(<DocView doc={doc} states={states} textStyle="checked" struck={t.snapshot()} />);
+    const all = wordsOf(1);
+    expect(struckWords(container, 1)).toEqual(all.slice(0, all.length - 6));
+    expect(unstruckWords(container, 1)).toEqual(all.slice(-6));
+    expect(blockEl(container, 1).hasAttribute("data-struck-all")).toBe(false);
+    expect(blockEl(container, 1).getAttribute("data-state")).toBe("autosaid");
+    // the block being read is struck up to the spoken word as before
+    expect(struckWords(container, 2)).toEqual(wordsOf(2).slice(0, 3));
+  });
+
+  it("a word skipped in the middle stays unstruck (a jump marks only the tail it landed on)", () => {
+    const t = new SpokenTracker();
+    t.advance(index, index.blocks[0].first + 2);
+    t.advance(index, index.blocks[0].first + 2 + 60);
+    const jumped = t.snapshot();
+    const { container } = render(<DocView doc={doc} states={states} textStyle="checked" struck={jumped} />);
+    expect(struckWords(container, 0)).toEqual(wordsOf(0).slice(0, 2));
+    // a record with a hole: words 0-3 and 6-end spoken, 4 and 5 skipped
+    const b = index.blocks[3];
+    const holey = new SpokenTracker();
+    holey.advance(index, b.first + 4);
+    holey.advance(index, b.first + 4 + 0);
+    const text = blocks[3].text;
+    const ranges = [[0, index.tokens[b.first + 3].end] as const, [index.tokens[b.first + 6].start, text.length] as const];
+    const skipped = render(<DocView doc={doc} textStyle="checked" struck={new Map([[blocks[3].id, ranges]])} />);
+    const w = wordsOf(3);
+    expect(struckWords(skipped.container, 3)).toEqual([...w.slice(0, 4), ...w.slice(6)]);
+    expect(unstruckWords(skipped.container, 3)).toEqual(w.slice(4, 6));
+  });
+
+  it("a fully spoken block takes the whole-block strike, and blocks with no spoken word have no word spans", () => {
+    const t = new SpokenTracker();
+    t.advance(index, index.blocks[1].first + 2);
+    t.advance(index, index.blocks[1].end);
+    t.advance(index, index.blocks[2].first + 1);
+    const { container } = render(<DocView doc={doc} states={states} textStyle="checked" struck={t.snapshot()} />);
+    expect(blockEl(container, 1).hasAttribute("data-struck-all")).toBe(true);
+    expect(blockEl(container, 1).querySelectorAll("[data-struck]").length).toBe(wordsOf(1).length);
+    expect(blockEl(container, 5).querySelectorAll(".tp-w").length).toBe(0);
+    expect(blockEl(container, 5).hasAttribute("data-struck-all")).toBe(false);
+  });
+
+  it("the whole-block line-through is only drawn for a fully spoken block", () => {
+    expect(css).toMatch(/\[data-state="said"\]\[data-struck-all\],\s*\.tp-read\[data-style="checked"\] \[data-state="autosaid"\]\[data-struck-all\]\s*\{[^}]*text-decoration:\s*line-through/);
+    expect(css).not.toMatch(/data-style="checked"\] \[data-state="autosaid"\]\s*\{[^}]*line-through/);
+  });
+
+  it("other styles never strike, with or without a record", () => {
+    const t = readLeavingTail();
+    for (const style of ["classic", "highlight", "focus"] as const) {
+      const { container, unmount } = render(<DocView doc={doc} states={states} textStyle={style} struck={t.snapshot()} spoken={{ blockId: blocks[2].id, endChar: 5 }} />);
+      expect(container.querySelectorAll("[data-struck],[data-struck-all],.tp-w").length, style).toBe(0);
+      unmount();
+    }
+  });
+
+  it("only the block that gained spoken words re-renders: unchanged blocks keep their range array", () => {
+    const t = new SpokenTracker();
+    t.advance(index, index.blocks[2].first + 2);
+    const a = t.snapshot();
+    t.advance(index, index.blocks[2].first + 4);
+    const b = t.snapshot();
+    expect(b.get(blocks[1].id)).toBe(a.get(blocks[1].id));
+    expect(b.get(blocks[2].id)).not.toBe(a.get(blocks[2].id));
+  });
+
+  it("the prompter keeps a block's spoken words after the speaker moves on, and clears them on restart", () => {
+    const { f, hook } = mount();
+    frames(5);
+    f.pos = index.blocks[1].end - 6;
+    speak();
+    frames(2);
+    f.pos = index.blocks[2].first + 3;
+    speak();
+    frames(2);
+    const r = hook.result.current.spokenRanges;
+    const kept = r.get(blocks[1].id)!;
+    expect(isSpokenAt(kept, 0)).toBe(true);
+    const lastWordStart = blocks[1].text.lastIndexOf(" ") + 1;
+    expect(isSpokenAt(kept, lastWordStart)).toBe(false);
+    act(() => hook.result.current.restart());
+    expect(hook.result.current.spokenRanges.size).toBe(0);
   });
 });

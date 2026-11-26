@@ -176,6 +176,10 @@
 .tp-read[data-style="checked"] [data-state="said"],
 .tp-read[data-style="checked"] [data-state="autosaid"] {
   opacity: 0.72;
+}
+/* The strike is literal: per word (below), and across the whole block only when every word was spoken. */
+.tp-read[data-style="checked"] [data-state="said"][data-struck-all],
+.tp-read[data-style="checked"] [data-state="autosaid"][data-struck-all] {
   text-decoration: line-through;
   text-decoration-thickness: 1.5px;
   text-decoration-color: hsl(var(--success-text));
