@@ -805,7 +805,7 @@ function STTPickerDropdown({
   return (
     <AnchoredBox
       boxRef={ref}
-      className="min-w-[200px] rounded-xl border border-border/30 bg-popover shadow-2xl z-50 overflow-hidden animate-in slide-in-from-bottom-2 fade-in duration-150"
+      className="min-w-[200px] rounded-xl border border-border/30 bg-popover shadow-2xl z-50 overflow-hidden"
     >
       {loading ? (
         <div className="px-4 py-3 text-xs text-muted-foreground">Loading providers...</div>
@@ -1061,7 +1061,7 @@ function LLMPickerDropdown({
   return (
     <AnchoredBox
       boxRef={ref}
-      className="min-w-[240px] rounded-xl border border-border/30 bg-popover shadow-2xl z-50 overflow-hidden animate-in slide-in-from-bottom-2 fade-in duration-150"
+      className="min-w-[240px] rounded-xl border border-border/30 bg-popover shadow-2xl z-50 overflow-hidden"
     >
       {/* ── Provider section ── */}
       {localOpts.length > 0 && (

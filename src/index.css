@@ -794,6 +794,17 @@ select option {
   from { transform: translateX(-24px); opacity: 0; }
   to { transform: translateX(0); opacity: 1; }
 }
+/* A floating box drawn at its final position (fixed left/top): only opacity and scale animate,
+   growing from the trigger's edge (transform-origin is set inline per placement). Never a transition
+   on left/top/translate: a `duration-*` class used to make the box fly in from the window's corner. */
+@keyframes nq-pop-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+.nq-pop { animation: nq-pop-in 140ms var(--ui-ease) both; transition: none; }
+@media (prefers-reduced-motion: reduce) {
+  .nq-pop { animation: none; }
+}
 .ui-pop-in { animation: ui-pop-in 160ms var(--ui-ease) both; }
 .ui-fade-in { animation: ui-fade-in 140ms var(--ui-ease) both; }
 .ui-sheet-in-right { animation: ui-sheet-in-right 240ms var(--ui-ease) both; }

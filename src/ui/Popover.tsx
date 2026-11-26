@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { cn } from "../lib/utils";
-import { Portal, anchorOf, placeBox, useDismiss, useMeasured } from "./portal";
+import { Portal, anchorOf, placeBox, popOrigin, useDismiss, useMeasured } from "./portal";
 
 export interface PopoverProps {
   open: boolean;
@@ -43,7 +43,8 @@ export function Popover({ open, onClose, anchorRef, label, align = "start", pref
     return () => window.removeEventListener("resize", again);
   }, [open]);
   if (!open || !anchorRef.current) return null;
-  const pos = placeBox(anchorOf(anchorRef.current), size, { align, prefer });
+  const anchorBox = anchorOf(anchorRef.current);
+  const pos = placeBox(anchorBox, size, { align, prefer });
   return (
     <Portal>
       <div
@@ -53,6 +54,7 @@ export function Popover({ open, onClose, anchorRef, label, align = "start", pref
         }}
         role="dialog"
         aria-label={label}
+        data-side={pos.placement === "above" ? "top" : "bottom"}
         style={{
           position: "fixed",
           left: pos.left,
@@ -61,8 +63,10 @@ export function Popover({ open, onClose, anchorRef, label, align = "start", pref
           maxHeight: pos.maxHeight,
           maxWidth: pos.maxWidth,
           overflowY: "auto",
+          transition: "none",
+          transformOrigin: popOrigin(anchorBox, pos, size.width),
         }}
-        className={cn("rounded-xl border border-border/40 bg-popover text-popover-foreground shadow-xl", className)}
+        className={cn("nq-pop rounded-xl border border-border/40 bg-popover text-popover-foreground shadow-xl", className)}
       >
         {children}
       </div>
@@ -121,7 +125,8 @@ export function AnchoredBox({
     return () => window.removeEventListener("resize", on);
   }, []);
   const anchor = ph.current?.parentElement ?? null;
-  const pos = anchor ? placeBox(anchorOf(anchor), size, { prefer, align, gap: 8 }) : null;
+  const anchorBox = anchor ? anchorOf(anchor) : null;
+  const pos = anchor && anchorBox ? placeBox(anchorBox, size, { prefer, align, gap: 8 }) : null;
   return (
     <>
       <span ref={ph} hidden />
@@ -129,6 +134,7 @@ export function AnchoredBox({
         <div
           {...rest}
           ref={setRef}
+          data-side={pos ? (pos.placement === "above" ? "top" : "bottom") : undefined}
           style={{
             position: "fixed",
             left: pos?.left ?? 0,
@@ -138,8 +144,11 @@ export function AnchoredBox({
             maxWidth: pos?.maxWidth,
             overflowY: "auto",
             visibility: pos ? "visible" : "hidden",
+            // Position is never animated: a `duration-*` class on a caller used to slide the box in from (0,0).
+            transition: "none",
+            transformOrigin: pos && anchorBox ? popOrigin(anchorBox, pos, size.width) : undefined,
           }}
-          className={className}
+          className={cn("nq-pop", className)}
         >
           {children}
         </div>

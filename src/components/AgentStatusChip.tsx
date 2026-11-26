@@ -177,7 +177,7 @@ function HoverCard({
       id={id}
       role="tooltip"
       data-testid="agent-hover-card"
-      className="w-72 rounded-xl border border-border/40 bg-popover p-3 text-meta shadow-lg animate-in fade-in-0 slide-in-from-bottom-1 duration-150"
+      className="w-72 rounded-xl border border-border/40 bg-popover p-3 text-meta shadow-lg"
     >
       <div className="flex items-baseline justify-between gap-3">
         <span className="text-xs font-semibold text-foreground">

@@ -78,6 +78,15 @@ export function placeBox(
   return { left, top, placement: below ? "below" : "above", maxHeight, maxWidth };
 }
 
+/**
+ * transform-origin for a box placed by `placeBox`: the edge that faces the trigger, at the trigger's
+ * horizontal centre (kept inside the box). A box above its trigger grows from its bottom edge.
+ */
+export function popOrigin(anchor: Anchor, pos: Pick<Placement, "left" | "placement">, boxWidth: number): string {
+  const x = Math.max(0, Math.min(anchor.left + anchor.width / 2 - pos.left, boxWidth));
+  return `${Math.round(x)}px ${pos.placement === "above" ? "100%" : "0%"}`;
+}
+
 /** Measure a floating element after it mounts, so it can be placed with its real size. */
 export function useMeasured<T extends HTMLElement>(dep: unknown) {
   const [el, setEl] = useState<T | null>(null);
