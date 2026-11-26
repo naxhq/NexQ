@@ -6,6 +6,7 @@ import { showToast } from "../../stores/toastStore";
 import { useAudioPlayerStore } from "../../stores/audioPlayerStore";
 import { Bookmark, Trash2, Pencil, Sparkles, Check, X, Loader2 } from "lucide-react";
 import { formatTimestamp, formatRelativeTime } from "../../lib/utils";
+import { relMs } from "../../lib/time";
 
 interface BookmarksTabProps {
   meeting: Meeting;
@@ -113,7 +114,7 @@ export function BookmarksTab({ meeting, onBookmarkUpdated, onNavigateToBookmark,
       {/* Existing bookmarks */}
       <div className="space-y-1">
         {sorted.map((bookmark) => {
-          const relativeMs = Math.max(0, bookmark.timestamp_ms - meetingStartMs);
+          const relativeMs = relMs(bookmark.timestamp_ms, meetingStartMs);
           return (
             <BookmarkRow
               key={bookmark.id}
@@ -165,7 +166,7 @@ function SuggestionsSection({
       {/* Suggestion rows */}
       <div className="space-y-1">
         {suggestions.suggestions.map((suggestion, index) => {
-          const relativeMs = Math.max(0, suggestion.timestamp_ms - meetingStartMs);
+          const relativeMs = relMs(suggestion.timestamp_ms, meetingStartMs);
           return (
             <div
               key={`suggestion-${index}`}
@@ -330,7 +331,7 @@ function BookmarkRow({
             onBlur={saveNote}
             onKeyDown={handleKeyDown}
             disabled={saving}
-            className="w-full rounded-md border border-border/50 bg-background/50 px-2 py-1 text-xs leading-relaxed text-foreground/80 outline-none focus:border-primary/40 focus:ring-1 focus:ring-primary/20 disabled:opacity-50"
+            className="w-full rounded-md border border-border/50 bg-background/50 px-2 py-1 text-xs leading-relaxed text-foreground/80 outline-none focus:border-ring focus:ring-1 focus:ring-primary/20 disabled:opacity-50"
             placeholder="Add a note..."
           />
         ) : (

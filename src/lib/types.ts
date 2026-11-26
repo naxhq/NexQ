@@ -88,6 +88,10 @@ export interface Meeting {
   config_snapshot: MeetingConfig | null;
   audio_mode?: AudioMode;
   ai_scenario?: AIScenario;
+  /** Home workspace of the meeting ("general" when absent). */
+  workspace_id?: string;
+  /** Only in the answer of `start_meeting`, when the meeting was filed somewhere other than asked. */
+  workspace_notice?: string;
   speakers?: SpeakerIdentity[];
   bookmarks?: MeetingBookmark[];
   topic_sections?: TopicSection[];
@@ -127,7 +131,11 @@ export interface MeetingSummary {
   has_summary: boolean;
   audio_mode?: AudioMode;
   ai_scenario?: AIScenario;
+  /** Home workspace ("general" when absent). */
+  workspace_id?: string;
   speaker_count?: number;
+  /** An AI-written recap exists (workspace meeting lists only). */
+  has_recap?: boolean;
 }
 
 // == SPEAKER TYPES ==
@@ -653,9 +661,17 @@ export interface ContextResource {
   chunk_count?: number;
   index_status?: string;
   last_indexed_at?: string;
+  /** `missing` = the file is gone (the row is kept); `loading` = text is still being read. */
+  status?: "ready" | "loading" | "missing";
 }
 
-export type ContextFileType = "pdf" | "txt" | "md" | "docx";
+export type ContextFileType = "pdf" | "txt" | "md" | "docx" | "note";
+
+/** `get_workspace_note`: a note as the edit dialog shows it (mirrors `NoteText` in Rust). */
+export interface NoteText {
+  title: string;
+  text: string;
+}
 
 export interface TokenBudget {
   total: number;
@@ -826,7 +842,7 @@ export interface GenerateAssistOptions {
   /** Images pasted into Ask; only a Claude (subscription) answer can use them. */
   images?: ImageAttachment[];
   /**
-   * The Notes / Tools pills as they are when the user asks. Leave it out for an
+   * The Knowledge / Tools pills as they are when the user asks. Leave it out for an
    * automatic answer (Auto-Answer, summaries, action items, bookmark
    * suggestions): those never use sources.
    */
@@ -1221,10 +1237,39 @@ export interface WindowMeetingEndedEvent {
 // field for field. Secret values never live in these: a secret env var or
 // header has no value here and sits in Windows Credential Manager.
 
-/** Which sources one answer may use: the two overlay pills. */
+/**
+ * What one answer may use of its meeting's workspace: the two overlay pills, Knowledge (named
+ * `library` here: documents, notes and folders of the workspace's Library) and Tools (its MCP
+ * servers). A pill that is off is a lock. Mirrors Rust `sources::config::SourceToggles`; the old
+ * name of `library` was `notes`.
+ */
 export interface SourceToggles {
-  notes: boolean;
+  library: boolean;
   tools: boolean;
+}
+
+/** A folder of the meeting's Library; `used` unless it is switched off in Settings. Mirrors Rust `AssistFolder`. */
+export interface AssistFolder {
+  label: string;
+  used: boolean;
+}
+
+/** A tool server of the meeting's workspace. Mirrors Rust `AssistServer`. */
+export interface AssistServer {
+  label: string;
+  allowed_tools: number;
+  total_tools: number;
+  /** Switched on, signed in and with an allowed tool. */
+  usable: boolean;
+}
+
+/** What the Knowledge and Tools pills cover for one meeting's workspace. Mirrors Rust `AssistSources`. */
+export interface AssistSources {
+  workspace_id: string;
+  documents: number;
+  notes: number;
+  folders: AssistFolder[];
+  servers: AssistServer[];
 }
 
 export interface NotesFolder {
@@ -1251,6 +1296,10 @@ export interface McpTool {
   /** `mcp__<key>__<name>`. */
   full_name: string;
   allowed: boolean;
+  /** The server marks the tool read-only (it may then run without asking). */
+  read_only_hint?: boolean;
+  /** The server marks the tool as one that can destroy or overwrite things. */
+  destructive_hint?: boolean;
 }
 
 export interface McpCheckStatus {
@@ -1278,6 +1327,13 @@ export interface PersonalSourcesConfig {
   mcp_servers: McpServer[];
   /** The one-time note about tool permissions was shown. */
   mcp_notice_seen: boolean;
+}
+
+/** What `repair_personal_sources` did with servers and folders that were saved twice. */
+export interface SourcesRepairResult {
+  config: PersonalSourcesConfig;
+  merged_servers: number;
+  merged_folders: number;
 }
 
 export interface NotesFolderInfo {
@@ -1349,4 +1405,709 @@ export interface SourceActivity {
 export interface StreamActivityEvent {
   request_id: string | null;
   activity: SourceActivity;
+}
+
+// ============================================================================
+// Workspaces (mirrors Rust `workspace/types.rs`; spec 2026-11-24-workspaces-design.md)
+// Timestamps are Unix epoch milliseconds unless a field says otherwise.
+// ============================================================================
+
+/** What a workspace points at in the library. */
+export type WorkspaceItemKind = "document" | "folder" | "server";
+
+/** Library row health: `missing` = file gone (row is kept), `off` = switched off globally in Settings. */
+export type LibraryStatus = "ready" | "indexing" | "missing" | "off" | "error";
+
+/** A workspace in the rail: counts and last activity included. */
+export interface WorkspaceSummary {
+  id: string;
+  name: string;
+  /** Optional emoji or icon key; the voiceprint is the real mark. */
+  icon: string | null;
+  /** One of the `WORKSPACE_HUES` ids (src/ui/hues), null = neutral. */
+  color: string | null;
+  description: string;
+  include_general: boolean;
+  keep_separate: boolean;
+  default_scenario: AIScenario | null;
+  /** The workspace new meetings start in (exactly one). */
+  is_default: boolean;
+  pinned: boolean;
+  archived: boolean;
+  sort: number;
+  meeting_count: number;
+  chat_count: number;
+  item_count: number;
+  /** Newest meeting, chat or edit; null when empty. */
+  last_activity: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/** One library entry as a workspace sees it (name, health and size resolved). */
+export interface WorkspaceItem {
+  workspace_id: string;
+  kind: WorkspaceItemKind;
+  ref_id: string;
+  /** User label override; null = use `name`. */
+  label: string | null;
+  /** Resolved display name (file name, folder path, server name). */
+  name: string;
+  pinned: boolean;
+  status: LibraryStatus;
+  /** Why it is missing/off/errored, for the row's second line. A document's is its file type: `note` for text written in the app. */
+  detail: string | null;
+  tokens: number | null;
+  added_at: number;
+}
+
+/** A workspace with everything its settings and Library panel need. */
+export interface WorkspaceDetail extends WorkspaceSummary {
+  /** Added to the AI instructions after the custom instructions. */
+  instructions: string;
+  /** "Prepare recaps with AI" (off by default). */
+  recaps_with_ai: boolean;
+  /** "Suggest after meetings" for memory (off by default). */
+  suggest_memory: boolean;
+  /** The live brief runs in this workspace's meetings (off by default). */
+  brief_enabled?: boolean;
+  items: WorkspaceItem[];
+}
+
+export interface WorkspaceInput {
+  /** Client-made UUID so the mark shown while creating is the real one (the backend makes one when absent). */
+  id?: string;
+  name: string;
+  icon?: string | null;
+  color?: string | null;
+  description?: string;
+  instructions?: string;
+  /** New workspaces start with false. */
+  include_general?: boolean;
+  keep_separate?: boolean;
+  default_scenario?: AIScenario | null;
+}
+
+export type WorkspacePatch = Partial<WorkspaceInput> & {
+  pinned?: boolean;
+  recaps_with_ai?: boolean;
+  suggest_memory?: boolean;
+  brief_enabled?: boolean;
+};
+
+/** Deleting a workspace: move its meetings, chats and talking points to General, or delete them. */
+export type DeleteWorkspaceMode = "move" | "delete";
+
+/** A document, folder or MCP server, once, with the workspaces that use it. */
+export interface LibraryItem {
+  kind: WorkspaceItemKind;
+  ref_id: string;
+  name: string;
+  status: LibraryStatus;
+  detail: string | null;
+  tokens: number | null;
+  workspace_ids: string[];
+  /** In no workspace (never added anywhere on its own). */
+  unfiled: boolean;
+}
+
+/** Where a meeting's material comes from. `effective` is computed by Rust `scope_for` only. */
+export interface MeetingScope {
+  meeting_id: string;
+  home: string;
+  borrowed: string[];
+  /** Workspaces whose material is used: home + borrowed + General when allowed. */
+  effective: string[];
+}
+
+export interface WorkspaceMeetingPage {
+  meetings: MeetingSummary[];
+  total: number;
+}
+
+/** `workspaces_changed` */
+export interface WorkspacesChangedEvent {
+  workspace_id?: string | null;
+}
+
+// -- Search and index --------------------------------------------------------
+
+export type PassageKind = "transcript" | "document" | "folder" | "talking_point";
+
+export interface Passage {
+  id: number;
+  kind: PassageKind;
+  ref_id: string;
+  sub_ref: string | null;
+  title: string;
+  /** ms since the meeting started (see lib/time.ts). */
+  start_ms: number | null;
+  end_ms: number | null;
+  text: string;
+  tokens: number;
+  occurred_at: number | null;
+  /** Fused rank, higher is better. */
+  score: number;
+  /** 0..1, how well it matches the query (newer backends). */
+  relevance?: number;
+  /** A short excerpt around the match. */
+  snippet?: string;
+  /** [start, end) pairs in `snippet`, in UTF-16 offsets. */
+  match_ranges?: Array<[number, number]>;
+}
+
+export interface SkippedFile {
+  path: string;
+  /** "too large", "secret-looking name", "hidden", "limit reached" ... */
+  reason: string;
+  /** The Library folder it belongs to, when the backend says so (else matched by path). */
+  folder_id?: string | null;
+}
+
+/** What the index holds of one Library folder. Mirrors Rust `FolderIndexInfo`. */
+export interface FolderIndexInfo {
+  folder_id: string;
+  /** Files indexed (not the ones skipped or that failed). */
+  files: number;
+  /** When the folder was last brought up to date; null when nothing is indexed. */
+  indexed_at: number | null;
+}
+
+export interface IndexStatus {
+  workspace_id: string;
+  state: "idle" | "indexing" | "paused";
+  done: number;
+  total: number;
+  passages: number;
+  skipped: SkippedFile[];
+  last_indexed_at: number | null;
+  /** Meetings whose recap the AI wrote ("Prepare recaps with AI"); absent from older backends. */
+  ai_recaps?: number;
+  /** Recaps that failed, with the latest short reason; not tried again until the transcript changes or you rescan. */
+  ai_recaps_failed?: { count: number; reason: string | null };
+  /** Each folder of the workspace: its indexed files and when it was last updated; absent from older backends. */
+  folders?: FolderIndexInfo[];
+}
+
+/** `workspace_index_progress` */
+export interface WorkspaceIndexProgressEvent {
+  workspace_id: string;
+  done: number;
+  total: number;
+  current: string | null;
+  skipped: number;
+}
+
+// -- Context ladder ------------------------------------------------------------
+
+/** The five layers of what an answer saw, in drawing order. */
+export type ContextLayer = "instructions" | "meetings" | "documents" | "folders" | "conversation";
+
+/** One item of the context: bar width is `tokens`, height is `relevance`. */
+export interface ContextBar {
+  id: string;
+  /** What the item is: meeting, document, folder, talking_point, memory, instructions, conversation. Absent from reports saved by older versions. */
+  kind?: string;
+  /** The item's id (a meeting, document, folder, talking point or memory id). */
+  ref_id?: string;
+  /** For a file of a folder: its path inside the folder. */
+  sub_ref?: string | null;
+  layer: ContextLayer;
+  title: string;
+  tokens: number;
+  /** 0..1 */
+  relevance: number;
+  pinned: boolean;
+  /** false = found but cut by the budget. */
+  included: boolean;
+}
+
+export type ContextDepth = "lean" | "balanced" | "deep";
+
+/** What was (or would be) sent for a question. Stored with every answer. */
+/** What a new chat would be drawn against (`get_context_budget`): the same rule as `ContextReport.budget`. */
+export interface ContextBudget {
+  depth: ContextDepth;
+  budget: number;
+  window: number;
+}
+
+export interface ContextReport {
+  strategy: "full" | "ladder";
+  depth: ContextDepth;
+  /**
+   * Token budget used for this report. A paid API model: 8k, 24k or 80k by depth; a subscription
+   * or local model: 16k, 30% of the window (up to 64k) or 60% (up to 150k). Never above 60% of the window.
+   */
+  budget: number;
+  /** The model's real context window in tokens. */
+  window: number;
+  used: number;
+  bars: ContextBar[];
+  /** Items left out (not drawn individually when small). */
+  omitted: number;
+  /** "Earlier messages condensed", window under 8k, pinned cut ... */
+  notices: string[];
+  /** true = estimate before sending, false = what was sent. */
+  estimate: boolean;
+  /**
+   * Per layer, what is in scope against what the bars send: `available` tokens, and whether part of
+   * it is `searched` for each question (so the bars depend on the question). Absent in reports saved
+   * by older versions.
+   */
+  layers?: ContextLayerInfo[];
+  /** The budget of every depth for this chat's model (absent in reports saved by older versions). */
+  depth_budgets?: DepthBudgets | null;
+}
+
+/** What one layer holds in scope (`ContextReport.layers`). Documents include notes and talking points. */
+export interface ContextLayerInfo {
+  layer: ContextLayer;
+  /** Tokens of everything of the layer that is in scope and indexed. */
+  available: number;
+  /** How many sources that is (for a folder: its files). */
+  sources: number;
+  /** Part of it is found by searching the question. */
+  searched: boolean;
+}
+
+export interface DepthBudgets {
+  lean: number;
+  balanced: number;
+  deep: number;
+}
+
+// -- Workspace chat ----------------------------------------------------------------
+
+export interface WorkspaceChat {
+  id: string;
+  workspace_id: string;
+  title: string;
+  provider: string | null;
+  model: string | null;
+  effort: string | null;
+  depth: ContextDepth;
+  include_meetings: boolean;
+  /** Messages up to this id are condensed (shows "Earlier messages condensed"). */
+  condensed_upto: number | null;
+  /** Saved messages (0 = an empty chat). Absent from older backends. */
+  message_count?: number;
+  created_at: number;
+  updated_at: number;
+}
+
+/** One meeting's switch for a chat (`list_chat_meeting_prefs`): false = left out of this chat. */
+export interface ChatMeetingPref {
+  meeting_id: string;
+  included: boolean;
+}
+
+/** Per chat: pin an item so it is always sent, exclude it, or go back to the default (`set_chat_item_pref`). */
+export type ChatItemPrefValue = "pin" | "exclude" | "default";
+
+export type WorkspaceChatPatch = Partial<
+  Pick<WorkspaceChat, "title" | "provider" | "model" | "effort" | "depth" | "include_meetings">
+>;
+
+/** `[S1]` in the answer text points at one of these. */
+export interface WorkspaceCitation {
+  /** "S1" without brackets. */
+  tag: string;
+  kind: PassageKind;
+  ref_id: string;
+  sub_ref: string | null;
+  title: string;
+  start_ms: number | null;
+  /** Text of the passage; for a source that is gone (empty `ref_id`), why in plain words. */
+  snippet: string;
+}
+
+export interface WorkspaceMessage {
+  id: number;
+  chat_id: string;
+  role: "user" | "assistant";
+  content: string;
+  model: string | null;
+  citations: WorkspaceCitation[];
+  context: ContextReport | null;
+  input_tokens: number;
+  output_tokens: number;
+  created_at: number;
+}
+
+/** Common to every `workspace_chat_*` event. */
+interface WorkspaceChatEventBase {
+  chat_id: string;
+  request_id: string;
+}
+export interface WorkspaceChatStartEvent extends WorkspaceChatEventBase {
+  model: string | null;
+}
+export interface WorkspaceChatTokenEvent extends WorkspaceChatEventBase {
+  token: string;
+}
+export interface WorkspaceChatActivityEvent extends WorkspaceChatEventBase {
+  activity: SourceActivity;
+}
+export interface WorkspaceChatContextEvent extends WorkspaceChatEventBase {
+  report: ContextReport;
+}
+export interface WorkspaceChatEndEvent extends WorkspaceChatEventBase {
+  message: WorkspaceMessage;
+  cancelled: boolean;
+}
+/** Why an answer failed, as the backend names it. Absent from older backends. */
+export type WorkspaceChatErrorKind = "no_key" | "rate_limited" | "unavailable" | "too_long" | "preempted" | "access_changed" | "other" | "internal";
+
+export interface WorkspaceChatErrorEvent extends WorkspaceChatEventBase {
+  error: string;
+  error_kind?: WorkspaceChatErrorKind;
+  /** With `access_changed`: "deleted" (a meeting or file was deleted) or "moved" (taken out of this chat). */
+  error_detail?: "deleted" | "moved";
+}
+
+/** `workspace_chat_approval_refused`: a tool was not run and no question was asked (for example it can't be answered safely). */
+export interface WorkspaceChatApprovalRefusedEvent {
+  chat_id: string;
+  request_id?: string | null;
+  /** The server and tool that were not run. */
+  server: string;
+  tool: string;
+  reason: string;
+}
+
+/** A pin or exclusion saved for a chat (`list_chat_item_prefs`). */
+export interface ItemPref {
+  /** The first two parts of a context bar id: `<kind>:<ref>`. */
+  kind: string;
+  ref_id: string;
+  pref: ChatItemPrefValue;
+  /** The item's name; empty when it is gone. Absent from older backends. */
+  title?: string;
+}
+
+/** `get_chat_capabilities`: what this chat's model can do right now, and what is off and why. */
+export interface ChatCapabilities {
+  /** This CLI can ask the user before it runs a tool. It does NOT say whether the chat can run: Codex, Antigravity, API and local models are false and chat normally. */
+  can_ask: boolean;
+  tools_off: Array<{ tool: string; reason: string }>;
+  notes: string[];
+}
+
+/** `workspace_chat_approval`: a tool that is not read-only asks first (auto-denied after 60 s). */
+export interface WorkspaceChatApprovalEvent extends WorkspaceChatEventBase {
+  approval_id: string;
+  server: string;
+  tool: string;
+  /** Pretty JSON, secrets redacted, cut at 4000 characters. */
+  args: unknown;
+  /** The arguments were cut: not everything is shown. */
+  truncated?: boolean;
+  /** Secrets were replaced in `args`: what is shown is not exactly what runs. */
+  redacted?: boolean;
+}
+
+/** `workspace_chat_approval_closed`: the question is over (answered elsewhere, timed out, cancelled). */
+export interface WorkspaceChatApprovalClosedEvent {
+  chat_id: string;
+  approval_id: string;
+  reason: "answered" | "timed_out" | "cancelled" | string;
+}
+
+// -- Live notes ---------------------------------------------------------------------
+
+export type NoteBlockType = "topic" | "summary" | "bullet" | "decision" | "task" | "question";
+
+/** Stable id for the life of the meeting (talking-point "said it" and edits rely on it). */
+export interface NoteBlock {
+  id: string;
+  type: NoteBlockType;
+  /** Parent topic id, null for topics. */
+  parent: string | null;
+  /** Text with inline entities `{{p:Name}} {{l:Place}} {{o:Org}} {{d:Date}} {{n:Number}}`. */
+  text: string;
+  /** Meeting time the block belongs to: ms SINCE THE MEETING STARTED (see lib/time.ts). */
+  t: number | null;
+  /** The user edited it; the AI never changes or removes it. */
+  edited: boolean;
+  pinned: boolean;
+}
+
+export interface NoteDoc {
+  version: number;
+  blocks: NoteBlock[];
+}
+
+/** What a helper (notes, brief) is doing. */
+export type NotetakerStatus = "off" | "waiting" | "on" | "running" | "paused" | "capped" | "error" | "finished";
+
+/** What the person may do now; the panel's buttons come from this, never from token counts. */
+export type RunAction = "update" | "pause" | "resume" | "keep_going" | "try_again" | "start";
+
+/** The stretch of the call the notes do not cover (meeting time, ms), when a run ended early. */
+export interface NotCovered {
+  from_ms: number;
+  to_ms: number;
+}
+
+/** Why a run ended (a meeting that is over), from the backend. */
+export type EndedKind = "covered" | "limit" | "error" | "plan_limit" | "paused" | "manual" | "out_of_time" | "stopped" | "interrupted" | "other_meeting" | "nothing_to_note";
+export interface RunEnded {
+  kind: EndedKind;
+  detail: string | null;
+}
+
+/** The notes or brief moved to another provider (an online one) while the meeting ran. */
+export interface MovedOnline {
+  from: string;
+  to: string;
+}
+
+/** Which model a run will use (the cheapest tier when nothing was chosen). */
+export interface RunModel {
+  provider: string;
+  model: string;
+  label: string;
+}
+
+/** What "Automatic" means for a provider: the cheapest good-enough model. `label` is what to show. */
+export interface AutomaticModel {
+  provider: string;
+  /** Empty: the provider's own fast tier (subscriptions). */
+  model: string;
+  effort: string | null;
+  label: string;
+}
+
+export interface NotetakerSettings {
+  enabled: boolean;
+  /** "This meeting" or "Every meeting" when turning on. */
+  scope: "meeting" | "every";
+  provider: string | null;
+  model: string | null;
+  effort: string | null;
+  update_mode: "automatic" | "manual";
+  detail: "brief" | "standard" | "detailed";
+  /** "meeting" follows the meeting language. */
+  language: string;
+  /** Tokens per meeting (default 120000). */
+  cap: number;
+  colors: boolean;
+}
+
+/** `notetaker_state` */
+export interface NotetakerState {
+  meeting_id: string;
+  status: NotetakerStatus;
+  tokens_used: number;
+  cap: number;
+  next_in_ms: number | null;
+  /** All tokens the run has seen. */
+  total_tokens: number;
+  /** Why it paused or stopped (plan limit ...); the final pass adds "Not covered: mm:ss to mm:ss". */
+  reason: string | null;
+  error_kind: string | null;
+  can: RunAction[];
+  model: RunModel | null;
+  /** What the notes miss: shown with "Update notes" in the ended panel and the Notes tab. */
+  not_covered: NotCovered | null;
+  /** Why it ended, once the meeting is over. */
+  ended: RunEnded | null;
+  moved_online: MovedOnline | null;
+}
+
+/** `notetaker_doc` */
+export interface NotetakerDocEvent {
+  meeting_id: string;
+  version: number;
+  doc: NoteDoc;
+}
+
+/** A user edit of the saved notes (ids are the block ids). */
+export type NoteEdit =
+  | { op: "update"; id: string; text?: string; type?: NoteBlockType; pinned?: boolean }
+  | { op: "add"; id: string; type: NoteBlockType; parent: string | null; text: string; after?: string | null }
+  | { op: "delete"; id: string };
+
+// -- Brief ---------------------------------------------------------------------------
+
+export interface BriefFact {
+  text: string;
+  /** Title of the cited passage (chip label). */
+  source: string;
+  passage_id?: number | null;
+  /** Where the fact comes from, to open it directly. */
+  sources?: BriefSource[];
+}
+
+export interface BriefSource {
+  kind: PassageKind;
+  ref_id: string;
+  sub_ref: string | null;
+  title: string;
+  start_ms: number | null;
+}
+
+/** A short sheet of facts about what is being discussed now. */
+export interface BriefSheet {
+  now: string;
+  facts: BriefFact[];
+  earlier: string[];
+  generated_at: number;
+}
+
+export type BriefStatus = NotetakerStatus;
+
+export interface BriefState {
+  meeting_id: string;
+  status: BriefStatus;
+  tokens_used: number;
+  cap: number;
+  next_in_ms: number | null;
+  total_tokens: number;
+  reason: string | null;
+  error_kind: string | null;
+  can: RunAction[];
+  model: RunModel | null;
+  /** Always null for a brief (it has no transcript to cover); the backend sends the same shape for both. */
+  not_covered: NotCovered | null;
+  ended: RunEnded | null;
+  moved_online: MovedOnline | null;
+}
+
+/** Which model writes the brief. Whether it runs is the workspace's own switch (`brief_enabled`). */
+export interface BriefSettings {
+  provider: string | null;
+  model: string | null;
+  effort: string | null;
+  cap: number;
+}
+
+/** `brief_sheet`: `sheet` is null when a topic change hid the old one. */
+export interface BriefSheetEvent {
+  meeting_id: string;
+  sheet: BriefSheet | null;
+}
+
+// -- Memory ------------------------------------------------------------------------------
+
+export type MemoryKind = "person" | "decision" | "open_item" | "fact" | "preference";
+export type MemoryStatus = "suggested" | "saved" | "dismissed";
+
+/** Which AI proposes memory after a meeting; nothing set = the cheapest model automatically. */
+export interface MemorySettings {
+  provider: string | null;
+  model: string | null;
+  effort: string | null;
+}
+
+export interface MemoryItem {
+  /** A suggestion the transcript does not support: shown as "Not found in the transcript". */
+  unsupported?: boolean;
+  id: string;
+  workspace_id: string;
+  kind: MemoryKind;
+  title: string;
+  text: string;
+  source_meeting: string | null;
+  source_ms: number | null;
+  status: MemoryStatus;
+  created_at: number;
+  updated_at: number;
+}
+
+/** `memory_changed` */
+export interface MemoryChangedEvent {
+  workspace_id: string;
+}
+
+// -- Talking points ---------------------------------------------------------------------------
+
+export interface TalkingPoint {
+  id: string;
+  workspace_id: string;
+  title: string;
+  /** TipTap document as JSON text. */
+  doc_json: string;
+  markdown: string;
+  plain_text: string;
+  /** "Use as AI context". */
+  in_context: boolean;
+  sort: number;
+  created_at: number;
+  updated_at: number;
+}
+
+/** Fields of a note to change; absent fields stay as they are. */
+export type TalkingPointPatch = Partial<Pick<TalkingPoint, "title" | "doc_json" | "markdown" | "plain_text" | "in_context">>;
+
+/** One block (by stable id) the user has said or ticked. */
+export interface PointSaid {
+  block_id: string;
+  /** "voice" = detected, "manual" = the user's own choice (wins over voice). */
+  by: "voice" | "manual";
+  ticked: boolean;
+}
+
+/** "Said it" state of one note in one meeting. */
+export interface PointProgress {
+  meeting_id: string;
+  point_id: string;
+  said: PointSaid[];
+}
+
+/** A settings file that could not be read at start and what was done. */
+export interface StoreRecovery {
+  file: string;
+  kept_as: string | null;
+  restored: boolean;
+}
+
+// ============================================================================
+// The database did not open (mirrors Rust `db::health`; `db` of `get_workspaces_status`)
+// ============================================================================
+
+/** `retry_open_database`: `ok` the file can be opened; `needs_restart` the running app cannot take it in without a restart. */
+export interface RetryOpenResult {
+  ok: boolean;
+  needs_restart: boolean;
+}
+export type DbProblemKind = "unreadable" | "newer" | "upgrade_failed" | "locked";
+
+/** A copy of the database NexQ opened read-only and checked before offering it. */
+export interface DbBackup {
+  /** A file name in NexQ's data folder (never a path). */
+  name: string;
+  /** Epoch ms. */
+  created_at: number;
+  bytes: number;
+  /** null when the copy can't say. */
+  meetings: number | null;
+}
+
+/** Damage the daily background check found in the open meetings file (`get_db_integrity`, event `db_integrity_problem`). */
+export interface DbIntegrityFinding {
+  message: string;
+  /** The first lines SQLite reported. */
+  details: string[];
+  /** Epoch ms of the check. */
+  checked_at: number;
+  /** The data folder, where the file and its copies are. */
+  folder: string;
+  copies: DbBackup[];
+}
+
+export interface DbProblem {
+  kind: DbProblemKind;
+  message: string;
+  /** Where the file is. */
+  path: string;
+  backups: DbBackup[];
+}
+
+/** get_meeting_recap: the recap the AI wrote for a meeting; model is null when it was not recorded. */
+export interface MeetingRecap {
+  text: string;
+  model: string | null;
+  created_at: number;
 }

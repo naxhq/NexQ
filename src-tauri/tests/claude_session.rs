@@ -78,6 +78,7 @@ fn cfg(mode: &str, record: Option<&Path>) -> SessionConfig {
         system_prompt,
         thinking: false,
         sources: None,
+        approvals: None,
     }
 }
 
@@ -543,6 +544,7 @@ async fn real_claude_image() {
         system_prompt: "You are a terse assistant. Answer in as few words as possible.".into(),
         thinking: false,
         sources: None,
+        approvals: None,
     };
     let session = ClaudeSession::spawn(bin, cfg).await.expect("spawn real claude");
 
@@ -588,6 +590,7 @@ async fn real_claude_two_turns() {
         system_prompt: "You are a terse assistant. Answer in as few words as possible.".into(),
         thinking: false,
         sources: None,
+        approvals: None,
     };
     let session = ClaudeSession::spawn(bin, cfg)
         .await

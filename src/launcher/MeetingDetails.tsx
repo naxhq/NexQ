@@ -124,7 +124,7 @@ export function MeetingDetails({ meetingId, onBack }: MeetingDetailsProps) {
       </div>
 
       {/* Tab bar */}
-      <div className="flex gap-1.5 border-b border-border/20 px-6 py-2.5" role="tablist">
+      <div className="flex gap-1.5 border-b border-border/20 px-6 py-2.5" role="tablist" aria-label="Meeting sections">
         <TabButton
           active={activeTab === "transcript"}
           onClick={() => setActiveTab("transcript")}

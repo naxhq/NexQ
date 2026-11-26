@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { anchorOf, placeBox } from "../ui/portal";
 import { AlertTriangle, Languages } from "lucide-react";
 import { STT_LANGUAGES, SAME_AS_SHARED_LANGUAGE } from "../lib/sttLanguages";
 import { languageLabel, languageShortLabel } from "../lib/sideLanguage";
@@ -21,7 +22,7 @@ export function SideLanguagePicker({ side }: { side: LanguageSide }) {
 
   const [open, setOpen] = useState(false);
   const [focusIdx, setFocusIdx] = useState(0);
-  const [pos, setPos] = useState<{ bottom: number; left: number }>({ bottom: 0, left: 0 });
+  const [pos, setPos] = useState<{ top: number; left: number; maxHeight?: number }>({ top: 0, left: 0 });
   const chipRef = useRef<HTMLButtonElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -42,12 +43,11 @@ export function SideLanguagePicker({ side }: { side: LanguageSide }) {
     setOpen(true);
   };
 
-  // Open upward from the footer chip, kept inside the window.
+  // Open upward from the footer chip with the shared placement, inside the window.
   useLayoutEffect(() => {
     if (!open || !chipRef.current) return;
-    const r = chipRef.current.getBoundingClientRect();
-    const left = Math.min(r.left, window.innerWidth - POPOVER_WIDTH - 8);
-    setPos({ bottom: window.innerHeight - r.top + 6, left: Math.max(8, left) });
+    const p = placeBox(anchorOf(chipRef.current), { width: POPOVER_WIDTH, height: popRef.current?.offsetHeight ?? 0 }, { align: "start", prefer: "above" });
+    setPos({ top: p.top, left: p.left, maxHeight: p.maxHeight });
   }, [open]);
 
   useEffect(() => {
@@ -131,7 +131,7 @@ export function SideLanguagePicker({ side }: { side: LanguageSide }) {
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={summary}
-        title={summary}
+        
         className={`flex shrink-0 cursor-pointer items-center gap-1 rounded-full px-1.5 py-0.5 text-meta font-medium tabular-nums transition-colors duration-150 ${
           open
             ? "bg-accent/50 text-foreground"
@@ -155,8 +155,8 @@ export function SideLanguagePicker({ side }: { side: LanguageSide }) {
             role="dialog"
             aria-label={name}
             onKeyDown={onPopoverKeyDown}
-            style={{ bottom: pos.bottom, left: pos.left, width: POPOVER_WIDTH }}
-            className="scope-pop-enter fixed z-50 rounded-xl border border-border/30 bg-popover/95 p-1.5 shadow-2xl backdrop-blur-md"
+            style={{ top: pos.top, left: pos.left, width: POPOVER_WIDTH, maxHeight: pos.maxHeight, overflowY: "auto" }}
+            className="scope-pop-enter fixed z-50 rounded-xl border border-border/30 bg-popover p-1.5 shadow-2xl"
           >
             <p className="px-2 pb-1 pt-0.5 text-[0.6rem] font-medium uppercase tracking-widest text-muted-foreground/45">
               {info.label} speaks

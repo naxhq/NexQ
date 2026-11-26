@@ -19,6 +19,7 @@ import {
   patchMcpServer,
   patchNotesFolder,
   removeMcpServerDurably,
+  samePath,
   removeNotesFolder,
   applyCheckResult,
 } from "./sourcesActions";
@@ -93,7 +94,7 @@ export function PersonalSourcesEditor({ variant }: PersonalSourcesEditorProps) {
       return;
     }
     if (!picked || typeof picked !== "string") return;
-    if (config.notes_folders.some((f) => f.path.toLowerCase() === picked.toLowerCase())) {
+    if (config.notes_folders.some((f) => samePath(f.path, picked))) {
       setFolderError("That folder is already added.");
       return;
     }
@@ -247,12 +248,12 @@ export function PersonalSourcesEditor({ variant }: PersonalSourcesEditorProps) {
         <AddMcpServerDialog
           editing={dialog.editing}
           onClose={() => setDialog(null)}
-          onAdded={(servers) => {
+          onAdded={(servers, alreadySaved) => {
             // Only an added server, not an edit of one the user already knew.
             if (!dialog.editing && !useSourcesStore.getState().config.mcp_notice_seen) setShowNotice(true);
             // A new or edited server starts off: check it now and show its tools,
-            // so the switch can be turned on.
-            for (const s of servers) if (!s.needs_sign_in) void check(s, true);
+            // so the switch can be turned on. One Settings already had is only linked.
+            for (const s of servers) if (!s.needs_sign_in && !alreadySaved.some((a) => a.id === s.id)) void check(s, true);
           }}
         />
       )}

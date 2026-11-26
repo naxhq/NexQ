@@ -9,7 +9,8 @@ export function DemoBadge() {
   return (
     <button
       onClick={exitDemo}
-      className="fixed bottom-4 right-4 z-[100] rounded-full bg-destructive/20 border border-destructive/30 px-3 py-1.5 cursor-pointer transition-colors duration-150 hover:bg-destructive/30"
+      className="fixed bottom-4 right-4 z-[100] rounded-full bg-background border border-destructive/40 px-3 py-1.5 cursor-pointer transition-colors duration-150 hover:border-destructive/70"
+      style={{ backgroundImage: "linear-gradient(hsl(var(--destructive) / 0.14), hsl(var(--destructive) / 0.14))" }}
       title="Exit demo mode (Ctrl+Shift+D)"
       aria-label="Exit demo mode"
     >

@@ -1,0 +1,9 @@
+{
+  "id": "w1",
+  "kind": "folder",
+  "patch": {
+    "label": "Vault",
+    "pinned": true
+  },
+  "refId": "f1"
+}

@@ -10,14 +10,13 @@ import type {
   PersonalSourcesConfig,
   SourceToggles,
 } from "../lib/types";
-import { setPersonalSources } from "../lib/ipc";
-import { useConfigStore } from "./configStore";
-import { isCliAgent } from "../lib/cliAgents";
+import { repairPersonalSources, setPersonalSources, type SourcesFiling } from "../lib/ipc";
 
 // Same plugin-store file as `configStore`, so the launcher and the overlay see
 // each other's changes through `onKeyChange`.
 const STORE_FILE = "config.json";
 const CONFIG_KEY = "personalSources";
+/** Saved by older versions as `{ notes, tools }` (the pills were global); now only read, as the default of a new meeting. */
 const TOGGLES_KEY = "sourceToggles";
 
 export const DEFAULT_SOURCES_CONFIG: PersonalSourcesConfig = {
@@ -26,7 +25,9 @@ export const DEFAULT_SOURCES_CONFIG: PersonalSourcesConfig = {
   mcp_notice_seen: false,
 };
 
-export const DEFAULT_SOURCE_TOGGLES: SourceToggles = { notes: false, tools: false };
+/** Both pills start on in every meeting. */
+/** Knowledge is on (documents were always used); Tools start nothing until the person turns them on, as in 2.45. */
+export const DEFAULT_SOURCE_TOGGLES: SourceToggles = { library: true, tools: false };
 
 let storeInstance: Store | null = null;
 
@@ -129,9 +130,15 @@ export function normalizeSourcesConfig(raw: unknown): PersonalSourcesConfig {
   };
 }
 
-function normalizeToggles(raw: unknown): SourceToggles {
+/**
+ * The pills a meeting starts with, from what an older version saved. `notes` is the old name of
+ * the Knowledge pill (`library`); anything not understood, or never saved, is Knowledge on and Tools off.
+ */
+export function normalizeToggles(raw: unknown): SourceToggles {
   if (!isObject(raw)) return { ...DEFAULT_SOURCE_TOGGLES };
-  return { notes: raw.notes === true, tools: raw.tools === true };
+  // An old `notes: false` turned off folders only (documents were always used), so it never turns Knowledge off.
+  const knowledge = typeof raw.library === "boolean" ? raw.library : true;
+  return { library: knowledge, tools: raw.tools === true };
 }
 
 /** Which kinds of source have something an answer could use right now. */
@@ -155,13 +162,15 @@ function fingerprint(value: unknown): string {
 
 interface SourcesState {
   config: PersonalSourcesConfig;
+  /** What a meeting's pills start with (older saved pills, else both on). The pills of a meeting live in `assistSourcesStore`. */
   toggles: SourceToggles;
   loaded: boolean;
   /** Why the backend refused the last config (an invalid or duplicate server key); `null` when it took it. */
   pushError: string | null;
   load: () => Promise<void>;
   /** Set, save and give to the backend. Resolves once the backend has answered; never rejects. */
-  setConfig: (c: PersonalSourcesConfig) => Promise<void>;
+  /** `filing`: what was just added, filed in a workspace too (startup pushes pass none). */
+  setConfig: (c: PersonalSourcesConfig, filing?: SourcesFiling) => Promise<void>;
   /**
    * Like `setConfig` for a change that must not be lost (a removal): rejects when
    * the save fails, then nothing reaches the backend and the config goes back to
@@ -169,16 +178,10 @@ interface SourcesState {
    * the new config (it still has the old one then); it must not throw.
    */
   setConfigDurably: (c: PersonalSourcesConfig, afterSave?: () => Promise<void>) => Promise<void>;
-  /**
-   * Set and save. A pill flipped here applies to the next answer. Pass a
-   * function to change the latest value (two quick clicks each see the other's
-   * result).
-   */
-  setToggles: (t: SourceToggles | ((latest: SourceToggles) => SourceToggles)) => void;
 }
 
 /** Notices of our own saves come back through `onKeyChange`; skip them. */
-const ownSaves: Record<string, string[]> = { [CONFIG_KEY]: [], [TOGGLES_KEY]: [] };
+const ownSaves: Record<string, string[]> = { [CONFIG_KEY]: [] };
 const OWN_SAVES_KEPT = 16;
 
 function rememberOwnSave(key: string, value: unknown): string {
@@ -219,10 +222,15 @@ const STARTING_RE = /state not managed/i;
 const STARTING_WAIT_MS = 150;
 const STARTING_TRIES = 200;
 
-async function sendWhenReady(config: PersonalSourcesConfig): Promise<void> {
+async function sendWhenReady(config: PersonalSourcesConfig, filing?: SourcesFiling): Promise<void> {
+  // Only a push made after the config was read from disk may say so (see `setPersonalSources`).
+  return whenBackendReady(() => setPersonalSources(config, filing, useSourcesStore.getState().loaded));
+}
+
+async function whenBackendReady<T>(call: () => Promise<T>): Promise<T> {
   for (let attempt = 1; ; attempt++) {
     try {
-      return await setPersonalSources(config);
+      return await call();
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       if (!STARTING_RE.test(message) || attempt >= STARTING_TRIES) throw e;
@@ -231,10 +239,33 @@ async function sendWhenReady(config: PersonalSourcesConfig): Promise<void> {
   }
 }
 
-function pushToBackend(config: PersonalSourcesConfig): Promise<void> {
+/**
+ * A server or folder saved twice (added in two workspaces by an older version)
+ * becomes one, in the saved config and in every workspace's links. Call it after
+ * the first push: the backend merges what it holds (it takes nothing from here,
+ * so this window can't make it move or delete a secret) and this keeps what it
+ * returns. Never throws: on any trouble the config stays as it was and the next
+ * start tries again.
+ */
+async function mergeSavedDuplicates(config: PersonalSourcesConfig): Promise<void> {
+  try {
+    const result = await whenBackendReady(() => repairPersonalSources());
+    const merged = (result?.merged_servers ?? 0) + (result?.merged_folders ?? 0);
+    if (merged === 0 || !result.config) return;
+    // Something changed it while the backend worked: leave it, the next start repairs.
+    if (useSourcesStore.getState().config !== config) return;
+    const repaired = normalizeSourcesConfig(result.config);
+    useSourcesStore.setState({ config: repaired });
+    await persist(CONFIG_KEY, repaired);
+  } catch (e) {
+    console.warn("[sourcesStore] Couldn't merge duplicate sources:", e);
+  }
+}
+
+function pushToBackend(config: PersonalSourcesConfig, filing?: SourcesFiling): Promise<void> {
   const run = async () => {
     try {
-      await sendWhenReady(config);
+      await sendWhenReady(config, filing);
       useSourcesStore.setState({ pushError: null });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -263,15 +294,6 @@ async function watchSaved(): Promise<void> {
       // The window that saved it already told the backend.
       useSourcesStore.setState({ config: normalizeSourcesConfig(saved) });
     }),
-    await store.onKeyChange<unknown>(TOGGLES_KEY, (saved) => {
-      if (saved === undefined || saved === null) return;
-      const own = ownSaves[TOGGLES_KEY].indexOf(fingerprint(saved));
-      if (own >= 0) {
-        ownSaves[TOGGLES_KEY].splice(own, 1);
-        return;
-      }
-      useSourcesStore.setState({ toggles: normalizeToggles(saved) });
-    }),
   );
 }
 
@@ -291,17 +313,19 @@ export const useSourcesStore = create<SourcesState>((set, get) => ({
       await watchSaved();
       // The backend is the source of truth for answers: give it what we have.
       await pushToBackend(config);
+      // The same server saved twice becomes one, from what the backend now holds.
+      await mergeSavedDuplicates(config);
     } catch (e) {
       console.error("[sourcesStore] Failed to load:", e);
       set({ loaded: true });
     }
   },
 
-  setConfig: (c) => {
+  setConfig: (c, filing) => {
     const config = normalizeSourcesConfig(c);
     set({ config });
     // Save first so a window that opens next sees it, then tell the backend.
-    return persist(CONFIG_KEY, config).then(() => pushToBackend(config));
+    return persist(CONFIG_KEY, config).then(() => pushToBackend(config, filing));
   },
 
   setConfigDurably: async (c, afterSave) => {
@@ -318,29 +342,4 @@ export const useSourcesStore = create<SourcesState>((set, get) => ({
     await afterSave?.();
     await pushToBackend(config);
   },
-
-  setToggles: (t) => {
-    let toggles: SourceToggles = { notes: false, tools: false };
-    set((state) => {
-      const next = typeof t === "function" ? t(state.toggles) : t;
-      toggles = { notes: next.notes === true, tools: next.tools === true };
-      return { toggles };
-    });
-    void persist(TOGGLES_KEY, toggles);
-  },
 }));
-
-/**
- * The pills as they are right now, for a request the user makes. `undefined`
- * off the CLI agents, or with no source set up at all (nothing to
- * send, so nobody who never set sources up sends anything new); otherwise each
- * pill that is on and has a source behind it. Both off still goes out when
- * sources exist: Shorten and FollowUp follow the answer they work on.
- */
-export function requestToggles(): SourceToggles | undefined {
-  if (!isCliAgent(useConfigStore.getState().llmProvider)) return undefined;
-  const { config, toggles } = useSourcesStore.getState();
-  const kinds = enabledKinds(config);
-  if (!kinds.notes && !kinds.tools) return undefined;
-  return { notes: toggles.notes && kinds.notes, tools: toggles.tools && kinds.tools };
-}

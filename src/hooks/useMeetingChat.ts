@@ -11,7 +11,7 @@ import {
   onStreamToken,
 } from "../lib/events";
 import type { AgentSessionStatus, MeetingChatMessage, SourceChip } from "../lib/types";
-import { requestToggles } from "../stores/sourcesStore";
+import { asksForSession, requestToggles } from "../stores/assistSourcesStore";
 
 /**
  * - `saved`: loaded from the database
@@ -169,7 +169,7 @@ export function useMeetingChat(meetingId: string, { enabled = true, trackSession
 
       const requestId = crypto.randomUUID();
       // The pills as they are when you ask; a question you type always may use them.
-      const sources = requestToggles();
+      const sources = requestToggles(meetingId);
       const questionId = `local-q-${requestId}`;
       const answerId = `local-a-${requestId}`;
       const now = Date.now();
@@ -182,7 +182,7 @@ export function useMeetingChat(meetingId: string, { enabled = true, trackSession
           content: "",
           status: "streaming",
           createdAt: now,
-          ...(sources && (sources.notes || sources.tools) ? { askedSources: true } : {}),
+          ...(asksForSession(sources, meetingId) ? { askedSources: true } : {}),
         },
       ]);
 

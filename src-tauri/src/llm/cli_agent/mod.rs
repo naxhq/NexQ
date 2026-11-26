@@ -6,6 +6,7 @@
 //! [`spawner`] picks the session type for a [`CliAgentKind`].
 
 pub mod acp;
+pub mod approval;
 pub mod codex;
 pub mod command;
 pub mod context;
@@ -24,6 +25,7 @@ pub mod settings;
 pub mod sources_convert;
 pub mod spawner;
 pub mod status;
+pub mod transcripts;
 
 /// Which CLI agent a session talks to. Serialised as the provider id
 /// (`claude_cli`, `antigravity_cli`, `codex_cli`), the string the frontend uses.

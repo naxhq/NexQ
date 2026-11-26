@@ -11,15 +11,19 @@ import {
   saveMcpServerForm,
 } from "../lib/ipc";
 import { SourcesModal } from "./SourcesModal";
-import { addMcpServers, errorText, replaceMcpServer } from "./sourcesActions";
+import { showToast } from "../stores/toastStore";
+import { ALREADY_IN_SETTINGS, addMcpServers, errorText, replaceMcpServer } from "./sourcesActions";
 import { NEEDS_SIGN_IN_TEXT } from "./McpServerCard";
 
 type Tab = "json" | "form" | "claude";
 
 interface AddMcpServerDialogProps {
   onClose: () => void;
-  /** Called after servers were added or an edit was saved. */
-  onAdded?: (servers: McpServer[]) => void;
+  /**
+   * Called after servers were added or an edit was saved. `alreadySaved` are the
+   * ones Settings already had (only linked into the workspace, nothing new to check).
+   */
+  onAdded?: (servers: McpServer[], alreadySaved: McpServer[]) => void;
   /** Edit this server (the form only). */
   editing?: McpServer;
 }
@@ -105,15 +109,17 @@ export function AddMcpServerDialog({ onClose, onAdded, editing }: AddMcpServerDi
   }, [envNamesKey]);
 
   const finish = async (servers: McpServer[], replace = false) => {
+    let alreadySaved: McpServer[] = [];
     try {
       if (replace) for (const s of servers) await replaceMcpServer(s);
-      else await addMcpServers(servers);
+      else alreadySaved = await addMcpServers(servers);
     } catch (e) {
       // Not saved: the backend must not keep their keys.
       if (!replace) void discardPendingMcpServers(servers.map((s) => s.id)).catch(() => {});
       throw e;
     }
-    onAdded?.(servers);
+    if (alreadySaved.length > 0) showToast(ALREADY_IN_SETTINGS, "info");
+    onAdded?.(servers, alreadySaved);
     onClose();
   };
 

@@ -1,0 +1,10 @@
+{
+  "id": "c1",
+  "patch": {
+    "depth": "deep",
+    "include_meetings": false,
+    "model": "sonnet",
+    "provider": null,
+    "title": "Budget"
+  }
+}

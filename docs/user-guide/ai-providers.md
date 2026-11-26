@@ -130,6 +130,18 @@ NexQ supports 9 LLM providers. The LLM powers all AI features: Assist, What to S
 
 **Use Anthropic (Claude)** if you prefer nuanced, well-reasoned responses, especially for complex or sensitive topics.
 
+### Choosing a model for chat, notes and the brief
+
+Live answers use the provider you set above. Three newer features can use a different one, so a slow, careful model for questions doesn't have to answer live:
+
+- **[Workspace chat](workspace-chat.md)** has a **Model** picker in each chat. A new chat starts on your active provider and model (on your **Deep** model if the provider is a subscription).
+- **[Live notes and the brief](live-notes-and-brief.md)** have their own **Model** in **Settings > Live Notes and Brief**. The default, **Automatic**, names the model it will use and is worked out again before every run, so switching your provider applies to the next run. With a subscription it is the CLI's fast tier. With OpenAI, Anthropic, Gemini or Groq it is a small model from your provider's own list once that list is known (fetched in the background), otherwise your active model. With OpenRouter it is chosen by listed price. With Ollama, LM Studio or a custom server it is your active model, so choose a smaller one yourself to spend less.
+- **[Memory suggestions](talking-points.md#memory)** have their own model too, **Automatic** by default, and so do the optional AI recaps (**Prepare recaps with AI** in a workspace's settings): both follow the same rule as notes and the brief. Recaps send the transcript of one meeting to that model.
+
+None of them switches to another provider if yours fails. They say what failed and let you choose. A live answer always goes first: on a local server (Ollama, LM Studio or a local custom server) it can stop a chat answer or hold back notes that use the same server.
+
+Only the subscription providers (Claude, Codex, Antigravity) can read folders and use tools in a chat. Claude asks before a tool that could change something (version 2.1.328 or newer); Codex and Antigravity can't ask yet, so those tools are off for them. API and local models answer from the passages NexQ finds and can't use tools.
+
 ## Local vs Cloud Tradeoffs
 
 | Factor | Local (Ollama, Whisper, LM Studio) | Cloud (OpenAI, Deepgram, Groq) |

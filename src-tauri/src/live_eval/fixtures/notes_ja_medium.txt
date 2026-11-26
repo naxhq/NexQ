@@ -1,0 +1,10 @@
+```json
+{'ops': [
+  {'op': 'add', 'id': 'a', 'type': 'topic', 'text': '第3四半期の予算', 't': '00:04'},
+  {'op': 'add', 'type': 'bullet', 'parent': 'a', 'text': 'マーケティング部が12％増を要求、リスボンでの発売のため', 't': '00:11'},
+  {'op': 'add', 'type': 'decision', 'parent': 'a', 'text': '10月まで採用を凍結', 't': '01:24'},
+  {'op': 'add', 'id': 'b', 'type': 'topic', 'text': 'グロベックス社の契約', 't': '01:33'},
+  {'op': 'add', 'type': 'bullet', 'parent': 'b', 'text': '11月に更新、価格が5％上がる', 't': '01:33'},
+  {'op': 'add', 'type': 'task', 'parent': 'b', 'text': '金曜までに法務に契約書を頼む', 't': '02:20'},
+]}
+```

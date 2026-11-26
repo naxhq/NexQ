@@ -1,0 +1,11 @@
+{"ops":[
+{"op":"add","id":"t1","type":"topic","text":"Presupuesto del tercer trimestre","t":"00:04"},
+{"op":"add","type":"bullet","parent":"t1","text":"Marketing pide un 12 por ciento más, unos {{n:48.000 euros}} para el lanzamiento en {{l:Lisboa}}","t":"00:11"},
+{"op":"add","type":"bullet","parent":"t1","text":"{{p:María}} confirmó el lanzamiento el {{d:14 de septiembre}}; {{o:Acme}} se encarga de la impresión","t":"00:37"},
+{"op":"add","type":"decision","parent":"t1","text":"Congelar las contrataciones hasta {{d:octubre}}","t":"01:24"},
+{"op":"add","type":"task","parent":"t1","text":"Avisar a {{p:Tomás}} hoy","t":"01:24"},
+{"op":"add","id":"t2","type":"topic","text":"Contrato con Globex","t":"01:33"},
+{"op":"add","type":"bullet","parent":"t2","text":"El contrato con {{o:Globex}} se renueva en {{d:noviembre}} y sube un 5 por ciento","t":"01:33"},
+{"op":"add","type":"task","parent":"t2","text":"Pedir el contrato anterior a legal antes del {{d:viernes}}","t":"02:20"},
+{"op":"add","type":"question","parent":"t2","text":"¿Seguimos necesitando la oficina de {{l:Berlín}}?","t":"02:31"}
+]}

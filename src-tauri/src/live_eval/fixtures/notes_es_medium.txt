@@ -1,0 +1,11 @@
+```json
+{"ops":[
+ {"op":"add","id":"x","type":"topic","text":"Presupuesto T3","t":"00:04"},
+ {"op":"add","type":"bullet","parent":"x","text":"Marketing pide un 12 por ciento más para el lanzamiento en Lisboa","t":"00:11"},
+ {"op":"add","type":"decision","parent":"x","text":"Congelar contrataciones hasta octubre","t":"01:24"},
+ {"op":"add","type":"decision","parent":"x","text":"Congelar las contrataciones hasta octubre.","t":"01:25"},
+ {"op":"add","id":"y","type":"topic","text":"Contrato Globex","t":"01:33"},
+ {"op":"add","type":"bullet","parent":"y","text":"Se renueva en noviembre, el precio sube un 5 por ciento","t":"01:33"},
+ {"op":"add","type":"task","parent":"y","text":"Pedir el contrato a legal antes del viernes","t":"02:20"},
+]}
+```

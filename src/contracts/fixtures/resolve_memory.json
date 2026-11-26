@@ -1,0 +1,9 @@
+{
+  "action": "save",
+  "id": "k1",
+  "patch": {
+    "kind": "fact",
+    "text": "X",
+    "title": "T"
+  }
+}

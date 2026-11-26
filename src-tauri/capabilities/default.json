@@ -14,6 +14,8 @@
     "core:window:allow-set-always-on-top",
     "core:window:allow-set-size",
     "core:window:allow-set-position",
+    "core:window:allow-maximize",
+    "core:window:allow-unmaximize",
     "core:window:allow-start-dragging",
     "core:window:allow-set-background-color",
     "core:webview:allow-set-webview-background-color",

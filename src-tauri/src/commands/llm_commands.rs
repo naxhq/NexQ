@@ -62,6 +62,15 @@ pub async fn set_llm_provider(
 
     // Log the provider type only: the raw config JSON carries the API key / auth value.
     let provider_type = config.provider_type.clone();
+    // Which local server live answers use, so background AI runs on the same one yield.
+    if let Ok(pt) = ProviderType::from_str(&provider_type) {
+        crate::ai_runs::LiveGate::global().set_target(crate::ai_runs::LiveTarget::for_provider(&pt, config.base_url.as_deref()));
+    }
+    // Background AI runs find this provider's endpoint (a custom or remote
+    // Ollama address) here; the key is never kept.
+    if let Some(ai) = state.ai_runs.as_ref() {
+        ai.set_hint(config.clone());
+    }
     router
         .set_provider(config)
         .map_err(|e| format!("Failed to set provider: {}", e))?;
@@ -82,6 +91,14 @@ pub async fn set_llm_provider(
         }
     }
 
+    // "Automatic" model names (notes, brief, memory, recaps) follow the provider in use:
+    // fetch its model list in the background if one is due (never during a live answer).
+    if let Some(runs) = state.ai_runs.clone() {
+        let provider = provider_type.clone();
+        tauri::async_runtime::spawn(async move {
+            runs.refresh_models(&provider).await;
+        });
+    }
     log::info!("LLM provider set to: {}", provider_type);
     Ok(())
 }

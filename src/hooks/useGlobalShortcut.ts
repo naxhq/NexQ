@@ -16,7 +16,7 @@ import { showToast } from "../stores/toastStore";
 import { useConfigStore } from "../stores/configStore";
 import { formatShortcut, normalizeAccelerator, reservedShortcutAction, screenCaptureSupported } from "../lib/shortcutLabel";
 import { providerReadsImages } from "../lib/imageAttachments";
-import { modeForKeyEvent } from "../lib/hotkeys";
+import { forwardChordToEditor, keyBelongsToFocusedControl, modeForKeyEvent } from "../lib/hotkeys";
 import { captureScreenIntoAsk } from "../lib/screenCapture";
 
 /**
@@ -223,6 +223,8 @@ export function useGlobalShortcut() {
           key: "CmdOrCtrl+B",
           handler: (event) => {
             if (event.state === "Pressed") {
+              // In a NexQ editor Ctrl+B is bold: the global key hands it over.
+              if (forwardChordToEditor("b")) return;
               (async () => {
                 const target = switchShortcutTarget(await isOverlayVisible(), !!useMeetingStore.getState().activeMeeting);
                 if (target === "launcher") await showLauncherWindow();
@@ -283,9 +285,9 @@ export function useGlobalShortcut() {
       const store = useMeetingStore.getState();
       if (!store.activeMeeting) return;
 
-      // Don't trigger if user is typing in an input/textarea
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      // Text boxes (inputs, contenteditable, role=textbox) keep every key; Space also
+      // stays with a focused button or menu item.
+      if (keyBelongsToFocusedControl(e)) return;
 
       // Check action visibility from the AI actions store
       const actions = useAIActionsStore.getState().configs.actions;

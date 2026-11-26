@@ -114,7 +114,7 @@ Suggested export filenames preserve your meeting title's Unicode text, including
 
 - **For long lectures (2+ hours)**, use Web Speech API. It handles extended sessions without session timeouts or API cost concerns.
 - **Bookmark liberally.** It is easier to review too many bookmarks than to miss something important. You can always delete irrelevant ones later.
-- **Load course materials via RAG.** Before the lecture, load your syllabus, textbook excerpts, or previous lecture notes into Context Intelligence. The AI can then reference these when answering your questions. See [Using Context Intelligence (RAG)](rag-context.md).
+- **Load course materials via RAG.** Before the lecture, load your syllabus, textbook excerpts, or previous lecture notes into the Library of a [workspace](workspaces.md) for the course. The AI can then reference these when answering your questions. After a few lectures, the [workspace chat](workspace-chat.md) can answer across all of them. See [Using Context Intelligence (RAG)](rag-context.md).
 - **Review the same day.** Transcripts are most useful when reviewed while the content is fresh. Use the AI summarization to create condensed study notes.
 - **For in-person lectures**, an external USB microphone placed near the front of the room captures significantly better audio than a laptop mic.
 

@@ -1,6 +1,7 @@
 import { useRef, useEffect, useLayoutEffect, useMemo, useState, useCallback } from "react";
 import { formatShortcut } from "../../lib/shortcutLabel";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { focusAndMarkRow } from "./momentIndex";
 import type { TranscriptSegment, SpeakerIdentity, MeetingBookmark, TranslationResult, TranslationDisplayMode } from "../../lib/types";
 import type { TranscriptSearchState } from "../../hooks/useTranscriptSearch";
 import { useAudioPlayerStore } from "../../stores/audioPlayerStore";
@@ -251,10 +252,16 @@ export function TranscriptView({ segments, mergedSegments, isVisible = true, sea
       if (mergedIdx >= 0 && mergedIdx < mergedSegments.length) {
         scrollToMergedIndex(mergedIdx);
         setSelectedIndex(mergedIdx);
+        // Keyboard and screen reader users land on the line too, and it is marked for a moment.
+        if (scrollRef.current) stopFocus = focusAndMarkRow(scrollRef.current, mergedIdx);
       }
       onScrollHandled?.();
     });
-    return () => cancelAnimationFrame(frame);
+    let stopFocus: (() => void) | undefined;
+    return () => {
+      cancelAnimationFrame(frame);
+      stopFocus?.();
+    };
   }, [initialScrollToIndex, rawToMergedIndex, mergedSegments.length, scrollToMergedIndex, onScrollHandled]);
 
   // Search: scroll to match (remap raw index → merged index)
@@ -402,7 +409,7 @@ export function TranscriptView({ segments, mergedSegments, isVisible = true, sea
   return (
     <div className="relative flex flex-1 min-h-0 flex-col">
       {/* Always-visible search bar */}
-      <div className="flex items-center gap-2 rounded-lg bg-muted/20 mx-1 mt-1 mb-1.5 px-2.5 py-1.5">
+      <div className="flex items-center gap-2 rounded-lg border border-input bg-muted/20 mx-1 mt-1 mb-1.5 px-2.5 py-1.5">
         <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
         <input
           ref={setInputRef}
@@ -538,12 +545,14 @@ export function TranscriptView({ segments, mergedSegments, isVisible = true, sea
           <span className="font-semibold text-muted-foreground/60">Text</span>
           <button
             onClick={() => setTranscriptFontSize(Math.max(10, transcriptFontSize - 1))}
-            className="flex h-5 w-5 items-center justify-center rounded text-[9px] font-bold text-muted-foreground/60 hover:bg-secondary/30 cursor-pointer"
+            aria-label="Smaller transcript text"
+            className="flex h-6 w-6 items-center justify-center rounded text-[9px] font-bold text-muted-foreground/60 hover:bg-secondary/30 cursor-pointer"
           >A</button>
           <span className="min-w-[18px] text-center tabular-nums font-semibold text-muted-foreground/50">{transcriptFontSize}</span>
           <button
             onClick={() => setTranscriptFontSize(Math.min(20, transcriptFontSize + 1))}
-            className="flex h-5 w-5 items-center justify-center rounded text-[13px] font-bold text-muted-foreground/60 hover:bg-secondary/30 cursor-pointer"
+            aria-label="Larger transcript text"
+            className="flex h-6 w-6 items-center justify-center rounded text-[13px] font-bold text-muted-foreground/60 hover:bg-secondary/30 cursor-pointer"
           >A</button>
           <ColorPickerButton value={transcriptTextColor} onChange={setTranscriptTextColor} label="Text color" />
         </div>
@@ -552,12 +561,14 @@ export function TranscriptView({ segments, mergedSegments, isVisible = true, sea
           <span className="font-semibold text-muted-foreground/60">Translation</span>
           <button
             onClick={() => setTranslationFontSize(Math.max(9, translationFontSize - 1))}
-            className="flex h-5 w-5 items-center justify-center rounded text-[9px] font-bold text-muted-foreground/60 hover:bg-secondary/30 cursor-pointer"
+            aria-label="Smaller translation text"
+            className="flex h-6 w-6 items-center justify-center rounded text-[9px] font-bold text-muted-foreground/60 hover:bg-secondary/30 cursor-pointer"
           >A</button>
           <span className="min-w-[18px] text-center tabular-nums font-semibold text-muted-foreground/50">{translationFontSize}</span>
           <button
             onClick={() => setTranslationFontSize(Math.min(18, translationFontSize + 1))}
-            className="flex h-5 w-5 items-center justify-center rounded text-[13px] font-bold text-muted-foreground/60 hover:bg-secondary/30 cursor-pointer"
+            aria-label="Larger translation text"
+            className="flex h-6 w-6 items-center justify-center rounded text-[13px] font-bold text-muted-foreground/60 hover:bg-secondary/30 cursor-pointer"
           >A</button>
           <ColorPickerButton value={translationTextColor} onChange={setTranslationTextColor} label="Translation color" />
         </div>
@@ -630,7 +641,7 @@ export function TranscriptView({ segments, mergedSegments, isVisible = true, sea
       {/* Note editor modal */}
       {noteEdit && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/70"
           onClick={() => setNoteEdit(null)}
         >
           <div
@@ -649,7 +660,7 @@ export function TranscriptView({ segments, mergedSegments, isVisible = true, sea
               placeholder="Add a note..."
               rows={3}
               autoFocus
-              className="w-full resize-none rounded-lg border border-border/30 bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20"
+              className="w-full resize-none rounded-lg border border-border/30 bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 outline-none focus:border-ring focus:ring-1 focus:ring-primary/20"
             />
             <div className="mt-3 flex items-center justify-between">
               <span className="text-[10px] text-muted-foreground/40">{formatShortcut("CmdOrCtrl+Enter")} to save</span>
@@ -815,7 +826,7 @@ function TimelineScrubber({
           {/* Selected marker */}
           {selPct !== null && (
             <div
-              className="absolute top-0 h-full w-0.5 bg-white shadow-[0_0_8px_rgba(255,255,255,0.6)]"
+              className="absolute top-0 h-full w-0.5 bg-foreground shadow-[0_0_8px_hsl(var(--foreground)/0.4)]"
               style={{ left: `${selPct}%` }}
             />
           )}
@@ -823,7 +834,7 @@ function TimelineScrubber({
           {/* Hover line */}
           {hover && (
             <div
-              className="pointer-events-none absolute top-0 h-full w-px bg-white/40"
+              className="pointer-events-none absolute top-0 h-full w-px bg-foreground/40"
               style={{ left: hover.x }}
             />
           )}

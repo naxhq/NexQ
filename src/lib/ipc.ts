@@ -5,6 +5,13 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AutomaticModel, BriefSettings, BriefSheet, BriefState, NotetakerState, ChatCapabilities, DbIntegrityFinding, DbProblem, RetryOpenResult, ItemPref, ChatItemPrefValue, ChatMeetingPref, DeleteWorkspaceMode, ContextReport, ContextBudget, ContextDepth, IndexStatus, MeetingRecap, LibraryItem, MeetingScope, NoteText,
+  MemoryItem, MemorySettings, NoteDoc, NoteEdit, NotetakerSettings, PointProgress, PointSaid,
+  TalkingPoint, TalkingPointPatch, WorkspaceChat, WorkspaceChatPatch, WorkspaceDetail, WorkspaceInput, WorkspaceItemKind,
+  WorkspaceMeetingPage, WorkspaceMessage, WorkspacePatch, WorkspaceSummary,
+} from "./types";
+import type {
+  StoreRecovery,
   MeetingDetectionConfig,
   MeetingPromptInfo,
   StealthSupport,
@@ -46,8 +53,9 @@ import type {
   McpServer,
   McpServerForm,
   NotesFolderInfo,
-  PersonalSourcesConfig,
+  PersonalSourcesConfig, SourcesRepairResult,
   SourceToggles,
+  AssistSources,
 } from "./types";
 
 // == IPC: Audio (Sub-PRD 3) ==
@@ -322,9 +330,11 @@ export async function getActionConfigs(): Promise<AllActionConfigs> {
 // == IPC: Context (Sub-PRD 7) ==
 
 export async function loadContextFile(
-  filePath: string
+  filePath: string,
+  /** The workspace the file joins with the library (omitted = it joins none on its own). */
+  workspaceId?: string
 ): Promise<ContextResource> {
-  const result = await invoke<string>("load_context_file", { filePath });
+  const result = await invoke<string>("load_context_file", { filePath, ...(workspaceId ? { workspaceId } : {}) });
   return JSON.parse(result);
 }
 
@@ -341,10 +351,6 @@ export async function setCustomInstructions(
   instructions: string
 ): Promise<void> {
   return invoke("set_custom_instructions", { instructions });
-}
-
-export async function getAssembledContext(): Promise<string> {
-  return invoke("get_assembled_context");
 }
 
 export async function getTokenBudget(): Promise<TokenBudget> {
@@ -376,9 +382,10 @@ export async function hasApiKey(provider: string): Promise<boolean> {
 // == IPC: Meetings (Sub-PRD 1/8) ==
 
 export async function startMeeting(
-  title?: string
+  title?: string,
+  workspaceId?: string,
 ): Promise<Meeting> {
-  const result = await invoke<string>("start_meeting", { title });
+  const result = await invoke<string>("start_meeting", { title, ...(workspaceId ? { workspaceId } : {}) });
   return JSON.parse(result);
 }
 
@@ -839,6 +846,8 @@ export async function downloadUpdate(): Promise<UpdateInfo> {
 
 /** Install the downloaded update. The app exits and relaunches on the new version. */
 export async function installUpdateNow(): Promise<void> {
+  // The app restarts: save where the windows are first.
+  await import("../hooks/useWindowPlacement").then((m) => m.flushWindowPlacement()).catch(() => {});
   return invoke("install_update_now");
 }
 
@@ -883,8 +892,13 @@ export async function setClaudeCliConfig(config: ClaudeCliConfig): Promise<void>
  * Detect the CLI, its version and login state (no model call). For Antigravity
  * the login check also lists its models (the backend catalog is filled).
  */
-export async function cliAgentStatus(kind: CliAgentKind): Promise<CliAgentStatus> {
-  return invoke<CliAgentStatus>("cli_agent_status", { kind });
+/**
+ * What a CLI agent is and whether it is logged in. `refresh` asks the backend to look again instead of
+ * answering from what it saw a moment ago: pass it for an explicit "check again" (Settings, the wizard,
+ * after a login or install), not when merely opening a picker.
+ */
+export async function cliAgentStatus(kind: CliAgentKind, refresh = false): Promise<CliAgentStatus> {
+  return invoke<CliAgentStatus>("cli_agent_status", refresh ? { kind, refresh: true } : { kind });
 }
 
 /** The models the CLI offers (no model call). Cached by the backend; `refresh` asks the CLI again. */
@@ -1004,8 +1018,70 @@ export async function deleteMcpSecrets(serverId: string): Promise<void> {
  * when something that goes into it changed. Removing a server here forgets
  * its saved secrets. Rejects on an invalid or duplicate server key.
  */
-export async function setPersonalSources(config: PersonalSourcesConfig): Promise<void> {
-  return invoke("set_personal_sources", { config });
+/** The items the user just added, filed in a workspace: exactly these ids, never inferred. */
+export interface SourcesFiling {
+  workspace_id: string;
+  items: Array<{ kind: "folder" | "server"; ref_id: string }>;
+}
+
+/** `loaded` is true only once the sources store has read its config from disk: an earlier push could wipe what the backend holds. */
+export async function setPersonalSources(config: PersonalSourcesConfig, filing?: SourcesFiling, loaded?: boolean): Promise<void> {
+  return invoke("set_personal_sources", { config, ...(filing ? { filing } : {}), ...(loaded ? { loaded: true } : {}) });
+}
+
+/**
+ * Once, after the first `setPersonalSources` of the session: the backend merges
+ * the servers and folders it holds twice (the same thing in two workspaces) into
+ * one, in the workspaces' links too. It sends nothing and takes nothing from the
+ * webview: it works from what the backend already holds, so a webview can't
+ * make it move or delete anything. The result's config is the one to keep.
+ */
+export async function repairPersonalSources(): Promise<SourcesRepairResult> {
+  return invoke<SourcesRepairResult>("repair_personal_sources");
+}
+
+/** After a folder or server was removed from the saved sources: it leaves every workspace. */
+export async function removeLibraryItem(kind: WorkspaceItemKind, refId: string): Promise<void> {
+  return invoke("remove_library_item", { kind, refId });
+}
+
+/** Mirrors Rust `WorkspacesStatus`: false when the upgrade failed and the app runs on General alone. */
+export interface WorkspacesStatus {
+  available: boolean;
+  error: string | null;
+  /** Set when the meetings file itself did not open: nothing was changed. */
+  db?: DbProblem | null;
+}
+export async function getWorkspacesStatus(): Promise<WorkspacesStatus> {
+  return invoke<WorkspacesStatus>("get_workspaces_status");
+}
+
+// == IPC: the meetings file did not open ==
+// All of these refuse when it opened normally. None deletes a file: the damaged
+// ones are kept as nexq.db.damaged-<time>*. After a restore or a new start, call restartApp.
+
+/** Restore one of `db.backups` by name (never a path). */
+export async function restoreDatabaseCopy(name: string): Promise<void> {
+  return invoke("restore_database_copy", { name });
+}
+/** Put the unreadable file aside and start with an empty one on restart (only for `kind: "unreadable"`). */
+export async function startWithNewDatabase(): Promise<void> {
+  return invoke("start_with_new_database");
+}
+export async function openDataFolder(): Promise<void> {
+  return invoke("open_data_folder");
+}
+/** Refused while a meeting is active or a recording is saving. */
+export async function restartApp(): Promise<void> {
+  return invoke("restart_app");
+}
+/** Damage found by the daily background check of the open file, or null. */
+export async function getDbIntegrity(): Promise<DbIntegrityFinding | null> {
+  return invoke<DbIntegrityFinding | null>("get_db_integrity");
+}
+/** Locked file: look again. `needs_restart` means it opens now but only a restart can use it. */
+export async function retryOpenDatabase(): Promise<RetryOpenResult> {
+  return invoke<RetryOpenResult>("retry_open_database");
 }
 
 /**
@@ -1042,4 +1118,406 @@ export async function askMeeting(
 /** The meeting's saved "Ask this meeting" chat, oldest first. */
 export async function listMeetingChat(meetingId: string): Promise<MeetingChatMessage[]> {
   return invoke<MeetingChatMessage[]>("list_meeting_chat", { meetingId });
+}
+
+// == IPC: Workspaces (spec section 9). Rust params are snake_case, Tauri takes camelCase ==
+
+export async function listWorkspaces(): Promise<WorkspaceSummary[]> {
+  return invoke<WorkspaceSummary[]>("list_workspaces");
+}
+export async function getWorkspace(id: string): Promise<WorkspaceDetail> {
+  return invoke<WorkspaceDetail>("get_workspace", { id });
+}
+export async function createWorkspace(input: WorkspaceInput): Promise<WorkspaceDetail> {
+  return invoke<WorkspaceDetail>("create_workspace", { input });
+}
+export async function updateWorkspace(id: string, patch: WorkspacePatch): Promise<WorkspaceDetail> {
+  return invoke<WorkspaceDetail>("update_workspace", { id, patch });
+}
+/** Copies name, look, instructions, library memberships and talking points; not meetings, chats, memory or secrets. */
+export async function cloneWorkspace(id: string, name: string): Promise<WorkspaceDetail> {
+  return invoke<WorkspaceDetail>("clone_workspace", { id, name });
+}
+export async function archiveWorkspace(id: string, archived: boolean): Promise<void> {
+  return invoke("archive_workspace", { id, archived });
+}
+export async function deleteWorkspace(id: string, mode: DeleteWorkspaceMode): Promise<void> {
+  return invoke("delete_workspace", { id, mode });
+}
+export async function setDefaultWorkspace(id: string): Promise<void> {
+  return invoke("set_default_workspace", { id });
+}
+export async function reorderWorkspaces(ids: string[]): Promise<void> {
+  return invoke("reorder_workspaces", { ids });
+}
+export async function addWorkspaceItem(
+  id: string,
+  kind: WorkspaceItemKind,
+  refId: string,
+  label?: string,
+): Promise<void> {
+  return invoke("add_workspace_item", { id, kind, refId, label });
+}
+export async function updateWorkspaceItem(
+  id: string,
+  kind: WorkspaceItemKind,
+  refId: string,
+  patch: { label?: string | null; pinned?: boolean },
+): Promise<void> {
+  return invoke("update_workspace_item", { id, kind, refId, patch });
+}
+export async function removeWorkspaceItem(id: string, kind: WorkspaceItemKind, refId: string): Promise<void> {
+  return invoke("remove_workspace_item", { id, kind, refId });
+}
+/**
+ * What the assistant's Knowledge and Tools pills cover for a meeting: its own workspace's Library
+ * and tools. `meetingId` names a past meeting; omitted, it is the running meeting.
+ */
+export async function getAssistSources(meetingId?: string | null): Promise<AssistSources> {
+  return invoke<AssistSources>("get_assist_sources", { meetingId: meetingId ?? null });
+}
+export async function listLibrary(): Promise<LibraryItem[]> {
+  return invoke<LibraryItem[]>("list_library");
+}
+/** The display path of a file inside a Library folder, checked by the backend (rejects when it is outside the folder or gone). */
+export async function getLibraryFilePath(folderId: string, subPath: string): Promise<string> {
+  return invoke<string>("get_library_file_path", { folderId, subPath });
+}
+/** Shows that file in the file manager. The backend decides what may be revealed. */
+export async function revealLibraryFile(folderId: string, subPath: string): Promise<void> {
+  return invoke("reveal_library_file", { folderId, subPath });
+}
+
+/** Deletes every meeting of a workspace in one call; what went and what did not. */
+export async function deleteWorkspaceMeetings(id: string): Promise<{ deleted: number; failed: Array<{ id: string; reason: string }> }> {
+  return invoke("delete_workspace_meetings", { id });
+}
+export async function moveMeeting(meetingId: string, workspaceId: string): Promise<void> {
+  return invoke("move_meeting", { meetingId, workspaceId });
+}
+export async function listWorkspaceMeetings(
+  id: string,
+  query: string | null,
+  limit: number,
+  offset: number,
+): Promise<WorkspaceMeetingPage> {
+  return invoke<WorkspaceMeetingPage>("list_workspace_meetings", { id, query, limit, offset });
+}
+/** Meetings filed in no workspace; `listWorkspaceMeetings("unfiled", ...)` lists them. */
+export async function countUnfiledMeetings(): Promise<number> {
+  return invoke<number>("count_unfiled_meetings");
+}
+/** Try the failed recaps of a workspace again (it runs the way opening the workspace does). */
+export async function retryRecaps(workspaceId: string): Promise<void> {
+  return invoke("retry_recaps", { workspaceId });
+}
+export async function getMeetingRecap(meetingId: string): Promise<MeetingRecap | null> {
+  return invoke<MeetingRecap | null>("get_meeting_recap", { meetingId });
+}
+export async function deleteMeetingRecap(meetingId: string): Promise<void> {
+  return invoke("delete_meeting_recap", { meetingId });
+}
+export async function getMeetingScope(meetingId: string): Promise<MeetingScope> {
+  return invoke<MeetingScope>("get_meeting_scope", { meetingId });
+}
+/** Refuses keep-separate combinations with a clear message (the promise rejects with it). */
+export async function setMeetingScope(meetingId: string, borrowed: string[]): Promise<MeetingScope> {
+  return invoke<MeetingScope>("set_meeting_scope", { meetingId, borrowed });
+}
+/** Saves pasted text as a note in the workspace (named by its title, editable later); resolves to the note's id. */
+export async function addWorkspaceText(id: string, title: string, markdown: string): Promise<string> {
+  return invoke<string>("add_workspace_text", { id, title, markdown });
+}
+/** The title and text of a note, for the edit dialog. */
+export async function getWorkspaceNote(refId: string): Promise<NoteText> {
+  return invoke<NoteText>("get_workspace_note", { refId });
+}
+/** Saves an edited note. Every workspace that uses it sees the new text. */
+export async function updateWorkspaceNote(refId: string, title: string, markdown: string): Promise<void> {
+  return invoke("update_workspace_note", { refId, title, markdown });
+}
+
+// == IPC: Workspace search and index ==
+
+export async function getIndexStatus(id: string): Promise<IndexStatus> {
+  return invoke<IndexStatus>("get_index_status", { id });
+}
+export async function rescanWorkspace(id: string): Promise<void> {
+  return invoke("rescan_workspace", { id });
+}
+
+// == IPC: Workspace chat ==
+
+export async function listWorkspaceChats(workspaceId: string): Promise<WorkspaceChat[]> {
+  return invoke<WorkspaceChat[]>("list_workspace_chats", { workspaceId });
+}
+export async function createWorkspaceChat(workspaceId: string): Promise<WorkspaceChat> {
+  return invoke<WorkspaceChat>("create_workspace_chat", { workspaceId });
+}
+export async function updateWorkspaceChat(id: string, patch: WorkspaceChatPatch): Promise<WorkspaceChat> {
+  return invoke<WorkspaceChat>("update_workspace_chat", { id, patch });
+}
+export async function deleteWorkspaceChat(id: string): Promise<void> {
+  return invoke("delete_workspace_chat", { id });
+}
+export async function listWorkspaceMessages(chatId: string): Promise<WorkspaceMessage[]> {
+  return invoke<WorkspaceMessage[]>("list_workspace_messages", { chatId });
+}
+/** `chatId` null = the workspace default for new chats. */
+export async function setChatMeetingIncluded(
+  workspaceId: string,
+  chatId: string | null,
+  meetingId: string,
+  included: boolean,
+): Promise<void> {
+  return invoke("set_chat_meeting_included", { workspaceId, chatId, meetingId, included });
+}
+/** Which meetings this chat leaves out (the saved truth; the pane also keeps a local mirror). */
+export async function listChatMeetingPrefs(workspaceId: string, chatId: string): Promise<ChatMeetingPref[]> {
+  return invoke<ChatMeetingPref[]>("list_chat_meeting_prefs", { workspaceId, chatId });
+}
+/** `kind` and `refId` are the two first parts of a `ContextBar.id` ("<kind>:<ref>[:<sub>]"). */
+export async function setChatItemPref(chatId: string, kind: string, refId: string, pref: ChatItemPrefValue): Promise<void> {
+  return invoke("set_chat_item_pref", { chatId, kind, refId, pref });
+}
+/** Pins and exclusions saved for this chat, so the context panel shows them after a reload. */
+export async function listChatItemPrefs(chatId: string): Promise<ItemPref[]> {
+  return invoke<ItemPref[]>("list_chat_item_prefs", { chatId });
+}
+/** The budget and window a new chat would use, before any chat exists (the default model's own). */
+export async function getContextBudget(depth?: ContextDepth): Promise<ContextBudget> {
+  return invoke<ContextBudget>("get_context_budget", { depth });
+}
+/** What this chat's model can use now; `tools_off` says which tools are off and why. */
+export async function getChatCapabilities(chatId: string): Promise<ChatCapabilities> {
+  return invoke<ChatCapabilities>("get_chat_capabilities", { chatId });
+}
+/** The estimate shown before sending. */
+export async function previewChatContext(chatId: string, question?: string): Promise<ContextReport> {
+  return invoke<ContextReport>("preview_chat_context", { chatId, question });
+}
+/**
+ * Returns as soon as the request is accepted, not when the answer is saved: the answer comes as
+ * `workspace_chat_*` events carrying `requestId` (end, error, cancelled). `deeper` re-asks with
+ * the deep budget ("Search deeper").
+ */
+export async function askWorkspace(
+  chatId: string,
+  question: string,
+  requestId: string,
+  deeper = false,
+): Promise<void> {
+  return invoke("ask_workspace", { chatId, question, requestId, deeper });
+}
+export async function cancelWorkspaceRequest(requestId: string): Promise<void> {
+  return invoke("cancel_workspace_request", { requestId });
+}
+/** Saves `text` (what the person reviewed) as a document; the backend refuses text that cleaning would change. */
+export async function saveAnswerToLibrary(messageId: number, title: string, text: string): Promise<string> {
+  return invoke<string>("save_answer_to_library", { messageId, title, text });
+}
+/**
+ * Adds `text` (what the person reviewed) to the workspace's instructions. The backend refuses it if
+ * something the answer used has left the workspace, or if cleaning the text would change it.
+ */
+export async function addAnswerToInstructions(messageId: number, text: string): Promise<void> {
+  return invoke("add_answer_to_instructions", { messageId, text });
+}
+export async function answerWorkspaceApproval(approvalId: string, allow: boolean): Promise<void> {
+  return invoke("answer_workspace_approval", { approvalId, allow });
+}
+
+// == IPC: Live notes ==
+
+export async function getMeetingNotes(meetingId: string): Promise<NoteDoc | null> {
+  return invoke<NoteDoc | null>("get_meeting_notes", { meetingId });
+}
+export async function saveMeetingNotesEdit(meetingId: string, edit: NoteEdit): Promise<NoteDoc> {
+  return invoke<NoteDoc>("save_meeting_notes_edit", { meetingId, edit });
+}
+export async function notetakerStart(meetingId: string): Promise<void> {
+  return invoke("notetaker_start", { meetingId });
+}
+export async function notetakerStop(meetingId: string): Promise<void> {
+  return invoke("notetaker_stop", { meetingId });
+}
+export async function notetakerUpdateNow(meetingId: string): Promise<void> {
+  return invoke("notetaker_update_now", { meetingId });
+}
+/** "Keep going": adds the same amount to the cap. */
+/** Pause the automatic runs (the meeting goes on). Rejects with the reason when it cannot. */
+export async function notetakerPause(meetingId: string): Promise<void> {
+  return invoke("notetaker_pause", { meetingId });
+}
+export async function notetakerResume(meetingId: string): Promise<void> {
+  return invoke("notetaker_resume", { meetingId });
+}
+export async function briefPause(meetingId: string): Promise<void> {
+  return invoke("brief_pause", { meetingId });
+}
+export async function briefResume(meetingId: string): Promise<void> {
+  return invoke("brief_resume", { meetingId });
+}
+/** What "Automatic" is for a provider (or the active one when null), to say before turning on. */
+export async function getAutomaticModel(provider: string | null = null): Promise<AutomaticModel | null> {
+  return invoke<AutomaticModel | null>("get_automatic_model", { provider });
+}
+/** The person has seen "now uses an online provider": it will not be said again. */
+export async function notetakerDismissMoved(meetingId: string): Promise<void> {
+  return invoke("notetaker_dismiss_moved", { meetingId });
+}
+export async function briefDismissMoved(meetingId: string): Promise<void> {
+  return invoke("brief_dismiss_moved", { meetingId });
+}
+export async function notetakerContinue(meetingId: string): Promise<void> {
+  return invoke("notetaker_continue", { meetingId });
+}
+/** The run's true state now (a reopened window reads this, then follows the events). */
+export async function getNotetakerState(meetingId: string): Promise<NotetakerState> {
+  return invoke<NotetakerState>("get_notetaker_state", { meetingId });
+}
+export async function getBriefState(meetingId: string): Promise<BriefState> {
+  return invoke<BriefState>("get_brief_state", { meetingId });
+}
+export async function getNotetakerSettings(): Promise<NotetakerSettings> {
+  return invoke<NotetakerSettings>("get_notetaker_settings");
+}
+/** A patch: only the fields present change. Returns the merged settings. */
+export async function setNotetakerSettings(patch: Partial<NotetakerSettings>): Promise<NotetakerSettings> {
+  return invoke<NotetakerSettings>("set_notetaker_settings", { patch });
+}
+
+// == IPC: Brief ==
+
+export async function getMeetingBrief(meetingId: string): Promise<BriefSheet | null> {
+  return invoke<BriefSheet | null>("get_meeting_brief", { meetingId });
+}
+export async function briefStart(meetingId: string): Promise<void> {
+  return invoke("brief_start", { meetingId });
+}
+export async function briefStop(meetingId: string): Promise<void> {
+  return invoke("brief_stop", { meetingId });
+}
+export async function briefRefresh(meetingId: string): Promise<void> {
+  return invoke("brief_refresh", { meetingId });
+}
+export async function briefContinue(meetingId: string): Promise<void> {
+  return invoke("brief_continue", { meetingId });
+}
+export async function getBriefSettings(): Promise<BriefSettings> {
+  return invoke<BriefSettings>("get_brief_settings");
+}
+/** A patch: only the fields present change. Returns the merged settings. */
+export async function setBriefSettings(patch: Partial<BriefSettings>): Promise<BriefSettings> {
+  return invoke<BriefSettings>("set_brief_settings", { patch });
+}
+
+// == IPC: Workspace memory ==
+
+export async function getMemorySettings(): Promise<MemorySettings> {
+  return invoke<MemorySettings>("get_memory_settings");
+}
+/** A patch: only the fields present change. Returns the merged settings. */
+export async function setMemorySettings(patch: Partial<MemorySettings>): Promise<MemorySettings> {
+  return invoke<MemorySettings>("set_memory_settings", { patch });
+}
+
+export async function listMemory(workspaceId: string): Promise<MemoryItem[]> {
+  return invoke<MemoryItem[]>("list_memory", { workspaceId });
+}
+/** A new item under a new id; `status` is "saved" when absent (the person typed it). */
+export interface MemoryCreate {
+  workspace_id: string;
+  /** The check against the transcript did not find it ("Not found in the transcript"). */
+  unsupported?: boolean;
+  kind: MemoryItem["kind"];
+  title: string;
+  text: string;
+  source_meeting?: string | null;
+  source_ms?: number | null;
+  status?: MemoryItem["status"];
+}
+export async function createMemory(input: MemoryCreate): Promise<MemoryItem> {
+  return invoke<MemoryItem>("create_memory", { input });
+}
+/** Changes an item that exists; a forgotten id rejects with "not_found". */
+export async function updateMemory(
+  id: string,
+  patch: Partial<Pick<MemoryItem, "kind" | "title" | "text" | "status">>,
+): Promise<MemoryItem> {
+  return invoke<MemoryItem>("update_memory", { id, patch });
+}
+export async function deleteMemory(id: string): Promise<void> {
+  return invoke("delete_memory", { id });
+}
+/** One AI call proposing up to 8 items (status "suggested"); nothing is saved until resolved. */
+export async function suggestMemory(workspaceId: string, meetingId: string): Promise<MemoryItem[]> {
+  return invoke<MemoryItem[]>("suggest_memory", { workspaceId, meetingId });
+}
+export async function resolveMemory(
+  id: string,
+  action: "save" | "dismiss",
+  patch?: Partial<Pick<MemoryItem, "kind" | "title" | "text">>,
+): Promise<void> {
+  return invoke("resolve_memory", { id, action, patch });
+}
+
+// == IPC: Talking points ==
+
+export async function listTalkingPoints(workspaceId: string): Promise<TalkingPoint[]> {
+  return invoke<TalkingPoint[]>("list_talking_points", { workspaceId });
+}
+/** Everything a new note starts with, in one call (nothing is ever on for a moment and then turned off). */
+export interface TalkingPointContent {
+  doc_json: string;
+  markdown: string;
+  plain_text: string;
+  in_context: boolean;
+}
+/** Creates a note in one atomic call, with the AI-context flag explicit. */
+export async function createTalkingPoint(workspaceId: string, title: string, content: TalkingPointContent): Promise<TalkingPoint> {
+  return invoke<TalkingPoint>("create_talking_point", { workspaceId, title, content });
+}
+/**
+ * Changes only the fields given. With `expectedUpdatedAt` the backend refuses ("conflict")
+ * when the note changed since; a note deleted elsewhere is refused with "not_found".
+ */
+export async function patchTalkingPoint(
+  id: string,
+  patch: TalkingPointPatch,
+  expectedUpdatedAt?: number,
+): Promise<TalkingPoint> {
+  return invoke<TalkingPoint>("patch_talking_point", { id, patch, expectedUpdatedAt });
+}
+export async function deleteTalkingPoint(id: string): Promise<void> {
+  return invoke("delete_talking_point", { id });
+}
+export async function copyTalkingPoint(id: string, workspaceId: string): Promise<TalkingPoint> {
+  return invoke<TalkingPoint>("copy_talking_point", { id, workspaceId });
+}
+export async function reorderTalkingPoints(workspaceId: string, ids: string[]): Promise<void> {
+  return invoke("reorder_talking_points", { workspaceId, ids });
+}
+export async function getPointProgress(meetingId: string, pointId: string): Promise<PointProgress | null> {
+  return invoke<PointProgress | null>("get_point_progress", { meetingId, pointId });
+}
+export async function savePointProgress(meetingId: string, pointId: string, said: PointSaid[]): Promise<void> {
+  return invoke("save_point_progress", { meetingId, pointId, said });
+}
+/** The "only this meeting" copy of a note's document (TipTap JSON text), or null. */
+export async function getMeetingPointEdit(meetingId: string, pointId: string): Promise<string | null> {
+  return invoke<string | null>("get_meeting_point_edit", { meetingId, pointId });
+}
+/** `doc` null removes the meeting-only copy. */
+export async function saveMeetingPointEdit(
+  meetingId: string,
+  pointId: string,
+  doc: string | null,
+): Promise<void> {
+  return invoke("save_meeting_point_edit", { meetingId, pointId, doc });
+}
+
+/** Settings files that were unreadable at start. Returned once. */
+export function takeStoreRecovery(): Promise<StoreRecovery[]> {
+  return invoke<StoreRecovery[]>("take_store_recovery");
 }

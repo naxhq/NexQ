@@ -1,0 +1,17 @@
+{
+  "id": "w1",
+  "patch": {
+    "brief_enabled": true,
+    "color": "plum",
+    "default_scenario": null,
+    "description": "d",
+    "icon": null,
+    "include_general": true,
+    "instructions": "Be brief",
+    "keep_separate": false,
+    "name": "Renamed",
+    "pinned": true,
+    "recaps_with_ai": false,
+    "suggest_memory": true
+  }
+}

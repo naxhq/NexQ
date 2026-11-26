@@ -1,7 +1,7 @@
 //! Reading MCP server definitions (pasted JSON, Claude Code's `~/.claude.json`),
 //! splitting secrets out of them, and the read-only default for tool switches.
 
-use super::config::{is_valid_tool_full_name, EnvVar, McpServer, McpTool, McpTransport};
+use super::config::{is_valid_tool_full_name, EnvVar, McpServer, McpTool, McpTransport, ToolHints};
 use serde_json::Value;
 
 /// One server as written in someone's JSON, before secrets are split out.
@@ -201,7 +201,12 @@ pub fn tool_allowed_by_default(tool_name: &str) -> bool {
 /// The tool list after a Check: the user's earlier switches stay, a new tool
 /// takes the read-only default, a tool the server no longer has is dropped.
 /// Only valid names under `mcp__<key>__` count (see `is_valid_tool_full_name`).
-pub fn merge_checked_tools(old: &[McpTool], found_full_names: &[String], key: &str) -> Vec<McpTool> {
+pub fn merge_checked_tools(
+    old: &[McpTool],
+    found_full_names: &[String],
+    key: &str,
+    hints: &std::collections::HashMap<String, ToolHints>,
+) -> Vec<McpTool> {
     let prefix = format!("mcp__{key}__");
     let mut merged: Vec<McpTool> = Vec::new();
     for full in found_full_names {
@@ -217,7 +222,17 @@ pub fn merge_checked_tools(old: &[McpTool], found_full_names: &[String], key: &s
             .find(|t| t.name == name)
             .map(|t| t.allowed)
             .unwrap_or_else(|| tool_allowed_by_default(name));
-        merged.push(McpTool { name: name.to_string(), full_name: full.clone(), allowed });
+        // Hints are exactly what this check read. A check that could not read
+        // them (the server did not say, or the read failed) leaves both unknown:
+        // an old "read-only" is never carried over (the tool may have changed).
+        let hint = hints.get(full).copied().unwrap_or_default();
+        merged.push(McpTool {
+            name: name.to_string(),
+            full_name: full.clone(),
+            allowed,
+            read_only_hint: hint.read_only,
+            destructive_hint: hint.destructive,
+        });
     }
     merged
 }
@@ -367,14 +382,14 @@ mod tests {
     #[test]
     fn merge_checked_tools_keeps_choices_defaults_new_drops_gone() {
         let old = vec![
-            McpTool { name: "kb_search".into(), full_name: "mcp__m__kb_search".into(), allowed: false },
-            McpTool { name: "gone".into(), full_name: "mcp__m__gone".into(), allowed: true },
+            McpTool { name: "kb_search".into(), full_name: "mcp__m__kb_search".into(), allowed: false, ..Default::default() },
+            McpTool { name: "gone".into(), full_name: "mcp__m__gone".into(), allowed: true, ..Default::default() },
         ];
         let found = vec!["mcp__m__kb_search".into(), "mcp__m__delete_note".into(), "mcp__m__kb_read".into(), "mcp__other__x".into()];
         let mut found = found;
         found.push("mcp__m__--add-dir".into());
         found.push("mcp__m__a b".into());
-        let merged = merge_checked_tools(&old, &found, "m");
+        let merged = merge_checked_tools(&old, &found, "m", &Default::default());
         let get = |n: &str| merged.iter().find(|t| t.name == n).map(|t| t.allowed);
         assert_eq!((get("kb_search"), get("delete_note"), get("kb_read"), get("gone"), get("x")), (Some(false), Some(false), Some(true), None, None));
         assert_eq!(merged.iter().find(|t| t.name == "kb_read").unwrap().full_name, "mcp__m__kb_read");
@@ -427,5 +442,27 @@ mod tests {
     fn credential_ids() {
         assert_eq!(credential_id("a", "API_KEY"), "mcp:a:API_KEY");
         assert_eq!(header_credential_id("a", "Authorization"), "mcp:a:header:Authorization");
+    }
+
+    #[test]
+    fn a_check_keeps_only_the_hints_it_read_and_never_an_old_read_only() {
+        use std::collections::HashMap;
+        let old = vec![McpTool {
+            name: "kb".into(),
+            full_name: "mcp__m__kb".into(),
+            allowed: true,
+            read_only_hint: Some(true),
+            destructive_hint: Some(false),
+        }];
+        let found = vec!["mcp__m__kb".to_string(), "mcp__m__new".to_string()];
+        // The check read nothing: both unknown, the user's switch kept.
+        let blind = merge_checked_tools(&old, &found, "m", &HashMap::new());
+        assert_eq!((blind[0].read_only_hint, blind[0].destructive_hint, blind[0].allowed), (None, None, true));
+        // The check read hints: exactly those.
+        let mut read = HashMap::new();
+        read.insert("mcp__m__kb".to_string(), ToolHints { read_only: Some(false), destructive: Some(true) });
+        let seen = merge_checked_tools(&old, &found, "m", &read);
+        assert_eq!((seen[0].read_only_hint, seen[0].destructive_hint), (Some(false), Some(true)));
+        assert_eq!((seen[1].read_only_hint, seen[1].destructive_hint), (None, None));
     }
 }

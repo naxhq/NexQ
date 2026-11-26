@@ -43,6 +43,16 @@ pub struct GenerationParams {
     /// setting still wins.
     #[serde(default)]
     pub thinking_auto_off: bool,
+    /// Mark the stable system part for the provider's prompt cache. Only the
+    /// `ai_runs` service sets it (Anthropic `cache_control`); live answers
+    /// keep their exact old request body. Ignored by other providers.
+    #[serde(default)]
+    pub cache_system: bool,
+    /// The context window to ask for (Ollama `options.num_ctx`), so a long
+    /// prompt is not silently cut at the server's default. Only `ai_runs`
+    /// sets it. Ignored by other providers.
+    #[serde(default)]
+    pub num_ctx: Option<u64>,
 }
 
 impl Default for GenerationParams {
@@ -57,6 +67,8 @@ impl Default for GenerationParams {
             cancel: None,
             thinking: ThinkingSetting::Auto,
             thinking_auto_off: false,
+            cache_system: false,
+            num_ctx: None,
         }
     }
 }
@@ -278,12 +290,18 @@ pub struct ModelInfo {
     pub context_window: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CompletionStats {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub total_tokens: u64,
     pub latency_ms: u64,
+    /// Prompt tokens read from / written to the provider's prompt cache, when
+    /// it reports them (Anthropic). `prompt_tokens` stays the uncached part.
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    #[serde(default)]
+    pub cache_write_tokens: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -292,9 +310,26 @@ pub struct LLMMessage {
     pub content: String,
 }
 
+/// The text of a transport error with its URL taken out. reqwest puts the
+/// request URL in the message, and a URL can carry a key (`?key=`) or a
+/// private host; this text goes to the UI and the log.
+pub fn error_text(e: &reqwest::Error) -> String {
+    let text = e.to_string();
+    match e.url() {
+        Some(url) => {
+            let mut hidden = url.clone();
+            hidden.set_query(None);
+            let _ = hidden.set_password(None);
+            let _ = hidden.set_username("");
+            text.replace(url.as_str(), "[url hidden]").replace(hidden.as_str(), "[url hidden]")
+        }
+        None => text,
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum LLMError {
-    #[error("HTTP request failed: {0}")]
+    #[error("HTTP request failed: {}", error_text(.0))]
     HttpError(#[from] reqwest::Error),
 
     #[error("JSON parse error: {0}")]
@@ -558,6 +593,7 @@ mod tests {
             completion_tokens: 7,
             total_tokens: prompt + 7,
             latency_ms: 1,
+            ..Default::default()
         };
         assert_eq!(StreamUsage::from_stats(&stats(0)), None);
         let real = StreamUsage::from_stats(&stats(12)).unwrap();
@@ -650,5 +686,17 @@ mod tests {
         };
         assert_eq!(cancellable(&params, async { 7 }).await.unwrap(), 7);
         assert_eq!(cancellable(&GenerationParams::default(), async { 8 }).await.unwrap(), 8);
+    }
+
+    #[tokio::test]
+    async fn transport_error_text_never_carries_the_url_or_a_key_in_it() {
+        let err = reqwest::Client::new()
+            .get("http://127.0.0.1:1/v1beta/models?key=SECRETKEY123")
+            .send()
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("SECRETKEY123"), "reqwest itself would leak it");
+        assert!(!error_text(&err).contains("SECRETKEY123"));
+        assert!(!LLMError::from(err).to_string().contains("SECRETKEY123"));
     }
 }

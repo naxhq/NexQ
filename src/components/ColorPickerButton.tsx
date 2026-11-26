@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect } from "react";
+import { useKeepInWindow } from "../ui/portal";
 import { createPortal } from "react-dom";
+import { readableOn, readingTextColor, useIsLight } from "../lib/themeText";
 
 const PALETTE = [
   { name: "White", value: "#e4e4e7" },
@@ -28,8 +30,12 @@ interface ColorPickerButtonProps {
 export function ColorPickerButton({ value, onChange, label }: ColorPickerButtonProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  useKeepInWindow(ref);
   const btnRef = useRef<HTMLButtonElement>(null);
   const [pos, setPos] = useState({ x: 0, y: 0 });
+  const isLight = useIsLight();
+  // The swatch shows the colour the text really gets in this theme (theme defaults follow the foreground).
+  const shown = readingTextColor(value) === value ? readableOn(value, isLight ? "light" : "dark", 3) : readingTextColor(value);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -54,11 +60,11 @@ export function ColorPickerButton({ value, onChange, label }: ColorPickerButtonP
         ref={btnRef}
         onClick={handleOpen}
         className="flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-white/5 transition-colors cursor-pointer"
-        title={label || "Pick color"}
+        aria-label={label || "Pick color"}
       >
         <div
-          className="h-3.5 w-3.5 rounded border border-white/15"
-          style={{ backgroundColor: value }}
+          className="h-3.5 w-3.5 rounded border border-input"
+          style={{ backgroundColor: shown }}
         />
         <svg className="h-2 w-2 text-muted-foreground/35" viewBox="0 0 12 12" fill="none">
           <path d="M3 5L6 8L9 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -68,7 +74,7 @@ export function ColorPickerButton({ value, onChange, label }: ColorPickerButtonP
       {open && createPortal(
         <div
           ref={ref}
-          className="fixed z-[9999] rounded-lg border border-white/10 p-2.5 shadow-2xl shadow-black/60"
+          className="dark fixed z-[9999] rounded-lg border border-white/10 p-2.5 text-foreground shadow-2xl shadow-black/60"
           style={{
             backgroundColor: '#111122',
             left: `${Math.max(90, Math.min(pos.x - 90, window.innerWidth - 195))}px`,
@@ -87,7 +93,7 @@ export function ColorPickerButton({ value, onChange, label }: ColorPickerButtonP
                     : "hover:brightness-110 hover:ring-1 hover:ring-white/25 hover:ring-offset-1 hover:ring-offset-[#111122]"
                 }`}
                 style={{ backgroundColor: c.value }}
-                title={c.name}
+                aria-label={c.name}
               />
             ))}
           </div>

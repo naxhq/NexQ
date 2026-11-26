@@ -6,6 +6,20 @@ use crate::db::rag as rag_db;
 use rusqlite::Connection;
 use uuid::Uuid;
 
+/// The file id of a transcript session of `owner`.
+fn file_id_for(owner: Option<&str>) -> String {
+    match owner {
+        Some(meeting) => format!("transcript_{}_{}", meeting, Uuid::new_v4()),
+        None => format!("transcript_{}", Uuid::new_v4()),
+    }
+}
+
+/// The `LIKE` pattern (with `\` as the escape) of every file id of `meeting`'s transcript.
+pub fn file_id_pattern(meeting: &str) -> String {
+    let escaped = meeting.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    format!("transcript\\_{escaped}\\_%")
+}
+
 /// Accumulates live transcript segments and indexes them into the RAG store
 /// when the buffer reaches the configured chunk size threshold.
 pub struct TranscriptIndexer {
@@ -17,8 +31,13 @@ pub struct TranscriptIndexer {
     chunk_size: usize,
     /// Number of segments pushed since last flush.
     segments_since_flush: usize,
-    /// Unique file ID for the current transcript session.
+    /// Unique file ID for the current transcript session. It names the owning
+    /// meeting (`transcript_<meeting>_<uuid>`), so one meeting's chunks can be
+    /// found and deleted without touching another's.
     file_id: String,
+    /// The meeting whose transcript this is; only that meeting's requests may
+    /// search the chunks.
+    owner: Option<String>,
 }
 
 impl TranscriptIndexer {
@@ -30,7 +49,19 @@ impl TranscriptIndexer {
             chunk_size,
             segments_since_flush: 0,
             file_id: format!("transcript_{}", Uuid::new_v4()),
+            owner: None,
         }
+    }
+
+    /// The meeting this transcript belongs to (None between meetings). Starts a
+    /// fresh file id that names it.
+    pub fn set_owner(&mut self, owner: Option<String>) {
+        self.file_id = file_id_for(owner.as_deref());
+        self.owner = owner;
+    }
+
+    pub fn owner(&self) -> Option<&str> {
+        self.owner.as_deref()
     }
 
     /// Push a new transcript segment into the buffer.
@@ -129,6 +160,6 @@ impl TranscriptIndexer {
         self.buffer.clear();
         self.buffer_tokens = 0;
         self.segments_since_flush = 0;
-        self.file_id = format!("transcript_{}", Uuid::new_v4());
+        self.file_id = file_id_for(self.owner.as_deref());
     }
 }

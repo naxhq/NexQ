@@ -1,0 +1,7 @@
+{
+  "chat_id": "c1",
+  "error": "Something this answer was using (a meeting or a file) was moved out of this chat or switched off, so the answer was stopped and nothing was saved. Ask again.",
+  "error_detail": "moved",
+  "error_kind": "access_changed",
+  "request_id": "ask-1"
+}

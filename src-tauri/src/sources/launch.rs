@@ -299,7 +299,7 @@ mod tests {
     use crate::sources::config::{EnvVar, McpTool};
 
     fn tool(key: &str, name: &str, allowed: bool) -> McpTool {
-        McpTool { name: name.into(), full_name: format!("mcp__{key}__{name}"), allowed }
+        McpTool { name: name.into(), full_name: format!("mcp__{key}__{name}"), allowed, ..Default::default() }
     }
 
     fn stdio(key: &str, label: &str, env: Vec<EnvVar>, tools: Vec<McpTool>) -> McpServer {
@@ -465,9 +465,9 @@ mod tests {
                 vec![],
                 vec![
                     tool("m", "kb_read", true),
-                    McpTool { name: "x".into(), full_name: "--add-dir".into(), allowed: true },
-                    McpTool { name: "y".into(), full_name: "--add-dir=C:\\".into(), allowed: false },
-                    McpTool { name: "z".into(), full_name: "mcp__other__z".into(), allowed: true },
+                    McpTool { name: "x".into(), full_name: "--add-dir".into(), allowed: true, ..Default::default() },
+                    McpTool { name: "y".into(), full_name: "--add-dir=C:\\".into(), allowed: false, ..Default::default() },
+                    McpTool { name: "z".into(), full_name: "mcp__other__z".into(), allowed: true, ..Default::default() },
                 ],
             )],
             ..Default::default()

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { anchorOf, placeBox } from "../ui/portal";
 import { Clock3 } from "lucide-react";
 import { useConfigStore } from "../stores/configStore";
 import { useMeetingStore } from "../stores/meetingStore";
+import { CHIP_BASE, CHIP_OFF, CHIP_OPEN } from "./chipStyles";
 import {
   DEFAULT_CONTEXT_SCOPE,
   MAX_MINUTES,
@@ -61,7 +63,7 @@ export function ContextScopePicker() {
   const [open, setOpen] = useState(false);
   const [focusIdx, setFocusIdx] = useState(0);
   const [customText, setCustomText] = useState("");
-  const [pos, setPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+  const [pos, setPos] = useState<{ top: number; left: number; maxHeight?: number }>({ top: 0, left: 0 });
   const chipRef = useRef<HTMLButtonElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -79,12 +81,11 @@ export function ContextScopePicker() {
     setOpen(true);
   }, [scope, isCustomMinutes]);
 
-  // Anchor under the chip, right-aligned, kept inside the window.
+  // Anchor to the chip with the shared placement (flip, shift, max-height), inside the window.
   useLayoutEffect(() => {
     if (!open || !chipRef.current) return;
-    const r = chipRef.current.getBoundingClientRect();
-    const left = Math.min(Math.max(8, r.right - POPOVER_WIDTH), window.innerWidth - POPOVER_WIDTH - 8);
-    setPos({ top: r.bottom + 6, left: Math.max(8, left) });
+    const p = placeBox(anchorOf(chipRef.current), { width: POPOVER_WIDTH, height: popRef.current?.offsetHeight ?? 0 }, { align: "end" });
+    setPos({ top: p.top, left: p.left, maxHeight: p.maxHeight });
   }, [open]);
 
   // Focus the selected option on open (and follow arrow-key focus).
@@ -181,13 +182,14 @@ export function ContextScopePicker() {
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={`Transcript scope: ${chipLabel}${oneOff ? ", next action only" : ""}`}
-        title={`Transcript scope: ${chipLabel}${oneOff ? " (next action only)" : ""}`}
-        className={`ml-auto flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-meta font-medium transition-colors duration-150 cursor-pointer ${
+        
+        data-chip=""
+        className={`ml-auto shrink-0 ${CHIP_BASE} ${
           active
             ? "bg-primary/10 text-primary/90 ring-1 ring-inset ring-primary/20 hover:bg-primary/15"
             : open
-              ? "bg-accent/50 text-foreground"
-              : "text-muted-foreground/60 hover:bg-accent/50 hover:text-foreground"
+              ? CHIP_OPEN
+              : CHIP_OFF
         }`}
       >
         <Clock3 className="h-3 w-3" aria-hidden="true" />
@@ -202,8 +204,8 @@ export function ContextScopePicker() {
             role="dialog"
             aria-label="Transcript scope"
             onKeyDown={onPopoverKeyDown}
-            style={{ top: pos.top, left: pos.left, width: POPOVER_WIDTH }}
-            className="scope-pop-enter fixed z-50 rounded-xl border border-border/30 bg-popover/95 p-1.5 shadow-2xl backdrop-blur-md"
+            style={{ top: pos.top, left: pos.left, width: POPOVER_WIDTH, maxHeight: pos.maxHeight, overflowY: "auto" }}
+            className="scope-pop-enter fixed z-50 rounded-xl border border-border/30 bg-popover p-1.5 shadow-2xl"
           >
             <p className="px-2 pb-1 pt-0.5 text-[0.6rem] font-medium uppercase tracking-widest text-muted-foreground/45">
               Focus the next answers on
@@ -289,8 +291,8 @@ export function ContextScopePicker() {
                             }
                           }}
                           aria-label={`Custom minutes (${MIN_MINUTES} to ${MAX_MINUTES})`}
-                          className={`h-5 w-9 rounded-md border bg-transparent px-1 text-center text-meta tabular-nums text-foreground/80 outline-none transition-colors duration-150 placeholder:text-muted-foreground/40 focus:border-primary/40 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none ${
-                            scope.kind === "minutes" && isCustomMinutes ? "border-primary/30" : "border-border/30"
+                          className={`h-5 w-9 rounded-md border bg-transparent px-1 text-center text-meta tabular-nums text-foreground/80 outline-none transition-colors duration-150 placeholder:text-muted-foreground/40 ui-focus [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none ${
+                            scope.kind === "minutes" && isCustomMinutes ? "border-primary" : "border-input"
                           }`}
                         />
                         <span className="text-meta text-muted-foreground/40">min</span>

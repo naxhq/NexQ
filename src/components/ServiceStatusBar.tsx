@@ -2,7 +2,7 @@
 // Shows LLM, You STT, and Them STT with provider + model, lighting up when active.
 // During recording: STT chips are interactive (click to swap provider), with mute toggles.
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import {
   Brain, Mic, MicOff, Volume2, VolumeX, Zap, Cpu,
   ChevronUp, CheckCircle, Globe, Monitor, HardDrive, Cloud, ArrowUpCircle,
@@ -26,6 +26,10 @@ import { StreamLatency } from "./StreamLatency";
 import { CLI_AGENTS, cliAgentInfo, cliTierLabel, isCliAgent } from "../lib/cliAgents";
 import { openUpdateDialog } from "../hooks/useUpdater";
 import { SideLanguagePicker } from "../overlay/SideLanguagePicker";
+import { AnchoredBox } from "../ui/Popover";
+import { Tooltip } from "../ui/Tooltip";
+import { usePickerKeys } from "./usePickerKeys";
+import { useElementSize } from "../overlay/useElementSize";
 
 // ── Human-friendly provider labels ──
 const LLM_LABELS: Record<string, string> = {
@@ -238,10 +242,47 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
     setPickerOpen(null);
   }, [meetingAudioConfig, setMeetingAudioConfig]);
 
+  // The meeting footer is one row that can never overlap, whatever the names are. It starts with
+  // everything and gives up one thing at a time while the row overflows (measured, not by width):
+  // 1 model names, 2 the YOU / THEM words, 3 STT names (icon and dot only), 4 the LLM name is cut
+  // with an ellipsis. Every chip keeps its full name in a tooltip.
+  const [barRef, bar] = useElementSize<HTMLDivElement>();
+  const elRef = useRef<HTMLDivElement | null>(null);
+  const setBar = useCallback(
+    (el: HTMLDivElement | null) => {
+      elRef.current = el;
+      barRef(el);
+    },
+    [barRef],
+  );
+  const narrow = compact && bar.w > 0 && bar.w < 640;
+  const [level, setLevel] = useState(0);
+  const sig = [llmProviderLabel, llmModelLabel, youStt.provider, youStt.model, themStt.provider, themStt.model, isRecording, audioMode, bar.w].join("|");
+  const lastSig = useRef(sig);
+  useLayoutEffect(() => {
+    if (!compact) return;
+    if (lastSig.current !== sig) {
+      lastSig.current = sig;
+      if (level !== 0) {
+        setLevel(0);
+        return;
+      }
+    }
+    const el = elRef.current;
+    if (el && level < 4 && el.scrollWidth > el.clientWidth + 1) setLevel(level + 1);
+  });
+  const hideModel = compact && level >= 1;
+  const hideLabel = compact && level >= 2;
+  const iconOnly = compact && level >= 3;
+  const llmShrinks = compact && level >= 4;
+
   return (
-    <div className={`flex flex-wrap items-center gap-2.5 ${compact ? "px-3 py-2" : "px-5 py-2.5"}`}>
+    <div
+      ref={setBar}
+      className={`flex items-center ${compact ? "flex-nowrap gap-1 overflow-hidden" : "flex-wrap gap-2.5"} ${narrow ? "px-2 py-2" : compact ? "px-3 py-2" : "px-5 py-2.5"}`}
+    >
       {/* LLM — always interactive */}
-      <div className="relative">
+      <div className={`relative ${compact ? (llmShrinks ? "min-w-0 shrink" : "shrink-0") : ""}`}>
         {isCliAgent(llmProvider) ? (
           <AgentStatusChip
             kind={llmProvider}
@@ -262,6 +303,7 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
             pickerOpen={pickerOpen === "llm"}
             onClick={() => setPickerOpen(pickerOpen === "llm" ? null : "llm")}
             tooltip={`LLM: ${llmProviderLabel} / ${llmModelLabel}`}
+            hideModel={hideModel}
           />
         )}
         {pickerOpen === "llm" && (
@@ -282,7 +324,7 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
         )}
       </div>
 
-      <Divider />
+      {!narrow && <Divider />}
 
       {audioMode === "in_person" ? (
         /* In-Person mode: single Room STT indicator + speaker count */
@@ -300,6 +342,9 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
               pickerOpen={pickerOpen === "them"}
               onClick={() => setPickerOpen(pickerOpen === "them" ? null : "them")}
               tooltip={`Room STT: ${themStt.provider}${themStt.model ? ` / ${themStt.model}` : ""}`}
+              hideModel={hideModel}
+                hideLabel={hideLabel}
+                iconOnly={iconOnly}
             />
             {pickerOpen === "them" && (
               <STTPickerDropdown
@@ -322,8 +367,8 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
       ) : (
         <>
           {/* Online mode: You STT — interactive during recording */}
-          <div className="flex items-center gap-1">
-            <div className="relative">
+          <div className={`flex items-center gap-1 ${compact ? "shrink-0" : ""}`}>
+            <div className={`relative ${compact ? "shrink-0" : ""}`}>
               <STTChip
                 icon={<Mic className="h-3.5 w-3.5" />}
                 provider={youStt.provider}
@@ -336,6 +381,9 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
                 pickerOpen={pickerOpen === "you"}
                 onClick={() => setPickerOpen(pickerOpen === "you" ? null : "you")}
                 tooltip={`Your STT: ${youStt.provider}${youStt.model ? ` / ${youStt.model}` : ""}`}
+                hideModel={hideModel}
+                hideLabel={hideLabel}
+                iconOnly={iconOnly}
               />
               {pickerOpen === "you" && (
                 <STTPickerDropdown
@@ -348,17 +396,17 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
                 />
               )}
             </div>
-            {isRecording && (
+            {isRecording && !narrow && (
               <MuteButton type="mic" muted={mutedYou} onToggle={toggleMuteYou} label="You" />
             )}
             {isRecording && compact && <SideLanguagePicker side="you" />}
           </div>
 
-          <Divider />
+          {!narrow && <Divider />}
 
           {/* Online mode: Them STT — interactive during recording */}
-          <div className="flex items-center gap-1">
-            <div className="relative">
+          <div className={`flex items-center gap-1 ${compact ? "shrink-0" : ""}`}>
+            <div className={`relative ${compact ? "shrink-0" : ""}`}>
               <STTChip
                 icon={<Volume2 className="h-3.5 w-3.5" />}
                 provider={themStt.provider}
@@ -371,6 +419,9 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
                 pickerOpen={pickerOpen === "them"}
                 onClick={() => setPickerOpen(pickerOpen === "them" ? null : "them")}
                 tooltip={`Their STT: ${themStt.provider}${themStt.model ? ` / ${themStt.model}` : ""}`}
+                hideModel={hideModel}
+                hideLabel={hideLabel}
+                iconOnly={iconOnly}
           />
           {pickerOpen === "them" && (
             <STTPickerDropdown
@@ -383,7 +434,7 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
             />
           )}
             </div>
-            {isRecording && (
+            {isRecording && !narrow && (
               <MuteButton type="speaker" muted={mutedThem} onToggle={toggleMuteThem} label="Them" />
             )}
             {isRecording && compact && <SideLanguagePicker side="them" />}
@@ -392,7 +443,7 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
       )}
 
       {/* Latency: live timer while an answer streams, then the last answer's time */}
-      <StreamLatency divider={<Divider />} />
+      <StreamLatency divider={narrow ? <span /> : <Divider />} />
 
       {/* Update ready — launcher footer only (the updater runs in the launcher) */}
       {!compact && <UpdatePill />}
@@ -413,7 +464,7 @@ export function UpdatePill() {
       <Divider />
       <button
         onClick={openUpdateDialog}
-        title={`See what's new in v${version} and install it`}
+        aria-label={`See what's new in v${version} and install it`}
         className="flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15"
       >
         <ArrowUpCircle className="h-3 w-3" />
@@ -458,68 +509,6 @@ const COLOR_MAP = {
   },
 } as const;
 
-// ── Service Chip (display-only, used for LLM) ──────────────────────
-
-function ServiceChip({
-  icon,
-  provider,
-  model,
-  active,
-  color,
-  tooltip,
-}: {
-  icon: React.ReactNode;
-  provider: string;
-  model: string;
-  active: boolean;
-  color: keyof typeof COLOR_MAP;
-  tooltip: string;
-}) {
-  const c = COLOR_MAP[color];
-
-  return (
-    <div
-      className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 transition-all duration-200 ${
-        active
-          ? `${c.bg} border ${c.border} shadow-sm ${c.glow}`
-          : "bg-secondary/30 border border-transparent"
-      }`}
-      title={tooltip}
-    >
-      {/* Status dot */}
-      <span className="relative flex h-2 w-2 shrink-0">
-        {active && (
-          <span className={`absolute inline-flex h-full w-full animate-pulse rounded-full ${c.dot} opacity-40`} />
-        )}
-        <span className={`relative inline-flex h-2 w-2 rounded-full transition-colors duration-200 ${
-          active ? c.dot : "bg-muted-foreground/30"
-        }`} />
-      </span>
-
-      {/* Icon */}
-      <span className={`shrink-0 transition-colors duration-200 ${active ? c.active : "text-muted-foreground/60"}`}>
-        {icon}
-      </span>
-
-      {/* Text */}
-      <div className="flex items-center gap-1 min-w-0">
-        <span className={`text-xs font-medium truncate max-w-[100px] transition-colors duration-200 ${
-          active ? "text-foreground/90" : "text-muted-foreground/70"
-        }`}>
-          {provider}
-        </span>
-        {model && (
-          <span className={`text-meta truncate max-w-[70px] transition-colors duration-200 ${
-            active ? "text-foreground/60" : "text-muted-foreground/60"
-          }`}>
-            {model}
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
-
 // ── STT Chip (interactive during recording) ─────────────────────────
 
 function STTChip({
@@ -534,7 +523,13 @@ function STTChip({
   pickerOpen,
   onClick,
   tooltip,
+  hideModel = false,
+  hideLabel = false,
+  iconOnly = false,
 }: {
+  hideModel?: boolean;
+  hideLabel?: boolean;
+  iconOnly?: boolean;
   icon: React.ReactNode;
   provider: string;
   model: string;
@@ -549,16 +544,18 @@ function STTChip({
 }) {
   const c = COLOR_MAP[color];
 
-  return (
-    <div
-      className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 transition-all duration-200 ${
+  const Root = interactive ? "button" : "div";
+  const chip = (
+    <Root
+      {...(interactive ? { type: "button" as const, "aria-haspopup": "dialog" as const, "aria-expanded": pickerOpen } : {})}
+      aria-label={tooltip}
+      className={`flex min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-left transition-all duration-200 ui-focus ${hideModel || iconOnly ? "overflow-hidden" : ""} ${
         muted
           ? "bg-destructive/5 border border-destructive/10"
           : active
             ? `${c.bg} border ${c.border} shadow-sm ${c.glow}`
             : "bg-secondary/30 border border-transparent"
       } ${interactive ? "cursor-pointer hover:brightness-110" : ""}`}
-      title={tooltip}
       onClick={interactive ? onClick : undefined}
     >
       {/* Status dot */}
@@ -579,8 +576,8 @@ function STTChip({
       </span>
 
       {/* Text */}
-      <div className="flex items-center gap-1 min-w-0">
-        {label && (
+      <span className={`flex items-center gap-1 min-w-0 ${iconOnly ? "hidden" : ""}`}>
+        {label && !hideLabel && (
           <span className={`shrink-0 text-meta font-semibold uppercase tracking-wide transition-colors duration-200 ${
             muted ? "text-destructive/50" : active ? c.active : "text-muted-foreground/60"
           }`}>
@@ -592,23 +589,24 @@ function STTChip({
         }`}>
           {provider}
         </span>
-        {model && !muted && (
+        {model && !muted && !hideModel && (
           <span className={`text-meta truncate max-w-[70px] transition-colors duration-200 ${
             active ? "text-foreground/60" : "text-muted-foreground/60"
           }`}>
             {model}
           </span>
         )}
-      </div>
+      </span>
 
       {/* Chevron — visible only when interactive */}
-      {interactive && (
+      {interactive && !iconOnly && (
         <ChevronUp className={`h-2.5 w-2.5 shrink-0 transition-all duration-200 ${
           pickerOpen ? "text-foreground/60 rotate-0" : "text-muted-foreground/50 rotate-180"
         }`} />
       )}
-    </div>
+    </Root>
   );
+  return <Tooltip content={tooltip}>{chip}</Tooltip>;
 }
 
 // ── Mute Button ─────────────────────────────────────────────────────
@@ -624,21 +622,24 @@ function MuteButton({
   onToggle: () => void;
   label: string;
 }) {
+  const name = muted ? `Unmute ${label}` : `Mute ${label}`;
   return (
+    <Tooltip content={name}>
     <button
       onClick={onToggle}
-      className={`shrink-0 rounded-full p-1 transition-all duration-150 cursor-pointer ${
+      className={`shrink-0 rounded-full p-1 transition-all duration-150 cursor-pointer ui-focus ${
         muted
           ? "bg-red-500/10 text-red-400 hover:bg-red-500/20"
           : "text-muted-foreground/60 hover:text-foreground/70 hover:bg-accent/40"
       }`}
-      title={muted ? `Unmute ${label}` : `Mute ${label}`}
+      aria-label={muted ? `Unmute ${label}` : `Mute ${label}`}
     >
       {type === "mic"
         ? (muted ? <MicOff className="h-3 w-3" /> : <Mic className="h-3 w-3" />)
         : (muted ? <VolumeX className="h-3 w-3" /> : <Volume2 className="h-3 w-3" />)
       }
     </button>
+    </Tooltip>
   );
 }
 
@@ -660,6 +661,7 @@ function STTPickerDropdown({
   otherPartyLabel: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  usePickerKeys(ref);
   const [apiKeyStatus, setApiKeyStatus] = useState<Record<string, boolean>>({});
   const [localEngines, setLocalEngines] = useState<LocalSTTEngineInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -801,9 +803,9 @@ function STTPickerDropdown({
   })).filter((group) => group.options.length > 0);
 
   return (
-    <div
-      ref={ref}
-      className="absolute bottom-full left-0 mb-2 min-w-[200px] rounded-xl border border-border/30 bg-popover/90 backdrop-blur-md shadow-2xl z-50 overflow-hidden animate-in slide-in-from-bottom-2 fade-in duration-150"
+    <AnchoredBox
+      boxRef={ref}
+      className="min-w-[200px] rounded-xl border border-border/30 bg-popover shadow-2xl z-50 overflow-hidden"
     >
       {loading ? (
         <div className="px-4 py-3 text-xs text-muted-foreground">Loading providers...</div>
@@ -892,7 +894,7 @@ function STTPickerDropdown({
           )}
         </>
       )}
-    </div>
+    </AnchoredBox>
   );
 }
 
@@ -917,17 +919,49 @@ function LLMPickerDropdown({
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  usePickerKeys(ref);
   const verifiedProviders = useConfigStore((s) => s.verifiedCloudProviders);
   const cliAgentConfigs = useConfigStore((s) => s.cliAgentConfigs);
   const cliAgentModels = useConfigStore((s) => s.cliAgentModels);
   const agentStatuses = useAgentStore((s) => s.statuses);
   const refreshAgentStatus = useAgentStore((s) => s.refreshStatus);
+  const customBaseUrl = useConfigStore((s) => s.customLlmBaseUrl);
+  const customAuthType = useConfigStore((s) => s.customLlmAuthType);
+  const lastModelByProvider = useConfigStore((s) => s.lastModelByProvider);
+  // A local server that started after the app answers when the picker opens (never switches anything).
+  const [reachable, setReachable] = useState<string[]>([]);
+  // The model the custom endpoint is set up with: the active one, else the last one used with it.
+  const customModel = currentProvider === "custom" ? currentModel : lastModelByProvider["custom"] ?? "";
 
-  // Detect each CLI agent once per window so a logged-in one shows up here.
+  // Look again every time the picker opens: a subscription login or a local server that became
+  // ready while the app ran shows up now, not after a restart. These are cheap local checks
+  // (no model call).
   useEffect(() => {
+    // A subscription status younger than a minute is reused (it was just looked at).
+    const checkedAt = useAgentStore.getState().checkedAt;
     for (const { id } of CLI_AGENTS) {
-      if (!useAgentStore.getState().statuses[id]) void refreshAgentStatus(id);
+      const at = checkedAt[id];
+      if (at == null || Date.now() - at > 60_000) void refreshAgentStatus(id);
     }
+    let cancelled = false;
+    (async () => {
+      const { listModels } = await import("../lib/ipc");
+      for (const o of LLM_PROVIDER_OPTIONS) {
+        if (!o.isLocal || o.value === "custom") continue;
+        try {
+          await Promise.race([
+            listModels(JSON.stringify({ provider_type: o.value })),
+            new Promise((_, no) => setTimeout(() => no(new Error("timeout")), 2500)),
+          ]);
+          if (!cancelled) setReachable((r) => (r.includes(o.value) ? r : [...r, o.value]));
+        } catch {
+          /* not running */
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [refreshAgentStatus]);
   const availableAgents = CLI_AGENTS.filter(
     (a) => currentProvider === a.id || (!!agentStatuses[a.id]?.auth?.logged_in && !isOutdated(agentStatuses[a.id])),
@@ -955,15 +989,21 @@ function LLMPickerDropdown({
         const config = JSON.stringify({
           provider_type: pendingProvider,
           ...(key && { api_key: key }),
+          ...(pendingProvider === "custom" && customBaseUrl && { base_url: customBaseUrl, auth_type: customAuthType }),
         });
         const modelList = await listModels(config);
         if (cancelled) return;
         const chatModels = modelList.filter(
           (m: { id: string }) => !EMBEDDING_PATTERNS.some((p) => m.id.toLowerCase().includes(p))
         );
-        setModels(chatModels.map((m: { id: string; name?: string }) => ({ id: m.id, name: m.name || m.id })));
+        const list = chatModels.map((m: { id: string; name?: string }) => ({ id: m.id, name: m.name || m.id }));
+        // The endpoint's own model stays offered even when it does not list models.
+        if (pendingProvider === "custom" && customModel && !list.some((m) => m.id === customModel)) {
+          list.unshift({ id: customModel, name: customModel });
+        }
+        setModels(list);
       } catch {
-        if (!cancelled) setModels([]);
+        if (!cancelled) setModels(pendingProvider === "custom" && customModel ? [{ id: customModel, name: customModel }] : []);
       } finally {
         if (!cancelled) setModelsLoading(false);
       }
@@ -987,10 +1027,11 @@ function LLMPickerDropdown({
   }, [onClose]);
 
   // Only show verified/ready providers
+  // A configured provider stays in the list (the custom endpoint once it has a URL); a local one
+  // that answered just now shows up even if it was never verified in Settings.
   const available = LLM_PROVIDER_OPTIONS.filter((o) => {
-    if (o.value === "custom") return false;
-    if (o.requiresKey) return verifiedProviders.includes(o.value);
-    return verifiedProviders.includes(o.value); // Local also needs verification
+    if (o.value === "custom") return !!customBaseUrl;
+    return verifiedProviders.includes(o.value) || reachable.includes(o.value);
   });
   // Fallback: always include the current active provider
   if (!available.some((o) => o.value === currentProvider)) {
@@ -998,13 +1039,29 @@ function LLMPickerDropdown({
     if (opt) available.unshift(opt);
   }
 
+  const hostOf = (url: string) => {
+    try {
+      return new URL(url).host;
+    } catch {
+      return "";
+    }
+  };
+  const statusOf = (v: string): string =>
+    currentProvider === v
+      ? "active"
+      : v === "custom"
+        ? hostOf(customBaseUrl)
+        : !verifiedProviders.includes(v) && reachable.includes(v)
+          ? "running"
+          : "";
+
   const localOpts = available.filter((o) => o.isLocal);
   const cloudOpts = available.filter((o) => !o.isLocal);
 
   return (
-    <div
-      ref={ref}
-      className="absolute bottom-full left-0 mb-2 min-w-[240px] rounded-xl border border-border/30 bg-popover/90 backdrop-blur-md shadow-2xl z-50 overflow-hidden animate-in slide-in-from-bottom-2 fade-in duration-150"
+    <AnchoredBox
+      boxRef={ref}
+      className="min-w-[240px] rounded-xl border border-border/30 bg-popover shadow-2xl z-50 overflow-hidden"
     >
       {/* ── Provider section ── */}
       {localOpts.length > 0 && (
@@ -1027,7 +1084,7 @@ function LLMPickerDropdown({
               >
                 <Icon className={`h-3.5 w-3.5 shrink-0 ${isPending ? "text-primary" : "text-emerald-400"}`} />
                 <span className="flex-1 text-left font-medium">{opt.label}</span>
-                {isActive && <span className="text-meta text-primary/80">active</span>}
+                {statusOf(opt.value) && <span className={`text-meta ${isActive ? "text-primary/80" : "text-muted-foreground/70"}`}>{statusOf(opt.value)}</span>}
               </button>
             );
           })}
@@ -1054,7 +1111,7 @@ function LLMPickerDropdown({
               >
                 <Icon className={`h-3.5 w-3.5 shrink-0 ${isPending ? "text-primary" : "text-blue-400"}`} />
                 <span className="flex-1 text-left font-medium">{opt.label}</span>
-                {isActive && <span className="text-meta text-primary/80">active</span>}
+                {statusOf(opt.value) && <span className={`text-meta ${isActive ? "text-primary/80" : "text-muted-foreground/70"}`}>{statusOf(opt.value)}</span>}
               </button>
             );
           })}
@@ -1159,7 +1216,7 @@ function LLMPickerDropdown({
           ) : null}
         </div>
       )}
-    </div>
+    </AnchoredBox>
   );
 }
 

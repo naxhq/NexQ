@@ -48,7 +48,7 @@ describe("language picker in the status bar", () => {
       },
     });
     render(<ServiceStatusBar />);
-    expect(screen.getByTitle("Your STT: Azure MAI Streaming / MAI-Transcribe-2-Streaming")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Your STT: Azure MAI Streaming / MAI-Transcribe-2-Streaming" })).toBeInTheDocument();
   });
 
   it("is absent outside a meeting and in the launcher footer", () => {

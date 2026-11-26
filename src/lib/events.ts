@@ -3,6 +3,14 @@
 // ============================================================================
 
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { NOTES_UPDATE_EVENT } from "./hotkeys";
+import type {
+  BriefSettings, BriefSheetEvent, MemorySettings, BriefState, NotetakerSettings, MemoryChangedEvent, NotetakerDocEvent, NotetakerState,
+  WorkspaceChatActivityEvent, WorkspaceChatApprovalEvent, WorkspaceChatApprovalClosedEvent, WorkspaceChatApprovalRefusedEvent, WorkspaceChatContextEvent, WorkspaceChatEndEvent,
+  WorkspaceChatErrorEvent, WorkspaceChatStartEvent, WorkspaceChatTokenEvent, WorkspaceIndexProgressEvent,
+  WorkspacesChangedEvent,
+  DbIntegrityFinding,
+} from "./types";
 import type {
   AIScenario,
   MeetingPromptInfo,
@@ -387,6 +395,8 @@ export function onDetectedMeetingEnded(handler: () => void): Promise<UnlistenFn>
 export interface StartDetectedMeetingEvent {
   title: string;
   scenario: AIScenario;
+  /** The workspace to file it in; omitted = the default workspace. */
+  workspace_id?: string;
 }
 
 export function emitStartDetectedMeeting(payload: StartDetectedMeetingEvent): Promise<void> {
@@ -409,4 +419,91 @@ export function emitAgentFallbackShown(): Promise<void> {
 
 export function onAgentFallbackShown(handler: () => void): Promise<UnlistenFn> {
   return listen("nexq:agent_fallback_shown", () => handler());
+}
+
+// == WORKSPACE EVENTS (spec section 9) ==
+
+export function onWorkspacesChanged(handler: (e: WorkspacesChangedEvent) => void): Promise<UnlistenFn> {
+  return listen<WorkspacesChangedEvent>("workspaces_changed", (e) => handler(e.payload ?? {}));
+}
+export function onDbIntegrityProblem(handler: (e: DbIntegrityFinding) => void): Promise<UnlistenFn> {
+  return listen<DbIntegrityFinding>("db_integrity_problem", (e) => handler(e.payload));
+}
+export function onWorkspaceIndexProgress(handler: (e: WorkspaceIndexProgressEvent) => void): Promise<UnlistenFn> {
+  return listen<WorkspaceIndexProgressEvent>("workspace_index_progress", (e) => handler(e.payload));
+}
+
+export function onWorkspaceChatStart(handler: (e: WorkspaceChatStartEvent) => void): Promise<UnlistenFn> {
+  return listen<WorkspaceChatStartEvent>("workspace_chat_start", (e) => handler(e.payload));
+}
+export function onWorkspaceChatToken(handler: (e: WorkspaceChatTokenEvent) => void): Promise<UnlistenFn> {
+  return listen<WorkspaceChatTokenEvent>("workspace_chat_token", (e) => handler(e.payload));
+}
+export function onWorkspaceChatActivity(handler: (e: WorkspaceChatActivityEvent) => void): Promise<UnlistenFn> {
+  return listen<WorkspaceChatActivityEvent>("workspace_chat_activity", (e) => handler(e.payload));
+}
+export function onWorkspaceChatContext(handler: (e: WorkspaceChatContextEvent) => void): Promise<UnlistenFn> {
+  return listen<WorkspaceChatContextEvent>("workspace_chat_context", (e) => handler(e.payload));
+}
+export function onWorkspaceChatEnd(handler: (e: WorkspaceChatEndEvent) => void): Promise<UnlistenFn> {
+  return listen<WorkspaceChatEndEvent>("workspace_chat_end", (e) => handler(e.payload));
+}
+export function onWorkspaceChatError(handler: (e: WorkspaceChatErrorEvent) => void): Promise<UnlistenFn> {
+  return listen<WorkspaceChatErrorEvent>("workspace_chat_error", (e) => handler(e.payload));
+}
+/** A tool that is not read-only asks for a click (answer with `answerWorkspaceApproval`). */
+export function onWorkspaceChatApproval(handler: (e: WorkspaceChatApprovalEvent) => void): Promise<UnlistenFn> {
+  return listen<WorkspaceChatApprovalEvent>("workspace_chat_approval", (e) => handler(e.payload));
+}
+/** A tool was refused without asking (nothing to click). */
+export function onWorkspaceChatApprovalRefused(handler: (e: WorkspaceChatApprovalRefusedEvent) => void): Promise<UnlistenFn> {
+  return listen<WorkspaceChatApprovalRefusedEvent>("workspace_chat_approval_refused", (e) => handler(e.payload));
+}
+/** The approval question ended without a click here (answered elsewhere, timeout, cancelled). */
+export function onWorkspaceChatApprovalClosed(handler: (e: WorkspaceChatApprovalClosedEvent) => void): Promise<UnlistenFn> {
+  return listen<WorkspaceChatApprovalClosedEvent>("workspace_chat_approval_closed", (e) => handler(e.payload));
+}
+
+export function onNotetakerState(handler: (e: NotetakerState) => void): Promise<UnlistenFn> {
+  return listen<NotetakerState>("notetaker_state", (e) => handler(e.payload));
+}
+export function onNotetakerDoc(handler: (e: NotetakerDocEvent) => void): Promise<UnlistenFn> {
+  return listen<NotetakerDocEvent>("notetaker_doc", (e) => handler(e.payload));
+}
+export function onBriefState(handler: (e: BriefState) => void): Promise<UnlistenFn> {
+  return listen<BriefState>("brief_state", (e) => handler(e.payload));
+}
+/** `workspace_material_unavailable`: a file or tool could not be used for this meeting. */
+export interface WorkspaceMaterialUnavailableEvent {
+  meeting_id: string | null;
+  message: string;
+}
+export function onWorkspaceMaterialUnavailable(handler: (e: WorkspaceMaterialUnavailableEvent) => void): Promise<UnlistenFn> {
+  return listen<WorkspaceMaterialUnavailableEvent>("workspace_material_unavailable", (e) => handler(e.payload));
+}
+export function onNotetakerSettingsChanged(handler: (e: NotetakerSettings) => void): Promise<UnlistenFn> {
+  return listen<NotetakerSettings>("notetaker_settings_changed", (e) => handler(e.payload));
+}
+export function onBriefSettingsChanged(handler: (e: BriefSettings) => void): Promise<UnlistenFn> {
+  return listen<BriefSettings>("brief_settings_changed", (e) => handler(e.payload));
+}
+/** `automatic_model_updated`: a provider's model list landed, so "Automatic" may name a different model. */
+export function onAutomaticModelUpdated(handler: (e: { provider: string }) => void): Promise<UnlistenFn> {
+  return listen<{ provider: string }>("automatic_model_updated", (e) => handler(e.payload));
+}
+export function onBriefSheet(handler: (e: BriefSheetEvent) => void): Promise<UnlistenFn> {
+  return listen<BriefSheetEvent>("brief_sheet", (e) => handler(e.payload));
+}
+export function onMemorySettingsChanged(handler: (e: MemorySettings) => void): Promise<UnlistenFn> {
+  return listen<MemorySettings>("memory_settings_changed", (e) => handler(e.payload));
+}
+export function onMemoryChanged(handler: (e: MemoryChangedEvent) => void): Promise<UnlistenFn> {
+  return listen<MemoryChangedEvent>("memory_changed", (e) => handler(e.payload));
+}
+
+/** In-window DOM event the `N` key raises: "update notes now" (the notes panel listens). */
+export { NOTES_UPDATE_EVENT };
+export function onNotesUpdateRequested(handler: () => void): () => void {
+  window.addEventListener(NOTES_UPDATE_EVENT, handler);
+  return () => window.removeEventListener(NOTES_UPDATE_EVENT, handler);
 }

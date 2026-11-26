@@ -61,7 +61,7 @@ export function CustomInstructions() {
         placeholder="Add custom instructions for AI responses..."
         rows={3}
         maxLength={5000}
-        className="w-full resize-none rounded-xl border border-border/40 bg-secondary/20 px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/50 transition-colors focus:border-primary/40 focus:bg-secondary/40 focus:outline-none focus:ring-1 focus:ring-primary/20"
+        className="w-full resize-none rounded-xl border border-border/40 bg-secondary/20 px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/50 transition-colors focus:border-ring focus:bg-secondary/40 focus:outline-none focus:ring-1 focus:ring-primary/20"
       />
     </div>
   );

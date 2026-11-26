@@ -92,32 +92,14 @@ impl Drop for RecorderHandle {
 /// Get the recordings directory path.
 /// Creates it if it doesn't exist.
 fn get_recordings_dir() -> Result<PathBuf, String> {
-    let app_data = std::env::var("APPDATA")
-        .map(PathBuf::from)
-        .or_else(|_| {
-            // Fallback for non-Windows or if APPDATA is not set
-            dirs_fallback()
-        })
-        .map_err(|e| format!("Failed to find app data directory: {}", e))?;
-
-    let recordings_dir = app_data.join("com.nexq.app").join("recordings");
+    // From the app's identifier (see `app_paths`): a build with another
+    // identifier never records into the real app's folder.
+    let recordings_dir = crate::app_paths::recordings_dir();
 
     fs::create_dir_all(&recordings_dir)
         .map_err(|e| format!("Failed to create recordings directory: {}", e))?;
 
     Ok(recordings_dir)
-}
-
-/// Fallback for getting a suitable data directory
-fn dirs_fallback() -> Result<PathBuf, String> {
-    // Try common locations
-    if let Ok(home) = std::env::var("HOME") {
-        Ok(PathBuf::from(home).join(".config"))
-    } else if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        Ok(PathBuf::from(local))
-    } else {
-        Err("Cannot determine data directory".to_string())
-    }
 }
 
 /// Start recording audio to a WAV file.

@@ -1,0 +1,27 @@
+{
+  "doc": {
+    "blocks": [
+      {
+        "edited": true,
+        "id": "b0",
+        "parent": null,
+        "pinned": false,
+        "t": 5000,
+        "text": "Plan",
+        "type": "topic"
+      },
+      {
+        "edited": true,
+        "id": "b1",
+        "parent": "b0",
+        "pinned": false,
+        "t": 6000,
+        "text": "Do it",
+        "type": "bullet"
+      }
+    ],
+    "version": 1
+  },
+  "meeting_id": "m1",
+  "version": 2
+}

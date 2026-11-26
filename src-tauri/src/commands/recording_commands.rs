@@ -138,12 +138,11 @@ pub async fn delete_recording(
         )
         .map_err(|e| format!("Failed to query recording paths: {}", e))?;
 
-    // Delete files from disk — ignore errors if files no longer exist
-    if let Some(recording_path) = &paths.0 {
-        let _ = fs::remove_file(recording_path);
-    }
-    if let Some(waveform_path) = &paths.1 {
-        let _ = fs::remove_file(waveform_path);
+    // Delete files from disk, but only ones inside NexQ's recordings folder
+    // (a path the database names elsewhere is never touched).
+    let files: Vec<std::path::PathBuf> = [&paths.0, &paths.1].into_iter().flatten().map(std::path::PathBuf::from).collect();
+    if let Some(dir) = crate::workspace::purge::recordings_dir() {
+        crate::workspace::purge::delete_files_inside(&dir, &files);
     }
 
     // Clear all recording columns in DB

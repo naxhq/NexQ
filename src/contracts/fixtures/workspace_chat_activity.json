@@ -1,0 +1,13 @@
+{
+  "activity": {
+    "chip": {
+      "kind": "tool",
+      "label": "Notes: set_flag",
+      "path": null
+    },
+    "kind": "tool",
+    "label": "Notes: set_flag"
+  },
+  "chat_id": "c1",
+  "request_id": "ask-1"
+}

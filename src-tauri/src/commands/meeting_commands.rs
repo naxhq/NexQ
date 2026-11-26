@@ -16,6 +16,8 @@ use crate::llm::cli_agent::protocol::AgentErrorKind;
 use crate::llm::cli_agent::routing::{self, SessionRecord, PRELOAD_MESSAGE_CHARS};
 use crate::sources::launch::build_sources_launch;
 use crate::state::{AppState, LiveMeeting};
+use crate::workspace::runtime;
+use crate::workspace::EffectiveScope;
 
 /// Global custom instructions (AI Actions settings).
 fn custom_instructions(state: &AppState) -> String {
@@ -27,25 +29,53 @@ fn custom_instructions(state: &AppState) -> String {
         .unwrap_or_default()
 }
 
-/// The launch of a with-sources session from the saved sources and secrets:
-/// `Ok(None)` when nothing usable is enabled, `Err` when something was enabled
-/// but every source was left out.
-pub(crate) fn current_sources_launch(state: &AppState) -> Result<Option<SourcesLaunch>, String> {
-    let cfg = state
+/// The launch of a with-sources session from the saved sources and secrets,
+/// cut down to what `scope` may use and what the pills left on (`folders`: the
+/// Library's searched folders, `servers`: the Tools): `Ok(None)` when nothing
+/// usable is enabled, `Err` when something was enabled but every source was
+/// left out.
+pub(crate) fn current_sources_launch(
+    state: &AppState,
+    scope: &EffectiveScope,
+    folders: bool,
+    servers: bool,
+) -> Result<Option<SourcesLaunch>, String> {
+    let saved = state
         .personal_sources
         .read()
         .map_err(|_| "Couldn't read your sources".to_string())?
         .clone();
+    let cfg = crate::workspace::assist::session_sources(&saved, scope, folders, servers);
     build_sources_launch(&cfg, &crate::commands::sources_commands::saved_secret)
 }
 
 /// `record` as a with-sources session starts it: the sources launch, and the
-/// system prompt followed by what each source is.
-fn with_sources_record(state: &AppState, mut record: SessionRecord) -> Result<SessionRecord, String> {
-    let launch = current_sources_launch(state)?.ok_or_else(|| "No personal sources are enabled".to_string())?;
+/// system prompt followed by what each source is. `key` says what is left out
+/// (a session with the Library off has no folders, one with Tools off no servers).
+fn with_sources_record(
+    state: &AppState,
+    mut record: SessionRecord,
+    scope: &EffectiveScope,
+    key: &SessionKey,
+) -> Result<SessionRecord, String> {
+    let launch = current_sources_launch(state, scope, !key.no_library, !key.no_tools)?
+        .ok_or_else(|| "No personal sources are enabled".to_string())?;
     record.system_prompt = format!("{}\n\n{}", record.system_prompt, launch.system_prompt_addition);
     record.sources = Some(launch);
     Ok(record)
+}
+
+/// What the scope holds of the Library and Tools right now (for deciding
+/// whether a with-sources session has anything to start with).
+pub(crate) fn held_sources(state: &AppState, scope: &EffectiveScope) -> crate::workspace::assist::Held {
+    let saved = state.personal_sources.read().map(|c| c.clone()).unwrap_or_default();
+    let resources = state
+        .context
+        .as_ref()
+        .and_then(|c| c.lock().ok())
+        .map(|c| c.list_resources())
+        .unwrap_or_default();
+    crate::workspace::assist::held(scope, &saved, &resources)
 }
 
 /// What a live-meeting Claude session starts with: the scenario prompt,
@@ -60,18 +90,62 @@ pub(crate) fn live_session_record(
     finals: &[Seg],
     with_sources: bool,
 ) -> Result<SessionRecord, String> {
+    live_session_record_flags(state, tier, finals, with_sources, false, false)
+}
+
+/// [`live_session_record`] for the session `key` names (its pills' locks).
+pub(crate) fn live_session_record_for(state: &AppState, key: &SessionKey, finals: &[Seg]) -> Result<SessionRecord, String> {
+    live_session_record_flags(state, key.tier, finals, key.with_sources, key.no_library, key.no_tools)
+}
+
+/// `no_library`: the session holds no documents, notes or folders (the
+/// Library pill was off); `no_tools`: a with-sources session without its servers.
+/// The workspace's instructions and context talking points are always in.
+pub(crate) fn live_session_record_flags(
+    state: &AppState,
+    tier: Tier,
+    finals: &[Seg],
+    with_sources: bool,
+    no_library: bool,
+    no_tools: bool,
+) -> Result<SessionRecord, String> {
+    // Stamp first: the generation and sources epoch this record is built under.
+    // If the scope restarts while it is built, the record is refused at insert.
+    let live_id = state.live_meeting.lock().ok().and_then(|m| m.as_ref().map(|m| m.id.clone()));
+    let key = SessionKey {
+        scope: SessionScope::Live(live_id.clone().unwrap_or_default()),
+        tier,
+        with_sources,
+        no_library,
+        no_tools,
+    };
+    let stamp = live_id.as_ref().map(|_| record_stamp(state, &key)).unwrap_or_default();
     let (scenario_prompt, speaker_context) = state
         .active_scenario
         .read()
         .map(|s| (s.system_prompt.clone(), s.speaker_context.clone()))
         .unwrap_or_default();
-    let documents = state
+    // The running meeting's own scope: its workspace, what it borrows, and
+    // General when its workspace includes it.
+    let scoped = match live_id.as_deref() {
+        Some(id) => runtime::for_meeting(state, id),
+        None => runtime::for_default(state),
+    };
+    let (head, documents, document_rules) = state
         .context
         .as_ref()
         .and_then(|c| c.lock().ok())
-        .map(|c| c.get_assembled_context())
+        .map(|c| {
+            let (head, documents) = c.assembled_parts_for(&scoped, !no_library);
+            (head, documents, c.document_rules_for(&scoped))
+        })
         .unwrap_or_default();
-    let (mut preload, rag_mode) = routing::document_preload(&documents);
+    // Excerpts from local search can arrive in any turn (documents added later, the meeting's own
+    // transcript): every live session says once, with the same words, that fenced blocks are data.
+    let document_rules = if document_rules.is_empty() { crate::context::excerpt_rules(&scoped.scope) } else { document_rules };
+    // The talking points and instructions are preloaded whatever the documents come to; only
+    // the documents go to retrieval when they are over the cap.
+    let (mut preload, rag_mode) = routing::session_preload(&head, &documents);
     let mut sent = HashMap::new();
     if tier == Tier::Deep {
         preload.extend(build_preload_messages(finals, None, PRELOAD_MESSAGE_CHARS, true));
@@ -81,18 +155,26 @@ pub(crate) fn live_session_record(
         system_prompt: routing::live_system_prompt(
             &scenario_prompt,
             &speaker_context,
-            &custom_instructions(state),
+            &runtime::instructions_with_workspace(&custom_instructions(state), &scoped.scope),
+            &document_rules,
         ),
         preload,
         sent,
         rag_mode,
+        generation: stamp.0,
+        sources_epoch: stamp.1,
         ..SessionRecord::default()
     };
     if with_sources {
-        with_sources_record(state, record)
+        with_sources_record(state, record, &scoped.scope, &key)
     } else {
         Ok(record)
     }
+}
+
+/// The generation and sources epoch a record for `key` starts to be built under.
+fn record_stamp(state: &AppState, key: &SessionKey) -> (u64, u64) {
+    (state.agent_sessions.generation_for(key), state.meeting_sessions.sources_epoch(&key.scope))
 }
 
 /// What the AI gets about a past meeting: its summary, its final
@@ -144,6 +226,29 @@ pub(crate) fn past_session_record(
     meeting_id: &str,
     with_sources: bool,
 ) -> Result<SessionRecord, String> {
+    past_session_record_flags(state, meeting_id, with_sources, false, false)
+}
+
+/// [`past_session_record`] for the session `key` names (its pills' locks).
+pub(crate) fn past_session_record_for(state: &AppState, meeting_id: &str, key: &SessionKey) -> Result<SessionRecord, String> {
+    past_session_record_flags(state, meeting_id, key.with_sources, key.no_library, key.no_tools)
+}
+
+pub(crate) fn past_session_record_flags(
+    state: &AppState,
+    meeting_id: &str,
+    with_sources: bool,
+    no_library: bool,
+    no_tools: bool,
+) -> Result<SessionRecord, String> {
+    let key = SessionKey {
+        scope: SessionScope::Past(meeting_id.to_string()),
+        tier: Tier::Deep,
+        with_sources,
+        no_library,
+        no_tools,
+    };
+    let stamp = record_stamp(state, &key);
     let context = past_meeting_context(state, meeting_id)?;
     let mut preload = build_preload_messages(
         &context.transcript,
@@ -152,13 +257,20 @@ pub(crate) fn past_session_record(
         true,
     );
     preload.extend(chat_history_preload(&context.chat));
+    // The past meeting's own scope, not whatever is running now.
+    let scoped = runtime::for_meeting(state, meeting_id);
     let record = SessionRecord {
-        system_prompt: routing::past_system_prompt(&custom_instructions(state)),
+        system_prompt: routing::past_system_prompt(&runtime::instructions_with_workspace(
+            &custom_instructions(state),
+            &scoped.scope,
+        )),
         preload,
+        generation: stamp.0,
+        sources_epoch: stamp.1,
         ..SessionRecord::default()
     };
     if with_sources {
-        with_sources_record(state, record)
+        with_sources_record(state, record, &scoped.scope, &key)
     } else {
         Ok(record)
     }
@@ -224,14 +336,30 @@ fn past_transcript(transcript: &serde_json::Value, names: &HashMap<String, Strin
 pub(crate) fn start_session_in_background(
     app: &AppHandle,
     key: SessionKey,
-    build: impl FnOnce(&AppState) -> Result<SessionRecord, String> + Send + 'static,
+    build: impl Fn(&AppState) -> Result<SessionRecord, String> + Send + Sync + 'static,
 ) {
-    let epoch = app.state::<AppState>().meeting_sessions.epoch(&key.scope);
+    start_session_attempt(app, key, std::sync::Arc::new(build), true);
+}
+
+/// One try of [`start_session_in_background`]. The generation is read before
+/// the record is built: if the scope restarts in between, the session is not
+/// started from that record and (once) the record is built again.
+fn start_session_attempt(
+    app: &AppHandle,
+    key: SessionKey,
+    build: std::sync::Arc<dyn Fn(&AppState) -> Result<SessionRecord, String> + Send + Sync>,
+    retry: bool,
+) {
+    let (epoch, generation) = {
+        let state = app.state::<AppState>();
+        (state.meeting_sessions.epoch(&key.scope), state.agent_sessions.generation_for(&key))
+    };
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let label = routing::session_key_label(&key);
         let built = {
             let app = app.clone();
+            let build = build.clone();
             tokio::task::spawn_blocking(move || build(&app.state::<AppState>())).await
         };
         let state = app.state::<AppState>();
@@ -249,8 +377,13 @@ pub(crate) fn start_session_in_background(
                 return;
             }
         };
-        if !state.meeting_sessions.insert_if_current(key.clone(), record, epoch) {
-            return; // closed while the record was built
+        if !state.meeting_sessions.insert_checked(key.clone(), record, epoch, Some(generation)) {
+            // Closed while the record was built: nothing to start. Restarted
+            // while it was built (same epoch): build it again, once.
+            if retry && state.meeting_sessions.epoch(&key.scope) == epoch {
+                start_session_attempt(&app, key, build, false);
+            }
+            return;
         }
         let Some(record) = state.meeting_sessions.get(&key) else {
             return;
@@ -263,19 +396,29 @@ pub(crate) fn start_session_in_background(
             preload: record.preload,
             sources: record.sources,
         };
-        match state.agent_sessions.ensure(&key, init).await {
-            Ok(_) => {
+        match state.agent_sessions.ensure_at(&key, init, None, Some(generation)).await {
+            Ok(handle) => {
                 if key.with_sources {
                     state.sources_cooldown.clear_key(&key);
                 }
-                // Closed (and not reopened) while it was starting: close it
-                // now; live sessions are never reaped.
+                // Closed (and not reopened) while it was starting: close exactly
+                // this session (never a newer one that took the key); live
+                // sessions are never reaped.
                 let closed = state.meeting_sessions.epoch(&key.scope) != epoch
                     && !state.meeting_sessions.contains(&key);
                 if closed {
-                    if let Some(handle) = state.agent_sessions.retire_if_idle(&key) {
+                    if let Some(handle) = state.agent_sessions.retire_handle_if_idle(&key, &handle) {
                         handle.close().await;
                     }
+                }
+            }
+            Err(e) if crate::llm::cli_agent::manager::is_scope_changed(&e) => {
+                // Restarted while it started: that record is gone. Build a new one, once.
+                log::info!("Claude session {label} was restarted while it started");
+                // The record this attempt stored is from before the restart: gone.
+                state.meeting_sessions.remove_if_generation(&key, generation);
+                if retry {
+                    start_session_attempt(&app, key, build, false);
                 }
             }
             Err(e) => {
@@ -320,12 +463,12 @@ fn retry_sources_key(app: &AppHandle, key: SessionKey) {
     state.meeting_sessions.clear_sources(&key.scope);
     match key.scope.clone() {
         SessionScope::Live(_) => {
-            start_session_in_background(app, key.clone(), move |state| live_session_record(state, key.tier, &[], true))
+            start_session_in_background(app, key.clone(), move |state| live_session_record_for(state, &key, &[]))
         }
         SessionScope::Past(id) => {
-            start_session_in_background(app, key, move |state| past_session_record(state, &id, true))
+            start_session_in_background(app, key.clone(), move |state| past_session_record_for(state, &id, &key))
         }
-        SessionScope::Utility => {}
+        SessionScope::Utility | SessionScope::Workspace(_) | SessionScope::Notes(_) | SessionScope::Brief(_) => {}
     }
 }
 
@@ -360,9 +503,9 @@ pub(crate) fn restart_sources_sessions(app: &AppHandle) {
         state.meeting_sessions.clear_sources(scope);
     }
     let live = state.live_meeting.lock().ok().and_then(|m| m.as_ref().map(|m| m.id.clone()));
-    let rewarm = live.filter(|_| {
-        routing::cli_agent_is_active(&state)
-            && state.personal_sources.read().map(|c| c.has_enabled()).unwrap_or(false)
+    let rewarm = live.filter(|id| {
+        let held = held_sources(&state, &runtime::for_meeting(&state, id).scope);
+        routing::cli_agent_is_active(&state) && (held.folders || held.servers)
     });
     let sessions = state.agent_sessions.clone();
     let app = app.clone();
@@ -373,6 +516,113 @@ pub(crate) fn restart_sources_sessions(app: &AppHandle) {
         if let Some(id) = rewarm {
             let key = SessionKey::sources(SessionScope::Live(id), Tier::Fast);
             start_session_in_background(&app, key, |state| live_session_record(state, Tier::Fast, &[], true));
+        }
+    });
+}
+
+/// The scope of a meeting changed (a borrowed workspace added or removed, a
+/// new home, or its material or instructions edited): forget and close its
+/// sessions, which hold the old documents and sources, and warm the running
+/// meeting's Fast ones again with the new scope. Like a sources restart:
+/// in the background, requests in flight finish or restart on their own, and
+/// other meetings' sessions are untouched.
+pub(crate) fn restart_meeting_sessions(app: &AppHandle, meeting_id: &str) {
+    let state = app.state::<AppState>();
+    state.sources_cooldown.clear();
+    let live_scope = SessionScope::Live(meeting_id.to_string());
+    let past_scope = SessionScope::Past(meeting_id.to_string());
+    // Its notes and brief sessions were started with context from the same
+    // scope: they start again too (a run builds its own context each time).
+    let aux_scopes = [SessionScope::Notes(meeting_id.to_string()), SessionScope::Brief(meeting_id.to_string())];
+    // The brief drops its sheet and looks the new scope up now.
+    if let Some(rt) = crate::live_runtime::global() {
+        rt.scope_changed(meeting_id);
+        // Its sessions start again: they get the brief and memory again.
+        rt.forget_sessions(meeting_id);
+    }
+    let is_live = live_meeting_is(&state, meeting_id);
+    state.meeting_sessions.remove_scope(&live_scope);
+    state.meeting_sessions.remove_scope(&past_scope);
+    // The old sessions leave their keys at once; a request that comes next
+    // starts a new session under the new record and never queues behind the
+    // old ones, which only finish the turn they are in and close.
+    state.agent_sessions.detach_scope(&live_scope);
+    state.agent_sessions.detach_scope(&past_scope);
+    for scope in &aux_scopes {
+        state.agent_sessions.detach_scope(scope);
+    }
+    let rewarm = is_live && routing::cli_agent_is_active(&state);
+    let with_sources = rewarm && {
+        let held = held_sources(&state, &runtime::for_meeting(&state, meeting_id).scope);
+        held.folders || held.servers
+    };
+    let sessions = state.agent_sessions.clone();
+    let app = app.clone();
+    let id = meeting_id.to_string();
+    if rewarm {
+        let key = SessionKey::plain(SessionScope::Live(id.clone()), Tier::Fast);
+        start_session_in_background(&app, key, |state| live_session_record(state, Tier::Fast, &[], false));
+        if with_sources {
+            let key = SessionKey::sources(SessionScope::Live(id), Tier::Fast);
+            start_session_in_background(&app, key, |state| live_session_record(state, Tier::Fast, &[], true));
+        }
+    }
+    tauri::async_runtime::spawn(async move {
+        let bound = crate::llm::cli_agent::manager::DRAIN_TIMEOUT;
+        sessions.close_retired_graceful(&live_scope, bound).await;
+        sessions.close_retired_graceful(&past_scope, bound).await;
+        for scope in &aux_scopes {
+            sessions.close_retired_graceful(scope, bound).await;
+        }
+    });
+}
+
+/// The material of these chats' workspace changed: their sessions leave at once
+/// (the next run starts one from its fresh context) and close after the turn
+/// they are in.
+pub(crate) fn restart_chat_sessions(app: &AppHandle, chat_ids: Vec<String>) {
+    if chat_ids.is_empty() {
+        return;
+    }
+    let state = app.state::<AppState>();
+    let scopes: Vec<SessionScope> = chat_ids.into_iter().map(SessionScope::Workspace).collect();
+    for scope in &scopes {
+        state.agent_sessions.detach_scope(scope);
+    }
+    let sessions = state.agent_sessions.clone();
+    tauri::async_runtime::spawn(async move {
+        for scope in &scopes {
+            sessions.close_retired_graceful(scope, crate::llm::cli_agent::manager::DRAIN_TIMEOUT).await;
+        }
+    });
+}
+
+fn live_meeting_is(state: &AppState, meeting_id: &str) -> bool {
+    state.live_meeting.lock().ok().map_or(false, |m| m.as_ref().map_or(false, |m| m.id == meeting_id))
+}
+
+/// A meeting that no longer exists: every session of it ends and nothing
+/// starts again (no rewarm), and its notes and brief stop.
+pub(crate) fn drop_meeting_sessions(app: &AppHandle, meeting_id: &str) {
+    let state = app.state::<AppState>();
+    if let Some(rt) = crate::live_runtime::global() {
+        rt.meeting_deleted(meeting_id);
+    }
+    state.restarts.forget(&format!("meeting:{meeting_id}"));
+    let scopes = [
+        SessionScope::Live(meeting_id.to_string()),
+        SessionScope::Past(meeting_id.to_string()),
+        SessionScope::Notes(meeting_id.to_string()),
+        SessionScope::Brief(meeting_id.to_string()),
+    ];
+    for scope in &scopes {
+        state.meeting_sessions.remove_scope(scope);
+        state.agent_sessions.detach_scope(scope);
+    }
+    let sessions = state.agent_sessions.clone();
+    tauri::async_runtime::spawn(async move {
+        for scope in &scopes {
+            sessions.close_retired_graceful(scope, crate::llm::cli_agent::manager::DRAIN_TIMEOUT).await;
         }
     });
 }
@@ -411,7 +661,10 @@ pub async fn close_past_meeting_session(
     meeting_id: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    close_scope_in_background(&state, SessionScope::Past(meeting_id));
+    close_scope_in_background(&state, SessionScope::Past(meeting_id.clone()));
+    if let Some(ai) = state.ai_runs.clone() {
+        tauri::async_runtime::spawn(async move { ai.close_meeting(&meeting_id).await });
+    }
     Ok(())
 }
 
@@ -454,13 +707,19 @@ pub async fn save_meeting_ai_interactions(
 #[command]
 pub async fn start_meeting(
     title: Option<String>,
+    workspace_id: Option<String>,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<String, String> {
-    let db = state
-        .database
-        .as_ref()
-        .ok_or_else(|| "Database not initialized".to_string())?;
+    // Before anything starts (audio, recording): no database, no meeting, and a
+    // sentence that says why. The page calls this before it opens the microphone.
+    let db = state.database.as_ref().ok_or_else(|| match &state.db_problem {
+        Some(problem) => format!(
+            "NexQ can't start a meeting because it can't open its meetings file. {}",
+            problem.message
+        ),
+        None => "NexQ can't start a meeting: the meetings file isn't open yet.".to_string(),
+    })?;
 
     let db = db
         .lock()
@@ -473,9 +732,12 @@ pub async fn start_meeting(
         )
     });
 
-    let meeting = meetings::create_meeting(db.connection(), &title)
-        .map_err(|e| format!("Failed to create meeting: {}", e))?;
+    // A requested workspace that is unknown or archived falls back to the default one, and
+    // the response says so (`workspace_notice`): a meeting always starts when the database
+    // is open. The meeting and its home are created in one transaction: no orphan row.
+    let (meeting, workspace_notice) = create_meeting_filed(db.connection(), &title, workspace_id.as_deref(), crate::workspace::available())?;
     state.meeting_active.store(true, Ordering::SeqCst);
+    state.workspace_chat.cancel_recaps(); // recaps never run in a meeting
 
     // Clear per-meeting state so the new meeting starts fresh.
     // The intelligence buffer and last detected question persist across
@@ -490,6 +752,7 @@ pub async fn start_meeting(
     if let Some(rag_arc) = state.rag.as_ref() {
         if let Ok(mut rag_mgr) = rag_arc.lock() {
             if let Some(indexer) = rag_mgr.transcript_indexer_mut() {
+                indexer.set_owner(Some(meeting.id.clone()));
                 indexer.reset();
             }
         }
@@ -506,6 +769,10 @@ pub async fn start_meeting(
             start_ms,
         });
     }
+    // Notes and brief start by themselves where the user turned them on for every meeting.
+    if let Some(rt) = crate::live_runtime::global() {
+        rt.on_meeting_start(&meeting.id);
+    }
     if routing::cli_agent_is_active(&state) {
         let key = SessionKey::plain(SessionScope::Live(meeting.id.clone()), Tier::Fast);
         start_session_in_background(&app, key, |state| {
@@ -513,7 +780,9 @@ pub async fn start_meeting(
         });
         // The with-sources Fast session warms beside it, so the first answer
         // with a pill on finds it ready. Deep ones start on first use.
-        let has_sources = state.personal_sources.read().map(|c| c.has_enabled()).unwrap_or(false);
+        let scope = runtime::for_meeting(&state, &meeting.id).scope;
+        let held = held_sources(&state, &scope);
+        let has_sources = held.folders || held.servers;
         if has_sources {
             let key = SessionKey::sources(SessionScope::Live(meeting.id.clone()), Tier::Fast);
             start_session_in_background(&app, key, |state| {
@@ -522,7 +791,58 @@ pub async fn start_meeting(
         }
     }
 
-    serde_json::to_string(&meeting).map_err(|e| format!("Failed to serialize meeting: {}", e))
+    meeting_response(&meeting, workspace_notice)
+}
+
+/// Creates the meeting in the workspace asked for. With no workspace asked for it goes to the
+/// default one (General when that fails too, and with no home at all as the last resort). A
+/// workspace that was asked for and cannot be used never turns into another one: the meeting
+/// starts filed nowhere, and the sentence says so.
+fn create_meeting_filed(
+    conn: &rusqlite::Connection,
+    title: &str,
+    requested: Option<&str>,
+    workspaces: bool,
+) -> Result<(meetings::Meeting, Option<String>), String> {
+    use crate::workspace::meetings as ws_meetings;
+    use crate::workspace::store::StartHome;
+    if !workspaces {
+        return ws_meetings::create_meeting_in(conn, title, None).map(|m| (m, None));
+    }
+    let asked = requested.filter(|id| !id.is_empty()).is_some();
+    let (home, notice) = crate::workspace::store::home_for_start(conn, requested);
+    let home = match home {
+        StartHome::Unfiled => return ws_meetings::create_meeting_unfiled(conn, title).map(|m| (m, notice)),
+        StartHome::Home(h) => h,
+    };
+    match ws_meetings::create_meeting_in(conn, title, Some(&home)) {
+        Ok(m) => Ok((m, notice)),
+        Err(first) => {
+            log::warn!("The meeting could not be filed in {home}: {first}");
+            if asked {
+                let note = "That workspace couldn't be used, so this meeting is not filed in a workspace and uses none of their material. Pick one from the island to file it";
+                return ws_meetings::create_meeting_unfiled(conn, title).map(|m| (m, Some(note.to_string()))).map_err(|_| first);
+            }
+            let general = crate::workspace::types::GENERAL_ID;
+            let last_resorts: &[Option<&str>] = if home == general { &[None] } else { &[Some(general), None] };
+            for next in last_resorts {
+                if let Ok(m) = ws_meetings::create_meeting_in(conn, title, *next) {
+                    return Ok((m, None));
+                }
+            }
+            Err(first)
+        }
+    }
+}
+
+/// The JSON `start_meeting` answers with: the meeting, plus `workspace_notice` only when it
+/// was filed somewhere other than asked.
+pub(crate) fn meeting_response(meeting: &meetings::Meeting, notice: Option<String>) -> Result<String, String> {
+    let mut value = serde_json::to_value(meeting).map_err(|e| format!("Failed to serialize meeting: {}", e))?;
+    if let (Some(text), Some(obj)) = (notice, value.as_object_mut()) {
+        obj.insert("workspace_notice".to_string(), serde_json::Value::String(text));
+    }
+    serde_json::to_string(&value).map_err(|e| format!("Failed to serialize meeting: {}", e))
 }
 
 #[command]
@@ -538,6 +858,36 @@ pub async fn end_meeting(
         }
     }
     close_scope_in_background(&state, SessionScope::Live(meeting_id.clone()));
+    // The live transcript chunks belong to the meeting that just ended: no later
+    // request may search them, and they are not kept.
+    if let Some(rag_arc) = state.rag.as_ref() {
+        if let Ok(mut rag_mgr) = rag_arc.lock() {
+            if let Some(indexer) = rag_mgr.transcript_indexer_mut() {
+                if indexer.owner() == Some(meeting_id.as_str()) {
+                    indexer.set_owner(None);
+                }
+            }
+        }
+    }
+    if let Some(db) = state.database.as_ref() {
+        if let Ok(db) = db.lock() {
+            let _ = crate::workspace::purge::purge_transcript_chunks(db.connection(), &meeting_id);
+        }
+    }
+    if let Ok(mut warned) = state.material_warned.lock() {
+        warned.remove(&meeting_id);
+    }
+    state.restarts.forget(&format!("meeting:{meeting_id}"));
+    // Notes and brief: a bounded final pass in the background (never delays the end),
+    // then their sessions end after the turn they are in.
+    if let Some(rt) = crate::live_runtime::global() {
+        rt.on_meeting_end(&meeting_id);
+    } else if let Some(ai) = state.ai_runs.clone() {
+        let id = meeting_id.clone();
+        tauri::async_runtime::spawn(async move { ai.close_meeting(&id).await });
+    }
+    crate::workspace_chat::runtime::meeting_ended(&state.workspace_chat, &meeting_id);
+    crate::workspace_chat::runtime::recaps_after_meeting(&app, &state, &meeting_id);
 
     let db_arc = state
         .database
@@ -688,18 +1038,42 @@ pub async fn get_meeting(
 pub async fn delete_meeting(
     meeting_id: String,
     state: State<'_, AppState>,
+    app: AppHandle,
 ) -> Result<(), String> {
+    use crate::commands::workspace_commands::{change_and_restart, delete_touch};
+    state.workspace_chat.cancel_recaps(); // a recap in flight must not outlive this change
     let db = state
         .database
         .as_ref()
         .ok_or_else(|| "Database not initialized".to_string())?;
 
-    let db = db
-        .lock()
-        .map_err(|e| format!("Failed to lock database: {}", e))?;
-
-    meetings::delete_meeting(db.connection(), &meeting_id)
-        .map_err(|e| format!("Failed to delete meeting: {}", e))
+    // Its notes and brief stop first and save nothing (a save never recreates a row anyway).
+    if let Some(rt) = crate::live_runtime::global() {
+        rt.meeting_deleted(&meeting_id);
+    }
+    // Everything about the meeting goes in one step: rows of every table
+    // (cached translations, notes, brief, search passages, borrowed ...). Its
+    // sessions end and the chats of its workspace stop using it (a change of
+    // access like any other).
+    let files = change_and_restart(&state, &app, |conn| delete_touch(conn, &meeting_id), || {
+        let db = db
+            .lock()
+            .map_err(|e| format!("Failed to lock database: {}", e))?;
+        let tx = db
+            .connection()
+            .unchecked_transaction()
+            .map_err(|e| format!("Failed to delete meeting: {}", e))?;
+        let files = crate::workspace::purge::purge_meeting(&tx, &meeting_id)?;
+        tx.commit().map_err(|e| format!("Failed to delete meeting: {}", e))?;
+        Ok(files)
+    })?;
+    // Then the recording and waveform, only if they are in NexQ's recordings folder.
+    if let Some(dir) = crate::workspace::purge::recordings_dir() {
+        crate::workspace::purge::delete_files_inside(&dir, &files);
+    }
+    crate::workspace_chat::runtime::meeting_deleted(&state.workspace_chat, &meeting_id);
+    close_scope_in_background(&state, SessionScope::Past(meeting_id));
+    Ok(())
 }
 
 #[command]
@@ -1060,6 +1434,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn when_filing_in_the_asked_workspace_fails_the_meeting_starts_unfiled_never_in_general() {
+        use crate::workspace::test_support::{memory_db, new_ws};
+        let conn = memory_db();
+        let ws = new_ws(&conn, "Sales", false, false);
+        // Filing in any workspace fails; an unfiled home still works.
+        conn.execute_batch(
+            "CREATE TRIGGER refuse_filing BEFORE UPDATE OF workspace_id ON meetings
+             WHEN NEW.workspace_id NOT LIKE 'unfiled:%' BEGIN SELECT RAISE(ABORT, 'no'); END;",
+        )
+        .unwrap();
+        let (m, notice) = create_meeting_filed(&conn, "A", Some(&ws), true).unwrap();
+        assert!(crate::workspace::types::is_unfiled(&m.workspace_id), "not General: {}", m.workspace_id);
+        assert!(notice.unwrap().contains("not filed in a workspace"));
+    }
+
+    #[test]
     fn past_transcript_labels_remote_speaker_tags() {
         let transcript = serde_json::json!([
             {"id": "a", "text": "Hi", "speaker": "User", "speaker_id": "you", "timestamp_ms": 1_000, "is_final": true},
@@ -1082,5 +1472,60 @@ mod tests {
         let names: HashMap<String, String> = [("speaker_0".to_string(), "Dana".to_string())].into_iter().collect();
         let labels: Vec<String> = past_transcript(&transcript, &names, 0).into_iter().map(|s| s.speaker).collect();
         assert_eq!(labels, vec!["You", "Speaker 1", "Speaker 2", "Them", "Dana"]);
+    }
+
+    #[test]
+    fn a_meeting_asked_for_an_unusable_workspace_starts_unfiled_with_an_empty_scope_and_says_so() {
+        use crate::workspace::scope::{scope_for, ScopeOwner};
+        use crate::workspace::test_support::{memory_db, new_ws};
+        let conn = memory_db();
+        let ok = new_ws(&conn, "Sales", false, false);
+        let (m, notice) = create_meeting_filed(&conn, "A", Some(&ok), true).unwrap();
+        assert_eq!((m.workspace_id.as_str(), notice), (ok.as_str(), None));
+        for (title, asked) in [("B", "gone".to_string()), ("C", ok.clone())] {
+            if title == "C" {
+                crate::workspace::store::archive_workspace(&conn, &ok, true).unwrap();
+            }
+            let (m, notice) = create_meeting_filed(&conn, title, Some(&asked), true).unwrap();
+            assert!(crate::workspace::types::is_unfiled(&m.workspace_id), "{title}: {}", m.workspace_id);
+            let notice = notice.unwrap();
+            assert!(notice.contains("not filed in a workspace") && notice.contains("island"), "{notice}");
+            let scope = scope_for(&conn, ScopeOwner::Meeting(&m.id)).unwrap();
+            assert!(scope.material_workspaces.is_empty() && scope.document_ids.is_empty() && scope.folder_ids.is_empty());
+            assert!(scope.talking_point_ids.is_empty() && scope.instructions.is_empty() && !scope.unrestricted);
+            // The island's picker: an ordinary move gives it a home and its material.
+            crate::workspace::meetings::move_meeting_atomic(&conn, &m.id, "general").unwrap();
+            assert_eq!(crate::workspace::store::home_of(&conn, &m.id).unwrap().as_deref(), Some("general"));
+            assert!(scope_for(&conn, ScopeOwner::Meeting(&m.id)).unwrap().material_workspaces.contains(&"general".to_string()));
+        }
+        // No id: the default workspace, no sentence.
+        let (m, notice) = create_meeting_filed(&conn, "D", None, true).unwrap();
+        assert_eq!((m.workspace_id.as_str(), notice), ("general", None));
+        // Where the response carries the field, and only then.
+        let json: serde_json::Value = serde_json::from_str(&meeting_response(&m, Some("x".into())).unwrap()).unwrap();
+        assert_eq!(json["workspace_notice"], "x");
+        let json: serde_json::Value = serde_json::from_str(&meeting_response(&m, None).unwrap()).unwrap();
+        assert!(json.get("workspace_notice").is_none());
+    }
+
+    #[test]
+    fn two_unfiled_meetings_do_not_share_a_home_and_cannot_borrow_until_filed() {
+        use crate::workspace::test_support::memory_db;
+        let conn = memory_db();
+        let (a, _) = create_meeting_filed(&conn, "A", Some("gone"), true).unwrap();
+        let (b, _) = create_meeting_filed(&conn, "B", Some("gone"), true).unwrap();
+        assert_ne!(a.workspace_id, b.workspace_id);
+        let err = crate::workspace::meetings::set_meeting_scope(&conn, &a.id, &["general".to_string()]).unwrap_err();
+        assert!(err.contains("File this meeting in a workspace first"));
+        assert!(crate::workspace::meetings::set_meeting_scope(&conn, &a.id, &[]).is_ok());
+        assert!(crate::workspace::access::live_parts(&conn, &a.id).is_some(), "a live meeting without a home can still run its notes");
+    }
+
+    #[test]
+    fn a_meeting_still_starts_when_workspaces_are_off() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrations::run(&conn).unwrap();
+        // Workspaces are off for this run: the meeting is created without a home.
+        assert!(create_meeting_filed(&conn, "F", Some("x"), false).is_ok());
     }
 }

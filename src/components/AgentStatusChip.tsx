@@ -4,6 +4,7 @@
 // Rendered by ServiceStatusBar in both windows.
 
 import { useEffect, useId, useState, type ReactNode } from "react";
+import { AnchoredBox } from "../ui/Popover";
 import { ChevronUp } from "lucide-react";
 import { ProviderLogo } from "./icons/ProviderLogos";
 import { useAgentStore } from "../stores/agentStore";
@@ -172,11 +173,11 @@ function HoverCard({
   const agent = cliAgentInfo(kind);
 
   return (
-    <div
+    <AnchoredBox
       id={id}
       role="tooltip"
       data-testid="agent-hover-card"
-      className="absolute bottom-full left-0 z-50 mb-2 w-72 rounded-xl border border-border/40 bg-popover p-3 text-meta shadow-lg animate-in fade-in-0 slide-in-from-bottom-1 duration-150"
+      className="w-72 rounded-xl border border-border/40 bg-popover p-3 text-meta shadow-lg"
     >
       <div className="flex items-baseline justify-between gap-3">
         <span className="text-xs font-semibold text-foreground">
@@ -223,7 +224,7 @@ function HoverCard({
           {detail ?? note}
         </p>
       )}
-    </div>
+    </AnchoredBox>
   );
 }
 
@@ -268,6 +269,7 @@ export function AgentStatusChip({
   const style = STATE_STYLE[state];
   // The picker replaces the card while it is open.
   const cardOpen = (hovered || focused) && !dismissed && !pickerOpen;
+  const Chip = onClick ? "button" : "div";
 
   return (
     <div
@@ -278,14 +280,13 @@ export function AgentStatusChip({
         setDismissed(false);
       }}
     >
-      <div
+      <Chip
+        {...(onClick ? { type: "button" as const, "aria-haspopup": "dialog" as const } : { tabIndex: 0 })}
         data-testid="agent-status-chip"
-        role={onClick ? "button" : undefined}
-        tabIndex={0}
         aria-label={`AI provider: ${agent.name}${label ? `, ${label}` : ""}`}
         aria-describedby={cardOpen ? cardId : undefined}
         aria-expanded={onClick ? pickerOpen : undefined}
-        className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-primary/40 ${style.pill} ${
+        className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-left transition-colors duration-200 ui-focus ${style.pill} ${
           onClick ? "cursor-pointer hover:brightness-110" : ""
         }`}
         onClick={onClick}
@@ -296,10 +297,6 @@ export function AgentStatusChip({
         }}
         onKeyDown={(e) => {
           if (e.key === "Escape") setDismissed(true);
-          else if (onClick && (e.key === "Enter" || e.key === " ")) {
-            e.preventDefault();
-            onClick();
-          }
         }}
       >
         <span className="relative flex h-2 w-2 shrink-0">
@@ -313,14 +310,14 @@ export function AgentStatusChip({
           />
         </span>
         <ProviderLogo id={agent.logo} className={`h-3.5 w-3.5 shrink-0 ${state === "idle" ? "opacity-50" : ""}`} />
-        <div className="flex min-w-0 items-center gap-1">
+        <span className="flex min-w-0 items-center gap-1">
           {!compact && <span className="text-xs font-medium text-foreground/90">{agent.name}</span>}
           {label && (
             <span className={`truncate ${compact ? "text-xs font-medium text-foreground/90" : "text-meta text-foreground/60"}`}>
               {label}
             </span>
           )}
-        </div>
+        </span>
         {onClick && (
           <ChevronUp
             className={`h-2.5 w-2.5 shrink-0 transition-all duration-200 ${
@@ -328,7 +325,7 @@ export function AgentStatusChip({
             }`}
           />
         )}
-      </div>
+      </Chip>
       {cardOpen && (
         <HoverCard
           id={cardId}

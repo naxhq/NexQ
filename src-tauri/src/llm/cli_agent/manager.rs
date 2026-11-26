@@ -11,8 +11,13 @@
 //! - Each session has a delta cursor so a request only sends transcript
 //!   segments the session has not seen yet; it resets when the session is
 //!   (re)started.
-//! - Past-meeting sessions close after 15 min without AI activity
-//!   (`reap_idle`, driven by `run_idle_reaper` every 60 s).
+//! - Past-meeting and Workspace-chat sessions close after 15 min without AI
+//!   activity (`reap_idle`, driven by `run_idle_reaper` every 60 s). Notes and
+//!   Brief sessions end with their meeting (`close_scope`); a long idle limit
+//!   only catches a meeting end that never arrived.
+//! - A session may carry its own kind, model and effort ([`SessionOverride`],
+//!   `ensure_with`): a chat can use Codex while the live provider is Claude.
+//!   Such a session is pinned to its kind, and a provider switch leaves it.
 //! - Every state transition is reported through a [`StatusSink`]
 //!   (`agent_session_status` in the app).
 //!
@@ -21,7 +26,7 @@
 
 use super::command::{SessionConfig, SourcesLaunch};
 use super::context::DeltaCursor;
-use super::protocol::{AgentErrorKind, ImageAttachment, TurnResult};
+use super::protocol::{AgentErrorKind, ImageAttachment, PlanLimit, TurnResult};
 use super::session::{failed_mcp_servers, AgentError, ClaudeSession, InitInfo};
 use super::settings::CliSettings;
 use super::CliAgentKind;
@@ -36,6 +41,13 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 /// Past-meeting sessions idle this long are closed.
 pub const PAST_IDLE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// Workspace-chat sessions idle this long are closed.
+pub const WORKSPACE_IDLE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// Notes and Brief sessions end with their meeting; one left idle this long
+/// (the meeting end never reached us) is closed anyway.
+pub const MEETING_AUX_IDLE_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
+/// A graceful close waits at most this long for turns in flight.
+pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 /// How often the idle reaper runs.
 pub const REAP_INTERVAL: Duration = Duration::from_secs(60);
 /// Tauri event carrying [`AgentSessionStatus`].
@@ -56,6 +68,12 @@ pub enum SessionScope {
     Past(String),
     /// Callers with no meeting (translation, knowledge-base test, wizard).
     Utility,
+    /// A workspace chat (by chat id). Reaped after [`WORKSPACE_IDLE_TIMEOUT`].
+    Workspace(String),
+    /// Live notes of a meeting (by meeting id). Ends with the meeting.
+    Notes(String),
+    /// The brief of a meeting (by meeting id). Ends with the meeting.
+    Brief(String),
 }
 
 impl SessionScope {
@@ -64,13 +82,26 @@ impl SessionScope {
             SessionScope::Live(_) => "live",
             SessionScope::Past(_) => "past",
             SessionScope::Utility => "utility",
+            SessionScope::Workspace(_) => "workspace",
+            SessionScope::Notes(_) => "notes",
+            SessionScope::Brief(_) => "brief",
         }
     }
 
-    fn meeting_id(&self) -> Option<String> {
+    pub(crate) fn meeting_id(&self) -> Option<String> {
         match self {
-            SessionScope::Live(id) | SessionScope::Past(id) => Some(id.clone()),
-            SessionScope::Utility => None,
+            SessionScope::Live(id) | SessionScope::Past(id) | SessionScope::Notes(id) | SessionScope::Brief(id) => {
+                Some(id.clone())
+            }
+            SessionScope::Utility | SessionScope::Workspace(_) => None,
+        }
+    }
+
+    /// The chat id of a Workspace scope.
+    pub fn chat_id(&self) -> Option<&str> {
+        match self {
+            SessionScope::Workspace(id) => Some(id),
+            _ => None,
         }
     }
 }
@@ -97,22 +128,51 @@ pub struct SessionKey {
     /// The with-sources variant: runs beside the plain session of the same
     /// scope and tier (notes folders and MCP tools, see `crate::sources`).
     pub with_sources: bool,
+    /// The session holds none of the scope's Library material (documents,
+    /// notes, folders): the Library pill was off when it was started.
+    pub no_library: bool,
+    /// A with-sources session started without the scope's servers: the Tools
+    /// pill was off. Always false for a plain session.
+    pub no_tools: bool,
 }
 
 impl SessionKey {
     /// The plain session of `scope` and `tier`.
     pub fn plain(scope: SessionScope, tier: Tier) -> Self {
-        Self { scope, tier, with_sources: false }
+        Self { scope, tier, with_sources: false, no_library: false, no_tools: false }
     }
 
     /// The with-sources session of `scope` and `tier`.
     pub fn sources(scope: SessionScope, tier: Tier) -> Self {
-        Self { scope, tier, with_sources: true }
+        Self { scope, tier, with_sources: true, no_library: false, no_tools: false }
     }
 
-    /// The other variant of the same scope and tier.
+    /// This key with the pills' locks: `no_library` (no documents, notes or
+    /// folders) and `no_tools` (a with-sources session without its servers).
+    pub fn locked(mut self, no_library: bool, no_tools: bool) -> Self {
+        self.no_library = no_library;
+        self.no_tools = no_tools && self.with_sources;
+        self
+    }
+
+    /// The other variant of the same scope and tier. The library lock follows.
     pub fn sibling(&self) -> Self {
-        Self { scope: self.scope.clone(), tier: self.tier, with_sources: !self.with_sources }
+        Self { scope: self.scope.clone(), tier: self.tier, with_sources: !self.with_sources, no_library: self.no_library, no_tools: false }
+    }
+
+    /// A session with a pill off: it runs beside the default ones and is not
+    /// reported to the pills (they show the default sessions).
+    pub fn is_locked_variant(&self) -> bool {
+        self.no_library || self.no_tools
+    }
+
+    /// Every key a scope and tier can have with or without sources.
+    pub fn variants(scope: &SessionScope, tier: Tier, with_sources: bool) -> Vec<SessionKey> {
+        let combos: &[(bool, bool)] = if with_sources { &[(false, false), (false, true), (true, false)] } else { &[(false, false), (true, false)] };
+        combos
+            .iter()
+            .map(|&(no_library, no_tools)| SessionKey { scope: scope.clone(), tier, with_sources, no_library, no_tools })
+            .collect()
     }
 }
 
@@ -184,7 +244,21 @@ pub fn tier_for(mode: &str, scope: &SessionScope, cfg: &ClaudeCliConfig) -> Tier
         SessionScope::Live(_) if mode == "Recap" => Tier::Deep,
         SessionScope::Live(_) | SessionScope::Utility => Tier::Fast,
         SessionScope::Past(_) => Tier::Deep,
+        // Notes and the brief default to the cheapest tier; a chat to the better one.
+        SessionScope::Notes(_) | SessionScope::Brief(_) => Tier::Fast,
+        SessionScope::Workspace(_) => Tier::Deep,
     }
+}
+
+/// What one session is started with instead of the settings of the active
+/// provider: a kind of its own (the session is then pinned to it: switching
+/// the live provider leaves it alone), a model and an effort.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SessionOverride {
+    pub kind: Option<CliAgentKind>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub thinking: Option<bool>,
 }
 
 /// Cumulative token/cost/timing accounting for one scope (estimate from the
@@ -243,9 +317,12 @@ fn epoch_ms() -> u64 {
 /// Payload of the `agent_session_status` event.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentSessionStatus {
-    /// `"live"` | `"past"` | `"utility"`.
+    /// `"live"` | `"past"` | `"utility"` | `"workspace"` | `"notes"` | `"brief"`.
     pub scope: String,
     pub meeting_id: Option<String>,
+    /// The chat id of a `"workspace"` session.
+    #[serde(default)]
+    pub chat_id: Option<String>,
     /// `"fast"` | `"deep"`.
     pub tier: String,
     /// `"starting"` | `"ready"` | `"busy"` | `"error"` | `"closed"`.
@@ -321,6 +398,11 @@ pub trait SessionHandle: Send + Sync {
     fn init_info(&self) -> InitInfo {
         InitInfo::default()
     }
+    /// The plan-limit signal the CLI reported since this was last asked
+    /// (taking it clears it). `None` for a handle that has none.
+    fn take_plan_limit(&self) -> Option<PlanLimit> {
+        None
+    }
 }
 
 #[async_trait]
@@ -362,6 +444,10 @@ impl SessionHandle for ClaudeSession {
 
     fn init_info(&self) -> InitInfo {
         ClaudeSession::init_info(self)
+    }
+
+    fn take_plan_limit(&self) -> Option<PlanLimit> {
+        ClaudeSession::take_plan_limit(self)
     }
 }
 
@@ -430,6 +516,21 @@ struct Entry {
     /// What a with-sources session came up without (see
     /// [`AgentSessionStatus::sources_notice`]).
     sources_notice: Option<String>,
+    /// The override the session was started with (`None` follows the active
+    /// provider). A session with its own kind is not touched by a provider switch.
+    requested: Option<SessionOverride>,
+    /// A graceful close is waiting for the turns in flight: no new turn starts.
+    draining: bool,
+    /// The approvals the session was started with (the chat's rules at spawn).
+    /// A session whose chat has other rules now is replaced, never reused.
+    spawned_approvals: Option<super::approval::ChatApprovals>,
+}
+
+impl Entry {
+    /// Started for a kind of its own, not the active one.
+    fn pinned(&self) -> bool {
+        self.requested.as_ref().is_some_and(|o| o.kind.is_some())
+    }
 }
 
 pub struct AgentSessionManager {
@@ -441,10 +542,32 @@ pub struct AgentSessionManager {
     entries: Mutex<HashMap<SessionKey, Entry>>,
     /// Serializes spawning per key so concurrent `ensure`s start one session.
     spawn_locks: Mutex<HashMap<SessionKey, Arc<AsyncMutex<()>>>>,
+    /// Sessions taken out of their key by [`AgentSessionManager::detach_scope`]
+    /// while a turn of theirs is still running. A new session may already
+    /// hold the key; these only finish their turns and are then closed.
+    retiring: Mutex<Vec<(SessionKey, Entry)>>,
+    /// Bumped whenever a scope's sessions are taken out of service for a
+    /// change of what they were started with (see [`AgentSessionManager::generation`]).
+    /// Lock order: `entries`, then `scope_gen`.
+    scope_gen: Mutex<HashMap<SessionScope, u64>>,
+    /// Bumped when a scope's with-sources sessions are closed for a change of
+    /// the sources (only with-sources keys see it). Same lock order.
+    sources_gen: Mutex<HashMap<SessionScope, u64>>,
     cursors: Mutex<HashMap<SessionKey, Arc<AsyncMutex<DeltaCursor>>>>,
     usage: Mutex<HashMap<SessionScope, SessionUsage>>,
     shutting_down: AtomicBool,
+    /// Woken whenever a turn ends (a graceful close waits on it).
+    turn_ended: tokio::sync::Notify,
+    /// Called with the key of every session taken out of service (closed,
+    /// reaped, retired, replaced), e.g. to delete a chat's transcript folder.
+    on_closed: Mutex<Option<ClosedHook>>,
+    /// Per-call tool approval of workspace chats, by chat id. Read when a
+    /// `Workspace` session starts; no other scope ever has one.
+    chat_approvals: Mutex<HashMap<String, super::approval::ChatApprovals>>,
 }
+
+/// See `AgentSessionManager::set_closed_hook`.
+pub type ClosedHook = Arc<dyn Fn(&SessionKey) + Send + Sync>;
 
 impl AgentSessionManager {
     pub fn new(
@@ -458,9 +581,51 @@ impl AgentSessionManager {
             settings,
             entries: Mutex::new(HashMap::new()),
             spawn_locks: Mutex::new(HashMap::new()),
+            retiring: Mutex::new(Vec::new()),
+            scope_gen: Mutex::new(HashMap::new()),
+            sources_gen: Mutex::new(HashMap::new()),
             cursors: Mutex::new(HashMap::new()),
             usage: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
+            turn_ended: tokio::sync::Notify::new(),
+            on_closed: Mutex::new(None),
+            chat_approvals: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Let the chat's sessions ask before a tool runs (takes effect for a
+    /// session started afterwards; a changed policy replaces the session).
+    pub fn set_chat_approvals(&self, approvals: super::approval::ChatApprovals) {
+        self.chat_approvals.lock().unwrap().insert(approvals.chat_id.clone(), approvals);
+    }
+
+    /// The chat is gone: forget its approvals and refuse any open question.
+    pub fn clear_chat_approvals(&self, chat_id: &str) {
+        if let Some(a) = self.chat_approvals.lock().unwrap().remove(chat_id) {
+            a.broker.deny_chat(chat_id);
+        }
+    }
+
+    fn approvals_for(&self, scope: &SessionScope) -> Option<super::approval::ChatApprovals> {
+        let chat = scope.chat_id()?;
+        self.chat_approvals.lock().unwrap().get(chat).cloned()
+    }
+
+    /// Run `hook` for every session that leaves service (any reason).
+    pub fn set_closed_hook(&self, hook: ClosedHook) {
+        *self.on_closed.lock().unwrap() = Some(hook);
+    }
+
+    fn notify_closed(&self, key: &SessionKey) {
+        // A chat session that leaves service leaves no question open.
+        if key.with_sources {
+            if let Some(a) = self.approvals_for(&key.scope) {
+                a.broker.deny_chat(&a.chat_id);
+            }
+        }
+        let hook = self.on_closed.lock().unwrap().clone();
+        if let Some(hook) = hook {
+            hook(key);
         }
     }
 
@@ -477,17 +642,109 @@ impl AgentSessionManager {
         key: &SessionKey,
         init: SessionInit,
     ) -> Result<Arc<dyn SessionHandle>, AgentError> {
+        self.ensure_with(key, init, None).await
+    }
+
+    /// [`AgentSessionManager::ensure`] for a session with its own kind, model
+    /// and effort. A running session started with a different override is
+    /// replaced (the chat changed its model); one without an override follows
+    /// the active provider exactly as before.
+    pub async fn ensure_with(
+        &self,
+        key: &SessionKey,
+        init: SessionInit,
+        overrides: Option<SessionOverride>,
+    ) -> Result<Arc<dyn SessionHandle>, AgentError> {
+        self.ensure_at(key, init, overrides, None).await
+    }
+
+    /// The generation of `scope`: read it BEFORE building the `init` a session
+    /// is started with, and pass it to [`AgentSessionManager::ensure_at`].
+    pub fn generation(&self, scope: &SessionScope) -> u64 {
+        self.scope_gen.lock().unwrap().get(scope).copied().unwrap_or(0)
+    }
+
+    /// The generation a session of `key` is started under: the scope's, and for
+    /// a with-sources key also the sources' (a change of the sources makes a
+    /// with-sources start stale but leaves plain ones alone). Read it before
+    /// building the init, as [`AgentSessionManager::generation`].
+    pub fn generation_for(&self, key: &SessionKey) -> u64 {
+        let scope = self.generation(&key.scope);
+        if key.with_sources {
+            let sources = self.sources_gen.lock().unwrap().get(&key.scope).copied().unwrap_or(0);
+            scope + (sources << 32)
+        } else {
+            scope
+        }
+    }
+
+    /// Whether the generation of `key` moved since `expected` was read.
+    fn changed_since(&self, key: &SessionKey, expected: Option<u64>) -> bool {
+        expected.is_some_and(|g| self.generation_for(key) != g)
+    }
+
+    fn bump_sources(&self, scope: &SessionScope) {
+        let _entries = self.entries.lock().unwrap();
+        *self.sources_gen.lock().unwrap().entry(scope.clone()).or_insert(0) += 1;
+    }
+
+    /// Bumps the generation of `scope`; the caller holds the `entries` lock, so
+    /// the bump and the removal of the scope's sessions are one step.
+    fn bump_locked(&self, scope: &SessionScope) {
+        *self.scope_gen.lock().unwrap().entry(scope.clone()).or_insert(0) += 1;
+    }
+
+    fn bump_scope(&self, scope: &SessionScope) {
+        let _entries = self.entries.lock().unwrap();
+        self.bump_locked(scope);
+    }
+
+    /// [`AgentSessionManager::ensure_with`] for an `init` built when `scope` was
+    /// at generation `expected`. If the scope was restarted since (its sessions
+    /// detached or closed), nothing starts with that `init`: a session already
+    /// being spawned is closed instead of inserted, and the call fails with
+    /// [`scope_changed`] so the caller builds a fresh record and tries once more.
+    pub async fn ensure_at(
+        &self,
+        key: &SessionKey,
+        init: SessionInit,
+        overrides: Option<SessionOverride>,
+        expected: Option<u64>,
+    ) -> Result<Arc<dyn SessionHandle>, AgentError> {
+        let overrides = overrides.filter(|o| *o != SessionOverride::default());
+        let pinned_kind = overrides.as_ref().and_then(|o| o.kind);
         let lock = self.spawn_lock(key);
         let _spawning = lock.lock().await;
         if self.shutting_down.load(Ordering::SeqCst) {
             return Err(shut_down_error());
         }
+        if self.changed_since(key, expected) {
+            return Err(scope_changed());
+        }
+        // A chat's with-sources session needs its approval rules: without them it
+        // cannot tell a tool that asks from one that runs, so it does not start.
+        // Read under the spawn lock (and read again before the session is
+        // inserted), so a session never lives with rules that were replaced
+        // while it started.
+        let mut approvals = if key.with_sources { self.approvals_for(&key.scope) } else { None };
+        if key.with_sources && matches!(key.scope, SessionScope::Workspace(_)) && approvals.is_none() {
+            return Err(AgentError::Spawn(
+                "This chat has no tool approval rules yet, so its tools and folders were not started.".into(),
+            ));
+        }
 
-        let mut kind = self.settings.active();
+        let mut kind = pinned_kind.unwrap_or_else(|| self.settings.active());
         let stale = {
             let mut entries = self.entries.lock().unwrap();
             match entries.get_mut(key) {
-                Some(entry) if entry.kind == kind && entry.handle.is_alive() && !restart_after_error(key, entry) => {
+                Some(entry)
+                    if entry.kind == kind
+                        && entry.requested == overrides
+                        && entry.spawned_approvals == approvals
+                        && !entry.draining
+                        && entry.handle.is_alive()
+                        && !restart_after_error(key, entry) =>
+                {
                     entry.last_used = Instant::now();
                     return Ok(entry.handle.clone());
                 }
@@ -507,9 +764,17 @@ impl AgentSessionManager {
             let (model, effort, thinking) = {
                 let cfg = self.settings.config(kind);
                 let (m, e) = cfg.model_for(key.tier);
+                let (m, e) = match &overrides {
+                    Some(o) => (o.model.as_deref().unwrap_or(m), o.effort.as_deref().unwrap_or(e)),
+                    None => (m, e),
+                };
                 let resolved = self.settings.resolve(kind, m, e);
                 // The thinking toggle is Claude's alone.
-                let thinking = kind.supports_thinking_toggle() && cfg.thinking_for(key.tier);
+                let wanted = overrides
+                    .as_ref()
+                    .and_then(|o| o.thinking)
+                    .unwrap_or_else(|| cfg.thinking_for(key.tier));
+                let thinking = kind.supports_thinking_toggle() && wanted;
                 (resolved.model, resolved.effort, thinking)
             };
             self.emit(key, SessionState::Starting, &model, None);
@@ -520,6 +785,7 @@ impl AgentSessionManager {
                 system_prompt: init.system_prompt.clone(),
                 thinking,
                 sources: if key.with_sources { init.sources.clone() } else { None },
+                approvals: approvals.clone(),
             };
             let handle = match self.spawner.spawn(cfg).await {
                 Ok(handle) => handle,
@@ -552,9 +818,18 @@ impl AgentSessionManager {
             };
             // Check the kind and insert under one lock: a switch after this
             // point runs `close_other_kinds`, which then finds the entry.
+            let mut stale = false;
             let inserted = {
                 let mut entries = self.entries.lock().unwrap();
-                if self.settings.active() == kind {
+                // The chat's rules may have changed while the process started: then
+                // this session was built for rules that no longer apply.
+                let rules_unchanged = !key.with_sources || self.approvals_for(&key.scope) == approvals;
+                if self.changed_since(key, expected) {
+                    // The scope was restarted while this session started: it
+                    // was built from material that is no longer current.
+                    stale = true;
+                    false
+                } else if rules_unchanged && (pinned_kind.is_some() || self.settings.active() == kind) {
                     self.cursors.lock().unwrap().insert(
                         key.clone(),
                         Arc::new(AsyncMutex::new(DeltaCursor::default())),
@@ -570,6 +845,9 @@ impl AgentSessionManager {
                             in_flight: 0,
                             turns: 0,
                             sources_notice,
+                            requested: overrides.clone(),
+                            draining: false,
+                            spawned_approvals: approvals.clone(),
                         },
                     );
                     true
@@ -583,7 +861,14 @@ impl AgentSessionManager {
             }
             handle.close().await;
             self.emit(key, SessionState::Closed, &model, None);
-            kind = self.settings.active();
+            if stale {
+                return Err(scope_changed());
+            }
+            kind = pinned_kind.unwrap_or_else(|| self.settings.active());
+            approvals = if key.with_sources { self.approvals_for(&key.scope) } else { None };
+            if key.with_sources && matches!(key.scope, SessionScope::Workspace(_)) && approvals.is_none() {
+                return Err(AgentError::Spawn("This chat's tool approval rules were removed while its session started.".into()));
+            }
             if attempts >= 3 {
                 return Err(AgentError::Crashed("the AI provider kept changing while a session started".into()));
             }
@@ -618,6 +903,9 @@ impl AgentSessionManager {
             let entry = entries.get_mut(key).ok_or_else(|| {
                 AgentError::Crashed("no CLI agent session is running for this request".into())
             })?;
+            if entry.draining {
+                return Err(AgentError::Crashed("this session is restarting; try again in a moment".into()));
+            }
             entry.in_flight += 1;
             entry.last_used = Instant::now();
             entry.state = SessionState::Busy;
@@ -704,6 +992,14 @@ impl AgentSessionManager {
                 _ => None,
             }
         };
+        if transition.is_none() {
+            // A turn of a session that was detached for a restart.
+            let mut retiring = self.retiring.lock().unwrap();
+            if let Some((_, entry)) = retiring.iter_mut().find(|(k, e)| k == key && same_session(&e.handle, handle)) {
+                entry.in_flight = entry.in_flight.saturating_sub(1);
+            }
+        }
+        self.turn_ended.notify_waiters();
         if let Some((state, error)) = transition {
             self.emit(key, state, &handle.model(), error);
         }
@@ -733,6 +1029,8 @@ impl AgentSessionManager {
     /// Close every tier of `scope` (meeting ended / left the meeting view). A
     /// session still starting for that scope is waited for and closed too.
     pub async fn close_scope(&self, scope: &SessionScope) {
+        // (No generation bump: closing ends the scope or follows a restart that
+        // already bumped it; the records and the epoch guard an ended meeting.)
         for with_sources in [false, true] {
             self.close_variant(scope, with_sources).await;
         }
@@ -742,15 +1040,17 @@ impl AgentSessionManager {
     /// Close both tiers' with-sources sessions of `scope` and leave the plain
     /// ones (the sources changed in settings; usage is kept).
     pub async fn close_sources(&self, scope: &SessionScope) {
+        self.bump_sources(scope);
         self.close_variant(scope, true).await;
     }
 
     async fn close_variant(&self, scope: &SessionScope, with_sources: bool) {
         for tier in [Tier::Fast, Tier::Deep] {
-            let key = SessionKey { scope: scope.clone(), tier, with_sources };
-            let lock = self.spawn_lock(&key);
-            let _spawning = lock.lock().await;
-            self.close_key(&key).await;
+            for key in SessionKey::variants(scope, tier, with_sources) {
+                let lock = self.spawn_lock(&key);
+                let _spawning = lock.lock().await;
+                self.close_key(&key).await;
+            }
         }
     }
 
@@ -779,7 +1079,11 @@ impl AgentSessionManager {
         let keys: Vec<SessionKey> = {
             let active = self.settings.active();
             let entries = self.entries.lock().unwrap();
-            entries.iter().filter(|(_, e)| e.kind != active).map(|(k, _)| k.clone()).collect()
+            entries
+                .iter()
+                .filter(|(_, e)| e.kind != active && !e.pinned())
+                .map(|(k, _)| k.clone())
+                .collect()
         };
         let closes = keys.into_iter().map(|key| async move {
             let lock = self.spawn_lock(&key);
@@ -788,7 +1092,7 @@ impl AgentSessionManager {
                 let active = self.settings.active();
                 let mut entries = self.entries.lock().unwrap();
                 match entries.get(&key) {
-                    Some(e) if e.kind != active => {
+                    Some(e) if e.kind != active && !e.pinned() => {
                         self.cursors.lock().unwrap().remove(&key);
                         entries.remove(&key)
                     }
@@ -810,13 +1114,142 @@ impl AgentSessionManager {
     /// soon as they come up, and no new session starts afterwards.
     pub async fn close_all(&self) {
         self.shutting_down.store(true, Ordering::SeqCst);
-        let drained: Vec<(SessionKey, Entry)> = self.entries.lock().unwrap().drain().collect();
+        let mut drained: Vec<(SessionKey, Entry)> = self.entries.lock().unwrap().drain().collect();
+        drained.extend(self.retiring.lock().unwrap().drain(..));
         self.cursors.lock().unwrap().clear();
         futures::future::join_all(drained.iter().map(|(_, entry)| entry.handle.close())).await;
         for (key, entry) in &drained {
             self.emit(key, SessionState::Closed, &entry.handle.model(), None);
+            self.notify_closed(key);
         }
         self.usage.lock().unwrap().clear();
+    }
+
+    /// Close every tier of `scope` the gentle way: no new turn starts, the
+    /// turns in flight finish (at most `bound`, then they are cut), and only
+    /// then do the processes close. Usage is kept. For scope restarts (the
+    /// sources or the scope of a meeting changed) and chat deletion.
+    pub async fn close_scope_graceful(&self, scope: &SessionScope, bound: Duration) {
+        let mut keys = Vec::new();
+        for with_sources in [false, true] {
+            for tier in [Tier::Fast, Tier::Deep] {
+                keys.extend(SessionKey::variants(scope, tier, with_sources));
+            }
+        }
+        futures::future::join_all(keys.iter().map(|key| self.close_key_graceful(key, bound))).await;
+    }
+
+    /// Takes every session of `scope` out of service at once, without waiting
+    /// for anything: a request that arrives next finds no session for its key
+    /// and starts a new one under the new record, never queued behind the old
+    /// one's turns (no spawn lock is taken). A turn still running on an old
+    /// session finishes there; close those with
+    /// [`AgentSessionManager::close_retired_graceful`]. Returns how many sessions
+    /// were detached.
+    pub fn detach_scope(&self, scope: &SessionScope) -> usize {
+        let mut moved: Vec<(SessionKey, Entry)> = Vec::new();
+        {
+            let mut entries = self.entries.lock().unwrap();
+            // The bump and the removal are one step: a spawn that started before
+            // finds the generation changed when it is about to insert.
+            self.bump_locked(scope);
+            let keys: Vec<SessionKey> = entries.keys().filter(|k| &k.scope == scope).cloned().collect();
+            for key in keys {
+                if let Some(mut entry) = entries.remove(&key) {
+                    entry.draining = true;
+                    moved.push((key, entry));
+                }
+            }
+        }
+        {
+            let mut cursors = self.cursors.lock().unwrap();
+            for (key, _) in &moved {
+                cursors.remove(key);
+            }
+        }
+        let count = moved.len();
+        self.retiring.lock().unwrap().extend(moved);
+        count
+    }
+
+    /// Closes the sessions [`AgentSessionManager::detach_scope`] took out for
+    /// `scope`: after their turns in flight finish (at most `bound`, then they
+    /// are cut). A session that took the key since is not touched.
+    pub async fn close_retired_graceful(&self, scope: &SessionScope, bound: Duration) {
+        let deadline = tokio::time::Instant::now() + bound;
+        loop {
+            let ended = self.turn_ended.notified();
+            tokio::pin!(ended);
+            ended.as_mut().enable();
+            let idle = self.retiring.lock().unwrap().iter().filter(|(k, _)| &k.scope == scope).all(|(_, e)| e.in_flight == 0);
+            if idle {
+                break;
+            }
+            if tokio::time::timeout_at(deadline, ended).await.is_err() {
+                log::warn!("closing retired sessions of {:?} with a turn still in flight after {bound:?}", scope);
+                break;
+            }
+        }
+        let taken: Vec<(SessionKey, Entry)> = {
+            let mut retiring = self.retiring.lock().unwrap();
+            let (mine, rest): (Vec<_>, Vec<_>) = retiring.drain(..).partition(|(k, _)| &k.scope == scope);
+            *retiring = rest;
+            mine
+        };
+        futures::future::join_all(taken.iter().map(|(_, entry)| entry.handle.close())).await;
+    }
+
+    /// [`AgentSessionManager::close_scope_graceful`] for one key.
+    pub async fn close_key_graceful(&self, key: &SessionKey, bound: Duration) {
+        self.bump_scope(&key.scope);
+        let lock = self.spawn_lock(key);
+        let _spawning = lock.lock().await;
+        let running = {
+            let mut entries = self.entries.lock().unwrap();
+            match entries.get_mut(key) {
+                Some(entry) => {
+                    entry.draining = true;
+                    true
+                }
+                None => false,
+            }
+        };
+        if !running {
+            return;
+        }
+        let deadline = tokio::time::Instant::now() + bound;
+        loop {
+            // Register before looking, so a turn ending in between is not missed.
+            let ended = self.turn_ended.notified();
+            tokio::pin!(ended);
+            ended.as_mut().enable();
+            let idle = self.entries.lock().unwrap().get(key).map_or(true, |e| e.in_flight == 0);
+            if idle {
+                break;
+            }
+            if tokio::time::timeout_at(deadline, ended).await.is_err() {
+                log::warn!("closing {:?} with a turn still in flight after {bound:?}", key.scope);
+                break;
+            }
+        }
+        self.close_key(key).await;
+    }
+
+    /// If `key`'s session has finished `max_turns` turns and none is in
+    /// flight, close it so the next `ensure` starts a fresh one (notes
+    /// sessions are renewed every 25 runs so history does not grow). Scope
+    /// usage is kept. True when it was recycled.
+    pub async fn recycle_after(&self, key: &SessionKey, max_turns: usize) -> bool {
+        if self.turns(key) < max_turns {
+            return false;
+        }
+        match self.retire_if_idle(key) {
+            Some(handle) => {
+                handle.close().await;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Close past-meeting sessions with no AI activity for 15 min (and no turn
@@ -864,6 +1297,22 @@ impl AgentSessionManager {
     /// next `ensure` starts a fresh one. Reports `closed` and returns the
     /// handle for the caller to `close()` (off the request's critical path).
     /// Scope usage is kept.
+    /// Like [`AgentSessionManager::retire_if_idle`], but only when the session at
+    /// `key` is `handle` itself: a newer session that took the key is left alone.
+    pub fn retire_handle_if_idle(&self, key: &SessionKey, handle: &Arc<dyn SessionHandle>) -> Option<Arc<dyn SessionHandle>> {
+        let entry = {
+            let mut entries = self.entries.lock().unwrap();
+            match entries.get(key) {
+                Some(e) if e.in_flight == 0 && same_session(&e.handle, handle) => entries.remove(key)?,
+                _ => return None,
+            }
+        };
+        self.cursors.lock().unwrap().remove(key);
+        self.emit(key, SessionState::Closed, &entry.handle.model(), None);
+        self.notify_closed(key);
+        Some(entry.handle)
+    }
+
     pub fn retire_if_idle(&self, key: &SessionKey) -> Option<Arc<dyn SessionHandle>> {
         let entry = {
             let mut entries = self.entries.lock().unwrap();
@@ -874,6 +1323,7 @@ impl AgentSessionManager {
         };
         self.cursors.lock().unwrap().remove(key);
         self.emit(key, SessionState::Closed, &entry.handle.model(), None);
+        self.notify_closed(key);
         Some(entry.handle)
     }
 
@@ -894,6 +1344,7 @@ impl AgentSessionManager {
             .lock()
             .unwrap()
             .iter()
+            .filter(|(key, _)| !key.is_locked_variant())
             .map(|(key, e)| (key.clone(), e.state, e.handle.model(), e.error.clone()))
             .collect();
         rows.sort_by(|a, b| a.0.cmp(&b.0));
@@ -923,6 +1374,7 @@ impl AgentSessionManager {
     async fn close_removed(&self, key: &SessionKey, entry: Entry) {
         entry.handle.close().await;
         self.emit(key, SessionState::Closed, &entry.handle.model(), None);
+        self.notify_closed(key);
     }
 
     fn status(
@@ -935,6 +1387,7 @@ impl AgentSessionManager {
         AgentSessionStatus {
             scope: key.scope.label().to_string(),
             meeting_id: key.scope.meeting_id(),
+            chat_id: key.scope.chat_id().map(str::to_string),
             tier: key.tier.label().to_string(),
             state: state.label().to_string(),
             model: model.to_string(),
@@ -947,6 +1400,10 @@ impl AgentSessionManager {
     }
 
     fn emit(&self, key: &SessionKey, state: SessionState, model: &str, error: Option<TurnError>) {
+        // A session with a pill off is not what the pills show.
+        if key.is_locked_variant() {
+            return;
+        }
         self.sink.emit(&self.status(key, state, model, error));
     }
 }
@@ -1003,21 +1460,44 @@ pub async fn run_idle_reaper(manager: Arc<AgentSessionManager>) {
 /// long) is replaced on its next use: Utility requests are unrelated, so
 /// nothing is lost. Meeting sessions keep theirs; restarting them means
 /// replaying context, which the caller (Task 15) owns.
+///
+/// Notes and Brief sessions are replaced too: every run resends what it
+/// needs (the outline, the passages), and `ai_runs` replays a chat's history
+/// into a Workspace session when a fresh one starts.
 fn restart_after_error(key: &SessionKey, entry: &Entry) -> bool {
-    key.scope == SessionScope::Utility
-        && entry.state == SessionState::Error
+    matches!(
+        key.scope,
+        SessionScope::Utility | SessionScope::Workspace(_) | SessionScope::Notes(_) | SessionScope::Brief(_)
+    ) && entry.state == SessionState::Error
         && entry.in_flight == 0
 }
 
 fn is_stale(key: &SessionKey, entry: &Entry, now: Instant) -> bool {
-    matches!(key.scope, SessionScope::Past(_))
-        && entry.in_flight == 0
-        && now.saturating_duration_since(entry.last_used) >= PAST_IDLE_TIMEOUT
+    let limit = match key.scope {
+        SessionScope::Past(_) => PAST_IDLE_TIMEOUT,
+        SessionScope::Workspace(_) => WORKSPACE_IDLE_TIMEOUT,
+        SessionScope::Notes(_) | SessionScope::Brief(_) => MEETING_AUX_IDLE_TIMEOUT,
+        SessionScope::Live(_) | SessionScope::Utility => return false,
+    };
+    entry.in_flight == 0 && now.saturating_duration_since(entry.last_used) >= limit
 }
 
 /// Same session object (compares data pointers; vtable pointers may differ).
 fn same_session(a: &Arc<dyn SessionHandle>, b: &Arc<dyn SessionHandle>) -> bool {
     std::ptr::eq(Arc::as_ptr(a) as *const (), Arc::as_ptr(b) as *const ())
+}
+
+const SCOPE_CHANGED: &str = "the meeting's material changed while this session started";
+
+/// A session was about to start from an `init` built before its scope was
+/// restarted. Retryable: build a fresh record and ask once more.
+pub fn scope_changed() -> AgentError {
+    AgentError::Crashed(SCOPE_CHANGED.to_string())
+}
+
+/// Whether `err` is [`scope_changed`].
+pub fn is_scope_changed(err: &AgentError) -> bool {
+    matches!(err, AgentError::Crashed(m) if m == SCOPE_CHANGED)
 }
 
 fn shut_down_error() -> AgentError {
@@ -1035,11 +1515,17 @@ mod tests {
         alive: AtomicBool,
         closed: AtomicBool,
         appended: Mutex<Vec<String>>,
+        /// Held at the first warm-up message until released.
+        warm: Mutex<Option<Arc<TestGate>>>,
     }
 
     #[async_trait]
     impl SessionHandle for FakeSession {
         async fn append_context(&self, text: &str) -> Result<(), AgentError> {
+            let gate = self.warm.lock().unwrap().take();
+            if let Some(gate) = gate {
+                gate.pass().await;
+            }
             self.appended.lock().unwrap().push(text.to_string());
             Ok(())
         }
@@ -1120,12 +1606,35 @@ mod tests {
         fail_sources: AtomicBool,
         /// Switch the active kind while the next session starts.
         switch_during_spawn: Mutex<Option<(Arc<CliSettings>, CliAgentKind)>>,
+        /// Hold the next spawn at its start / after the session exists, until released.
+        gate_start: Mutex<Option<Arc<TestGate>>>,
+        gate_end: Mutex<Option<Arc<TestGate>>>,
+        /// Hold the warm-up (the first preload message) of the next session.
+        gate_warm: Mutex<Option<Arc<TestGate>>>,
+    }
+
+    /// A point a fake spawner waits at: `entered` says it is there, `release` lets it go.
+    #[derive(Default)]
+    struct TestGate {
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+
+    impl TestGate {
+        async fn pass(&self) {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
     }
 
     #[async_trait]
     impl SessionSpawner for FakeSpawner {
         async fn spawn(&self, cfg: SessionConfig) -> Result<Arc<dyn SessionHandle>, AgentError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            let start = self.gate_start.lock().unwrap().take();
+            if let Some(gate) = start {
+                gate.pass().await;
+            }
             tokio::task::yield_now().await;
             if let Some((settings, kind)) = self.switch_during_spawn.lock().unwrap().take() {
                 settings.set_active(kind);
@@ -1138,8 +1647,13 @@ mod tests {
                 alive: AtomicBool::new(true),
                 closed: AtomicBool::new(false),
                 appended: Mutex::new(Vec::new()),
+                warm: Mutex::new(self.gate_warm.lock().unwrap().take()),
             });
             self.spawned.lock().unwrap().push((cfg, s.clone()));
+            let end = self.gate_end.lock().unwrap().take();
+            if let Some(gate) = end {
+                gate.pass().await;
+            }
             Ok(s)
         }
     }
@@ -1428,6 +1942,7 @@ mod tests {
         let s = AgentSessionStatus {
             scope: "live".into(),
             meeting_id: Some("m1".into()),
+            chat_id: None,
             tier: "fast".into(),
             state: "ready".into(),
             model: "haiku".into(),
@@ -1460,6 +1975,26 @@ mod tests {
         assert_eq!(v["usage"]["last_request_at_ms"], 5);
         assert!(v["error_kind"].is_null());
         assert_eq!(v["with_sources"], true);
+    }
+
+    #[test]
+    fn a_session_with_a_pill_off_is_its_own_key_and_stays_out_of_the_pills_status() {
+        let live = SessionScope::Live("m".into());
+        let default = SessionKey::sources(live.clone(), Tier::Fast);
+        let no_tools = default.clone().locked(false, true);
+        let no_library = default.clone().locked(true, false);
+        let plain_no_library = SessionKey::plain(live.clone(), Tier::Fast).locked(true, true);
+        assert!(!default.is_locked_variant() && no_tools.is_locked_variant() && no_library.is_locked_variant());
+        assert_ne!(default, no_tools);
+        assert_ne!(default, no_library);
+        assert!(!plain_no_library.no_tools, "a plain session has no servers to leave out");
+        // the library lock follows to the sibling; the tools lock does not
+        assert!(no_library.sibling().no_library && !no_tools.sibling().no_tools);
+        // every variant is closed with its scope
+        let all = SessionKey::variants(&live, Tier::Fast, true);
+        assert_eq!(all.len(), 3);
+        assert!(all.contains(&default) && all.contains(&no_tools) && all.contains(&no_library));
+        assert!(SessionKey::variants(&live, Tier::Deep, false).contains(&SessionKey::plain(live, Tier::Deep).locked(true, false)));
     }
 
     #[test]
@@ -2015,5 +2550,595 @@ mod tests {
         assert!(futures::poll!(blocked.as_mut()).is_pending());
         assert!(mgr.retire_if_idle(&k).is_none());
         assert_eq!(mgr.snapshot().len(), 1);
+    }
+
+    // ---- per-session overrides, new scopes, graceful close ----
+
+    fn over(kind: Option<CliAgentKind>, model: &str, effort: &str) -> Option<SessionOverride> {
+        Some(SessionOverride {
+            kind,
+            model: Some(model).filter(|m| !m.is_empty()).map(str::to_string),
+            effort: Some(effort).filter(|e| !e.is_empty()).map(str::to_string),
+            thinking: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn a_session_with_its_own_kind_survives_a_provider_switch() {
+        let (mgr, spawner, _sink) = setup();
+        let chat = key(SessionScope::Workspace("c1".into()), Tier::Deep);
+        let live = key(SessionScope::Live("m".into()), Tier::Fast);
+        mgr.settings().set_active(CliAgentKind::Claude);
+        mgr.ensure(&live, init(&[])).await.unwrap();
+        mgr.ensure_with(&chat, init(&[]), over(Some(CliAgentKind::Codex), "gpt-x", "high")).await.unwrap();
+
+        mgr.settings().set_active(CliAgentKind::Antigravity);
+        assert_eq!(mgr.close_other_kinds().await, 1, "only the live Claude session follows the switch");
+        let scopes: Vec<_> = mgr.snapshot().iter().map(|s| s.scope.clone()).collect();
+        assert_eq!(scopes, vec!["workspace"]);
+
+        // The chat keeps its session, and still asks.
+        mgr.ensure_with(&chat, init(&[]), over(Some(CliAgentKind::Codex), "gpt-x", "high")).await.unwrap();
+        assert_eq!(spawner.calls.load(Ordering::SeqCst), 2);
+        let r = mgr.ask(&chat, "hi", no_delta(), Arc::new(CancelToken::new())).await.unwrap();
+        assert_eq!(r.text, "hi");
+        assert_eq!(mgr.settings().active(), CliAgentKind::Antigravity, "the active kind is untouched by the chat");
+    }
+
+    #[tokio::test]
+    async fn without_a_kind_override_a_session_still_follows_the_active_provider() {
+        let (mgr, _spawner, _sink) = setup();
+        let chat = key(SessionScope::Workspace("c1".into()), Tier::Deep);
+        // A model-only override pins nothing.
+        mgr.ensure_with(&chat, init(&[]), over(None, "opus", "")).await.unwrap();
+        mgr.settings().set_active(CliAgentKind::Codex);
+        assert_eq!(mgr.close_other_kinds().await, 1);
+    }
+
+    #[tokio::test]
+    async fn override_model_effort_and_thinking_reach_the_spawner_and_a_change_replaces_the_session() {
+        let (mgr, spawner, _sink) = setup();
+        let chat = key(SessionScope::Workspace("c1".into()), Tier::Deep);
+        let o = SessionOverride {
+            kind: Some(CliAgentKind::Claude),
+            model: Some("opus".into()),
+            effort: Some("high".into()),
+            thinking: Some(true),
+        };
+        let a = mgr.ensure_with(&chat, init(&[]), Some(o.clone())).await.unwrap();
+        let again = mgr.ensure_with(&chat, init(&[]), Some(o.clone())).await.unwrap();
+        assert!(same_session(&a, &again), "the same override reuses the session");
+        {
+            let spawned = spawner.spawned.lock().unwrap();
+            let cfg = &spawned[0].0;
+            assert_eq!((cfg.kind, cfg.model.as_str(), cfg.thinking), (CliAgentKind::Claude, "opus", true));
+        }
+        let o2 = SessionOverride { model: Some("sonnet".into()), ..o };
+        let b = mgr.ensure_with(&chat, init(&[]), Some(o2)).await.unwrap();
+        assert!(!same_session(&a, &b));
+        assert_eq!(spawner.calls.load(Ordering::SeqCst), 2);
+        assert!(spawner.spawned.lock().unwrap()[0].1.closed.load(Ordering::SeqCst), "the old one was closed");
+        // An empty override is no override.
+        let (mgr2, spawner2, _) = setup();
+        let k = key(SessionScope::Utility, Tier::Fast);
+        mgr2.ensure_with(&k, init(&[]), Some(SessionOverride::default())).await.unwrap();
+        mgr2.ensure(&k, init(&[])).await.unwrap();
+        assert_eq!(spawner2.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn the_new_scopes_have_labels_ids_and_default_tiers() {
+        let cfg = ClaudeCliConfig::default();
+        for (scope, label, meeting, chat) in [
+            (SessionScope::Workspace("c".into()), "workspace", None, Some("c")),
+            (SessionScope::Notes("m".into()), "notes", Some("m"), None),
+            (SessionScope::Brief("m".into()), "brief", Some("m"), None),
+        ] {
+            assert_eq!(scope.label(), label);
+            assert_eq!(scope.meeting_id().as_deref(), meeting);
+            assert_eq!(scope.chat_id(), chat);
+            let tier = tier_for("Assist", &scope, &cfg);
+            assert_eq!(tier, if label == "workspace" { Tier::Deep } else { Tier::Fast });
+        }
+    }
+
+    #[tokio::test]
+    async fn status_reports_the_chat_id_for_a_workspace_session() {
+        let (mgr, _s, sink) = setup();
+        mgr.ensure(&key(SessionScope::Workspace("chat-7".into()), Tier::Deep), init(&[])).await.unwrap();
+        let rows = sink.0.lock().unwrap();
+        let last = rows.last().unwrap();
+        assert_eq!(
+            (last.scope.as_str(), last.chat_id.as_deref(), last.meeting_id.as_deref()),
+            ("workspace", Some("chat-7"), None)
+        );
+        let old: AgentSessionStatus = serde_json::from_str(
+            r#"{"scope":"live","meeting_id":"m","tier":"fast","state":"ready","model":"h","detail":null,"usage":{}}"#,
+        )
+        .unwrap();
+        assert_eq!(old.chat_id, None);
+    }
+
+    #[tokio::test]
+    async fn workspace_sessions_are_reaped_at_fifteen_minutes_and_notes_much_later() {
+        let (mgr, _s, _sink) = setup();
+        let chat = key(SessionScope::Workspace("c".into()), Tier::Deep);
+        let notes = key(SessionScope::Notes("m".into()), Tier::Fast);
+        let brief = key(SessionScope::Brief("m".into()), Tier::Fast);
+        let live = key(SessionScope::Live("m".into()), Tier::Fast);
+        for k in [&chat, &notes, &brief, &live] {
+            mgr.ensure(k, init(&[])).await.unwrap();
+        }
+        let t0 = Instant::now();
+        mgr.reap_idle(t0 + Duration::from_secs(14 * 60)).await;
+        assert_eq!(mgr.snapshot().len(), 4);
+        mgr.reap_idle(t0 + Duration::from_secs(16 * 60)).await;
+        let left: Vec<_> = mgr.snapshot().iter().map(|s| s.scope.clone()).collect();
+        assert_eq!(left, vec!["live", "notes", "brief"], "the chat went; notes, brief and live stay");
+        mgr.reap_idle(t0 + Duration::from_secs(3 * 60 * 60)).await;
+        let left: Vec<_> = mgr.snapshot().iter().map(|s| s.scope.clone()).collect();
+        assert_eq!(left, vec!["live"], "a live meeting session is never reaped");
+    }
+
+    #[tokio::test]
+    async fn a_workspace_session_with_a_turn_in_flight_is_not_reaped() {
+        let (mgr, _s, _sink) = setup();
+        let chat = key(SessionScope::Workspace("c".into()), Tier::Deep);
+        mgr.ensure(&chat, init(&[])).await.unwrap();
+        let blocked = mgr.ask(&chat, "block", no_delta(), Arc::new(CancelToken::new()));
+        tokio::pin!(blocked);
+        assert!(futures::poll!(blocked.as_mut()).is_pending());
+        mgr.reap_idle(Instant::now() + Duration::from_secs(60 * 60)).await;
+        assert_eq!(mgr.snapshot().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn notes_and_brief_end_with_their_meeting_and_a_chat_with_its_scope() {
+        let (mgr, spawner, _sink) = setup();
+        for scope in [SessionScope::Notes("m".into()), SessionScope::Brief("m".into()), SessionScope::Workspace("c".into())] {
+            mgr.ensure(&key(scope, Tier::Fast), init(&[])).await.unwrap();
+        }
+        mgr.close_scope(&SessionScope::Notes("m".into())).await;
+        mgr.close_scope(&SessionScope::Brief("m".into())).await;
+        assert_eq!(mgr.snapshot().len(), 1);
+        mgr.close_scope(&SessionScope::Workspace("c".into())).await;
+        assert!(mgr.snapshot().is_empty());
+        assert!(spawner.spawned.lock().unwrap().iter().all(|(_, s)| s.closed.load(Ordering::SeqCst)));
+    }
+
+    #[tokio::test]
+    async fn a_graceful_close_lets_the_turn_in_flight_finish_then_closes_and_keeps_usage() {
+        let (mgr, spawner, sink) = setup();
+        let mgr = Arc::new(mgr);
+        let scope = SessionScope::Workspace("c".into());
+        let k = key(scope.clone(), Tier::Deep);
+        mgr.ensure(&k, init(&[])).await.unwrap();
+        let turn = tokio::spawn({
+            let (mgr, k) = (mgr.clone(), k.clone());
+            async move { mgr.ask(&k, "slow", no_delta(), Arc::new(CancelToken::new())).await }
+        });
+        tokio::time::sleep(Duration::from_millis(15)).await;
+        let started = Instant::now();
+        mgr.close_scope_graceful(&scope, DRAIN_TIMEOUT).await;
+        assert!(started.elapsed() >= Duration::from_millis(20), "it waited for the turn");
+        assert!(started.elapsed() < Duration::from_secs(3));
+        let done = turn.await.unwrap().expect("the turn in flight was delivered");
+        assert_eq!(done.text, "slow");
+        assert!(spawner.spawned.lock().unwrap()[0].1.closed.load(Ordering::SeqCst));
+        assert!(mgr.snapshot().is_empty());
+        assert_eq!(mgr.usage(&scope).requests, 1, "usage is kept (a restart is not an ending)");
+        assert_eq!(sink.states().last().map(String::as_str), Some("closed"));
+    }
+
+    #[tokio::test]
+    async fn a_graceful_close_is_bounded_when_a_turn_never_ends() {
+        let (mgr, spawner, _sink) = setup();
+        let mgr = Arc::new(mgr);
+        let k = key(SessionScope::Workspace("c".into()), Tier::Deep);
+        mgr.ensure(&k, init(&[])).await.unwrap();
+        let _stuck = tokio::spawn({
+            let (mgr, k) = (mgr.clone(), k.clone());
+            async move { mgr.ask(&k, "block", no_delta(), Arc::new(CancelToken::new())).await }
+        });
+        tokio::time::sleep(Duration::from_millis(15)).await;
+        let started = Instant::now();
+        mgr.close_key_graceful(&k, Duration::from_millis(120)).await;
+        let took = started.elapsed();
+        assert!(took >= Duration::from_millis(100) && took < Duration::from_secs(2), "{took:?}");
+        assert!(spawner.spawned.lock().unwrap()[0].1.closed.load(Ordering::SeqCst), "then it is killed");
+    }
+
+    #[tokio::test]
+    async fn a_draining_session_takes_no_new_turn_and_a_graceful_close_of_nothing_is_fine() {
+        let (mgr, _s, _sink) = setup();
+        let mgr = Arc::new(mgr);
+        let k = key(SessionScope::Workspace("c".into()), Tier::Deep);
+        mgr.close_key_graceful(&k, Duration::from_millis(10)).await;
+        mgr.ensure(&k, init(&[])).await.unwrap();
+        let slow = tokio::spawn({
+            let (mgr, k) = (mgr.clone(), k.clone());
+            async move { mgr.ask(&k, "slow", no_delta(), Arc::new(CancelToken::new())).await }
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let closing = tokio::spawn({
+            let (mgr, k) = (mgr.clone(), k.clone());
+            async move { mgr.close_key_graceful(&k, DRAIN_TIMEOUT).await }
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let late = mgr.ask(&k, "hello", no_delta(), Arc::new(CancelToken::new())).await;
+        assert!(matches!(late, Err(AgentError::Crashed(ref m)) if m.contains("restarting")), "{late:?}");
+        slow.await.unwrap().unwrap();
+        closing.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_detached_scope_gives_a_new_session_at_once_while_the_old_turn_finishes_and_is_then_closed() {
+        let (mgr, spawner, _sink) = setup();
+        let mgr = Arc::new(mgr);
+        let scope = SessionScope::Live("m".into());
+        let k = key(scope.clone(), Tier::Fast);
+        mgr.ensure(&k, init(&[])).await.unwrap();
+        // A turn that never ends on the old session.
+        let stuck = tokio::spawn({
+            let (mgr, k) = (mgr.clone(), k.clone());
+            async move { mgr.ask(&k, "block", no_delta(), Arc::new(CancelToken::new())).await }
+        });
+        tokio::time::sleep(Duration::from_millis(15)).await;
+        assert_eq!(mgr.detach_scope(&scope), 1);
+        // The drain is waiting (it holds nothing a new ask needs) ...
+        let drain = tokio::spawn({
+            let (mgr, scope) = (mgr.clone(), scope.clone());
+            async move { mgr.close_retired_graceful(&scope, Duration::from_millis(400)).await }
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        // ... and a live ask arriving now gets a new session without waiting for it.
+        let started = Instant::now();
+        mgr.ensure(&k, init(&["new documents"])).await.unwrap();
+        let answer = mgr.ask(&k, "hello", no_delta(), Arc::new(CancelToken::new())).await.unwrap();
+        assert_eq!(answer.text, "hello");
+        assert!(started.elapsed() < Duration::from_millis(150), "not queued behind the drain: {:?}", started.elapsed());
+        let spawned = spawner.spawned.lock().unwrap();
+        assert_eq!(spawned.len(), 2);
+        assert!(!spawned[1].1.closed.load(Ordering::SeqCst), "the new session is untouched");
+        assert!(spawned[1].1.appended.lock().unwrap().iter().any(|m| m == "new documents"));
+        drop(spawned);
+        // The old turn is cut at the bound and only the old session closes.
+        drain.await.unwrap();
+        let spawned = spawner.spawned.lock().unwrap();
+        assert!(spawned[0].1.closed.load(Ordering::SeqCst));
+        assert!(!spawned[1].1.closed.load(Ordering::SeqCst));
+        drop(spawned);
+        stuck.abort();
+        assert_eq!(mgr.snapshot().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_detached_session_closes_right_after_its_turn_when_that_ends_before_the_bound() {
+        let (mgr, spawner, _sink) = setup();
+        let mgr = Arc::new(mgr);
+        let scope = SessionScope::Live("m".into());
+        let k = key(scope.clone(), Tier::Fast);
+        mgr.ensure(&k, init(&[])).await.unwrap();
+        let turn = tokio::spawn({
+            let (mgr, k) = (mgr.clone(), k.clone());
+            async move { mgr.ask(&k, "slow", no_delta(), Arc::new(CancelToken::new())).await }
+        });
+        tokio::time::sleep(Duration::from_millis(15)).await;
+        mgr.detach_scope(&scope);
+        let started = Instant::now();
+        mgr.close_retired_graceful(&scope, DRAIN_TIMEOUT).await;
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(turn.await.unwrap().unwrap().text, "slow", "the turn in flight was delivered");
+        assert!(spawner.spawned.lock().unwrap()[0].1.closed.load(Ordering::SeqCst));
+        // Nothing is left to detach or close.
+        assert_eq!(mgr.detach_scope(&scope), 0);
+    }
+
+    // ---- a scope restart never lets a session start from a record built before it ----
+
+    fn live_key() -> (SessionScope, SessionKey) {
+        let scope = SessionScope::Live("m".into());
+        let k = key(scope.clone(), Tier::Fast);
+        (scope, k)
+    }
+
+    /// Starts `ensure_at` for `k` (built at generation `generation`) in a task.
+    fn start_at(
+        mgr: &Arc<AgentSessionManager>,
+        k: &SessionKey,
+        preload: &[&str],
+        generation: u64,
+    ) -> tokio::task::JoinHandle<Result<Arc<dyn SessionHandle>, AgentError>> {
+        let (mgr, k, init) = (mgr.clone(), k.clone(), init(preload));
+        tokio::spawn(async move { mgr.ensure_at(&k, init, None, Some(generation)).await })
+    }
+
+    fn stale(result: &Result<Arc<dyn SessionHandle>, AgentError>) -> bool {
+        matches!(result, Err(e) if is_scope_changed(e))
+    }
+
+    #[tokio::test]
+    async fn a_detach_before_the_spawn_stops_the_old_record_from_starting_anything() {
+        let (mgr, spawner, _sink) = setup();
+        let mgr = Arc::new(mgr);
+        let (scope, k) = live_key();
+        let built_at = mgr.generation(&scope);
+        mgr.detach_scope(&scope);
+        let result = mgr.ensure_at(&k, init(&["OLD DOCUMENTS"]), None, Some(built_at)).await;
+        assert!(stale(&result));
+        assert_eq!(spawner.calls.load(Ordering::SeqCst), 0, "nothing was started");
+        // A record built after the detach starts normally.
+        let fresh = mgr.ensure_at(&k, init(&["NEW DOCUMENTS"]), None, Some(mgr.generation(&scope))).await.unwrap();
+        assert!(fresh.is_alive());
+        assert_eq!(spawner.spawned.lock().unwrap()[0].1.appended.lock().unwrap()[0], "NEW DOCUMENTS");
+    }
+
+    #[tokio::test]
+    async fn a_detach_while_the_spawn_is_starting_closes_that_session_and_inserts_nothing() {
+        let (mgr, spawner, _sink) = setup();
+        let mgr = Arc::new(mgr);
+        let (scope, k) = live_key();
+        let gate = Arc::new(TestGate::default());
+        *spawner.gate_start.lock().unwrap() = Some(gate.clone());
+        let task = start_at(&mgr, &k, &["OLD"], mgr.generation(&scope));
+        gate.entered.notified().await;
+        mgr.detach_scope(&scope);
+        gate.release.notify_one();
+        assert!(stale(&task.await.unwrap()));
+        assert!(spawner.spawned.lock().unwrap()[0].1.closed.load(Ordering::SeqCst), "the stale session is closed");
+        assert!(mgr.snapshot().is_empty(), "and never inserted");
+    }
+
+    #[tokio::test]
+    async fn a_detach_after_the_spawn_but_before_the_insert_is_caught_too() {
+        let (mgr, spawner, _sink) = setup();
+        let mgr = Arc::new(mgr);
+        let (scope, k) = live_key();
+        let gate = Arc::new(TestGate::default());
+        *spawner.gate_end.lock().unwrap() = Some(gate.clone());
+        let task = start_at(&mgr, &k, &[], mgr.generation(&scope));
+        gate.entered.notified().await;
+        mgr.detach_scope(&scope);
+        gate.release.notify_one();
+        assert!(stale(&task.await.unwrap()));
+        assert!(spawner.spawned.lock().unwrap()[0].1.closed.load(Ordering::SeqCst));
+        assert!(mgr.snapshot().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_detach_during_the_warm_up_is_caught() {
+        let (mgr, spawner, _sink) = setup();
+        let mgr = Arc::new(mgr);
+        let (scope, k) = live_key();
+        let gate = Arc::new(TestGate::default());
+        *spawner.gate_warm.lock().unwrap() = Some(gate.clone());
+        let task = start_at(&mgr, &k, &["OLD DOCUMENTS"], mgr.generation(&scope));
+        gate.entered.notified().await;
+        mgr.detach_scope(&scope);
+        gate.release.notify_one();
+        assert!(stale(&task.await.unwrap()));
+        assert!(spawner.spawned.lock().unwrap()[0].1.closed.load(Ordering::SeqCst));
+        assert!(mgr.snapshot().is_empty());
+    }
+
+    #[tokio::test]
+    async fn two_detaches_in_a_row_leave_only_a_record_built_after_the_second_usable() {
+        let (mgr, spawner, _sink) = setup();
+        let mgr = Arc::new(mgr);
+        let (scope, k) = live_key();
+        let first = mgr.generation(&scope);
+        mgr.detach_scope(&scope);
+        let between = mgr.generation(&scope);
+        let gate = Arc::new(TestGate::default());
+        *spawner.gate_start.lock().unwrap() = Some(gate.clone());
+        let task = start_at(&mgr, &k, &["BETWEEN"], between);
+        gate.entered.notified().await;
+        mgr.detach_scope(&scope);
+        gate.release.notify_one();
+        assert!(stale(&task.await.unwrap()), "built between the two detaches");
+        assert!(stale(&mgr.ensure_at(&k, init(&[]), None, Some(first)).await));
+        let last = mgr.generation(&scope);
+        assert!(last > between && between > first);
+        mgr.ensure_at(&k, init(&["LAST"]), None, Some(last)).await.unwrap();
+        assert_eq!(mgr.snapshot().len(), 1);
+        let spawned = spawner.spawned.lock().unwrap();
+        assert!(spawned[0].1.closed.load(Ordering::SeqCst) && !spawned[1].1.closed.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn an_old_record_cannot_pick_up_the_newer_session_that_took_the_key() {
+        let (mgr, spawner, _sink) = setup();
+        let mgr = Arc::new(mgr);
+        let (scope, k) = live_key();
+        let old = mgr.generation(&scope);
+        mgr.detach_scope(&scope);
+        let new_handle = mgr.ensure_at(&k, init(&["NEW"]), None, Some(mgr.generation(&scope))).await.unwrap();
+        assert!(stale(&mgr.ensure_at(&k, init(&["OLD"]), None, Some(old)).await));
+        assert_eq!(spawner.calls.load(Ordering::SeqCst), 1);
+        assert!(new_handle.is_alive(), "the newer session is untouched");
+        // Retiring "by handle" leaves a newer session alone and removes the one it names.
+        let other: Arc<dyn SessionHandle> = Arc::new(FakeSession {
+            model: "x".into(),
+            alive: AtomicBool::new(true),
+            closed: AtomicBool::new(false),
+            appended: Mutex::new(Vec::new()),
+            warm: Mutex::new(None),
+        });
+        assert!(mgr.retire_handle_if_idle(&k, &other).is_none());
+        assert_eq!(mgr.snapshot().len(), 1);
+        assert!(mgr.retire_handle_if_idle(&k, &new_handle).is_some());
+        assert!(mgr.snapshot().is_empty());
+    }
+
+    #[tokio::test]
+    async fn every_way_of_closing_a_scope_moves_its_generation() {
+        let (mgr, _spawner, _sink) = setup();
+        let scope = SessionScope::Workspace("c".into());
+        let k = key(scope.clone(), Tier::Deep);
+        let mut last = mgr.generation(&scope);
+        let with_sources = SessionKey::sources(scope.clone(), Tier::Deep);
+        let sources_before = mgr.generation_for(&with_sources);
+        mgr.close_sources(&scope).await;
+        assert!(mgr.generation_for(&with_sources) > sources_before, "a with-sources start built earlier is stale");
+        assert_eq!(mgr.generation(&scope), last, "plain sessions and their records are not affected");
+        last = mgr.generation(&scope);
+        mgr.close_scope_graceful(&scope, Duration::from_millis(10)).await;
+        assert!(mgr.generation(&scope) > last);
+        last = mgr.generation(&scope);
+        mgr.close_key_graceful(&k, Duration::from_millis(10)).await;
+        assert!(mgr.generation(&scope) > last);
+        // Another scope's generation did not move.
+        assert_eq!(mgr.generation(&SessionScope::Live("m".into())), 0);
+    }
+
+    #[tokio::test]
+    async fn an_ask_after_the_detach_never_reaches_the_old_session() {
+        let (mgr, spawner, _sink) = setup();
+        let mgr = Arc::new(mgr);
+        let (scope, k) = live_key();
+        mgr.ensure(&k, init(&["old"])).await.unwrap();
+        mgr.detach_scope(&scope);
+        // No session at the key: the ask fails instead of using the retired one.
+        let late = mgr.ask(&k, "hello", no_delta(), Arc::new(CancelToken::new())).await;
+        assert!(late.is_err());
+        mgr.ensure(&k, init(&["new"])).await.unwrap();
+        let answer = mgr.ask(&k, "hello", no_delta(), Arc::new(CancelToken::new())).await.unwrap();
+        assert_eq!(answer.text, "hello");
+        let spawned = spawner.spawned.lock().unwrap();
+        assert!(spawned[1].1.appended.lock().unwrap().iter().any(|m| m == "new"));
+        drop(spawned);
+        mgr.close_retired_graceful(&scope, Duration::from_millis(50)).await;
+    }
+
+    #[tokio::test]
+    async fn recycle_after_n_turns_replaces_an_idle_session_and_keeps_usage() {
+        let (mgr, spawner, _sink) = setup();
+        let k = key(SessionScope::Notes("m".into()), Tier::Fast);
+        mgr.ensure(&k, init(&[])).await.unwrap();
+        assert!(!mgr.recycle_after(&k, 2).await, "no turns yet");
+        mgr.ask(&k, "a", no_delta(), Arc::new(CancelToken::new())).await.unwrap();
+        assert!(!mgr.recycle_after(&k, 2).await);
+        mgr.ask(&k, "b", no_delta(), Arc::new(CancelToken::new())).await.unwrap();
+        assert!(mgr.recycle_after(&k, 2).await);
+        assert!(spawner.spawned.lock().unwrap()[0].1.closed.load(Ordering::SeqCst));
+        assert_eq!(mgr.usage(&SessionScope::Notes("m".into())).requests, 2, "usage kept");
+        mgr.ensure(&k, init(&[])).await.unwrap();
+        assert_eq!(spawner.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(mgr.turns(&k), 0);
+    }
+
+    #[tokio::test]
+    async fn the_closed_hook_runs_for_every_way_a_session_leaves() {
+        let (mgr, _s, _sink) = setup();
+        let seen: Arc<Mutex<Vec<SessionKey>>> = Arc::default();
+        let target = seen.clone();
+        mgr.set_closed_hook(Arc::new(move |k: &SessionKey| target.lock().unwrap().push(k.clone())));
+        let a = key(SessionScope::Workspace("a".into()), Tier::Deep);
+        let b = key(SessionScope::Workspace("b".into()), Tier::Deep);
+        let c = key(SessionScope::Notes("m".into()), Tier::Fast);
+        for k in [&a, &b, &c] {
+            mgr.ensure(k, init(&[])).await.unwrap();
+        }
+        mgr.close_scope(&SessionScope::Workspace("a".into())).await; // explicit close
+        mgr.touch(&c);
+        mgr.reap_idle(Instant::now() + Duration::from_secs(16 * 60)).await; // idle reap of b (a is gone)
+        let retired = mgr.retire_if_idle(&c).unwrap(); // retire
+        retired.close().await;
+        assert_eq!(*seen.lock().unwrap(), vec![a, b, c]);
+    }
+
+    #[tokio::test]
+    async fn workspace_notes_and_brief_sessions_are_replaced_after_a_failed_turn() {
+        let (mgr, spawner, _sink) = setup();
+        for scope in [SessionScope::Workspace("c".into()), SessionScope::Notes("m".into()), SessionScope::Brief("m".into())] {
+            let k = key(scope, Tier::Fast);
+            mgr.ensure(&k, init(&[])).await.unwrap();
+            let _ = mgr.ask(&k, "fail:context too long", no_delta(), Arc::new(CancelToken::new())).await;
+            mgr.ensure(&k, init(&[])).await.unwrap();
+        }
+        assert_eq!(spawner.calls.load(Ordering::SeqCst), 6, "each was started again");
+        // A live session in error is kept (restarting it means replaying context).
+        let live = key(SessionScope::Live("m".into()), Tier::Fast);
+        mgr.ensure(&live, init(&[])).await.unwrap();
+        let _ = mgr.ask(&live, "fail:x", no_delta(), Arc::new(CancelToken::new())).await;
+        mgr.ensure(&live, init(&[])).await.unwrap();
+        assert_eq!(spawner.calls.load(Ordering::SeqCst), 7);
+    }
+
+    #[tokio::test]
+    async fn existing_sessions_keep_their_behaviour_without_overrides() {
+        // The same calls as before the overrides existed: reuse, restart on a dead
+        // process, and a kind switch replacing the session.
+        let (mgr, spawner, _sink) = setup();
+        let k = key(SessionScope::Past("m".into()), Tier::Deep);
+        let a = mgr.ensure(&k, init(&["ctx"])).await.unwrap();
+        let b = mgr.ensure(&k, init(&["ctx"])).await.unwrap();
+        assert!(same_session(&a, &b));
+        a.close().await;
+        let c = mgr.ensure(&k, init(&["ctx"])).await.unwrap();
+        assert!(!same_session(&a, &c));
+        mgr.settings().set_active(CliAgentKind::Codex);
+        let d = mgr.ensure(&k, init(&["ctx"])).await.unwrap();
+        assert!(!same_session(&c, &d));
+        assert_eq!(spawner.calls.load(Ordering::SeqCst), 3);
+    }
+
+    mod approvals_at_spawn {
+        use super::super::*;
+        use super::{init, key, setup};
+        use crate::llm::cli_agent::approval::{ApprovalPolicy, ChatApprovals, WorkspaceApprovals};
+        use crate::sources::config::{McpServer, McpTool};
+
+        fn approvals(chat: &str, read_only: Option<bool>) -> ChatApprovals {
+            let policy = ApprovalPolicy::from_servers(
+                &[McpServer {
+                    key: "m".into(),
+                    tools: vec![McpTool {
+                        name: "t".into(),
+                        full_name: "mcp__m__t".into(),
+                        allowed: true,
+                        read_only_hint: read_only,
+                        destructive_hint: None,
+                    }],
+                    ..Default::default()
+                }],
+                vec![],
+            );
+            ChatApprovals { can_ask: true, chat_id: chat.into(), broker: Arc::new(WorkspaceApprovals::new()), policy: Arc::new(policy) }
+        }
+
+        fn sources_init() -> SessionInit {
+            SessionInit { sources: Some(SourcesLaunch::default()), ..init(&[]) }
+        }
+
+        #[tokio::test]
+        async fn a_chat_with_sources_does_not_start_without_its_approval_rules() {
+            let (mgr, spawner, _) = setup();
+            let k = SessionKey::sources(SessionScope::Workspace("c".into()), Tier::Deep);
+            let err = mgr.ensure(&k, sources_init()).await.err().expect("refused");
+            assert!(err.to_string().contains("approval"), "{err}");
+            assert_eq!(spawner.calls.load(Ordering::SeqCst), 0);
+            // Other scopes with sources, and chats without sources, are untouched.
+            mgr.ensure(&SessionKey::sources(SessionScope::Live("m".into()), Tier::Fast), sources_init()).await.unwrap();
+            mgr.ensure(&key(SessionScope::Workspace("c".into()), Tier::Deep), init(&[])).await.unwrap();
+        }
+
+        #[tokio::test]
+        async fn a_session_is_replaced_when_the_chats_rules_changed_since_it_started() {
+            let (mgr, spawner, _) = setup();
+            let k = SessionKey::sources(SessionScope::Workspace("c".into()), Tier::Deep);
+            mgr.set_chat_approvals(approvals("c", Some(true)));
+            let a = mgr.ensure(&k, sources_init()).await.unwrap();
+            let again = mgr.ensure(&k, sources_init()).await.unwrap();
+            assert!(same_session(&a, &again), "same rules: reused");
+            // A refreshed Check says the tool is no longer read-only: the old session must not be reused.
+            mgr.set_chat_approvals(approvals("c", Some(false)));
+            let b = mgr.ensure(&k, sources_init()).await.unwrap();
+            assert!(!same_session(&a, &b));
+            assert_eq!(spawner.calls.load(Ordering::SeqCst), 2);
+            assert!(spawner.spawned.lock().unwrap()[0].1.closed.load(Ordering::SeqCst));
+            // The approvals reach the spawner, only for this chat's with-sources session.
+            assert!(spawner.spawned.lock().unwrap()[1].0.approvals.is_some());
+        }
     }
 }

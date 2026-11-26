@@ -224,7 +224,7 @@ export function TestSearchDialog({ isOpen, onClose }: TestSearchDialogProps) {
     <div
       ref={backdropRef}
       onClick={handleBackdropClick}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-background/70"
     >
       <div className="w-[680px] max-h-[85vh] flex flex-col rounded-2xl border border-border/50 bg-card shadow-2xl">
         {/* Header */}

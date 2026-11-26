@@ -41,8 +41,8 @@ describe("generateAssist", () => {
     useTranscriptStore.setState({ segments: [] } as never);
     await generateAssist("Assist");
     expect("sources" in invoke.mock.calls[0][1]).toBe(false);
-    await generateAssist("Assist", "Who is Dana?", { sources: { notes: true, tools: false } });
-    expect(invoke.mock.calls[1][1].sources).toEqual({ notes: true, tools: false });
+    await generateAssist("Assist", "Who is Dana?", { sources: { library: true, tools: false } });
+    expect(invoke.mock.calls[1][1].sources).toEqual({ library: true, tools: false });
   });
 
   it("sends the latest interim extension without changing stored finals", async () => {

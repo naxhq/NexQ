@@ -24,6 +24,7 @@ vi.mock("../lib/ipc", async (importOriginal) => ({
 
 import { AddMcpServerDialog } from "./AddMcpServerDialog";
 import { DEFAULT_SOURCES_CONFIG, useSourcesStore } from "../stores/sourcesStore";
+import { useToastStore } from "../stores/toastStore";
 
 const server = (over: Partial<McpServer> = {}): McpServer => ({
   id: "s1",
@@ -61,6 +62,21 @@ describe("AddMcpServerDialog", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(ipc.importMcpServersJson).toHaveBeenCalledWith('{"mcpServers":{"mira":{},"wiki":{}}}');
     expect(useSourcesStore.getState().config.mcp_servers.map((s) => s.label)).toEqual(["Mira", "Wiki"]);
+  });
+
+  it("a server Settings already has is linked, said so, and not checked again", async () => {
+    const saved = server();
+    useSourcesStore.setState({ config: { ...DEFAULT_SOURCES_CONFIG, mcp_servers: [saved] } });
+    ipc.importMcpServersJson.mockResolvedValue([saved]);
+    const onClose = vi.fn();
+    const onAdded = vi.fn();
+    render(<AddMcpServerDialog onClose={onClose} onAdded={onAdded} />);
+    fireEvent.change(screen.getByLabelText("Server JSON"), { target: { value: '{"mcpServers":{"mira":{}}}' } });
+    fireEvent.click(screen.getByRole("button", { name: "Add servers" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(useSourcesStore.getState().config.mcp_servers).toHaveLength(1);
+    expect(useToastStore.getState().toasts.map((t) => t.message)).toContain("Already in Settings, added to this workspace");
+    expect(onAdded).toHaveBeenCalledWith([saved], [saved]);
   });
 
   it("invalid JSON shows the parser error and adds nothing", async () => {

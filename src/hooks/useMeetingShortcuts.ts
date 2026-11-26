@@ -4,7 +4,7 @@
 
 import { useEffect } from "react";
 import { useMeetingStore } from "../stores/meetingStore";
-import { overlaySingleKey } from "../lib/hotkeys";
+import { NOTES_UPDATE_EVENT, isTypingTarget, overlaySingleKey } from "../lib/hotkeys";
 
 interface ShortcutActions {
   addBookmark: () => void;
@@ -22,11 +22,8 @@ export function useMeetingShortcuts(actions: ShortcutActions) {
     const handler = (e: KeyboardEvent) => {
       if (!isRecording) return;
 
-      const target = e.target as HTMLElement;
-      const isInput =
-        target.tagName === "INPUT" ||
-        target.tagName === "TEXTAREA" ||
-        target.isContentEditable;
+      // Text boxes (inputs, contenteditable, role=textbox) keep every key.
+      const isInput = isTypingTarget(e.target as Element | null);
 
       // Escape always works (even in inputs) — close all panels
       if (overlaySingleKey(e.key)?.id === "closePanels") {
@@ -59,6 +56,9 @@ export function useMeetingShortcuts(actions: ShortcutActions) {
           break;
         case "mute":
           actions.toggleMute();
+          break;
+        case "notes":
+          window.dispatchEvent(new Event(NOTES_UPDATE_EVENT));
           break;
       }
     };

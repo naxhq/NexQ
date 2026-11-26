@@ -1,0 +1,19 @@
+Here are the updated notes:
+```json
+{
+  "ops": [
+    {"op": "add", "id": "a", "type": "topic", "text": "Q3 budget and launch", "t": "00:05"},
+    {"op": "add", "type": "bullet", "parent": "a", "text": "Marketing wants 12 percent more (about $48,000) for the Lisbon launch", "t": "00:12"},
+    {"op": "add", "type": "bullet", "parent": "a", "text": "Marketing wants 12 percent more, about $48,000, for the Lisbon launch", "t": "00:13"},
+    {"op": "add", "type": "bullet", "parent": "a", "text": "Maria confirmed the launch date: September 14", "t": "00:38"},
+    {"op": "add", "type": "decision", "parent": "a", "text": "Freeze hiring until October", "t": "09:00"},
+    {"op": "add", "type": "action", "parent": "a", "text": "Tom must be told about the freeze", "t": "01:25"},
+    {"op": "add", "type": "banana", "text": "This type does not exist", "t": "01:30"},
+    {"op": "add", "id": "b", "type": "topic", "text": "Globex vendor contract", "t": "01:32"},
+    {"op": "add", "type": "bullet", "parent": "b", "text": "Contract renews in November with a 5 percent increase", "t": "01:32"},
+    {"op": "add", "type": "task", "parent": "b", "text": "Ask legal for the old contract before Friday", "t": "02:20"},
+    {"op": "add", "type": "question", "parent": "b", "text": "Is the Berlin office still needed next year?", "t": "02:30"}
+  ]
+}
+```
+Let me know if you want more detail.

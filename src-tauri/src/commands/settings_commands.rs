@@ -38,3 +38,10 @@ pub async fn set_config(key: String, value: String, app: AppHandle) -> Result<()
 
     Ok(())
 }
+
+/// The settings files that could not be read at start and what was done
+/// (see `store_guard`). Returned once: the UI shows it and it is cleared.
+#[tauri::command]
+pub fn take_store_recovery(state: tauri::State<'_, crate::state::AppState>) -> Vec<crate::store_guard::StoreRecovery> {
+    state.store_findings.lock().map(|mut f| std::mem::take(&mut *f)).unwrap_or_default()
+}

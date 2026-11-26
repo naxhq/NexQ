@@ -71,12 +71,12 @@ describe("personal sources ipc", () => {
     expect(invoke).toHaveBeenLastCalledWith("set_personal_sources", { config });
     await askMeeting("m", "q", "r");
     expect(invoke).toHaveBeenLastCalledWith("ask_meeting", { meetingId: "m", question: "q", requestId: "r" });
-    await askMeeting("m", "q", "r", { notes: true, tools: true });
+    await askMeeting("m", "q", "r", { library: true, tools: true });
     expect(invoke).toHaveBeenLastCalledWith("ask_meeting", {
       meetingId: "m",
       question: "q",
       requestId: "r",
-      sources: { notes: true, tools: true },
+      sources: { library: true, tools: true },
     });
   });
 

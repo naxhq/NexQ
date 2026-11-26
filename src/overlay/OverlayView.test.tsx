@@ -23,7 +23,6 @@ vi.mock("@tauri-apps/api/webviewWindow", () => ({
 }));
 
 import { OverlayView } from "./OverlayView";
-import { CallLogPanel } from "../calllog";
 import { useConfigStore } from "../stores/configStore";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useScenarioStore } from "../stores/scenarioStore";
@@ -33,9 +32,9 @@ import type { AIScenario, AudioMode, Meeting, SpeakerIdentity } from "../lib/typ
 
 // Mounts the real overlay and every store behind it: a selector that returns a
 // new value on each read only shows up as a crash in a real render.
-function renderOverlay(audioMode: AudioMode, scenario: AIScenario) {
+function renderOverlay(audioMode: AudioMode, scenario: AIScenario, meetingId = "meeting-1") {
   useMeetingStore.setState({
-    activeMeeting: { id: "meeting-1", title: "Standup" } as Meeting,
+    activeMeeting: { id: meetingId, title: "Standup" } as Meeting,
     currentView: "overlay",
     audioMode,
     aiScenario: scenario,
@@ -44,7 +43,6 @@ function renderOverlay(audioMode: AudioMode, scenario: AIScenario) {
   return render(
     <div>
       <OverlayView />
-      <CallLogPanel />
     </div>,
   );
 }
@@ -63,6 +61,9 @@ beforeAll(() => {
     },
   );
   Element.prototype.scrollTo = () => {};
+  // The dock lays itself out from its container's size, which jsdom reports as 0.
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 1200 });
+  Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, get: () => 600 });
 });
 
 afterEach(() => {
@@ -113,7 +114,7 @@ describe("OverlayView", () => {
     // split -> AI panel only -> transcript only
     fireEvent.click(screen.getByRole("button", { name: "Focus AI panel" }));
     fireEvent.click(screen.getByRole("button", { name: "Focus Transcript" }));
-    expect(screen.getByRole("button", { name: "Expand AI panel" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Expand Assistant panel" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^Ask/ })).toBeNull();
 
     const claimed: boolean[] = [];
@@ -123,7 +124,7 @@ describe("OverlayView", () => {
     window.removeEventListener(SCREENSHOT_EVENT, after);
 
     expect(claimed).toEqual([true]);
-    expect(screen.queryByRole("button", { name: "Expand AI panel" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Expand Assistant panel" })).toBeNull();
     // The Ask box mounted with the picture and took it.
     expect(await screen.findByRole("group", { name: "Attached images" })).toBeTruthy();
     discardPendingScreenshots();
@@ -191,7 +192,6 @@ describe("OverlayView", () => {
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: "Speaker Stats (S)" }));
     });
-    expect(screen.getByText("Speaker Stats")).toBeTruthy();
     expect(screen.getByText("1 speaker")).toBeTruthy();
   });
 });

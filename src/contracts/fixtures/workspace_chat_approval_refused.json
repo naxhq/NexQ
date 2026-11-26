@@ -1,0 +1,7 @@
+{
+  "chat_id": "c1",
+  "reason": "set_flag was refused: its arguments are longer than 100 KB, too long to show before it runs.",
+  "request_id": "ask-1",
+  "server": "notes",
+  "tool": "set_flag"
+}

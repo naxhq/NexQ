@@ -1,7 +1,7 @@
-import type { MeetingSummary } from "../lib/types";
-import { getDateGroup } from "../lib/utils";
+import type { MeetingSummary, WorkspaceSummary } from "../lib/types";
+import { groupMeetingsByDate } from "../workspace/meetingGroups";
 import { MeetingCard } from "./MeetingCard";
-import { Mic } from "lucide-react";
+import { NOT_FILED, isUnfiledHome } from "../workspace/unfiled";
 
 interface RecentMeetingsProps {
   meetings: MeetingSummary[];
@@ -11,38 +11,13 @@ interface RecentMeetingsProps {
   favorites?: Set<string>;
   onToggleFavorite?: (meetingId: string) => void;
   activeMeetingId?: string | null;
+  /** Shown when the list is empty. */
+  empty?: React.ReactNode;
+  /** Search everywhere: name the workspace each meeting is filed in. */
+  workspaces?: WorkspaceSummary[];
 }
 
-/** Groups meetings by date category: Today, Yesterday, This Week, Earlier */
-function groupMeetingsByDate(
-  meetings: MeetingSummary[]
-): Map<string, MeetingSummary[]> {
-  const groups = new Map<string, MeetingSummary[]>();
-  const order = ["Today", "Yesterday", "This Week", "Earlier"];
-
-  for (const label of order) {
-    groups.set(label, []);
-  }
-
-  for (const meeting of meetings) {
-    const group = getDateGroup(meeting.start_time);
-    const list = groups.get(group);
-    if (list) {
-      list.push(meeting);
-    } else {
-      groups.set(group, [meeting]);
-    }
-  }
-
-  for (const [key, value] of groups) {
-    if (value.length === 0) {
-      groups.delete(key);
-    }
-  }
-
-  return groups;
-}
-
+/** Meetings grouped by when they happened: Today, Yesterday, This week, Earlier. */
 export function RecentMeetings({
   meetings,
   onSelect,
@@ -51,54 +26,44 @@ export function RecentMeetings({
   favorites,
   onToggleFavorite,
   activeMeetingId,
+  empty,
+  workspaces,
 }: RecentMeetingsProps) {
   if (meetings.length === 0) {
     return (
-      <div className="dash-main flex flex-col items-center justify-center rounded-2xl border border-border/20 bg-secondary/10 py-14">
-        <div className="mb-3 rounded-full bg-primary/10 p-3.5">
-          <Mic className="h-4.5 w-4.5 text-primary/30" />
-        </div>
-        <p className="text-xs font-medium text-muted-foreground/50">
-          No meetings yet
-        </p>
-        <p className="mt-1 text-meta text-muted-foreground/60">
-          Start a meeting to see it here
-        </p>
+      <div className="px-3 py-8 text-center">
+        {empty ?? (
+          <>
+            <p className="ui-section text-foreground">No meetings yet</p>
+            <p className="ui-meta mt-1 text-muted-foreground">Start a meeting and it will be kept here.</p>
+          </>
+        )}
       </div>
     );
   }
 
-  const grouped = groupMeetingsByDate(meetings);
-
-  // Running counter for staggered card entrance across all groups
-  let cardIndex = 0;
-
   return (
     <div className="space-y-4">
-      {Array.from(grouped.entries()).map(([dateGroup, groupMeetings]) => (
-        <div key={dateGroup}>
-          <h3 className="mb-2 text-meta font-semibold uppercase tracking-wider text-muted-foreground/60">
-            {dateGroup}
-          </h3>
-          <div className="space-y-1.5">
-            {groupMeetings.map((meeting) => {
-              const idx = cardIndex++;
-              return (
-                <MeetingCard
-                  key={meeting.id}
-                  meeting={meeting}
-                  onSelect={onSelect}
-                  onDelete={onDelete}
-                  onRename={onRename}
-                  isFavorite={favorites?.has(meeting.id) ?? false}
-                  onToggleFavorite={onToggleFavorite}
-                  isLive={meeting.id === activeMeetingId}
-                  staggerIndex={idx}
-                />
-              );
-            })}
+      {groupMeetingsByDate(meetings).map((group) => (
+        <section key={group.label} aria-label={group.label}>
+          <h3 className="ui-meta mb-1 px-2 font-medium text-muted-foreground">{group.label}</h3>
+          <div className="space-y-0.5">
+            {group.meetings.map((meeting) => (
+              <MeetingCard
+                key={meeting.id}
+                meeting={meeting}
+                onSelect={onSelect}
+                onDelete={onDelete}
+                onRename={onRename}
+                isFavorite={favorites?.has(meeting.id) ?? false}
+                onToggleFavorite={onToggleFavorite}
+                isLive={meeting.id === activeMeetingId}
+                canMove={!!workspaces && workspaces.length > 1}
+                workspace={workspaces ? (isUnfiledHome(meeting.workspace_id) ? NOT_FILED : workspaces.find((w) => w.id === (meeting.workspace_id ?? "general"))) : undefined}
+              />
+            ))}
           </div>
-        </div>
+        </section>
       ))}
     </div>
   );

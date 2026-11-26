@@ -1,3 +1,4 @@
+import { Tooltip } from "../ui/Tooltip";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStreamStore } from "../stores/streamStore";
 import { useAIActionsStore } from "../stores/aiActionsStore";
@@ -81,7 +82,7 @@ export function ModeButtons() {
     }
 
     // Add custom actions
-    for (const [key, cfg] of Object.entries(actions)) {
+    for (const cfg of Object.values(actions)) {
       if (!cfg.isBuiltIn && cfg.visible) {
         result.push({
           mode: cfg.mode,
@@ -198,12 +199,11 @@ export function ModeButtons() {
           const hint = scopeHint(contextScope, label);
           const name = hint ? `${label} · ${hint}` : label;
           return (
+            <Tooltip key={mode} content={shortcut ? `${name} (${shortcut})` : name}>
             <button
-              key={mode}
               onClick={() => handleClick(mode)}
               disabled={locked && !isActive}
               aria-label={shortcut ? `${name} (${shortcut})` : name}
-              title={shortcut ? `${name} (${shortcut})` : name}
               aria-pressed={isActive || isAskActive}
               className={`flex items-center gap-1 rounded-lg px-2 py-1 text-meta font-medium transition-all duration-150 cursor-pointer ${
                 isActive
@@ -218,6 +218,7 @@ export function ModeButtons() {
               {isActive ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" /> : <Icon className="h-3 w-3" aria-hidden="true" />}
               <span>{label}</span>
             </button>
+            </Tooltip>
           );
         })}
         <ContextScopePicker />

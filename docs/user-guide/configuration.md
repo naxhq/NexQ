@@ -9,9 +9,10 @@ NexQ supports multiple STT and LLM providers, configurable audio devices, and lo
 The General settings panel controls app-wide behavior and preferences. Here you can configure:
 
 - **App behavior** -- startup options, system tray behavior, and window preferences
-- **Theme and appearance** -- light/dark mode and visual customization
+- **Theme and appearance** -- light/dark mode and visual customization. A theme change reaches the open meeting window at once. The default transcript and answer text colours follow the theme, so they stay readable in the light theme; a colour you picked yourself is used as chosen
 - **Language** -- interface language selection
 - **Update preferences** -- NexQ downloads updates quietly in the background and shows an "Update ready" button in the footer. Click it to see what's new and install when convenient, or it installs when you quit (never during a meeting). You always get the newest version, even if several came out since your last update. Turn this off under Settings > About > Automatic updates
+- **Window positions** -- NexQ remembers where the dashboard and the meeting window were, for each set of monitors. **Reset window positions** puts both back on your main screen (see [Meeting Window Layout](meeting-layout.md))
 - **Data management** -- storage location and cleanup options
 
 ## Speech-to-Text (STT) Providers
@@ -197,9 +198,9 @@ NexQ supports loading documents (PDF, TXT, MD, DOCX) as context for AI responses
 
 ### Setup
 
-1. Open Settings > Context
-2. Load documents using the file picker
-3. Enable RAG and configure the embedding model (requires Ollama with an embedding model like `nomic-embed-text`)
+1. Open Settings > Context Strategy and choose **Local RAG**
+2. Configure the embedding model (requires Ollama with an embedding model like `nomic-embed-text`)
+3. Add documents in the **Library** of a [workspace](workspaces.md): **Choose files**, or drop them on the window
 4. Documents are automatically chunked, embedded, and indexed
 
 ### Configuration
@@ -208,6 +209,16 @@ NexQ supports loading documents (PDF, TXT, MD, DOCX) as context for AI responses
 - **Top-K results**: Number of relevant chunks included in AI context
 - **Similarity threshold**: Minimum relevance score for chunk inclusion
 - **Search mode**: Semantic, keyword (FTS), or hybrid search
+
+## Workspaces
+
+Meetings, chats and files are kept in [workspaces](workspaces.md). Most workspace options are on the workspace itself: open it and use **Edit workspace** (name, colour, instructions for the AI, the scenario it starts as, **Also use General**, **Keep separate**, **Make default** and **Prepare recaps with AI**) and the **Library** (documents, folders, tools, talking points and memory). Settings keeps the global parts:
+
+- **Settings > Personal Sources**: the list of notes folders and tools, their on and off switches, tool permissions and secret values
+- **Settings > Context Strategy**: how documents reach live answers ([Using Context Intelligence](rag-context.md))
+- **Settings > Live Notes and Brief**: the model, detail and limit of the [live notes and brief](live-notes-and-brief.md)
+
+[Workspace chat](workspace-chat.md) has its own model per chat, picked in the chat itself. By default it uses the provider and model you set under **LLM Providers**.
 
 ## AI Actions
 
@@ -253,7 +264,7 @@ Higher confidence thresholds filter out uncertain transcriptions, giving you a c
 Settings > Hotkeys lists the in-meeting keys and the other shortcuts NexQ uses.
 
 - **Rebindable here** -- Assist (`Space`) and the five action keys: What to Say (`1`), Shorten (`2`), Follow-Up (`3`), Recap (`4`) and Ask Question (`5`). Click a binding and press the new key. Reset to Defaults brings the originals back
-- **Fixed** -- `Ctrl+M` (start or end a meeting), `Ctrl+B` (overlay or dashboard), `Ctrl+,` (Settings), and in the overlay `Escape`, `B`, `S`, `K` and `M`. These are listed in the editor but can't be changed
+- **Fixed** -- `Ctrl+M` (start or end a meeting), `Ctrl+B` (overlay or dashboard), `Ctrl+,` (Settings), and in the overlay `Escape`, `B`, `S`, `K`, `M` and `N` (update the live notes). These are listed in the editor but can't be changed
 - **Changed in General** -- Assist from any app, Capture screen into Ask and Hide from screen share. Their keys are set in Settings > General and shown in Hotkeys for reference
 
 See [Keyboard Shortcuts](keyboard-shortcuts.md) for the full reference and what each key does.

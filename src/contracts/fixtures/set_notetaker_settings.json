@@ -1,0 +1,7 @@
+{
+  "patch": {
+    "cap": 90000,
+    "detail": "brief",
+    "update_mode": "manual"
+  }
+}

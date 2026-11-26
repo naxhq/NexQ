@@ -20,10 +20,7 @@ const SUFFIX: &str = ".json";
 
 /// `%LOCALAPPDATA%\NexQ\agent-private`.
 pub fn private_dir() -> PathBuf {
-    let base = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    base.join("NexQ").join("agent-private")
+    crate::app_paths::local_root().join("agent-private")
 }
 
 /// Write `content` to a new, uniquely named file in `dir` (created if missing).
@@ -79,7 +76,7 @@ fn owner_pid(file_name: &str) -> Option<u32> {
 }
 
 #[cfg(windows)]
-fn pid_alive(pid: u32) -> bool {
+pub(crate) fn pid_alive(pid: u32) -> bool {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{
         GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -98,7 +95,7 @@ fn pid_alive(pid: u32) -> bool {
 }
 
 #[cfg(not(windows))]
-fn pid_alive(_pid: u32) -> bool {
+pub(crate) fn pid_alive(_pid: u32) -> bool {
     false
 }
 

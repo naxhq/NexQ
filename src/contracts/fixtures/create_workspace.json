@@ -1,0 +1,13 @@
+{
+  "input": {
+    "color": "teal",
+    "default_scenario": null,
+    "description": "Acme",
+    "icon": null,
+    "id": null,
+    "include_general": false,
+    "instructions": "Keep answers short",
+    "keep_separate": false,
+    "name": "Client work"
+  }
+}

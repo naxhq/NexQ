@@ -2,6 +2,8 @@
 
 NexQ's Context Intelligence feature lets you load your own documents so the AI can reference them during meetings. When you load your resume, a job description, course notes, or project documentation, the AI uses that context to provide more relevant and informed responses.
 
+Documents belong to [workspaces](workspaces.md). A meeting only uses the documents of its own workspace, of General if that workspace uses it, and of workspaces you chose to also use for that meeting. Documents of other workspaces never reach its answers.
+
 ## Prerequisites
 
 - NexQ installed and running ([Getting Started](getting-started.md))
@@ -33,11 +35,13 @@ The result: the AI can reference your documents when generating responses, makin
 
 ### Step by Step
 
-1. Open the **Context Intelligence** panel in the Launcher
-2. Click **Add Document**
+1. Open the workspace the meeting will be filed in (you start with **General**)
+2. In the **Library** on the right, click **Choose files**, or **Add** and then pick what to add. You can also drop files on the window
 3. Select one or more files from the file picker (multiple selection is supported)
-4. Indexing begins automatically -- progress is shown in real-time with a progress indicator
+4. When the local knowledge base is on, indexing begins automatically. Progress shows in the Library
 5. Wait for indexing to complete before starting your meeting
+
+To use a document you already added in another workspace, choose **Add > Files, folders and tools in the library**. Each document exists once, and workspaces point to it.
 
 ### What Happens During Indexing
 
@@ -58,13 +62,19 @@ When the AI needs context during a meeting, NexQ searches your indexed documents
 - **Full-text search (FTS)** -- finds chunks containing specific keywords or phrases
 - **Hybrid mode** -- combines both methods for the best results (default)
 
-The top matching chunks are included in the AI prompt, limited by the token budget.
+The top matching chunks are included in the AI prompt, limited by the token budget. In a live answer they are handed to the model as data: each excerpt is fenced, numbered as a source so an answer can cite it, and the prompt says that text inside is never an instruction.
+
+## Live answers and workspace chat
+
+Context Intelligence is what **live answers** use during a meeting. The [workspace chat](workspace-chat.md) uses a search of its own: a local keyword index of the workspace's meetings, documents, folders you allowed and notes. It doesn't need the embedding model, and you can use it with the local knowledge base off.
+
+Whichever strategy you use in **Settings > Context Strategy** (**Local RAG**, **Gemini Context Cache**, or sending the documents whole), the documents a live answer can use are filtered to the meeting's workspace first, before anything is ranked or sent. Instructions you wrote for the workspace are added after your general custom instructions.
 
 ## Configuration
 
 ![Context Strategy settings panel](../../website/public/screenshots/Setting/Setting-Context%20Strategy.png)
 
-Open Settings (`Ctrl+,`) > Context to configure RAG parameters:
+Open Settings (`Ctrl+,`) > Context Strategy to configure RAG parameters:
 
 | Setting | Description | Default |
 |---------|-------------|---------|
@@ -110,18 +120,18 @@ Load project context:
 
 To remove documents from the RAG index:
 
-1. Open the Context Intelligence panel
-2. Find the document you want to remove
-3. Click the **remove/delete** button next to it
-4. The document's chunks and embeddings are removed from the index
+1. Open the workspace and find the document in the **Library**
+2. Open its **...** menu
+3. Choose **Remove from this workspace** to stop using it here. Other workspaces keep it
+4. Choose **Remove from library** to remove it everywhere. It leaves every workspace that uses it, and its chunks and embeddings are removed from the index
 
-Clearing a document does not delete the original file -- it only removes it from NexQ's index.
+Removing a document does not delete the original file. It only removes it from NexQ.
 
 ## Tips
 
 - **Smaller, focused documents work better than large dumps.** A 2-page resume produces better context matches than a 50-page portfolio. The AI retrieves the most relevant chunks, so concise documents mean every chunk is useful.
 - **Wait for indexing to complete before starting a meeting.** Only indexed content is available to the AI. Check the progress indicator before beginning.
-- **Update documents when they change.** If you update your resume or project docs, remove the old version and re-add the new one to refresh the index.
+- **Update documents when they change.** If you update your resume or project docs, remove the old version and re-add the new one to refresh the index. **Index again** in the document's **...** menu rebuilds only its index.
 - **Use Hybrid search mode** (the default) for the best results. It combines semantic understanding with keyword matching.
 - **Check the AI's responses** to see if it is referencing your documents. If responses seem generic, verify that indexing completed and that your documents are relevant to the conversation topic.
 - **For embedding models**, if you are using Ollama for LLM, you can also use it for embeddings. Pull an embedding model like `nomic-embed-text`:

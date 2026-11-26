@@ -307,7 +307,7 @@ describe("QuestionPanel", () => {
     expect(runUserAction).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Get AI assistance for this question" }));
-    expect(runUserAction).toHaveBeenCalledWith("Assist", "What would you do first?");
+    expect(runUserAction).toHaveBeenCalledWith("Assist", "What would you do first?", { sources: expect.objectContaining({ library: true }) });
   });
 
   it("shows nothing and answers nothing with detection off", () => {
@@ -465,13 +465,13 @@ describe("Personal sources and automatic answers", () => {
           },
         ],
       },
-      toggles: { notes: true, tools: true },
+      toggles: { library: true, tools: true },
     });
   }
 
   afterEach(() => {
     useConfigStore.setState({ llmProvider: providerBefore });
-    useSourcesStore.setState({ config: DEFAULT_SOURCES_CONFIG, toggles: { notes: false, tools: false } });
+    useSourcesStore.setState({ config: DEFAULT_SOURCES_CONFIG, toggles: { library: false, tools: false } });
   });
 
   it("Auto-Answer never sends sources, even with both pills on", async () => {
@@ -496,7 +496,7 @@ describe("Personal sources and automatic answers", () => {
     fireEvent.click(screen.getByText(/Which database did you pick\?/));
     await settle();
     expect(vi.mocked(runUserAction)).toHaveBeenCalledWith(
-      "Assist", "Which database did you pick?", { sources: { notes: true, tools: true } },
+      "Assist", "Which database did you pick?", { sources: { library: true, tools: true } },
     );
   });
 });

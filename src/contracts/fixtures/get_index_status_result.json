@@ -1,0 +1,27 @@
+{
+  "ai_recaps": 2,
+  "ai_recaps_failed": {
+    "count": 1,
+    "reason": "The model did not answer in time"
+  },
+  "done": 3,
+  "folders": [
+    {
+      "files": 638,
+      "folder_id": "f1",
+      "indexed_at": 1700000000000
+    }
+  ],
+  "last_indexed_at": 1700000000000,
+  "passages": 120,
+  "skipped": [
+    {
+      "folder_id": "f1",
+      "path": "big.pdf",
+      "reason": "Too large to read"
+    }
+  ],
+  "state": "indexing",
+  "total": 10,
+  "workspace_id": "w1"
+}

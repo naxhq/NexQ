@@ -7,6 +7,7 @@ import { useConfigStore } from "../../stores/configStore";
 import { showToast } from "../../stores/toastStore";
 import { useAudioPlayerStore } from "../../stores/audioPlayerStore";
 import { formatTimestamp } from "../../lib/utils";
+import { relMs } from "../../lib/time";
 import { isCliAgent } from "../../lib/cliAgents";
 import {
   CheckSquare,
@@ -74,9 +75,7 @@ export function ActionItemRow({
     setEditing(false);
   };
 
-  const relativeMs = item.timestamp_ms > meetingStartMs
-    ? item.timestamp_ms - meetingStartMs
-    : 0;
+  const relativeMs = relMs(item.timestamp_ms, meetingStartMs);
   const hasTimestamp = relativeMs > 0;
   const hasAssignee = !!assignee;
   const showMeta = hasTimestamp || hasAssignee;
@@ -88,7 +87,7 @@ export function ActionItemRow({
       onDragStart={(e) => onDragStart(e, item.id)}
       onDragEnd={onDragEnd}
       className={`group flex items-start gap-1.5 rounded-xl px-2 py-2.5 transition-colors hover:bg-secondary/20 ${
-        item.completed ? "opacity-50" : ""
+        ""
       } ${isDragTarget ? "border-t-2 border-primary/40" : "border-t-2 border-transparent"}`}
     >
       {/* Drag handle */}
@@ -123,7 +122,7 @@ export function ActionItemRow({
                 if (e.key === "Escape") { setEditText(item.text); setEditing(false); }
               }}
               onBlur={handleSave}
-              className="flex-1 rounded-md border border-border/30 bg-background px-2 py-1 text-sm text-foreground outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20"
+              className="flex-1 rounded-md border border-border/30 bg-background px-2 py-1 text-sm text-foreground outline-none focus:border-ring focus:ring-1 focus:ring-primary/20"
             />
             <button
               onClick={handleSave}

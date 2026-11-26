@@ -85,8 +85,9 @@ pub fn remove_stale_session_dirs() {
 
 /// The launch of an Antigravity session (everything but the binary).
 pub fn antigravity_launch(program: std::path::PathBuf, cfg: &SessionConfig) -> AcpLaunch {
-    let sources = acp_sources(cfg.sources.as_ref());
-    let has_notes = cfg.sources.as_ref().is_some_and(|s| !s.add_dirs.is_empty());
+    let effective = super::approval::launch_sources(cfg.kind, cfg.sources.as_ref(), cfg.approvals.as_ref());
+    let sources = acp_sources(effective.as_ref());
+    let has_notes = effective.as_ref().is_some_and(|s| !s.add_dirs.is_empty());
     let mut launch = AcpLaunch::new(program, antigravity_args(), session_dir());
     launch.remove_cwd_on_close = true;
     launch.model = cfg.model.clone();
@@ -121,7 +122,8 @@ async fn spawn_antigravity(cfg: SessionConfig) -> Result<Arc<dyn SessionHandle>,
 
 /// The launch of a Codex session (everything but the binary).
 pub fn codex_launch(program: std::path::PathBuf, prefix_args: Vec<String>, cfg: &SessionConfig) -> CodexLaunch {
-    let sources = codex_sources(cfg.sources.as_ref());
+    let effective = super::approval::launch_sources(cfg.kind, cfg.sources.as_ref(), cfg.approvals.as_ref());
+    let sources = codex_sources(effective.as_ref());
     let mut launch = CodexLaunch::new(program, prefix_args, sandbox_dir(), cfg.model.clone());
     launch.effort = cfg.effort.clone();
     launch.system_prompt = adapt_system_prompt(&cfg.system_prompt, sources.has_notes);
@@ -155,6 +157,7 @@ mod tests {
             system_prompt: "sp".into(),
             thinking: true,
             sources,
+            approvals: None,
         }
     }
 

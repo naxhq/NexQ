@@ -1,0 +1,7 @@
+{
+  "patch": {
+    "effort": null,
+    "model": "gpt-5-nano",
+    "provider": "openai"
+  }
+}

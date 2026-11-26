@@ -1,0 +1,248 @@
+/* Talking points: type for the editor and the prompter. Colours are named steps
+   that read on both themes; the document stores the names, never a colour value. */
+
+:root {
+  --tp-blue: 221 83% 40%;
+  --tp-green: 142 70% 27%;
+  --tp-amber: 32 95% 30%;
+  --tp-red: 0 72% 40%;
+  --tp-violet: 262 60% 45%;
+  --tp-quiet: 215 20% 43%;
+}
+.dark {
+  --tp-blue: 213 94% 72%;
+  --tp-green: 142 60% 62%;
+  --tp-amber: 38 92% 62%;
+  --tp-red: 0 86% 72%;
+  --tp-violet: 262 80% 78%;
+  --tp-quiet: 215 14% 64%;
+}
+
+.tp-c-blue { color: hsl(var(--tp-blue)); }
+.tp-c-green { color: hsl(var(--tp-green)); }
+.tp-c-amber { color: hsl(var(--tp-amber)); }
+.tp-c-red { color: hsl(var(--tp-red)); }
+.tp-c-violet { color: hsl(var(--tp-violet)); }
+.tp-c-quiet { color: hsl(var(--tp-quiet)); }
+
+.tp-s-small { font-size: 0.82em; }
+.tp-s-large { font-size: 1.28em; line-height: 1.2; }
+.tp-s-xlarge { font-size: 1.7em; line-height: 1.15; }
+
+/* Shared document typography */
+.tp-doc { color: hsl(var(--foreground)); overflow-wrap: anywhere; }
+.tp-doc p, .tp-doc h1, .tp-doc h2, .tp-doc h3, .tp-doc li { margin: 0; }
+.tp-doc p { margin-block: 0.55em; }
+.tp-doc h1, .tp-doc h2, .tp-doc h3 { font-weight: 650; letter-spacing: -0.012em; line-height: 1.25; margin-block: 1.1em 0.35em; }
+.tp-doc h1 { font-size: 1.45em; }
+.tp-doc h2 { font-size: 1.22em; }
+.tp-doc h3 { font-size: 1.06em; }
+.tp-doc > :first-child { margin-top: 0; }
+.tp-doc ul, .tp-doc ol { margin: 0.3em 0; padding-left: 1.4em; }
+.tp-doc ul { list-style: disc; }
+.tp-doc ol { list-style: decimal; }
+.tp-doc li > p { margin-block: 0.25em; }
+.tp-doc li::marker { color: hsl(var(--muted-foreground)); }
+.tp-doc strong { font-weight: 650; }
+
+/* Editor surface */
+.tp-prose { min-height: 8rem; padding: 0.25rem 0.1rem 2rem; font-size: 0.9375rem; line-height: 1.6; caret-color: hsl(var(--primary)); }
+.tp-editor-compact .tp-prose { font-size: 0.875rem; min-height: 5rem; }
+.tp-prose p.is-editor-empty:first-child::before { content: attr(data-placeholder); color: hsl(var(--muted-foreground)); pointer-events: none; float: left; height: 0; }
+
+/* Reader: the current phrase at full contrast, what is ahead a little dimmer,
+   what has been said settled back. Opacity is the only thing that moves. */
+.tp-read { position: relative; padding: 0 0.4em 0 1.7em; line-height: inherit; }
+.tp-read [data-block-id] { position: relative; transition: opacity 240ms cubic-bezier(0.22, 1, 0.36, 1); }
+.tp-read [data-state="current"] { opacity: 1; }
+.tp-read [data-state="ahead"] { opacity: 0.74; }
+.tp-read [data-state="past"] { opacity: 0.5; }
+.tp-read [data-state="said"] { opacity: 0.46; }
+.tp-read h1, .tp-read h2, .tp-read h3 { margin-block: 0.9em 0.3em; }
+
+.tp-tick {
+  position: absolute;
+  top: 0.38em;
+  left: calc(-1.5em - var(--d, 0) * 1.4em);
+  display: inline-flex;
+  width: 1.05em;
+  height: 1.05em;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  /* the edge of a control reads at 3:1 (the --input token) */
+  border: 1.5px solid hsl(var(--input));
+  color: transparent;
+  background: transparent;
+  font-size: max(11px, 0.6em);
+  padding: 0;
+  outline: none;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+.tp-tick > svg { width: 0.8em; height: 0.8em; }
+.tp-tick:hover { border-color: hsl(var(--foreground) / 0.7); }
+.tp-tick:focus-visible { box-shadow: 0 0 0 2px hsl(var(--ring) / 0.7); }
+.tp-tick[aria-pressed="true"] { background: hsl(var(--success)); border-color: hsl(var(--success)); color: hsl(var(--success-foreground)); }
+.tp-read [data-state="said"] .tp-tick { opacity: 1; }
+
+/* Spoken so far in the current block (CSS Custom Highlight API; ignored where missing) */
+::highlight(tp-spoken) { color: hsl(var(--foreground) / 0.5); }
+
+/* The focus marker: a thin tick on the left edge at the reading line */
+.tp-focus-mark {
+  position: absolute;
+  left: 0;
+  width: 0.7rem;
+  height: 2px;
+  border-radius: 1px;
+  background: hsl(var(--primary));
+  pointer-events: none;
+  opacity: 0.9;
+}
+
+.tp-progress { height: 2px; background: hsl(var(--border)); }
+.tp-progress > span { display: block; height: 100%; width: 100%; transform-origin: 0 50%; background: hsl(var(--primary) / 0.8); will-change: transform; }
+
+
+@media (prefers-reduced-motion: reduce) {
+  .tp-read [data-block-id], .tp-tick { transition: none; }
+}
+
+/* Offers: one bottom column (Resume, Back, Go to) so chips never share a spot; a "Go to" aimed at
+   the top edge floats there, never on the reading line (a third down). */
+.tp-offers {
+  position: absolute; left: 50%; bottom: 0.75rem; transform: translateX(-50%);
+  display: flex; flex-direction: column-reverse; align-items: center; gap: 0.5rem;
+  width: max-content; max-width: calc(100% - 1.5rem); pointer-events: none;
+}
+.tp-offers-top { position: absolute; left: 50%; top: 0.5rem; transform: translateX(-50%); max-width: calc(100% - 1.5rem); }
+.tp-offer-slot { display: flex; max-width: 100%; justify-content: center; }
+.tp-offers .tp-offer, .tp-offers-top .tp-offer { pointer-events: auto; animation: tp-offer-in 200ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes tp-offer-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .tp-offers .tp-offer, .tp-offers-top .tp-offer { animation: none; } }
+
+/* Ticks heard by voice are softer than ones made by hand: a hollow, dashed ring and a lighter settle */
+.tp-read [data-state="autosaid"] { opacity: 0.5; }
+.tp-tick[data-auto] {
+  background: hsl(var(--success) / 0.16);
+  border-style: dashed;
+  border-color: hsl(var(--success) / 0.8);
+  color: hsl(var(--success));
+}
+
+/* Polish: ticks are quiet. A paragraph's circle shows on hover, focus or when ticked; a bullet's
+   circle takes the dot's place, small and faint; headings have none. Nothing looks like a form. */
+.tp-read .tp-tick { opacity: 0; }
+.tp-read [data-block-id]:hover .tp-tick,
+.tp-read [data-block-id]:focus-within .tp-tick,
+.tp-read .tp-tick:focus-visible,
+.tp-read .tp-tick[aria-pressed="true"] { opacity: 1; }
+.tp-read.tp-ticks ul { list-style: none; }
+.tp-read.tp-ticks ul > li::marker { content: ""; }
+.tp-read.tp-ticks p[data-list="bullet"] > .tp-tick {
+  left: -1.2em;
+  top: 0.55em;
+  width: 0.62em;
+  height: 0.62em;
+  opacity: 1;
+  border-width: 1px;
+}
+.tp-read.tp-ticks p[data-list="bullet"] > .tp-tick > svg { width: 0.5em; height: 0.5em; }
+.tp-read.tp-ticks p[data-list="bullet"]:hover > .tp-tick,
+.tp-read.tp-ticks p[data-list="bullet"]:focus-within > .tp-tick,
+.tp-read.tp-ticks p[data-list="bullet"] > .tp-tick[aria-pressed="true"] { opacity: 1; }
+
+/* Reading emphasis: full on the current phrase, about 62 percent ahead and 40 percent behind; Manual is all full */
+.tp-read[data-dim="on"] [data-state="ahead"] { opacity: 0.62; }
+.tp-read[data-dim="on"] [data-state="past"] { opacity: 0.4; }
+.tp-read[data-dim="off"] [data-state="ahead"], .tp-read[data-dim="off"] [data-state="past"] { opacity: 1; }
+
+/* The focus marker: a 2 px rule the height of a line, in the gutter */
+.tp-focus-mark { width: 2px; border-radius: 1px; left: 0; opacity: 1; }
+
+/* ---- Text style presets (Settings: reading, "Text style") ----------------------------------------
+   Classic is the look above and has no rules of its own. Each preset restyles the same four states:
+   current (the line you are on), ahead (what is left), past (scrolled over) and said / autosaid.
+   Opacity steps apply only where the reader dims (data-dim="on"); the said marks apply everywhere.
+   Specificity (0,4,0) beats the Classic rules (0,3,0). */
+.tp-read[data-style]:not([data-style="classic"]) [data-block-id] {
+  transition: opacity 240ms cubic-bezier(0.22, 1, 0.36, 1), transform 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 240ms ease, box-shadow 240ms ease, text-decoration-color 240ms ease;
+}
+
+/* Checked off: what you said is struck through in green; what you passed settles back */
+.tp-read[data-style="checked"][data-dim="on"] [data-state="ahead"] { opacity: 1; }
+.tp-read[data-style="checked"][data-dim="on"] [data-state="past"] { opacity: 0.5; }
+.tp-read[data-style="checked"] [data-state="said"],
+.tp-read[data-style="checked"] [data-state="autosaid"] {
+  opacity: 0.72;
+}
+/* The strike is literal: per word (below), and across the whole block only when every word was spoken. */
+.tp-read[data-style="checked"] [data-state="said"][data-struck-all],
+.tp-read[data-style="checked"] [data-state="autosaid"][data-struck-all] {
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+  text-decoration-color: hsl(var(--success-text));
+}
+/* Word by word while you speak the line you are on: a strike draws across each word the moment it is heard.
+   The word index is the one the highlight uses; the draw is short (100 ms) so it never trails the voice. */
+.tp-read[data-style="checked"] .tp-w {
+  background: linear-gradient(hsl(var(--success-text)), hsl(var(--success-text))) no-repeat 0 58% / 0 1.5px;
+  transition: background-size 100ms linear;
+}
+.tp-read[data-style="checked"] .tp-w[data-struck] { background-size: 100% 1.5px; }
+.tp-read[data-style="checked"] [data-block-id] { transition-duration: 240ms, 240ms, 240ms, 240ms, 100ms; }
+
+/* Highlight: a soft blue wash on the current line, a soft green one on what you said */
+.tp-read[data-style="highlight"][data-dim="on"] [data-state="ahead"] { opacity: 1; }
+.tp-read[data-style="highlight"][data-dim="on"] [data-state="past"] { opacity: 0.66; }
+.tp-read[data-style="highlight"][data-dim="on"] [data-state="current"],
+.tp-read[data-style="highlight"] [data-state="said"],
+.tp-read[data-style="highlight"] [data-state="autosaid"] {
+  border-radius: 0.3em;
+  background-color: var(--tp-mark);
+  box-shadow: -0.35em 0 0 var(--tp-mark), 0.35em 0 0 var(--tp-mark);
+}
+.tp-read[data-style="highlight"][data-dim="on"] [data-state="current"] { --tp-mark: hsl(var(--primary) / 0.16); }
+.tp-read[data-style="highlight"] [data-state="said"],
+.tp-read[data-style="highlight"] [data-state="autosaid"] { --tp-mark: hsl(var(--success) / 0.16); opacity: 0.85; }
+
+/* Focus: the current line is a touch bigger (scaled, so nothing reflows), the rest recedes */
+.tp-read[data-style="focus"][data-dim="on"] [data-state="current"] { opacity: 1; transform: scale(1.06); transform-origin: 0 50%; }
+.tp-read[data-style="focus"][data-dim="on"] [data-state="ahead"] { opacity: 0.64; }
+.tp-read[data-style="focus"][data-dim="on"] [data-state="past"] { opacity: 0.4; }
+.tp-read[data-style="focus"] [data-state="said"],
+.tp-read[data-style="focus"] [data-state="autosaid"] { opacity: 0.4; }
+
+/* High contrast: everything stays near full strength; the state is told by lines, not by fading */
+.tp-read[data-style="contrast"][data-dim="on"] [data-state="ahead"] { opacity: 1; }
+.tp-read[data-style="contrast"][data-dim="on"] [data-state="past"] { opacity: 0.8; }
+.tp-read[data-style="contrast"][data-dim="on"] [data-state="current"] {
+  opacity: 1;
+  border-radius: 0.3em;
+  background-color: hsl(var(--primary) / 0.2);
+  box-shadow: -0.35em 0 0 hsl(var(--primary) / 0.2), 0.35em 0 0 hsl(var(--primary) / 0.2), 0 0 0 2px hsl(var(--primary) / 0.7);
+}
+.tp-read[data-style="contrast"] [data-state="said"],
+.tp-read[data-style="contrast"] [data-state="autosaid"] {
+  opacity: 0.8;
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+  text-decoration-color: hsl(var(--foreground));
+}
+
+/* The preview box on a style card */
+.tp-preview {
+  padding: 0.4rem 0.6rem;
+  font-size: 11px;
+  line-height: 1.4;
+  border-radius: 0.5rem;
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
+  overflow: hidden;
+}
+.tp-preview p { margin-block: 0.2em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (prefers-reduced-motion: reduce) {
+  .tp-read[data-style] [data-block-id] { transition: none !important; }
+  .tp-read .tp-w { transition: none !important; }
+}

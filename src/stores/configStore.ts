@@ -26,8 +26,10 @@ import {
   normalizeThinkingMap,
   requestOptionFields,
 } from "../lib/llmRequestOptions";
+import { sanitizePlacement, sanitizeSetups, type SetupEntry, type WindowPlacement } from "../lib/windowPlacement";
 import { CLI_AGENTS, cliAgentInfo, cliAgentName, isCliAgent } from "../lib/cliAgents";
 import { clampMinutes, DEFAULT_CONTEXT_SCOPE, SCOPE_KINDS } from "../lib/contextScope";
+import { DEFAULT_OVERLAY_OPACITY } from "../overlay/backing";
 
 const DEFAULT_DEEPGRAM_CONFIG: DeepgramConfig = {
   model: "nova-3",
@@ -340,6 +342,16 @@ interface ConfigState {
 
   // Overlay appearance
   overlayOpacity: number;
+  /** Meeting window's dock layout, as saved (sanitized by the dock on load). Only the overlay window writes it. */
+  overlayDock: unknown;
+  /** Panels the user opened for the current meeting only (Escape closes the last one). */
+  overlayDockTransient: string[];
+  /** Last size and place of each window (null: never saved). Each window writes only its own. */
+  launcherPlacement: WindowPlacement | null;
+  overlayPlacement: WindowPlacement | null;
+  /** Each window's place per monitor setup (docked, undocked...), newest first, at most 6. */
+  launcherSetups: SetupEntry[];
+  overlaySetups: SetupEntry[];
 
   // Transcript scope of user actions (overlay picker)
   contextScope: ContextScopeSetting;
@@ -455,6 +467,12 @@ interface ConfigState {
   setAiResponseHPad: (v: number) => void;
   setAiResponseAlign: (align: "left" | "center" | "right") => void;
   setOverlayOpacity: (opacity: number) => void;
+  setOverlayDock: (dock: unknown) => void;
+  setOverlayDockTransient: (panels: string[]) => void;
+  setWindowPlacement: (label: "launcher" | "overlay", placement: WindowPlacement) => void;
+  setWindowSetups: (label: "launcher" | "overlay", entries: SetupEntry[], latest: WindowPlacement) => void;
+  /** Forget every saved window place (the "Reset window positions" command). */
+  clearWindowPlacements: () => void;
   setContextScope: (scope: ContextScopeSetting) => void;
   setContextScopeSticky: (sticky: boolean) => void;
   setShowPostMeetingTranslation: (enabled: boolean) => void;
@@ -544,7 +562,13 @@ export const useConfigStore = create<ConfigState>((set) => ({
   aiResponseLineHeight: 1.6,
   aiResponseHPad: 0,
   aiResponseAlign: "left" as const,
-  overlayOpacity: 0.65,
+  overlayOpacity: DEFAULT_OVERLAY_OPACITY,
+  overlayDock: null,
+  overlayDockTransient: [],
+  launcherPlacement: null,
+  overlayPlacement: null,
+  launcherSetups: [],
+  overlaySetups: [],
   contextScope: DEFAULT_CONTEXT_SCOPE,
   contextScopeSticky: true,
   showPostMeetingTranslation: true,
@@ -960,6 +984,29 @@ export const useConfigStore = create<ConfigState>((set) => ({
     set({ overlayOpacity: opacity });
     persistValue("overlayOpacity", opacity);
   },
+  setOverlayDock: (dock) => {
+    set({ overlayDock: dock });
+    persistValue("overlayDock", dock);
+  },
+  setOverlayDockTransient: (panels) => {
+    set({ overlayDockTransient: panels });
+    persistValue("overlayDockTransient", panels);
+  },
+  setWindowPlacement: (label, placement) => {
+    if (label === "launcher") set({ launcherPlacement: placement });
+    else set({ overlayPlacement: placement });
+    persistValue(`${label}Placement`, placement);
+  },
+  setWindowSetups: (label, entries, latest) => {
+    if (label === "launcher") set({ launcherSetups: entries, launcherPlacement: latest });
+    else set({ overlaySetups: entries, overlayPlacement: latest });
+    persistValue(`${label}Setups`, entries);
+    persistValue(`${label}Placement`, latest);
+  },
+  clearWindowPlacements: () => {
+    set({ launcherSetups: [], overlaySetups: [], launcherPlacement: null, overlayPlacement: null });
+    for (const k of ["launcherSetups", "overlaySetups", "launcherPlacement", "overlayPlacement"]) persistValue(k, null);
+  },
   setContextScope: (scope) => {
     const next = normalizeContextScope(scope);
     set({ contextScope: next });
@@ -1106,6 +1153,12 @@ export const useConfigStore = create<ConfigState>((set) => ({
       const aiResponseHPad = await store.get<number>("aiResponseHPad");
       const aiResponseAlign = await store.get<string>("aiResponseAlign");
       const overlayOpacity = await store.get<number>("overlayOpacity");
+      const overlayDock = await store.get<unknown>("overlayDock");
+      const overlayDockTransient = await store.get<unknown>("overlayDockTransient");
+      const launcherPlacement = await store.get<unknown>("launcherPlacement");
+      const overlayPlacement = await store.get<unknown>("overlayPlacement");
+      const launcherSetups = await store.get<unknown>("launcherSetups");
+      const overlaySetups = await store.get<unknown>("overlaySetups");
       const contextScope = await store.get<ContextScopeSetting>("contextScope");
       const contextScopeSticky = await store.get<boolean>("contextScopeSticky");
       const showPostMeetingTranslation = await store.get<boolean>("showPostMeetingTranslation");
@@ -1311,7 +1364,15 @@ export const useConfigStore = create<ConfigState>((set) => ({
         aiResponseLineHeight: aiResponseLineHeight ?? 1.6,
         aiResponseHPad: aiResponseHPad ?? 0,
         aiResponseAlign: (aiResponseAlign as "left" | "center" | "right") ?? "left",
-        overlayOpacity: overlayOpacity ?? 0.65,
+        overlayOpacity: overlayOpacity ?? DEFAULT_OVERLAY_OPACITY,
+        overlayDock: overlayDock ?? null,
+        overlayDockTransient: Array.isArray(overlayDockTransient)
+          ? overlayDockTransient.filter((p): p is string => typeof p === "string")
+          : [],
+        launcherPlacement: sanitizePlacement(launcherPlacement),
+        overlayPlacement: sanitizePlacement(overlayPlacement),
+        launcherSetups: sanitizeSetups(launcherSetups),
+        overlaySetups: sanitizeSetups(overlaySetups),
         contextScope: normalizeContextScope(contextScope),
         contextScopeSticky: contextScopeSticky ?? true,
         sttLanguage: sttLanguage ?? "en-US",
@@ -1411,9 +1472,23 @@ export const useConfigStore = create<ConfigState>((set) => ({
       store.onKeyChange<boolean>("contextScopeSticky", (val) => {
         if (val != null) set({ contextScopeSticky: val });
       });
+      // The theme chosen in one window reaches the others at once (the meeting window stays mounted).
+      store.onKeyChange<ThemeMode>("theme", (val) => {
+        if (val === "dark" || val === "light" || val === "system") set({ theme: val });
+      });
       store.onKeyChange<number>("overlayOpacity", (val) => {
         if (val != null) set({ overlayOpacity: val });
       });
+      // The overlay window writes the layout; the launcher (demo mode) only reads it.
+      store.onKeyChange<unknown>("overlayDock", (val) => {
+        set({ overlayDock: val ?? null });
+      });
+      // Window places: the other window clears them in "Reset window positions"; this one must hear it
+      // (a null included), or its next save writes its old list back.
+      store.onKeyChange<unknown>("launcherSetups", (val) => set({ launcherSetups: sanitizeSetups(val) }));
+      store.onKeyChange<unknown>("overlaySetups", (val) => set({ overlaySetups: sanitizeSetups(val) }));
+      store.onKeyChange<unknown>("launcherPlacement", (val) => set({ launcherPlacement: sanitizePlacement(val) }));
+      store.onKeyChange<unknown>("overlayPlacement", (val) => set({ overlayPlacement: sanitizePlacement(val) }));
       store.onKeyChange<string>("customLlmBaseUrl", (val) => {
         if (val != null) set({ customLlmBaseUrl: val });
       });

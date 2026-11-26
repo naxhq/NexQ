@@ -150,7 +150,8 @@ describe("AgentStatusChip", () => {
       ),
     );
     const chip = screen.getByTestId("agent-status-chip");
-    expect(chip).toHaveAttribute("tabindex", "0");
+    // a real button when it opens a picker, a focusable status otherwise
+    expect(chip.tagName === "BUTTON" || chip.getAttribute("tabindex") === "0").toBe(true);
     expect(chip).not.toHaveAttribute("title");
     fireEvent.mouseEnter(chip.parentElement!);
     const card = screen.getByRole("tooltip");
@@ -178,7 +179,10 @@ describe("AgentStatusChip", () => {
     const onClick = vi.fn();
     const { rerender } = render(<AgentStatusChip onClick={onClick} />);
     const chip = screen.getByTestId("agent-status-chip");
-    fireEvent.keyDown(chip, { key: "Enter" });
+    // a native button: Enter and Space click it
+    expect(chip.tagName).toBe("BUTTON");
+    expect(chip).toHaveAttribute("aria-haspopup", "dialog");
+    fireEvent.click(chip);
     expect(onClick).toHaveBeenCalledTimes(1);
     fireEvent.focus(chip);
     expect(screen.getByRole("tooltip")).toBeInTheDocument();

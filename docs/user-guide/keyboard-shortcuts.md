@@ -15,7 +15,7 @@ These shortcuts are registered system-wide and work regardless of which applicat
 | Shortcut | Action | Description |
 |----------|--------|-------------|
 | `Ctrl+M` | Start / End Meeting | Starts a new meeting if none is active; ends the current meeting if one is running |
-| `Ctrl+B` | Switch between overlay and dashboard | Switches between the launcher (dashboard) and the overlay (meeting) window. With no meeting running, it brings the dashboard back |
+| `Ctrl+B` | Switch between overlay and dashboard | Switches between the launcher (dashboard) and the overlay (meeting) window. With no meeting running, it brings the dashboard back. In a NexQ text editor, such as the talking points editor, it makes the selection bold instead |
 | `Ctrl+,` | Open / Close Settings | Toggles the settings panel |
 | `Ctrl+Shift+H` | Hide from screen share | Turns stealth mode on or off. Change it in Settings > General |
 | `Ctrl+Shift+Space` | Assist from any app | During a meeting, generates AI Assist without switching to NexQ. Stops an automatic answer that's running. Change it in Settings > General |
@@ -42,11 +42,75 @@ These overlay keys are fixed (they can't be rebound in Settings > Hotkeys) and n
 | `S` | Open or close the speaker stats panel |
 | `K` | Open or close the bookmarks panel |
 | `M` | Mute or unmute your microphone ("You") |
-| `Escape` | Close the open panels (speaker stats, bookmarks, developer log) |
+| `N` | Update the live notes now (when live notes are on and not already updating) |
+| `Escape` | Put away the panels you opened on the fly (speaker stats, bookmarks, AI Call Log, developer log) |
+
+`Ctrl+Shift+L` shows or hides the Dev Log panel.
 
 > In the Ask box, `Ctrl+V` attaches a copied screenshot (Claude subscription only). `Ctrl+Shift+S` captures the screen for you; see [Asking about something on screen](claude-subscription.md#asking-about-something-on-screen). Screenshots can include other people's video or documents and go to Anthropic with your question; NexQ doesn't save them.
 
 > **Note:** The number keys (`1`--`5`) work with both the main keyboard and the numpad. They only trigger when no modifier keys (Ctrl, Alt, Meta, Shift) are held, and the same goes for the other action keys.
+
+## Workspaces
+
+These work in the launcher (`Cmd` replaces `Ctrl` on macOS).
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Shift+O` | Switch workspace: type part of a name, `Up` and `Down` to move, `Enter` to open |
+| `Ctrl+Shift+N` | Create a new workspace |
+| `Ctrl+Shift+Y` | Show or hide the Library, when the window is too narrow to show it beside the chat |
+
+In the [workspace chat](workspace-chat.md), `Enter` sends the question and `Shift+Enter` adds a line.
+
+### Moving around the dashboard
+
+Each list is one Tab stop, so you do not tab through every meeting or file to get past it. Tab lands on the row you used last.
+
+| Shortcut | Action |
+|----------|--------|
+| `Up` and `Down` | Previous or next row in the workspace list, the meeting list or the Library |
+| `Home` and `End` | First or last row |
+| `Enter` | Open the row |
+| `Right`, `Menu` key or `Shift+F10` | Move to the row's own actions (star, rename, move, delete, menu); `Right` again goes to the next one |
+| `Left` or `Escape` | Back to the row |
+| `F6` and `Shift+F6` | Next or previous area: workspaces and meetings, chat, Library, status bar |
+| `Tab` from the top of the page | Skip links: to workspaces and meetings, to chat, to the Library |
+
+## Meeting Window Panels
+
+With a panel tab focused (see [Meeting window layout](meeting-layout.md)):
+
+| Shortcut | Action |
+|----------|--------|
+| `Left` and `Right` | Previous or next tab |
+| `Home` and `End` | First or last tab |
+| `Alt+Shift+Left` and `Alt+Shift+Right` | Move the tab one place in its row |
+| `Menu` key, `Shift+F10` or `Alt+Down` | Open the Move menu for the panel |
+| `Escape` | Cancel a drag in progress |
+
+With a separator between panels focused:
+
+| Shortcut | Action |
+|----------|--------|
+| Arrow keys | Resize by 16 pixels |
+| `Shift` and arrow keys | Resize by 64 pixels |
+| `Home` and `End` | Smallest and largest size |
+| `Enter` | Even out the two panels |
+
+## Talking Points Panel
+
+With the note focused in the Talking points panel ([Talking points](talking-points.md)):
+
+| Shortcut | Action |
+|----------|--------|
+| `Space` | Play or pause auto-scroll (it doesn't start an AI answer here) |
+| `Enter` | Tick the current line, or go to the suggested point |
+| `Backspace` | Go back to where you were after a big jump |
+| `+` and `-` | Bigger or smaller text |
+| Arrow, `Page Up`, `Page Down`, `Home`, `End` | Scroll yourself |
+
+In the editor: `Ctrl+B`, `Ctrl+I` and `Ctrl+U` for bold, italic and underline, `Ctrl+Alt+1` to `3` for headings, `Ctrl+Shift+8` and `Ctrl+Shift+7` for bullet and numbered lists.
 
 ## System Tray
 

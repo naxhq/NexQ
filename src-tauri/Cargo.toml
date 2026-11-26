@@ -13,6 +13,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+regex = "1"
 tauri = { version = "2", features = ["macos-private-api", "tray-icon", "protocol-asset"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
@@ -37,12 +38,16 @@ thiserror = "2"
 log = "0.4"
 hound = "3.5"
 pdf-extract = "0.12"
+notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
 lopdf = "0.47"
 tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
 url = "2"
+unicode-normalization = "0.1"
 whisper-rs = "0.16"
 sha2 = "0.11"
 zip = { version = "9", default-features = false, features = ["deflate"] }
+# bounded inflate of PDF streams (workspace_search::safe_extract)
+flate2 = "1"
 # load-dynamic: onnxruntime.dll is bundled and loaded on first use (see src/ort_runtime.rs)
 ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "tracing", "api-24", "load-dynamic"] }
 ndarray = "0.17"  # Must match ort's ndarray version
@@ -86,6 +91,8 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell_PropertiesSystem",
     # Window subclassing (stealth mode follows window visibility)
     "Win32_UI_Shell",
+    # "Show in folder": select a file through the shell API
+    "Win32_UI_Shell_Common",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Variant",
     "Win32_System_LibraryLoader",
@@ -95,6 +102,8 @@ windows = { version = "0.62", features = [
     # Job object: a Check's diagnose run is killed with every process it started
     "Win32_System_JobObjects",
     "Win32_Security",
+    # open without following links, final path of a handle (workspace_search::safe_open)
+    "Win32_Storage_FileSystem",
 ] }
 
 # macOS-specific

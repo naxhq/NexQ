@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{command, AppHandle, Emitter, State};
 
 use crate::commands::intelligence_commands::{
-    compose_instructions, request_route, request_with_sources, route_after_outage, run_session_assist,
+    compose_instructions, plan_toggles, request_plan, request_route_locked, route_after_outage, run_session_assist,
     sources_unavailable_notice, stateless_provider, SessionAssist, SessionOutcome,
 };
 use crate::commands::meeting_commands::{past_meeting_context, PastMeetingContext};
@@ -206,8 +206,11 @@ pub async fn ask_meeting(
     let scope = SessionScope::Past(meeting_id.clone());
     let epoch = state.meeting_sessions.epoch(&scope);
     // Asking about a past meeting is the user's own question: the pills decide.
-    let with_sources = request_with_sources(&state, MEETING_ASK_MODE, &scope, sources);
-    let mut route = request_route(&state, MEETING_ASK_MODE, &scope, with_sources);
+    let scoped = crate::workspace::runtime::for_meeting(&state, &meeting_id);
+    let plan = request_plan(&state, MEETING_ASK_MODE, &scope, sources, &scoped);
+    let with_sources = plan.with_sources();
+    let (no_library, no_tools) = plan.key_flags();
+    let mut route = request_route_locked(&state, MEETING_ASK_MODE, &scope, with_sources, no_library, no_tools);
 
     if let Route::ClaudeSession(key) = &route {
         let make_req = |key: SessionKey| SessionAssist {
@@ -227,7 +230,8 @@ pub async fn ask_meeting(
             params: params.clone(),
             cancel: cancel.clone(),
             images: &[],
-            sources: Some(sources.unwrap_or_default()),
+            workspace: None,
+            sources: Some(plan_toggles(&plan)),
         };
         match run_session_assist(&state, &app_handle, key.clone(), make_req).await {
             SessionOutcome::Done(Ok(Some(answer))) => {

@@ -1,0 +1,11 @@
+{"ops":[
+{"op":"add","id":"t1","type":"topic","text":"Q3 budget","t":"00:05"},
+{"op":"add","type":"bullet","parent":"t1","text":"Marketing asks for 12 percent more, about {{n:$48,000}} extra for the {{l:Lisbon}} launch","t":"00:12"},
+{"op":"add","type":"bullet","parent":"t1","text":"{{p:Maria}} confirmed the launch on {{d:September 14}}; {{o:Acme}} handles the printing","t":"00:38"},
+{"op":"add","type":"decision","parent":"t1","text":"Freeze hiring until {{d:October}} to afford the launch","t":"01:25"},
+{"op":"add","type":"task","parent":"t1","text":"Tell {{p:Tom}} about the hiring freeze today","t":"01:25"},
+{"op":"add","id":"t2","type":"topic","text":"Globex contract","t":"01:32"},
+{"op":"add","type":"bullet","parent":"t2","text":"{{o:Globex}} contract renews in {{d:November}}, price up 5 percent","t":"01:32"},
+{"op":"add","type":"task","parent":"t2","text":"Take over the renegotiation; ask legal for the old contract by {{d:Friday}}","t":"02:20"},
+{"op":"add","type":"question","parent":"t2","text":"Do we still need the {{l:Berlin}} office next year?","t":"02:30"}
+]}

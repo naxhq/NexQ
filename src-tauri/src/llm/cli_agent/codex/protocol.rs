@@ -350,6 +350,9 @@ pub enum Notification {
     Error { turn_id: String, error: TurnError, will_retry: bool },
     /// `mcpServer/startupStatus/updated`: `starting`, `ready`, `failed`.
     McpStartup { name: String, status: String, error: Option<String> },
+    /// `account/rateLimits/updated`: only a window past 90% used, or one that
+    /// says the limit was reached.
+    PlanLimit(crate::llm::cli_agent::protocol::PlanLimit),
     Other(String),
 }
 
@@ -402,8 +405,39 @@ fn parse_notification(method: &str, p: &Value) -> Notification {
             status: s(p, "status"),
             error: p.get("error").and_then(Value::as_str).map(str::to_string),
         },
+        "account/rateLimits/updated" => parse_plan_limit(&p["rateLimits"])
+            .map(Notification::PlanLimit)
+            .unwrap_or_else(|| Notification::Other(method.to_string())),
         other => Notification::Other(other.to_string()),
     }
+}
+
+/// Used share at or past which a window counts as "near".
+const NEAR_PERCENT: u64 = 90;
+
+/// A plan limit from a `RateLimitSnapshot` (`primary`/`secondary` windows with
+/// `usedPercent`, `resetsAt`; `rateLimitReachedType` set once the limit is hit).
+fn parse_plan_limit(snapshot: &Value) -> Option<crate::llm::cli_agent::protocol::PlanLimit> {
+    use crate::llm::cli_agent::protocol::{PlanLimit, PlanLimitLevel};
+    let reached = snapshot.get("rateLimitReachedType").is_some_and(|v| !v.is_null());
+    let worst = ["primary", "secondary"]
+        .iter()
+        .filter_map(|k| snapshot.get(*k).filter(|w| !w.is_null()))
+        .max_by_key(|w| w["usedPercent"].as_u64().unwrap_or(0))?;
+    let used = worst["usedPercent"].as_u64().unwrap_or(0);
+    let level = if reached || used >= 100 {
+        PlanLimitLevel::Hit
+    } else if used >= NEAR_PERCENT {
+        PlanLimitLevel::Near
+    } else {
+        return None;
+    };
+    Some(PlanLimit {
+        level,
+        resets_at: worst["resetsAt"].as_u64(),
+        window: worst["windowDurationMins"].as_u64().map(|m| format!("{m}m")),
+        used: Some(used as f64),
+    })
 }
 
 /// A request from the server that the client must answer.
@@ -907,5 +941,30 @@ mod tests {
         assert_eq!(meta["codex_approval_kind"], "mcp_tool_call");
         assert_eq!(reply_for(&req, true), Reply::Result(json!({ "action": "accept" })));
         assert_eq!(reply_for(&req, false), Reply::Result(json!({ "action": "decline" })));
+    }
+
+    #[test]
+    fn codex_rate_limit_updates_surface_only_near_or_reached_windows() {
+        use crate::llm::cli_agent::protocol::PlanLimitLevel;
+        let note = |p: Value| parse_notification("account/rateLimits/updated", &p);
+        let calm = note(json!({"rateLimits": {"primary": {"usedPercent": 40, "resetsAt": 1900000000, "windowDurationMins": 300}, "secondary": null}}));
+        assert_eq!(calm, Notification::Other("account/rateLimits/updated".into()));
+        match note(json!({"rateLimits": {"primary": {"usedPercent": 40}, "secondary": {"usedPercent": 93, "resetsAt": 1900000000, "windowDurationMins": 10080}}})) {
+            Notification::PlanLimit(l) => {
+                assert_eq!(l.level, PlanLimitLevel::Near);
+                assert_eq!(l.resets_at, Some(1_900_000_000));
+                assert_eq!(l.window.as_deref(), Some("10080m"));
+                assert_eq!(l.used, Some(93.0));
+            }
+            other => panic!("{other:?}"),
+        }
+        match note(json!({"rateLimits": {"primary": {"usedPercent": 50}, "rateLimitReachedType": "rate_limit_reached"}})) {
+            Notification::PlanLimit(l) => assert_eq!(l.level, PlanLimitLevel::Hit),
+            other => panic!("{other:?}"),
+        }
+        match note(json!({"rateLimits": {"primary": {"usedPercent": 100}}})) {
+            Notification::PlanLimit(l) => assert_eq!(l.level, PlanLimitLevel::Hit),
+            other => panic!("{other:?}"),
+        }
     }
 }

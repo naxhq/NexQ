@@ -1,0 +1,23 @@
+{
+  "can": [
+    "update"
+  ],
+  "cap": 120000,
+  "ended": {
+    "detail": null,
+    "kind": "interrupted"
+  },
+  "error_kind": null,
+  "meeting_id": "m1",
+  "model": null,
+  "moved_online": null,
+  "next_in_ms": null,
+  "not_covered": {
+    "from_ms": 120000,
+    "to_ms": 2400000
+  },
+  "reason": "Not covered: 02:00 to 40:00",
+  "status": "finished",
+  "tokens_used": 4200,
+  "total_tokens": 21000
+}

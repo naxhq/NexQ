@@ -34,6 +34,9 @@ pub struct GenerationGuard {
     is_generating: Arc<AtomicBool>,
     in_flight: Arc<Mutex<InFlight>>,
     cancel_token: Arc<CancelToken>,
+    /// Tells `ai_runs` a live answer runs, so notes, chats and the brief on
+    /// the same local server wait or stop. An atomic add: no added latency.
+    _live: crate::ai_runs::LiveBusy,
 }
 
 impl GenerationGuard {
@@ -283,6 +286,7 @@ impl IntelligenceEngine {
             is_generating: self.is_generating.clone(),
             in_flight: self.in_flight.clone(),
             cancel_token,
+            _live: crate::ai_runs::LiveGate::global().enter(),
         })
     }
 
@@ -551,5 +555,14 @@ mod tests {
         engine.clear_session();
         them_final(&mut engine, "acc_1", "Why do you want this job?", 1_000);
         assert!(engine.last_detected_question().is_some());
+    }
+
+    #[test]
+    fn a_generation_marks_the_live_gate_busy_until_its_guard_is_dropped() {
+        // The gate is shared by every test in the process: only "busy while held" is stable.
+        let engine = IntelligenceEngine::new();
+        let guard = engine.begin_generation("req-gate").expect("claim");
+        assert!(crate::ai_runs::LiveGate::global().is_busy());
+        drop(guard);
     }
 }

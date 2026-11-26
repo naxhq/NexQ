@@ -10,8 +10,7 @@ use std::path::{Path, PathBuf};
 /// `agy` 1.5.14: sign-in survives (it is kept outside that folder), the folder
 /// is created by `agy`, and a user MCP server marker never started.
 pub fn agy_home_dir() -> PathBuf {
-    let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-    base.join("NexQ").join("agent-agy")
+    crate::app_paths::local_root().join("agent-agy")
 }
 
 /// Antigravity CLI: `agy acp --disable-telemetry --sandbox --gemini-dir <NexQ's folder>`.

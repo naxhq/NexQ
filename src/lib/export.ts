@@ -7,6 +7,7 @@ import { formatTimestamp, formatDurationLong, getSpeakerLabel, getModeLabel } fr
 import { showToast } from "../stores/toastStore";
 import { scenarioLabel, useScenarioStore } from "../stores/scenarioStore";
 import { defaultRemoteSpeakerName, remoteKeyOf } from "./speakerLabels";
+import { meetingBase, relMs } from "./time";
 
 /** Strip LLM thinking tags from text (Qwen3, DeepSeek, etc.) */
 function stripThinkTags(text: string): string {
@@ -47,7 +48,7 @@ function meetingStartMs(meeting: Meeting): number {
 }
 
 function segmentTime(seg: TranscriptSegment, startMs: number): string {
-  return formatTimestamp(Math.max(0, seg.timestamp_ms - startMs));
+  return formatTimestamp(relMs(seg.timestamp_ms, meetingBase(startMs, [seg.timestamp_ms])));
 }
 
 function safeFilename(title: string): string {
@@ -92,7 +93,7 @@ export function exportToMarkdown(meeting: Meeting): string {
     md += `## Bookmarks\n\n`;
     const sortedBookmarks = [...meeting.bookmarks].sort((a, b) => a.timestamp_ms - b.timestamp_ms);
     for (const b of sortedBookmarks) {
-      const ts = formatTimestamp(Math.max(0, b.timestamp_ms - startMs));
+      const ts = formatTimestamp(relMs(b.timestamp_ms, startMs));
       md += b.note ? `- **[${ts}]** ${b.note}\n` : `- **[${ts}]** *(no note)*\n`;
     }
     md += "\n";
@@ -136,11 +137,11 @@ export function exportToSRT(segments: TranscriptSegment[], startMs: number = 0, 
   const lines: string[] = [];
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
-    const segStart = Math.max(0, seg.timestamp_ms - startMs);
+    const segStart = relMs(seg.timestamp_ms, meetingBase(startMs, [seg.timestamp_ms]));
     // Estimate end: next segment start or +3 seconds
     const nextSeg = segments[i + 1];
     const segEnd = nextSeg
-      ? Math.max(0, nextSeg.timestamp_ms - startMs)
+      ? relMs(nextSeg.timestamp_ms, meetingBase(startMs, [nextSeg.timestamp_ms]))
       : segStart + 3000;
 
     lines.push(`${i + 1}`);

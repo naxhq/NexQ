@@ -26,6 +26,7 @@ pub(crate) const IDLE_MENU: &[Entry] = &[
     Item("copy_transcript", "Copy Transcript"),
     Separator,
     ScreenShare,
+    Item("bring_windows", "Bring windows to this screen"),
     Item("settings", "Settings"),
     Item("quit", "Quit NexQ"),
 ];
@@ -42,6 +43,7 @@ pub(crate) const MEETING_MENU: &[Entry] = &[
     Separator,
     ScreenShare,
     Item("toggle_stealth", "Hide Overlay"),
+    Item("bring_windows", "Bring windows to this screen"),
     Separator,
     Item("copy_ai_answer", "Copy Last AI Answer"),
     Item("copy_action_items", "Copy Action Items"),

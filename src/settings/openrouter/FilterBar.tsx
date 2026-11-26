@@ -42,13 +42,13 @@ export function FilterBar({
             placeholder="Search models..."
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
-            className="w-full rounded-lg border border-border/30 bg-background/50 pl-8 pr-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/30 focus:border-primary/40 focus:outline-none focus:ring-1 focus:ring-primary/20"
+            className="w-full rounded-lg border border-border/30 bg-background/50 pl-8 pr-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/30 focus:border-ring focus:outline-none focus:ring-1 focus:ring-primary/20"
           />
         </div>
         <select
           value={sort}
           onChange={(e) => onSortChange(e.target.value as SortOption)}
-          className="rounded-lg border border-border/30 bg-background/50 px-3 py-2 text-xs text-foreground focus:border-primary/40 focus:outline-none cursor-pointer min-w-[150px]"
+          className="rounded-lg border border-border/30 bg-background/50 px-3 py-2 text-xs text-foreground focus:border-ring focus:outline-none cursor-pointer min-w-[150px]"
         >
           <option value="newest">Newest first</option>
           <option value="price_asc">Price: low → high</option>

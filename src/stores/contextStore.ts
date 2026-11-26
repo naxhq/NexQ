@@ -26,7 +26,7 @@ interface ContextState {
 
   // Async actions that call IPC
   loadResources: () => Promise<void>;
-  loadFile: (filePath: string) => Promise<ContextResource>;
+  loadFile: (filePath: string, workspaceId?: string) => Promise<ContextResource>;
   removeFile: (resourceId: string) => Promise<void>;
   saveCustomInstructions: (instructions: string) => Promise<void>;
   refreshTokenBudget: () => Promise<void>;
@@ -67,10 +67,10 @@ export const useContextStore = create<ContextState>((set, get) => ({
     }
   },
 
-  loadFile: async (filePath: string) => {
+  loadFile: async (filePath: string, workspaceId?: string) => {
     try {
       set({ isLoading: true, error: null });
-      const resource = await ipcLoadContextFile(filePath);
+      const resource = await ipcLoadContextFile(filePath, workspaceId);
       set((state) => ({
         resources: [...state.resources, resource],
         isLoading: false,

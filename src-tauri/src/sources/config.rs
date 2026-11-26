@@ -26,6 +26,15 @@ pub struct NotesFolder {
     pub enabled: bool,
 }
 
+/// Forget what a server said about its tools (they came from what it was
+/// before the change).
+pub fn clear_tool_hints(tools: &mut [McpTool]) {
+    for t in tools {
+        t.read_only_hint = None;
+        t.destructive_hint = None;
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct McpServer {
@@ -40,6 +49,19 @@ pub struct McpServer {
     pub tools: Vec<McpTool>,
     pub last_check: Option<McpCheckStatus>,
     pub needs_sign_in: bool,
+}
+
+impl McpServer {
+    /// Does `other` start something else: another command, arguments, URL or
+    /// plain environment? (Secret values are not compared: they are not here.)
+    pub fn target_differs(&self, other: &McpServer) -> bool {
+        let plain = |s: &McpServer| -> Vec<(String, Option<String>)> {
+            let mut v: Vec<_> = s.env.iter().map(|e| (e.name.clone(), e.value.clone())).collect();
+            v.sort();
+            v
+        };
+        self.transport != other.transport || plain(self) != plain(other)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -76,6 +98,13 @@ pub struct EnvVar {
     pub secret: bool,
 }
 
+/// What a server's `tools/list` says about one tool (MCP `annotations`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ToolHints {
+    pub read_only: Option<bool>,
+    pub destructive: Option<bool>,
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct McpTool {
@@ -84,6 +113,11 @@ pub struct McpTool {
     /// `mcp__<key>__<name>`.
     pub full_name: String,
     pub allowed: bool,
+    /// The server's `annotations.readOnlyHint` from its `tools/list`
+    /// (`None` = not reported, or saved before NexQ read it: workspace chat then asks).
+    pub read_only_hint: Option<bool>,
+    /// The server's `annotations.destructiveHint`; `None` = not reported.
+    pub destructive_hint: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -95,11 +129,15 @@ pub struct McpCheckStatus {
     pub checked_at_ms: u64,
 }
 
-/// The two overlay pills: which sources this one answer may use.
+/// The two overlay pills: what this one answer may use of its workspace's
+/// Library (documents, notes, searched folders) and Tools (MCP servers). A pill
+/// that is off is a lock, not a hint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SourceToggles {
-    pub notes: bool,
+    /// Saved as `notes` by older versions of the pill; still read.
+    #[serde(alias = "notes")]
+    pub library: bool,
     pub tools: bool,
 }
 
@@ -186,6 +224,7 @@ mod tests {
                     name: (*n).into(),
                     full_name: format!("mcp__{key}__{n}"),
                     allowed: *a,
+                    ..Default::default()
                 })
                 .collect(),
             ..Default::default()

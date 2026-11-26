@@ -10,6 +10,7 @@ import { useAgentStore } from "../stores/agentStore";
 import { formatUsageSummary, formatCostEstimate, formatDuration, usageAttribution } from "../lib/agentUsage";
 import { cliAgentName, isCliAgent } from "../lib/cliAgents";
 import { useConfigStore } from "../stores/configStore";
+import { Popover } from "../ui/Popover";
 import { PromptViewer } from "./PromptViewer";
 import { callLogStats, formatCompactTokens } from "./stats";
 import type { LogFilterKind } from "../lib/types";
@@ -37,9 +38,20 @@ const FILTER_OPTIONS: Array<{ label: string; value: LogFilterKind }> = [
 
 // -- Main panel component ----------------------------------------------------
 
-export function CallLogPanel() {
-  const isOpen = useCallLogStore((s) => s.isOpen);
-  const setOpen = useCallLogStore((s) => s.setOpen);
+export function CallLogPanel({ embedded = false, onClose }: { embedded?: boolean; onClose?: () => void } = {}) {
+  // Embedded in the meeting window's dock: the dock decides when it is shown,
+  // sizes it and owns Escape; the panel always draws its content.
+  const storeOpen = useCallLogStore((s) => s.isOpen);
+  const isOpen = embedded || storeOpen;
+  const setStoreOpen = useCallLogStore((s) => s.setOpen);
+  const setOpen = useCallback(
+    (open: boolean) => {
+      if (embedded) {
+        if (!open) onClose?.();
+      } else setStoreOpen(open);
+    },
+    [embedded, onClose, setStoreOpen],
+  );
   const entries = useCallLogStore((s) => s.entries);
   const activeFilter = useCallLogStore((s) => s.activeFilter);
   const setFilter = useCallLogStore((s) => s.setFilter);
@@ -61,11 +73,11 @@ export function CallLogPanel() {
     useAgentStore.getState().init();
   }, []);
   const [showExportMenu, setShowExportMenu] = useState(false);
-  const exportMenuRef = useRef<HTMLDivElement>(null);
+  const exportBtnRef = useRef<HTMLButtonElement>(null);
 
   // Close on Escape (skip if settings overlay is open)
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || embedded) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         if (useMeetingStore.getState().settingsOpen) return;
@@ -74,7 +86,7 @@ export function CallLogPanel() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [isOpen, setOpen]);
+  }, [isOpen, embedded, setOpen]);
 
   // Filter entries
   const filteredEntries = useMemo(() => {
@@ -102,18 +114,6 @@ export function CallLogPanel() {
     () => entries.find((e) => e.id === expandedEntryId) ?? null,
     [entries, expandedEntryId]
   );
-
-  // Close export menu on outside click
-  useEffect(() => {
-    if (!showExportMenu) return;
-    const handler = (e: MouseEvent) => {
-      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
-        setShowExportMenu(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [showExportMenu]);
 
   // Export translated transcript
   const handleExport = useCallback(async (format: string) => {
@@ -143,12 +143,20 @@ export function CallLogPanel() {
 
   return (
     <div
-      className={`shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${
-        isOpen ? "w-[380px]" : "w-0"
-      }`}
+      className={
+        embedded
+          ? "h-full min-h-0 w-full overflow-hidden"
+          : `shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${isOpen ? "w-[380px]" : "w-0"}`
+      }
     >
       {isOpen && (
-        <div className="flex flex-col h-full w-[380px] border-l border-border/40 bg-card">
+        <div
+          className={
+            embedded
+              ? "flex h-full w-full flex-col"
+              : "flex flex-col h-full w-[380px] border-l border-border/40 bg-card"
+          }
+        >
           {/* ── Header ── */}
           <div className="border-b border-border/30 px-3 py-2.5 shrink-0">
             <div className="flex items-center justify-between">
@@ -166,8 +174,9 @@ export function CallLogPanel() {
               <div className="flex items-center gap-1">
                 {/* Export dropdown */}
                 {meetingId && entries.length > 0 && (
-                  <div className="relative" ref={exportMenuRef}>
+                  <div className="relative">
                     <button
+                      ref={exportBtnRef}
                       onClick={() => setShowExportMenu((v) => !v)}
                       className="flex items-center gap-1 rounded-lg border border-border/30 bg-secondary/30 px-2 py-1 text-meta font-medium text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
                       title="Export transcript"
@@ -177,9 +186,8 @@ export function CallLogPanel() {
                       <ChevronDown className="h-2.5 w-2.5" />
                     </button>
 
-                    {showExportMenu && (
-                      <div className="absolute right-0 top-full z-50 mt-1 w-52 rounded-lg border border-border/40 bg-popover shadow-lg">
-                        <div className="py-1">
+                    <Popover open={showExportMenu} onClose={() => setShowExportMenu(false)} anchorRef={exportBtnRef} label="Export transcript" align="end" className="w-52 rounded-lg shadow-lg">
+                      <div className="py-1">
                           <button
                             onClick={() => handleExport("translated_txt")}
                             className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-foreground/80 hover:bg-accent/40 transition-colors"
@@ -205,9 +213,8 @@ export function CallLogPanel() {
                           >
                             Copy to clipboard
                           </button>
-                        </div>
                       </div>
-                    )}
+                    </Popover>
                   </div>
                 )}
 
@@ -223,7 +230,8 @@ export function CallLogPanel() {
                 <button
                   onClick={handleClose}
                   className="rounded p-1 text-muted-foreground/50 transition-colors hover:bg-accent hover:text-foreground"
-                  title="Close (Esc)"
+                  title={embedded ? "Close" : "Close (Esc)"}
+                  aria-label={embedded ? "Close AI call log" : undefined}
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>

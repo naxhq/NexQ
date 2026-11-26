@@ -45,6 +45,7 @@
 
 pub mod activity;
 pub mod config;
+pub mod dedupe;
 pub mod launch;
 pub mod mcp_json;
 pub mod notes;

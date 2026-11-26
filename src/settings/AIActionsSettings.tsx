@@ -524,7 +524,7 @@ export function AIActionsSettings() {
                 value={configs.customInstructions}
                 onChange={(e) => handleCustomInstructionsChange(e.target.value)}
                 placeholder="Add extra instructions beyond the presets above..."
-                className="mt-2 w-full resize-none rounded-lg border border-border/50 bg-secondary/30 px-3 py-2.5 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/20"
+                className="mt-2 w-full resize-none rounded-lg border border-border/50 bg-secondary/30 px-3 py-2.5 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none focus:ring-1 focus:ring-primary/20"
               />
             </div>
           </div>
@@ -758,14 +758,14 @@ export function AIActionsSettings() {
                 value={newActionName}
                 onChange={(e) => setNewActionName(e.target.value)}
                 placeholder="Action name"
-                className="w-full rounded-lg border border-border/50 bg-secondary/30 px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/20"
+                className="w-full rounded-lg border border-border/50 bg-secondary/30 px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none focus:ring-1 focus:ring-primary/20"
               />
               <textarea
                 rows={3}
                 value={newActionPrompt}
                 onChange={(e) => setNewActionPrompt(e.target.value)}
                 placeholder="System prompt for this action..."
-                className="w-full resize-none rounded-lg border border-border/50 bg-secondary/30 px-3 py-2.5 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/20"
+                className="w-full resize-none rounded-lg border border-border/50 bg-secondary/30 px-3 py-2.5 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none focus:ring-1 focus:ring-primary/20"
               />
               <div className="flex gap-2">
                 <button
@@ -928,7 +928,7 @@ function ActionCard({
               rows={3}
               value={action.systemPrompt}
               onChange={(e) => onPromptChange(e.target.value)}
-              className="w-full resize-none rounded-lg border border-border/50 bg-secondary/30 px-3 py-2.5 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/20"
+              className="w-full resize-none rounded-lg border border-border/50 bg-secondary/30 px-3 py-2.5 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none focus:ring-1 focus:ring-primary/20"
             />
           </div>
 
@@ -1062,7 +1062,7 @@ function ActionCard({
                         onChange={(e) =>
                           onOverrideChange("ragTopK", Number(e.target.value))
                         }
-                        className="rounded border border-border/50 bg-secondary/30 px-2 py-1 text-meta text-foreground focus:border-primary/50 focus:outline-none"
+                        className="rounded border border-border/50 bg-secondary/30 px-2 py-1 text-meta text-foreground focus:border-ring focus:outline-none"
                       >
                         {[3, 5, 7, 10, 15, 20].map((v) => (
                           <option key={v} value={v}>

@@ -35,8 +35,8 @@ export function BookmarkPanel() {
     <div className="max-h-40 overflow-y-auto px-2 py-1.5">
       <div className="mb-1 flex items-center gap-1.5 px-1">
         <Bookmark className="h-3 w-3 text-primary/60" />
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/40">
-          Bookmarks ({sorted.length})
+        <span className="ui-meta text-muted-foreground/60">
+          {sorted.length} saved
         </span>
       </div>
       <div className="space-y-0.5">
@@ -78,7 +78,7 @@ function BookmarkRow({
       <button
         onClick={() => scrollToSegment(bookmark.segment_id)}
         className="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 hover:bg-primary/20 transition-colors cursor-pointer"
-        title="Jump to line"
+        aria-label="Jump to line"
       >
         <span className="tabular-nums text-[10px] font-semibold text-primary">
           {formatDurationLong(elapsedMs)}

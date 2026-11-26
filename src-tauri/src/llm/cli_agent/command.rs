@@ -19,6 +19,9 @@ pub struct SessionConfig {
     pub thinking: bool,
     /// Personal sources for a with-sources session; `None` for the plain one.
     pub sources: Option<SourcesLaunch>,
+    /// Per-call tool approval: only a workspace chat session has it (see
+    /// `approval.rs`). `None` keeps every other session exactly as it was.
+    pub approvals: Option<super::approval::ChatApprovals>,
 }
 
 /// Built-in tools a with-sources session gets when a notes folder is enabled.
@@ -109,7 +112,9 @@ pub fn build_args(
     mcp_config_file: Option<&Path>,
 ) -> Vec<String> {
     let s = |x: &str| x.to_string();
-    let sources = cfg.sources.as_ref();
+    // A chat that cannot ask has its asking tools switched off right here.
+    let effective = super::approval::launch_sources(cfg.kind, cfg.sources.as_ref(), cfg.approvals.as_ref());
+    let sources = effective.as_ref();
     let mut args = vec![
         s("-p"),
         s("--input-format"),
@@ -133,11 +138,22 @@ pub fn build_args(
         }
         Some(_) => {}
     }
-    args.extend([s("--permission-prompts"), s("none"), s("--no-session-persistence")]);
+    // A workspace chat that can ask hands its prompts to NexQ (`host`: the CLI
+    // sends a `can_use_tool` control request); everyone else is never asked.
+    let ask = cfg.approvals.as_ref().filter(|a| a.can_ask && sources.is_some());
+    args.extend([s("--permission-prompts"), s(if ask.is_some() { "host" } else { "none" }), s("--no-session-persistence")]);
+    if ask.is_some() {
+        // How a host (the Agent SDK) takes the questions: over stdio, as control requests.
+        args.extend([s("--permission-prompt-tool"), s("stdio")]);
+    }
     if let Some(src) = sources {
-        if !src.allowed_tools.is_empty() {
+        // A tool that asks is left out of the allow list: only then does the CLI ask.
+        let asks: std::collections::HashSet<String> =
+            ask.map(|a| a.policy.ask_tools().into_iter().collect()).unwrap_or_default();
+        let allowed: Vec<&String> = src.allowed_tools.iter().filter(|t| !asks.contains(*t)).collect();
+        if !allowed.is_empty() {
             args.push(s("--allowedTools"));
-            args.extend(src.allowed_tools.iter().cloned());
+            args.extend(allowed.into_iter().cloned());
         }
         args.push(s("--strict-mcp-config"));
         if let Some(file) = mcp_config_file {
@@ -160,10 +176,7 @@ pub fn build_args(
 
 /// `%LOCALAPPDATA%\NexQ\agent-sandbox`: the empty cwd the agent runs in.
 pub fn sandbox_dir() -> PathBuf {
-    let base = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    base.join("NexQ").join("agent-sandbox")
+    crate::app_paths::local_root().join("agent-sandbox")
 }
 
 /// Apply cwd (created if missing), stripped env and CREATE_NO_WINDOW.
@@ -231,6 +244,7 @@ mod tests {
             system_prompt: "sp".into(),
             thinking: true,
             sources: None,
+            approvals: None,
         }
     }
 
@@ -400,5 +414,55 @@ mod tests {
         assert_eq!(cmd.get_current_dir(), Some(dir.as_path()));
         assert!(dir.is_dir());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_a_chat_that_can_ask_launches_with_host_prompts_and_its_asking_tools_left_out_of_the_allow_list() {
+        use crate::llm::cli_agent::approval::{ApprovalPolicy, ChatApprovals, WorkspaceApprovals};
+        use crate::sources::config::{McpServer, McpTool};
+        let tool = |n: &str, ro: Option<bool>| McpTool {
+            name: n.into(),
+            full_name: format!("mcp__m__{n}"),
+            allowed: true,
+            read_only_hint: ro,
+            destructive_hint: None,
+        };
+        let policy = ApprovalPolicy::from_servers(
+            &[McpServer { key: "m".into(), tools: vec![tool("kb_search", Some(true)), tool("send_mail", None)], ..Default::default() }],
+            vec![],
+        );
+        let src = SourcesLaunch {
+            add_dirs: vec!["C:\\t".into()],
+            allowed_tools: vec!["mcp__m__kb_search".into(), "mcp__m__send_mail".into(), "Read".into()],
+            ..Default::default()
+        };
+        let value_of = |args: &[String], flag: &str| args.iter().position(|a| a == flag).map(|i| args[i + 1].clone());
+        let approvals = |can_ask| ChatApprovals {
+            can_ask,
+            chat_id: "c".into(),
+            broker: std::sync::Arc::new(WorkspaceApprovals::new()),
+            policy: std::sync::Arc::new(policy.clone()),
+        };
+        let build = |a: Option<ChatApprovals>| {
+            build_args(&SessionConfig { sources: Some(src.clone()), approvals: a, ..cfg() }, Path::new("sp.txt"), None)
+        };
+
+        let asking = build(Some(approvals(true)));
+        assert_eq!(value_of(&asking, "--permission-prompts").as_deref(), Some("host"));
+        // Found live: without this the CLI never asks, it denies by itself.
+        assert_eq!(value_of(&asking, "--permission-prompt-tool").as_deref(), Some("stdio"));
+        let at = asking.iter().position(|a| a == "--allowedTools").unwrap();
+        assert!(asking[at + 1..].contains(&"mcp__m__kb_search".to_string()) && asking[at + 1..].contains(&"Read".to_string()));
+        assert!(!asking.contains(&"mcp__m__send_mail".to_string()), "a tool that asks must not be pre-allowed");
+
+        // Everyone else: exactly as before.
+        for other in [build(None), build(Some(approvals(false)))] {
+            assert_eq!(value_of(&other, "--permission-prompts").as_deref(), Some("none"));
+            assert_eq!(value_of(&other, "--permission-prompt-tool"), None);
+            assert!(other.contains(&"mcp__m__send_mail".to_string()));
+        }
+        // A plain session (no sources) never asks, whatever it is given.
+        let plain = build_args(&SessionConfig { approvals: Some(approvals(true)), ..cfg() }, Path::new("sp.txt"), None);
+        assert_eq!(value_of(&plain, "--permission-prompts").as_deref(), Some("none"));
     }
 }

@@ -29,6 +29,7 @@ vi.mock("../lib/events", () => ({
 import { useMeetingChat } from "./useMeetingChat";
 import { useConfigStore } from "../stores/configStore";
 import { DEFAULT_SOURCES_CONFIG, useSourcesStore } from "../stores/sourcesStore";
+import { useAssistSourcesStore } from "../stores/assistSourcesStore";
 
 const providerBefore = useConfigStore.getState().llmProvider;
 
@@ -43,13 +44,18 @@ beforeEach(() => {
       ...DEFAULT_SOURCES_CONFIG,
       notes_folders: [{ id: "f1", label: "Vault", path: "D:\\Vault", enabled: true }],
     },
-    toggles: { notes: true, tools: true },
+    toggles: { library: true, tools: true },
+  });
+  // What this past meeting's workspace holds: a folder, and no tool server.
+  useAssistSourcesStore.setState({
+    pills: {},
+    info: { m1: { workspace_id: "w1", documents: 0, notes: 0, folders: [{ label: "Vault", used: true }], servers: [] } },
   });
 });
 
 afterEach(() => {
   useConfigStore.setState({ llmProvider: providerBefore });
-  useSourcesStore.setState({ config: DEFAULT_SOURCES_CONFIG, toggles: { notes: false, tools: false } });
+  useSourcesStore.setState({ config: DEFAULT_SOURCES_CONFIG, toggles: { library: false, tools: false } });
 });
 
 describe("useMeetingChat and personal sources", () => {
@@ -62,15 +68,15 @@ describe("useMeetingChat and personal sources", () => {
     const [meetingId, question, , sources] = ipc.askMeeting.mock.calls[0];
     expect([meetingId, question]).toEqual(["m1", "Who is Dana?"]);
     // Tools has no usable server behind it, so it goes as off.
-    expect(sources).toEqual({ notes: true, tools: false });
+    expect(sources).toEqual({ library: true, tools: false });
   });
 
-  it("sends no sources off the Claude subscription", async () => {
+  it("sends Knowledge to every provider, and Tools to none but a subscription agent", async () => {
     useConfigStore.setState({ llmProvider: "openai" });
     const { result } = renderHook(() => useMeetingChat("m1"));
     await act(async () => {
       await result.current.ask("Who is Dana?");
     });
-    expect(ipc.askMeeting.mock.calls[0][3]).toBeUndefined();
+    expect(ipc.askMeeting.mock.calls[0][3]).toEqual({ library: true, tools: false });
   });
 });

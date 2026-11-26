@@ -40,11 +40,13 @@ In NexQ Settings, select the **Interview** scenario. This configures the AI prom
 
 Use Context Intelligence (RAG) to give the AI background about you and the role:
 
-1. Open the **Context Intelligence** panel in the Launcher
-2. Click **Add Document**
+1. Open the [workspace](workspaces.md) you will start the interview in. A workspace just for the job search keeps these files apart from your other meetings
+2. In the **Library** on the right, click **Choose files**
 3. Select your resume PDF, the job description, and any company research notes
-4. Wait for indexing to complete (progress is shown in real-time)
+4. Wait for indexing to complete (progress is shown in the Library)
 5. The AI now has context about your background and the role you are interviewing for
+
+After the interview, ask the [workspace chat](workspace-chat.md) things like "What did they ask about my last job?" across all your interviews. Your own [talking points](talking-points.md) can sit in the meeting window as a panel.
 
 See [Using Context Intelligence (RAG)](rag-context.md) for more details on document loading.
 
@@ -85,7 +87,7 @@ For the fastest automatic answers, transcribe the interviewer with Cartesia or D
 2. **Review the full transcript** in the Launcher -- every word from both sides is saved
 3. Check the **AI Call Log** sidebar for all AI suggestions that were generated during the session
 4. **Export or copy** the transcript for your notes or follow-up preparation
-5. The meeting summary includes key discussion points, questions asked, and action items
+5. The meeting summary includes key discussion points, questions asked, and action items. If something is missing, the **AI** menu in the meeting details can **Generate summary**, **Extract action items** or **Suggest bookmarks**
 
 ## Tips
 

@@ -1,5 +1,10 @@
+pub mod ai_runs;
+pub mod app_paths;
 pub mod audio;
+pub mod store_guard;
 pub mod commands;
+#[cfg(test)]
+mod contract;
 pub mod context;
 pub mod credentials;
 pub mod db;
@@ -7,15 +12,26 @@ pub mod intelligence;
 pub mod logging;
 pub mod rag;
 pub mod sources;
+pub mod live_brief;
+pub mod live_common;
+pub mod live_eval;
+pub mod live_notes;
+pub mod live_runtime;
+pub mod prompt_data;
 pub mod llm;
 pub mod meeting_detect;
 pub mod nav_guard;
 pub mod notes_mcp;
 pub mod ort_runtime;
 pub mod state;
+pub mod text_kit;
 pub mod stt;
 pub mod translation;
 pub mod tray;
+pub mod workspace;
+pub mod workspace_chat;
+pub mod workspace_search;
+pub mod workspace_memory;
 
 use state::AppState;
 use std::sync::{Arc, Mutex};
@@ -67,6 +83,12 @@ use commands::updater_commands;
 // == MODULE COMMANDS: claude cli ==
 use commands::claude_cli_commands;
 use commands::cli_agent_commands;
+// == MODULE COMMANDS: database recovery ==
+use commands::db_recovery_commands;
+// == MODULE COMMANDS: workspaces ==
+use commands::workspace_chat_commands;
+use commands::live_commands;
+use commands::workspace_commands;
 
 /// Show the launcher window and hide the overlay window.
 pub(crate) fn show_launcher(app: &tauri::AppHandle) {
@@ -119,6 +141,66 @@ fn hide_all(app: &tauri::AppHandle) {
     }
 }
 
+/// Reads the text of documents that were saved before the text was kept, one
+/// by one off the main thread. The text is saved so the next start reads
+/// nothing; a file that can't be read leaves its row, shown as missing.
+fn read_documents_in_background(
+    docs: Vec<context::ContextResource>,
+    db_arc: Arc<Mutex<db::DatabaseManager>>,
+    ctx_arc: Arc<Mutex<context::ContextManager>>,
+) {
+    for doc in docs {
+        let read = context::extract_text(&doc.file_type, &doc.file_path);
+        match read {
+            Ok(text) => {
+                let tokens = context::token_counter::count_tokens(&text) as i64;
+                if let Ok(db) = db_arc.lock() {
+                    let _ = workspace::documents::store_text(db.connection(), &doc.id, &text, tokens);
+                }
+                if let Ok(mut ctx) = ctx_arc.lock() {
+                    ctx.finish_extraction(&doc.id, text);
+                }
+            }
+            Err(e) => {
+                log::warn!("Context document {} can't be read, marking it missing: {}", doc.name, e);
+                if let Ok(db) = db_arc.lock() {
+                    let _ = workspace::documents::mark_missing(db.connection(), &doc.id, &e);
+                }
+                if let Ok(mut ctx) = ctx_arc.lock() {
+                    ctx.mark_missing(&doc.id);
+                }
+            }
+        }
+    }
+}
+
+/// Set once the app state is managed (end of the state's construction in setup).
+static STATE_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Commands the page sends before the state exists wait for it instead of
+/// failing with "state not managed": the window shows at once, and the call
+/// runs when setup has managed the state (at most a minute; after that it runs
+/// and fails as it always did).
+fn startup_gate<R: tauri::Runtime>(
+    handler: impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static,
+) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
+    let handler = std::sync::Arc::new(handler);
+    move |invoke| {
+        if STATE_READY.load(std::sync::atomic::Ordering::SeqCst) {
+            return handler(invoke);
+        }
+        let handler = handler.clone();
+        tauri::async_runtime::spawn(async move {
+            let started = std::time::Instant::now();
+            while !STATE_READY.load(std::sync::atomic::Ordering::SeqCst) && started.elapsed() < std::time::Duration::from_secs(60) {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            handler(invoke);
+        });
+        true
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Relaunched by the installer of an update installed on quit: the user
@@ -131,6 +213,20 @@ pub fn run() {
     // App log: stderr plus a rotating file (opened in setup, once the log
     // folder is known). Without a logger every log statement is a no-op.
     logging::init();
+
+    // Where this build keeps its files comes from its own identifier, and the
+    // settings files are checked before the store plugin can load (and replace)
+    // one that can't be read.
+    let context = tauri::generate_context!();
+    let identifier = context.config().identifier.clone();
+    let data_dir = app_paths::data_dir_for(&identifier);
+    app_paths::init(data_dir.clone(), &identifier);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let store_findings = store_guard::guard(&data_dir, now_ms);
+    store_guard::refresh_backups(&data_dir, std::time::SystemTime::now());
 
     tauri::Builder::default()
         .manage(stt::azure_mai_streaming::MaiBridge::default())
@@ -154,27 +250,39 @@ pub fn run() {
         .on_page_load(|webview, _payload| {
             stealth_commands::apply_to_new_window(&webview.window());
         })
-        .setup(|app| {
+        .setup(move |app| {
+            let setup_started = std::time::Instant::now();
             log_commands::start(app.handle());
             // Private mcp-config files a crashed run left behind hold secrets.
             let stale = sources::private_files::cleanup_leftovers(&sources::private_files::private_dir());
             if stale > 0 {
                 log::info!("Removed {stale} leftover private session file(s)");
             }
+            // Chat transcript folders of a run that did not close cleanly.
+            let stale = llm::cli_agent::transcripts::TranscriptRoot::cleanup_leftovers(
+                llm::cli_agent::transcripts::global().root(),
+            );
+            if stale > 0 {
+                log::info!("Removed {stale} leftover chat transcript folder(s)");
+            }
             let mut app_state = AppState::new();
+            app_state.store_findings = std::sync::Mutex::new(store_findings.clone());
 
             // -- Initialize DatabaseManager --
             let app_data_dir = app
                 .path()
                 .app_data_dir()
                 .expect("Failed to resolve app data directory");
-            match db::DatabaseManager::new(app_data_dir.clone()) {
+            match db::open_or_problem(app_data_dir.clone()) {
                 Ok(db_mgr) => {
+                    app_state.readers = Some(Arc::new(db::readers::ReaderPool::new(db_mgr.path().to_path_buf())));
                     app_state.database = Some(Arc::new(Mutex::new(db_mgr)));
                     log::info!("Database initialized successfully");
                 }
-                Err(e) => {
-                    log::error!("Failed to initialize database: {}", e);
+                Err(problem) => {
+                    // Nothing was created or changed: the UI shows why and the copies to restore.
+                    log::error!("The database did not open ({:?}): {}", problem.kind, problem.message);
+                    app_state.db_problem = Some(problem);
                 }
             }
 
@@ -203,22 +311,21 @@ pub fn run() {
             // -- Restore persisted context resources from DB --
             // Load stored metadata first (while holding DB lock), then restore into
             // ContextManager (different lock), then clean up any stale DB entries.
+            // Documents come back from the text saved in the database, so startup
+            // reads no file. A document with no saved text (from before this) is
+            // read once in the background; one that can't be read stays, as
+            // "missing".
             if let (Some(db_arc), Some(ctx_arc)) = (&app_state.database, &app_state.context) {
-                let stored = {
-                    match db_arc.lock() {
-                        Ok(db_guard) => {
-                            db::context::list_context_resources(db_guard.connection())
-                                .unwrap_or_default()
-                        }
-                        Err(_) => Vec::new(),
-                    }
+                let (stored, saved) = match db_arc.lock() {
+                    Ok(db_guard) => (
+                        db::context::list_context_resources(db_guard.connection()).unwrap_or_default(),
+                        workspace::documents::saved_texts(db_guard.connection()).unwrap_or_default(),
+                    ),
+                    Err(_) => (Vec::new(), Default::default()),
                 };
-
-                let mut missing_ids: Vec<String> = Vec::new();
-
+                let mut to_read: Vec<context::ContextResource> = Vec::new();
                 if let Ok(mut ctx) = ctx_arc.lock() {
                     for db_res in stored {
-                        let id = db_res.id.clone();
                         let res = context::ContextResource {
                             id: db_res.id,
                             name: db_res.name,
@@ -228,30 +335,26 @@ pub fn run() {
                             token_count: db_res.token_count as usize,
                             preview: db_res.preview,
                             loaded_at: db_res.loaded_at,
+                            status: context::STATUS_READY.to_string(),
                         };
-                        match ctx.restore_resource(res) {
-                            Ok(()) => {}
-                            Err(e) => {
-                                log::warn!("Context resource {} no longer on disk, removing: {}", id, e);
-                                missing_ids.push(id);
+                        match saved.get(&res.id) {
+                            Some(t) if t.status == "ready" => ctx.restore_resource(res, Some(t.text.clone())),
+                            Some(_) => {
+                                let id = res.id.clone();
+                                ctx.restore_resource(res, None);
+                                ctx.mark_missing(&id);
+                            }
+                            None => {
+                                to_read.push(res.clone());
+                                ctx.restore_resource(res, None);
                             }
                         }
                     }
-                    log::info!(
-                        "Restored {} context resource(s) from DB",
-                        ctx.list_resources().len()
-                    );
+                    log::info!("Restored {} context resource(s) from DB", ctx.list_resources().len());
                 }
-
-                // Clean up DB entries whose files have been deleted outside the app
-                if !missing_ids.is_empty() {
-                    if let Ok(db_guard) = db_arc.lock() {
-                        for id in &missing_ids {
-                            let _ = db::context::delete_context_resource(db_guard.connection(), id);
-                            let _ = db::rag::delete_chunks_by_file(db_guard.connection(), id);
-                        }
-                        log::info!("Cleaned up {} stale context resource(s)", missing_ids.len());
-                    }
+                if !to_read.is_empty() {
+                    let (db_arc, ctx_arc) = (db_arc.clone(), ctx_arc.clone());
+                    std::thread::spawn(move || read_documents_in_background(to_read, db_arc, ctx_arc));
                 }
             }
 
@@ -318,15 +421,74 @@ pub fn run() {
                 Arc::new(llm::cli_agent::manager::TauriStatusSink(app.handle().clone())),
                 app_state.cli_settings.clone(),
             ));
+            // Workspace chats ask the user before a tool runs (events + command).
+            llm::cli_agent::approval::WorkspaceApprovals::global().install_app(app.handle().clone());
             tauri::async_runtime::spawn(llm::cli_agent::manager::run_idle_reaper(
                 app_state.agent_sessions.clone(),
             ));
+            // The AI run service shares that manager (and closes a chat's transcript folder with its session).
+            app_state.ai_runs = Some(Arc::new(ai_runs::AiRuns::new(
+                app.handle().clone(),
+                app_state.agent_sessions.clone(),
+                app_state.credentials.clone(),
+            )));
+            // A chat's tool questions and activity lines carry the id of the answer being written.
+            if let Some(runs) = &app_state.ai_runs {
+                use tauri::Emitter;
+                let hub = app_state.workspace_chat.clone();
+                let handle = app.handle().clone();
+                ai_runs::chat_events::wire(
+                    runs,
+                    &llm::cli_agent::approval::WorkspaceApprovals::global(),
+                    Arc::new(move |chat| hub.request_of(chat)),
+                    Arc::new(move |event, payload| {
+                        let _ = handle.emit(event, payload);
+                    }),
+                );
+            }
             // Re-probe an unavailable CLI agent every 60 s (no model call).
             tauri::async_runtime::spawn(llm::cli_agent::routing::run_health_probe(
                 app.handle().clone(),
             ));
 
+            let _ = app_state.app_handle.set(app.handle().clone());
+            if let Some(rt) = live_runtime::app::build(app.handle(), &app_state) {
+                live_runtime::init(rt);
+            }
             app.manage(app_state);
+            // Commands that arrived while the state was being built run now.
+            STATE_READY.store(true, std::sync::atomic::Ordering::SeqCst);
+            if !store_findings.is_empty() {
+                use tauri::Emitter;
+                let _ = app.emit("store_recovered", &store_findings);
+            }
+            // A good copy of the settings files, at most every ten minutes.
+            let backup_dir = data_dir.clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(store_guard::BACKUP_EVERY).await;
+                    let dir = backup_dir.clone();
+                    let _ = tokio::task::spawn_blocking(move || store_guard::refresh_backups(&dir, std::time::SystemTime::now())).await;
+                }
+            });
+            workspace_chat::runtime::attach(app.handle());
+            // A quiet read-only check of the meetings file, once a day, never during a meeting.
+            if app.state::<AppState>().database.is_some() {
+                let busy_app = app.handle().clone();
+                let announce = app.handle().clone();
+                db::integrity::spawn(
+                    data_dir.clone(),
+                    move || {
+                        let state = busy_app.state::<AppState>();
+                        state.meeting_active.load(std::sync::atomic::Ordering::SeqCst)
+                            || state.recording_jobs.load(std::sync::atomic::Ordering::SeqCst) > 0
+                    },
+                    move |finding| {
+                        use tauri::Emitter;
+                        let _ = announce.emit("db_integrity_problem", finding);
+                    },
+                );
+            }
 
             // -- Auto-detect first Ollama model in background --
             let auto_detect_app = app.handle().clone();
@@ -456,6 +618,11 @@ pub fn run() {
                     "copy_transcript" => {
                         let _ = _app.emit("tray_copy", "transcript");
                     }
+                    "bring_windows" => {
+                        // The launcher window moves both windows to the screen the mouse is on.
+                        let _ = _app.emit("tray_bring_windows", ());
+                        show_for_second_launch(&app_handle);
+                    }
                     "settings" => {
                         let _ = _app.emit("tray_open_settings", ());
                         show_launcher(&app_handle);
@@ -530,6 +697,24 @@ pub fn run() {
                 });
             }
 
+            // -- The launcher starts hidden and the frontend shows it once its saved place is back (no jump from
+            //    the default size). If that never happens (a slow or failed load), show it after a few seconds. --
+            {
+                let safety_app = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(4000));
+                    let overlay_up = safety_app
+                        .get_webview_window("overlay")
+                        .and_then(|o| o.is_visible().ok())
+                        .unwrap_or(false);
+                    if let Some(launcher) = safety_app.get_webview_window("launcher") {
+                        if !overlay_up && !launcher.is_visible().unwrap_or(true) {
+                            let _ = launcher.show();
+                        }
+                    }
+                });
+            }
+
             // -- Live blur-behind on the overlay (real desktop passthrough), only while shown --
             #[cfg(target_os = "windows")]
             if let Some(overlay) = app.get_webview_window("overlay") {
@@ -542,10 +727,10 @@ pub fn run() {
                 stealth_commands::float_over_full_screen(&overlay.as_ref().window());
             }
 
-            log::info!("NexQ initialized successfully");
+            log::info!("NexQ initialized successfully (setup took {} ms)", setup_started.elapsed().as_millis());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(startup_gate(tauri::generate_handler![
             // == COMMANDS: audio ==
             audio_commands::list_audio_devices,
             audio_commands::start_capture,
@@ -603,7 +788,6 @@ pub fn run() {
             context_commands::remove_context_file,
             context_commands::list_context_resources,
             context_commands::set_custom_instructions,
-            context_commands::get_assembled_context,
             context_commands::get_token_budget,
             // == COMMANDS: credentials ==
             credential_commands::store_api_key,
@@ -714,6 +898,7 @@ pub fn run() {
             claude_cli_commands::claude_cli_models,
             claude_cli_commands::seed_claude_cli_models,
             claude_cli_commands::get_agent_sessions,
+            claude_cli_commands::answer_workspace_approval,
             // == COMMANDS: cli agents (Claude / Antigravity / Codex) ==
             cli_agent_commands::cli_agent_status,
             cli_agent_commands::cli_agent_models,
@@ -730,10 +915,108 @@ pub fn run() {
             sources_commands::discard_pending_mcp_servers,
             sources_commands::delete_mcp_secrets,
             sources_commands::open_source_file,
+            workspace_commands::get_workspaces_status,
+            db_recovery_commands::restore_database_copy,
+            db_recovery_commands::start_with_new_database,
+            db_recovery_commands::open_data_folder,
+            db_recovery_commands::restart_app,
+            db_recovery_commands::retry_open_database,
+            db_recovery_commands::get_db_integrity,
+            live_commands::notetaker_start,
+            live_commands::notetaker_stop,
+            live_commands::notetaker_update_now,
+            live_commands::notetaker_continue,
+            live_commands::get_notetaker_settings,
+            live_commands::set_notetaker_settings,
+            live_commands::get_meeting_notes,
+            live_commands::save_meeting_notes_edit,
+            live_commands::get_meeting_brief,
+            live_commands::brief_start,
+            live_commands::brief_stop,
+            live_commands::brief_refresh,
+            live_commands::brief_continue,
+            live_commands::get_brief_settings,
+            live_commands::set_brief_settings,
+            live_commands::get_memory_settings,
+            live_commands::notetaker_pause,
+            live_commands::notetaker_resume,
+            live_commands::get_notetaker_state,
+            live_commands::get_brief_state,
+            live_commands::get_automatic_model,
+            live_commands::brief_pause,
+            live_commands::notetaker_dismiss_moved,
+            live_commands::brief_dismiss_moved,
+            live_commands::brief_resume,
+            live_commands::set_memory_settings,
+            live_commands::suggest_memory,
+            workspace_commands::list_workspaces,
+            workspace_commands::get_workspace,
+            workspace_commands::create_workspace,
+            workspace_commands::update_workspace,
+            workspace_commands::clone_workspace,
+            workspace_commands::archive_workspace,
+            workspace_commands::delete_workspace,
+            workspace_commands::delete_workspace_meetings,
+            workspace_commands::set_default_workspace,
+            workspace_commands::reorder_workspaces,
+            workspace_commands::add_workspace_item,
+            workspace_commands::update_workspace_item,
+            workspace_commands::remove_workspace_item,
+            workspace_commands::list_library,
+            workspace_commands::get_assist_sources,
+            workspace_commands::get_library_file_path,
+            workspace_commands::reveal_library_file,
+            workspace_commands::remove_library_item,
+            workspace_commands::add_workspace_text,
+            workspace_commands::get_workspace_note,
+            workspace_commands::update_workspace_note,
+            workspace_commands::move_meeting,
+            workspace_commands::list_workspace_meetings,
+            workspace_commands::count_unfiled_meetings,
+            workspace_commands::get_meeting_scope,
+            workspace_commands::set_meeting_scope,
+            workspace_commands::list_talking_points,
+            workspace_commands::create_talking_point,
+            workspace_commands::patch_talking_point,
+            workspace_commands::delete_talking_point,
+            workspace_commands::copy_talking_point,
+            workspace_commands::reorder_talking_points,
+            workspace_commands::get_point_progress,
+            workspace_commands::save_point_progress,
+            workspace_commands::get_meeting_point_edit,
+            workspace_commands::save_meeting_point_edit,
+            workspace_commands::list_memory,
+            workspace_commands::create_memory,
+            workspace_commands::update_memory,
+            workspace_chat_commands::get_index_status,
+            workspace_chat_commands::get_meeting_recap,
+            workspace_chat_commands::retry_recaps,
+            workspace_chat_commands::delete_meeting_recap,
+            workspace_chat_commands::rescan_workspace,
+            workspace_chat_commands::list_workspace_chats,
+            workspace_chat_commands::create_workspace_chat,
+            workspace_chat_commands::update_workspace_chat,
+            workspace_chat_commands::delete_workspace_chat,
+            workspace_chat_commands::list_workspace_messages,
+            workspace_chat_commands::set_chat_meeting_included,
+            workspace_chat_commands::list_chat_meeting_prefs,
+            workspace_chat_commands::set_chat_item_pref,
+            workspace_chat_commands::list_chat_item_prefs,
+            workspace_chat_commands::preview_chat_context,
+            workspace_chat_commands::get_context_budget,
+            workspace_chat_commands::get_chat_capabilities,
+            workspace_chat_commands::ask_workspace,
+            workspace_chat_commands::cancel_workspace_request,
+            workspace_chat_commands::save_answer_to_library,
+            workspace_chat_commands::add_answer_to_instructions,
+            workspace_commands::delete_memory,
+            workspace_commands::resolve_memory,
             sources_commands::set_personal_sources,
+            sources_commands::repair_personal_sources,
             claude_cli_commands::open_claude_login_terminal,
-        ])
-        .build(tauri::generate_context!())
+            settings_commands::take_store_recovery,
+        ]))
+        .build(context)
         .expect("error while building NexQ")
         .run(|app, event| {
             // How NexQ ends up quitting, for bug reports (a window closing,
@@ -757,7 +1040,12 @@ pub fn run() {
             if let tauri::RunEvent::Exit = &event {
                 let meeting_active = app.state::<AppState>().meeting_active.load(std::sync::atomic::Ordering::SeqCst);
                 log::info!("NexQ is exiting (meeting active: {meeting_active})");
+                // Running notes and briefs are saved as interrupted (resumable).
+                if let Some(rt) = live_runtime::global() {
+                    tauri::async_runtime::block_on(rt.shutdown(std::time::Duration::from_secs(2)));
+                }
                 let sessions = app.state::<AppState>().agent_sessions.clone();
+                llm::cli_agent::approval::WorkspaceApprovals::global().shut_down();
                 tauri::async_runtime::block_on(sessions.close_all());
                 logging::flush(std::time::Duration::from_millis(500));
             }

@@ -130,6 +130,22 @@ pub fn get_all_embeddings(conn: &Connection) -> Result<Vec<(String, Vec<u8>)>, S
     Ok(results)
 }
 
+/// The embeddings of the chunks of `files` only, as (chunk_id, raw_bytes).
+pub fn get_embeddings_for_files(conn: &Connection, files: &[String]) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let allowed = serde_json::to_string(files).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT e.chunk_id, e.embedding FROM rag_embeddings e
+             JOIN rag_chunks c ON c.chunk_id = e.chunk_id
+             WHERE c.file_id IN (SELECT value FROM json_each(?1))",
+        )
+        .map_err(|e| format!("Failed to prepare the embeddings query: {}", e))?;
+    let rows = stmt
+        .query_map(params![allowed], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)))
+        .map_err(|e| format!("Failed to query embeddings: {}", e))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("Failed to read embedding row: {}", e))
+}
+
 // ── Index status ─────────────────────────────────────────────────────────────
 
 /// Get the current RAG index status (chunk counts, file counts, etc.).

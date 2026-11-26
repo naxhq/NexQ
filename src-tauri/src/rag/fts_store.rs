@@ -5,6 +5,8 @@ use rusqlite::{params, Connection};
 /// - `conn`: SQLite connection with the `rag_fts` and `rag_chunks` tables
 /// - `query`: raw search query text (will be sanitized for FTS5)
 /// - `limit`: maximum number of results
+/// - `files`: only chunks of these files may match (None = every chunk). The
+///   filter is part of the query, so `limit` counts allowed chunks only.
 ///
 /// Returns Vec of (chunk_id, bm25_score) ordered by relevance (lower BM25 = more relevant,
 /// so we negate for ascending sort).
@@ -12,6 +14,7 @@ pub fn search_keywords(
     conn: &Connection,
     query: &str,
     limit: usize,
+    files: Option<&[String]>,
 ) -> Result<Vec<(String, f64)>, String> {
     let fts_query = prepare_fts_query(query);
     if fts_query.is_empty() {
@@ -23,16 +26,21 @@ pub fn search_keywords(
         FROM rag_fts f
         JOIN rag_chunks c ON c.rowid = f.rowid
         WHERE rag_fts MATCH ?1
+          AND (?3 IS NULL OR c.file_id IN (SELECT value FROM json_each(?3)))
         ORDER BY score
         LIMIT ?2
     ";
+    let allowed = match files {
+        Some(files) => Some(serde_json::to_string(files).map_err(|e| e.to_string())?),
+        None => None,
+    };
 
     let mut stmt = conn
         .prepare(sql)
         .map_err(|e| format!("FTS query prepare failed: {}", e))?;
 
     let rows = stmt
-        .query_map(params![fts_query, limit as i64], |row| {
+        .query_map(params![fts_query, limit as i64, allowed], |row| {
             let chunk_id: String = row.get(0)?;
             let score: f64 = row.get(1)?;
             Ok((chunk_id, score))

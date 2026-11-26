@@ -1,0 +1,7 @@
+```json
+{"now":"Budget and launch","facts":[
+{"text":"Marketing asked for 12% more for the Lisbon launch","source":"P1"},
+{"text":"Maria confirmed the launch for September 14","source":"P2"},
+{"text":"The Globex contract renews in November with a 7% increase","source":"P3"},
+{"text":"Tom runs the Berlin office","source":"P3"}]}
+```

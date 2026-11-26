@@ -41,6 +41,13 @@ pub struct Meeting {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
     pub recording_offset_ms: Option<i64>,
+    /// The workspace the meeting is filed in.
+    #[serde(default = "general_workspace")]
+    pub workspace_id: String,
+}
+
+fn general_workspace() -> String {
+    "general".to_string()
 }
 
 /// Response struct that maps MeetingSpeaker back to frontend SpeakerIdentity format.
@@ -90,6 +97,36 @@ pub struct MeetingSummary {
     pub has_summary: bool,
     pub audio_mode: String,
     pub ai_scenario: String,
+    /// The workspace the meeting is filed in.
+    #[serde(default = "general_workspace")]
+    pub workspace_id: String,
+    /// An AI-written recap exists for it (the workspace list fills this in).
+    #[serde(default)]
+    pub has_recap: bool,
+}
+
+/// Fills in the workspace of each meeting (one indexed query), when workspaces
+/// are available; otherwise they all stay in General.
+fn fill_workspace_ids(conn: &Connection, items: &mut [MeetingSummary]) {
+    if items.is_empty() || !super::workspace_migrations::available() {
+        return;
+    }
+    let ids: Vec<&str> = items.iter().map(|m| m.id.as_str()).collect();
+    let Ok(ids) = serde_json::to_string(&ids) else { return };
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT id, workspace_id FROM meetings WHERE id IN (SELECT value FROM json_each(?1))",
+    ) else {
+        return;
+    };
+    let Ok(rows) = stmt.query_map(params![ids], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))) else {
+        return;
+    };
+    let homes: std::collections::HashMap<String, String> = rows.filter_map(Result::ok).collect();
+    for item in items {
+        if let Some(home) = homes.get(&item.id) {
+            item.workspace_id = home.clone();
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -169,6 +206,7 @@ pub fn create_meeting(conn: &Connection, title: &str) -> Result<Meeting, Databas
         recording_size: None,
         waveform_path: None,
         recording_offset_ms: None,
+        workspace_id: general_workspace(),
     })
 }
 
@@ -207,6 +245,7 @@ pub fn get_meeting(conn: &Connection, id: &str) -> Result<Meeting, DatabaseError
                 recording_size: row.get(10)?,
                 waveform_path: row.get(11)?,
                 recording_offset_ms: row.get(12)?,
+                workspace_id: general_workspace(),
             })
         })
         .map_err(|e| match e {
@@ -219,6 +258,11 @@ pub fn get_meeting(conn: &Connection, id: &str) -> Result<Meeting, DatabaseError
     // Also fetch and merge transcript segments into the transcript array
     let segments = list_transcript_segments(conn, id)?;
     let mut meeting = meeting;
+    if super::workspace_migrations::available() {
+        if let Ok(home) = conn.query_row("SELECT workspace_id FROM meetings WHERE id = ?1", params![id], |row| row.get(0)) {
+            meeting.workspace_id = home;
+        }
+    }
     if !segments.is_empty() {
         meeting.transcript = serde_json::to_value(&segments).unwrap_or(serde_json::json!([]));
     }
@@ -276,6 +320,8 @@ pub fn list_meetings(
             has_summary: row.get::<_, i32>(6)? != 0,
             audio_mode: row.get::<_, String>(7).unwrap_or_else(|_| "online".to_string()),
             ai_scenario: row.get::<_, String>(8).unwrap_or_else(|_| "team_meeting".to_string()),
+            workspace_id: general_workspace(),
+            has_recap: false,
         })
     })?;
 
@@ -283,6 +329,7 @@ pub fn list_meetings(
     for row in rows {
         results.push(row?);
     }
+    fill_workspace_ids(conn, &mut results);
     Ok(results)
 }
 
@@ -400,6 +447,8 @@ pub fn delete_meeting(conn: &Connection, id: &str) -> Result<(), DatabaseError> 
     conn.execute("DELETE FROM meeting_action_items WHERE meeting_id = ?1", params![id])?;
     conn.execute("DELETE FROM meeting_topic_sections WHERE meeting_id = ?1", params![id])?;
     super::meeting_chat::delete_chat_messages(conn, id)?;
+    // Cached translations of the transcript go with it.
+    super::translation::delete_meeting_translations(conn, id)?;
 
     // Then existing deletes (segments + meeting)
     conn.execute(
@@ -450,6 +499,8 @@ pub fn search_meetings(
             has_summary: row.get::<_, i32>(6)? != 0,
             audio_mode: row.get::<_, String>(7).unwrap_or_else(|_| "online".to_string()),
             ai_scenario: row.get::<_, String>(8).unwrap_or_else(|_| "team_meeting".to_string()),
+            workspace_id: general_workspace(),
+            has_recap: false,
         })
     })?;
 
@@ -457,6 +508,7 @@ pub fn search_meetings(
     for row in rows {
         results.push(row?);
     }
+    fill_workspace_ids(conn, &mut results);
     Ok(results)
 }
 

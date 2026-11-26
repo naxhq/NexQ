@@ -80,13 +80,13 @@ The first launch opens a short setup. You can skip it; everything below is also 
 
 1. **Set up speech-to-text.** In Settings → STT Providers, download the Parakeet model (local, free) or add a Deepgram or Groq key. Then in Settings → Audio & Devices, choose an engine for each side. A fresh install starts with cloud engines: Web Speech for your mic (no key) and Deepgram for the other side (needs a key). To keep audio on your computer, pick the **Local Only (Parakeet)** or **Fully Offline** preset. The **Free** preset needs no key, but your mic still goes through Web Speech.
 2. **Pick an LLM** in Settings → LLM Providers. [Ollama](https://ollama.com) is found automatically, cloud providers need a key, and Claude or Codex can use your subscription.
-3. **Optional:** add your resume or notes under **Meeting Context** on the dashboard.
+3. **Optional:** add your resume or notes in the **Library** of a workspace (you start with **General**).
 4. **Press** <kbd>Ctrl</kbd>+<kbd>M</kbd>. NexQ captures system audio, so it works with Zoom, Teams, Meet, Discord or anything that plays sound.
 5. **Get an answer.** When a question comes up, press <kbd>Space</kbd> in the overlay, or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> from any app.
 
 NexQ updates itself in the background and installs when you quit, never in the middle of a meeting. Updates are signed (Ed25519).
 
-Guides: [Getting started](docs/user-guide/getting-started.md) · [Choosing providers](docs/user-guide/ai-providers.md) · [Audio setup](docs/user-guide/audio-setup.md) · [Interview copilot](docs/user-guide/interview-copilot.md) · [Lecture assistant](docs/user-guide/lecture-assistant.md) · [Meeting detection](docs/user-guide/meeting-detection.md) · [Claude subscription](docs/user-guide/claude-subscription.md) · [Troubleshooting](docs/user-guide/troubleshooting.md)
+Guides: [Getting started](docs/user-guide/getting-started.md) · [Choosing providers](docs/user-guide/ai-providers.md) · [Audio setup](docs/user-guide/audio-setup.md) · [Interview copilot](docs/user-guide/interview-copilot.md) · [Lecture assistant](docs/user-guide/lecture-assistant.md) · [Meeting detection](docs/user-guide/meeting-detection.md) · [Claude subscription](docs/user-guide/claude-subscription.md) · [Workspaces](docs/user-guide/workspaces.md) · [Workspace chat](docs/user-guide/workspace-chat.md) · [Meeting window layout](docs/user-guide/meeting-layout.md) · [Talking points](docs/user-guide/talking-points.md) · [Live notes and the brief](docs/user-guide/live-notes-and-brief.md) · [Troubleshooting](docs/user-guide/troubleshooting.md)
 
 How-to: [Transcribe both sides of a call](https://getnexq.com/guides/transcribe-both-sides-of-a-call/) · [Local transcription on Windows](https://getnexq.com/guides/local-call-transcription-windows/) · [Ollama or LM Studio in a call](https://getnexq.com/guides/ollama-lm-studio-meeting-assistant/) · [NexQ next to Meetily, anarlog, Otter and Granola](https://getnexq.com/guides/open-source-otter-granola-alternative/)
 

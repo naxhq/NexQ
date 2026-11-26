@@ -225,12 +225,6 @@ impl CustomClient {
         cancellable(params, request.send()).await
     }
 
-    /// "answered 401 Unauthorized (reason)" for a failed response.
-    async fn failure(resp: reqwest::Response) -> String {
-        let status = resp.status();
-        Self::failure_text(status, &resp.text().await.unwrap_or_default())
-    }
-
     fn failure_text(status: reqwest::StatusCode, body: &str) -> String {
         let detail = error_detail(body);
         if detail.is_empty() {
@@ -490,7 +484,7 @@ impl LLMProvider for CustomClient {
                 if is_cancelled(&params) {
                     return LLMError::Cancelled;
                 }
-                emit_error(&app_handle, &params, &e.to_string());
+                emit_error(&app_handle, &params, &super::provider::error_text(&e));
                 LLMError::HttpError(e)
             })?;
 
@@ -531,6 +525,7 @@ impl LLMProvider for CustomClient {
             completion_tokens: token_count,
             total_tokens: token_count,
             latency_ms,
+            ..Default::default()
         };
 
         check_cancelled(&params)?;

@@ -1,0 +1,16 @@
+{
+  "checked_at": 1700000000000,
+  "copies": [
+    {
+      "bytes": 1024,
+      "created_at": 1700000000000,
+      "meetings": 3,
+      "name": "nexq-before-workspaces.db"
+    }
+  ],
+  "details": [
+    "row 3 missing from index i"
+  ],
+  "folder": "C:/data",
+  "message": "A check of your meetings file found damage."
+}

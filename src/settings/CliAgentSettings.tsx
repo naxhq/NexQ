@@ -353,7 +353,7 @@ function AgentDetails({
   // A check also refreshes the model catalog (nothing to ask a missing CLI). One
   // that was too old is checked first: after an update its models load too.
   const handleCheck = async () => {
-    const checked = refreshStatus(kind);
+    const checked = refreshStatus(kind, { refresh: true });
     if (isOutdated(status)) {
       await checked;
       if (isOutdated(useAgentStore.getState().statuses[kind])) return;
@@ -386,10 +386,10 @@ function AgentDetails({
     let tries = 0;
     const timer = window.setInterval(() => {
       tries += 1;
-      void refreshStatus(kind);
+      void refreshStatus(kind, { refresh: true });
       if (tries >= LOGIN_POLL_TRIES) setAwaitingLogin(false);
     }, LOGIN_POLL_MS);
-    const onFocus = () => void refreshStatus(kind);
+    const onFocus = () => void refreshStatus(kind, { refresh: true });
     window.addEventListener("focus", onFocus);
     return () => {
       window.clearInterval(timer);

@@ -124,11 +124,12 @@ impl LLMProvider for GeminiClient {
 
     async fn list_models(&self) -> Result<Vec<ModelInfo>, LLMError> {
         let url = format!(
-            "{}/v1beta/models?key={}",
-            self.base_url, self.api_key
+            "{}/v1beta/models",
+            self.base_url
         );
 
-        let response = self.client.get(&url).send().await?;
+        // The key travels in a header: a URL ends up in error text and logs.
+        let response = self.client.get(&url).header("x-goog-api-key", &self.api_key).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -216,8 +217,8 @@ impl LLMProvider for GeminiClient {
         sink: Option<TokenSink>,
     ) -> Result<CompletionStats, LLMError> {
         let url = format!(
-            "{}/v1beta/models/{}:streamGenerateContent?key={}&alt=sse",
-            self.base_url, model, self.api_key
+            "{}/v1beta/models/{}:streamGenerateContent?alt=sse",
+            self.base_url, model
         );
         let start = Instant::now();
 
@@ -238,6 +239,7 @@ impl LLMProvider for GeminiClient {
                 .client
                 .post(&url)
                 .header("Content-Type", "application/json")
+                .header("x-goog-api-key", &self.api_key)
                 .json(&body)
                 .send();
             let (params, app_handle) = (&params, &app_handle);
@@ -246,7 +248,7 @@ impl LLMProvider for GeminiClient {
                     if is_cancelled(params) {
                         return LLMError::Cancelled;
                     }
-                    emit_error(app_handle, params, &e.to_string());
+                    emit_error(app_handle, params, &super::provider::error_text(&e));
                     LLMError::HttpError(e)
                 })
             }
@@ -280,7 +282,7 @@ impl LLMProvider for GeminiClient {
                 if is_cancelled(&params) {
                     return LLMError::Cancelled;
                 }
-                emit_error(&app_handle, &params, &e.to_string());
+                emit_error(&app_handle, &params, &super::provider::error_text(&e));
                 LLMError::HttpError(e)
             })?;
 
@@ -355,6 +357,7 @@ impl LLMProvider for GeminiClient {
             completion_tokens,
             total_tokens: total,
             latency_ms,
+            ..Default::default()
         };
 
         if !grounding_sources.is_empty() {
@@ -420,5 +423,17 @@ mod thinking_tests {
         let (b, sent) = body("gemini-2.5-flash", Off, cached, false);
         assert!(!sent);
         assert!(b["generationConfig"].get("thinkingConfig").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_connect_failure_never_yields_text_with_the_key_and_the_key_goes_in_a_header() {
+        let client = GeminiClient::new("FAKEKEY-abc123", Some("http://127.0.0.1:1"));
+        let err = client.list_models().await.unwrap_err();
+        let text = err.to_string();
+        assert!(!text.contains("FAKEKEY-abc123"), "{text}");
+        assert!(!text.contains("127.0.0.1:1/v1beta"), "{text}");
+        // And the URLs it builds carry no key at all.
+        let src = include_str!("gemini.rs");
+        assert!(!src.contains(concat!("?key", "={}")));
     }
 }

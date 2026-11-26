@@ -1,19 +1,31 @@
-import { useEffect, useCallback, useState } from "react";
+import { Suspense, useEffect, useCallback, useState, useRef } from "react";
 import { useMeetingStore } from "./stores/meetingStore";
 import { useConfigStore } from "./stores/configStore";
 import { useAIActionsStore, watchSavedActionConfigs } from "./stores/aiActionsStore";
 import { useSourcesStore } from "./stores/sourcesStore";
+import { useWorkspaceStore, watchWorkspaces } from "./stores/workspaceStore";
+import { watchWorkspaceChats } from "./stores/workspaceChatStore";
 import { useScenarioStore, watchSavedScenarios } from "./stores/scenarioStore";
-import { LauncherView } from "./launcher/LauncherView";
-import { OverlayView } from "./overlay/OverlayView";
-import { SettingsOverlay } from "./settings/SettingsOverlay";
-import { FirstRunWizard } from "./components/wizard/FirstRunWizard";
 import { ToastContainer } from "./components/Toast";
+import {
+  DemoBadge,
+  DemoPicker,
+  FirstRunWizard,
+  LauncherView,
+  OverlayResizeHandles,
+  OverlayView,
+  SelectionToolbar,
+  SettingsOverlay,
+  StarPrompt,
+  UpdateDialog,
+  preloadForWindow,
+} from "./lazyViews";
 import { showToast } from "./stores/toastStore";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { UpdateReadyToast } from "./components/UpdateToast";
-import { UpdateDialog } from "./components/UpdateDialog";
-import { StarPrompt } from "./components/StarPrompt";
+import { StoreRecoveryNotice } from "./components/StoreRecoveryNotice";
+import { NoticeStack } from "./components/NoticeStack";
+import { DatabaseDamageNotice } from "./components/DatabaseDamageNotice";
 import { useTheme } from "./hooks/useTheme";
 import { useGlobalShortcut } from "./hooks/useGlobalShortcut";
 import { useTranslation } from "./hooks/useTranslation";
@@ -23,27 +35,31 @@ import { useUpdater } from "./hooks/useUpdater";
 import { useAgentFallbackToast } from "./hooks/useAgentFallbackToast";
 import { refreshCliModelsOnStart } from "./stores/agentStore";
 import { useTranslationStore } from "./stores/translationStore";
-import { CallLogPanel } from "./calllog";
-import { OverlayResizeHandles } from "./overlay/OverlayResizeHandles";
-import { SelectionToolbar } from "./components/SelectionToolbar";
+import { useWindowPlacement } from "./hooks/useWindowPlacement";
 import { ActiveMeetingProvider } from "./components/ActiveMeetingProvider";
 import { initMeetingSpeakers, resetMeetingScopedStores } from "./stores/resetMeeting";
 import { listen } from "@tauri-apps/api/event";
 import type { AppView, Meeting, AudioMode, AIScenario } from "./lib/types";
 import { useDemoShortcut } from "./demo/useDemoShortcut";
-import { DemoPicker } from "./demo/DemoPicker";
-import { DemoBadge } from "./demo/DemoBadge";
 import { useDemoStore } from "./demo/demoStore";
 import { SCREENSHOT_EVENT, leaveSettingsForAsk } from "./lib/screenCapture";
 import { SHOW_MEETING_OVERLAY_EVENT, showLauncherWindow, showMeetingOverlay, showOverlayWindow, waitForOverlayMeeting } from "./lib/windows";
 import type { ShowMeetingOverlayPayload } from "./lib/windows";
 import { logToFile } from "./lib/logger";
-import { emitOverlayMeetingReady, onAudioCaptureStatus, onAudioCaptureStopped, onCaptureWarning, onOverlayMeetingReady, onStartDetectedMeeting, onStealthModeChanged } from "./lib/events";
+import { shouldToastMaterial } from "./workspace/materialNotice";
+import { emitOverlayMeetingReady, onWorkspaceMaterialUnavailable, onAudioCaptureStatus, onAudioCaptureStopped, onCaptureWarning, onOverlayMeetingReady, onStartDetectedMeeting, onStealthModeChanged } from "./lib/events";
 import { createCaptureStatusHandler } from "./lib/captureStatus";
+
+// This window's views start loading as the script runs, before React has rendered anything.
+preloadForWindow();
+
+/** No spinner: while a view loads the window shows its own background, then the view. */
+const Quiet = ({ children }: { children: React.ReactNode }) => <Suspense fallback={null}>{children}</Suspense>;
 
 function App() {
   const currentView = useMeetingStore((s) => s.currentView);
   const isDemoActive = useDemoStore((s) => s.isDemoActive);
+  const pickerOpen = useDemoStore((s) => s.pickerOpen);
   const settingsOpen = useMeetingStore((s) => s.settingsOpen);
   const setSettingsOpen = useMeetingStore((s) => s.setSettingsOpen);
   const setCurrentView = useMeetingStore((s) => s.setCurrentView);
@@ -80,6 +96,9 @@ function App() {
     loadConfig();
     useAIActionsStore.getState().loadConfigs();
     useSourcesStore.getState().load();
+    // Workspaces load in both windows and follow every change.
+    void useWorkspaceStore.getState().load();
+    watchWorkspaces().catch(() => {});
     useTranslationStore.getState().loadConfig().then(async () => {
       // Sync backend translation provider with persisted frontend setting
       const { provider } = useTranslationStore.getState();
@@ -125,6 +144,12 @@ function App() {
 
   // Detect which Tauri window we're in ("launcher" or "overlay")
   const [windowLabel, setWindowLabel] = useState<string>("");
+  // Size and place of each window come back as the user left them (never from demo mode).
+  useWindowPlacement(windowLabel, { enabled: configLoaded, paused: isDemoActive });
+  // Chat answers keep arriving while another page is open (launcher window only).
+  useEffect(() => {
+    if (windowLabel === "launcher") void watchWorkspaceChats();
+  }, [windowLabel]);
   useEffect(() => {
     import("@tauri-apps/api/webviewWindow").then(({ getCurrentWebviewWindow }) => {
       const label = getCurrentWebviewWindow().label;
@@ -210,13 +235,31 @@ function App() {
   useEffect(() => {
     if (windowLabel !== "launcher") return;
     let unlisten: (() => void) | undefined;
-    onStartDetectedMeeting(({ title, scenario }) => {
+    onStartDetectedMeeting(({ title, scenario, workspace_id }) => {
       if (useMeetingStore.getState().activeMeeting) return;
-      useMeetingStore.getState().startMeetingFlow(title, "online", scenario).catch((err) => {
+      useMeetingStore.getState().startMeetingFlow(title, "online", scenario, workspace_id ? { workspaceId: workspace_id } : undefined).catch((err) => {
         console.error("[App] Starting the detected meeting failed:", err);
       });
     }).then((fn) => { unlisten = fn; });
     return () => { unlisten?.(); };
+  }, [windowLabel]);
+
+  // A file or tool could not be used: one warning, in the window the person is looking at
+  // (the meeting window during a meeting, else the launcher).
+  useEffect(() => {
+    if (windowLabel !== "launcher" && windowLabel !== "overlay") return;
+    let unlisten: (() => void) | undefined;
+    let gone = false;
+    onWorkspaceMaterialUnavailable((e) => {
+      const running = !!useMeetingStore.getState().activeMeeting;
+      if (shouldToastMaterial(windowLabel, running, e.meeting_id)) showToast(e.message, "warning");
+    })
+      .then((fn) => (gone ? fn() : (unlisten = fn)))
+      .catch(() => {});
+    return () => {
+      gone = true;
+      unlisten?.();
+    };
   }, [windowLabel]);
 
   // LAUNCHER window: record that the overlay took the meeting (decides which
@@ -231,8 +274,14 @@ function App() {
   }, [windowLabel]);
 
   // OVERLAY window: when currentView->"launcher", hide self + show launcher
+  // Not on the first render: the overlay starts in "launcher" and is hidden, and showing the launcher then
+  // would put it on screen at its default place before its saved place is back.
+  const overlayViewSeen = useRef(false);
   useEffect(() => {
     if (windowLabel !== "overlay") return;
+    const first = !overlayViewSeen.current;
+    overlayViewSeen.current = true;
+    if (first) return;
     if (currentView === "launcher") {
       showLauncherWindow().catch(() => {});
     }
@@ -242,10 +291,10 @@ function App() {
   useEffect(() => {
     if (windowLabel !== "overlay") return;
     let unlisten: (() => void) | undefined;
-    listen<{ meeting: Meeting; audioMode: AudioMode; aiScenario: AIScenario }>(
+    listen<{ meeting: Meeting; audioMode: AudioMode; aiScenario: AIScenario; workspaceId?: string; borrowed?: string[] }>(
       "nexq:meeting_started",
       async (e) => {
-        const { meeting, audioMode, aiScenario } = e.payload;
+        const { meeting, audioMode, aiScenario, borrowed } = e.payload;
         const startedAt = Date.now();
         // Reset ALL per-meeting stores in THIS (overlay) window first. Each Tauri
         // webview has its own Zustand instances, so the launcher clearing its
@@ -264,6 +313,7 @@ function App() {
         useScenarioStore.setState({ activeScenarioId: aiScenario });
         useMeetingStore.setState({
           activeMeeting: meeting,
+          activeBorrowed: borrowed ?? [],
           currentView: "overlay",
           audioMode,
           aiScenario,
@@ -322,6 +372,12 @@ function App() {
       startMeetingFlow().catch((err) => {
         console.error("[App] Tray start meeting failed:", err);
       });
+    }).then((unlisten) => unlisteners.push(unlisten));
+
+    listen("tray_bring_windows", () => {
+      // One window does it for both: the launcher.
+      if (windowLabel !== "launcher") return;
+      import("./lib/windowReset").then((m) => m.resetWindowPositions("cursor")).catch(() => {});
     }).then((unlisten) => unlisteners.push(unlisten));
 
     listen("tray_open_settings", () => {
@@ -428,19 +484,25 @@ function App() {
             <ErrorBoundary fallbackMessage="Failed to load overlay">
               {/* key on the meeting id → remounts overlay UI per meeting so local
                   state (open panels, tabs, layout mode) does not carry over */}
-              <OverlayLayout key={activeMeetingId || "no-meeting"} />
+              <Quiet>
+                <OverlayLayout key={activeMeetingId || "no-meeting"} />
+              </Quiet>
             </ErrorBoundary>
           )}
           {(settingsOpen || currentView === "settings") && (
-            <SettingsOverlay isModal={currentView === "overlay"} />
+            <Quiet>
+              <SettingsOverlay isModal={currentView === "overlay"} />
+            </Quiet>
           )}
         </ErrorBoundary>
         <ActiveMeetingProvider isLauncherWindow={false} />
         <ToastContainer />
         {/* Settings -> About can open here too */}
-        <UpdateDialog />
-        {/* macOS + stealth only: resize the overlay without macOS's resize cursors */}
-        <OverlayResizeHandles />
+        <Quiet>
+          <UpdateDialog />
+          {/* macOS + stealth only: resize the overlay without macOS's resize cursors */}
+          <OverlayResizeHandles />
+        </Quiet>
       </div>
     );
   }
@@ -450,53 +512,79 @@ function App() {
       <ErrorBoundary fallbackMessage="NexQ encountered an error">
         {resolvedView === "overlay" && isDemoActive && (
           <ErrorBoundary fallbackMessage="Failed to load overlay">
-            <OverlayLayout key={activeMeetingId || "no-meeting"} />
+            <Quiet>
+              <OverlayLayout key={activeMeetingId || "no-meeting"} />
+            </Quiet>
           </ErrorBoundary>
         )}
         {(resolvedView === "launcher" || (resolvedView === "overlay" && !isDemoActive)) && (
           <ErrorBoundary fallbackMessage="Failed to load launcher">
-            <LauncherView />
+            <Quiet>
+              <LauncherView />
+            </Quiet>
           </ErrorBoundary>
         )}
         {resolvedView === "wizard" && (
           <ErrorBoundary fallbackMessage="Failed to load setup wizard">
-            <FirstRunWizard />
+            <Quiet>
+              <FirstRunWizard />
+            </Quiet>
           </ErrorBoundary>
         )}
         {resolvedView === "settings" && (
           <ErrorBoundary fallbackMessage="Failed to load settings">
-            <SettingsOverlay />
+            <Quiet>
+              <SettingsOverlay />
+            </Quiet>
           </ErrorBoundary>
         )}
-        {settingsOpen && resolvedView === "overlay" && <SettingsOverlay isModal />}
+        {settingsOpen && resolvedView === "overlay" && (
+          <Quiet>
+            <SettingsOverlay isModal />
+          </Quiet>
+        )}
       </ErrorBoundary>
       <ActiveMeetingProvider isLauncherWindow={isLauncherWindow} />
       <ToastContainer />
-      <SelectionToolbar />
+      <Quiet>
+        <SelectionToolbar />
+      </Quiet>
       {/* Call log panel is now integrated into the overlay flex layout above */}
 
       {/* One-time "update ready" notice (the footer pill stays) */}
       <UpdateReadyToast />
-      <UpdateDialog />
+      {windowLabel === "launcher" && (
+        <NoticeStack>
+          <StoreRecoveryNotice />
+          <DatabaseDamageNotice />
+        </NoticeStack>
+      )}
+      <Quiet>
+        <UpdateDialog />
 
-      {/* One-time "star NexQ" card after the fifth finished meeting (launcher only) */}
-      {windowLabel === "launcher" && <StarPrompt />}
+        {/* One-time "star NexQ" card after the fifth finished meeting (launcher only) */}
+        {windowLabel === "launcher" && <StarPrompt />}
 
-      {/* Demo mode — scenario picker modal + floating exit badge */}
-      <DemoPicker />
-      <DemoBadge />
+        {/* Demo mode: scenario picker modal + floating exit badge (loaded when asked for) */}
+        {(pickerOpen || isDemoActive) && (
+          <>
+            <DemoPicker />
+            <DemoBadge />
+          </>
+        )}
+      </Quiet>
     </div>
   );
 }
 
-/** Overlay UI shared by the overlay window and the launcher's demo mode. */
+/**
+ * Overlay UI shared by the overlay window and the launcher's demo mode. The AI call
+ * log is a panel of the meeting window's dock now, not a sidebar next to it.
+ */
 function OverlayLayout() {
   return (
-    <div className="flex h-full">
-      <div className="flex-1 min-w-0 overflow-hidden">
-        <OverlayView />
-      </div>
-      <CallLogPanel />
+    <div className="h-full min-w-0 overflow-hidden">
+      <OverlayView />
     </div>
   );
 }

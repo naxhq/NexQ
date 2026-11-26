@@ -48,7 +48,10 @@ const LEGACY_DEFAULTS: Partial<Record<keyof HotkeyConfig, string>> = {
 /** Fields the old Settings > Hotkeys page saved next to the mode keys. */
 const LEGACY_FIELDS = ["toggle_assist", "start_end_meeting", "show_hide", "open_settings", "escape"];
 
-export type OverlayKeyId = "bookmark" | "stats" | "bookmarks" | "mute" | "closePanels";
+export type OverlayKeyId = "bookmark" | "stats" | "bookmarks" | "mute" | "notes" | "closePanels";
+
+/** DOM event the N key raises on window: "update the live notes now". */
+export const NOTES_UPDATE_EVENT = "nexq:notes-update";
 
 export interface OverlaySingleKey {
   /** As shown to the user and as KeyboardEvent.key spells it (letters upper case); matching ignores case. */
@@ -69,6 +72,7 @@ export const OVERLAY_SINGLE_KEYS: readonly OverlaySingleKey[] = [
   { key: "S", id: "stats", label: "Speaker stats", where: "overlay, in a meeting" },
   { key: "K", id: "bookmarks", label: "Bookmarks panel", where: "overlay, in a meeting" },
   { key: "M", id: "mute", label: "Mute", where: "overlay, in a meeting" },
+  { key: "N", id: "notes", label: "Update notes now", where: "meeting window" },
   { key: "Escape", id: "closePanels", label: "Close open panels", where: "overlay" },
 ];
 
@@ -309,4 +313,95 @@ export function hotkeysAsTaken(hotkeys: HotkeyConfig, mac = isMacPlatform()): Re
 export function modeHotkey(mode: IntelligenceMode, hotkeys: HotkeyConfig = DEFAULT_HOTKEYS): string {
   const action = HOTKEY_ACTIONS.find((a) => a.mode === mode);
   return action ? hotkeys[action.id] : "";
+}
+
+// ---------------------------------------------------------------------------
+// Key guard: keys that belong to the control that has focus
+// ---------------------------------------------------------------------------
+
+const TYPING_SELECTOR = [
+  "input",
+  "textarea",
+  "select",
+  "[contenteditable]:not([contenteditable=\"false\"])",
+  "[role=\"textbox\"]",
+  "[role=\"searchbox\"]",
+  "[role=\"combobox\"]",
+  "[role=\"spinbutton\"]",
+].join(",");
+
+const ACTIVATABLE_SELECTOR = [
+  "button",
+  "a[href]",
+  "summary",
+  "[role=\"button\"]",
+  "[role=\"menuitem\"]",
+  "[role=\"menuitemcheckbox\"]",
+  "[role=\"menuitemradio\"]",
+  "[role=\"option\"]",
+  "[role=\"tab\"]",
+  "[role=\"switch\"]",
+  "[role=\"checkbox\"]",
+  "[role=\"radio\"]",
+  "[role=\"treeitem\"]",
+].join(",");
+
+/** The element a key press went to (falls back to the focused element for window-level events). */
+function keyTarget(e: { target?: EventTarget | null }): Element | null {
+  const t = e.target;
+  if (t && typeof (t as Element).closest === "function") return t as Element;
+  return typeof document !== "undefined" ? document.activeElement : null;
+}
+
+/** A text box of any kind: input, textarea, select, contenteditable (also inside one) or role=textbox. */
+export function isTypingTarget(el: Element | null | undefined): boolean {
+  if (!el || typeof el.closest !== "function") return false;
+  return el.closest(TYPING_SELECTOR) !== null;
+}
+
+/** A control Space activates: button, link, menu item, tab, switch ... */
+export function isActivatableTarget(el: Element | null | undefined): boolean {
+  if (!el || typeof el.closest !== "function") return false;
+  return el.closest(ACTIVATABLE_SELECTOR) !== null;
+}
+
+/**
+ * Should the in-meeting single key (Space, 1-5, B, S, K, M, N, ...) be left to
+ * the control that has focus? Text boxes keep every key; Space also stays with
+ * a focused button or menu item (it presses it).
+ */
+export function keyBelongsToFocusedControl(e: { target?: EventTarget | null; key?: string; code?: string }): boolean {
+  const el = keyTarget(e);
+  if (isTypingTarget(el)) return true;
+  const isSpace = e.code === "Space" || e.key === " " || e.key === "Space";
+  return isSpace && isActivatableTarget(el);
+}
+
+/** The focused rich-text editor (contenteditable or role=textbox), if the window has focus. */
+export function focusedRichEditor(doc: Document = document): Element | null {
+  if (typeof doc.hasFocus === "function" && !doc.hasFocus()) return null;
+  const el = doc.activeElement;
+  if (!el || typeof el.closest !== "function") return null;
+  return el.closest("[contenteditable]:not([contenteditable=\"false\"]),[role=\"textbox\"]");
+}
+
+/**
+ * The global Ctrl+B swallows the key before the page sees it. When an editor in
+ * NexQ has focus, hand the chord to it (bold) instead of switching windows.
+ * Returns true when it was handed over.
+ */
+export function forwardChordToEditor(key: string, doc: Document = document): boolean {
+  const editor = focusedRichEditor(doc);
+  if (!editor) return false;
+  const target = doc.activeElement ?? editor;
+  target.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key: key.toLowerCase(),
+      code: `Key${key.toUpperCase()}`,
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  return true;
 }

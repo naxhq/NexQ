@@ -31,6 +31,14 @@
 //! - Usage: like the real CLI, `total_cost_usd` is cumulative for the process
 //!   (0.0001 per answered query); token counts are per turn, mostly cache
 //!   writes on the first query and cache reads afterwards.
+//! - Query `tool:<name> <json input>`: a tool call like the real CLI makes it. A
+//!   tool listed after `--allowedTools` runs at once; any other asks the host
+//!   with a `can_use_tool` control request (only when launched with
+//!   `--permission-prompt-tool stdio`, else it is refused by itself, as the real
+//!   CLI does) and waits for the `control_response`. A tool that runs appends
+//!   `ran <name> <updatedInput>` to the file named by the `fake_tool_log`
+//!   directive; its `tool_result` is an error when refused. The answer text is
+//!   `tool:ran` or `tool:refused`.
 //! - stdin EOF: exits 0.
 
 use serde_json::{json, Value};
@@ -110,7 +118,16 @@ fn main() {
     let thinking = std::env::var("CLAUDE_CODE_DISABLE_THINKING").as_deref() != Ok("1");
     let mut answered = 0u32;
     let mut answered_initialize = false;
-    for line in std::io::stdin().lock().lines() {
+    let stdin = std::io::stdin();
+    let mut lines = stdin.lock().lines();
+    let tool_log = directive("fake_tool_log");
+    let allowed_tools: Vec<String> = args
+        .iter()
+        .position(|a| a == "--allowedTools")
+        .map(|i| args[i + 1..].iter().take_while(|a| !a.starts_with("--")).cloned().collect())
+        .unwrap_or_default();
+    let asks_host = arg_after("--permission-prompt-tool").as_deref() == Some("stdio");
+    while let Some(line) = lines.next() {
         let Ok(line) = line else { break };
         if let Some(path) = &record {
             let mut f = std::fs::OpenOptions::new()
@@ -151,7 +168,43 @@ fn main() {
             );
             continue;
         }
-        let answer = if content == "hello" {
+        let mut tool_answer: Option<String> = None;
+        if let Some(call) = content.strip_prefix("tool:") {
+            let (name, input) = call.split_once(' ').unwrap_or((call, "{}"));
+            let input: Value = serde_json::from_str(input).unwrap_or_else(|_| json!({}));
+            let id = format!("toolu_{}", answered + 1);
+            emit(&mut out, &json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":id,"name":name,"input":input}]}}));
+            let mut ran_with: Option<Value> = None;
+            if allowed_tools.iter().any(|t| t == name) {
+                ran_with = Some(input.clone());
+            } else if asks_host {
+                let rid = format!("req-{}", answered + 1);
+                emit(&mut out, &json!({"type":"control_request","request_id":rid,"request":{
+                    "subtype":"can_use_tool","tool_name":name,"display_name":name,"input":input,
+                    "tool_use_id":id,"permission_suggestions":[],"server_policy_ask_only":true}}));
+                // Wait for the host's answer, like the real CLI.
+                loop {
+                    let Some(Ok(next)) = lines.next() else { std::process::exit(0) };
+                    let Ok(reply) = serde_json::from_str::<Value>(&next) else { continue };
+                    if reply["type"] == "control_response" && reply["response"]["request_id"] == rid {
+                        let r = &reply["response"]["response"];
+                        if r["behavior"] == "allow" {
+                            ran_with = Some(r["updatedInput"].clone());
+                        }
+                        break;
+                    }
+                }
+            }
+            if let (Some(done), Some(path)) = (&ran_with, &tool_log) {
+                let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap();
+                writeln!(f, "ran {name} {done}").unwrap();
+            }
+            emit(&mut out, &json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":id,"is_error":ran_with.is_none(),"content":"x"}]}}));
+            tool_answer = Some(if ran_with.is_some() { "tool:ran".into() } else { "tool:refused".into() });
+        }
+        let answer = if let Some(t) = tool_answer {
+            t
+        } else if content == "hello" {
             "Hello world".to_string()
         } else {
             format!("answer:{content}")

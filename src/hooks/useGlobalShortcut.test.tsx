@@ -387,3 +387,41 @@ describe("meeting shortcut (Ctrl+M) and demos", () => {
     expect(commands()).not.toContain("end_meeting");
   });
 });
+
+describe("Ctrl+B and the in-meeting keys leave editors and buttons alone", () => {
+  afterEach(() => { document.body.innerHTML = ""; });
+
+  it("hands Ctrl+B to a focused rich-text editor (bold) instead of switching windows", async () => {
+    await mountWindow("overlay");
+    const editor = document.createElement("div");
+    editor.setAttribute("contenteditable", "true");
+    editor.tabIndex = 0;
+    document.body.appendChild(editor);
+    editor.focus();
+    const seen: KeyboardEvent[] = [];
+    editor.addEventListener("keydown", (e) => seen.push(e));
+    windowState.overlayVisible = true;
+    emitted.length = 0;
+
+    await act(async () => { shortcuts.get("CmdOrCtrl+B")!({ state: "Pressed" }); });
+    expect(seen).toHaveLength(1);
+    expect(seen[0].key).toBe("b");
+    expect(seen[0].ctrlKey).toBe(true);
+  });
+
+  it("does not run an action key when Space is pressed on a focused button", async () => {
+    const store = await mountWindow("overlay");
+    store.setState({ activeMeeting: { id: "m", title: "t", start_time: "", end_time: null, duration_seconds: null, transcript: [], ai_interactions: [], summary: null, config_snapshot: null } });
+    const button = document.createElement("button");
+    document.body.appendChild(button);
+    button.focus();
+    const event = new KeyboardEvent("keydown", { code: "Space", key: " ", bubbles: true, cancelable: true });
+    button.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+
+    // The same key on the page itself still belongs to the action.
+    const free = new KeyboardEvent("keydown", { code: "Space", key: " ", bubbles: true, cancelable: true });
+    document.body.dispatchEvent(free);
+    expect(free.defaultPrevented).toBe(true);
+  });
+});

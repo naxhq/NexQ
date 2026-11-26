@@ -42,12 +42,16 @@ fn normalize_and_filter(mut chunks: Vec<ScoredChunk>, threshold: f64) -> Vec<Sco
 /// - `query_text`: the raw query text for keyword search
 /// - `config`: RAG configuration
 /// - `embeddings`: in-memory (chunk_id, embedding) pairs for vector search
+///   (already limited to the allowed files)
+/// - `files`: the files whose chunks may match (None = all); applied inside
+///   the keyword query, before the top candidates are taken
 pub fn hybrid_search(
     conn: &Connection,
     query_embedding: &[f32],
     query_text: &str,
     config: &RagConfig,
     embeddings: &[(String, Vec<f32>)],
+    files: Option<&[String]>,
 ) -> Result<Vec<ScoredChunk>, String> {
     let top_candidates = config.top_k * 400; // 2K for top_k=5
 
@@ -55,7 +59,7 @@ pub fn hybrid_search(
     let semantic_results = vector_store::search_similar(query_embedding, embeddings, top_candidates);
 
     // Keyword search
-    let keyword_results = fts_store::search_keywords(conn, query_text, top_candidates)?;
+    let keyword_results = fts_store::search_keywords(conn, query_text, top_candidates, files)?;
 
     // RRF merge
     let keyword_weight = 1.0 - config.semantic_weight;
@@ -127,8 +131,9 @@ pub fn keyword_only_search(
     conn: &Connection,
     query_text: &str,
     config: &RagConfig,
+    files: Option<&[String]>,
 ) -> Result<Vec<ScoredChunk>, String> {
-    let results = fts_store::search_keywords(conn, query_text, config.top_k)?;
+    let results = fts_store::search_keywords(conn, query_text, config.top_k, files)?;
 
     let mut scored_chunks: Vec<ScoredChunk> = Vec::new();
     for (chunk_id, score) in results {

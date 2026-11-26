@@ -15,8 +15,10 @@
 use super::command::{
     build_args, configure_session_command, configure_sources_env, sandbox_dir, SessionConfig,
 };
+use super::approval::ChatApprovals;
 use super::protocol::{
-    classify_error, parse_line, user_message, user_message_with_images, AgentErrorKind, AgentEvent,
+    permission_allow, permission_deny, PermissionAsk,
+    classify_error, PlanLimit, parse_line, user_message, user_message_with_images, AgentErrorKind, AgentEvent,
     ImageAttachment, McpServerState, ToolResult, ToolUse, TurnResult,
 };
 use crate::llm::provider::CancelToken;
@@ -25,7 +27,7 @@ use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex as AsyncMutex, OwnedMutexGuard};
@@ -244,9 +246,19 @@ struct Shared {
     cost: Mutex<CostTracker>,
     /// The latest `system/init`.
     init: Mutex<InitInfo>,
+    /// The worst plan-limit signal since it was last taken.
+    plan_limit: Mutex<Option<PlanLimit>>,
 }
 
 impl Shared {
+    fn note_plan_limit(&self, limit: PlanLimit) {
+        let mut slot = self.plan_limit.lock().unwrap();
+        *slot = Some(match slot.take() {
+            Some(old) => old.merge(limit),
+            None => limit,
+        });
+    }
+
     /// Fill `result.cost_usd` with this turn's share of the process total.
     fn settle_cost(&self, mut result: TurnResult) -> TurnResult {
         result.cost_usd = self.cost.lock().unwrap().per_turn(result.total_cost_usd);
@@ -287,6 +299,80 @@ impl Shared {
     }
 }
 
+/// What lets a workspace chat's session answer `can_use_tool` questions.
+struct ClaudeAsk {
+    approvals: ChatApprovals,
+    /// The process's stdin; taken (dropped) on close so the CLI sees EOF.
+    stdin: Mutex<Option<std_mpsc::Sender<String>>>,
+    /// Questions being asked: while any is open the turn is not "silent".
+    open: AtomicUsize,
+    /// Their `request_id`s: a repeated id is refused, never asked twice.
+    open_ids: Mutex<std::collections::HashSet<String>>,
+    /// Counts turns: a question remembers the turn it was asked in, and an
+    /// answer that arrives after that turn ended is a refusal.
+    turn: std::sync::atomic::AtomicU64,
+    /// True outside a turn (the start state, and after every turn exit): no
+    /// question is asked then, whatever the CLI sends.
+    refuse: AtomicBool,
+}
+
+impl ClaudeAsk {
+    /// A turn starts: questions are welcome again, under a new number.
+    fn begin_turn(&self) {
+        self.turn.fetch_add(1, Ordering::SeqCst);
+        self.refuse.store(false, Ordering::SeqCst);
+    }
+
+    /// A turn ended (done, failed, cancelled, killed): whatever is still open
+    /// is refused and nothing is asked until the next turn begins.
+    fn end_turn(&self) {
+        self.refuse.store(true, Ordering::SeqCst);
+        self.turn.fetch_add(1, Ordering::SeqCst);
+        self.approvals.broker.deny_chat(&self.approvals.chat_id);
+    }
+
+    fn send(&self, line: String) {
+        if let Some(tx) = self.stdin.lock().unwrap().as_ref() {
+            let _ = tx.send(line);
+        }
+    }
+
+    /// Refuse every open question and let go of stdin.
+    fn shut(&self) {
+        self.approvals.broker.deny_chat(&self.approvals.chat_id);
+        self.stdin.lock().unwrap().take();
+    }
+
+    /// Answer one question in the background: the user may take a while, and
+    /// the turn keeps reading the CLI's output meanwhile.
+    fn answer(self: &Arc<Self>, q: PermissionAsk) {
+        if self.refuse.load(Ordering::SeqCst) {
+            self.send(permission_deny(&q.request_id, "No tool call may be approved outside a turn."));
+            return;
+        }
+        let turn = self.turn.load(Ordering::SeqCst);
+        if q.request_id.is_empty() || !self.open_ids.lock().unwrap().insert(q.request_id.clone()) {
+            // No id, or one already open: the answer could not be told apart.
+            self.send(permission_deny(&q.request_id, "The user did not allow this tool call."));
+            return;
+        }
+        self.open.fetch_add(1, Ordering::SeqCst);
+        let me = self.clone();
+        tokio::spawn(async move {
+            let (allow, why) = me.approvals.decide_with_reason(&q.request_id, &q.tool_name, &q.input).await;
+            me.open_ids.lock().unwrap().remove(&q.request_id);
+            // The turn this was asked in is over: whatever was clicked, it is a refusal.
+            let allow = allow && me.turn.load(Ordering::SeqCst) == turn && !me.refuse.load(Ordering::SeqCst);
+            me.send(if allow {
+                permission_allow(&q.request_id, &q.input)
+            } else {
+                permission_deny(&q.request_id, why.as_deref().unwrap_or("The user did not allow this tool call."))
+            });
+            me.open.fetch_sub(1, Ordering::SeqCst);
+        });
+    }
+}
+
 enum TurnMsg {
     Delta(String),
     Tool(ToolUse),
@@ -307,6 +393,8 @@ pub struct ClaudeSession {
     /// arrives, and on close and drop if it never did.
     mcp_config_file: Option<PathBuf>,
     timeouts: SessionTimeouts,
+    /// `Some` only for a workspace chat session that can ask.
+    ask: Option<Arc<ClaudeAsk>>,
 }
 
 impl ClaudeSession {
@@ -372,9 +460,13 @@ impl ClaudeSession {
             }
         };
 
+        let ask = cfg.approvals.clone().filter(|a| a.can_ask && cfg.sources.is_some()).map(|approvals| {
+            Arc::new(ClaudeAsk { approvals, stdin: Mutex::new(Some(stdin_tx.clone())), open: AtomicUsize::new(0), open_ids: Mutex::default(), turn: std::sync::atomic::AtomicU64::new(0), refuse: AtomicBool::new(true) })
+        });
         let session = ClaudeSession {
             model: cfg.model,
             shared,
+            ask,
             stdin_tx: Mutex::new(Some(stdin_tx)),
             turn: Arc::new(AsyncMutex::new(events)),
             prompt_file,
@@ -468,7 +560,13 @@ impl ClaudeSession {
         loop {
             tokio::select! {
                 biased;
-                _ = cancel.cancelled() => return Err(AgentError::Cancelled),
+                _ = cancel.cancelled() => {
+                    // A stopped answer leaves no question open.
+                    if let Some(ask) = &self.ask {
+                        ask.approvals.broker.deny_chat(&ask.approvals.chat_id);
+                    }
+                    return Err(AgentError::Cancelled);
+                }
                 msg = rx.recv() => match msg {
                     Some(TurnMsg::Thinking) => {
                         if !quiet {
@@ -506,6 +604,9 @@ impl ClaudeSession {
     /// Close stdin, give the process 2 s to exit, then kill it. Idempotent.
     pub async fn close(&self) {
         self.shared.closed.store(true, Ordering::SeqCst);
+        if let Some(ask) = &self.ask {
+            ask.shut();
+        }
         self.stdin_tx.lock().unwrap().take();
         let deadline = Instant::now() + CLOSE_GRACE;
         loop {
@@ -533,6 +634,11 @@ impl ClaudeSession {
     }
 
     /// The tools and MCP server states of the latest `system/init`.
+    /// The plan-limit signal reported since the last call (clears it).
+    pub fn take_plan_limit(&self) -> Option<PlanLimit> {
+        self.shared.plan_limit.lock().unwrap().take()
+    }
+
     pub fn init_info(&self) -> InitInfo {
         self.shared.init.lock().unwrap().clone()
     }
@@ -615,9 +721,12 @@ impl ClaudeSession {
         if !self.is_alive() {
             return Err(AgentError::Crashed(self.shared.crash_reason()));
         }
+        if let Some(ask) = &self.ask {
+            ask.begin_turn();
+        }
         self.send_line(user_message_with_images(text, query, images))?;
         let (tx, rx) = mpsc::unbounded_channel();
-        tokio::spawn(drive_turn(guard, tx, self.shared.clone(), self.timeouts));
+        tokio::spawn(drive_turn(guard, tx, self.shared.clone(), self.timeouts, self.ask.clone()));
         Ok(rx)
     }
 }
@@ -625,6 +734,9 @@ impl ClaudeSession {
 impl Drop for ClaudeSession {
     fn drop(&mut self) {
         self.shared.closed.store(true, Ordering::SeqCst);
+        if let Some(ask) = &self.ask {
+            ask.shut();
+        }
         self.stdin_tx.lock().unwrap().take();
         if let Some(mut child) = self.shared.child.lock().unwrap().take() {
             if matches!(child.try_wait(), Ok(None)) {
@@ -649,6 +761,7 @@ async fn drive_turn(
     tx: mpsc::UnboundedSender<TurnMsg>,
     shared: Arc<Shared>,
     timeouts: SessionTimeouts,
+    ask: Option<Arc<ClaudeAsk>>,
 ) {
     let mut drain_deadline: Option<tokio::time::Instant> = None;
     let outcome = loop {
@@ -682,9 +795,32 @@ async fn drive_turn(
                     }
                 }
                 Ok(Some(AgentEvent::TurnComplete(result))) => break Ok(shared.settle_cost(result)),
+                Ok(Some(AgentEvent::RateLimit(limit))) => shared.note_plan_limit(limit),
+                // Only a chat session that can ask is ever asked (`--permission-prompts
+                // host` is its alone); for everyone else this event does not occur.
+                Ok(Some(AgentEvent::PermissionRequest(q))) => {
+                    if let Some(ask) = &ask {
+                        // A cancelled or closing turn asks nothing new: refused at once.
+                        if drain_deadline.is_some() || tx.is_closed() {
+                            ask.send(permission_deny(&q.request_id, "The turn was stopped."));
+                        } else {
+                            ask.answer(q);
+                        }
+                    }
+                }
+                Ok(Some(AgentEvent::PermissionCancelled(id))) => {
+                    if let Some(ask) = &ask {
+                        ask.approvals.broker.deny_request(&ask.approvals.chat_id, &id);
+                    }
+                }
                 Ok(Some(_)) => {}
                 Ok(None) => break Err(AgentError::Crashed(shared.crash_reason())),
                 Err(_) => {
+                    // A question waiting for the user is activity: the CLI is quiet
+                    // because it waits for us, not because it hung.
+                    if drain_deadline.is_none() && ask.as_ref().is_some_and(|a| a.open.load(Ordering::SeqCst) > 0) {
+                        continue;
+                    }
                     let drained_out = drain_deadline
                         .is_some_and(|deadline| tokio::time::Instant::now() >= deadline);
                     shared.terminate(&if drained_out {
@@ -699,10 +835,17 @@ async fn drive_turn(
                 }
             },
             _ = tx.closed(), if drain_deadline.is_none() => {
+                if let Some(ask) = &ask {
+                    ask.approvals.broker.deny_chat(&ask.approvals.chat_id);
+                }
                 drain_deadline = Some(tokio::time::Instant::now() + timeouts.drain);
             }
         }
     };
+    // The turn is over, however it ended: nothing stays open, nothing new is asked.
+    if let Some(ask) = &ask {
+        ask.end_turn();
+    }
     let _ = tx.send(TurnMsg::Done(outcome));
 }
 
@@ -766,6 +909,7 @@ fn start_process(
         exit_status: Mutex::new(None),
         cost: Mutex::new(CostTracker::default()),
         init: Mutex::new(InitInfo::default()),
+        plan_limit: Mutex::new(None),
     });
     let (stdin_tx, stdin_rx) = std_mpsc::channel::<String>();
     let (event_tx, event_rx) = mpsc::unbounded_channel();
@@ -947,6 +1091,7 @@ mod tests {
             exit_status: Mutex::new(None),
             cost: Mutex::new(CostTracker::default()),
             init: Mutex::new(InitInfo::default()),
+            plan_limit: Mutex::new(None),
         };
         let first = shared.settle_cost(TurnResult { total_cost_usd: 0.0100, ..Default::default() });
         assert_eq!(first.cost_usd, 0.0100);
@@ -1061,5 +1206,192 @@ mod tests {
                 "Not logged in · Please run /login".into()
             ))
         );
+    }
+
+    mod ask {
+        use super::super::*;
+        use crate::llm::cli_agent::approval::{ApprovalBroker, ApprovalPolicy, ApprovalRequest, WorkspaceApprovals};
+        use crate::sources::config::{McpServer, McpTool};
+        use serde_json::json;
+
+        fn policy() -> ApprovalPolicy {
+            let tool = |n: &str, ro: Option<bool>| McpTool {
+                name: n.into(),
+                full_name: format!("mcp__mira__{n}"),
+                allowed: true,
+                read_only_hint: ro,
+                destructive_hint: None,
+            };
+            ApprovalPolicy::from_servers(
+                &[McpServer { key: "mira".into(), tools: vec![tool("kb_search", Some(true)), tool("send_mail", None)], ..Default::default() }],
+                vec![],
+            )
+        }
+
+        fn harness() -> (Arc<ClaudeAsk>, std_mpsc::Receiver<String>, Arc<WorkspaceApprovals>, Arc<Mutex<Vec<String>>>) {
+            let broker = Arc::new(WorkspaceApprovals::new().with_timeout(Duration::from_secs(5)));
+            let ids: Arc<Mutex<Vec<String>>> = Arc::default();
+            let target = ids.clone();
+            broker.set_emitter(Arc::new(move |n| {
+                if let crate::llm::cli_agent::approval::ApprovalNotice::Request(e) = n {
+                    target.lock().unwrap().push(e.approval_id);
+                }
+            }));
+            let (tx, rx) = std_mpsc::channel();
+            let ask = Arc::new(ClaudeAsk {
+                approvals: ChatApprovals { can_ask: true, chat_id: "c1".into(), broker: broker.clone(), policy: Arc::new(policy()) },
+                stdin: Mutex::new(Some(tx)),
+                open: AtomicUsize::new(0),
+                open_ids: Mutex::default(),
+                turn: std::sync::atomic::AtomicU64::new(0),
+                refuse: AtomicBool::new(true),
+            });
+            ask.begin_turn(); // the tests run inside a turn unless they say otherwise
+            (ask, rx, broker, ids)
+        }
+
+        fn question(id: &str, tool: &str, input: serde_json::Value) -> PermissionAsk {
+            PermissionAsk { request_id: id.into(), tool_name: tool.into(), input, tool_use_id: "t".into() }
+        }
+
+        async fn line(rx: &std_mpsc::Receiver<String>) -> serde_json::Value {
+            for _ in 0..400 {
+                if let Ok(l) = rx.try_recv() {
+                    return serde_json::from_str(&l).unwrap();
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            panic!("no reply was written");
+        }
+
+        #[tokio::test]
+        async fn read_only_tools_run_without_a_question_and_the_rest_wait_for_the_user() {
+            let (ask, rx, broker, ids) = harness();
+            ask.answer(question("r1", "mcp__mira__kb_search", json!({"q": "x"})));
+            assert_eq!(line(&rx).await["response"]["response"]["behavior"], "allow");
+            assert!(ids.lock().unwrap().is_empty(), "nobody was asked");
+
+            let input = json!({"to": "a@b.c"});
+            ask.answer(question("r2", "mcp__mira__send_mail", input.clone()));
+            for _ in 0..200 {
+                if !ids.lock().unwrap().is_empty() { break; }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            assert_eq!(ask.open.load(Ordering::SeqCst), 1, "an open question counts as activity");
+            assert!(rx.try_recv().is_err(), "no answer yet: nothing is sent");
+            let id = ids.lock().unwrap()[0].clone();
+            assert!(broker.answer(&id, true));
+            let reply = line(&rx).await;
+            assert_eq!(reply["response"]["request_id"], "r2");
+            assert_eq!(reply["response"]["response"]["behavior"], "allow");
+            assert_eq!(reply["response"]["response"]["updatedInput"], input);
+            assert_eq!(ask.open.load(Ordering::SeqCst), 0);
+        }
+
+        #[tokio::test]
+        async fn a_refused_unknown_or_forbidden_call_is_denied_and_a_closed_session_denies_what_is_open() {
+            let (ask, rx, broker, ids) = harness();
+            ask.answer(question("r1", "Bash", json!({"command": "dir"})));
+            assert_eq!(line(&rx).await["response"]["response"]["behavior"], "deny");
+            ask.answer(question("r2", "mcp__mira__nope", json!({})));
+            assert_eq!(line(&rx).await["response"]["response"]["behavior"], "deny");
+
+            ask.answer(question("r3", "mcp__mira__send_mail", json!({})));
+            for _ in 0..200 {
+                if !ids.lock().unwrap().is_empty() { break; }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            let id = ids.lock().unwrap()[0].clone();
+            ask.approvals.broker.deny_chat("c1"); // a cancel or a close refuses what is open
+            assert_eq!(line(&rx).await["response"]["response"]["behavior"], "deny");
+            ask.shut(); // and the close lets go of stdin
+            assert!(!broker.answer(&id, true), "a late click finds nothing to allow");
+            // Stdin is let go: the CLI sees EOF.
+            assert!(ask.stdin.lock().unwrap().is_none());
+            let _ = ApprovalRequest { chat_id: String::new(), request_id: String::new(), server: String::new(), tool: String::new(), args: json!(null) };
+            let _ = broker.pending("c1");
+        }
+
+        #[tokio::test]
+        async fn a_stopped_turn_refuses_every_question_at_once_and_asks_nobody() {
+            let (ask, rx, _broker, ids) = harness();
+            let shared = Arc::new(Shared {
+                child: Mutex::new(None),
+                alive: AtomicBool::new(true),
+                closed: AtomicBool::new(false),
+                stderr_tail: Mutex::new(VecDeque::new()),
+                stderr_done: AtomicBool::new(true),
+                exit_status: Mutex::new(None),
+                cost: Mutex::new(CostTracker::default()),
+                init: Mutex::new(InitInfo::default()),
+                plan_limit: Mutex::new(None),
+            });
+            let (etx, erx) = mpsc::unbounded_channel();
+            let events = Arc::new(AsyncMutex::new(erx)).lock_owned().await;
+            // The receiver of the turn is already gone: this is a cancelled turn draining.
+            let (ttx, trx) = mpsc::unbounded_channel();
+            drop(trx);
+            etx.send(AgentEvent::PermissionRequest(question("q1", "mcp__mira__send_mail", json!({"to": "a"})))).unwrap();
+            etx.send(AgentEvent::PermissionRequest(question("q2", "mcp__mira__kb_search", json!({})))).unwrap();
+            etx.send(AgentEvent::TurnComplete(TurnResult::default())).unwrap();
+            let timeouts = SessionTimeouts { inactivity: Duration::from_secs(5), drain: Duration::from_secs(5), ..SessionTimeouts::default() };
+            drive_turn(events, ttx, shared, timeouts, Some(ask.clone())).await;
+            for id in ["q1", "q2"] {
+                let reply = line(&rx).await;
+                assert_eq!(reply["response"]["request_id"], id);
+                assert_eq!(reply["response"]["response"]["behavior"], "deny", "{id}: even the read-only tool");
+            }
+            assert!(ids.lock().unwrap().is_empty(), "nobody was asked");
+            assert_eq!(ask.open.load(Ordering::SeqCst), 0);
+        }
+
+        #[tokio::test]
+        async fn outside_a_turn_nothing_is_asked_and_a_turn_that_ended_voids_its_open_question() {
+            let (ask, rx, broker, ids) = harness();
+            ask.end_turn();
+            ask.answer(question("o1", "mcp__mira__send_mail", json!({})));
+            assert_eq!(line(&rx).await["response"]["response"]["behavior"], "deny", "no turn: refused at once");
+            ask.answer(question("o2", "mcp__mira__kb_search", json!({})));
+            assert_eq!(line(&rx).await["response"]["response"]["behavior"], "deny", "even a read-only tool");
+            assert!(ids.lock().unwrap().is_empty());
+
+            // A question open when its turn ends: refused, and the late click does nothing.
+            ask.begin_turn();
+            ask.answer(question("t1", "mcp__mira__send_mail", json!({})));
+            for _ in 0..200 {
+                if !ids.lock().unwrap().is_empty() { break; }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            let id = ids.lock().unwrap()[0].clone();
+            ask.end_turn();
+            assert_eq!(line(&rx).await["response"]["response"]["behavior"], "deny");
+            assert!(!broker.answer(&id, true));
+            // The next turn is a clean start.
+            ask.begin_turn();
+            ask.answer(question("t2", "mcp__mira__kb_search", json!({})));
+            assert_eq!(line(&rx).await["response"]["response"]["behavior"], "allow");
+        }
+
+        #[tokio::test]
+        async fn a_repeated_or_missing_request_id_is_refused_never_asked_twice() {
+            let (ask, rx, broker, ids) = harness();
+            ask.answer(question("dup", "mcp__mira__send_mail", json!({})));
+            for _ in 0..200 {
+                if !ids.lock().unwrap().is_empty() { break; }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            // The same id again while the first is open: refused at once.
+            ask.answer(question("dup", "mcp__mira__send_mail", json!({})));
+            let reply = line(&rx).await;
+            assert_eq!(reply["response"]["response"]["behavior"], "deny");
+            assert_eq!(ids.lock().unwrap().len(), 1, "only one question reached the user");
+            ask.answer(question("", "mcp__mira__kb_search", json!({})));
+            assert_eq!(line(&rx).await["response"]["response"]["behavior"], "deny", "no id: refused even for a read-only tool");
+            // Once answered the id is free again.
+            broker.answer(&ids.lock().unwrap()[0].clone(), false);
+            assert_eq!(line(&rx).await["response"]["response"]["behavior"], "deny");
+            ask.answer(question("dup", "mcp__mira__kb_search", json!({})));
+            assert_eq!(line(&rx).await["response"]["response"]["behavior"], "allow");
+        }
     }
 }

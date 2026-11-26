@@ -1,156 +1,130 @@
-import { useState, useCallback } from "react";
-import { CloudUpload, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { FilePlus2, Loader2 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useContextStore } from "../stores/contextStore";
-import { useConfigStore } from "../stores/configStore";
-import { useRagStore } from "../stores/ragStore";
+import { addFilesToWorkspace, supportedPaths } from "../workspace/addMaterial";
+import { cn } from "../lib/utils";
+import { useWorkspaceStore } from "../stores/workspaceStore";
+import { InfoTip } from "../ui";
 
-export function FileUpload() {
-  const loadFile = useContextStore((s) => s.loadFile);
-  const contextStrategy = useConfigStore((s) => s.contextStrategy);
-  const autoIndexFile = useRagStore((s) => s.autoIndexFile);
-  const [isDragOver, setIsDragOver] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+type DragState = { dragging: boolean };
 
-  const processFile = useCallback(
-    async (filePath: string) => {
-      setIsProcessing(true);
-      setErrorMessage(null);
-      try {
-        const resource = await loadFile(filePath);
-        // Auto-index if RAG is active — fire and forget, doesn't block UI
-        if (contextStrategy === "local_rag") {
-          autoIndexFile(resource.id);
-        }
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setErrorMessage(msg);
-        setTimeout(() => setErrorMessage(null), 5000);
-      } finally {
-        setIsProcessing(false);
-      }
-    },
-    [loadFile, contextStrategy, autoIndexFile]
-  );
+/**
+ * Files dropped on the window, from Tauri's own drag-drop event. (The browser's
+ * `File.path` is empty in WebView2, so the old drop zone never received a path.)
+ * Paths arrive whole; unsupported ones are reported, not silently dropped.
+ */
+export function useTauriFileDrop(
+  onPaths: (paths: string[], skipped: string[]) => void,
+  enabled = true,
+): DragState {
+  const [dragging, setDragging] = useState(false);
+  const handler = useRef(onPaths);
+  handler.current = onPaths;
 
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragOver(true);
-  }, []);
+  useEffect(() => {
+    if (!enabled) return;
+    let stop: (() => void) | undefined;
+    let cancelled = false;
+    import("@tauri-apps/api/webview")
+      .then(({ getCurrentWebview }) =>
+        getCurrentWebview().onDragDropEvent((event) => {
+          const p = event.payload;
+          if (p.type === "enter" || p.type === "over") setDragging(true);
+          else if (p.type === "leave") setDragging(false);
+          else if (p.type === "drop") {
+            setDragging(false);
+            const { ok, skipped } = supportedPaths(p.paths);
+            handler.current(ok, skipped);
+          }
+        }),
+      )
+      .then((fn) => {
+        if (cancelled) fn();
+        else stop = fn;
+      })
+      .catch(() => {
+        /* no Tauri (browser preview): browsing still works */
+      });
+    return () => {
+      cancelled = true;
+      stop?.();
+    };
+  }, [enabled]);
 
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragOver(false);
-  }, []);
+  return { dragging };
+}
 
-  const handleDrop = useCallback(
-    async (e: React.DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setIsDragOver(false);
+/** Says what a drop or a pick did, in one line (null when nothing needs saying). */
+export function describeAdd(added: number, failed: number, skipped: number): string | null {
+  const parts: string[] = [];
+  if (failed > 0) parts.push(`${failed} couldn't be read`);
+  if (skipped > 0) parts.push(`${skipped} ${skipped === 1 ? "isn't" : "aren't"} a PDF, text, Markdown or Word file`);
+  return parts.length ? parts.join(", ") + "." : added > 0 ? null : "Nothing was added.";
+}
 
-      const files = e.dataTransfer?.files;
-      if (!files || files.length === 0) return;
+/**
+ * "Choose files": adds PDF, text, Markdown and Word files to the workspace
+ * (library and workspace together). Dropping files on the window does the same
+ * (see `useTauriFileDrop`, wired where the window's content lives).
+ */
+export function FileUpload({ workspaceId: given, className, compact = false }: { workspaceId?: string; className?: string; compact?: boolean }) {
+  const openId = useWorkspaceStore((s) => s.openId);
+  const workspaceId = given ?? openId;
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
 
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        const filePath = (file as File & { path?: string }).path;
-        if (filePath) {
-          await processFile(filePath);
-        }
-      }
-    },
-    [processFile]
-  );
-
-  const handleBrowse = useCallback(async () => {
+  const browse = useCallback(async () => {
+    setMessage(null);
     try {
       const selected = await open({
         multiple: true,
-        filters: [
-          {
-            name: "Context Files",
-            extensions: ["pdf", "txt", "md", "docx"],
-          },
-        ],
+        filters: [{ name: "Context files", extensions: ["pdf", "txt", "md", "docx"] }],
       });
-
-      if (selected) {
-        const paths = Array.isArray(selected) ? selected : [selected];
-        for (const filePath of paths) {
-          if (filePath) {
-            await processFile(filePath);
-          }
-        }
-      }
+      if (!selected) return;
+      const paths = Array.isArray(selected) ? selected : [selected];
+      const { ok, skipped } = supportedPaths(paths);
+      setBusy(true);
+      const result = await addFilesToWorkspace(ok, workspaceId);
+      setMessage(describeAdd(result.added, result.failed.length, skipped.length) ?? (result.failed[0]?.error ?? null));
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setErrorMessage(msg);
-      setTimeout(() => setErrorMessage(null), 5000);
+      setMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
-  }, [processFile]);
+  }, [workspaceId]);
 
+  useEffect(() => {
+    if (!message) return;
+    const t = setTimeout(() => setMessage(null), 6000);
+    return () => clearTimeout(t);
+  }, [message]);
+
+  const hint = "PDF, text, Markdown or Word. You can also drop them on this window.";
   return (
-    <div className="w-full">
-      {/* Drop zone */}
-      <div
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-        onClick={handleBrowse}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            handleBrowse();
-          }
-        }}
-        role="button"
-        tabIndex={0}
-        aria-label="Drop files here or click to browse"
-        className={`relative flex flex-col items-center justify-center rounded-xl border-2 border-dashed transition-all duration-200 ${
-          isDragOver
-            ? "border-primary/60 bg-primary/5 scale-[1.01]"
-            : "border-muted-foreground/20 bg-secondary/20 hover:border-muted-foreground/30 hover:bg-secondary/30"
-        } px-6 py-6`}
-      >
-        {isProcessing ? (
-          <>
-            <Loader2 className="mb-2 h-8 w-8 animate-spin text-primary/60" />
-            <p className="text-sm font-medium text-muted-foreground">
-              Processing file...
-            </p>
-          </>
-        ) : (
-          <>
-            <CloudUpload
-              className={`mb-2 h-8 w-8 transition-colors duration-200 ${
-                isDragOver ? "text-primary" : "text-primary/30"
-              }`}
-            />
-            <p className="text-sm font-medium text-muted-foreground">
-              {isDragOver ? "Drop to upload" : "Drag files here"}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              PDF, TXT, Markdown, or DOCX
-            </p>
-            <button
-              onClick={handleBrowse}
-              className="mt-3 rounded-lg border border-primary/20 bg-primary/5 px-4 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 hover:text-primary"
-            >
-              Browse Files
-            </button>
-          </>
-        )}
+    <div className={cn("w-full", className)}>
+      <div className={compact ? "flex items-center gap-1" : undefined}>
+        <button
+          type="button"
+          onClick={browse}
+          disabled={busy}
+          aria-busy={busy}
+          className={cn(
+            "ui-body flex w-full items-center gap-2 rounded-lg border border-dashed border-border text-left text-muted-foreground outline-none transition-colors hover:border-foreground/30 hover:bg-accent/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-60",
+            compact ? "min-w-0 flex-1 px-2.5 py-1.5" : "px-3 py-2.5",
+          )}
+        >
+          {busy ? <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" /> : <FilePlus2 className="h-4 w-4 shrink-0" aria-hidden="true" />}
+          <span className="min-w-0">
+            <span className="block font-medium text-foreground">{busy ? "Adding files" : "Choose files"}</span>
+            {!compact && <span className="ui-meta block">{hint}</span>}
+          </span>
+        </button>
+        {compact && <InfoTip label="About adding files">{hint}</InfoTip>}
       </div>
-
-      {/* Error toast */}
-      {errorMessage && (
-        <div className="mt-2 rounded-xl bg-destructive/10 px-3 py-2 text-xs text-destructive">
-          {errorMessage}
-        </div>
+      {message && (
+        <p role="status" className="ui-meta mt-1.5 text-muted-foreground">
+          {message}
+        </p>
       )}
     </div>
   );

@@ -13,7 +13,7 @@ use crate::llm::cli_agent::manager::{AgentSessionManager, NoopStatusSink};
 use crate::llm::cli_agent::settings::CliSettings;
 use crate::llm::cli_agent::spawner::CliSpawner;
 use crate::llm::cli_agent::routing::{CachedFallback, HealthTracker, MeetingSessions};
-use crate::llm::gemini_cache::CachedContent;
+use crate::llm::gemini_cache::ScopedCache;
 use crate::llm::openrouter_models::OpenRouterModelCache;
 use crate::llm::LLMRouter;
 use crate::rag::RagManager;
@@ -63,6 +63,8 @@ impl Default for ActiveScenario {
 /// and then check/initialize the manager within.
 pub struct AppState {
     pub database: Option<Arc<Mutex<DatabaseManager>>>,
+    /// Read-only connections for reads that must not wait for the shared one (the live path, the rail).
+    pub readers: Option<Arc<crate::db::readers::ReaderPool>>,
     pub audio: Arc<Mutex<Option<AudioCaptureManager>>>,
     pub stt: Option<Arc<Mutex<STTRouter>>>,
     pub llm: Option<Arc<Mutex<LLMRouter>>>,
@@ -121,7 +123,22 @@ pub struct AppState {
     pub tray_manager: Arc<Mutex<Option<TrayManager>>>,
     /// Active Gemini context cache for the current meeting session.
     /// Set when the user creates a cache; cleared on delete or meeting end.
-    pub gemini_cache: Arc<Mutex<Option<CachedContent>>>,
+    /// The cache and the scope fingerprint it was built from, in one value: a
+    /// request uses it only when its scope has the same fingerprint, so a cache
+    /// built from one workspace's documents never answers for another.
+    pub gemini_cache: Arc<Mutex<Option<ScopedCache>>>,
+    /// The app handle, set once at startup (for events from code that has none).
+    pub app_handle: std::sync::OnceLock<tauri::AppHandle>,
+    /// Why the database did not open (None when it did). While it is set nothing
+    /// is created, upgraded or written to the database.
+    pub db_problem: Option<crate::db::health::DbProblem>,
+    /// Settings files that could not be read at start (shown to the user once).
+    pub store_findings: Mutex<Vec<crate::store_guard::StoreRecovery>>,
+    /// Restarts caused by grants wait and coalesce (see `workspace::restart`).
+    pub restarts: Arc<crate::workspace::restart::Restarts>,
+    /// Meetings (or "default") the user was already told their workspace
+    /// material could not be read for: told once per meeting.
+    pub material_warned: Mutex<std::collections::HashSet<String>>,
     /// Downloaded update waiting to be installed (on Restart or on quit).
     pub pending_update: Arc<Mutex<Option<PendingUpdate>>>,
     /// True while `download_update` is running; prevents parallel downloads.
@@ -135,6 +152,8 @@ pub struct AppState {
     /// provider (Claude, Antigravity or Codex). `setup` replaces this with one
     /// that emits `agent_session_status` to the app.
     pub agent_sessions: Arc<AgentSessionManager>,
+    /// Workspace chat: request guard, session fingerprints, search indexer.
+    pub workspace_chat: Arc<crate::workspace_chat::ChatHub>,
     /// Per-CLI model settings and catalogs (one of each per CLI agent), read
     /// whenever a session is spawned, and which CLI is active.
     pub cli_settings: Arc<CliSettings>,
@@ -164,6 +183,9 @@ pub struct AppState {
     /// A with-sources session that just failed to start: answers skip it for
     /// a while instead of waiting on it again.
     pub sources_cooldown: Arc<crate::llm::cli_agent::routing::SourcesCooldown>,
+    /// The one service chat, notes, brief, recap and memory calls go through
+    /// (set in `setup`, once the session manager exists).
+    pub ai_runs: Option<Arc<crate::ai_runs::AiRuns>>,
 }
 
 /// The meeting between `start_meeting` and `end_meeting`.
@@ -179,6 +201,7 @@ impl AppState {
         let cli_settings = Arc::new(CliSettings::new());
         Self {
             database: None,
+            readers: None,
             audio: Arc::new(Mutex::new(Some(AudioCaptureManager::new()))),
             stt: None,
             llm: None,
@@ -206,10 +229,16 @@ impl AppState {
             openrouter_cache: Arc::new(Mutex::new(None)),
             tray_manager: Arc::new(Mutex::new(None)),
             gemini_cache: Arc::new(Mutex::new(None)),
+            db_problem: None,
+            store_findings: Mutex::new(Vec::new()),
+            restarts: Arc::new(Default::default()),
+            app_handle: std::sync::OnceLock::new(),
+            material_warned: Mutex::new(std::collections::HashSet::new()),
             pending_update: Arc::new(Mutex::new(None)),
             update_downloading: Arc::new(AtomicBool::new(false)),
             meeting_active: Arc::new(AtomicBool::new(false)),
             recording_jobs: Arc::new(AtomicUsize::new(0)),
+            workspace_chat: crate::workspace_chat::ChatHub::new(),
             agent_sessions: Arc::new(AgentSessionManager::new(
                 Arc::new(CliSpawner),
                 Arc::new(NoopStatusSink),
@@ -225,6 +254,7 @@ impl AppState {
             sources_applied: Arc::new(Mutex::new((PersonalSourcesConfig::default(), 0))),
             sources_cooldown: Arc::new(Default::default()),
             pending_servers: Arc::new(Mutex::new(Vec::new())),
+            ai_runs: None,
         }
     }
 }

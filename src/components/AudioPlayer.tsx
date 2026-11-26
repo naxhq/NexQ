@@ -315,8 +315,8 @@ function AudioPlayerImpl({
       <button
         onClick={toggle}
         className="flex-shrink-0 w-[30px] h-[30px] rounded-full flex items-center justify-center
-          text-white/70 hover:text-white hover:bg-indigo-500/20 active:bg-indigo-500/30
-          transition-colors duration-150 focus:outline-none focus-visible:ring-1 focus-visible:ring-indigo-400"
+          text-muted-foreground hover:text-foreground hover:bg-primary/15 active:bg-primary/25
+          transition-colors duration-150 focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         aria-label={isPlaying ? "Pause" : "Play"}
       >
         {isPlaying ? <PauseIcon /> : <PlayIcon />}
@@ -346,7 +346,7 @@ function AudioPlayerImpl({
         ) : (
           /* Placeholder track bar when no waveform data yet */
           <div className="w-full h-full flex items-center">
-            <div className="w-full h-[3px] rounded-full bg-white/[0.06]" />
+            <div className="w-full h-[3px] rounded-full bg-foreground/10" />
           </div>
         )}
       </div>
@@ -369,7 +369,7 @@ function AudioPlayerImpl({
           max="200"
           value={Math.round(volume * 100)}
           onChange={(e) => setVolume(Number(e.target.value) / 100)}
-          className="w-16 h-1 accent-indigo-400 cursor-pointer opacity-60 hover:opacity-100 transition-opacity"
+          className="w-16 h-1 accent-primary cursor-pointer opacity-60 hover:opacity-100 transition-opacity"
           title={`Volume: ${Math.round(volume * 100)}%`}
           aria-label="Volume"
         />
@@ -382,7 +382,7 @@ function AudioPlayerImpl({
       <button
         onClick={() => cycleSpeed("up")}
         className="flex-shrink-0 text-[10px] font-semibold
-          bg-white/[0.06] hover:bg-white/[0.1] active:bg-white/[0.14]
+          bg-foreground/10 hover:bg-foreground/15 active:bg-foreground/20
           px-1.5 py-0.5 rounded transition-colors duration-150
           text-muted-foreground hover:text-foreground
           focus:outline-none focus-visible:ring-1 focus-visible:ring-white/20"
@@ -397,7 +397,7 @@ function AudioPlayerImpl({
         onClick={handleDownload}
         className="flex-shrink-0 flex items-center justify-center w-6 h-6 rounded
           text-muted-foreground hover:text-foreground
-          hover:bg-white/[0.06] active:bg-white/[0.1]
+          hover:bg-foreground/10 active:bg-foreground/15
           transition-colors duration-150
           focus:outline-none focus-visible:ring-1 focus-visible:ring-white/20"
         aria-label="Download recording"
@@ -426,18 +426,18 @@ export function AudioPlayerSkeleton() {
   return (
     <div className="border-t border-border/10 bg-card/95 backdrop-blur-xl px-5 py-2.5 flex items-center gap-3 select-none">
       {/* Play button placeholder */}
-      <div className="flex-shrink-0 w-[30px] h-[30px] rounded-full bg-white/[0.06] animate-pulse" />
+      <div className="flex-shrink-0 w-[30px] h-[30px] rounded-full bg-foreground/10 animate-pulse" />
 
       {/* Time placeholder */}
-      <div className="flex-shrink-0 w-[36px] h-[10px] rounded bg-white/[0.06] animate-pulse" />
+      <div className="flex-shrink-0 w-[36px] h-[10px] rounded bg-foreground/10 animate-pulse" />
 
       {/* Waveform track placeholder */}
       <div className="flex-1 h-[36px] min-w-0 flex items-center">
-        <div className="w-full h-[3px] rounded-full bg-white/[0.06] animate-pulse" />
+        <div className="w-full h-[3px] rounded-full bg-foreground/10 animate-pulse" />
       </div>
 
       {/* Duration placeholder */}
-      <div className="flex-shrink-0 w-[36px] h-[10px] rounded bg-white/[0.06] animate-pulse" />
+      <div className="flex-shrink-0 w-[36px] h-[10px] rounded bg-foreground/10 animate-pulse" />
 
       {/* Processing label */}
       <span className="flex-shrink-0 text-[10px] text-muted-foreground/40 animate-pulse">

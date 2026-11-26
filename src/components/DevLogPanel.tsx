@@ -29,6 +29,25 @@ async function openDetachedDevLog() {
   }
 }
 
+/**
+ * The Dev Log filling its parent (a panel of the meeting window's dock). The dock
+ * decides when it is shown and owns Escape and sizing.
+ */
+export function DevLogEmbedded({ onClose }: { onClose?: () => void }) {
+  return (
+    <div className="flex h-full min-h-0 w-full flex-col">
+      <DevLogContent
+        onClose={onClose}
+        escapeCloses={false}
+        onDetach={() => {
+          openDetachedDevLog();
+          onClose?.();
+        }}
+      />
+    </div>
+  );
+}
+
 /** Inline DevLog panel (embedded in OverlayView). */
 export function DevLogPanel({
   open,
@@ -106,9 +125,11 @@ type FilterCategory = (typeof FILTER_CATEGORIES)[number];
 function DevLogContent({
   onClose,
   onDetach,
+  escapeCloses = true,
 }: {
   onClose?: () => void;
   onDetach?: () => void;
+  escapeCloses?: boolean;
 } = {}) {
   const entries = useDevLogStore((s) => s.entries);
   const clear = useDevLogStore((s) => s.clear);
@@ -131,13 +152,13 @@ function DevLogContent({
 
   // Escape to close (inline only)
   useEffect(() => {
-    if (!onClose) return;
+    if (!onClose || !escapeCloses) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  }, [onClose, escapeCloses]);
 
   const filteredEntries = filterCategory === "all"
     ? entries
@@ -205,7 +226,7 @@ function DevLogContent({
             <button
               onClick={onClose}
               className="rounded p-1 text-muted-foreground/60 hover:bg-accent/50 hover:text-foreground"
-              aria-label="Close (Esc)"
+              aria-label={escapeCloses ? "Close (Esc)" : "Close Dev Log"}
             >
               <X className="h-3 w-3" />
             </button>

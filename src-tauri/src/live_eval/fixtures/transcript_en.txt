@@ -1,0 +1,14 @@
+00:05|You|Okay, thanks for joining. Let's start with the Q3 budget.
+00:12|Them|Sure. Marketing wants 12 percent more, about $48,000 extra for the product launch in Lisbon.
+00:30|You|That's a lot. What did Maria say about the launch date?
+00:38|Them|Maria confirmed the launch is on September 14, and Acme will handle the printing.
+00:55|You|Good. Can we afford it without cutting engineering?
+01:03|Them|If we freeze hiring until October, yes. Otherwise we would have to cut two contractors.
+01:25|You|Let's freeze hiring then. I will tell Tom today.
+01:32|Them|Great. Also, the vendor contract with Globex renews in November and the price goes up 5 percent.
+01:50|You|We should renegotiate. Who owns that?
+01:58|Them|Nobody yet. I can take it, but I need the old contract from legal.
+02:20|You|Okay, you take Globex. I will ask legal for the contract by Friday.
+02:30|Them|One open question: do we still need the Berlin office next year?
+02:48|You|Not sure. Let's put that on the agenda for the next meeting.
+03:05|Them|Fine. That is all from me.

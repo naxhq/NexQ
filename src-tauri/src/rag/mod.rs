@@ -8,6 +8,9 @@ pub mod prompt_builder;
 pub mod file_processor;
 pub mod transcript_indexer;
 
+#[cfg(test)]
+mod isolation_tests;
+
 use std::sync::{Arc, Mutex};
 use config::RagConfig;
 use embedder::OllamaEmbedder;
@@ -83,6 +86,16 @@ impl RagManager {
             self.transcript_indexer = None;
         }
         self.config = config;
+    }
+
+    /// The file id of the running transcript's chunks, but only for the meeting
+    /// that owns them: another meeting, a past one or a request outside any
+    /// meeting never gets it.
+    pub fn transcript_file_id_for(&self, meeting_id: &str) -> Option<String> {
+        self.transcript_indexer
+            .as_ref()
+            .filter(|t| t.owner() == Some(meeting_id))
+            .map(|t| t.file_id().to_string())
     }
 
     /// Get a mutable reference to the transcript indexer, if enabled.
@@ -241,12 +254,16 @@ impl RagManager {
     /// Creates a temporary OllamaEmbedder for the query embedding, locks the
     /// database, loads stored embeddings, and dispatches to the appropriate
     /// search mode (hybrid, semantic, or keyword).
+    ///
+    /// `files` limits the search to the chunks of those files (None = all):
+    /// the limit is applied before ranking, so the top results are all allowed.
     pub async fn search_async(
         db: &Arc<Mutex<DatabaseManager>>,
         query: &str,
         config: &RagConfig,
         embedder_url: &str,
         model: &str,
+        files: Option<&[String]>,
     ) -> Result<Vec<ScoredChunk>, String> {
         let embedder = OllamaEmbedder::new(embedder_url);
 
@@ -270,20 +287,20 @@ impl RagManager {
                     .ok_or("Query embedding required for hybrid search")?;
 
                 // Load all stored embeddings for vector search
-                let stored = load_all_embeddings(conn)?;
+                let stored = load_embeddings(conn, files)?;
 
-                search::hybrid_search(conn, query_emb, query, config, &stored)
+                search::hybrid_search(conn, query_emb, query, config, &stored, files)
             }
             "semantic" => {
                 let query_emb = query_embedding
                     .as_ref()
                     .ok_or("Query embedding required for semantic search")?;
 
-                let stored = load_all_embeddings(conn)?;
+                let stored = load_embeddings(conn, files)?;
 
                 search::semantic_only_search(conn, query_emb, config, &stored)
             }
-            "keyword" => search::keyword_only_search(conn, query, config),
+            "keyword" => search::keyword_only_search(conn, query, config, files),
             other => Err(format!("Unknown search mode: {}", other)),
         }
     }
@@ -295,12 +312,16 @@ impl RagManager {
     }
 }
 
-/// Load all embeddings from the database into memory for vector search.
+/// Load the embeddings of the allowed files (all when `files` is None) into
+/// memory for vector search.
 ///
 /// Returns Vec of (chunk_id, embedding_vector) pairs.
-fn load_all_embeddings(conn: &Connection) -> Result<Vec<(String, Vec<f32>)>, String> {
-    let rows = rag_db::get_all_embeddings(conn)
-        .map_err(|e| format!("Failed to load embeddings: {}", e))?;
+pub fn load_embeddings(conn: &Connection, files: Option<&[String]>) -> Result<Vec<(String, Vec<f32>)>, String> {
+    let rows = match files {
+        Some(files) => rag_db::get_embeddings_for_files(conn, files),
+        None => rag_db::get_all_embeddings(conn),
+    }
+    .map_err(|e| format!("Failed to load embeddings: {}", e))?;
 
     let embeddings: Vec<(String, Vec<f32>)> = rows
         .into_iter()

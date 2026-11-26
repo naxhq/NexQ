@@ -9,7 +9,7 @@
 import { cancelGeneration } from "./ipc";
 import { logToFile } from "./logger";
 import { runUserAction } from "./userAction";
-import { requestToggles } from "../stores/sourcesStore";
+import { requestToggles } from "../stores/assistSourcesStore";
 import type { ImageAttachment, TurnSignal } from "./types";
 import { useQuestionStore, type AutoAnswerRef } from "../stores/questionStore";
 import { useStreamStore } from "../stores/streamStore";

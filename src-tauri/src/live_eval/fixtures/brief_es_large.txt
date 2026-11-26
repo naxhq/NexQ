@@ -1,0 +1,4 @@
+{"now":"Presupuesto: lanzamiento y contrataciones","facts":[
+{"text":"Marketing pide un 12 por ciento más, unos 48.000 euros, para el lanzamiento en Lisboa","source":"P1"},
+{"text":"María confirmó el lanzamiento el 14 de septiembre","source":"P2"},
+{"text":"El contrato con Globex se renueva en noviembre y sube un 5 por ciento","source":"P3"}]}

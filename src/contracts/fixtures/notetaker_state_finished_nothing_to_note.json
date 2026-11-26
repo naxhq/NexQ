@@ -1,0 +1,18 @@
+{
+  "can": [],
+  "cap": 120000,
+  "ended": {
+    "detail": null,
+    "kind": "nothing_to_note"
+  },
+  "error_kind": null,
+  "meeting_id": "m1",
+  "model": null,
+  "moved_online": null,
+  "next_in_ms": null,
+  "not_covered": null,
+  "reason": null,
+  "status": "finished",
+  "tokens_used": 900,
+  "total_tokens": 4000
+}

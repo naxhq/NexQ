@@ -80,6 +80,8 @@ struct Shared {
     mcp: Mutex<Vec<McpServerState>>,
     /// The thread's cumulative token usage when the last turn ended.
     usage_baseline: Mutex<Usage>,
+    /// The worst plan-limit signal since it was last taken.
+    plan_limit: Mutex<Option<crate::llm::cli_agent::protocol::PlanLimit>>,
     /// Which MCP tools may run: the allowlist `item_breach` checks every item against.
     policy: CodexPolicy,
     /// The keys of the MCP servers NexQ configured: any other that starts is a breach.
@@ -544,6 +546,10 @@ impl SessionHandle for CodexSession {
     fn init_info(&self) -> InitInfo {
         CodexSession::init_info(self)
     }
+
+    fn take_plan_limit(&self) -> Option<crate::llm::cli_agent::protocol::PlanLimit> {
+        self.shared.plan_limit.lock().unwrap().take()
+    }
 }
 
 /// The developer message about reading (and nothing else: the system prompt is
@@ -754,6 +760,13 @@ async fn run_turn(
                     Notification::TokenUsage { turn_id: t, total, .. } if t == turn_id => {
                         total_usage = Some(total);
                     }
+                    Notification::PlanLimit(limit) => {
+                        let mut slot = shared.plan_limit.lock().unwrap();
+                        *slot = Some(match slot.take() {
+                            Some(old) => old.merge(limit),
+                            None => limit,
+                        });
+                    }
                     Notification::Error { turn_id: t, error, will_retry } if t == turn_id => {
                         if will_retry {
                             log::info!("codex: transient error, retrying: {}", error.message);
@@ -831,6 +844,7 @@ fn start_process(launch: &CodexLaunch, args: &[String], approvals: Arc<Approvals
         pending: Mutex::new(HashMap::new()),
         mcp: Mutex::new(Vec::new()),
         usage_baseline: Mutex::new(Usage::default()),
+        plan_limit: Mutex::new(None),
         policy: approvals.policy.clone(),
         expected_servers: launch.server_keys(),
     });

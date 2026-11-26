@@ -36,7 +36,7 @@ interface AgentState {
   /** Open agent sessions by `agentSessionKey`. Closed sessions are dropped. */
   sessions: Record<string, AgentSessionStatus>;
   /** Re-detect the CLI and its login. Concurrent calls for one agent share one check. */
-  refreshStatus: (kind: CliAgentKind) => Promise<void>;
+  refreshStatus: (kind: CliAgentKind, opts?: { refresh?: boolean }) => Promise<void>;
   /**
    * Ask the CLI for its model catalog and keep it in the config store
    * (persisted, so every window and the next start have it). Concurrent
@@ -87,11 +87,11 @@ export const useAgentStore = create<AgentState>((set) => ({
   modelsRefreshing: {},
   sessions: {},
 
-  refreshStatus: (kind) => {
+  refreshStatus: (kind, opts) => {
     const running = inFlight.get(kind);
     if (running) return running;
     set((s) => ({ checking: withAgent(s.checking, kind, true) }));
-    const run = cliAgentStatus(kind)
+    const run = cliAgentStatus(kind, opts?.refresh === true)
       .then((status) =>
         set((s) => ({
           statuses: withAgent(s.statuses, kind, status),

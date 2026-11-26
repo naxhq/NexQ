@@ -8,7 +8,7 @@ import type { McpServer, PersonalSourcesConfig } from "../lib/types";
 const saved = vi.hoisted(() => new Map<string, unknown>());
 const keyListeners = vi.hoisted(() => [] as Array<{ key: string; cb: (v: unknown) => void }>);
 const invokeCalls = vi.hoisted(() => [] as Array<{ cmd: string; args: unknown }>);
-const backend = vi.hoisted(() => ({ reject: null as string | null, startingFor: 0 }));
+const backend = vi.hoisted(() => ({ reject: null as string | null, startingFor: 0, repair: null as unknown, repairFails: false }));
 const writes = vi.hoisted(() => ({ count: 0 }));
 
 vi.mock("@tauri-apps/plugin-store", () => ({
@@ -39,6 +39,10 @@ vi.mock("@tauri-apps/api/core", () => ({
       throw "state not managed for field `state` on command `set_personal_sources`. You must call `.manage()` before using this command";
     }
     if (cmd === "set_personal_sources" && backend.reject) throw new Error(backend.reject);
+    if (cmd === "repair_personal_sources") {
+      if (backend.repairFails) throw new Error("boom");
+      return backend.repair;
+    }
     return null;
   }),
 }));
@@ -87,17 +91,19 @@ beforeEach(() => {
   invokeCalls.length = 0;
   backend.reject = null;
   backend.startingFor = 0;
+  backend.repair = null;
+  backend.repairFails = false;
   writes.count = 0;
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
 describe("sourcesStore", () => {
-  it("an old config.json without the new keys loads empty sources and both pills off, and leaves other keys alone", async () => {
+  it("an old config.json without the new keys loads empty sources and Knowledge on and Tools off, and leaves other keys alone", async () => {
     saved.set("llmProvider", "claude_cli"); // nothing else
     const w = await openWindow();
     expect(w.useSourcesStore.getState().config).toEqual(w.DEFAULT_SOURCES_CONFIG);
-    expect(w.useSourcesStore.getState().toggles).toEqual({ notes: false, tools: false });
+    expect(w.useSourcesStore.getState().toggles).toEqual({ library: true, tools: false });
     expect(saved.has("personalSources")).toBe(false); // loading never writes
     expect(saved.has("sourceToggles")).toBe(false);
     expect(saved.get("llmProvider")).toBe("claude_cli");
@@ -130,7 +136,7 @@ describe("sourcesStore", () => {
     expect(c.mcp_servers).toHaveLength(1);
     expect(c.mcp_servers[0].env[0].value).toBeNull();
     expect(c.mcp_servers[0].transport).toEqual({ type: "stdio", command: "n", args: [] });
-    expect(w.useSourcesStore.getState().toggles).toEqual({ notes: false, tools: false });
+    expect(w.useSourcesStore.getState().toggles).toEqual({ library: true, tools: false });
   });
 
   it("pushes the config to the backend on load and on every change", async () => {
@@ -144,6 +150,36 @@ describe("sourcesStore", () => {
     expect(pushes()).toHaveLength(2);
     expect((pushes()[1].args as { config: PersonalSourcesConfig }).config.notes_folders).toEqual([]);
     expect(saved.get("personalSources")).toEqual(next);
+  });
+
+  it("a server saved twice is merged at startup by the backend, from what it holds: the repaired config is kept and saved", async () => {
+    const twice = config({ mcp_servers: [server({ id: "keep" }), server({ id: "drop", key: "mira-2", enabled: false, last_check: null })] });
+    saved.set("personalSources", twice);
+    const repaired = config({ mcp_servers: [server({ id: "keep" })] });
+    backend.repair = { config: repaired, merged_servers: 1, merged_folders: 0 };
+    const w = await openWindow();
+    expect(w.useSourcesStore.getState().config.mcp_servers.map((s) => s.id)).toEqual(["keep"]);
+    expect(saved.get("personalSources")).toEqual(repaired);
+    // The backend gets the config first, then repairs it itself; the repair call carries no config.
+    expect(invokeCalls.map((c) => c.cmd)).toEqual(["set_personal_sources", "repair_personal_sources"]);
+    expect((pushes()[0].args as { config: PersonalSourcesConfig }).config.mcp_servers.map((s) => s.id)).toEqual(["keep", "drop"]);
+    const repair = invokeCalls.find((c) => c.cmd === "repair_personal_sources");
+    expect(repair?.args ?? {}).toEqual({});
+  });
+
+  it("with nothing to merge, or a repair that fails, the saved config is untouched", async () => {
+    const original = config();
+    saved.set("personalSources", original);
+    backend.repair = { config: config({ mcp_servers: [] }), merged_servers: 0, merged_folders: 0 };
+    const w = await openWindow();
+    expect(w.useSourcesStore.getState().config.mcp_servers).toHaveLength(1);
+    expect(writes.count).toBe(0);
+
+    backend.repairFails = true;
+    const w2 = await openWindow();
+    expect(w2.useSourcesStore.getState().config.mcp_servers).toHaveLength(1);
+    expect(writes.count).toBe(0);
+    expect(pushes().length).toBe(2);
   });
 
   it("an old install pushes an empty config at startup without writing the file", async () => {
@@ -171,22 +207,21 @@ describe("sourcesStore", () => {
     expect(w.useSourcesStore.getState().pushError).toBeNull();
   });
 
-  it("a pill flipped in the overlay reaches the launcher and the next start", async () => {
-    const overlay = await openWindow();
-    // The launcher is a second window with its own store, listening on the same file.
-    const launcherListeners = keyListeners.length;
-    vi.resetModules();
-    const launcherMod = await import("./sourcesStore");
-    await launcherMod.useSourcesStore.getState().load();
-    expect(keyListeners.length).toBeGreaterThan(launcherListeners);
+  it("an older saved pill pair is read as the default of a new meeting: an old notes off (folders only) never turns Knowledge off, and nothing is rewritten", async () => {
+    saved.set("sourceToggles", { notes: false, tools: true });
+    const w = await openWindow();
+    expect(w.useSourcesStore.getState().toggles).toEqual({ library: true, tools: true });
+    expect(saved.get("sourceToggles")).toEqual({ notes: false, tools: true }); // loading never writes
+    expect(writes.count).toBe(0);
+  });
 
-    overlay.useSourcesStore.getState().setToggles({ notes: true, tools: false });
-    await vi.waitFor(() => expect(launcherMod.useSourcesStore.getState().toggles).toEqual({ notes: true, tools: false }));
-    // Its own copy is not clobbered by the echo of its own save.
-    expect(overlay.useSourcesStore.getState().toggles).toEqual({ notes: true, tools: false });
-
-    const next = await openWindow();
-    expect(next.useSourcesStore.getState().toggles).toEqual({ notes: true, tools: false });
+  it("a saved pair in the new names, a half-saved one and a damaged one all load", async () => {
+    saved.set("sourceToggles", { library: false });
+    expect((await openWindow()).useSourcesStore.getState().toggles).toEqual({ library: false, tools: false });
+    saved.set("sourceToggles", { notes: "yes", tools: 3 });
+    expect((await openWindow()).useSourcesStore.getState().toggles).toEqual({ library: true, tools: false });
+    saved.set("sourceToggles", [1, 2]);
+    expect((await openWindow()).useSourcesStore.getState().toggles).toEqual({ library: true, tools: false });
   });
 
   it("a config changed in another window arrives here without telling the backend again", async () => {
@@ -220,21 +255,5 @@ describe("sourcesStore", () => {
     expect(
       enabledKinds(config({ mcp_servers: [server({ tools: [{ name: "x", full_name: "mcp__mira__x", allowed: false }] })] })).tools,
     ).toBe(false);
-  });
-
-  it("requestToggles is undefined off Claude and masks kinds with nothing enabled", async () => {
-    const w = await openWindow();
-    await w.useSourcesStore.getState().setConfig(config({ mcp_servers: [] }));
-    w.useSourcesStore.getState().setToggles({ notes: true, tools: true });
-
-    await w.setProvider("openai");
-    expect(w.requestToggles()).toBeUndefined();
-
-    await w.setProvider("claude_cli");
-    expect(w.requestToggles()).toEqual({ notes: true, tools: false }); // no usable server behind Tools
-
-    // Nothing set up at all: nothing to send.
-    await w.useSourcesStore.getState().setConfig(config({ notes_folders: [], mcp_servers: [] }));
-    expect(w.requestToggles()).toBeUndefined();
   });
 });

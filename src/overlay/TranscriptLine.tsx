@@ -3,6 +3,8 @@
 // Speaker color is dynamic via speakerStore; confidence underline when enabled.
 // SP2 Task 7: Hover bookmark icon, right-click context menu, bookmarked line indicator.
 
+import { Tooltip } from "../ui/Tooltip";
+import { readableOn, readingTextColor, useIsLight } from "../lib/themeText";
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Bookmark as BookmarkIcon } from "lucide-react";
@@ -51,7 +53,6 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
   const translations = useTranslationStore((s) => s.translations);
   const translating = useTranslationStore((s) => s.translating);
   const displayMode = useTranslationStore((s) => s.displayMode);
-  const autoTranslateActive = useTranslationStore((s) => s.autoTranslateActive);
 
   // SP2 Task 7: Bookmark state + context menu position
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -75,6 +76,7 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
   const speaker = useSpeakerStore((s) => isPending ? undefined : s.speakers[speakerId]);
   const renameSpeaker = useSpeakerStore((s) => s.renameSpeaker);
   const ensureRemoteSpeaker = useSpeakerStore((s) => s.ensureRemoteSpeaker);
+  const isLight = useIsLight();
 
   const speakerLabel = isPending
     ? "..."
@@ -82,6 +84,12 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
   const speakerHex = isPending
     ? "#6b7280"
     : (speaker?.color ?? (remoteKey && segment.speaker_tag ? remoteSpeakerColor(segment.speaker_tag) : "#6b7280"));
+
+  // The two default speaker colours have theme-aware text tokens, so the
+  // transparency backing accounts for them; custom colours are adjusted instead.
+  const tagColor = speakerHex.toLowerCase() === "#22c55e" ? "hsl(var(--success-text))"
+    : speakerHex.toLowerCase() === "#f97316" ? "hsl(var(--speaker-interviewer-text))"
+    : readableOn(speakerHex, isLight ? "light" : "dark");
 
   // Convert epoch timestamp to elapsed time since meeting start
   const elapsedMs = meetingStartTime
@@ -258,12 +266,11 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
       onContextMenu={handleContextMenu}
     >
       {/* Timestamp */}
-      <span
-        className="mt-[3px] shrink-0 text-[0.6875rem] tabular-nums text-muted-foreground/45 font-medium tracking-tight"
-        title={fullTimestamp}
-      >
-        {isHovered ? fullTimestamp : shortTimestamp}
-      </span>
+      <Tooltip content={fullTimestamp}>
+        <span className="mt-[3px] shrink-0 text-[0.6875rem] tabular-nums text-muted-foreground/45 font-medium tracking-tight">
+          {isHovered ? fullTimestamp : shortTimestamp}
+        </span>
+      </Tooltip>
 
       {/* Speaker label — click to rename */}
       {isEditing ? (
@@ -279,14 +286,14 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
           }}
           maxLength={40}
           className="mt-[2px] shrink-0 w-20 rounded bg-white/5 border border-purple-400/30 px-1 py-0 text-[0.6875rem] font-semibold outline-none"
-          style={{ color: speakerHex }}
+          style={{ color: tagColor }}
         />
       ) : (
         <span
           className={`mt-[3px] shrink-0 text-[0.6875rem] font-semibold tracking-tight ${canRename ? "cursor-pointer hover:underline" : ""} ${isPending ? "animate-pulse" : ""}`}
-          style={{ color: speakerHex }}
+          style={{ color: tagColor }}
           onClick={startEditing}
-          title={canRename ? "Click to rename" : undefined}
+          aria-label={canRename ? "Click to rename" : undefined}
         >
           {speakerLabel}
         </span>
@@ -294,6 +301,7 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
 
       {/* Text content + translation + bookmark note */}
       <div className="flex-1 min-w-0 relative">
+        <Tooltip content={`Confidence: ${Math.round(segment.confidence * 100)}%`} disabled={!isLowConfidence}>
         <span
           className={`leading-[1.65] ${
             segment.is_final
@@ -304,12 +312,7 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
               ? "border-b border-dotted border-white/30 opacity-70"
               : ""
           }`}
-          style={{ fontSize: `${transcriptFontSize}px`, color: segment.is_final ? transcriptTextColor : undefined }}
-          title={
-            isLowConfidence
-              ? `Confidence: ${Math.round(segment.confidence * 100)}%`
-              : undefined
-          }
+          style={{ fontSize: `${transcriptFontSize}px`, color: segment.is_final ? readingTextColor(transcriptTextColor) : undefined }}
         >
           {renderText()}
           {pendingTail && (
@@ -318,10 +321,11 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
             </span>
           )}
         </span>
+        </Tooltip>
 
         {/* Inline translation — visible below the original text */}
         {displayMode === "inline" && (
-          <div className="mt-1 leading-[1.5]" style={{ fontSize: `${translationFontSize}px`, color: translationTextColor }}>
+          <div className="mt-1 leading-[1.5]" style={{ fontSize: `${translationFontSize}px`, color: readableOn(translationTextColor, isLight ? "light" : "dark", 5.4) }}>
             {isTranslating ? (
               <span className="text-muted-foreground/40 animate-pulse">Translating...</span>
             ) : translation ? (
@@ -340,7 +344,7 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
               top: `${Math.max(8, mousePos.y - 90)}px`,
             }}
           >
-            <p style={{ fontSize: `${translationFontSize + 1}px`, color: translationTextColor }} className="leading-[1.6]">
+            <p style={{ fontSize: `${translationFontSize + 1}px`, color: readableOn(translationTextColor, isLight ? "light" : "dark", 5.4) }} className="leading-[1.6]">
               {translation.translated_text}
             </p>
             <div className="mt-1.5 flex items-center gap-1.5 text-[0.6rem] text-muted-foreground/50">
@@ -373,8 +377,8 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
       <div className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
           onClick={handleToggleBookmark}
-          className="rounded p-0.5 hover:bg-accent/50 transition-colors"
-          title={isBookmarked ? "Remove bookmark" : "Bookmark this line"}
+          className="-m-1 rounded p-1.5 hover:bg-accent/50 transition-colors ui-focus"
+          aria-label={`${isBookmarked ? "Remove bookmark" : "Bookmark this line"} by ${speakerLabel} at ${hours > 0 ? `${hours}:` : ""}${minutes}:${String(seconds).padStart(2, "0")}`}
         >
           <BookmarkIcon className={`h-3 w-3 ${isBookmarked ? "fill-primary text-primary" : "text-muted-foreground/40"}`} />
         </button>
