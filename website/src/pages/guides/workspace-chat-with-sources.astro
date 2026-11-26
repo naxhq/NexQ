@@ -1,0 +1,121 @@
+---
+import Guide from '../../layouts/Guide.astro';
+import { doc } from '../../data/site';
+// docs/user-guide/workspace-chat.md. Budgets: src-tauri/src/workspace_search/context_plan.rs Depth::budget_for
+// (8k, 24k, 80k; 16k, 30% up to 64k, 60% up to 150k with a subscription or a local model; never over 60% of the window).
+// Search runs on the PC: src-tauri/src/workspace_search/ (keyword index, no embedding model).
+const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
+---
+
+<Guide
+  slug="workspace-chat-with-sources"
+  lede="Workspace chat answers questions across everything in a workspace: its past meetings, its documents and the folders you added. Each answer says where it came from, and a click takes you to the moment in the meeting."
+>
+  <h2>What you can ask</h2>
+  <ul>
+    <li>“What did we decide about pricing?”</li>
+    <li>“What did I promise Priya?”</li>
+    <li>“Summarize last week’s calls.”</li>
+  </ul>
+  <p>
+    It only uses the <a class="link" href="../workspaces-for-clients-and-projects/">workspace</a> you have open, and General if you turned on <strong>Also use General</strong> for it. It never reads another workspace’s meetings.
+  </p>
+
+  <figure class="guide-shot">
+    <img
+      src={`${base}screenshots/v3/workspace-chat-context.webp`}
+      width="1600"
+      height="1000"
+      loading="lazy"
+      decoding="async"
+      alt="Workspace chat with an answer and its sources. The context view is open below it, with a bar for each item the next answer will see."
+    />
+    <figcaption>An answer with its sources, and the context view open below it (invented demo data).</figcaption>
+  </figure>
+
+  <h2>Ask a question</h2>
+  <ol>
+    <li>Open a workspace. You need an AI provider set up, and some material in the workspace: a few meetings, or documents in the Library.</li>
+    <li>Type in the box that says <strong>Ask about your meetings, documents and notes</strong>. Under <strong>Try asking</strong> you may see questions made from your own meetings.</li>
+    <li>Press <code>Enter</code>, or click <strong>Ask</strong>. <code>Shift+Enter</code> adds a line.</li>
+    <li>The answer streams in. <strong>Stop</strong> cancels it, and what was written stays on screen but is not saved.</li>
+  </ol>
+  <p>
+    Before you send, the box shows how much the question would carry, for example “About 6.2k tokens of 24k”. Chats are listed under <strong>Chats</strong>, and each one keeps its own model.
+  </p>
+
+  <h2>Read the sources</h2>
+  <p>
+    Sources appear as <code>[S1]</code>, <code>[S2]</code> tags in the answer. Click one, or open <strong>N sources</strong> under the answer.
+  </p>
+  <ul>
+    <li>A meeting opens on its transcript at the line being spoken at that moment.</li>
+    <li>A document opens the Library and marks its row.</li>
+    <li>A file in a folder shows its path, with <strong>Open folder</strong>.</li>
+  </ul>
+  <p>
+    A tag can only point at something that was really sent to the model. NexQ removes any tag the model invents, and text from your meetings and files is handed to the model as data, not as instructions.
+  </p>
+
+  <h2>See what it saw</h2>
+  <p>
+    Click <strong>Context</strong> above the box. Each bar is one item: its width is its size, and its height is how relevant it is. The layers are instructions and memory, meetings, documents, folders and the conversation. For an item you can open it, pin it, or <strong>Leave out of this chat</strong>.
+  </p>
+  <p>
+    NexQ doesn’t send everything. It searches first, on your computer, and sends what fits. Small items go in whole. When something didn’t fit, the answer says so, and <strong>Search deeper</strong> asks again with more room.
+  </p>
+
+  <h2>Choose how much goes in</h2>
+  <div class="guide-table">
+    <table>
+      <thead>
+        <tr><th scope="col">Depth</th><th scope="col">What it is</th><th scope="col">Material per answer</th></tr>
+      </thead>
+      <tbody>
+        <tr><th scope="row">Lean</th><td>Quick and cheap</td><td>About 8k tokens</td></tr>
+        <tr><th scope="row">Balanced</th><td>Most questions; it stops when nothing more is relevant</td><td>Up to 24k tokens</td></tr>
+        <tr><th scope="row">Deep</th><td>Searches widely, slower</td><td>Up to 80k tokens</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    Those are the sizes with an API provider. With a subscription or a local model, which cost nothing per token, the room grows with the model: Lean 16k, Balanced up to 64k, Deep up to 150k. Either way an answer never uses more than 60 percent of the model’s window. The <strong>All meetings</strong> control sets which past meetings the chat may use.
+  </p>
+
+  <h2>Keep an answer</h2>
+  <ul>
+    <li><strong>Copy</strong> copies it without the source tags.</li>
+    <li><strong>Ask another model</strong> asks the same question again with a model you pick.</li>
+    <li><strong>Save to library</strong> saves it as a document in this workspace, so later answers can use it.</li>
+    <li><strong>Add to instructions</strong> adds it to the workspace’s instructions, which the AI follows in every later answer. Read it first, and <strong>Undo</strong> is there if you change your mind.</li>
+  </ul>
+
+  <h2>When a tool wants to run</h2>
+  <p>
+    With a Claude subscription (version 2.1.328 or newer), a tool that could change something asks first. A card shows the exact arguments, and you choose <strong>Allow once</strong> or <strong>Deny</strong>. If you don’t answer in 60 seconds, the call is denied. There is no “always allow”. Codex and Antigravity run only read-only tools in a chat.
+  </p>
+
+  <h2>What leaves your computer</h2>
+  <ul>
+    <li>Adding files, building the index and finding passages send nothing anywhere.</li>
+    <li>
+      When you ask, NexQ sends the provider you chose for that chat your question, the workspace’s instructions and memory, the passages or files picked for this answer, and the recent conversation. With Ollama or LM Studio on your PC, that stays on your PC.
+    </li>
+    <li>With a subscription, the command-line tool also sends what it reads itself: files from the workspace’s folders and the results of tools you allowed.</li>
+    <li>
+      <strong>Prepare recaps with AI</strong> is off by default. If you turn it on, it sends one meeting’s transcript at a time to a model, to write a short recap of meetings that have no summary.
+    </li>
+  </ul>
+
+  <h2>Tips</h2>
+  <ul>
+    <li>Ask about one thing at a time. A narrow question finds better passages.</li>
+    <li>Use Lean for lookups, and Deep for questions like “what changed over the last month?”.</li>
+    <li>Pin the one document that matters, such as a contract, so it is always in front of the model.</li>
+    <li>If an answer looks wrong, open the context view. It shows what the model saw.</li>
+  </ul>
+  <p>
+    Every control is in the <a class="link" href={doc('workspace-chat')}>user guide</a>. For help during a call, see
+    <a class="link" href="../live-notes-and-meeting-brief/">live notes and the brief</a>.
+  </p>
+</Guide>

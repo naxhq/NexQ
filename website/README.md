@@ -18,7 +18,7 @@ npm run preview
 ```
 src/
   pages/guides/            how-to pages, one question each; the list is data/guides.ts, the shell layouts/Guide.astro
-  pages/index.astro        page order: Navbar, Hero (hero + "The call" as one stage), YourAI, AfterCall,
+  pages/index.astro        page order: Navbar, Hero (hero + "The call" as one stage), Workspaces, YourAI, AfterCall,
                            MadeFor, Privacy, Releases, Download, Compare, FAQ, FinalCTA, Footer
   layouts/Layout.astro     head, OG/Twitter, JSON-LD, font preload, reveal-on-scroll helper
   components/              one file per section, plus Navbar, Footer, Icon, Wave
@@ -47,6 +47,10 @@ scroll-jacking) from the first word to the last beat. Under 900px it is one colu
 - Phones (and no JS) get a still of each beat (`BeatFrame.astro`) next to its text. The hero CTA names
   your system from 640px up, and on phones reads "Get it for Windows or Mac" and jumps to Download.
 
+## Workspaces and screenshots
+
+`Workspaces.astro` (`#workspaces`) is the one place the site uses real screenshots of the app (the rest is recreated markup). They live in `public/screenshots/v3/` as WebP under 120 KB each, taken from the app's own frontend with a mocked backend and invented data (Acme, Priya), never from a real install or real meetings. Every claim in that section and in the 3.0 guides is traced to `docs/user-guide/` or the app source in the comment at the top of the file.
+
 ## Where facts live
 
 `src/data/site.ts` is the single source for links, provider lists, counts, hotkeys, scenarios,
@@ -62,7 +66,8 @@ Nothing about versions is typed by hand.
 - `RELEASES` is parsed from the root `CHANGELOG.md` with the app's own `parseChangelog`
   (`src/lib/releaseNotes.mjs`). It keeps versions from 2.22.0 on that have new features, drops
   entries scoped `website`, `deps` or `release`, and lists newest first. `RELEASE_ONELINERS` in
-  `site.ts` can override a release's summary, keyed by version ("2.41.0").
+  `site.ts` can override a release's summary, keyed by version ("2.41.0"). A one-liner for a version newer than the
+  newest changelog entry is allowed (it waits unused until `CHANGELOG.md` has that release), so it can be written before the release.
 - `waveFor(version)` imports the app's own `releaseWave()` (`src/lib/releaseWave.mjs`), so the site
   shows the same shape as the update dialog and the installer. Seed it with the full version
   string. `Wave.astro` renders it as static, labelled markup; sections move a `--progress`

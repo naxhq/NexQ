@@ -280,4 +280,6 @@ NexQ never creates, upgrades or overwrites a database it can't use. Instead of t
 - [Meeting window layout](meeting-layout.md): arrange the panels
 - [Talking points](talking-points.md): notes you read during a call
 - [Live notes and the brief](live-notes-and-brief.md): notes written while you talk
+- [Memory](memory.md): facts the workspace keeps
+- [The Library](library.md): documents, folders and tools, and the Knowledge and Tools pills
 - [Using Context Intelligence](rag-context.md): documents and the local knowledge base

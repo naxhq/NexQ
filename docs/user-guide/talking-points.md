@@ -48,6 +48,9 @@ The note is set as a clean page. The line you are saying sits on a thin marker i
 | **Speed** (words a minute, used by auto-scroll) | 60 to 260 | 140 |
 | **Tick what I have said** | on or off | On |
 | **Suggest where I am** | on or off | On |
+| **Text style** | Classic, Checked off, Highlight, Focus or High contrast | Classic |
+
+The **Text style** picker shows a small preview of each style. **Classic** fades lines as you pass them. **Checked off** strikes through in green what you said. **Highlight** puts a soft mark on the line you are on. **Focus** makes the current line stand out and lets the rest recede. **High contrast** keeps full strength everywhere and marks the state with lines.
 
 With the note focused, `+` and `-` change the text size. NexQ remembers your settings and the last note you used in each workspace.
 
@@ -123,7 +126,7 @@ Ticks need your own voice, so they follow the same rules as **My voice**: not in
 
 ## Memory
 
-A workspace can also keep **Memory**: short facts that you approved, such as a person's role, a decision, an open item or a preference. The AI uses them in this workspace's answers. Memory appears in the **Library**, under the talking points.
+A workspace can also keep **Memory**: short facts that you approved, such as a person's role, a decision, an open item or a preference. The AI uses them in this workspace's answers. Memory appears in the **Library**, under the talking points. The full story is in [Memory](memory.md).
 
 **Add a fact** with **+**. Choose a kind (**Person**, **Decision**, **Open item**, **Fact** or **Preference**), give it a short title and write what to remember. Saved items are grouped by kind. **Edit** changes one and **Forget** deletes it (it asks first). With more than four items, a search box appears. An item that came from a meeting has a **From (meeting)** link that opens the meeting at that moment.
 

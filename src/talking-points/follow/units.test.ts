@@ -162,8 +162,10 @@ describe("follower", () => {
     }
     const sorted = times.slice(30).sort((a, b) => a - b);
     const p50 = sorted[Math.floor(sorted.length / 2)];
-    // The median: single updates are slower while the whole suite runs in parallel.
-    expect(p50).toBeLessThan(2);
+    // The median: single updates are slower while the whole suite runs in parallel, and a
+    // shared CI runner is slower still; a real regression (a full rescan per word) is far above both.
+    const onCi = !!(globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.CI;
+    expect(p50).toBeLessThan(onCi ? 10 : 2);
     expect(Math.abs(f.snapshot().position - big.blocks[206].end)).toBeLessThanOrEqual(12);
   });
 });

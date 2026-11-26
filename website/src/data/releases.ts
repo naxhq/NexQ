@@ -91,7 +91,15 @@ const minor = (v: string) => v.split('.').slice(0, 2).join('.');
 if (RELEASES.length === 0) {
   throw new Error('releases.ts: no releases parsed from CHANGELOG.md (is the format still "## [x.y.z]" with a "New" section?)');
 }
+const newestListed = RELEASES[0].version.split('.').map(Number);
+const isNewer = (v: string) => {
+  const p = v.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if ((p[i] ?? 0) !== (newestListed[i] ?? 0)) return (p[i] ?? 0) > (newestListed[i] ?? 0);
+  return false;
+};
 for (const key of Object.keys(RELEASE_ONELINERS)) {
+  // A one-liner for the next release can be written before it ships: it stays unused until CHANGELOG.md has that version.
+  if (isNewer(key)) continue;
   if (!RELEASES.some((r) => r.version === key)) {
     throw new Error(`releases.ts: RELEASE_ONELINERS has "${key}" but CHANGELOG.md has no such release with new features. Fix or remove it in data/site.ts.`);
   }

@@ -15,6 +15,48 @@ export interface Guide {
 
 export const GUIDES: Guide[] = [
   {
+    slug: 'workspaces-for-clients-and-projects',
+    label: 'Workspaces for clients, classes and projects',
+    title: 'Workspaces: Keep Each Client, Class or Project Apart',
+    description:
+      'Give each client, class or project its own meetings, files, notes and memory, and keep them apart. How to make one, what is shared, and what an update does.',
+  },
+  {
+    slug: 'workspace-chat-with-sources',
+    label: 'Ask across your meetings (workspace chat)',
+    title: 'Ask Across Your Meetings and Files, With Sources',
+    description:
+      'Ask a question across a workspace’s meetings, documents and folders and get an answer with sources. The context view, the depth setting and what leaves your PC.',
+  },
+  {
+    slug: 'talking-points-that-follow-your-voice',
+    label: 'Talking points that follow your voice',
+    title: 'Talking Points That Follow Your Voice During a Call',
+    description:
+      'Read your notes in the meeting window and let them scroll as you speak. Manual, Auto and My voice, ticking off what you said, and the honest limits.',
+  },
+  {
+    slug: 'live-notes-and-meeting-brief',
+    label: 'Live notes and the meeting brief',
+    title: 'Live Meeting Notes and a Brief From Your Own Files',
+    description:
+      'Turn on live notes, and a brief that surfaces what your workspace already knows about the topic. Settings, limits, cost and what is sent to the model.',
+  },
+  {
+    slug: 'meeting-memory',
+    label: 'Memory for a workspace',
+    title: 'Meeting Memory: Facts Your Assistant Keeps, You Approve',
+    description:
+      'Keep people, decisions, open items and preferences in a workspace. NexQ suggests them after a meeting with a link to the moment, and you save what is right.',
+  },
+  {
+    slug: 'library-knowledge-and-tools',
+    label: 'Library: documents, folders and tools',
+    title: 'The Library: Documents, Notes, Folders and Tools for Your AI',
+    description:
+      'Add documents, notes, folders and tools to a workspace, and choose per answer what the AI may use with the Knowledge and Tools pills. Setup and privacy.',
+  },
+  {
     slug: 'transcribe-both-sides-of-a-call',
     label: 'Transcribe both sides of a call',
     title: 'How to Transcribe Both Sides of a Call Without a Bot',

@@ -109,6 +109,8 @@ To give the AI your resume, notes or course material, open the workspace you wil
 - [Meeting Window Layout](meeting-layout.md) -- Choose and arrange the panels
 - [Talking Points](talking-points.md) -- Notes you read during a call, with voice-following
 - [Live Notes and the Brief](live-notes-and-brief.md) -- Notes written for you while you talk
+- [Memory](memory.md) -- Facts a workspace keeps, with a link back to the moment
+- [The Library](library.md) -- Documents, folders and tools, and the Knowledge and Tools pills
 - [Using Context Intelligence (RAG)](rag-context.md) -- Load documents for AI-enhanced responses
 - [Configuration Guide](configuration.md) -- Full provider setup and configuration options
 - [Keyboard Shortcuts](keyboard-shortcuts.md) -- Full shortcuts reference

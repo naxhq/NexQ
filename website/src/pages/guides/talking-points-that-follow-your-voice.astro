@@ -1,0 +1,108 @@
+---
+import Guide from '../../layouts/Guide.astro';
+import { doc } from '../../data/site';
+// docs/user-guide/talking-points.md, meeting-layout.md. Ranges and defaults: src/stores/talkingPointsStore.ts
+// (size 14 to 56, default 26; spacing 1.2 to 2.2; speed 60 to 260, default 140). Follow rules: src/talking-points/prompter/voice.ts.
+const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
+---
+
+<Guide
+  slug="talking-points-that-follow-your-voice"
+  lede="Talking points are your own notes, kept in a workspace and shown in the meeting window. They can scroll by themselves, follow what you say, and tick off what you have already covered."
+>
+  <figure class="guide-shot">
+    <img
+      src={`${base}screenshots/v3/talking-points-my-voice.webp`}
+      width="1500"
+      height="966"
+      loading="lazy"
+      decoding="async"
+      alt="The meeting window in the Presenter layout. The talking points panel is in My voice mode, with said lines ticked, beside the assistant."
+    />
+    <figcaption>The Presenter layout: talking points in My voice mode, next to the assistant (invented demo data).</figcaption>
+  </figure>
+
+  <h2>Write your notes</h2>
+  <ol>
+    <li>Open a workspace. In the Library on the right, find <strong>Talking points</strong> and click <strong>New note</strong>.</li>
+    <li>Give the note a title and write. It saves as you type.</li>
+    <li>Use the toolbar for bold, italic, underline, three heading sizes, lists, text colour and size.</li>
+  </ol>
+  <p>
+    <strong>Import</strong> brings in Markdown from a file (up to 2 MB) or pasted text. Headings, lists, bold and italic are kept, and links become plain text.
+  </p>
+  <p>
+    Under the title, <strong>Use as AI context</strong> decides whether live answers and the workspace chat may draw on the note. It is on for a new note. Turn it off for notes that are only for you.
+  </p>
+
+  <h2>Show them in a meeting</h2>
+  <p>
+    Talking points are a panel in the meeting window, and they are hidden in the default layout. Choose <strong>Layout, Panels, Talking points</strong>, or pick the <strong>Presenter</strong> layout, which puts them next to the assistant. If you have no note yet, the panel offers <strong>Write a note</strong>.
+  </p>
+  <p>
+    The note is set as a clean page. The line you are saying sits on a thin marker in the upper third, at full strength. What is ahead is a little fainter, and what you have said settles back. The reading settings, behind the sliders button, set text size (14 to 56), line spacing, speed and a text style: Classic, Checked off, Highlight, Focus or High contrast.
+  </p>
+
+  <h2>Three ways the note moves</h2>
+  <ul>
+    <li><strong>Manual</strong> is the default. You scroll, and nothing moves by itself.</li>
+    <li><strong>Auto</strong> scrolls at the speed you set, in words a minute. Press play, or <code>Space</code> while the note is focused.</li>
+    <li><strong>My voice</strong> follows what you say.</li>
+  </ul>
+  <p>If you scroll yourself in Auto or My voice, the note stops for 4 seconds and a <strong>Resume</strong> button offers to go back.</p>
+
+  <h2>Follow my voice</h2>
+  <p>
+    NexQ matches the last few words you said with the part of the note around your place, and scrolls to keep it. This happens on your computer. It listens only to your own side of the call, never to the other people, and makes no AI request.
+  </p>
+  <ul>
+    <li>It copes with a line you skip, a point you take out of order and the odd ad-lib.</li>
+    <li>
+      For a big jump it waits for stronger proof. Until then it can offer <strong>Go to</strong>, a button for the point your last words fit best. It never moves the note by itself on an offer: you click it.
+    </li>
+    <li>After a big automatic jump you get <strong>Back to where I was</strong> for 8 seconds.</li>
+    <li>When it isn’t sure it holds still. The panel says <strong>Following you</strong>, <strong>Listening</strong>, <strong>Lost your place</strong> or <strong>Waiting for you</strong>.</li>
+  </ul>
+  <p>
+    It needs your own voice as a separate side. It is not available in an in-person meeting, with your microphone muted, or when your side has no speech engine, and the panel says which.
+  </p>
+
+  <h2>Said it</h2>
+  <p>
+    With <strong>Tick what I have said</strong> on, each bullet or paragraph gets a tick once you have said enough of it. That means at least three distinctive words from the line, or all of them if it has fewer, said in the last 90 seconds. Ticked lines settle back, and the panel counts what is left to say. Click a tick to set it yourself. Ticks work in any mode and are saved with the meeting.
+  </p>
+
+  <h2>Be honest about the limits</h2>
+  <ul>
+    <li>Following works on the words your speech engine writes down, so it is only as good as that transcript.</li>
+    <li>It compares words, not meaning. If you say something in quite different words than the note, it may not notice. Misheard names and numbers can also cause a miss.</li>
+    <li>
+      Languages are not equal. English and French match best. For Spanish, Portuguese, German and Arabic, ticks may be missed. For Japanese, Chinese and Korean, ticks often miss rephrased lines. NexQ says so in the panel.
+    </li>
+    <li>The note and your speech need to be in the same language.</li>
+  </ul>
+  <p>Treat it as a help, not a guarantee. Keep Manual one click away, and scroll when it is wrong.</p>
+
+  <h2>Edit during the call</h2>
+  <p>
+    Click <strong>Edit this note</strong> and change what you need. <strong>Only this meeting</strong> leaves the note in the workspace as it was. <strong>Save to workspace</strong> changes it for every later meeting. If the note changed in another window, NexQ asks which version to keep and overwrites nothing.
+  </p>
+
+  <h2>What the AI sees</h2>
+  <ul>
+    <li>A note marked <strong>Use as AI context</strong> can be used in live answers and in the workspace chat. It goes to the provider that answers, like your documents.</li>
+    <li>A note that isn’t marked is never sent anywhere.</li>
+    <li>Live notes never read your talking points.</li>
+  </ul>
+
+  <h2>Tips</h2>
+  <ul>
+    <li>Write short lines, one idea per bullet. They tick and follow best.</li>
+    <li>Keep the order you will say them in. Following allows skips, but a clear order helps.</li>
+    <li>Rehearse once: start a test meeting, read the note aloud and see how it follows you.</li>
+  </ul>
+  <p>
+    All the keys and settings are in the <a class="link" href={doc('talking-points')}>user guide</a>. Arranging the panel next to the assistant is covered in
+    <a class="link" href={doc('meeting-layout')}>meeting window layout</a>.
+  </p>
+</Guide>
