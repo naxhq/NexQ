@@ -1,0 +1,133 @@
+---
+import Guide from '../../layouts/Guide.astro';
+import { doc } from '../../data/site';
+// docs/user-guide/live-notes-and-brief.md. Update rules: src-tauri/src/live_notes/trigger.rs (100 words, 20 s, 90 s, 15 words, cap 120k).
+// Brief: src-tauri/src/live_brief/sheet.rs (6 facts, 350 tokens, stale after 4 minutes). Answers: src-tauri/src/live_runtime/mod.rs
+// build_extras (the brief and core memory in every live answer; the notes outline, 700 tokens, only for Recap and Follow-Up).
+const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
+---
+
+<Guide
+  slug="live-notes-and-meeting-brief"
+  lede="Two helpers can work beside your live answers. Live notes write a tidy page while you talk. The brief keeps a short sheet of what your workspace already knows about the topic. Both are off until you turn them on."
+>
+  <p>
+    They run on a model of their own, with their own limit, and they never slow down or block a live answer.
+  </p>
+
+  <h2>Show the panels</h2>
+  <p>
+    Both are panels in the meeting window, hidden in the default layout. Choose <strong>Layout, Panels, Live notes</strong> (or <strong>Brief</strong>), or pick the <strong>Notes</strong> layout, which puts them side by side on the right. Hiding a panel doesn’t stop the notes or the brief.
+  </p>
+
+  <figure class="guide-shot">
+    <img
+      src={`${base}screenshots/v3/live-notes.webp`}
+      width="1500"
+      height="966"
+      loading="lazy"
+      decoding="async"
+      alt="The meeting window in the Notes layout: the transcript above the assistant on the left, and live notes on the right with topics, a decision, a task and a question."
+    />
+    <figcaption>The Notes layout. Live notes are on the right, with the time of each line (invented demo data).</figcaption>
+  </figure>
+
+  <h2>Live notes</h2>
+  <ol>
+    <li>Open the <strong>Live notes</strong> panel in a running meeting.</li>
+    <li>Under <strong>Turn on for</strong>, choose <strong>This meeting</strong> or <strong>Every meeting</strong>.</li>
+    <li>Click <strong>Turn on notes</strong>. Before you do, the panel says which model they will use.</li>
+  </ol>
+  <p>
+    You get a page, not a chat: topics as headings with the time each started, a summary line, and notes, <strong>Decision</strong>, <strong>Task</strong> and <strong>Question</strong> lines, each marked in its own way. People, places, organisations, dates and numbers are set apart. Click a time to jump to that moment in the transcript.
+  </p>
+  <p>
+    Click any line to edit it, pin it or delete it, or add one of your own. NexQ never changes or removes a line you edited or pinned. <strong>Undo</strong> takes back your last change.
+  </p>
+
+  <h2>When the notes update</h2>
+  <p>With <strong>Updates</strong> on <strong>Automatic</strong> (the default), NexQ updates the notes:</p>
+  <ul>
+    <li>after about 100 new words and a 2 second pause, and at least 20 seconds after the last update,</li>
+    <li>after 90 seconds without an update, if at least 15 new words are waiting,</li>
+    <li>when you click <strong>Update now</strong> or press <code>N</code> in the meeting window,</li>
+    <li>and once more when the meeting ends. That never delays ending the meeting.</li>
+  </ul>
+  <p>
+    Nothing runs on silence, and a live answer always goes first. On <strong>Manual</strong>, notes never run unless you ask. After a meeting, the <strong>Notes</strong> tab of the meeting shows the same page, editable, with <strong>Copy as Markdown</strong> and <strong>Save as file</strong>. If part of a call never reached the notes, it says so, and <strong>Update notes</strong> covers it.
+  </p>
+
+  <h2>Cost and the limit</h2>
+  <ul>
+    <li>Notes use your provider’s tokens. NexQ sends only the new lines of the transcript and a short outline of the notes so far.</li>
+    <li>The default limit is 120k tokens a meeting. At the limit the notes pause and ask <strong>Keep taking notes?</strong>, and nothing more is sent until you choose.</li>
+    <li>With a Claude, Codex or Antigravity plan, the notes use your plan instead of money.</li>
+    <li>
+      <strong>Automatic</strong> model means a cheap one where it can find one. With a subscription it is the fast tier, and with Ollama, LM Studio or a custom server it is your active model. The panel names the model before you turn anything on.
+    </li>
+  </ul>
+
+  <h2>The brief</h2>
+  <p>
+    The brief is turned on <strong>per workspace</strong>. In the <strong>Brief</strong> panel, click <strong>Turn on the brief</strong>, and it starts in every meeting of that workspace. <strong>Turn the brief off</strong> in the panel’s menu turns it off again.
+  </p>
+
+  <figure class="guide-shot">
+    <img
+      src={`${base}screenshots/v3/brief.webp`}
+      width="1500"
+      height="966"
+      loading="lazy"
+      decoding="async"
+      alt="The Brief panel: the topic being discussed, three facts from the workspace each with a chip for the document or meeting it came from, and a folded list of earlier points."
+    />
+    <figcaption>The brief: the topic, up to six facts with sources, and earlier points folded away.</figcaption>
+  </figure>
+
+  <p>It is a short sheet that follows the conversation:</p>
+  <ul>
+    <li>a line with the topic being discussed,</li>
+    <li>up to 6 facts from your workspace, each with a source chip that opens the meeting, document or note it came from,</li>
+    <li>earlier points, folded away, and how old the sheet is.</li>
+  </ul>
+  <p>
+    A fact only appears if it cites a passage that was really sent to the model. When the topic changes, the old sheet is hidden at once and a new one is made. <strong>Live answers use it</strong>: every answer carries the newest sheet while it is less than 4 minutes old, and never waits for it. Recap and Follow-Up answers also carry a short outline of the notes.
+  </p>
+
+  <h2>How the brief works</h2>
+  <ol>
+    <li>About every 30 seconds of speech, NexQ searches the workspace on your computer: past meetings, documents, the folders in its Library, talking points marked as AI context, and saved memory. That makes no model call.</li>
+    <li>It asks the model for a new sheet only when the top passages changed a lot, the topic changed, or you click <strong>Refresh</strong>, and never more often than every 45 seconds.</li>
+    <li>The model writes the sheet in at most 350 tokens. A brief uses roughly 60k tokens an hour, so the default limit of 120k covers about two hours.</li>
+  </ol>
+
+  <h2>What is sent, and to whom</h2>
+  <div class="guide-table">
+    <table>
+      <thead>
+        <tr><th scope="col"></th><th scope="col">Live notes</th><th scope="col">Brief</th></tr>
+      </thead>
+      <tbody>
+        <tr><th scope="row">Sends to the model</th><td>The new transcript lines and the notes so far</td><td>The recent transcript, passages from the workspace and your saved memory</td></tr>
+        <tr><th scope="row">Reads the workspace</th><td>Never</td><td>Yes, only the meeting’s workspace and what it uses</td></tr>
+        <tr><th scope="row">Off by default</th><td>Yes</td><td>Yes</td></tr>
+        <tr><th scope="row">Can use a local model</th><td>Yes</td><td>Yes</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    With a model on your computer, nothing leaves it. With an online provider, the transcript goes to that provider. If your Automatic model moves from a local one to an online one, a line tells you once.
+  </p>
+
+  <h2>Tips</h2>
+  <ul>
+    <li>Start with Automatic and Standard detail. See what it costs, then change it.</li>
+    <li>Use a local model for notes if you don’t want the conversation to leave your PC. It can be slower on a long meeting.</li>
+    <li>Turn the brief on in workspaces with a lot of material, such as a client you have spoken to many times.</li>
+    <li>Press <code>N</code> before the end if you want the notes right up to the last minute.</li>
+  </ul>
+  <p>
+    The full list of states, buttons and limits is in the <a class="link" href={doc('live-notes-and-brief')}>user guide</a>. For what a workspace holds, see
+    <a class="link" href="../library-knowledge-and-tools/">the Library guide</a>.
+  </p>
+</Guide>

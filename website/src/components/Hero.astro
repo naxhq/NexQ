@@ -61,7 +61,7 @@ const numberedNames = new Intl.ListFormat('en', { style: 'long', type: 'disjunct
     )}
     <h1 id="hero-title" class="display">Hears both sides.<br />Answers from your notes.</h1>
     <p class="nx-sub">
-      An open-source meeting assistant for your computer. It transcribes both sides of a call live, and one key answers the question that was just asked. No bot joins. Use local models, any API, or your Claude or ChatGPT plan.
+      An open-source meeting assistant for your computer. It transcribes both sides of a call live, and one key answers the question that was just asked. Each client, class or project gets a workspace for its meetings, files and notes. No bot joins. Use local models, any API, or your Claude or ChatGPT plan.
     </p>
     <div class="nx-cta">
       <!-- One blue button. 640px and up it names your system; on phones, which cannot run either build, it jumps to Download. -->
@@ -176,18 +176,18 @@ const numberedNames = new Intl.ListFormat('en', { style: 'long', type: 'disjunct
       <div class="nx-still"><BeatFrame beat="c" /></div>
     </article>
 
-    <!-- Beat d: docs/user-guide/claude-subscription.md (Personal sources), rag-context.md, src-tauri/src/llm/gemini_cache.rs (Gemini Context Cache) -->
-    <article class="nx-beat" id="knows" data-beat-id="d" data-t={TIMES.d} data-t0={T0.d} data-hint="Notes and Tools, in the answer" aria-labelledby="beat-d">
+    <!-- Beat d: docs/user-guide/claude-subscription.md (Personal sources), library.md (Knowledge and Tools pills, Tools start off: src/stores/sourcesStore.ts), rag-context.md, src-tauri/src/llm/gemini_cache.rs (Gemini Context Cache) -->
+    <article class="nx-beat" id="knows" data-beat-id="d" data-t={TIMES.d} data-t0={T0.d} data-hint="Knowledge and Tools, in the answer" aria-labelledby="beat-d">
       <p class="eyebrow">{mmss(TIMES.d)}</p>
       <h3 id="beat-d" class="h3">What it knows.</h3>
       <p class="nx-beat__lede">
-        NexQ searches the documents you load on your PC, and on your Claude or ChatGPT plan an answer can also read your notes and call your tools.
+        An answer can use the documents, notes and folders of the meeting’s workspace, and on your Claude or ChatGPT plan it can also call your tools.
       </p>
-      <span class="nx-new">New in 2.44 · Codex too</span>
+      <span class="nx-new">New in 3.0 · Scoped to a workspace</span>
       <ul class="nx-facts">
         <li>Documents you load are indexed locally with vector and keyword search, and work with any AI. Gemini can also cache them.</li>
-        <li>A notes folder, such as an Obsidian vault, is read only. Tools are connectors to your apps (MCP servers), like a calendar, and tools that look like they change something (add, send, edit, delete) start off.</li>
-        <li>Switch Notes and Tools on for an answer you ask for. A lookup can add a few seconds, and automatic answers never use them.</li>
+        <li>A notes folder, such as an Obsidian vault, is read only and kept up to date by NexQ. Tools are connectors to your apps (MCP servers), like a calendar, and tools that look like they change something (add, send, edit, delete) start off.</li>
+        <li>The Knowledge and Tools pills decide what an answer you ask for may use. Knowledge starts on and Tools start off. A lookup can add a few seconds, and automatic answers never use them.</li>
       </ul>
       <div class="nx-still"><BeatFrame beat="d" /></div>
     </article>

@@ -19,12 +19,13 @@ export const doc = (name: string) => `${REPO}/blob/main/docs/user-guide/${name}.
 export const SITE_TITLE = 'NexQ: Open-Source AI Meeting Assistant for Windows and Mac';
 // Keep at or under 160 characters (checked at build time in Layout.astro).
 export const SITE_DESCRIPTION =
-  'Free, open-source meeting assistant. Transcribes both sides of a call live and answers from your notes, with local models or your own AI. No bot joins.';
+  'Free, open-source meeting assistant with a workspace for every client or class. Hears both sides of a call and answers from your notes. No bot joins.';
 
 /** Section ids, in page order. Components use these for `id=` and nav links. */
 export const SECTION = {
   hero: 'hero',
   call: 'call',
+  workspaces: 'workspaces',
   ai: 'ai',
   after: 'after',
   demo: 'demo',
@@ -39,10 +40,10 @@ export const SECTION = {
 /** Navbar anchors (max 5). Download is the button, GitHub is a text link. */
 export const NAV: { label: string; href: string }[] = [
   { label: 'The call', href: `#${SECTION.call}` },
+  { label: 'Workspaces', href: `#${SECTION.workspaces}` },
   { label: 'Your AI', href: `#${SECTION.ai}` },
   { label: 'After the call', href: `#${SECTION.after}` },
   { label: 'Privacy', href: `#${SECTION.privacy}` },
-  { label: 'Releases', href: `#${SECTION.releases}` },
 ];
 
 /** Where something runs. */
@@ -179,6 +180,7 @@ export const SCENARIOS = [
  * and true to that release's CHANGELOG entry.
  */
 export const RELEASE_ONELINERS: Record<string, string> = {
+  '3.0.0': 'Workspaces, chat across your meetings, talking points, live notes and memory.',
   '2.45.0': 'Clear help when Claude Code is too old, and safer CLI lookup.',
   '2.44.0': 'Your ChatGPT plan, through Codex.',
   '2.43.0': 'Point Whisper API at your own speech server.',
@@ -215,8 +217,20 @@ export const FAQ: { q: string; a: string }[] = [
     a: 'No. NexQ runs on your computer and listens to your microphone and your system audio, so it works with Zoom, Teams, Google Meet or any other app without adding a participant. Follow the recording and consent rules that apply to you.',
   },
   {
+    q: 'What is a workspace?',
+    a: 'A named place for the meetings, chats and files of one client, class or project. Each workspace has its own Library of documents, notes, folders and tools, plus its own instructions, talking points and memory. A meeting or a chat reads only its own workspace, and General or another workspace only if you choose. Keep separate cuts a workspace off in both directions. You start with one workspace, called General.',
+  },
+  {
     q: 'Does my audio leave my computer?',
-    a: 'With the settings a new install starts with, yes: Web Speech (your microphone) is an online service, and so is Deepgram (the other side), which starts once you add a key. You can change both. With an on-device speech engine such as Parakeet and a local model through Ollama or LM Studio, audio, transcripts and answers stay on your machine. A cloud provider receives what you send it, and Web Speech and Windows Speech send your microphone audio online even though they need no key. Meetings are stored in a local database on your computer, and API keys sit in the system credential store (Windows Credential Manager, or Keychain on a Mac).',
+    a: 'With the settings a new install starts with, yes: Web Speech (your microphone) is an online service, and so is Deepgram (the other side), which starts once you add a key. You can change both. With an on-device speech engine such as Parakeet and a local model through Ollama or LM Studio, audio, transcripts and answers stay on your machine. A cloud provider receives what you send it, and Web Speech and Windows Speech send your microphone audio online even though they need no key. Live notes, the brief and memory suggestions send the transcript to the model you pick for them. Searching your files and meetings for the workspace chat happens on your computer. Meetings are stored in a local database on your computer, and API keys sit in the system credential store (Windows Credential Manager, or Keychain on a Mac).',
+  },
+  {
+    q: 'Can I ask questions across all my meetings?',
+    a: 'Yes, inside one workspace. Workspace chat searches that workspace’s meetings, documents and folders on your computer, sends the best matches to the model you chose, and cites each source. Click a source to open the meeting at that moment. It never reads another workspace’s meetings.',
+  },
+  {
+    q: 'Do live notes and the brief cost anything?',
+    a: 'Both are off until you turn them on. Each runs on a model of its own, with a limit per meeting (120k tokens by default). With an API provider that costs what your provider charges, with a Claude or ChatGPT plan it uses your plan, and with Ollama or LM Studio it runs on your computer.',
   },
   {
     q: 'Can other people see NexQ when I share my screen?',
@@ -245,6 +259,10 @@ export const FAQ: { q: string; a: string }[] = [
   {
     q: 'Why does my Mac say NexQ can’t be opened?',
     a: 'The macOS beta is not notarized, so Gatekeeper blocks the first launch. After you drag NexQ into Applications, run xattr -cr /Applications/NexQ.app once, then open it.',
+  },
+  {
+    q: 'What happens to my meetings when I update to 3.0?',
+    a: 'NexQ upgrades its database the first time it starts and keeps a copy of the old one for 14 days. Your meetings, documents, folders and tools all go into General, and nothing is deleted. If the upgrade can’t finish, nothing is changed, NexQ keeps working with everything in General, and it tries again the next time it starts.',
   },
   {
     q: 'How do updates work?',

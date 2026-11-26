@@ -1,0 +1,295 @@
+---
+/**
+ * #workspaces: what 3.0 adds around the call. One framed screenshot of the home screen, then five short
+ * scenes with a real screenshot each (website/public/screenshots/v3/, taken from the app with invented data).
+ * No cards, no grid of tiles: one column of text and one figure, stacked on phones.
+ *
+ * Facts (docs/user-guide/ unless a source says otherwise):
+ *   workspace parts, General, Keep separate, borrowing, 14-day copy ... workspaces.md ("What is shared between
+ *       workspaces", "What happens when you upgrade"), src-tauri/src/db/workspace_migrations.rs BACKUP_KEEP
+ *   chat: citations, context view, Lean / Balanced / Deep, Allow once / Deny, 60 s .. workspace-chat.md;
+ *       budgets src-tauri/src/workspace_search/context_plan.rs Depth::budget_for (8k, 24k, 80k; more with a
+ *       subscription or a local model, never over 60 percent of the window)
+ *   talking points: Manual, Auto, My voice, Go to, Said it, limits ....... talking-points.md,
+ *       src/talking-points/prompter/voice.ts (needs your own voice as a separate side)
+ *   live notes and brief: off until turned on, model and limit of their own .... live-notes-and-brief.md,
+ *       src-tauri/src/live_runtime/mod.rs (the brief rides in every live answer; notes only in Recap and Follow-Up)
+ *   memory: five kinds, suggested then saved by you, link to the moment ....... memory.md, src/memory/
+ *   library, Knowledge and Tools pills (Tools start off) .................... library.md, src/stores/sourcesStore.ts
+ */
+import { SECTION, doc } from '../data/site';
+import { GUIDES } from '../data/guides';
+
+const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
+const shot = (name: string) => `${base}screenshots/v3/${name}.webp`;
+const guide = (slug: string) => `${base}guides/${slug}/`;
+// Every guide named here must exist in data/guides.ts.
+const need = (slug: string) => {
+  if (!GUIDES.some((g) => g.slug === slug)) throw new Error(`Workspaces.astro: no guide "${slug}" in data/guides.ts`);
+  return guide(slug);
+};
+---
+
+<section id={SECTION.workspaces} class="section ws" aria-labelledby="ws-title">
+  <div class="wrap">
+    <p class="eyebrow">before 00:00</p>
+    <h2 id="ws-title" class="h2 mt-3 max-w-[20ch]">A workspace for every client.</h2>
+    <p class="lede">
+      Keep the meetings, files and notes of one client, class or project together, and apart from everything else.
+      NexQ now opens on your workspaces, and a call starts in the one you pick, or in your default.
+    </p>
+
+    <figure class="ws-frame" data-reveal>
+      <img
+        src={shot('workspace-home')}
+        width="1600"
+        height="1000"
+        loading="lazy"
+        decoding="async"
+        alt="A NexQ workspace called Acme renewal. On the left, the list of workspaces and its 22 meetings. In the middle, a chat with an answer and sources. On the right, the Library, instructions, talking points and memory."
+      />
+      <figcaption>A workspace in NexQ 3.0, with invented demo data.</figcaption>
+    </figure>
+
+    <div class="ws-lead" data-reveal>
+      <ul class="ws-facts">
+        <li>
+          Each workspace has its own <strong>meetings, chats, Library, instructions, talking points and memory</strong>.
+          Every workspace gets its own waveform mark, and each meeting is a bar: taller is longer.
+        </li>
+        <li>
+          A meeting or a chat reads only its own workspace. It also reads General, or another workspace, only when you choose.
+          <strong>Keep separate</strong> shuts a workspace off in both directions.
+        </li>
+        <li>
+          Updating from 2.x? Your meetings and files go into General, and NexQ keeps a copy of your old database for 14 days.
+        </li>
+      </ul>
+      <p><a class="link" href={need('workspaces-for-clients-and-projects')}>How workspaces work</a></p>
+    </div>
+
+    <article class="ws-scene" data-reveal>
+      <div class="ws-text">
+        <h3 class="h3">Ask the whole workspace.</h3>
+        <p>
+          Ask across a workspace’s meetings, documents and folders. Every answer cites its sources, and a click opens the meeting at the moment it came from.
+        </p>
+        <ul class="ws-facts">
+          <li>The context view shows what the next answer will see, and what it only searched.</li>
+          <li>
+            Lean, Balanced and Deep set how much material goes in. The room follows the model’s window and never takes more than 60 percent of it.
+          </li>
+          <li>A tool that could change something asks first: <strong>Allow once</strong> or <strong>Deny</strong>. There is no “always allow”.</li>
+        </ul>
+        <p><a class="link" href={need('workspace-chat-with-sources')}>Workspace chat and the context view</a></p>
+      </div>
+      <figure class="ws-fig">
+        <img
+          src={shot('workspace-chat-context')}
+          width="1600"
+          height="1000"
+          loading="lazy"
+          decoding="async"
+          alt="Workspace chat with the context view open: a bar for each item the next answer will see, grouped as instructions and memory, meetings, documents, folders and conversation."
+        />
+      </figure>
+    </article>
+
+    <article class="ws-scene" data-reveal>
+      <div class="ws-text">
+        <h3 class="h3">Notes that follow your voice.</h3>
+        <p>
+          Write talking points once, then read them in the meeting window. Choose <strong>Manual</strong>, <strong>Auto</strong>, or <strong>My voice</strong>, which scrolls to where you are as you speak.
+        </p>
+        <ul class="ws-facts">
+          <li>It listens only to your side, on your PC, and makes no AI request to do it.</li>
+          <li>Lines you have said are ticked off. <strong>Go to</strong> offers the point you seem to be on, and you click it.</li>
+          <li>
+            It is only as good as your speech engine’s transcript. It compares words, not meaning, so keep Manual one click away.
+          </li>
+        </ul>
+        <p><a class="link" href={need('talking-points-that-follow-your-voice')}>Talking points and My voice</a></p>
+      </div>
+      <figure class="ws-fig">
+        <img
+          src={shot('talking-points-my-voice')}
+          width="1500"
+          height="966"
+          loading="lazy"
+          decoding="async"
+          alt="The meeting window in the Presenter layout. Talking points in My voice mode are ticked as they are said, beside the assistant with its Knowledge and Tools pills."
+        />
+      </figure>
+    </article>
+
+    <article class="ws-scene" data-reveal>
+      <div class="ws-text">
+        <h3 class="h3">Notes and a brief, while you talk.</h3>
+        <p>
+          <strong>Live notes</strong> keep a tidy page of topics, decisions, tasks and questions. The <strong>brief</strong> keeps a short sheet of what the workspace already knows about the topic, with a source for each fact.
+        </p>
+        <ul class="ws-facts">
+          <li>Both are off until you turn them on, and each runs on a model of its own, with a limit per meeting.</li>
+          <li>The brief goes into your live answers while it is fresh. Recap and Follow-Up also carry a short outline of the notes.</li>
+          <li>You can edit any note line. NexQ never overwrites a line you edited or pinned.</li>
+        </ul>
+        <p><a class="link" href={need('live-notes-and-meeting-brief')}>Live notes and the brief</a></p>
+      </div>
+      <div class="ws-figs">
+        <figure class="ws-fig">
+          <img
+            src={shot('live-notes')}
+            width="1500"
+            height="966"
+            loading="lazy"
+            decoding="async"
+            alt="The meeting window in the Notes layout: the transcript above the assistant, and live notes on the right with topics, a decision, a task and a question."
+          />
+        </figure>
+        <figure class="ws-fig">
+          <img
+            src={shot('brief')}
+            width="1500"
+            height="966"
+            loading="lazy"
+            decoding="async"
+            alt="The Brief panel: the topic being discussed and three facts from the workspace, each with a chip for the document or meeting it came from."
+          />
+        </figure>
+      </div>
+    </article>
+
+    <article class="ws-scene" data-reveal>
+      <div class="ws-text">
+        <h3 class="h3">Memory, and a Library the call can use.</h3>
+        <p>
+          <strong>Memory</strong> holds people, decisions, open items, facts and preferences. NexQ can suggest them after a meeting, each with a link to the moment it came from, and nothing is kept until you save it.
+        </p>
+        <ul class="ws-facts">
+          <li>
+            The <strong>Library</strong> holds documents, notes, folders and tools. A folder is read and kept up to date on its own.
+          </li>
+          <li>
+            In a meeting, the <strong>Knowledge</strong> and <strong>Tools</strong> pills decide what an answer may use of the workspace. Knowledge starts on, Tools start off, and a pill that is off keeps everything of its kind out.
+          </li>
+          <li>Searching and indexing happen on your PC. Only what an answer uses goes to the model you chose.</li>
+        </ul>
+        <p>
+          <a class="link" href={need('meeting-memory')}>Memory</a>
+          <span aria-hidden="true"> · </span>
+          <a class="link" href={need('library-knowledge-and-tools')}>The Library, Knowledge and Tools</a>
+        </p>
+      </div>
+      <div class="ws-figs ws-figs--tall">
+        <figure class="ws-fig">
+          <img
+            src={shot('library')}
+            width="510"
+            height="560"
+            loading="lazy"
+            decoding="async"
+            alt="The Library of a workspace: a pinned contract, a note, a questionnaire, a notes folder indexed with 540 files, and a connected tool."
+          />
+        </figure>
+        <figure class="ws-fig">
+          <img
+            src={shot('memory')}
+            width="510"
+            height="630"
+            loading="lazy"
+            decoding="async"
+            alt="The Memory section of a workspace: a person, a decision, an open item, a fact and a preference, with Suggest after meetings turned on."
+          />
+        </figure>
+      </div>
+    </article>
+
+    <p class="ws-more" data-reveal>
+      More in the user guide: <a class="link" href={doc('meeting-layout')}>arranging the meeting window</a>, and
+      <a class="link" href={doc('workspaces')}>everything a workspace can do</a>.
+    </p>
+  </div>
+</section>
+
+<style>
+  .ws-frame {
+    margin-top: 3.5rem;
+  }
+  .ws-frame img,
+  .ws-fig img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border: 1px solid hsl(var(--border));
+    border-radius: 1rem;
+    background-color: hsl(var(--card));
+  }
+  .ws-frame figcaption {
+    margin-top: 0.75rem;
+    font-size: 0.875rem;
+    color: hsl(var(--muted-foreground));
+  }
+  .ws-lead {
+    margin-top: 2.5rem;
+    max-width: 44rem;
+  }
+  .ws-facts {
+    display: grid;
+    gap: 0.75rem;
+    margin-top: 1rem;
+    padding-left: 1.25rem;
+    list-style: disc;
+    font-size: 1rem;
+    line-height: 1.55;
+    color: hsl(var(--muted-foreground));
+  }
+  .ws-facts li::marker {
+    color: hsl(var(--muted-foreground) / 0.7);
+  }
+  .ws-facts strong {
+    font-weight: 650;
+    color: hsl(var(--foreground));
+  }
+  .ws-lead > p,
+  .ws-text > p:last-child {
+    margin-top: 1.25rem;
+    font-size: 0.9375rem;
+  }
+  .ws-scene {
+    display: grid;
+    gap: 2rem;
+    margin-top: 6rem;
+  }
+  .ws-text > p:first-of-type {
+    margin-top: 0.875rem;
+    max-width: 34rem;
+    font-size: 1.125rem;
+    line-height: 1.55;
+    color: hsl(var(--foreground) / 0.9);
+  }
+  .ws-text .ws-facts {
+    max-width: 34rem;
+  }
+  .ws-figs {
+    display: grid;
+    gap: 1.25rem;
+    align-content: start;
+  }
+  /* The two narrow crops (Library, Memory) sit side by side. */
+  .ws-figs--tall {
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+  }
+  @media (min-width: 900px) {
+    .ws-scene {
+      grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+      gap: 4rem;
+      align-items: start;
+    }
+  }
+  .ws-more {
+    margin-top: 5rem;
+    font-size: 0.9375rem;
+    color: hsl(var(--muted-foreground));
+  }
+</style>

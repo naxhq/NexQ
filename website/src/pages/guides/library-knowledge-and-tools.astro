@@ -1,0 +1,117 @@
+---
+import Guide from '../../layouts/Guide.astro';
+import { doc } from '../../data/site';
+// docs/user-guide/library.md, workspaces.md ("What is in a workspace", "Folder text search"), claude-subscription.md (Personal sources).
+// Pills: src/sources/SourcePills.tsx, src/lib/sourcePills.ts (Tools locked off a subscription), src/stores/sourcesStore.ts (Knowledge on, Tools off).
+// Folder limits: src-tauri/src/workspace_search/crawler.rs (2 MB a file, 5,000 files, secret-looking names skipped);
+// watcher: workspace_search/watch.rs (2 s after the last change); full check every 30 minutes: workspace_chat/hub.rs RESCAN_EVERY.
+const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
+---
+
+<Guide
+  slug="library-knowledge-and-tools"
+  lede="The Library is the list of what the AI may use in a workspace: documents and notes you add, folders it can search, and tools it can call. In a meeting, two pills decide per answer whether it may use them."
+>
+  <figure class="guide-shot">
+    <img
+      src={`${base}screenshots/v3/library.webp`}
+      width="510"
+      height="560"
+      loading="lazy"
+      decoding="async"
+      alt="The Library of a workspace: a pinned contract, a note, a questionnaire, a notes folder indexed with 540 files, and a connected tool."
+      style="max-width: 22rem"
+    />
+    <figcaption>The Library, with the state of each row in words (invented demo data).</figcaption>
+  </figure>
+
+  <h2>Add documents and notes</h2>
+  <ol>
+    <li>Click <strong>Add</strong> at the top of the Library, or <strong>Choose files</strong> under the list. You can also drop files on the window.</li>
+    <li>NexQ reads PDF, text, Markdown and Word files.</li>
+    <li>To save something you typed, choose <strong>Paste text</strong>. It is saved as a Markdown document, shown as a Note.</li>
+  </ol>
+  <p>A file you add belongs to this workspace. The file on your disk is never changed.</p>
+
+  <h2>Add a folder</h2>
+  <ol>
+    <li>Choose <strong>Add, Folder</strong> and pick a folder, for example a notes vault.</li>
+    <li>NexQ reads it and keeps it up to date by itself. It never changes your files.</li>
+  </ol>
+  <ul>
+    <li>It reads <code>.md</code>, <code>.txt</code>, <code>.pdf</code> and <code>.docx</code> files.</li>
+    <li>
+      It skips hidden and system folders, <code>node_modules</code>, links, files over 2 MB, anything past 5,000 files in one folder, and files that look like secrets: names starting with <code>.env</code> or <code>id_</code>, ending in <code>.pem</code> or <code>.key</code>, or containing <code>credential</code>, <code>secret</code>, <code>token</code> or <code>password</code>.
+    </li>
+    <li>A folder with skipped files shows <strong>N files skipped</strong>. Click it to see each file and the reason.</li>
+    <li>A file you add, edit, rename or delete is read again a couple of seconds after it stops changing. Every 30 minutes NexQ also checks the whole folder once. If something looks wrong, choose <strong>Re-index now</strong> in the row’s menu.</li>
+  </ul>
+  <p>To stop using a folder, remove it from the Library. Indexing waits while a meeting is running.</p>
+
+  <h2>Add a tool</h2>
+  <ol>
+    <li>Choose <strong>Add, Tool (MCP server)</strong>.</li>
+    <li>Paste the <code>mcpServers</code> JSON from the server’s README, or follow the form.</li>
+    <li>
+      NexQ checks the server and lists its tools. Each tool has its own switch in <strong>Settings, Personal Sources</strong>, and tools whose names suggest they change something (add, send, edit, delete) start off.
+    </li>
+  </ol>
+  <p>
+    Tools need a Claude, Codex or Antigravity subscription. Secret values such as keys and tokens go to the system credential store, not to NexQ’s settings file. OAuth sign-in for a server is not supported yet.
+  </p>
+
+  <h2>Use something in another workspace</h2>
+  <p>
+    Everything exists once in the library, and workspaces point to it. In another workspace, choose <strong>Add, Files, folders and tools in the library</strong>, tick what you want and click <strong>Add</strong>. Nothing is copied. Rows can be renamed, and a document can be pinned so every <a class="link" href="../workspace-chat-with-sources/">chat answer</a> sees it first.
+  </p>
+
+  <h2>The Knowledge and Tools pills</h2>
+  <p>In the meeting assistant, next to the action buttons, two pills show what your next answer may use of the meeting’s workspace.</p>
+  <figure class="guide-shot">
+    <img
+      src={`${base}screenshots/v3/knowledge-pill.webp`}
+      width="740"
+      height="290"
+      loading="lazy"
+      decoding="async"
+      alt="The hover card of the Knowledge pill: three documents, one note and one folder, what on and off do, and that Claude reads the folders’ files itself."
+    />
+    <figcaption>Hover a pill to see what it covers.</figcaption>
+  </figure>
+  <ul>
+    <li>
+      <strong>Knowledge</strong> is the workspace’s documents, notes and folders. It works with every provider. With a Claude, Codex or Antigravity plan, an answer can read the files in your folders itself. With an API or local provider, NexQ searches the folders on your computer and sends the best matching passages with your question.
+    </li>
+    <li>
+      <strong>Tools</strong> are the workspace’s tool servers. They need a subscription. With another provider the pill shows but is locked, and its hover card says why.
+    </li>
+  </ul>
+  <p>
+    A pill is on or off. <strong>Knowledge starts on and Tools start off</strong>, in every meeting. A pill that is off keeps everything of its kind out of the answer. A pill only shows when the workspace holds something of its kind. The same pills are in the Ask tab of a past meeting.
+  </p>
+  <p>
+    Automatic answers, such as summaries and action items, never use your folders or tools. Looking things up can add a few seconds to an answer.
+  </p>
+
+  <h2>Privacy</h2>
+  <ul>
+    <li>Adding a file and indexing a folder send nothing anywhere. NexQ searches on your computer.</li>
+    <li>
+      When an answer uses your material, it goes to the provider that answers: the passages that matched, or, with a subscription, whatever the command-line tool reads itself. With Ollama or LM Studio on your PC, it stays on your PC.
+    </li>
+    <li>Tool results go to your AI provider as part of the answer. Add only tools you are happy to share with it.</li>
+    <li>In a workspace chat, a tool that could change something asks before it runs. There is no “always allow”.</li>
+    <li>Another workspace’s files are never included. A workspace set to Keep separate can’t be borrowed and borrows nothing.</li>
+  </ul>
+
+  <h2>Tips</h2>
+  <ul>
+    <li>Name your files. “Pricing 2026” helps you read the Library and the sources of an answer.</li>
+    <li>Add a folder rather than copying notes in. It stays current on its own.</li>
+    <li>Turn Knowledge off for an answer that should come from the call alone.</li>
+  </ul>
+  <p>
+    More is in the <a class="link" href={doc('library')}>user guide</a>, and the
+    <a class="link" href={doc('claude-subscription')}>subscription guide</a> covers tools and personal sources in detail.
+  </p>
+</Guide>

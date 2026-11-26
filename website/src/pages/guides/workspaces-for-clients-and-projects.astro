@@ -1,0 +1,124 @@
+---
+import Guide from '../../layouts/Guide.astro';
+import { doc } from '../../data/site';
+// docs/user-guide/workspaces.md. Shortcuts: src/workspace/WorkspaceHome.tsx HOME_SHORTCUTS. Field limits: src/workspace/WorkspaceDialog.tsx
+// (name 60, description 160). 14-day copy: src-tauri/src/db/workspace_migrations.rs BACKUP_KEEP.
+const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
+---
+
+<Guide
+  slug="workspaces-for-clients-and-projects"
+  lede="A workspace is a named place for the meetings, chats and files of one client, class or project. What the AI can read in a meeting or a chat depends on the workspace, so one client’s documents don’t show up in another’s answers."
+>
+  <h2>When this is worth it</h2>
+  <ul>
+    <li>You work for several clients, and each one’s files and decisions should stay with that client.</li>
+    <li>You take several classes, or run several projects, and want to ask questions across just one of them.</li>
+    <li>Some of your work is confidential and must never mix with the rest.</li>
+  </ul>
+  <p>With one job, you can stay in <strong>General</strong>. Every NexQ starts with it.</p>
+
+  <figure class="guide-shot">
+    <img
+      src={`${base}screenshots/v3/workspace-home.webp`}
+      width="1600"
+      height="1000"
+      loading="lazy"
+      decoding="async"
+      alt="A workspace called Acme renewal: the list of workspaces and its meetings on the left, a chat in the middle, the Library, talking points and memory on the right."
+    />
+    <figcaption>A workspace with invented demo data. The list is on the left, the chat in the middle, the Library on the right.</figcaption>
+  </figure>
+
+  <h2>Make a workspace</h2>
+  <ol>
+    <li>Click <strong>+</strong> next to <strong>Workspaces</strong>, or press <code>Ctrl+Shift+N</code> (<code>Cmd</code> on a Mac).</li>
+    <li>
+      Give it a <strong>Name</strong> (up to 60 characters). A <strong>Colour</strong> and one line for <strong>What is it for</strong> help you tell workspaces apart.
+    </li>
+    <li>
+      Under <strong>Instructions for the AI</strong>, say how to work here: who the people are, what to focus on, the tone. They are read in every meeting and chat of this workspace.
+    </li>
+    <li>
+      Choose what you want from the rest: <strong>Starts as</strong> (the scenario meetings use here), <strong>Also use General</strong> (off for a new workspace), <strong>Keep separate</strong> and <strong>Make default</strong>.
+    </li>
+    <li>Click <strong>Create workspace</strong>. It opens right away.</li>
+  </ol>
+  <p>
+    Then fill its Library on the right with documents, a folder of notes or a tool. The
+    <a class="link" href="../library-knowledge-and-tools/">Library guide</a> shows how.
+  </p>
+
+  <h2>Start a meeting in it</h2>
+  <ul>
+    <li>
+      <strong>Start meeting</strong> in the launcher opens a short setup dialog. It suggests the workspace you have open, and you can change it there.
+    </li>
+    <li>
+      <code>Ctrl+M</code>, the tray icon and Start on Login use your <strong>default</strong> workspace. The call detection prompt does too, unless you pick another there.
+    </li>
+    <li>
+      During a meeting, the workspace button in the meeting window’s header can file it somewhere else, or add a workspace to use for the rest of the call. The change applies from the next answer on.
+    </li>
+  </ul>
+
+  <h2>What is shared, and what never is</h2>
+  <p>
+    Workspaces share <strong>material</strong>: documents, folders, tools, talking points and memory. They never share meetings or chats.
+  </p>
+  <ul>
+    <li>A meeting uses its own workspace, General if that workspace has <strong>Also use General</strong> on, and any workspace you picked as <strong>Also use</strong> for that meeting.</li>
+    <li>The instructions come from the meeting’s own workspace only.</li>
+    <li>
+      <strong>Keep separate</strong> is for work that must not mix, such as one client’s. A workspace that is kept separate never uses General’s material, can’t borrow another workspace and can’t be borrowed. NexQ tells you why when you try.
+    </li>
+  </ul>
+
+  <h2>Move around and find things</h2>
+  <ul>
+    <li><code>Ctrl+Shift+O</code> jumps to another workspace by typing part of its name.</li>
+    <li>The search box looks in <strong>Here</strong> (the open workspace) or <strong>Everywhere</strong>.</li>
+    <li>Each meeting is a bar above the chat. A taller bar is a longer meeting, and a click opens it.</li>
+    <li>
+      <strong>Move to workspace</strong> on a meeting moves it. The old workspace then forgets what it learned from it: memory suggestions made from it go, and chats stop using it.
+    </li>
+  </ul>
+
+  <h2>Clone, archive and delete</h2>
+  <ul>
+    <li><strong>Clone</strong> copies the colour, instructions, settings, the files, folders and tools it uses, and its talking points. It doesn’t copy meetings, chats, memory or secrets.</li>
+    <li><strong>Archive</strong> hides a workspace and keeps everything. <strong>Bring back</strong> undoes it. General can’t be archived or deleted.</li>
+    <li>
+      <strong>Delete</strong> asks first: <strong>Move to General</strong>, <strong>Archive it instead</strong>, or <strong>Delete everything in it</strong>, which removes its meetings, chats, talking points and memory for good.
+    </li>
+  </ul>
+
+  <h2>Updating from NexQ 2.x</h2>
+  <ul>
+    <li>
+      The first start of 3.0 upgrades your database and keeps a copy of the old one for 14 days, as <code>nexq-before-workspaces.db</code> in the app data folder.
+    </li>
+    <li>All your meetings, documents, folders and tools go into General. Until you make another workspace, answers work as before.</li>
+    <li>
+      The upgrade is all or nothing. If a step fails, nothing is changed, NexQ keeps working with everything in General and tries again the next time it starts.
+    </li>
+  </ul>
+
+  <h2>Privacy</h2>
+  <ul>
+    <li>Workspaces, meetings and their indexes are stored in NexQ’s database on your computer.</li>
+    <li>Material from another workspace is never added to an answer unless you chose it for that meeting, or General is included.</li>
+    <li>What an answer does use goes to the model you chose, like any other answer.</li>
+  </ul>
+
+  <h2>Tips</h2>
+  <ul>
+    <li>One workspace per client, job or course. The less you keep in it that doesn’t belong, the better the answers.</li>
+    <li>Keep General for what is truly shared, and turn on <strong>Also use General</strong> only where it helps.</li>
+    <li>Use <strong>Keep separate</strong> for anything confidential.</li>
+  </ul>
+  <p>
+    Everything a workspace can do is in the <a class="link" href={doc('workspaces')}>user guide</a>. To ask across its meetings, see
+    <a class="link" href="../workspace-chat-with-sources/">workspace chat</a>.
+  </p>
+</Guide>

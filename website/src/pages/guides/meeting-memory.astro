@@ -1,0 +1,93 @@
+---
+import Guide from '../../layouts/Guide.astro';
+import { doc } from '../../data/site';
+// docs/user-guide/memory.md. Suggestions: src-tauri/src/live_runtime/memory.rs (chunks of 10,000 tokens, at most 4 calls),
+// src-tauri/src/workspace_memory/mod.rs (at most 8 suggestions). Chat cap: src-tauri/src/workspace_search/context_plan.rs MEMORY_TOKEN_CAP (1,500).
+// UI: src/memory/MemorySection.tsx, SuggestFromMeeting.tsx.
+const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
+---
+
+<Guide
+  slug="meeting-memory"
+  lede="Memory is a short list of facts a workspace keeps for you: who someone is, what you decided, what is still open, what a person prefers. The AI reads it as background, so you don’t have to say it again. Nothing goes in without your say-so."
+>
+  <figure class="guide-shot">
+    <img
+      src={`${base}screenshots/v3/memory.webp`}
+      width="510"
+      height="630"
+      loading="lazy"
+      decoding="async"
+      alt="The Memory section of a workspace, with five saved items: a person, a decision, an open item, a fact and a preference, and the Suggest after meetings switch."
+      style="max-width: 24rem"
+    />
+    <figcaption>The Memory section of a workspace, under its talking points (invented demo data).</figcaption>
+  </figure>
+
+  <h2>Where it lives</h2>
+  <p>
+    Memory is a section of the Library panel on the right of a <a class="link" href="../workspaces-for-clients-and-projects/">workspace</a>. Items are grouped by kind: <strong>Person</strong>, <strong>Decision</strong>, <strong>Open item</strong>, <strong>Fact</strong> and <strong>Preference</strong>. Each row shows a title and one line of text, and a click opens the whole item.
+  </p>
+
+  <h2>Add an item yourself</h2>
+  <ol>
+    <li>Click <strong>+</strong> in the Memory header.</li>
+    <li>Choose a kind, give it a short title, such as a person’s name or “Budget cap”, and write what to remember.</li>
+    <li>Click <strong>Add</strong>.</li>
+  </ol>
+  <p><strong>Edit</strong> changes an item. <strong>Forget</strong> deletes it, after asking. With more than four items, a search box appears.</p>
+
+  <h2>Let NexQ suggest</h2>
+  <ol>
+    <li>Open a past meeting that is filed in the workspace.</li>
+    <li>
+      Click <strong>Suggest from this meeting</strong>. A meeting that isn’t filed in a workspace has nowhere to keep memory, so NexQ asks you to file it first.
+    </li>
+    <li>
+      The transcript goes to the model in pieces of about 10,000 tokens, one call each and at most 4 calls. A longer meeting keeps its start and its end. NexQ proposes up to 8 items, each with the time in the meeting it came from.
+    </li>
+    <li>
+      The suggestions wait in Memory. For each, <strong>Dismiss</strong>, <strong>Edit</strong> or <strong>Save</strong> it. Tick <strong>Reviewed</strong> on the ones you have read and use <strong>Save all reviewed</strong> to keep them in one go.
+    </li>
+  </ol>
+  <p>
+    A suggestion that the transcript doesn’t back up says <strong>Not found in the transcript</strong>. To get suggestions after every meeting, turn on <strong>Suggest after meetings</strong>. It is off by default.
+  </p>
+  <p>
+    The <strong>Model</strong> button picks the model that proposes items. <strong>Automatic</strong> names the model it will use, and works like the one for <a class="link" href="../live-notes-and-meeting-brief/">notes and the brief</a>.
+  </p>
+
+  <h2>A link back to the moment</h2>
+  <p>
+    An item that came from a meeting has a <strong>From</strong> link. It opens that meeting on its transcript at the time the fact was said, so you can check it.
+  </p>
+
+  <h2>Where memory is used</h2>
+  <ul>
+    <li>In the <a class="link" href="../workspace-chat-with-sources/">workspace chat</a>, saved memory goes in first, up to 1,500 tokens.</li>
+    <li>In live answers during a meeting of this workspace, and in the brief.</li>
+    <li>Memory is handed to the model as background facts, never as instructions.</li>
+    <li>It stays in its workspace. It reaches another workspace only when that one borrows it for a meeting, or uses General.</li>
+    <li>Live notes never read your memory.</li>
+  </ul>
+
+  <h2>When a meeting leaves the workspace</h2>
+  <p>
+    Suggestions made from a meeting are removed when you move it to another workspace. Items you already saved keep their text but lose the link to the meeting. Deleting a workspace with <strong>Move to General</strong> deletes its saved memory, and the dialog says how many items.
+  </p>
+
+  <h2>Privacy</h2>
+  <ul>
+    <li>Your memory is stored in NexQ’s database on your computer.</li>
+    <li>Suggestions are made by the model you pick, so the transcript goes to that provider. With Ollama or LM Studio on your PC it stays there.</li>
+    <li>Saved memory goes to the provider that answers, whenever an answer uses it.</li>
+  </ul>
+
+  <h2>Tips</h2>
+  <ul>
+    <li>Keep items short, one fact each.</li>
+    <li>Review before you save. Suggestions can be wrong, and the link to the moment is there for that.</li>
+    <li>Forget what is out of date. A decision that was reversed will mislead later answers.</li>
+  </ul>
+  <p>The details are in the <a class="link" href={doc('memory')}>user guide</a>.</p>
+</Guide>

@@ -1,9 +1,10 @@
 ---
-// Page order = the story of one call: first word to recap. Each section is its own
+// Page order = the story of one call: first word to recap, with the workspaces that hold it right after the call stage. Each section is its own
 // component (and its own id, see SECTION in data/site.ts).
 import Layout from '../layouts/Layout.astro';
 import Navbar from '../components/Navbar.astro';
 import Hero from '../components/Hero.astro';
+import Workspaces from '../components/Workspaces.astro';
 import YourAI from '../components/YourAI.astro';
 import AfterCall from '../components/AfterCall.astro';
 import Demo from '../components/Demo.astro';
@@ -21,6 +22,7 @@ import Footer from '../components/Footer.astro';
   <Navbar />
   <main id="main" tabindex="-1" class="outline-hidden">
     <Hero />
+    <Workspaces />
     <YourAI />
     <AfterCall />
     <Demo />

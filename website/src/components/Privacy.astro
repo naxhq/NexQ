@@ -7,6 +7,8 @@
  *   stored on your machine .............. README.md "Privacy" (meetings, transcripts, recordings, models and the RAG index live
  *                                         in the app data folder, %APPDATA%\com.nexq.app); no account README.md "Why NexQ";
  *                                         local SQLite database (CLAUDE.md, Tech Stack)
+ *   workspaces, live notes and brief .... docs/user-guide/workspaces.md ("What is shared between workspaces", "Keep separate"),
+ *                                         workspace-chat.md ("What leaves your PC"), live-notes-and-brief.md ("Privacy at a glance")
  *   keys in the OS vault ................ README.md "Privacy" and "Personal sources" (Windows Credential Manager, macOS Keychain; personal
  *                                         source secrets too); src-tauri/src/credentials/
  *   signed updates ...................... README.md "Quick start" (installs on quit, never mid-meeting) and "Privacy" (Ed25519)
@@ -32,7 +34,13 @@ const ROWS: { k: string; h: string; p: string; link?: { href: string; label: str
   {
     k: 'storage',
     h: 'Stored on your machine.',
-    p: 'Meetings, transcripts, recordings, models and the search index live in a local database and folder on your computer. There is no NexQ cloud and no account.',
+    p: 'Meetings, transcripts, recordings, models, memory and the search index live in a local database and folder on your computer. There is no NexQ cloud and no account.',
+  },
+  {
+    k: 'workspaces',
+    h: 'Workspaces keep material apart.',
+    p: 'A meeting or a chat reads only its own workspace, and General or another workspace only when you choose. Keep separate shuts a workspace off in both directions. Searching and indexing happen on your computer, and only what an answer uses goes to the model you picked. Live notes and the brief are off until you turn them on, and they send the transcript to the model you pick for them.',
+    link: { href: 'guides/workspaces-for-clients-and-projects/', label: 'How workspaces keep things apart' },
   },
   {
     k: 'keys',
