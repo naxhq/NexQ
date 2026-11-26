@@ -152,10 +152,10 @@ export function GeneralSettings() {
             <div>
               <label className="text-sm font-medium text-foreground">Overlay Transparency</label>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                How transparent the overlay background is
+                How much of the meeting window you can see through
               </p>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                The window keeps enough backing to stay readable: about 82 to 85% on panels, header and footer.
+                Lower values really show what is behind, panels included. Text keeps a thin outline of the window colour so it stays readable. The eye button in the meeting window steps through 100, 85, 65, 45 and 30%.
               </p>
             </div>
           </div>

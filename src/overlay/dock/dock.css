@@ -5,8 +5,9 @@
  *
  * Contract with the host:
  *   --dock-surface-alpha   panel surface alpha (default .2, today's bg-card/20)
- *   --dock-reading-alpha   alpha of "reading" panels; Dock sets it from windowOpacity so the
- *                          window plus the panel always reach an 85% backing.
+ *   --dock-reading-alpha   alpha of "reading" panels; Dock sets both from the overlay level
+ *                          (overlayAlphas), so window plus panel add up to the level.
+ *   --dock-surface-floor   light theme only: the firmest a card may be (0 when see-through)
  * No element in the dock carries data-tauri-drag-region.
  */
 .nq-dock {
@@ -41,11 +42,11 @@
 /* Light theme: panels sit as a slightly firmer card (floor .5, hairline ring) so the window is not flat.
    Only ever stronger than what backing.ts asks for, so contrast is unaffected. */
 .light .nq-dock-surface {
-  background: hsl(var(--card) / max(var(--dock-surface-alpha), 0.5));
+  background: hsl(var(--card) / max(var(--dock-surface-alpha), var(--dock-surface-floor, 0.5)));
   box-shadow: 0 0 0 1px hsl(var(--border) / 0.7), 0 1px 3px hsl(var(--foreground) / 0.06);
 }
 .light .nq-dock-surface[data-reading="true"] {
-  background: hsl(var(--card) / max(var(--dock-reading-alpha), 0.5));
+  background: hsl(var(--card) / max(var(--dock-reading-alpha), var(--dock-surface-floor, 0.5)));
 }
 
 .nq-dock-panel {

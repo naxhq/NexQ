@@ -98,7 +98,9 @@ export function backingFor(c: ThemeColours, opacity: number, textRatio = TEXT_RA
   return { alpha: 1, muted: 0, mutedRgb: c.mutedForeground };
 }
 
-/** Panel surface alpha so window + surface reach `total` (never below the base surface alpha). */
+/**
+ * Panel surface alpha so window + surface reach `total` (never below the base surface alpha).
+ */
 export function surfaceAlphaFor(windowAlpha: number, total: number, base = 0.2): number {
   if (total <= windowAlpha) return base;
   return Math.min(0.95, Math.max(base, 1 - (1 - total) / (1 - Math.min(0.999, windowAlpha))));
@@ -145,4 +147,141 @@ export function rgbToHslVar([r, g, b]: Rgb): string {
     h *= 60;
   }
   return `${Math.round(h)} ${Math.round(s * 100)}% ${Math.round(l * 100)}%`;
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────────────────
+// The transparency levels of the meeting window.
+//
+// A level is how much of the window you can NOT see through. It sets the alpha of the window's own
+// colour AND of the panel surfaces on top of it, so lowering it really shows what is behind, panels
+// included. Text and icons are kept readable by a halo of the window colour right behind the glyphs
+// (a text-shadow / drop-shadow, no solid box), sized by the contrast maths above.
+// ─────────────────────────────────────────────────────────────────────────────────────────
+
+/** What the eye button cycles through, most solid first. */
+export const OPACITY_LEVELS = [1, 0.85, 0.65, 0.45, 0.3] as const;
+/** Panels sit at about 82 to 85% by default. */
+export const DEFAULT_OVERLAY_OPACITY = 0.85;
+/** The window's own colour is this share of the level; the panel surfaces make up the rest. */
+const WINDOW_SHARE = 0.75;
+/** The surface alpha of a panel that is not for reading (a quiet card), as before. */
+const QUIET_SURFACE = 0.2;
+/** The most a halo may cover: past it the window would be a solid box again. */
+export const MAX_HALO = 0.97;
+
+/** The index in OPACITY_LEVELS closest to `opacity` (a saved value from a slider or an older preset). */
+export function levelIndex(opacity: number): number {
+  let best = 0;
+  OPACITY_LEVELS.forEach((l, i) => {
+    if (Math.abs(l - opacity) < Math.abs(OPACITY_LEVELS[best] - opacity)) best = i;
+  });
+  return best;
+}
+
+/** The level one click after `opacity`, wrapping from the most see-through back to solid. */
+export function nextOpacityLevel(opacity: number): number {
+  return OPACITY_LEVELS[(levelIndex(opacity) + 1) % OPACITY_LEVELS.length];
+}
+
+export interface OverlayAlphas {
+  /** Alpha of the window's own colour (what shows between and around the panels). */
+  window: number;
+  /** Window and a reading panel together, as seen: the level itself. */
+  reading: number;
+  /** Alpha of a reading panel's own surface. */
+  readingSurface: number;
+  /** Alpha of any other panel's surface. */
+  quietSurface: number;
+}
+
+export function overlayAlphas(level: number): OverlayAlphas {
+  const l = Math.min(1, Math.max(0, level));
+  if (l >= 1) return { window: 1, reading: 1, readingSurface: QUIET_SURFACE, quietSurface: QUIET_SURFACE };
+  const window = l * WINDOW_SHARE;
+  const readingSurface = surfaceAlphaFor(window, l, 0);
+  return { window, reading: l, readingSurface, quietSurface: Math.min(QUIET_SURFACE, readingSurface) };
+}
+
+/** Alpha of two layers stacked. */
+export const stack = (a: number, b: number) => 1 - (1 - a) * (1 - b);
+
+/** The halo coverage that lifts a local alpha of `base` to `needed`. */
+export function haloCoverage(base: number, needed: number): number {
+  if (needed <= base + 1e-9) return 0;
+  return Math.min(MAX_HALO, 1 - (1 - needed) / (1 - Math.min(0.999, base)));
+}
+
+export interface Transparency {
+  alphas: OverlayAlphas;
+  /** The muted colour to use (strengthened where the theme's own would not read). */
+  muted: number;
+  mutedRgb: Rgb;
+  /** Halo coverage behind text and icons on the bare window (header, footer, quiet panels). */
+  chromeHalo: number;
+  /** Halo coverage behind text and icons on a reading panel. */
+  readingHalo: number;
+  /** The alpha a glyph actually sits on, worst case, in each place (window or panel, plus its halo). */
+  chromeLocal: number;
+  readingLocal: number;
+}
+
+/** Everything the meeting window needs at `level` so it is see-through and still reads over any background. */
+export function transparencyFor(c: ThemeColours, level: number): Transparency {
+  const alphas = overlayAlphas(level);
+  // The bare window under the header and footer: the least backing anywhere.
+  const chrome = backingFor(c, alphas.window);
+  // Text uses one muted colour everywhere, so the strongest requirement (the bare window's) sets it.
+  const mutedRgb = chrome.mutedRgb;
+  const chromeHalo = haloCoverage(alphas.window, chrome.alpha);
+  // A reading panel starts from window + surface, which is the level itself.
+  const reading = backingFor({ ...c, mutedForeground: mutedRgb }, alphas.reading);
+  const readingHalo = haloCoverage(alphas.reading, reading.alpha);
+  return {
+    alphas,
+    muted: chrome.muted,
+    mutedRgb,
+    chromeHalo,
+    readingHalo,
+    chromeLocal: stack(alphas.window, chromeHalo),
+    readingLocal: stack(alphas.reading, readingHalo),
+  };
+}
+
+/**
+ * The offsets (px) of the halo's layers: a ring one pixel out and a ring two out. Each layer is the window
+ * colour at the full `coverage` alpha, so every pixel within about two pixels of a glyph sits on at least
+ * that much backing (a blurred shadow would thin out to a fraction of it next to a hairline stroke).
+ */
+const HALO_RING: [number, number][] = [
+  [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1],
+  [2, 0], [-2, 0], [0, 2], [0, -2], [1.5, 1.5], [1.5, -1.5], [-1.5, 1.5], [-1.5, -1.5],
+];
+
+const haloColour = (coverage: number) => `hsl(var(--background) / ${Math.min(MAX_HALO, coverage).toFixed(3)})`;
+
+/** `text-shadow` that backs glyphs with the window colour; "none" when no halo is needed. */
+export function haloTextShadow(coverage: number): string {
+  if (coverage < 0.01) return "none";
+  const col = haloColour(coverage);
+  return [...HALO_RING.map(([x, y]) => `${x}px ${y}px 0 ${col}`), `0 0 3px ${col}`].join(", ");
+}
+
+/** The same for icons (an svg ignores text-shadow). */
+export function haloIconFilter(coverage: number): string {
+  if (coverage < 0.01) return "none";
+  const col = haloColour(coverage);
+  return [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([x, y]) => `drop-shadow(${x}px ${y}px 0 ${col})`).join(" ") + ` drop-shadow(0 0 3px ${col})`;
+}
+
+/** The CSS variables of the meeting window for a level (read by `.overlay-bg` in index.css and by dock.css). */
+export function transparencyVars(t: Transparency): Record<string, string> {
+  const vars: Record<string, string> = {
+    "--nq-halo-text": haloTextShadow(t.chromeHalo),
+    "--nq-halo-icon": haloIconFilter(t.chromeHalo),
+    "--nq-halo-text-reading": haloTextShadow(t.readingHalo),
+    "--nq-halo-icon-reading": haloIconFilter(t.readingHalo),
+  };
+  if (t.muted > 0) vars["--muted-foreground"] = rgbToHslVar(t.mutedRgb);
+  return vars;
 }

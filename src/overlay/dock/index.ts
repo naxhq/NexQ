@@ -7,7 +7,6 @@ export type { LayoutStorage } from "./layoutStorage";
 export * from "./layoutModel";
 export {
   computeGeometry,
-  readingBackingAlpha,
   type Geometry,
   type PanelMeta,
   type Rect,

@@ -501,15 +501,6 @@ export function hitTest(
 
 /* ----------------------------------------------------------------------- misc */
 
-/**
- * Backing alpha a reading panel keeps so text stays legible when the window itself is
- * translucent: window + panel together reach `floor` (85%). Never below `base`.
- */
-export function readingBackingAlpha(windowOpacity: number, base = 0.2, floor = 0.85): number {
-  const o = Math.min(0.99, Math.max(0, windowOpacity));
-  return Math.min(0.95, Math.max(base, (floor - o) / (1 - o)));
-}
-
 export function rectsOverlap(a: Rect, b: Rect): boolean {
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }

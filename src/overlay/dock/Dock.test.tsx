@@ -199,10 +199,23 @@ describe("Dock: roles and live geometry", () => {
     expect(screen.getByRole("separator").getAttribute("aria-valuenow")).toBe(before);
   });
 
-  it("sets a reading backing variable from the window opacity", () => {
-    const { container } = render(<Harness opacity={0.1} />);
-    const v = Number((container.querySelector(".nq-dock") as HTMLElement).style.getPropertyValue("--dock-reading-alpha"));
-    expect(v).toBeGreaterThan(0.8);
+  it("sets the panel surface alphas from the level: lower level, more see-through", () => {
+    const alphaAt = (o: number) => {
+      const { container, unmount } = render(<Harness opacity={o} />);
+      const st = (container.querySelector(".nq-dock") as HTMLElement).style;
+      const r = { reading: Number(st.getPropertyValue("--dock-reading-alpha")), quiet: Number(st.getPropertyValue("--dock-surface-alpha")), floor: st.getPropertyValue("--dock-surface-floor") };
+      unmount();
+      return r;
+    };
+    const solid = alphaAt(1);
+    const low = alphaAt(0.3);
+    expect(low.reading).toBeLessThan(0.15);
+    expect(low.quiet).toBeLessThanOrEqual(low.reading);
+    expect(alphaAt(0.85).reading).toBeGreaterThan(low.reading);
+    expect(alphaAt(0.85).reading).toBeLessThan(0.85); // window + panel make the 85%, the panel alone is less
+    // the light theme's firmer card only applies on the solid window
+    expect(solid.floor).toBe("0.5");
+    expect(low.floor).toBe("0");
   });
 });
 

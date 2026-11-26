@@ -161,7 +161,21 @@
 }
 
 /* Overlay window transparent background — background + backdrop-filter applied inline */
-.overlay-bg {}
+.overlay-bg {
+  /* The see-through window keeps text and icons readable with a halo of the window colour right behind
+     the glyphs (no solid box). The variables come from overlay/backing.ts per transparency level; at
+     100% they are "none". Reading panels (data-reading) need less, because their surface backs them. */
+  text-shadow: var(--nq-halo-text, none);
+}
+.overlay-bg svg {
+  filter: var(--nq-halo-icon, none);
+}
+.overlay-bg [data-reading="true"] {
+  text-shadow: var(--nq-halo-text-reading, var(--nq-halo-text, none));
+}
+.overlay-bg [data-reading="true"] svg {
+  filter: var(--nq-halo-icon-reading, var(--nq-halo-icon, none));
+}
 
 /* Stealth mode: the overlay window keeps the plain arrow cursor everywhere,
    so it doesn't change shape over buttons, text and the drag strip.

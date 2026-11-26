@@ -29,6 +29,7 @@ import {
 import { sanitizePlacement, sanitizeSetups, type SetupEntry, type WindowPlacement } from "../lib/windowPlacement";
 import { CLI_AGENTS, cliAgentInfo, cliAgentName, isCliAgent } from "../lib/cliAgents";
 import { clampMinutes, DEFAULT_CONTEXT_SCOPE, SCOPE_KINDS } from "../lib/contextScope";
+import { DEFAULT_OVERLAY_OPACITY } from "../overlay/backing";
 
 const DEFAULT_DEEPGRAM_CONFIG: DeepgramConfig = {
   model: "nova-3",
@@ -561,7 +562,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
   aiResponseLineHeight: 1.6,
   aiResponseHPad: 0,
   aiResponseAlign: "left" as const,
-  overlayOpacity: 0.65,
+  overlayOpacity: DEFAULT_OVERLAY_OPACITY,
   overlayDock: null,
   overlayDockTransient: [],
   launcherPlacement: null,
@@ -1363,7 +1364,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
         aiResponseLineHeight: aiResponseLineHeight ?? 1.6,
         aiResponseHPad: aiResponseHPad ?? 0,
         aiResponseAlign: (aiResponseAlign as "left" | "center" | "right") ?? "left",
-        overlayOpacity: overlayOpacity ?? 0.65,
+        overlayOpacity: overlayOpacity ?? DEFAULT_OVERLAY_OPACITY,
         overlayDock: overlayDock ?? null,
         overlayDockTransient: Array.isArray(overlayDockTransient)
           ? overlayDockTransient.filter((p): p is string => typeof p === "string")

@@ -24,8 +24,8 @@ import {
   type PanelMeta,
   type Rect,
   computeGeometry,
-  readingBackingAlpha,
 } from "./layoutGeometry";
+import { overlayAlphas } from "../backing";
 import { DockMenu, type DockMenuItem } from "./DockMenu";
 import type { SepDrag, TabDrag } from "./dockShared";
 import { useDockInteractions } from "./useDockInteractions";
@@ -44,7 +44,7 @@ export interface DockPanelDef {
   prefW?: number;
   /** Default true. */
   canHide?: boolean;
-  /** Reading panel: keeps an 85% backing when the window is translucent. */
+  /** Reading panel: its surface is a little firmer than the others, so window + panel add up to the level. */
   reading?: boolean;
 }
 
@@ -52,10 +52,8 @@ export interface DockProps {
   panels: Record<PanelId, DockPanelDef>;
   state: DockState;
   dispatch: (a: DockAction) => void;
-  /** 0..1 overlay window opacity; drives --dock-reading-alpha. Default 1. */
+  /** 0..1 overlay level (see backing.ts); drives the panel surface alphas. Default 1. */
   windowOpacity?: number;
-  /** Panel surface alpha (0..1) when the window needs more backing to stay readable; default is today's 0.2. */
-  surfaceAlpha?: number;
   /** Fixed container size (tests); otherwise measured. */
   size?: { w: number; h: number };
   className?: string;
@@ -91,7 +89,6 @@ export function Dock({
   state,
   dispatch,
   windowOpacity = 1,
-  surfaceAlpha,
   size: sizeOverride,
   className,
   renderTabExtra,
@@ -293,9 +290,12 @@ export function Dock({
     const v = geo.panels[p];
     return !v || !v.visible;
   };
+  const alphas = overlayAlphas(windowOpacity);
   const rootStyle = {
-    "--dock-reading-alpha": String(Math.max(readingBackingAlpha(windowOpacity), surfaceAlpha ?? 0)),
-    ...(surfaceAlpha !== undefined ? { "--dock-surface-alpha": String(surfaceAlpha) } : {}),
+    "--dock-reading-alpha": alphas.readingSurface.toFixed(3),
+    "--dock-surface-alpha": alphas.quietSurface.toFixed(3),
+    // The light theme's firmer card only on the solid window: a see-through one must stay see-through.
+    "--dock-surface-floor": windowOpacity >= 1 ? "0.5" : "0",
   } as CSSProperties;
 
   const panelIds = Object.keys(panels).filter((p) => known.includes(p));

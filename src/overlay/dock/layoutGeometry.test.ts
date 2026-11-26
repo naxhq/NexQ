@@ -3,7 +3,6 @@ import {
   computeGeometry,
   distribute,
   hitTest,
-  readingBackingAlpha,
   rectWithin,
   rectsOverlap,
   resizeFromDelta,
@@ -246,17 +245,5 @@ describe("hit testing", () => {
   it("no drops while compact", () => {
     const c = computeGeometry(l, { w: 400, h: 200 }, METAS);
     expect(hitTest(c, 200, 100, "assistant", true)).toBeNull();
-  });
-});
-
-describe("readingBackingAlpha", () => {
-  it("is high at low window opacity and relaxes to the base at high opacity", () => {
-    expect(readingBackingAlpha(0.1)).toBeGreaterThan(0.8);
-    expect(readingBackingAlpha(0.9)).toBe(0.2);
-    // window + panel together reach 85% for every opacity below it
-    for (const o of [0.1, 0.3, 0.5, 0.7, 0.8]) {
-      const total = o + (1 - o) * readingBackingAlpha(o);
-      expect(total).toBeGreaterThanOrEqual(0.849);
-    }
   });
 });

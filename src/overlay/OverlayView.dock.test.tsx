@@ -16,10 +16,11 @@ import {
   DEFAULT_PANELS,
   dockReducer,
   initialDockState,
-  readingBackingAlpha,
+
   type DockAction,
   type DockState,
 } from "./dock";
+import { overlayAlphas } from "./backing";
 import type { Meeting } from "../lib/types";
 
 const realSetDock = useConfigStore.getState().setOverlayDock;
@@ -211,12 +212,28 @@ describe("the meeting window's dock", () => {
     expect(screen.queryByRole("button", { name: "Expand Assistant panel" })).toBeNull();
   });
 
-  it("reading panels carry the reading backing, which stays at 85% when the window is nearly clear", () => {
-    useConfigStore.setState({ overlayOpacity: 0.1 });
+  it("a see-through level makes the window and the reading panels see-through", () => {
+    useConfigStore.setState({ overlayOpacity: 0.3 });
     renderOverlay();
     const root = screen.getByRole("group", { name: "Meeting panels" });
-    expect(Number(root.style.getPropertyValue("--dock-reading-alpha"))).toBeCloseTo(readingBackingAlpha(0.1), 5);
+    const a = overlayAlphas(0.3);
+    expect(Number(root.style.getPropertyValue("--dock-reading-alpha"))).toBeCloseTo(a.readingSurface, 2);
+    expect(Number(root.style.getPropertyValue("--dock-reading-alpha"))).toBeLessThan(0.2);
+    const bg = document.querySelector<HTMLElement>(".overlay-bg")!;
+    expect(bg.style.background).toContain(a.window.toFixed(3));
     expect(document.querySelectorAll('[data-dock-surface][data-reading="true"]').length).toBe(2);
+  });
+
+  it("the eye cycles the levels and shows a small level indicator", () => {
+    useConfigStore.setState({ overlayOpacity: 0.85 });
+    renderOverlay();
+    expect(screen.queryByTestId("opacity-level")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^Transparency: 85%/ }));
+    expect(useConfigStore.getState().overlayOpacity).toBe(0.65);
+    expect(screen.getByTestId("opacity-level").textContent).toContain("65%");
+    fireEvent.click(screen.getByRole("button", { name: /^Transparency: 65%/ }));
+    expect(useConfigStore.getState().overlayOpacity).toBe(0.45);
+    expect(screen.getByTestId("opacity-level").textContent).toContain("45%");
   });
 });
 

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { OVERLAY_MOTION_CSS } from "./overlayMotion";
 import { useIsLight } from "../lib/themeText";
-import { backingFor, readThemeColours, rgbToHslVar, surfaceAlphaFor } from "./backing";
+import { nextOpacityLevel, overlayAlphas, readThemeColours, transparencyFor, transparencyVars } from "./backing";
+import { OpacityLevelIndicator } from "./OpacityLevelIndicator";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useScenarioStore } from "../stores/scenarioStore";
 import { useTranslationStore } from "../stores/translationStore";
@@ -95,18 +96,16 @@ export function OverlayView() {
   const meetingId = activeMeeting?.id ?? "";
   const isLight = useIsLight();
   const overlayOpacity = useConfigStore((s) => s.overlayOpacity);
-  // What the window needs so text and icons read over any background at this transparency (see backing.ts).
-  // Where the theme's colours cannot be read (no CSS), nothing is changed.
-  const backing = useMemo(() => {
+  // Every level is really see-through (window and panels both take their alpha from it); text and icons
+  // stay readable through a halo of the window colour behind them (see backing.ts). Where the theme's
+  // colours cannot be read (no CSS), nothing is added.
+  const transparency = useMemo(() => {
     const c = readThemeColours();
-    return c.background[0] + c.background[1] + c.background[2] === 0 && c.foreground[0] === 0 ? null : backingFor(c, overlayOpacity);
+    return c.background[0] + c.background[1] + c.background[2] === 0 && c.foreground[0] === 0 ? null : transparencyFor(c, overlayOpacity);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [overlayOpacity, isLight]);
-  const backingVars = backing && backing.muted > 0 ? ({ "--muted-foreground": rgbToHslVar(backing.mutedRgb) } as React.CSSProperties) : undefined;
-  const chromeBacking =
-    backing && backing.alpha > overlayOpacity
-      ? { background: `hsl(var(--background) / ${surfaceAlphaFor(overlayOpacity, backing.alpha, 0).toFixed(3)})` }
-      : undefined;
+  const windowAlpha = overlayAlphas(overlayOpacity).window;
+  const transparencyStyle = transparency ? (transparencyVars(transparency) as React.CSSProperties) : undefined;
 
   useEffect(() => {
     if (!returnFocusToSettings) return;
@@ -240,10 +239,11 @@ export function OverlayView() {
   const stealthMode = useConfigStore((s) => s.stealthMode);
   const stealthShortcut = useConfigStore((s) => s.stealthShortcut);
   const setOverlayOpacity = useConfigStore((s) => s.setOverlayOpacity);
-  const OPACITY_PRESETS = [0.9, 0.65, 0.35, 0.1];
+  // A click moves to the next level and shows it for a moment.
+  const [levelShownAt, setLevelShownAt] = useState(0);
   const cycleOpacity = () => {
-    const idx = OPACITY_PRESETS.findIndex((p) => Math.abs(p - overlayOpacity) < 0.08);
-    setOverlayOpacity(OPACITY_PRESETS[(idx + 1) % OPACITY_PRESETS.length]);
+    setOverlayOpacity(nextOpacityLevel(overlayOpacity));
+    setLevelShownAt(Date.now());
   };
 
   const autoTranslateActive = useTranslationStore((s) => s.autoTranslateActive);
@@ -404,7 +404,7 @@ export function OverlayView() {
   );
 
   return (
-    <div className="overlay-bg flex h-full flex-col rounded-xl border border-border/20 shadow-xl" style={{ background: `hsl(var(--background) / ${overlayOpacity})`, backdropFilter: overlayOpacity > 0.7 ? "blur(12px) saturate(1.1)" : "none", ...backingVars }}>
+    <div className="overlay-bg flex h-full flex-col rounded-xl border border-border/20 shadow-xl" style={{ background: `hsl(var(--background) / ${windowAlpha.toFixed(3)})`, backdropFilter: overlayOpacity > 0.9 ? "blur(12px) saturate(1.1)" : "none", ...transparencyStyle }}>
 
       <style>{OVERLAY_MOTION_CSS}</style>
       {/* ═══ HEADER ═══ */}
@@ -412,7 +412,7 @@ export function OverlayView() {
         ref={headerRef}
         className="no-select flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-2 cursor-move"
         data-tauri-drag-region
-        style={{ borderBottom: "1px solid hsl(var(--border) / 0.12)", ...chromeBacking }}
+        style={{ borderBottom: "1px solid hsl(var(--border) / 0.12)" }}
       >
         <div className="flex min-w-0 items-center gap-2.5" data-tauri-drag-region>
           <GripHorizontal className="h-3 w-3 text-muted-foreground/40" />
@@ -582,17 +582,18 @@ export function OverlayView() {
             state={dock}
             dispatch={dockDispatch}
             windowOpacity={overlayOpacity}
-            surfaceAlpha={backing ? surfaceAlphaFor(overlayOpacity, backing.alpha) : undefined}
             renderTabExtra={(p) => (p === "transcript" && shortTranscript ? <TranscriptTabMeters /> : null)}
           />
         </div>
       </div>
 
+      <OpacityLevelIndicator level={overlayOpacity} shownAt={levelShownAt} />
+
       {/* Bookmark toast (manages its own visibility) */}
       <BookmarkToast />
 
       {/* ═══ FOOTER: Service Status ═══ */}
-      <div className="border-t border-border/20" style={chromeBacking}>
+      <div className="border-t border-border/20">
         <ServiceStatusBar compact />
       </div>
     </div>
