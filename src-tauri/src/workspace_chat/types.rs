@@ -73,7 +73,28 @@ pub struct ContextBar {
     pub included: bool,
 }
 
+/// What one layer (meetings, documents, folders) holds in scope, next to what the bars send of it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ContextLayerInfo {
+    /// meetings, documents (documents, notes and talking points) or folders.
+    pub layer: String,
+    /// Tokens of everything of the layer that is in scope and indexed.
+    pub available: usize,
+    /// How many sources that is (for a folder: its files).
+    pub sources: usize,
+    /// Part of it is searched for each question, so the bars depend on the question.
+    pub searched: bool,
+}
+
+/// The budget of each depth for the chat's model.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct DepthBudgets {
+    pub lean: usize,
+    pub balanced: usize,
+    pub deep: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ContextReport {
     pub strategy: String,
     pub depth: String,
@@ -84,6 +105,12 @@ pub struct ContextReport {
     pub omitted: usize,
     pub notices: Vec<String>,
     pub estimate: bool,
+    /// Available against sent, per layer (absent from reports saved by older versions).
+    #[serde(default)]
+    pub layers: Vec<ContextLayerInfo>,
+    /// The budget of every depth for this model (absent from reports saved by older versions).
+    #[serde(default)]
+    pub depth_budgets: Option<DepthBudgets>,
 }
 
 /// What a new chat would be drawn against: the default model's window and the budget of

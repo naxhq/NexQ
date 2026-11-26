@@ -1,4 +1,4 @@
-import type { ContextBar, ContextLayer } from "../lib/types";
+import type { ContextBar, ContextLayer, ContextLayerInfo } from "../lib/types";
 
 /** Drawing order of the five layers (also the legend order). */
 export const CONTEXT_LAYERS: readonly ContextLayer[] = ["instructions", "meetings", "documents", "folders", "conversation"];
@@ -40,13 +40,27 @@ export interface LayerSpan {
   count: number;
 }
 
+/** A layer that is searched for each question: what exists, drawn as a faint outline in the free room (never counted as used). */
+export interface LayerHint {
+  layer: ContextLayer;
+  x: number;
+  w: number;
+  /** Tokens in scope that the question may find. */
+  available: number;
+}
+
 export interface WaveLayout {
   segments: WaveSegment[];
   layers: LayerSpan[];
   /** Room left in the budget, drawn as dots on the centre line. Null when it is used up. */
   free: { x: number; w: number; tokens: number } | null;
+  /** Searched layers with something left to find, side by side in the free room. */
+  hints: LayerHint[];
   axis: number;
+  /** Tokens of the bars. */
   used: number;
+  /** Tokens of the prompt that are no bar (the framing and the question): reserved at the start of the free room. */
+  framing: number;
   /** Found but cut by the budget (not drawn on the axis). */
   cut: ContextBar[];
 }
@@ -103,14 +117,16 @@ function gapsOf(groups: Group[]): number {
  */
 export function layoutContextBars(
   bars: readonly ContextBar[],
-  opts: { budget: number; widthPx: number; minBarPx?: number },
+  opts: { budget: number; widthPx: number; minBarPx?: number; layers?: readonly ContextLayerInfo[]; total?: number },
 ): WaveLayout {
   const minBarPx = opts.minBarPx ?? 6;
   const W = Math.max(opts.widthPx, 1);
   const included = bars.filter((b) => b.included && b.tokens > 0);
   const cut = bars.filter((b) => !b.included);
   const used = included.reduce((n, b) => n + b.tokens, 0);
-  const axis = Math.max(opts.budget, used, 1);
+  // What the report counts as used also holds the prompt's own words: they take room on the axis, without a bar.
+  const framing = Math.max(0, (opts.total ?? used) - used);
+  const axis = Math.max(opts.budget, used + framing, 1);
 
   const layers: LayerSpan[] = CONTEXT_LAYERS.map((layer) => {
     const mine = included.filter((b) => b.layer === layer);
@@ -148,9 +164,38 @@ export function layoutContextBars(
     x += w;
   });
 
-  const start = segments.length > 0 ? x + LAYER_GAP : 0;
-  const free = used < axis && W - start > STROKE ? { x: start, w: W - start, tokens: axis - used } : null;
-  return { segments, layers, free, axis, used, cut };
+  const start = (segments.length > 0 ? x + LAYER_GAP : 0) + framing * ppt;
+  const free = used + framing < axis && W - start > STROKE ? { x: start, w: W - start, tokens: axis - used - framing } : null;
+  const hints = free ? hintsOf(opts.layers ?? [], included, free) : [];
+  return { segments, layers, free, hints, axis, used, framing, cut };
+}
+
+/** The searched layers with something left to find, sharing the free room evenly (their size is in the legend, not the width). */
+function hintsOf(info: readonly ContextLayerInfo[], included: readonly ContextBar[], free: { x: number; w: number }): LayerHint[] {
+  const open = CONTEXT_LAYERS.map((layer) => {
+    const i = info.find((l) => l.layer === layer);
+    const sent = included.filter((b) => b.layer === layer).reduce((n, b) => n + b.tokens, 0);
+    return i && i.searched && i.available > sent ? { layer, available: i.available - sent } : null;
+  }).filter((h): h is { layer: ContextLayer; available: number } => h !== null);
+  if (open.length === 0) return [];
+  const gap = ITEM_GAP;
+  const w = (free.w - gap * (open.length - 1)) / open.length;
+  if (w < STROKE * 3) return [];
+  return open.map((h, i) => ({ ...h, x: free.x + i * (w + gap), w }));
+}
+
+/**
+ * What the legend says of a layer. Sent tokens first; a searched layer says so, and what exists.
+ * "Folders" with nothing sent reads "searched when you ask, 1.2M indexed", never "none".
+ */
+export function legendText(layer: ContextLayer, sent: number, info: ContextLayerInfo | undefined): string {
+  const none = sent === 0 ? "none" : formatTokens(sent);
+  if (!info || info.available === 0) return none;
+  if (info.searched) {
+    const rest = layer === "documents" ? "in all" : "indexed";
+    return `${sent > 0 ? `${formatTokens(sent)} sent · ` : ""}searched when you ask · ${formatTokens(info.available)} ${rest}`;
+  }
+  return none;
 }
 
 /** 1,240 -> "1.2k", 24,000 -> "24k". */

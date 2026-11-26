@@ -74,7 +74,9 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
   const hasLibrary = !!detail?.items.some((i) => i.kind === "folder" || i.kind === "server");
 
   // The estimate follows what is typed and everything that changes the context.
+  const libraryRevision = useWorkspaceStore((s) => s.revision);
   const signature = [
+    libraryRevision,
     chat?.provider,
     chat?.model,
     chat?.effort,

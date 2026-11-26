@@ -7,7 +7,7 @@ import type { ChatCapabilities, ContextDepth, WorkspaceChat } from "../../lib/ty
 import type { ChatSession } from "../../stores/workspaceChatStore";
 import { cn } from "../../lib/utils";
 import { COLUMN } from "./column";
-import { DEPTHS } from "./depths";
+import { DEPTHS, depthText } from "./depths";
 import { CapabilityNotes } from "./CapabilityNotes";
 import { ReportNotices, withoutSessionNote } from "./ReportNotices";
 import { IndexingNote } from "../IndexingNote";
@@ -66,6 +66,13 @@ function Notice({ children }: { children: ReactNode }) {
   );
 }
 
+/** The depth a pointer or focus event is on (a radio of the Depth group), by its label. */
+function depthOf(target: EventTarget): ContextDepth | null {
+  const radio = target instanceof Element ? target.closest('[role="radio"]') : null;
+  const label = radio?.textContent?.trim();
+  return DEPTHS.find((d) => d.label === label)?.value ?? null;
+}
+
 function selectionText(sel: Selection): string {
   const base = providerLabel(sel.provider);
   const model = isCliAgent(sel.provider) ? cliModelLabel(sel.provider, sel.model) : sel.model || "Default";
@@ -80,10 +87,10 @@ function selectionText(sel: Selection): string {
 export function Composer(p: ComposerProps) {
   const box = useRef<HTMLTextAreaElement | null>(null);
   const uid = useId();
-  const [hint, setHint] = useState(false);
+  // The depth under the pointer or focus: its words replace the chosen depth's in the same fixed slot.
+  const [peek, setPeek] = useState<ContextDepth | null>(null);
   const { selection, session, compact } = p;
   const depth = p.chat?.depth ?? "balanced";
-  const depthInfo = DEPTHS.find((d) => d.value === depth) ?? DEPTHS[1];
   const report = session.preview;
   const cap = capabilityOf(selection.provider);
   const offTools = toolsOffInChat(selection.provider);
@@ -257,6 +264,7 @@ export function Composer(p: ComposerProps) {
                   onDepth={p.onDepth}
                   onEffort={p.onEffort}
                   ensureChat={p.ensureChat}
+                  budgets={report?.depth_budgets}
                 />
               </div>
             </div>
@@ -298,10 +306,10 @@ export function Composer(p: ComposerProps) {
         </div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border/60 px-2 py-2">
           <div
-            onFocus={() => setHint(true)}
-            onBlur={() => setHint(false)}
-            onMouseEnter={() => setHint(true)}
-            onMouseLeave={() => setHint(false)}
+            onFocus={(e) => setPeek(depthOf(e.target))}
+            onBlur={() => setPeek(null)}
+            onMouseOver={(e) => setPeek(depthOf(e.target))}
+            onMouseLeave={() => setPeek(null)}
             className="shrink-0"
           >
             <Segmented label="Depth" value={depth} onChange={p.onDepth} options={DEPTHS.map((d) => ({ value: d.value, label: d.label, disabled: p.writing }))} />
@@ -311,11 +319,14 @@ export function Composer(p: ComposerProps) {
           </span>
           {action}
         </div>
-        {hint && (
-          <p className="ui-meta border-t border-border/60 px-3 py-1.5 text-muted-foreground" aria-live="polite">
-            {depthInfo.label}: {depthInfo.text}
-          </p>
-        )}
+        {/* Always there, always the same height: hovering or choosing only changes its words, never the layout. */}
+        <p
+          data-depth-hint
+          className="ui-meta line-clamp-2 h-[2.625rem] overflow-hidden border-t border-border/60 px-3 py-1 text-muted-foreground"
+          aria-live="polite"
+        >
+          {DEPTHS.find((d) => d.value === (peek ?? depth))?.label}: {depthText(peek ?? depth, report?.depth_budgets)}
+        </p>
       </div>
     </div>
   );

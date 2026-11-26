@@ -517,13 +517,40 @@ describe("room for the answer", () => {
     expect(within(dialog).getByText(/For most questions/)).toBeInTheDocument();
   });
 
-  it("the start screen explains depth only while you are on it", async () => {
+  it("the depth line is always in the same slot, so hovering a depth never moves the question box", async () => {
     setup();
     await screen.findByRole("textbox", { name: /ask about this workspace/i });
-    expect(screen.queryByText(/For most questions/)).toBeNull();
+    const slot = () => document.querySelector("[data-depth-hint]") as HTMLElement;
+    const before = slot();
+    expect(before).not.toBeNull();
+    expect(before.textContent).toMatch(/Balanced: For most questions/);
+    const cls = before.className;
     const group = await screen.findByRole("radiogroup", { name: "Depth" });
-    act(() => within(group).getByRole("radio", { name: "Balanced" }).focus());
-    expect(await screen.findByText(/For most questions/)).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.hover(within(group).getByRole("radio", { name: "Deep" }));
+    // the same element, the same box: only its words change
+    expect(slot()).toBe(before);
+    expect(slot().className).toBe(cls);
+    expect(slot().textContent).toMatch(/Deep: Searches widely/);
+    expect(cls).toContain("h-[2.625rem]");
+    await user.unhover(within(group).getByRole("radio", { name: "Deep" }));
+    expect(slot()).toBe(before);
+    expect(slot().textContent).toMatch(/Balanced: For most questions/);
+    act(() => within(group).getByRole("radio", { name: "Lean" }).focus());
+    expect(slot().textContent).toMatch(/Lean: Quick and cheap/);
+    expect(slot().className).toBe(cls);
+  });
+
+  it("says each depth in the budget the chat's model really gets", async () => {
+    ipc.previewChatContext.mockResolvedValue({ ...report, budget: 60000, depth_budgets: { lean: 16000, balanced: 60000, deep: 120000 } });
+    setup({ chats: [chat("c1")], messages: pairs(1) });
+    const options = await screen.findByRole("button", { name: /Answer options/ });
+    await waitFor(() => expect(ipc.previewChatContext).toHaveBeenCalled());
+    await waitFor(() => expect(useWorkspaceChatStore.getState().sessions.c1?.preview?.depth_budgets?.deep).toBe(120000));
+    await userEvent.setup().click(options);
+    const dialog = await screen.findByRole("dialog", { name: "Answer options" });
+    expect(within(dialog).getByText(/Up to 60k tokens/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/24k/)).toBeNull();
   });
 
   it("names the effort and lets the model name take the room it needs", async () => {

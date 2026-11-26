@@ -87,7 +87,32 @@
   ],
   "budget": 6000,
   "depth": "balanced",
+  "depth_budgets": {
+    "balanced": 60000,
+    "deep": 120000,
+    "lean": 16000
+  },
   "estimate": true,
+  "layers": [
+    {
+      "available": 9400,
+      "layer": "meetings",
+      "searched": true,
+      "sources": 3
+    },
+    {
+      "available": 390,
+      "layer": "documents",
+      "searched": false,
+      "sources": 2
+    },
+    {
+      "available": 1200000,
+      "layer": "folders",
+      "searched": true,
+      "sources": 638
+    }
+  ],
   "notices": [
     "This conversation continues in an earlier session; that session holds its context."
   ],

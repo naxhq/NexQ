@@ -71,7 +71,7 @@ export function useWorkspaceChat(workspaceId: string): WorkspaceChatView {
  * The estimate before sending: asks the backend (debounced) when the question or anything
  * that changes the context changes. Late answers of an older ask are dropped by the store.
  */
-export function useChatPreview(chatId: string | null, question: string, signature: string, enabled = true, delay = 450) {
+export function useChatPreview(chatId: string | null, question: string, signature: string, enabled = true, delay = 400) {
   useEffect(() => {
     if (!chatId || !enabled) return;
     const timer = setTimeout(() => void useWorkspaceChatStore.getState().refreshPreview(chatId, question), delay);

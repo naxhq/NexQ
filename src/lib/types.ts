@@ -1612,6 +1612,31 @@ export interface ContextReport {
   notices: string[];
   /** true = estimate before sending, false = what was sent. */
   estimate: boolean;
+  /**
+   * Per layer, what is in scope against what the bars send: `available` tokens, and whether part of
+   * it is `searched` for each question (so the bars depend on the question). Absent in reports saved
+   * by older versions.
+   */
+  layers?: ContextLayerInfo[];
+  /** The budget of every depth for this chat's model (absent in reports saved by older versions). */
+  depth_budgets?: DepthBudgets | null;
+}
+
+/** What one layer holds in scope (`ContextReport.layers`). Documents include notes and talking points. */
+export interface ContextLayerInfo {
+  layer: ContextLayer;
+  /** Tokens of everything of the layer that is in scope and indexed. */
+  available: number;
+  /** How many sources that is (for a folder: its files). */
+  sources: number;
+  /** Part of it is found by searching the question. */
+  searched: boolean;
+}
+
+export interface DepthBudgets {
+  lean: number;
+  balanced: number;
+  deep: number;
 }
 
 // -- Workspace chat ----------------------------------------------------------------

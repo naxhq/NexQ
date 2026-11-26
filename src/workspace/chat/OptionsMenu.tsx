@@ -2,8 +2,8 @@ import { useCallback, useRef, useState } from "react";
 import { Portal, anchorOf, placeBox, useDismiss, useMeasured, type Anchor } from "../../ui/portal";
 import { Segmented, Button } from "../../ui";
 import { cliEffortLabel, isCliAgent } from "../../lib/cliAgents";
-import type { ContextDepth, WorkspaceChat } from "../../lib/types";
-import { DEPTHS } from "./depths";
+import type { ContextDepth, DepthBudgets, WorkspaceChat } from "../../lib/types";
+import { DEPTHS, depthText } from "./depths";
 import { PickerCaret } from "./ModelPicker";
 import { ScopeBody, scopeSummary } from "./ScopeControl";
 import type { Selection } from "./models";
@@ -21,6 +21,7 @@ export function OptionsMenu({
   onDepth,
   onEffort,
   ensureChat,
+  budgets,
 }: {
   workspaceId: string;
   chat: WorkspaceChat | null;
@@ -30,6 +31,8 @@ export function OptionsMenu({
   onDepth: (d: ContextDepth) => void;
   onEffort: (e: string) => void;
   ensureChat: () => Promise<string | null>;
+  /** The budget of each depth for this chat's model (from the latest estimate). */
+  budgets?: DepthBudgets | null;
 }) {
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<Anchor | null>(null);
@@ -88,7 +91,7 @@ export function OptionsMenu({
               <p className="ui-section text-foreground">How much to look at</p>
               <Segmented label="Depth" value={depth} onChange={onDepth} options={DEPTHS.map((d) => ({ value: d.value, label: d.label }))} />
               <p className="ui-meta text-muted-foreground" aria-live="polite">
-                {info.text}
+                {depthText(depth, budgets)}
               </p>
               {selection.efforts.length > 0 && selection.effort && (
                 <div className="space-y-1.5 pt-1">

@@ -590,6 +590,7 @@ mod tests {
             omitted: 0,
             notices: vec![],
             estimate: false,
+            ..Default::default()
         }
     }
 

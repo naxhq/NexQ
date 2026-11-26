@@ -194,6 +194,8 @@ pub fn report_of(plan: &ContextPlan, depth: &str, estimate: bool, extra_notices:
         omitted: plan.omitted,
         notices,
         estimate,
+        layers: plan.layers.iter().map(|l| ContextLayerInfo { layer: l.layer.clone(), available: l.available, sources: l.sources, searched: l.searched }).collect(),
+        depth_budgets: Some(DepthBudgets { lean: plan.depth_budgets[0], balanced: plan.depth_budgets[1], deep: plan.depth_budgets[2] }),
     }
 }
 

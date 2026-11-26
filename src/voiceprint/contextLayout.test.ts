@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ContextBar, ContextLayer } from "../lib/types";
-import { formatTokens, layerColor, layoutContextBars, strokeHeights } from "./contextLayout";
+import type { ContextBar, ContextLayer, ContextLayerInfo } from "../lib/types";
+import { formatTokens, layerColor, layoutContextBars, legendText, strokeHeights } from "./contextLayout";
 
 function bar(id: string, layer: ContextLayer, tokens: number, extra: Partial<ContextBar> = {}): ContextBar {
   return { id, layer, title: id, tokens, relevance: 0.5, pinned: false, included: true, ...extra };
@@ -95,5 +95,61 @@ describe("formatTokens", () => {
     expect(formatTokens(1240)).toBe("1.2k");
     expect(formatTokens(24000)).toBe("24k");
     expect(formatTokens(128000)).toBe("128k");
+  });
+});
+
+describe("what is sent against what is searched", () => {
+  const folders: ContextLayerInfo = { layer: "folders", available: 1_200_000, sources: 638, searched: true };
+  const docs: ContextLayerInfo = { layer: "documents", available: 390, sources: 2, searched: false };
+  const meetings: ContextLayerInfo = { layer: "meetings", available: 54_000, sources: 6, searched: true };
+
+  it("bars are proportional to their tokens on the budget's scale, and bars, gaps and free room fill the width", () => {
+    const bars = [bar("m", "meetings", 6000), bar("d", "documents", 3000), bar("f", "folders", 1500)];
+    const l = layoutContextBars(bars, { budget: 24000, widthPx: 800 });
+    const ppt = l.segments[0].w / 6000;
+    for (const s of l.segments) expect(s.w / s.tokens).toBeCloseTo(ppt, 9);
+    const gaps = 8 + 8 + 8; // three layers, then the free room
+    expect(l.segments.reduce((n, s) => n + s.w, 0) + gaps + l.free!.w).toBeCloseTo(800, 6);
+    // the free room is the rest of the budget at the same scale (less the layer gap that sets it apart)
+    expect(l.free!.tokens).toBe(24000 - 10500);
+    expect((l.free!.w + 8) / l.free!.tokens).toBeCloseTo(ppt, 6);
+  });
+
+  it("a searched layer is outlined in the free room and never counted as used", () => {
+    const l = layoutContextBars([bar("d", "documents", 390), bar("m", "meetings", 1600)], { budget: 60000, widthPx: 600, layers: [meetings, docs, folders] });
+    expect(l.hints.map((h) => h.layer)).toEqual(["meetings", "folders"]);
+    expect(l.used).toBe(1990);
+    expect(l.hints[0].available).toBe(54_000 - 1600);
+    expect(l.hints[1].available).toBe(1_200_000);
+    const free = l.free!;
+    expect(l.hints[0].x).toBeGreaterThanOrEqual(free.x);
+    const last = l.hints[l.hints.length - 1];
+    expect(last.x + last.w).toBeLessThanOrEqual(free.x + free.w + 0.001);
+    expect(l.hints[0].x + l.hints[0].w).toBeLessThan(l.hints[1].x);
+  });
+
+  it("draws no hint when nothing is left to find or there is no room", () => {
+    expect(layoutContextBars([bar("d", "documents", 390)], { budget: 60000, widthPx: 600, layers: [docs] }).hints).toEqual([]);
+    expect(layoutContextBars([bar("d", "documents", 60000)], { budget: 60000, widthPx: 600, layers: [folders] }).hints).toEqual([]);
+    expect(layoutContextBars([bar("d", "documents", 390)], { budget: 60000, widthPx: 600 }).hints).toEqual([]);
+  });
+
+  it("the prompt's own words take room on the axis without a bar", () => {
+    const l = layoutContextBars([bar("m", "meetings", 1000)], { budget: 4000, widthPx: 400, total: 1400 });
+    expect(l.used).toBe(1000);
+    expect(l.framing).toBe(400);
+    expect(l.free!.tokens).toBe(2600);
+    const plain = layoutContextBars([bar("m", "meetings", 1000)], { budget: 4000, widthPx: 400 });
+    expect(l.free!.x).toBeGreaterThan(plain.free!.x);
+    expect(l.free!.x + l.free!.w).toBeCloseTo(400, 6);
+  });
+
+  it("the legend says what is sent, what is searched and how much exists", () => {
+    expect(legendText("folders", 0, folders)).toBe("searched when you ask · 1.2M indexed".replace("1.2M", "1200k"));
+    expect(legendText("meetings", 1600, meetings)).toBe("1.6k sent · searched when you ask · 54k indexed");
+    expect(legendText("documents", 390, docs)).toBe("390");
+    expect(legendText("documents", 390, { ...docs, available: 31_000, searched: true })).toBe("390 sent · searched when you ask · 31k in all");
+    expect(legendText("instructions", 0, undefined)).toBe("none");
+    expect(legendText("folders", 0, undefined)).toBe("none");
   });
 });

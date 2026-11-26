@@ -1,7 +1,7 @@
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ContextBar } from "../lib/types";
+import type { ContextBar, ContextLayerInfo } from "../lib/types";
 import { ContextWave } from "./ContextWave";
 import { MeetingWave } from "./MeetingWave";
 import { VoiceprintMark } from "./VoiceprintMark";
@@ -26,6 +26,22 @@ describe("ContextWave", () => {
     }
     expect(screen.getByText(/Using 11.1k of 24k tokens/)).toBeInTheDocument();
     expect(screen.getByText(/1 found but cut/)).toBeInTheDocument();
+  });
+
+  it("says in the legend and the graph what a question will search, apart from what is sent", () => {
+    const layers: ContextLayerInfo[] = [
+      { layer: "meetings", available: 54_000, sources: 6, searched: true },
+      { layer: "documents", available: 6100, sources: 1, searched: false },
+      { layer: "folders", available: 1_200_000, sources: 638, searched: true },
+    ];
+    const { container } = render(<ContextWave bars={BARS} window={200000} budget={60000} used={11400} layers={layers} />);
+    const legend = within(screen.getByRole("list"));
+    expect(legend.getByRole("button", { name: /Folders.*searched when you ask · 1200k indexed/ })).toBeInTheDocument();
+    expect(legend.getByRole("button", { name: /Meetings.*4.2k sent · searched when you ask/ })).toBeInTheDocument();
+    expect(legend.getByRole("button", { name: /Documents\s*6\.1k$/ })).toBeInTheDocument();
+    // outlined hints only for the searched layers, and the number in the summary stays what is sent
+    expect([...container.querySelectorAll("[data-wave-hint]")].map((e) => e.getAttribute("data-wave-hint"))).toEqual(["meetings", "folders"]);
+    expect(screen.getByText(/Using 11.4k of 60k tokens/)).toBeInTheDocument();
   });
 
   it("moves between bars with the arrow keys, Home and End, one tab stop", async () => {

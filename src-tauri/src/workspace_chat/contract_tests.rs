@@ -43,6 +43,12 @@ fn report() -> ContextReport {
         omitted: 2,
         notices: vec!["This conversation continues in an earlier session; that session holds its context.".into()],
         estimate: true,
+        layers: vec![
+            ContextLayerInfo { layer: "meetings".into(), available: 9_400, sources: 3, searched: true },
+            ContextLayerInfo { layer: "documents".into(), available: 390, sources: 2, searched: false },
+            ContextLayerInfo { layer: "folders".into(), available: 1_200_000, sources: 638, searched: true },
+        ],
+        depth_budgets: Some(DepthBudgets { lean: 16_000, balanced: 60_000, deep: 120_000 }),
     }
 }
 

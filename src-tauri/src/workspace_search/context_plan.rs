@@ -22,6 +22,9 @@ use std::collections::HashSet;
 pub const MEMORY_TOKEN_CAP: usize = 1_500;
 pub const INSTRUCTIONS_TOKEN_CAP: usize = 4_000;
 pub const PINNED_SHARE: f32 = 0.25;
+/// In the ladder, small documents, notes and talking points go in whole up to this share of the
+/// budget (smallest first); only what does not fit, and folders, is searched per question.
+pub const WHOLE_SHARE: f32 = 0.20;
 pub const CARD_SHARE: f32 = 0.30;
 pub const CONVERSATION_SHARE: f32 = 0.35;
 pub const RECENT_CARDS: usize = 10;
@@ -221,6 +224,19 @@ pub struct MemoryUsed {
     pub tokens: usize,
 }
 
+/// What one layer holds in scope against what a question sends of it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LayerAvailability {
+    /// meetings, documents (documents, notes and talking points) or folders.
+    pub layer: String,
+    /// Tokens of everything of this layer that is in scope and indexed.
+    pub available: usize,
+    /// How many sources that is (for a folder: its files).
+    pub sources: usize,
+    /// Part of it is found by searching the question, so what is sent depends on the question.
+    pub searched: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ContextPlan {
     /// Index in `ContextInput::conversation` of the first turn that was sent
@@ -246,6 +262,10 @@ pub struct ContextPlan {
     /// The verbatim turns that are sent (oldest first).
     pub turns: Vec<ChatTurn>,
     pub omitted: usize,
+    /// Per layer: what is in scope against what is searched per question.
+    pub layers: Vec<LayerAvailability>,
+    /// The budget of lean, balanced and deep for this model.
+    pub depth_budgets: [usize; 3],
     #[serde(skip)]
     pub nonce: String,
 }
@@ -561,6 +581,9 @@ pub fn build_context(input: &ContextInput, env: &ContextEnv) -> ContextPlan {
     let mut strategy = Strategy::Ladder;
     let mut body_items: Vec<ContextItem> = Vec::new();
     let mut body_texts: Vec<String> = Vec::new(); // raw text per item (parallel)
+    // ladder only: what went in whole instead of being searched (the first `whole_count` body items)
+    let mut whole_keys: HashSet<(String, String, Option<String>)> = HashSet::new();
+    let (mut whole_used, mut whole_count, mut whole_stable) = (0usize, 0usize, true);
 
     if fixed_core + meeting_full + material_full <= budget {
         let mut loaded: Vec<(ContextItem, String)> = Vec::new();
@@ -622,7 +645,41 @@ pub fn build_context(input: &ContextInput, env: &ContextEnv) -> ContextPlan {
 
     // 6. ladder
     if strategy == Strategy::Ladder {
-        let remaining = budget.saturating_sub(fixed_core);
+        // Small documents, notes and talking points go in whole (smallest first) up to a share
+        // of the budget, so they never depend on the words of a question. Folders are only searched.
+        let whole_share = (budget as f32 * WHOLE_SHARE) as usize;
+        let whole_cap = whole_share.min(budget.saturating_sub(fixed_core));
+        whole_stable = whole_cap == whole_share;
+        let mut candidates: Vec<&&MaterialEntry> = material.iter().filter(|m| m.kind == "document" || m.kind == "talking_point").collect();
+        candidates.sort_by(|a, b| (a.tokens, a.kind.as_str(), a.ref_id.as_str(), &a.sub_ref).cmp(&(b.tokens, b.kind.as_str(), b.ref_id.as_str(), &b.sub_ref)));
+        for m in candidates {
+            if whole_used + m.tokens + WRAP_OVERHEAD_TOKENS > whole_cap {
+                continue;
+            }
+            let Some(text) = (env.load_full)(&m.kind, &m.ref_id, m.sub_ref.as_deref()) else { continue };
+            let t = tok(&text) + WRAP_OVERHEAD_TOKENS;
+            if whole_used + t > whole_cap {
+                continue;
+            }
+            whole_used += t;
+            whole_keys.insert((m.kind.clone(), m.ref_id.clone(), m.sub_ref.clone()));
+            body_items.push(ContextItem {
+                layer: layer_of(&m.kind).into(),
+                kind: m.kind.clone(),
+                ref_id: m.ref_id.clone(),
+                sub_ref: m.sub_ref.clone(),
+                title: m.title.clone(),
+                start_ms: None,
+                tokens: t,
+                relevance: None,
+                citation: None,
+                text: String::new(),
+            });
+            body_texts.push(text);
+        }
+        whole_count = body_items.len();
+
+        let remaining = budget.saturating_sub(fixed_core).saturating_sub(whole_used);
         let card_cap = (remaining as f32 * CARD_SHARE) as usize;
         let mut card_used = 0usize;
 
@@ -637,6 +694,7 @@ pub fn build_context(input: &ContextInput, env: &ContextEnv) -> ContextPlan {
                     return false;
                 }
                 !pinned_keys.contains(&(p.kind.clone(), p.ref_id.clone(), p.sub_ref.clone()))
+                    && !whole_keys.contains(&(p.kind.clone(), p.ref_id.clone(), p.sub_ref.clone()))
                     && !pinned_keys.contains(&("meeting".to_string(), p.ref_id.clone(), None))
             })
             .collect();
@@ -787,7 +845,8 @@ pub fn build_context(input: &ContextInput, env: &ContextEnv) -> ContextPlan {
 
     let mut card_blocks: Vec<String> = Vec::new();
     let mut body_blocks: Vec<String> = Vec::new();
-    for (mut it, text) in body_items.into_iter().zip(body_texts.into_iter()) {
+    let mut whole_blocks: Vec<String> = Vec::new();
+    for (n, (mut it, text)) in body_items.into_iter().zip(body_texts.into_iter()).enumerate() {
         let meta = meeting_meta(&input.meetings, &it);
         let label = cite(&it.kind, &it.ref_id, &it.sub_ref, &it.title, it.start_ms, None);
         let when = match (meta, it.start_ms) {
@@ -800,6 +859,8 @@ pub fn build_context(input: &ContextInput, env: &ContextEnv) -> ContextPlan {
         it.text = text;
         if it.kind == "meeting" {
             card_blocks.push(block);
+        } else if n < whole_count {
+            whole_blocks.push(block);
         } else {
             body_blocks.push(block);
         }
@@ -827,6 +888,10 @@ pub fn build_context(input: &ContextInput, env: &ContextEnv) -> ContextPlan {
     }
     if !pinned_blocks.is_empty() {
         parts.push(PromptPart { name: "pinned".into(), text: pinned_blocks.join("\n\n"), stable: true });
+    }
+    if !whole_blocks.is_empty() {
+        // the same for every question while the same material fits: part of the cached prefix
+        parts.push(PromptPart { name: "library".into(), text: whole_blocks.join("\n\n"), stable: whole_stable });
     }
     if !card_blocks.is_empty() {
         parts.push(PromptPart {
@@ -872,6 +937,28 @@ pub fn build_context(input: &ContextInput, env: &ContextEnv) -> ContextPlan {
         .filter_map(|l| seg_tokens.get(l).filter(|(t, c)| *t > 0 || *c > 0).map(|(t, c)| Segment { layer: (*l).into(), tokens: *t, count: *c }))
         .collect();
 
+    let ladder = strategy == Strategy::Ladder;
+    let mut layers: Vec<LayerAvailability> = Vec::new();
+    {
+        let (m_tokens, m_count) = meetings.iter().fold((0usize, 0usize), |(t, c), m| (t + m.transcript_tokens, c + 1));
+        if m_count > 0 && m_tokens > 0 {
+            layers.push(LayerAvailability { layer: "meetings".into(), available: m_tokens, sources: m_count, searched: ladder });
+        }
+        let docs: Vec<&MaterialEntry> = input.materials.iter().filter(|m| matches!(layer_of(&m.kind), "documents" | "talking_points")).collect();
+        if !docs.is_empty() {
+            let unsent = docs.iter().any(|m| {
+                let key = (m.kind.clone(), m.ref_id.clone(), m.sub_ref.clone());
+                !pinned_keys.contains(&key) && !whole_keys.contains(&key)
+            });
+            layers.push(LayerAvailability { layer: "documents".into(), available: docs.iter().map(|m| m.tokens).sum(), sources: docs.len(), searched: ladder && unsent });
+        }
+        let files: Vec<&MaterialEntry> = input.materials.iter().filter(|m| layer_of(&m.kind) == "folders").collect();
+        if !files.is_empty() {
+            layers.push(LayerAvailability { layer: "folders".into(), available: files.iter().map(|m| m.tokens).sum(), sources: files.len(), searched: ladder });
+        }
+    }
+    let depth_budgets = [Depth::Lean, Depth::Balanced, Depth::Deep].map(|d| d.budget_for(window, input.free_tokens));
+
     let tokens = parts.iter().map(|p| tok(&p.text)).sum::<usize>() + question_tokens;
     let omitted = dropped.len();
     if omitted >= MAX_DROPPED_LISTED {
@@ -898,6 +985,8 @@ pub fn build_context(input: &ContextInput, env: &ContextEnv) -> ContextPlan {
         notices,
         turns,
         omitted,
+        layers,
+        depth_budgets,
         nonce,
     }
 }
@@ -1394,5 +1483,122 @@ mod tests {
         let mat = |p: &ContextPlan| p.prompt_parts.iter().find(|x| x.name == "material").unwrap().clone();
         assert!(mat(&a).stable);
         assert_eq!(mat(&a).text, mat(&b).text);
+    }
+
+    // ---- the ladder sends small documents whole and says what it only searches
+
+    fn material(kind: &str, id: &str, sub: Option<&str>, tokens: usize) -> MaterialEntry {
+        MaterialEntry { kind: kind.into(), ref_id: id.into(), sub_ref: sub.map(Into::into), title: format!("{kind} {id}"), tokens }
+    }
+
+    /// A text of about `n` tokens (four characters each) that names its source.
+    fn sized(kind: &str, id: &str, n: usize) -> String {
+        format!("{kind}-{id} ") + &"abcd ".repeat(n.saturating_sub(2) * 4 / 5)
+    }
+
+    /// A notes folder, a library of small documents and a talking point beside meetings too big to send whole.
+    fn owners_workspace() -> ContextInput {
+        let mut i = base_input();
+        i.meetings = (0..6).map(|n| meeting(&format!("m{n}"), &format!("Meeting {n}"), n, "a short recap", 9_000)).collect();
+        i.materials = vec![
+            material("document", "note", None, 3),
+            material("document", "doc", None, 387),
+            material("talking_point", "tp", None, 200),
+            material("document", "huge", None, 30_000),
+        ];
+        i.materials.extend((0..40).map(|n| material("folder", "depaul", Some(&format!("n{n}.md")), 1_000)));
+        i
+    }
+
+    fn loader(kind: &str, id: &str, sub: Option<&str>) -> Option<String> {
+        let n = match (kind, id) {
+            ("document", "note") => 3,
+            ("document", "doc") => 387,
+            ("talking_point", _) => 200,
+            ("document", _) => 30_000,
+            _ => 1_000,
+        };
+        Some(sized(kind, &format!("{id}{}", sub.unwrap_or("")), n))
+    }
+
+    #[test]
+    fn the_ladder_sends_small_documents_and_talking_points_whole_without_a_question() {
+        let mut i = owners_workspace();
+        i.question = String::new();
+        let plan = build_context(&i, &env(&no_search, &loader));
+        assert_eq!(plan.strategy, Strategy::Ladder);
+        let whole: Vec<&str> = plan.items.iter().filter(|x| x.kind == "document" || x.kind == "talking_point").map(|x| x.ref_id.as_str()).collect();
+        assert_eq!(whole, ["note", "tp", "doc"], "smallest first, the huge one stays out");
+        assert!(plan.items.iter().all(|x| x.kind != "folder"), "folders are only searched");
+        let part = plan.prompt_parts.iter().find(|p| p.name == "library").expect("a library part");
+        assert!(part.stable && part.text.contains("document-doc") && part.text.contains("talking_point-tp") && !part.text.contains("document-huge"));
+        assert_eq!(plan.citations.iter().filter(|c| c.kind != "meeting").count(), 3);
+    }
+
+    #[test]
+    fn whole_documents_stay_within_a_fifth_of_the_budget_smallest_first() {
+        let mut i = base_input();
+        i.meetings = (0..6).map(|n| meeting(&format!("m{n}"), "M", n, "recap", 9_000)).collect();
+        // balanced is 24,000: a fifth is 4,800, so one 3,000-token document fits and not two
+        i.materials = (0..3).map(|n| material("document", &format!("d{n}"), None, 3_000 + n)).collect();
+        let load = |k: &str, id: &str, _: Option<&str>| Some(sized(k, id, 3_000));
+        let plan = build_context(&i, &env(&no_search, &load));
+        let whole = plan.items.iter().filter(|x| x.kind == "document").count();
+        assert_eq!(whole, 1);
+        let used: usize = plan.items.iter().filter(|x| x.kind == "document").map(|x| x.tokens).sum();
+        assert!(used <= (WHOLE_SHARE * plan.budget as f32) as usize);
+        assert_eq!(plan.items.iter().find(|x| x.kind == "document").unwrap().ref_id, "d0");
+        let docs = plan.layers.iter().find(|l| l.layer == "documents").unwrap();
+        assert!(docs.searched, "the two that did not fit are searched");
+    }
+
+    #[test]
+    fn a_document_sent_whole_is_not_sent_again_as_a_passage() {
+        let mut i = owners_workspace();
+        i.question = "what is in the doc".into();
+        let search = |_: &str, _: usize| {
+            vec![
+                passage(1, "document", "doc", "document doc", "a passage of the doc", 1.0),
+                passage(2, "folder", "depaul", "n3.md", "the folder note", 0.9),
+            ]
+        };
+        let plan = build_context(&i, &env(&search, &loader));
+        assert_eq!(plan.items.iter().filter(|x| x.kind == "document" && x.ref_id == "doc").count(), 1);
+        assert!(plan.items.iter().any(|x| x.kind == "folder"), "the folder passage is found by the question");
+    }
+
+    #[test]
+    fn layers_say_what_is_available_and_what_is_searched() {
+        let mut i = owners_workspace();
+        i.question = String::new();
+        let plan = build_context(&i, &env(&no_search, &loader));
+        let layer = |name: &str| plan.layers.iter().find(|l| l.layer == name).unwrap().clone();
+        assert_eq!(layer("folders"), LayerAvailability { layer: "folders".into(), available: 40_000, sources: 40, searched: true });
+        let docs = layer("documents");
+        assert_eq!((docs.available, docs.sources, docs.searched), (3 + 387 + 200 + 30_000, 4, true), "the huge one is still searched");
+        let meetings = layer("meetings");
+        assert_eq!((meetings.available, meetings.sources, meetings.searched), (54_000, 6, true));
+        assert_eq!(plan.depth_budgets, [8_000, 24_000, 76_800]);
+    }
+
+    #[test]
+    fn nothing_is_searched_when_everything_fits() {
+        let mut i = base_input();
+        i.meetings = vec![meeting("m1", "Kickoff", 10, "recap", 300)];
+        i.materials = vec![material("document", "d1", None, 200), material("folder", "f1", Some("a.md"), 100)];
+        let plan = build_context(&i, &env(&no_search, &load_text));
+        assert_eq!(plan.strategy, Strategy::Full);
+        assert!(plan.layers.iter().all(|l| !l.searched));
+        assert_eq!(plan.layers.iter().find(|l| l.layer == "folders").unwrap().available, 100);
+        assert!(plan.prompt_parts.iter().all(|p| p.name != "library"));
+    }
+
+    #[test]
+    fn pinned_and_excluded_items_are_not_taken_into_the_whole_share() {
+        let mut i = owners_workspace();
+        i.pinned = vec![PinnedItem { kind: "document".into(), ref_id: "doc".into(), sub_ref: None, title: "doc".into(), text: "pinned text".into() }];
+        let plan = build_context(&i, &env(&no_search, &loader));
+        assert_eq!(plan.items.iter().filter(|x| x.ref_id == "doc").count(), 1, "pinned once, never again as library");
+        assert_eq!(plan.items.iter().find(|x| x.ref_id == "doc").unwrap().layer, "pinned");
     }
 }

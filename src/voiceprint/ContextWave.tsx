@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { cn } from "../lib/utils";
-import type { ContextBar, ContextLayer } from "../lib/types";
+import type { ContextBar, ContextLayer, ContextLayerInfo } from "../lib/types";
 import {
   CONTEXT_LAYERS,
   CONTEXT_LAYER_NAMES,
@@ -9,6 +9,7 @@ import {
   formatTokens,
   layerColor,
   layoutContextBars,
+  legendText,
   strokeHeights,
   type WaveSegment,
 } from "./contextLayout";
@@ -30,6 +31,11 @@ export interface ContextWaveProps {
    * number reads the same as in the composer and the panel; the bars still draw their own tokens.
    */
   used?: number;
+  /**
+   * What each layer holds in scope (`ContextReport.layers`). A layer that is searched for each question
+   * says so in the legend and shows a faint outline in the room left; the outline is never counted as used.
+   */
+  layers?: ContextLayerInfo[];
   /** Click or Enter on a bar, a group, or a layer in the legend. */
   onSelect?: (selection: ContextSelection) => void;
   /** Height of the wave in px. */
@@ -67,7 +73,7 @@ function useWidth(ref: React.RefObject<HTMLElement | null>, fallback = 640) {
  * room left. Bars move only when the data changes. Everything is also a list
  * ("View as list"), and the bars are reachable with the arrow keys.
  */
-export function ContextWave({ bars, window: modelWindow, budget, used, onSelect, height = 64, className }: ContextWaveProps) {
+export function ContextWave({ bars, window: modelWindow, budget, used, layers, onSelect, height = 64, className }: ContextWaveProps) {
   const box = useRef<HTMLElement | null>(null);
   const width = useWidth(box);
   const [asList, setAsList] = useState(false);
@@ -75,8 +81,8 @@ export function ContextWave({ bars, window: modelWindow, budget, used, onSelect,
   const [hovered, setHovered] = useState<string | null>(null);
   const items = useRef<Array<HTMLButtonElement | null>>([]);
 
-  const layout = useMemo(() => layoutContextBars(bars, { budget, widthPx: width }), [bars, budget, width]);
-  const { segments, free } = layout;
+  const layout = useMemo(() => layoutContextBars(bars, { budget, widthPx: width, layers, total: used }), [bars, budget, width, layers, used]);
+  const { segments, free, hints } = layout;
   const at = Math.min(focusIdx, Math.max(segments.length - 1, 0));
   const readoutSeg = segments.find((s) => s.id === hovered) ?? null;
 
@@ -124,7 +130,7 @@ export function ContextWave({ bars, window: modelWindow, budget, used, onSelect,
       </div>
 
       {asList ? (
-        <ContextList bars={bars} onSelect={select} />
+        <ContextList bars={bars} layers={layers} onSelect={select} />
       ) : (
         <>
           <div
@@ -142,6 +148,17 @@ export function ContextWave({ bars, window: modelWindow, budget, used, onSelect,
                 style={{ left: free.x, width: free.w, top: height / 2 - 1 }}
               />
             ) : null}
+            {/* What a question may still find, outlined and not counted: layers that are searched, not sent. */}
+            {hints.map((h) => (
+              <div
+                key={h.layer}
+                aria-hidden
+                data-wave-hint={h.layer}
+                title={`${CONTEXT_LAYER_NAMES[h.layer]}: searched when you ask, ${formatTokens(h.available)} tokens in scope`}
+                className="absolute rounded-[3px] border border-dashed"
+                style={{ left: h.x, width: h.w, top: Math.round(height * 0.28), height: Math.round(height * 0.44), borderColor: layerColor(h.layer), opacity: 0.5 }}
+              />
+            ))}
             {segments.length === 0 && (
               <div aria-hidden className="ui-dots absolute inset-x-0 h-[2px]" style={{ top: height / 2 - 1 }} />
             )}
@@ -203,24 +220,31 @@ export function ContextWave({ bars, window: modelWindow, budget, used, onSelect,
           </p>
 
           <ul className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
-            {layout.layers.map((l) => (
-              <li key={l.layer}>
-                <button
-                  type="button"
-                  disabled={l.count === 0}
-                  onClick={() => select(l.layer, bars.filter((b) => b.layer === l.layer && b.included))}
-                  className="ui-meta inline-flex items-center gap-1.5 rounded-md px-1 py-0.5 outline-none ui-focus hover:bg-accent disabled:opacity-50 disabled:hover:bg-transparent"
-                >
-                  <span
-                    aria-hidden
-                    className="h-2 w-2 rounded-[2px]"
-                    style={{ background: layerColor(l.layer) }}
-                  />
-                  <span>{CONTEXT_LAYER_NAMES[l.layer]}</span>
-                  <span className="text-muted-foreground">{l.count === 0 ? "none" : formatTokens(l.tokens)}</span>
-                </button>
-              </li>
-            ))}
+            {layout.layers.map((l) => {
+              const info = layers?.find((i) => i.layer === l.layer);
+              const searched = !!info?.searched && info.available > 0;
+              return (
+                <li key={l.layer}>
+                  <button
+                    type="button"
+                    disabled={l.count === 0}
+                    onClick={() => select(l.layer, bars.filter((b) => b.layer === l.layer && b.included))}
+                    className={cn(
+                      "ui-meta inline-flex items-center gap-1.5 rounded-md px-1 py-0.5 outline-none ui-focus hover:bg-accent disabled:hover:bg-transparent",
+                      l.count === 0 && !searched && "disabled:opacity-50",
+                    )}
+                  >
+                    <span
+                      aria-hidden
+                      className={cn("h-2 w-2 rounded-[2px]", searched && l.count === 0 && "border border-dashed bg-transparent")}
+                      style={searched && l.count === 0 ? { borderColor: layerColor(l.layer) } : { background: layerColor(l.layer) }}
+                    />
+                    <span>{CONTEXT_LAYER_NAMES[l.layer]}</span>
+                    <span className="text-muted-foreground">{legendText(l.layer, l.tokens, info)}</span>
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         </>
       )}
@@ -228,13 +252,14 @@ export function ContextWave({ bars, window: modelWindow, budget, used, onSelect,
   );
 }
 
-function ContextList({ bars, onSelect }: { bars: ContextBar[]; onSelect: (layer: ContextLayer, bars: ContextBar[]) => void }) {
+function ContextList({ bars, layers, onSelect }: { bars: ContextBar[]; layers?: ContextLayerInfo[]; onSelect: (layer: ContextLayer, bars: ContextBar[]) => void }) {
   const rows = useMemo(
     () =>
       CONTEXT_LAYERS.flatMap((layer) => bars.filter((b) => b.layer === layer)),
     [bars],
   );
-  if (rows.length === 0) return <p className="ui-body py-2 text-muted-foreground">Nothing in the context yet.</p>;
+  const searched = (layers ?? []).filter((l) => l.searched && l.available > 0);
+  if (rows.length === 0 && searched.length === 0) return <p className="ui-body py-2 text-muted-foreground">Nothing in the context yet.</p>;
   return (
     <div className="max-h-72 overflow-y-auto">
       <table className="ui-body w-full border-collapse text-left">
@@ -268,6 +293,15 @@ function ContextList({ bars, onSelect }: { bars: ContextBar[]; onSelect: (layer:
           ))}
         </tbody>
       </table>
+      {searched.length > 0 && (
+        <ul aria-label="Searched when you ask" className="ui-meta mt-1.5 space-y-0.5 text-muted-foreground">
+          {searched.map((l) => (
+            <li key={l.layer}>
+              {CONTEXT_LAYER_NAMES[l.layer]}: searched when you ask, {formatTokens(l.available)} tokens {l.layer === "documents" ? "in all" : "indexed"}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

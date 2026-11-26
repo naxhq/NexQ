@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ContextWave, formatTokens, CONTEXT_LAYER_NAMES, type ContextSelection } from "../voiceprint";
 import { getContextBudget, listWorkspaceChats, previewChatContext } from "../lib/ipc";
 import { useWorkspaceStore } from "../stores/workspaceStore";
+import { useWorkspaceChatStore } from "../stores/workspaceChatStore";
 import type { ContextBar, ContextBudget, ContextReport, WorkspaceDetail } from "../lib/types";
 
 /** Used only until the backend has said what the default model gets (or when it cannot). */
@@ -50,6 +51,12 @@ export function ContextMeter({ workspaceId }: { workspaceId: string }) {
   });
   const [selection, setSelection] = useState<ContextSelection | null>(null);
   const [fallback, setFallback] = useState<ContextBudget | null>(null);
+  // The open chat's own estimate (the one over the composer, with the question being typed) is the
+  // number to show, so the rail, the panel and the box say the same thing.
+  const shared = useWorkspaceChatStore((s) => {
+    const open = s.activeChat[workspaceId];
+    return open ? s.sessions[open]?.preview ?? null : null;
+  });
 
   useEffect(() => {
     let live = true;
@@ -78,7 +85,7 @@ export function ContextMeter({ workspaceId }: { workspaceId: string }) {
 
   useEffect(() => setSelection(null), [workspaceId]);
 
-  const { report } = state;
+  const report = shared ?? state.report;
   const estimate = useMemo(() => libraryEstimate(detail), [detail]);
   const estimated = estimate.reduce((n, b) => n + b.tokens, 0);
   return (
@@ -103,7 +110,7 @@ export function ContextMeter({ workspaceId }: { workspaceId: string }) {
       {!report && !state.error && state.chat && <p className={hintClass}>Estimating</p>}
       {report && (
         <>
-          <ContextWave bars={report.bars} window={report.window} budget={report.budget} used={report.used} onSelect={setSelection} height={52} />
+          <ContextWave bars={report.bars} window={report.window} budget={report.budget} used={report.used} layers={report.layers} onSelect={setSelection} height={52} />
           {report.notices.map((n) => (
             <p key={n} className={hintClass}>
               {n}
