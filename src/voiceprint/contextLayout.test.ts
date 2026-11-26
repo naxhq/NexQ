@@ -94,6 +94,8 @@ describe("formatTokens", () => {
     expect(formatTokens(900)).toBe("900");
     expect(formatTokens(1240)).toBe("1.2k");
     expect(formatTokens(24000)).toBe("24k");
+    expect(formatTokens(1_200_000)).toBe("1.2M");
+    expect(formatTokens(999_999)).toBe("1M");
     expect(formatTokens(128000)).toBe("128k");
   });
 });
@@ -145,7 +147,7 @@ describe("what is sent against what is searched", () => {
   });
 
   it("the legend says what is sent, what is searched and how much exists", () => {
-    expect(legendText("folders", 0, folders)).toBe("searched when you ask · 1.2M indexed".replace("1.2M", "1200k"));
+    expect(legendText("folders", 0, folders)).toBe("searched when you ask · 1.2M indexed");
     expect(legendText("meetings", 1600, meetings)).toBe("1.6k sent · searched when you ask · 54k indexed");
     expect(legendText("documents", 390, docs)).toBe("390");
     expect(legendText("documents", 390, { ...docs, available: 31_000, searched: true })).toBe("390 sent · searched when you ask · 31k in all");

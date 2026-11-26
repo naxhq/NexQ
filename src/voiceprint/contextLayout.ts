@@ -201,6 +201,10 @@ export function legendText(layer: ContextLayer, sent: number, info: ContextLayer
 /** 1,240 -> "1.2k", 24,000 -> "24k". */
 export function formatTokens(n: number): string {
   if (n < 1000) return String(Math.round(n));
+  if (n >= 999_500) {
+    const m = n / 1_000_000;
+    return `${m >= 100 ? Math.round(m) : Math.round(m * 10) / 10}M`;
+  }
   const k = n / 1000;
   return `${k >= 100 ? Math.round(k) : Math.round(k * 10) / 10}k`;
 }

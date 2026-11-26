@@ -36,7 +36,7 @@ describe("ContextWave", () => {
     ];
     const { container } = render(<ContextWave bars={BARS} window={200000} budget={60000} used={11400} layers={layers} />);
     const legend = within(screen.getByRole("list"));
-    expect(legend.getByRole("button", { name: /Folders.*searched when you ask · 1200k indexed/ })).toBeInTheDocument();
+    expect(legend.getByRole("button", { name: /Folders.*searched when you ask · 1.2M indexed/ })).toBeInTheDocument();
     expect(legend.getByRole("button", { name: /Meetings.*4.2k sent · searched when you ask/ })).toBeInTheDocument();
     expect(legend.getByRole("button", { name: /Documents\s*6\.1k$/ })).toBeInTheDocument();
     // outlined hints only for the searched layers, and the number in the summary stays what is sent

@@ -40,6 +40,6 @@ describe("one number for the context", () => {
       useWorkspaceChatStore.setState({ activeChat: { acme: "c1" }, sessions: { c1: { ...useWorkspaceChatStore.getState().sessions.c1, preview: report(5400) } as never } });
     });
     expect(await screen.findByText(/Using 5.4k of 60k tokens/)).toBeInTheDocument();
-    expect(screen.getByText(/searched when you ask · 1200k indexed/)).toBeInTheDocument();
+    expect(screen.getByText(/searched when you ask · 1.2M indexed/)).toBeInTheDocument();
   });
 });
