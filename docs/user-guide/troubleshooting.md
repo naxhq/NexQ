@@ -226,16 +226,16 @@ The workspace you started it in was archived, deleted or couldn't be read, so Ne
 
 The file or folder moved or was deleted. Click **Remove** on its row, or put it back where it was. If it is a folder or tool, check **Settings > Personal Sources**: after a [settings reset](#settings-restored-or-reset) the list there may need to be filled again.
 
-### A Folder Shows "Needs your OK to search its text"
+### A Folder Doesn't Seem Up to Date
 
-NexQ doesn't search a folder until you allow it. Turn on **Search its text** under the folder. See [Workspaces](workspaces.md#folder-text-search).
+NexQ watches the folders in the Library and reads a changed file a couple of seconds after it stops changing. On a network drive that may not work: the folder is still checked every 30 minutes. Open the folder row's **...** menu and choose **Re-index now** to check at once. See [Workspaces](workspaces.md#folder-text-search).
 
 ### Workspace Chat Doesn't Find Something
 
 - Check the answer's sources, and open **Context** to see what the answer saw.
 - If it says "N things didn't fit", click **Search deeper**.
 - A meeting you left out of the chat, a document you removed from the workspace, and anything in another workspace are not used. See [What is shared between workspaces](workspaces.md#what-is-shared-between-workspaces).
-- A folder is only searched after **Search its text** is on. Files over 2 MB, hidden files and files with names like `.env` or containing `secret` or `password` are skipped. The folder's row shows **N files skipped**, and clicking it lists each file with the reason.
+- Files over 2 MB, hidden files and files with names like `.env` or containing `secret` or `password` are skipped. The folder's row shows **N files skipped**, and clicking it lists each file with the reason.
 - If the Library says **Still indexing**, or the answer says "Still indexing: 40 of 300 meetings are searchable", older meetings may be missing until it finishes. Indexing waits while a meeting is running, so a meeting you just finished may take a moment.
 
 ### Workspace Chat Says a Tool Is Off

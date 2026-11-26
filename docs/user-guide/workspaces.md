@@ -113,7 +113,7 @@ If you use the local knowledge base (see [Using Context Intelligence](rag-contex
 
 ### Add a folder
 
-Choose **Add > Folder** and pick a folder, for example a notes vault. The AI reads it but never changes it. A folder is only searched by NexQ once you allow it (see [Folder text search](#folder-text-search)).
+Choose **Add > Folder** and pick a folder, for example a notes vault. The AI reads it but never changes it. A folder in the Library is used: NexQ reads it and keeps it up to date by itself (see [Folders](#folder-text-search)). Take it out of the Library to stop using it.
 
 ### Add a tool (MCP server)
 
@@ -137,16 +137,17 @@ The state in a row is one of these:
 |--------------|---------------|
 | **Ready**, with a token count | A document NexQ has read |
 | **Reading its text** or **Indexing** | NexQ is still working on it |
-| **Indexed** | A folder whose text can be searched |
-| **Needs your OK to search its text** | A folder you haven't allowed yet |
+| **Indexed · 638 files** | A folder NexQ has read, with the number of files |
+| **Indexing 120 of 638** | NexQ is reading the folder now |
+| **Updated just now** | A file in the folder changed and NexQ read it again |
 | **Missing** | The file or folder moved or was deleted. Click **Remove**, or put it back |
 | **Off in Settings** | You switched it off in Settings > Personal Sources |
 
 ### Folder text search
 
-Under each folder is a switch, **Search its text**. It is off for every new folder and for every folder that existed before the upgrade. Turn it on to let workspace chat and the [brief](live-notes-and-brief.md) find passages in the folder. The passages that match a question go to the AI provider you use, so NexQ asks first.
+Every folder in a workspace's Library is used. There is no switch to turn on. NexQ reads the files in it, so workspace chat, the [brief](live-notes-and-brief.md) and the meeting assistant can find passages in it. With an API provider, the passages that match a question go to that provider. To stop using a folder, remove it from the Library.
 
-When it is on, NexQ reads `.md`, `.txt`, `.pdf` and `.docx` files and skips:
+NexQ reads `.md`, `.txt`, `.pdf` and `.docx` files and skips:
 
 - Hidden and system folders, and `node_modules`
 - Files that look like secrets: names starting with `.env` or `id_`, ending in `.pem`, `.key` or similar, or containing `credential`, `secret`, `token` or `password`
@@ -155,11 +156,11 @@ When it is on, NexQ reads `.md`, `.txt`, `.pdf` and `.docx` files and skips:
 
 Skipped files are listed. A folder with skipped files shows **N files skipped** in its row. Click it to open **Skipped in (folder)**, with each file's path and the reason (too large, a name that looks like a secret, hidden, over the limit). Nothing is changed or removed. Skipped files that can't be matched to a folder are listed under the Library as **N files skipped**.
 
-NexQ scans again every 10 minutes while a workspace is open. **Rescan folders** at the bottom of the Library does it now. Indexing waits while a meeting is running.
+NexQ watches every folder in the Library: a file you add, edit, rename or delete is read again a couple of seconds after it stops changing. Every 30 minutes it also checks everything once, in case a change was missed (a network drive, for example). If something looks wrong, open the folder row's **...** menu and choose **Re-index now**. Indexing waits while a meeting is running.
 
 While the index is being built, the Library says **Still indexing 312 of 540**, and the chat box and the context estimate say that results may leave out files that aren't indexed yet.
 
-This switch only controls NexQ's own search. With a subscription (Claude, Codex or Antigravity), a chat or a meeting can also read the files in the folders of the workspace itself (see [Personal sources](claude-subscription.md#personal-sources)), and that does not depend on this switch.
+With a subscription (Claude, Codex or Antigravity), a chat or a meeting can also read the files in the folders of the workspace itself (see [Personal sources](claude-subscription.md#personal-sources)).
 
 ### Recaps with AI
 
@@ -170,7 +171,7 @@ When it runs:
 - After each meeting in the workspace ends, for that meeting, a few seconds later once it is indexed
 - When you open the workspace, for up to 5 meetings that don't have a recap yet, newest first, once per opening
 - When you click **Try again** beside a recap failure, in **Edit workspace** or at the bottom of the Library. It runs the way opening the workspace does (never in a meeting) and says what came of it: **All recaps are written.**, **2 written, 1 still failed.** or **They failed again.**
-- When you click **Rescan folders** in the Library (shown only when the workspace has a folder). This also lets recaps that failed try again
+- When you choose **Re-index now** on a folder row. This also lets recaps that failed try again
 
 It never runs while a meeting is running. NexQ checks that the switch is still on, the workspace isn't archived and the meeting is still there before each call, and drops the result if anything changed while the model was working.
 
@@ -226,7 +227,7 @@ NexQ only fills General once, at the upgrade. After that, a document, folder or 
 
 ## Clone
 
-**Clone** makes a copy of a workspace. It copies the colour, description, instructions, its settings, the files, folders and tools it uses (with your names and pins) and its talking points. It does not copy meetings, chats, memory or secrets, and the copy starts with **Search its text** off on every folder.
+**Clone** makes a copy of a workspace. It copies the colour, description, instructions, its settings, the files, folders and tools it uses (with your names and pins) and its talking points. It does not copy meetings, chats, memory or secrets, and the copy uses the same folders.
 
 ## Archive and delete
 
@@ -249,7 +250,7 @@ NexQ adds workspaces to your existing data, and it does that safely:
 1. **A copy first.** Before changing your database for the first time, NexQ saves a copy of it as `nexq-before-workspaces.db` in the app data folder, next to `nexq.db` (`%APPDATA%\com.nexq.app\` on Windows). It does this only if you have meetings or documents, and only once. The copy is deleted at the first start after 14 days, because it still holds transcripts you may have deleted since. If the copy can't be made, NexQ writes that to its log and carries on, since the upgrade only adds things.
 2. **Everything goes into General.** All your meetings, documents, folders and tools are in General, and General is the default workspace. Until you make another workspace, answers work as before. A note at the top says so until you dismiss it: "Your meetings and files are in General. New workspaces keep their own."
 3. **The upgrade is all or nothing.** If a step of the workspace upgrade fails, nothing is changed. NexQ shows "Workspaces aren't available right now. Everything is in General, and NexQ works as before." and tries again the next time it starts.
-4. **Folders are not searched yet.** Every folder starts with **Search its text** off, until you turn it on.
+4. **Folders are read once they are in a workspace.** A folder in General is read in the background, a little at a time, and never during a meeting.
 
 ## If NexQ can't open your meetings
 

@@ -45,7 +45,7 @@ You can have years of meetings in a workspace, and the answer stays quick, becau
 
 - Meeting transcripts, cut into short passages at speaker changes, each with its time
 - Your documents
-- The folders you switched **Search its text** on for
+- The folders in the workspace's Library
 - Talking points that are marked **Use as AI context**
 
 It builds the index in the background at low priority, pauses while a meeting runs, and updates it when text changes. Old meetings are indexed newest first. Building it uploads nothing, and it uses keyword search only: no embedding model is needed. (The one exception is **Prepare recaps with AI**, if you turned it on: that sends a meeting's transcript to a model.)
@@ -145,7 +145,7 @@ If you don't answer, the call is denied after **60 seconds** (the card says "No 
 - **Searching and indexing happen on your PC.** Adding a file, building the index and finding passages send nothing anywhere. The one exception is **Prepare recaps with AI**, if you turned it on for the workspace: it sends one meeting's transcript at a time to a model ([Workspaces](workspaces.md#recaps-with-ai)).
 - **When you ask,** NexQ sends the provider you chose for that chat: your question, the workspace instructions, saved memory, the passages, recaps or files picked for this answer, and the recent conversation (once a conversation is long, its older turns also go to the same model to be condensed). With Ollama or LM Studio on your PC, that stays on your PC. With a cloud provider, it goes to that provider. With a **Custom server**, it goes wherever that server runs.
 - **With a subscription,** the CLI also sends what it reads itself to its provider: files from the workspace's folders, meeting files, and the results of tools you allowed.
-- **Folders you didn't allow** are not searched by NexQ. See **Search its text** in [Workspaces](workspaces.md#folder-text-search).
+- **Folders you removed from the Library** are not searched. See [Workspaces](workspaces.md#folder-text-search).
 - **Other workspaces** are never included: not their meetings, not their chats. Anything you left out of a chat stays out.
 - **Your chats** are stored in NexQ's database on your PC, with the sources and token counts of each answer. Deleting a chat or its workspace removes them.
 

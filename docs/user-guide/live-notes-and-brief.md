@@ -155,7 +155,7 @@ A fact only appears if it cites a passage that was really sent to the model, and
 
 ### How it works
 
-1. About every 30 seconds of speech, NexQ searches the workspace **on your PC**. This is a keyword search over the workspace's past meetings, documents, folders you allowed ([Search its text](workspaces.md#folder-text-search)), talking points marked as AI context and saved memory. It makes no model call.
+1. About every 30 seconds of speech, NexQ searches the workspace **on your PC**. This is a keyword search over the workspace's past meetings, documents, folders in its Library ([Folders](workspaces.md#folder-text-search)), talking points marked as AI context and saved memory. It makes no model call.
 2. It asks the model for a new sheet only when half of the top passages changed, the topic changed, or you click **Refresh**, and never more often than every 45 seconds. It sends about 2,500 tokens of passages, the recent transcript and your saved memory.
 3. The model writes the sheet in at most 350 tokens.
 
