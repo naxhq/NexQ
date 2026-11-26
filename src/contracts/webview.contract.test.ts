@@ -79,6 +79,7 @@ const RESULT_TYPES: Record<string, string> = {
   list_workspace_messages_result: "WorkspaceMessage[]",
   preview_chat_context_result: "ContextReport",
   get_context_budget_result: "ContextBudget",
+  get_workspace_note_result: "NoteText",
   retry_open_database_result: "RetryOpenResult",
 };
 

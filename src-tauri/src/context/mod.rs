@@ -41,10 +41,35 @@ pub const STATUS_MISSING: &str = "missing";
 pub fn extract_text(file_type: &str, file_path: &str) -> Result<String, String> {
     match file_type {
         "pdf" => pdf_extractor::extract_text_from_pdf(file_path),
-        "txt" | "md" => file_loader::load_text_file(file_path),
+        "txt" | "md" | NOTE_TYPE => file_loader::load_text_file(file_path),
         "docx" => crate::rag::file_processor::extract_docx_text(file_path),
         _ => Ok(String::new()),
     }
+}
+
+/// `file_type` of a note written in the app (pasted text): Markdown on disk,
+/// named by its title, and editable afterwards.
+pub const NOTE_TYPE: &str = "note";
+
+/// What a note is called: the title when there is one, else the first line of
+/// its text (without Markdown markers), else "Note". One line, 80 characters.
+pub fn note_title(title: &str, markdown: &str) -> String {
+    let one_line = |s: &str| -> String {
+        let cleaned = crate::prompt_data::strip_hidden(s);
+        cleaned.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect::<String>().trim().to_string()
+    };
+    let given = one_line(title);
+    if !given.is_empty() {
+        return given;
+    }
+    for line in markdown.lines() {
+        let line = line.trim().trim_start_matches(['#', '>', '-', '*', '+']);
+        let first = one_line(line);
+        if !first.is_empty() {
+            return first;
+        }
+    }
+    "Note".to_string()
 }
 
 /// A file name stem for a note saved from text: hidden characters out (joiners and selectors that are
@@ -350,6 +375,47 @@ impl ContextManager {
         self.cache.insert(resource_id, CachedResource { text: markdown.to_string(), token_count, loaded_at });
         self.resources.push(resource.clone());
         Ok(resource)
+    }
+
+    /// Adds a note written in the app: like `add_text`, but named by its title
+    /// (no `.md`) and of type `note`, so it can be edited later.
+    pub fn add_note(&mut self, title: &str, markdown: &str) -> Result<ContextResource, String> {
+        let title = note_title(title, markdown);
+        let mut resource = self.add_text(&title, markdown)?;
+        resource.name = title;
+        resource.file_type = NOTE_TYPE.to_string();
+        if let Some(r) = self.resources.iter_mut().find(|r| r.id == resource.id) {
+            r.name = resource.name.clone();
+            r.file_type = resource.file_type.clone();
+        }
+        Ok(resource)
+    }
+
+    /// Replaces the title and text of a note. Only notes can be edited this way.
+    pub fn update_note(&mut self, resource_id: &str, title: &str, markdown: &str) -> Result<ContextResource, String> {
+        let idx = self
+            .resources
+            .iter()
+            .position(|r| r.id == resource_id)
+            .ok_or_else(|| "That note is no longer in the library.".to_string())?;
+        if self.resources[idx].file_type != NOTE_TYPE {
+            return Err("Only a note written here can be edited.".to_string());
+        }
+        self.touched();
+        let title = note_title(title, markdown);
+        let path = self.resources[idx].file_path.clone();
+        fs::write(&path, markdown).map_err(|e| format!("Couldn't save the note: {e}"))?;
+        let token_count = count_tokens(markdown);
+        let r = &mut self.resources[idx];
+        r.name = title;
+        r.size_bytes = markdown.len() as u64;
+        r.token_count = token_count;
+        r.preview = markdown.chars().take(100).collect();
+        r.status = STATUS_READY.to_string();
+        let loaded_at = r.loaded_at.clone();
+        let out = r.clone();
+        self.cache.insert(resource_id.to_string(), CachedResource { text: markdown.to_string(), token_count, loaded_at });
+        Ok(out)
     }
 
     /// The cached text of a resource.
@@ -896,5 +962,38 @@ mod tests {
         assert!(m.get_assembled_context_for(&scoped(&[&r.id], "", &[])).contains("CANARY_SAVED_ANSWER"));
         assert!(!m.get_assembled_context_for(&scoped(&[], "", &[])).contains("CANARY_SAVED_ANSWER"));
         let _ = fs::remove_file(&r.file_path);
+    }
+
+    #[test]
+    fn a_note_is_named_by_its_title_and_can_be_edited() {
+        let mut m = manager_with(&[]);
+        let r = m.add_note("  Kickoff   plan ", "# Plan
+CANARY_ONE").unwrap();
+        assert_eq!((r.name.as_str(), r.file_type.as_str()), ("Kickoff plan", NOTE_TYPE));
+        assert_eq!(m.list_resources()[0].file_type, NOTE_TYPE);
+        let edited = m.update_note(&r.id, "Kickoff v2", "CANARY_TWO").unwrap();
+        assert_eq!(edited.name, "Kickoff v2");
+        assert_eq!(fs::read_to_string(&r.file_path).unwrap(), "CANARY_TWO");
+        assert_eq!(m.cached_text(&r.id).as_deref(), Some("CANARY_TWO"));
+        assert!(!m.get_assembled_context_for(&scoped(&[&r.id], "", &[])).contains("CANARY_ONE"));
+        assert!(m.get_assembled_context_for(&scoped(&[&r.id], "", &[])).contains("CANARY_TWO"));
+        let _ = fs::remove_file(&r.file_path);
+    }
+
+    #[test]
+    fn a_note_without_a_title_takes_its_first_line_and_only_notes_are_editable() {
+        assert_eq!(note_title("", "
+## Budget talk
+more"), "Budget talk");
+        assert_eq!(note_title("   ", "- first item"), "first item");
+        assert_eq!(note_title("", "  
+ 
+"), "Note");
+        assert_eq!(note_title(&"x".repeat(200), "").chars().count(), 80);
+        let mut m = manager_with(&[]);
+        let doc = m.add_text("A", "text").unwrap();
+        assert!(m.update_note(&doc.id, "B", "other").is_err());
+        assert!(m.update_note("nope", "B", "other").is_err());
+        let _ = fs::remove_file(&doc.file_path);
     }
 }

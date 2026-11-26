@@ -5,7 +5,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  AutomaticModel, BriefSettings, BriefSheet, BriefState, NotetakerState, ChatCapabilities, DbIntegrityFinding, DbProblem, RetryOpenResult, ItemPref, ChatItemPrefValue, ChatMeetingPref, DeleteWorkspaceMode, ContextReport, ContextBudget, ContextDepth, IndexStatus, MeetingRecap, LibraryItem, MeetingScope,
+  AutomaticModel, BriefSettings, BriefSheet, BriefState, NotetakerState, ChatCapabilities, DbIntegrityFinding, DbProblem, RetryOpenResult, ItemPref, ChatItemPrefValue, ChatMeetingPref, DeleteWorkspaceMode, ContextReport, ContextBudget, ContextDepth, IndexStatus, MeetingRecap, LibraryItem, MeetingScope, NoteText,
   MemoryItem, MemorySettings, NoteDoc, NoteEdit, NotetakerSettings, PointProgress, PointSaid,
   TalkingPoint, TalkingPointPatch, WorkspaceChat, WorkspaceChatPatch, WorkspaceDetail, WorkspaceInput, WorkspaceItemKind,
   WorkspaceMeetingPage, WorkspaceMessage, WorkspacePatch, WorkspaceSummary,
@@ -1205,9 +1205,17 @@ export async function getMeetingScope(meetingId: string): Promise<MeetingScope> 
 export async function setMeetingScope(meetingId: string, borrowed: string[]): Promise<MeetingScope> {
   return invoke<MeetingScope>("set_meeting_scope", { meetingId, borrowed });
 }
-/** Saves Markdown as a document in the workspace; resolves to the document id. */
+/** Saves pasted text as a note in the workspace (named by its title, editable later); resolves to the note's id. */
 export async function addWorkspaceText(id: string, title: string, markdown: string): Promise<string> {
   return invoke<string>("add_workspace_text", { id, title, markdown });
+}
+/** The title and text of a note, for the edit dialog. */
+export async function getWorkspaceNote(refId: string): Promise<NoteText> {
+  return invoke<NoteText>("get_workspace_note", { refId });
+}
+/** Saves an edited note. Every workspace that uses it sees the new text. */
+export async function updateWorkspaceNote(refId: string, title: string, markdown: string): Promise<void> {
+  return invoke("update_workspace_note", { refId, title, markdown });
 }
 
 // == IPC: Workspace search and index ==

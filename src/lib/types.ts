@@ -665,7 +665,13 @@ export interface ContextResource {
   status?: "ready" | "loading" | "missing";
 }
 
-export type ContextFileType = "pdf" | "txt" | "md" | "docx";
+export type ContextFileType = "pdf" | "txt" | "md" | "docx" | "note";
+
+/** `get_workspace_note`: a note as the edit dialog shows it (mirrors `NoteText` in Rust). */
+export interface NoteText {
+  title: string;
+  text: string;
+}
 
 export interface TokenBudget {
   total: number;
@@ -1413,7 +1419,7 @@ export interface WorkspaceItem {
   name: string;
   pinned: boolean;
   status: LibraryStatus;
-  /** Why it is missing/off/errored, for the row's second line. */
+  /** Why it is missing/off/errored, for the row's second line. A document's is its file type: `note` for text written in the app. */
   detail: string | null;
   tokens: number | null;
   /** Folders only: the user allowed indexing the folder text. */

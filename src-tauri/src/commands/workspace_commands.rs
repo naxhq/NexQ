@@ -861,8 +861,8 @@ pub async fn list_library(state: State<'_, AppState>) -> Result<Vec<LibraryItem>
     Ok(library::library_items(&members, &snapshot(&state)))
 }
 
-/// Saves Markdown as a document of the library and files it in `id`; returns
-/// the document's id.
+/// Saves pasted text as a note of the library (named by its title, editable
+/// afterwards) and files it in `id`; returns the note's id.
 #[command]
 pub async fn add_workspace_text(
     id: String,
@@ -877,7 +877,7 @@ pub async fn add_workspace_text(
             let resource = {
                 let ctx = state.context.as_ref().ok_or_else(|| "Context manager not initialized".to_string())?;
                 let mut ctx = ctx.lock().map_err(|e| format!("Failed to lock context manager: {e}"))?;
-                ctx.add_text(&title, &markdown)?
+                ctx.add_note(&title, &markdown)?
             };
             let saved = with_conn(&state, |conn| documents::add_document(conn, &resource, &markdown, Some(&id)));
             if let Err(e) = saved {
@@ -896,6 +896,59 @@ pub async fn add_workspace_text(
         crate::workspace_chat::runtime::documents_changed(&state.workspace_chat);
         emit_changed(&app, Some(&id));
     })
+}
+
+/// A note as the edit dialog shows it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NoteText {
+    pub title: String,
+    pub text: String,
+}
+
+/// The title and text of a note.
+#[command]
+pub async fn get_workspace_note(ref_id: String, state: State<'_, AppState>) -> Result<NoteText, String> {
+    let title = {
+        let ctx = state.context.as_ref().ok_or_else(|| "Context manager not initialized".to_string())?;
+        let ctx = ctx.lock().map_err(|e| format!("Failed to lock context manager: {e}"))?;
+        let r = ctx
+            .list_resources()
+            .into_iter()
+            .find(|r| r.id == ref_id && r.file_type == crate::context::NOTE_TYPE)
+            .ok_or_else(|| "That note is no longer in the library.".to_string())?;
+        r.name
+    };
+    let saved = with_reader(&state, |conn| documents::saved_text(conn, &ref_id))?;
+    let text = saved.map(|t| t.text).unwrap_or_default();
+    Ok(NoteText { title, text })
+}
+
+/// Saves an edited note (title and text). Every workspace that uses it sees
+/// the new text; the sessions that held the old one start again.
+#[command]
+pub async fn update_workspace_note(
+    ref_id: String,
+    title: String,
+    markdown: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    if markdown.trim().is_empty() {
+        return Err("A note needs some text.".to_string());
+    }
+    tokio::task::block_in_place(|| {
+        change_and_restart(&state, &app, |conn| holders_of(conn, ItemKind::Document, &ref_id), || {
+            let before = {
+                let ctx = state.context.as_ref().ok_or_else(|| "Context manager not initialized".to_string())?;
+                let mut ctx = ctx.lock().map_err(|e| format!("Failed to lock context manager: {e}"))?;
+                ctx.update_note(&ref_id, &title, &markdown)?
+            };
+            with_conn(&state, |conn| documents::update_note(conn, &before, &markdown))
+        })
+    })?;
+    crate::workspace_chat::runtime::documents_changed(&state.workspace_chat);
+    emit_changed(&app, None);
+    Ok(())
 }
 
 // ── Meetings ─────────────────────────────────────────────────────────────────
@@ -1241,7 +1294,7 @@ mod tests {
         "create_workspace", "update_workspace", "clone_workspace", "archive_workspace", "delete_workspace",
         "delete_workspace_meetings",
         "set_default_workspace", "reorder_workspaces", "add_workspace_item", "update_workspace_item",
-        "remove_workspace_item", "remove_library_item", "add_workspace_text", "move_meeting", "set_meeting_scope",
+        "remove_workspace_item", "remove_library_item", "add_workspace_text", "update_workspace_note", "move_meeting", "set_meeting_scope",
         "create_talking_point", "patch_talking_point", "delete_talking_point", "copy_talking_point",
         "reorder_talking_points", "save_point_progress", "save_meeting_point_edit", "create_memory",
         "update_memory", "delete_memory", "resolve_memory",
@@ -1251,7 +1304,7 @@ mod tests {
     const READ_ONLY: &[&str] = &[
         "get_workspaces_status", "list_workspaces", "get_workspace", "list_library", "list_workspace_meetings",
         "get_meeting_scope", "count_unfiled_meetings", "list_talking_points", "get_point_progress",
-        "get_meeting_point_edit", "list_memory", "get_library_file_path", "reveal_library_file",
+        "get_meeting_point_edit", "get_workspace_note", "list_memory", "get_library_file_path", "reveal_library_file",
     ];
 
     /// The text of command `name`: from its `fn` to the next `#[command]`

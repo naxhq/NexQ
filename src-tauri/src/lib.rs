@@ -967,6 +967,8 @@ pub fn run() {
             workspace_commands::reveal_library_file,
             workspace_commands::remove_library_item,
             workspace_commands::add_workspace_text,
+            workspace_commands::get_workspace_note,
+            workspace_commands::update_workspace_note,
             workspace_commands::move_meeting,
             workspace_commands::list_workspace_meetings,
             workspace_commands::count_unfiled_meetings,

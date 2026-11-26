@@ -50,6 +50,16 @@ pub fn add_document(conn: &Connection, resource: &ContextResource, text: &str, w
     tx.commit().map_err(|e| err("Couldn't save the document", e))
 }
 
+/// Saves an edited note: its row, its text, and drops the index rows of the
+/// old text (the next pass reads the new one).
+pub fn update_note(conn: &Connection, resource: &ContextResource, text: &str) -> Result<(), String> {
+    let tx = crate::db::immediate_tx(conn).map_err(|e| err("Couldn't save the note", e))?;
+    context_db::update_context_resource_text(&tx, &db_row(resource)).map_err(|e| err("Couldn't save the note", e))?;
+    store_text(&tx, &resource.id, text, resource.token_count as i64)?;
+    crate::db::rag::delete_chunks_by_file(&tx, &resource.id)?;
+    tx.commit().map_err(|e| err("Couldn't save the note", e))
+}
+
 /// Removes a document everywhere: row, text, index chunks and every membership.
 pub fn remove_document(conn: &Connection, id: &str) -> Result<(), String> {
     let tx = crate::db::immediate_tx(conn).map_err(|e| err("Couldn't remove the document", e))?;
@@ -142,6 +152,21 @@ mod tests {
         assert!(!members.contains_key(&(ItemKind::Document, "alone".to_string())));
         assert_eq!(saved_text(&conn, "in-a").unwrap().unwrap().text, "alpha text");
         assert_eq!(saved_texts(&conn).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn an_edited_note_changes_its_row_and_text() {
+        let conn = memory_db();
+        let mut r = resource("n");
+        r.file_type = "note".into();
+        add_document(&conn, &r, "before", Some("general")).unwrap();
+        r.name = "Renamed".into();
+        r.token_count = 7;
+        update_note(&conn, &r, "after").unwrap();
+        let row = context_db::get_context_resource(&conn, "n").unwrap();
+        assert_eq!((row.name.as_str(), row.token_count), ("Renamed", 7));
+        let saved = saved_text(&conn, "n").unwrap().unwrap();
+        assert_eq!((saved.text.as_str(), saved.token_count, saved.status.as_str()), ("after", 7, "ready"));
     }
 
     #[test]

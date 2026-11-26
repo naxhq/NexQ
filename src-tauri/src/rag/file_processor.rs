@@ -9,7 +9,7 @@ use crate::context::{file_loader, pdf_extractor};
 pub fn extract_text(file_path: &str, file_type: &str) -> Result<String, String> {
     match file_type.to_lowercase().as_str() {
         "pdf" => pdf_extractor::extract_text_from_pdf(file_path),
-        "txt" | "md" => file_loader::load_text_file(file_path),
+        "txt" | "md" | "note" => file_loader::load_text_file(file_path),
         "docx" => extract_docx_text(file_path),
         other => Err(format!(
             "Unsupported file type for text extraction: {}",

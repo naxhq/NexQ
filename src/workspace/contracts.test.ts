@@ -32,6 +32,8 @@ describe("commands the launcher sends", () => {
       { filing: { workspace_id: "w", items: [{ kind: "folder", ref_id: "f" }] }, loaded: true },
     ],
     ["remove_library_item", () => ipc.removeLibraryItem("folder", "f"), "remove_library_item", { kind: "folder", refId: "f" }],
+    ["get_workspace_note", () => ipc.getWorkspaceNote("d1"), "get_workspace_note", { refId: "d1" }],
+    ["update_workspace_note", () => ipc.updateWorkspaceNote("d1", "Plan", "# Plan"), "update_workspace_note", { refId: "d1", title: "Plan", markdown: "# Plan" }],
     ["get_library_file_path", () => ipc.getLibraryFilePath("f", "a.md"), "get_library_file_path", { folderId: "f", subPath: "a.md" }],
     ["reveal_library_file", () => ipc.revealLibraryFile("f", "a.md"), "reveal_library_file", { folderId: "f", subPath: "a.md" }],
     ["create_memory", () => ipc.createMemory({ workspace_id: "w", kind: "fact", title: "t", text: "x" }), "create_memory", { input: { workspace_id: "w", kind: "fact", title: "t", text: "x" } }],

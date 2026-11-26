@@ -146,6 +146,13 @@ mod tests {
     }
 
     #[test]
+    fn get_workspace_note_result() {
+        let note = crate::commands::workspace_commands::NoteText { title: "Plan".into(), text: "# Plan
+Ship it.".into() };
+        assert_contract!("get_workspace_note_result", note);
+    }
+
+    #[test]
     fn status_with_a_database_problem() {
         let status = WorkspacesStatus {
             available: false,
