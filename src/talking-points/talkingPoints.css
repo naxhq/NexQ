@@ -103,28 +103,23 @@
 .tp-progress { height: 2px; background: hsl(var(--border)); }
 .tp-progress > span { display: block; height: 100%; width: 100%; transform-origin: 0 50%; background: hsl(var(--primary) / 0.8); will-change: transform; }
 
-.tp-resume {
-  position: absolute;
-  left: 50%;
-  bottom: 0.75rem;
-  transform: translateX(-50%);
-  animation: tp-chip-in 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-@keyframes tp-chip-in {
-  from { opacity: 0; transform: translate(-50%, 6px); }
-  to { opacity: 1; transform: translate(-50%, 0); }
-}
 
 @media (prefers-reduced-motion: reduce) {
   .tp-read [data-block-id], .tp-tick { transition: none; }
-  .tp-resume { animation: none; }
 }
 
-/* "Go to" offer: at the edge nearest the target, never on the reading line (a third down) */
-.tp-suggest { position: absolute; left: 50%; transform: translateX(-50%); animation: tp-chip-in 200ms cubic-bezier(0.22, 1, 0.36, 1) both; }
-.tp-suggest-top { top: 0.5rem; }
-.tp-suggest-bottom { bottom: 3.25rem; }
-@media (prefers-reduced-motion: reduce) { .tp-suggest { animation: none; } }
+/* Offers: one bottom column (Resume, Back, Go to) so chips never share a spot; a "Go to" aimed at
+   the top edge floats there, never on the reading line (a third down). */
+.tp-offers {
+  position: absolute; left: 50%; bottom: 0.75rem; transform: translateX(-50%);
+  display: flex; flex-direction: column-reverse; align-items: center; gap: 0.5rem;
+  width: max-content; max-width: calc(100% - 1.5rem); pointer-events: none;
+}
+.tp-offers-top { position: absolute; left: 50%; top: 0.5rem; transform: translateX(-50%); max-width: calc(100% - 1.5rem); }
+.tp-offer-slot { display: flex; max-width: 100%; justify-content: center; }
+.tp-offers .tp-offer, .tp-offers-top .tp-offer { pointer-events: auto; animation: tp-offer-in 200ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes tp-offer-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .tp-offers .tp-offer, .tp-offers-top .tp-offer { animation: none; } }
 
 /* Ticks heard by voice are softer than ones made by hand: a hollow, dashed ring and a lighter settle */
 .tp-read [data-state="autosaid"] { opacity: 0.5; }
@@ -134,8 +129,6 @@
   border-color: hsl(var(--success) / 0.8);
   color: hsl(var(--success));
 }
-.tp-back { position: absolute; left: 50%; transform: translateX(-50%); bottom: 0.75rem; animation: tp-chip-in 200ms cubic-bezier(0.22, 1, 0.36, 1) both; }
-@media (prefers-reduced-motion: reduce) { .tp-back { animation: none; } }
 
 /* Polish: ticks are quiet. A paragraph's circle shows on hover, focus or when ticked; a bullet's
    circle takes the dot's place, small and faint; headings have none. Nothing looks like a form. */
