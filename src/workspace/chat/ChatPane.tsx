@@ -20,6 +20,8 @@ export interface ChatPaneProps extends ChatOpeners {
   workspaceId: string;
   /** The Start meeting action, drawn by the parent (the strongest element of the start screen). */
   startAction?: ReactNode;
+  /** Room (px) the workspace header's full block needs above the first message while it is expanded. */
+  topInset?: number;
   className?: string;
 }
 
@@ -29,7 +31,7 @@ const openProviderSettings = () => useMeetingStore.getState().openSettings("llm"
  * The middle of the launcher: ask across a workspace. Answers keep running when you leave
  * (the store holds them), two chats can write at once, and nothing fails silently.
  */
-export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, className }: ChatPaneProps) {
+export function ChatPane({ workspaceId, startAction, topInset = 0, onOpenMeeting, onOpenItem, className }: ChatPaneProps) {
   const store = useWorkspaceChatStore;
   const root = useRef<HTMLDivElement | null>(null);
   const [wide, setWide] = useState(true);
@@ -204,6 +206,7 @@ export function ChatPane({ workspaceId, startAction, onOpenMeeting, onOpenItem, 
           condensedUpto={chat?.condensed_upto ?? null}
           ctx={ctx}
           onDismissTurn={() => store.getState().dismissTurn(chatId)}
+          topInset={topInset}
         />
       ) : (
         <div className="flex-1" />

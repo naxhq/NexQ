@@ -96,7 +96,7 @@ export function ChatSwitcher({
   const now = Date.now();
 
   return (
-    <header className="border-b border-border/60 px-5 py-2">
+    <header data-chat-switcher="" className="relative z-10 border-b border-border/60 bg-background px-5 py-2">
       <div className={cn(COLUMN, "flex items-center gap-1")}>
         <div className="min-w-0 flex-1">
           {chat ? (

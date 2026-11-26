@@ -67,6 +67,9 @@ function Marker({ count, expanded, onToggle }: { count: number; expanded: boolea
   );
 }
 
+/** The scroller's own top padding (pt-6), in px. */
+const TOP_PAD = 24;
+
 /**
  * The conversation as a page: each question a quiet heading with its answer under it. Sticks
  * to the bottom while an answer is written, but only if you were at the bottom. Position is
@@ -82,6 +85,7 @@ export function Transcript({
   condensedUpto,
   ctx,
   onDismissTurn,
+  topInset = 0,
   className,
 }: {
   chatId: string;
@@ -92,6 +96,8 @@ export function Transcript({
   condensedUpto: number | null;
   ctx: TurnContext;
   onDismissTurn: () => void;
+  /** Room kept above the first message (px) for the workspace header while it is full; it scrolls away as the header condenses. */
+  topInset?: number;
   className?: string;
 }) {
   const scroller = useRef<HTMLDivElement | null>(null);
@@ -121,6 +127,7 @@ export function Transcript({
   const virtualizer = useVirtualizer({
     count: virtual ? items.length : 0,
     getScrollElement: () => scroller.current,
+    scrollMargin: topInset > 0 ? TOP_PAD + topInset : 0,
     estimateSize: () => 260,
     overscan: 4,
     initialRect: { width: 640, height: 640 },
@@ -242,12 +249,15 @@ export function Transcript({
         role="region"
         aria-label="Conversation"
         aria-describedby="ws-chat-keys"
+        data-chat-scroll=""
         className="absolute inset-0 overflow-y-auto overscroll-contain px-5 pt-6 [overflow-anchor:none]"
+        style={topInset > 0 ? { paddingTop: TOP_PAD + topInset } : undefined}
       >
         <p id="ws-chat-keys" className="sr-only">
           Alt and the up or down arrow move between answers.
         </p>
-        <div className={cn(COLUMN, "ui-body")}>
+        {/* Always scrollable by the inset, so a short chat can still be scrolled until the header is condensed. */}
+        <div className={cn(COLUMN, "ui-body")} style={topInset > 0 ? { minHeight: `calc(100% + ${topInset}px)` } : undefined}>
           {virtual && virtualizer.getVirtualItems().length === 0 ? (
             // The window has no size yet (hidden pane): draw the newest few so it is never blank.
             items.slice(-FALLBACK_TAIL).map((it, i) => <div key={it.type === "turn" ? it.turn.key : `m${i}`}>{renderItem(it)}</div>)
@@ -258,7 +268,7 @@ export function Transcript({
                   key={v.key}
                   data-index={v.index}
                   ref={virtualizer.measureElement}
-                  style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${v.start}px)` }}
+                  style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${v.start - virtualizer.options.scrollMargin}px)` }}
                 >
                   {items[v.index] && renderItem(items[v.index])}
                 </div>

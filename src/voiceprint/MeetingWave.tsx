@@ -20,12 +20,15 @@ export interface MeetingWaveProps {
   hue?: string | null;
   /** Height of the bars in px. */
   height?: number;
+  /** The same bars, compressed, for the condensed header: narrower, no month labels. Same names, same keys. */
+  mini?: boolean;
   className?: string;
 }
 
 /** A 4 px bar and 3 px of air; the button is the whole 7 px so there is no dead space. */
-const PITCH = 7;
-const BAR = 4;
+const FULL_SHAPE = { pitch: 7, bar: 4 };
+/** Compressed: 3 px bars on a 5 px pitch, still wide enough to hit. */
+const MINI_SHAPE = { pitch: 5, bar: 3 };
 const MIN_SHARE = 0.22;
 
 function formatDuration(s: number | null): string {
@@ -73,7 +76,8 @@ export function monthTicks(dates: string[], minGapBars = 8): Array<{ index: numb
  * recording still to come. Click or Enter opens a meeting; the label shows on
  * hover and focus. Long histories scroll, starting at the newest.
  */
-export function MeetingWave({ meetings, onOpen, hue = null, height = 32, className }: MeetingWaveProps) {
+export function MeetingWave({ meetings, onOpen, hue = null, height = 32, mini = false, className }: MeetingWaveProps) {
+  const { pitch: PITCH, bar: BAR } = mini ? MINI_SHAPE : FULL_SHAPE;
   const ordered = useMemo(
     () => [...meetings].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
     [meetings],
@@ -189,19 +193,21 @@ export function MeetingWave({ meetings, onOpen, hue = null, height = 32, classNa
               </button>
             ))}
           </div>
-          <div aria-hidden className="relative h-5" style={{ width: ordered.length * PITCH }}>
-            {ticks.map((t) => (
-              <span
-                key={t.index}
-                className="ui-meta absolute top-0.5 whitespace-nowrap text-muted-foreground/80"
-                style={{ left: t.index * PITCH + (PITCH - BAR) / 2 }}
-              >
-                {t.label}
-              </span>
-            ))}
-          </div>
+          {!mini && (
+            <div aria-hidden className="relative h-5" style={{ width: ordered.length * PITCH }}>
+              {ticks.map((t) => (
+                <span
+                  key={t.index}
+                  className="ui-meta absolute top-0.5 whitespace-nowrap text-muted-foreground/80"
+                  style={{ left: t.index * PITCH + (PITCH - BAR) / 2 }}
+                >
+                  {t.label}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
-        <div aria-hidden className="ui-dots ml-2 min-w-0 flex-1" style={{ height }} />
+        <div aria-hidden className={cn("ui-dots min-w-0 flex-1", mini ? "ml-1.5" : "ml-2")} style={{ height }} />
       </div>
       {tip && tipMeeting && (
         <TooltipBubble anchor={tip.anchor}>
