@@ -266,7 +266,7 @@ button.ln-time:focus-visible { box-shadow: 0 0 0 2px hsl(var(--primary)); }
 
 .rs-empty { padding: 1rem 0.875rem; font-size: 0.8125rem; line-height: 1.5; }
 .rs-empty h3 { font-size: 0.875rem; font-weight: 600; }
-.rs-empty p { margin-top: 0.25rem; color: hsl(var(--muted-foreground)); max-width: 40ch; }
+.rs-empty p { margin-top: 0.25rem; color: hsl(var(--muted-foreground)); }
 .rs-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
 /* Narrow: the margin collapses to the rule; times sit above the heading. */

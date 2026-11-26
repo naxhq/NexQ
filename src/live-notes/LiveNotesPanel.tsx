@@ -280,7 +280,7 @@ export function NotesPanel() {
       ) : !hasBlocks ? (
         <div className="rs-empty">
           <h3>Nothing yet</h3>
-          <p>The first notes appear after a minute or so of conversation.</p>
+          <p>The first notes come after about a minute of talk.</p>
         </div>
       ) : (
         doc && (

@@ -195,7 +195,7 @@ export function BriefPanel() {
         ) : !sheet ? (
           <div className="rs-empty" role="status">
             <h3>{hidden ? "Finding what’s known about the new topic" : "Listening for the topic"}</h3>
-            <p>{hidden ? "The old sheet is hidden so answers do not use it." : "The first sheet appears after a minute or so of conversation."}</p>
+            <p>{hidden ? "The old sheet is hidden so answers do not use it." : "The first sheet comes after about a minute of talk."}</p>
           </div>
         ) : (
           <>
