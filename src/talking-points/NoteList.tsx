@@ -14,7 +14,7 @@ interface Props {
   onDuplicate: (id: string) => void;
   onCopy: (id: string) => void;
   onDelete: (id: string) => void;
-  /** false while the list is filtered: a position in a part of the list means nothing. */
+  /** false while the list is filtered or sorted: a position in a part (or in another order) means nothing. */
   reorderable?: boolean;
 }
 
@@ -117,8 +117,13 @@ export function NoteList({ notes, selectedId, onSelect, onReorder, onDuplicate, 
           const items: MenuItemSpec[] = [
             { id: "dup", label: "Duplicate", onSelect: () => onDuplicate(n.id) },
             { id: "copy", label: "Copy to another workspace", onSelect: () => onCopy(n.id) },
-            { id: "up", label: "Move up", disabled: !reorderable || i === 0, separatorBefore: true, onSelect: () => move(n.id, -1) },
-            { id: "down", label: "Move down", disabled: !reorderable || i === notes.length - 1, onSelect: () => move(n.id, 1) },
+            // a position only means something in the manual order, and not while the list is filtered
+            ...(reorderable
+              ? [
+                  { id: "up", label: "Move up", disabled: i === 0, separatorBefore: true, onSelect: () => move(n.id, -1) },
+                  { id: "down", label: "Move down", disabled: i === notes.length - 1, onSelect: () => move(n.id, 1) },
+                ]
+              : []),
             { id: "del", label: "Delete", danger: true, separatorBefore: true, onSelect: () => onDelete(n.id) },
           ];
           // the row the drag would drop on gets a line above or below it

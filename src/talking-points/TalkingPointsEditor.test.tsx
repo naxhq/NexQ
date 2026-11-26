@@ -23,9 +23,10 @@ vi.mock("../lib/export", () => ({ saveExportFile: vi.fn(async () => true) }));
 
 import { TalkingPointsEditor } from "./TalkingPointsEditor";
 import { TalkingPointsDialog } from "./TalkingPointsDialog";
-import { __resetTalkingPointsForTests, useTalkingPointsStore } from "../stores/talkingPointsStore";
+import { __resetTalkingPointsForTests, loadPrefs, useTalkingPointsStore } from "../stores/talkingPointsStore";
 import { docBlocks, docFromText, parseDoc } from "./doc/model";
 import { dropIndex, moveItem } from "./reorder";
+import { sortNotes } from "./noteSort";
 import { saveExportFile } from "../lib/export";
 
 function note(id: string, title: string, text: string, sort: number): TalkingPoint {
@@ -529,6 +530,117 @@ describe("the formatting bar", () => {
     await user.keyboard("{Control>}a{/Control}");
     await user.click(within(bar).getByRole("button", { name: "Italic" }));
     expect(within(bar).getByRole("button", { name: "Italic" })).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
+describe("the note's layout", () => {
+  it("the formatting bar belongs to the body: it sits inside the body box, after the title", async () => {
+    render(<TalkingPointsEditor workspaceId="w1" />);
+    const bar = await screen.findByRole("toolbar", { name: "Text formatting" });
+    const title = screen.getByLabelText("Note title");
+    const body = bar.closest("[data-tp-body]") as HTMLElement;
+    expect(body).not.toBeNull();
+    expect(body.contains(screen.getByRole("textbox", { name: "Text of Opening" }))).toBe(true);
+    expect(body.contains(title)).toBe(false);
+    expect(title.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // the bar is the first thing in the body box: its top edge
+    expect(body.firstElementChild?.contains(bar)).toBe(true);
+  });
+
+  it("'Use as AI context' is out of the writing flow: not between the title and the body", async () => {
+    render(<TalkingPointsEditor workspaceId="w1" />);
+    const sw = await screen.findByRole("switch", { name: "Use as AI context" });
+    const title = screen.getByLabelText("Note title");
+    const body = document.querySelector("[data-tp-body]") as HTMLElement;
+    expect(body.contains(sw)).toBe(false);
+    // same row as the title and the note's menu, never after the title and before the body
+    const row = title.parentElement as HTMLElement;
+    expect(row.contains(sw)).toBe(true);
+    expect(row.contains(screen.getByRole("button", { name: "More for this note" }))).toBe(true);
+    expect(row.contains(body)).toBe(false);
+    expect(title.nextElementSibling?.contains(sw)).toBe(true);
+    expect(body.previousElementSibling).toBe(row);
+  });
+});
+
+describe("sorting the notes", () => {
+  const dated = [
+    { ...note("a", "Banana", "x", 0), created_at: 200, updated_at: 900 },
+    { ...note("b", "apple", "y", 1), created_at: 100, updated_at: 500 },
+    { ...note("c", "Cherry", "z", 2), created_at: 300, updated_at: 700 },
+  ];
+  const order = () => screen.getAllByRole("listitem").map((li) => li.getAttribute("data-note-id"));
+  const choose = async (user: ReturnType<typeof userEvent.setup>, name: string) => {
+    await user.click(screen.getByRole("button", { name: /^Sort notes/ }));
+    await user.click(await screen.findByRole("menuitemcheckbox", { name }));
+  };
+
+  it("orders by every key, with ties keeping the manual order", () => {
+    const ids = (k: Parameters<typeof sortNotes>[1]) => sortNotes(dated, k).map((n) => n.id);
+    expect(ids("manual")).toEqual(["a", "b", "c"]);
+    expect(ids("newest")).toEqual(["c", "a", "b"]);
+    expect(ids("oldest")).toEqual(["b", "a", "c"]);
+    expect(ids("edited")).toEqual(["a", "c", "b"]);
+    expect(ids("az")).toEqual(["b", "a", "c"]);
+    expect(sortNotes(NOTES, "newest").map((n) => n.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("offers manual order, newest, oldest, recently edited and A to Z, and applies the choice", async () => {
+    const user = userEvent.setup();
+    ipc.listTalkingPoints.mockResolvedValue(dated);
+    render(<TalkingPointsEditor workspaceId="w1" />);
+    await screen.findByRole("list", { name: "Notes" });
+    await user.click(screen.getByRole("button", { name: "Sort notes: Manual order" }));
+    const items = (await screen.findAllByRole("menuitemcheckbox")).map((m) => m.textContent);
+    expect(items).toEqual(["Manual order (drag)", "Newest first", "Oldest first", "Recently edited", "A to Z"]);
+    await user.keyboard("{Escape}");
+    await choose(user, "Newest first");
+    expect(order()).toEqual(["c", "a", "b"]);
+    await choose(user, "A to Z");
+    expect(order()).toEqual(["b", "a", "c"]);
+    await choose(user, "Recently edited");
+    expect(order()).toEqual(["a", "c", "b"]);
+  });
+
+  it("remembers the choice for this workspace only", async () => {
+    const user = userEvent.setup();
+    ipc.listTalkingPoints.mockResolvedValue(dated);
+    const first = render(<TalkingPointsEditor workspaceId="w1" />);
+    await screen.findByRole("list", { name: "Notes" });
+    await choose(user, "Oldest first");
+    expect(JSON.parse(localStorage.getItem("nexq-talking-points-v1")!).noteSort).toEqual({ w1: "oldest" });
+    expect(loadPrefs().noteSort).toEqual({ w1: "oldest" });
+    first.unmount();
+    render(<TalkingPointsEditor workspaceId="w1" />);
+    await screen.findByRole("list", { name: "Notes" });
+    expect(screen.getByRole("button", { name: "Sort notes: Oldest first" })).toBeInTheDocument();
+    expect(order()).toEqual(["b", "a", "c"]);
+    expect(useTalkingPointsStore.getState().noteSort.w2).toBeUndefined();
+  });
+
+  it("drag reorder works only in manual order", async () => {
+    const user = userEvent.setup();
+    ipc.listTalkingPoints.mockResolvedValue(dated);
+    render(<TalkingPointsEditor workspaceId="w1" />);
+    const list = await screen.findByRole("list", { name: "Notes" });
+    expect(within(list).getAllByRole("button", { name: /^Reorder / })).toHaveLength(3);
+    await choose(user, "Newest first");
+    expect(screen.queryByRole("button", { name: /^Reorder / })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Actions for Cherry" }));
+    expect(screen.queryByRole("menuitem", { name: "Move up" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Delete" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(ipc.reorderTalkingPoints).not.toHaveBeenCalled();
+    await choose(user, "Manual order (drag)");
+    expect(within(screen.getByRole("list", { name: "Notes" })).getAllByRole("button", { name: /^Reorder / })).toHaveLength(3);
+    expect(order()).toEqual(["a", "b", "c"]);
+  });
+
+  it("has no sort control for a single note", async () => {
+    ipc.listTalkingPoints.mockResolvedValue([NOTES[0]]);
+    render(<TalkingPointsEditor workspaceId="w1" />);
+    await screen.findByRole("list", { name: "Notes" });
+    expect(screen.queryByRole("button", { name: /^Sort notes/ })).not.toBeInTheDocument();
   });
 });
 

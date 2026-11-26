@@ -1,0 +1,20 @@
+/* The note editor's two fields: the title (one line) and the body (the writing surface with its own
+   formatting bar). Both read as fields at rest: a 3:1 edge (--input, as every field), a surface a step
+   off the dialog, a hover that firms the edge, and the same focus ring. */
+.tp-field {
+  border: 1px solid hsl(var(--input));
+  background: hsl(var(--background));
+  transition: border-color 150ms var(--ui-ease), background-color 150ms var(--ui-ease), box-shadow 150ms var(--ui-ease);
+}
+.dark .tp-field { background: hsl(var(--ui-field)); }
+.tp-field:hover { border-color: hsl(var(--foreground) / 0.55); }
+.tp-field:focus-within {
+  border-color: hsl(var(--ring));
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.28);
+}
+@media (prefers-reduced-motion: reduce) {
+  .tp-field { transition: none; }
+}
+
+/* the bar and the count line belong to the body box: a quiet band top and bottom */
+.tp-body-band { background: hsl(var(--muted) / 0.55); }

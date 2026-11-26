@@ -6,16 +6,17 @@
  * different surface (the Points panel).
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, FileText, FileUp, Plus, Search } from "lucide-react";
-import { useTalkingPointsStore } from "../stores/talkingPointsStore";
+import { ArrowDownUp, ArrowLeft, FileText, FileUp, Plus, Search } from "lucide-react";
+import { useTalkingPointsStore, type NoteSort } from "../stores/talkingPointsStore";
 import { listWorkspaces } from "../lib/ipc";
 import type { WorkspaceSummary } from "../lib/types";
-import { ConfirmDialog, Dialog, EmptyState, IconButton, Select, Button, Tooltip } from "../ui";
+import { ConfirmDialog, Dialog, EmptyState, IconButton, Menu, Select, Button, Tooltip } from "../ui";
 import { cn } from "../lib/utils";
 import { NoteList } from "./NoteList";
 import { NoteEditorPane } from "./NoteEditorPane";
 import { ImportDialog } from "./ImportDialog";
 import { emptyDoc } from "./doc/model";
+import { SORT_OPTIONS, SORT_SHORT, sortNotes } from "./noteSort";
 import "./talkingPoints.css";
 
 /** With this many notes the list gets a search field. */
@@ -36,6 +37,7 @@ export function TalkingPointsEditor({ workspaceId, className, initialId = null, 
   const loading = store((s) => s.loading[workspaceId]);
   const loadError = store((s) => s.loadError[workspaceId]);
   const actionError = store((s) => s.actionError);
+  const sort: NoteSort = store((s) => s.noteSort[workspaceId]) ?? "manual";
   const [selectedId, setSelectedId] = useState<string | null>(null);
   /** Narrow windows show the list or the note, not both. */
   const [view, setView] = useState<"list" | "note">(initialId ? "note" : "list");
@@ -75,7 +77,10 @@ export function TalkingPointsEditor({ workspaceId, className, initialId = null, 
   }, [selected]);
 
   const q = query.trim().toLowerCase();
-  const shown = useMemo(() => (q ? list.filter((n) => `${n.title} ${n.plain_text}`.toLowerCase().includes(q)) : list), [list, q]);
+  const shown = useMemo(() => {
+    const found = q ? list.filter((n) => `${n.title} ${n.plain_text}`.toLowerCase().includes(q)) : list;
+    return sortNotes(found, sort);
+  }, [list, q, sort]);
 
   const open = (id: string) => {
     setSelectedId(id);
@@ -165,6 +170,29 @@ export function TalkingPointsEditor({ workspaceId, className, initialId = null, 
               />
             </label>
           )}
+          {list.length > 1 && (
+            <Menu
+              label="Sort notes"
+              align="start"
+              items={SORT_OPTIONS.map((o) => ({
+                id: o.id,
+                label: o.label,
+                checked: sort === o.id,
+                onSelect: () => store.getState().setNoteSort(workspaceId, o.id),
+              }))}
+              renderTrigger={(props) => (
+                <button
+                  {...props}
+                  type="button"
+                  aria-label={`Sort notes: ${SORT_SHORT[sort]}`}
+                  className="ui-meta ui-focus ui-r-md -mt-0.5 inline-flex h-7 w-fit items-center gap-1.5 rounded-md px-2 font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <ArrowDownUp className="h-3.5 w-3.5" aria-hidden />
+                  {SORT_SHORT[sort]}
+                </button>
+              )}
+            />
+          )}
           {actionError && (
             <p role="alert" className="ui-meta px-1 text-destructive">
               {actionError}
@@ -175,7 +203,7 @@ export function TalkingPointsEditor({ workspaceId, className, initialId = null, 
               <NoteList
                 notes={shown}
                 selectedId={selectedId}
-                reorderable={!q}
+                reorderable={!q && sort === "manual"}
                 onSelect={open}
                 onReorder={(ids) => void store.getState().reorder(workspaceId, ids)}
                 onDuplicate={(id) =>

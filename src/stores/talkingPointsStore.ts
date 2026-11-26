@@ -37,6 +37,10 @@ export type SaveState = "saved" | "dirty" | "saving" | "failed" | "conflict";
 export type ScrollKind = "manual" | "auto" | "voice";
 /** How the three states of a line (what is left, what is covered, what you said) are drawn. */
 export type TextStyleId = "classic" | "checked" | "highlight" | "focus" | "contrast";
+/** How the notes of a workspace are ordered in the list. "manual" is the drag order the backend keeps. */
+export type NoteSort = "manual" | "newest" | "oldest" | "edited" | "az";
+export const NOTE_SORTS: readonly NoteSort[] = ["manual", "newest", "oldest", "edited", "az"];
+
 export const TEXT_STYLE_IDS: readonly TextStyleId[] = ["classic", "checked", "highlight", "focus", "contrast"];
 export const DEFAULT_TEXT_STYLE: TextStyleId = "classic";
 
@@ -73,6 +77,8 @@ interface Prefs {
   reading: ReadingSettings;
   lastNote: Record<string, string>;
   recent: Record<string, string[]>;
+  /** The list order chosen per workspace (absent: manual). */
+  noteSort: Record<string, NoteSort>;
 }
 
 function clampNum(v: unknown, min: number, max: number, fallback: number): number {
@@ -80,7 +86,7 @@ function clampNum(v: unknown, min: number, max: number, fallback: number): numbe
 }
 
 export function loadPrefs(): Prefs {
-  const base: Prefs = { reading: { ...DEFAULT_READING }, lastNote: {}, recent: {} };
+  const base: Prefs = { reading: { ...DEFAULT_READING }, lastNote: {}, recent: {}, noteSort: {} };
   try {
     const raw = typeof localStorage !== "undefined" ? localStorage.getItem(PREFS_KEY) : null;
     if (!raw) return base;
@@ -98,6 +104,9 @@ export function loadPrefs(): Prefs {
     };
     if (p.lastNote && typeof p.lastNote === "object") {
       for (const [k, v] of Object.entries(p.lastNote)) if (typeof v === "string") base.lastNote[k] = v;
+    }
+    if (p.noteSort && typeof p.noteSort === "object") {
+      for (const [k, v] of Object.entries(p.noteSort)) if (NOTE_SORTS.includes(v as NoteSort)) base.noteSort[k] = v as NoteSort;
     }
     if (p.recent && typeof p.recent === "object") {
       for (const [k, v] of Object.entries(p.recent)) {
@@ -177,6 +186,8 @@ interface TalkingPointsState {
   reading: ReadingSettings;
   lastNote: Record<string, string>;
   recent: Record<string, string[]>;
+  /** The list order chosen per workspace (absent: manual). */
+  noteSort: Record<string, NoteSort>;
 
   /** "Only this meeting" documents (JSON text) by point id, for the open meeting. */
   meetingEdits: Record<string, string>;
@@ -205,6 +216,7 @@ interface TalkingPointsState {
   find: (id: string) => TalkingPoint | undefined;
 
   setReading: (patch: Partial<ReadingSettings>) => void;
+  setNoteSort: (workspaceId: string, sort: NoteSort) => void;
   rememberNote: (workspaceId: string, pointId: string) => void;
 
   loadMeetingState: (meetingId: string, pointId: string) => Promise<void>;
@@ -225,7 +237,7 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
 
   const savePrefs = () => {
     const s = get();
-    writePrefs({ reading: s.reading, lastNote: s.lastNote, recent: s.recent });
+    writePrefs({ reading: s.reading, lastNote: s.lastNote, recent: s.recent, noteSort: s.noteSort });
   };
 
   /** Puts a point into its workspace list (never a deleted one). */
@@ -375,6 +387,7 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
     reading: prefs.reading,
     lastNote: prefs.lastNote,
     recent: prefs.recent,
+    noteSort: prefs.noteSort,
     meetingEdits: {},
     progress: {},
     progressError: null,
@@ -671,6 +684,11 @@ export const useTalkingPointsStore = create<TalkingPointsState>((set, get) => {
       savePrefs();
     },
 
+    setNoteSort: (workspaceId, sort) => {
+      set((s) => ({ noteSort: { ...s.noteSort, [workspaceId]: sort } }));
+      savePrefs();
+    },
+
     rememberNote: (workspaceId, pointId) => {
       set((s) => ({
         lastNote: { ...s.lastNote, [workspaceId]: pointId },
@@ -864,6 +882,7 @@ export function __resetTalkingPointsForTests(): void {
     reading: { ...DEFAULT_READING },
     lastNote: {},
     recent: {},
+    noteSort: {},
   });
 }
 

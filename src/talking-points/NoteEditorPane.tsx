@@ -9,6 +9,7 @@ import { docToMarkdown } from "./doc/markdown";
 import { cleanTitle, parseDoc } from "./doc/model";
 import { saveExportFile } from "../lib/export";
 import { cn } from "../lib/utils";
+import "./noteEditor.css";
 
 export function SaveStatus({
   state,
@@ -88,9 +89,10 @@ export function SaveBadge({ noteId }: { noteId: string | null }) {
 const DEFAULT_TITLE = "Untitled note";
 
 /**
- * One note on a writing surface: the formatting bar pinned at the top, a large title and the text in
- * the scrolling middle, the word count in a quiet footer. The editor draws the bar and the count into
- * the two hosts below, so they stay put while a long note scrolls.
+ * One note: a row with its title (a plain one-line field), the "Use as AI context" chip and the menu,
+ * then the body, a writing surface of its own. The formatting bar belongs to the body only: it sits on
+ * the body's top edge and the word count in its footer, both drawn by the editor into the two hosts
+ * below, so they stay put while a long note scrolls.
  */
 export function NoteEditorPane({ note, autoFocusTitle = false }: { note: TalkingPoint; autoFocusTitle?: boolean }) {
   const edit = useTalkingPointsStore((s) => s.edit);
@@ -144,43 +146,75 @@ export function NoteEditorPane({ note, autoFocusTitle = false }: { note: Talking
   const trouble = state === "failed" || state === "conflict";
 
   return (
-    <section
-      aria-label={`Editing ${note.title}`}
-      className="tp-paper flex min-h-0 flex-1 flex-col rounded-xl border border-border bg-background shadow-sm transition-colors focus-within:border-input dark:bg-[hsl(var(--ui-field))]"
-    >
-      <div data-tp-toolbar-dock="" className="flex shrink-0 items-start border-b border-border">
-        <div ref={setToolbarHost} className="min-h-[2.75rem] min-w-0 flex-1" />
-        <div className="p-1.5">
-          <Menu
-            label="More for this note"
-            align="end"
-            items={[
-              {
-                id: "export",
-                label: "Export as Markdown",
-                onSelect: () => void saveExportFile({ defaultName: note.title, extension: "md", filterLabel: "Markdown", content: markdown() }),
-              },
-              {
-                id: "copy",
-                label: copied ? "Copied" : "Copy Markdown",
-                onSelect: () => {
-                  void navigator.clipboard?.writeText(markdown()).then(() => {
-                    setCopied(true);
-                    setTimeout(() => setCopied(false), 1500);
-                  });
-                },
-              },
-            ]}
-            renderTrigger={(props) => (
-              <Button variant="ghost" size="sm" {...props} aria-label="More for this note" className="w-8 px-0">
-                <MoreHorizontal className="h-4 w-4" aria-hidden />
-              </Button>
-            )}
+    <section aria-label={`Editing ${note.title}`} className="flex min-h-0 flex-1 flex-col gap-3">
+      {/* the note's own row: its title, whether the AI may draw on it, and its menu. The title is plain text. */}
+      <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <input
+          ref={titleRef}
+          type="text"
+          value={title}
+          maxLength={160}
+          aria-label="Note title"
+          placeholder={DEFAULT_TITLE}
+          onChange={(e) => {
+            setTitle(e.target.value);
+            if (timer.current) clearTimeout(timer.current);
+            const v = e.target.value;
+            timer.current = setTimeout(() => commitTitle(v), 600);
+          }}
+          onBlur={(e) => commitTitle(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              editorRef.current?.focus();
+            }
+          }}
+          className="tp-field h-12 min-w-[12rem] flex-1 basis-[14rem] rounded-xl px-4 text-[1.5rem] font-semibold leading-tight tracking-tight text-foreground outline-none placeholder:font-medium placeholder:text-muted-foreground"
+        />
+        <div
+          data-tp-context=""
+          className={cn(
+            "inline-flex h-9 shrink-0 items-center gap-0.5 rounded-lg border pl-3 pr-1 transition-colors",
+            note.in_context ? "border-primary/50 bg-primary/10" : "border-border bg-muted/40",
+          )}
+        >
+          <Switch
+            className="items-center gap-2 [&>button]:mt-0"
+            checked={note.in_context}
+            onChange={(v) => void setInContext(note.id, v)}
+            label={<span className={cn("font-medium", note.in_context && "text-primary-text")}>Use as AI context</span>}
           />
+          <InfoTip label="About using this note as AI context">Live answers and the workspace chat can draw on this note.</InfoTip>
         </div>
+        <Menu
+          label="More for this note"
+          align="end"
+          items={[
+            {
+              id: "export",
+              label: "Export as Markdown",
+              onSelect: () => void saveExportFile({ defaultName: note.title, extension: "md", filterLabel: "Markdown", content: markdown() }),
+            },
+            {
+              id: "copy",
+              label: copied ? "Copied" : "Copy Markdown",
+              onSelect: () => {
+                void navigator.clipboard?.writeText(markdown()).then(() => {
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 1500);
+                });
+              },
+            },
+          ]}
+          renderTrigger={(props) => (
+            <Button variant="ghost" size="sm" {...props} aria-label="More for this note" className="h-9 w-9 shrink-0 px-0">
+              <MoreHorizontal className="h-4 w-4" aria-hidden />
+            </Button>
+          )}
+        />
       </div>
       {trouble && (
-        <div className="shrink-0 border-b border-destructive/30 bg-destructive/10 px-4 py-2">
+        <div className="shrink-0 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-2">
           <SaveStatus
             state={state}
             error={error}
@@ -198,55 +232,35 @@ export function NoteEditorPane({ note, autoFocusTitle = false }: { note: Talking
           )}
         </div>
       )}
-      <div data-tp-scroll="" className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex min-h-full w-full max-w-[46rem] flex-col px-6 pb-6 pt-7 sm:px-10">
-          <input
-            ref={titleRef}
-            type="text"
-            value={title}
-            maxLength={160}
-            aria-label="Note title"
-            placeholder={DEFAULT_TITLE}
-            onChange={(e) => {
-              setTitle(e.target.value);
-              if (timer.current) clearTimeout(timer.current);
-              const v = e.target.value;
-              timer.current = setTimeout(() => commitTitle(v), 600);
-            }}
-            onBlur={(e) => commitTitle(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
+      {/* the body: its formatting bar on its top edge (it stays while the text scrolls), the text, the count */}
+      <div role="group" aria-label="Note body" data-tp-body="" className="tp-field flex min-h-[14rem] min-w-0 flex-1 flex-col overflow-hidden rounded-xl">
+        <div data-tp-toolbar-dock="" className="tp-body-band shrink-0 border-b border-border">
+          <div ref={setToolbarHost} className="min-h-[2.75rem] min-w-0" />
+        </div>
+        <div data-tp-scroll="" className="min-h-0 flex-1 overflow-y-auto">
+          <div className="mx-auto flex min-h-full w-full max-w-[46rem] flex-col px-5 py-5 sm:px-8">
+            <LazyRichEditor
+              docJson={note.doc_json}
+              resetKey={`${note.id}:${rev}`}
+              ariaLabel={`Text of ${note.title}`}
+              toolbarHost={toolbarHost}
+              footerHost={footerHost}
+              handleRef={editorRef}
+              onChange={(doc) => edit(note.id, { doc })}
+            />
+            {/* the empty page below the text is still the page: a click there puts the caret at the end */}
+            <div
+              aria-hidden
+              className="min-h-16 flex-1 cursor-text"
+              onMouseDown={(e) => {
                 e.preventDefault();
                 editorRef.current?.focus();
-              }
-            }}
-            className="ui-r-md -mx-2 w-[calc(100%+1rem)] rounded-md bg-transparent px-2 py-1 text-[1.625rem] font-semibold leading-tight tracking-tight text-foreground outline-none transition-colors placeholder:text-muted-foreground hover:bg-accent/50 focus-visible:bg-accent/40 ui-focus"
-          />
-          <div className="mb-5 mt-1 flex items-center gap-0.5">
-            <Switch checked={note.in_context} onChange={(v) => void setInContext(note.id, v)} label="Use as AI context" />
-            <InfoTip label="About using this note as AI context">Live answers and the workspace chat can draw on this note.</InfoTip>
+              }}
+            />
           </div>
-          <LazyRichEditor
-            docJson={note.doc_json}
-            resetKey={`${note.id}:${rev}`}
-            ariaLabel={`Text of ${note.title}`}
-            toolbarHost={toolbarHost}
-            footerHost={footerHost}
-            handleRef={editorRef}
-            onChange={(doc) => edit(note.id, { doc })}
-          />
-          {/* the empty page below the text is still the page: a click there puts the caret at the end */}
-          <div
-            aria-hidden
-            className="min-h-16 flex-1 cursor-text"
-            onMouseDown={(e) => {
-              e.preventDefault();
-              editorRef.current?.focus();
-            }}
-          />
         </div>
+        <footer ref={setFooterHost} className="tp-body-band flex min-h-9 shrink-0 items-center border-t border-border px-5 py-2 sm:px-8" />
       </div>
-      <footer ref={setFooterHost} className="flex min-h-9 shrink-0 items-center border-t border-border px-6 py-2 sm:px-10" />
     </section>
   );
 }
