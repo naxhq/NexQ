@@ -63,7 +63,28 @@ fn final_path(file: &File) -> Result<std::path::PathBuf, String> {
         .map_err(|_| "could not resolve the file's location".to_string())
 }
 
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(target_os = "macos")]
+fn final_path(file: &File) -> Result<std::path::PathBuf, String> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::io::AsRawFd;
+    // fcntl(F_GETPATH) gives the path of the open descriptor (sys/fcntl.h).
+    const F_GETPATH: i32 = 50;
+    const MAXPATHLEN: usize = 1024;
+    extern "C" {
+        fn fcntl(fd: i32, cmd: i32, ...) -> i32;
+    }
+    let mut buf = vec![0u8; MAXPATHLEN];
+    let r = unsafe { fcntl(file.as_raw_fd(), F_GETPATH, buf.as_mut_ptr()) };
+    if r == -1 {
+        return Err("could not resolve the file's location".into());
+    }
+    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    let raw = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&buf[..len]));
+    // the root is canonical (on macOS /var is /private/var): compare like with like
+    std::fs::canonicalize(&raw).or(Ok(raw))
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 fn final_path(_file: &File) -> Result<std::path::PathBuf, String> {
     Err("no descriptor path".into())
 }
@@ -94,7 +115,8 @@ pub fn read_confined(path: &Path, canon_root: &Path, max: u64) -> Result<ReadFil
         }
         Err(e) => match std::fs::canonicalize(path) {
             Ok(c) if c.starts_with(canon_root) => {}
-            _ => return Err(e),
+            Ok(_) => return Err("resolves outside the folder".into()),
+            Err(_) => return Err(e),
         },
     }
     let mut bytes = Vec::with_capacity(md.len().min(max) as usize);

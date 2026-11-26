@@ -146,8 +146,6 @@ describe("QA round 5: exact note, lines and timing through the real hook chain",
       await tick(1000);
       const c = chip();
       report.push(`${name}: chip=${c?.textContent ?? '-'} state=${stateLabel()}`);
-      // @ts-ignore
-      (globalThis as any).__r5 = report;
       const first = blocks[target].text.split(/\s+/).slice(0, 2).join(" ");
       if (c) {
         expect(c.textContent).toContain(first);
@@ -182,7 +180,3 @@ describe("QA round 5: exact note, lines and timing through the real hook chain",
     expect(chip()).toBeNull();
   });
 });
-// @ts-ignore
-import { writeFileSync as __w } from "node:fs";
-import { afterAll } from "vitest";
-afterAll(() => __w(".agent-logs/r5-report.txt", ((globalThis as any).__r5 ?? []).join("\n")));
