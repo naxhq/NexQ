@@ -3,9 +3,21 @@ name: CI
 on:
   pull_request:
     branches: [main]
+    # Docs and the website don't touch the app. The site is built by deploy-website.yml.
+    paths-ignore:
+      - 'README.md'
+      - '**/*.md'
+      - 'docs/**'
+      - 'website/**'
   # Also run on main so the README CI badge reflects the default branch.
   push:
     branches: [main]
+    # Docs and the website don't touch the app. The site is built by deploy-website.yml.
+    paths-ignore:
+      - 'README.md'
+      - '**/*.md'
+      - 'docs/**'
+      - 'website/**'
   workflow_dispatch:
 
 permissions:
