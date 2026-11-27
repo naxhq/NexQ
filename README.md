@@ -9,15 +9,15 @@
 **Free, open-source AI meeting assistant, with a workspace for every client, class and project.**
 It transcribes both sides of a call live and answers from your own notes, with local models or the AI you already use. No bot joins.
 
-<!-- Release and stars come from getnexq.com/badges/*.json (rebuilt daily), because shields.io's GitHub badges often time out. -->
-[![Latest release](https://img.shields.io/endpoint?url=https%3A%2F%2Fgetnexq.com%2Fbadges%2Frelease.json&style=flat-square)](https://github.com/naxhq/NexQ/releases/latest)
-[![Installer downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fgetnexq.com%2Fbadges%2Fdownloads.json&style=flat-square)](https://github.com/naxhq/NexQ/releases)
+<!-- Badges are drawn by the site (website/src/pages/badges), rebuilt daily, because shields.io's often time out. -->
+[![Latest release](https://getnexq.com/badges/release.svg)](https://github.com/naxhq/NexQ/releases/latest)
+[![Installer downloads](https://getnexq.com/badges/downloads.svg)](https://github.com/naxhq/NexQ/releases)
 [![CI](https://github.com/naxhq/NexQ/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/naxhq/NexQ/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%28beta%29-lightgrey?style=flat-square)](https://github.com/naxhq/NexQ/releases/latest)
-[![Built with Tauri 2](https://img.shields.io/badge/built%20with-Tauri%202-24c8db?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
-[![Stars](https://img.shields.io/endpoint?url=https%3A%2F%2Fgetnexq.com%2Fbadges%2Fstars.json&style=flat-square)](https://github.com/naxhq/NexQ/stargazers)
-[![Discussions](https://img.shields.io/badge/discussions-ask%20or%20share-8250df?style=flat-square&logo=github)](https://github.com/naxhq/NexQ/discussions)
+[![License: MIT](https://getnexq.com/badges/license.svg)](LICENSE)
+[![Platform](https://getnexq.com/badges/platform.svg)](https://github.com/naxhq/NexQ/releases/latest)
+[![Built with Tauri 2](https://getnexq.com/badges/tauri.svg)](https://tauri.app)
+[![Stars](https://getnexq.com/badges/stars.svg)](https://github.com/naxhq/NexQ/stargazers)
+[![Discussions](https://getnexq.com/badges/discussions.svg)](https://github.com/naxhq/NexQ/discussions)
 
 **[Website](https://getnexq.com/)** ·
 **[Download](https://github.com/naxhq/NexQ/releases/latest)** ·
