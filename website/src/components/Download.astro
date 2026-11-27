@@ -8,12 +8,16 @@ import Icon from './Icon.astro';
 import Wave from './Wave.astro';
 import { CURRENT_VERSION } from '../data/releases';
 import { RELEASES_LATEST, RELEASES_URL, CONTRIBUTING, SECTION } from '../data/site';
+import { INSTALLER_DOWNLOADS_LABEL } from '../data/github';
 ---
 
 <section id={SECTION.download} class="section dl-sec border-t border-border" aria-labelledby="download-title">
   <div class="wrap">
     <h2 id="download-title" class="h2">Download NexQ</h2>
-    <p class="lede">Free and open source. Pick your system, run the installer, and start your next call with it open.</p>
+    <p class="lede">
+      Free and open source. Pick your system, run the installer, and start your next call with it open.
+      {INSTALLER_DOWNLOADS_LABEL && <>{INSTALLER_DOWNLOADS_LABEL} installer downloads so far.</>}
+    </p>
 
     <div class="dl mt-10" data-dl>
       <div class="dl-grid">

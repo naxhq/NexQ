@@ -11,6 +11,7 @@ It transcribes both sides of a call live and answers from your own notes, with l
 
 <!-- Release and stars come from getnexq.com/badges/*.json (rebuilt daily), because shields.io's GitHub badges often time out. -->
 [![Latest release](https://img.shields.io/endpoint?url=https%3A%2F%2Fgetnexq.com%2Fbadges%2Frelease.json&style=flat-square)](https://github.com/naxhq/NexQ/releases/latest)
+[![Installer downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fgetnexq.com%2Fbadges%2Fdownloads.json&style=flat-square)](https://github.com/naxhq/NexQ/releases)
 [![CI](https://github.com/naxhq/NexQ/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/naxhq/NexQ/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%28beta%29-lightgrey?style=flat-square)](https://github.com/naxhq/NexQ/releases/latest)
