@@ -11,6 +11,9 @@ on:
       - 'src/lib/releaseWave.mjs'
       - 'src/lib/releaseNotes.mjs'
       - 'src/lib/autoDetectCases.json'
+  # Daily, so the star count on the site and the README badge stays at most a day old (free: public repo).
+  schedule:
+    - cron: '17 6 * * *'
   workflow_dispatch:
 
 permissions:
