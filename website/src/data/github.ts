@@ -1,7 +1,7 @@
 // The star count shown next to "Star on GitHub" (Navbar.astro, Hero.astro).
 // BUILD time only: the site makes no request to GitHub from the visitor's browser. The deploy workflow runs on every
-// push that touches the site and once a day, so the number is at most a day old. pages/badges/stars.json.ts serves it
-// to the README badge. If the request fails (offline, rate limit,
+// push that touches the site and once a day, so the number is at most a day old. pages/badges/[name].svg.ts draws
+// the README badges from it. If the request fails (offline, rate limit,
 // slow), there is simply no count and the build carries on. GITHUB_TOKEN, when set, lifts the anonymous rate limit.
 import { REPO } from './site';
 
