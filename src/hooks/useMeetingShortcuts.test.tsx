@@ -2,6 +2,7 @@ import { cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useMeetingShortcuts } from "./useMeetingShortcuts";
 import { useMeetingStore } from "../stores/meetingStore";
+import { useTranscriptStore } from "../stores/transcriptStore";
 
 const actions = () => ({
   addBookmark: vi.fn(),
@@ -19,6 +20,7 @@ function press(key: string, mods: Partial<KeyboardEventInit> = {}) {
 describe("useMeetingShortcuts", () => {
   let a: ReturnType<typeof actions>;
   beforeEach(() => {
+    useTranscriptStore.getState().clearSegments();
     a = actions();
     useMeetingStore.setState({ isRecording: true });
     renderHook(() => useMeetingShortcuts(a));
@@ -39,6 +41,15 @@ describe("useMeetingShortcuts", () => {
     expect(a.toggleBookmarks).toHaveBeenCalledTimes(1);
     expect(a.toggleMute).toHaveBeenCalledTimes(1);
     expect(a.closeAllPanels).toHaveBeenCalledTimes(1);
+  });
+
+  it("Escape clears transcript selection before closing panels", () => {
+    useTranscriptStore.setState({ selectedSegmentIds: ["selected"] });
+    press("Escape");
+    expect(useTranscriptStore.getState().selectedSegmentIds).toEqual([]);
+    expect(a.closeAllPanels).not.toHaveBeenCalled();
+    press("Escape");
+    expect(a.closeAllPanels).toHaveBeenCalledOnce();
   });
 
   it("a key with a modifier belongs to the action keys, not to the single keys", () => {

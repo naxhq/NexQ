@@ -26,6 +26,8 @@ interface TranscriptLineProps {
   segment: TranscriptSegment;
   /** Optional search query to highlight matches */
   searchQuery?: string;
+  selected?: boolean;
+  onSelect?: (event: React.MouseEvent | React.KeyboardEvent) => void;
 }
 
 /**
@@ -36,7 +38,7 @@ interface TranscriptLineProps {
  * - Confidence underline when confidenceHighlightEnabled and below threshold
  * - Hover state showing full timestamp with milliseconds
  */
-export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
+export function TranscriptLine({ segment, searchQuery, selected = false, onSelect }: TranscriptLineProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState("");
@@ -250,7 +252,29 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
     <div
       ref={lineRef}
       data-segment-id={segment.id}
-      className={`group relative flex items-start gap-2.5 rounded-lg px-2 py-[7px] transition-colors duration-100 hover:bg-accent/25 border-l-[3px] transcript-line-enter`}
+      data-selected={selected}
+      role={onSelect ? "group" : undefined}
+      aria-label={onSelect ? `Transcript by ${speakerLabel} at ${shortTimestamp}` : undefined}
+      tabIndex={onSelect ? 0 : undefined}
+      onMouseDown={onSelect ? (e) => {
+        if (e.button !== 0 || !(e.shiftKey || e.ctrlKey || e.metaKey)) return;
+        if ((e.target as Element).closest("button, input, a, [contenteditable], [data-no-transcript-select]")) return;
+        // Shift-click selects bubbles, not a native text range. A plain drag
+        // still selects text normally for copying.
+        e.preventDefault();
+      } : undefined}
+      onClick={onSelect ? (e) => {
+        if ((e.target as Element).closest("button, input, a, [contenteditable], [data-no-transcript-select]")) return;
+        if (!(e.shiftKey || e.ctrlKey || e.metaKey) && window.getSelection()?.toString()) return;
+        onSelect(e);
+        e.currentTarget.focus();
+      } : undefined}
+      onKeyDown={onSelect ? (e) => {
+        if (e.target !== e.currentTarget || e.key !== "Enter") return;
+        e.preventDefault();
+        onSelect(e);
+      } : undefined}
+      className={`group relative flex items-start gap-2.5 rounded-lg px-2 py-[7px] transition-colors duration-100 border-l-[3px] transcript-line-enter ui-focus ${selected ? "bg-primary/10 ring-1 ring-inset ring-primary/40" : "hover:bg-accent/25"}`}
       style={{ borderLeftColor: isBookmarked ? 'hsl(var(--primary))' : isPending ? "transparent" : `${speakerHex}66` }}
       onMouseEnter={(e) => {
         // Dismiss any other line's tooltip first (singleton)
@@ -293,6 +317,7 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
           className={`mt-[3px] shrink-0 text-[0.6875rem] font-semibold tracking-tight ${canRename ? "cursor-pointer hover:underline" : ""} ${isPending ? "animate-pulse" : ""}`}
           style={{ color: tagColor }}
           onClick={startEditing}
+          data-no-transcript-select
           aria-label={canRename ? "Click to rename" : undefined}
         >
           {speakerLabel}
@@ -374,7 +399,7 @@ export function TranscriptLine({ segment, searchQuery }: TranscriptLineProps) {
       </div>
 
       {/* Hover bookmark icon */}
-      <div className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
         <button
           onClick={handleToggleBookmark}
           className="-m-1 rounded p-1.5 hover:bg-accent/50 transition-colors ui-focus"
