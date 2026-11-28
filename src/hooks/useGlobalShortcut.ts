@@ -18,6 +18,9 @@ import { formatShortcut, normalizeAccelerator, reservedShortcutAction, screenCap
 import { providerReadsImages } from "../lib/imageAttachments";
 import { forwardChordToEditor, keyBelongsToFocusedControl, modeForKeyEvent } from "../lib/hotkeys";
 import { captureScreenIntoAsk } from "../lib/screenCapture";
+import { useTranscriptStore } from "../stores/transcriptStore";
+import { useSpeakerStore } from "../stores/speakerStore";
+import { assistSpeakerLabel } from "../lib/speakerLabels";
 
 /**
  * Ctrl+M: end the running meeting (in every window that holds it) or start one.
@@ -303,7 +306,22 @@ export function useGlobalShortcut() {
         // Open/focus the Ask input instead of triggering generation directly
         window.dispatchEvent(new Event("nexq:toggle-ask-input"));
       } else {
-        runYourAction(mode).catch(() => {});
+        // Like a clicked question card, a selection is an explicit target.
+        // Snapshot before starting async work; keep the normal transcript context.
+        const transcript = useTranscriptStore.getState();
+        const selected = mode === "Assist" ? new Set(transcript.selectedSegmentIds) : new Set<string>();
+        const { speakers } = useSpeakerStore.getState();
+        const lines = transcript.segments
+          .filter((s) => s.is_final && selected.has(s.id) && s.text.trim())
+          .map((s) => `${assistSpeakerLabel(s, (id) => speakers[id]?.display_name)}: ${s.text}`);
+        const question = lines.length
+          ? `Respond to the following selected transcript excerpts. Use the meeting context when helpful:\n\n${lines.join("\n")}`
+          : undefined;
+        runYourAction(mode, question).catch((err) => {
+          if (question) showToast(typeof err === "string" ? err : "Couldn't generate AI response", "error");
+        });
+        // The request owns its text snapshot; the next interaction starts fresh.
+        if (question) transcript.clearSelection();
       }
     }
 

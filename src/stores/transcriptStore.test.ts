@@ -7,6 +7,49 @@ function seg(text: string, is_final: boolean, id = "them_1_acc_1"): TranscriptSe
   return { id, text, speaker: "Them", speaker_id: "them", timestamp_ms: 1_000, is_final, confidence: 0.9 };
 }
 
+describe("transcript selection", () => {
+  beforeEach(() => useTranscriptStore.getState().clearSegments());
+
+  it("selects only existing final segments, deduplicates, and excludes incoming lines", () => {
+    const store = useTranscriptStore.getState();
+    store.appendSegment(seg("First", true, "a"));
+    store.appendSegment(seg("Still talking", false, "b"));
+    store.setSelectedSegmentIds(["a", "a", "b", "missing"]);
+    store.appendSegment(seg("New words", true, "c"));
+    expect(useTranscriptStore.getState().selectedSegmentIds).toEqual(["a"]);
+    store.clearSelection();
+    expect(useTranscriptStore.getState().selectedSegmentIds).toEqual([]);
+  });
+
+  it("clears selection together with the transcript", () => {
+    const store = useTranscriptStore.getState();
+    store.appendSegment(seg("Question", true, "a"));
+    store.setSelectedSegmentIds(["a"]);
+    store.clearSegments();
+    expect(useTranscriptStore.getState().selectedSegmentIds).toEqual([]);
+  });
+
+  it("deselects a growing final when new words are confirmed under the same ID", () => {
+    const store = useTranscriptStore.getState();
+    store.appendSegment(seg("First question?", true, "a"));
+    store.appendSegment(seg("Another question?", true, "b"));
+    store.setSelectedSegmentIds(["a", "b"]);
+    store.updateInterimSegment(seg("First question? More words", false, "a"));
+    expect(useTranscriptStore.getState().selectedSegmentIds).toEqual(["a", "b"]);
+    store.updateInterimSegment(seg("First question? More words confirmed.", true, "a"));
+    expect(useTranscriptStore.getState().selectedSegmentIds).toEqual(["b"]);
+  });
+
+  it("also deselects new words committed by finalizeAllInterim", () => {
+    const store = useTranscriptStore.getState();
+    store.appendSegment(seg("Confirmed", true, "a"));
+    store.setSelectedSegmentIds(["a"]);
+    store.updateInterimSegment(seg("Confirmed plus new words", false, "a"));
+    store.finalizeAllInterim();
+    expect(useTranscriptStore.getState().selectedSegmentIds).toEqual([]);
+  });
+});
+
 describe("transcriptStore upsert", () => {
   beforeEach(() => useTranscriptStore.getState().clearSegments());
 

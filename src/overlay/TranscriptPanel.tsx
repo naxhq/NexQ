@@ -12,6 +12,7 @@ import { NoTranscriptBanner } from "./NoTranscriptBanner";
 import { mergeConsecutiveSegments } from "../lib/mergeSegments";
 import { Mic, MicOff, Volume2, VolumeX, Search, X, Radio } from "lucide-react";
 import { ColorPickerButton } from "../components/ColorPickerButton";
+import type { TranscriptSegment } from "../lib/types";
 
 export function TranscriptPanel({ onOpenDevLog, short = false }: { onOpenDevLog?: () => void; short?: boolean } = {}) {
   const segments = useTranscriptStore((s) => s.segments);
@@ -19,6 +20,21 @@ export function TranscriptPanel({ onOpenDevLog, short = false }: { onOpenDevLog?
   const autoScroll = useTranscriptStore((s) => s.autoScroll);
   const setSearchQuery = useTranscriptStore((s) => s.setSearchQuery);
   const setAutoScroll = useTranscriptStore((s) => s.setAutoScroll);
+  const selectedIds = useTranscriptStore((s) => s.selectedSegmentIds);
+  const setSelectedIds = useTranscriptStore((s) => s.setSelectedSegmentIds);
+  const clearSelection = useTranscriptStore((s) => s.clearSelection);
+  const meetingId = useMeetingStore((s) => s.activeMeeting?.id);
+  const anchorId = useRef<string | null>(null);
+  const assistKey = useConfigStore((s) => s.hotkeys.mode_assist);
+
+  useEffect(() => {
+    clearSelection();
+    anchorId.current = null;
+  }, [meetingId, clearSelection]);
+
+  useEffect(() => {
+    if (selectedIds.length === 0) anchorId.current = null;
+  }, [selectedIds]);
   const isRecording = useMeetingStore((s) => s.isRecording);
   const audioMode = useMeetingStore((s) => s.audioMode);
   const { micLevel, systemLevel } = useAudioLevel();
@@ -122,8 +138,17 @@ export function TranscriptPanel({ onOpenDevLog, short = false }: { onOpenDevLog?
   const mergedSegments = useMemo(() => {
     const finals = segments.filter((s) => s.is_final);
     const interims = segments.filter((s) => !s.is_final);
-    return [...mergeConsecutiveSegments(finals), ...interims];
-  }, [segments]);
+    // Keep selected/unselected originals apart so incoming speech cannot
+    // silently become part of a highlighted bubble.
+    const selected = new Set(selectedIds);
+    const runs: TranscriptSegment[][] = [];
+    for (const segment of finals) {
+      const last = runs[runs.length - 1];
+      if (last && selected.has(last[0].id) === selected.has(segment.id)) last.push(segment);
+      else runs.push([segment]);
+    }
+    return [...runs.flatMap(mergeConsecutiveSegments), ...interims];
+  }, [segments, selectedIds]);
 
   // Filter merged segments by search query
   const filteredSegments = searchQuery.trim()
@@ -136,6 +161,27 @@ export function TranscriptPanel({ onOpenDevLog, short = false }: { onOpenDevLog?
   const matchCount = searchQuery.trim()
     ? filteredSegments.length
     : 0;
+
+  const selectBubble = (segment: TranscriptSegment, event: React.MouseEvent | React.KeyboardEvent) => {
+    const idsOf = (s: TranscriptSegment): string[] =>
+      "originalIds" in s ? (s as TranscriptSegment & { originalIds: string[] }).originalIds : [s.id];
+    const additive = event.ctrlKey || event.metaKey;
+    let ids = idsOf(segment);
+    if (event.shiftKey && anchorId.current) {
+      const from = filteredSegments.findIndex((s) => idsOf(s).includes(anchorId.current!));
+      const to = filteredSegments.findIndex((s) => s.id === segment.id);
+      if (from >= 0 && to >= 0) {
+        ids = filteredSegments.slice(Math.min(from, to), Math.max(from, to) + 1).flatMap(idsOf);
+      }
+    } else {
+      anchorId.current = ids[0];
+    }
+    const remove = !event.shiftKey && ids.every((id) => selectedIds.includes(id));
+    setSelectedIds(additive
+      ? remove ? selectedIds.filter((id) => !ids.includes(id)) : [...selectedIds, ...ids]
+      : remove && selectedIds.length === ids.length ? [] : ids);
+    setAutoScroll(false);
+  };
 
   // Empty state
   if (segments.length === 0) {
@@ -254,10 +300,20 @@ export function TranscriptPanel({ onOpenDevLog, short = false }: { onOpenDevLog?
             key={seg.id}
             segment={seg}
             searchQuery={searchQuery}
+            selected={selectedIds.includes(seg.id)}
+            onSelect={seg.is_final ? (event) => selectBubble(seg, event) : undefined}
           />
         ))}
         <div ref={bottomRef} />
       </div>
+      {selectedIds.length > 0 && (
+        <div className="absolute bottom-1 right-2 z-10 flex max-w-[calc(100%-1rem)] items-center gap-2 rounded-lg border border-border/25 bg-muted/60 px-2 py-1 text-[11px] text-muted-foreground backdrop-blur-sm" role="status">
+          <span className="truncate">{selectedIds.length} selected · {assistKey} to Assist · Esc to clear</span>
+          <button aria-label="Clear transcript selection" onClick={clearSelection} className="shrink-0 rounded p-1 hover:bg-accent/40 ui-focus">
+            <X className="h-3 w-3" aria-hidden="true" />
+          </button>
+        </div>
+      )}
       </div>
 
       {/* Typeset controls */}

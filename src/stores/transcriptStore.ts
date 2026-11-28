@@ -16,6 +16,7 @@ interface TranscriptState {
   segments: TranscriptSegment[];
   searchQuery: string;
   autoScroll: boolean;
+  selectedSegmentIds: string[];
 
   // Actions
   appendSegment: (segment: TranscriptSegment) => void;
@@ -26,6 +27,8 @@ interface TranscriptState {
   clearSegments: () => void;
   setSearchQuery: (query: string) => void;
   setAutoScroll: (auto: boolean) => void;
+  setSelectedSegmentIds: (ids: string[]) => void;
+  clearSelection: () => void;
   reassignSpeaker: (fromId: string, toId: string) => void;
 }
 
@@ -33,6 +36,7 @@ export const useTranscriptStore = create<TranscriptState>((set) => ({
   segments: [],
   searchQuery: "",
   autoScroll: true,
+  selectedSegmentIds: [],
 
   appendSegment: (segment) =>
     set((state) => ({
@@ -57,7 +61,14 @@ export const useTranscriptStore = create<TranscriptState>((set) => ({
           current.is_final && !segment.is_final
             ? { ...current, pending_text: segment.text }
             : segment;
-        return { segments: updated };
+        return {
+          segments: updated,
+          // A final can keep growing under the same ID. Do not silently add
+          // those new words to a selection the user already made.
+          selectedSegmentIds: segment.is_final && current.text !== segment.text
+            ? state.selectedSegmentIds.filter((id) => id !== segment.id)
+            : state.selectedSegmentIds,
+        };
       }
       return { segments: [...state.segments, segment] };
     });
@@ -84,6 +95,10 @@ export const useTranscriptStore = create<TranscriptState>((set) => ({
             : { ...s, text: s.pending_text, pending_text: undefined }
           : { ...s, is_final: true }
       ),
+      selectedSegmentIds: state.selectedSegmentIds.filter((id) => {
+        const line = state.segments.find((s) => s.id === id);
+        return line && (!include(line) || line.pending_text === undefined || line.pending_text === line.text);
+      }),
     })),
 
   dropStaleInterim: () =>
@@ -107,10 +122,15 @@ export const useTranscriptStore = create<TranscriptState>((set) => ({
 
   clearSegments: () => {
     interimUpdatedAt.clear();
-    set({ segments: [] });
+    set({ segments: [], selectedSegmentIds: [] });
   },
   setSearchQuery: (query) => set({ searchQuery: query }),
   setAutoScroll: (auto) => set({ autoScroll: auto }),
+  setSelectedSegmentIds: (ids) => set((state) => {
+    const finals = new Set(state.segments.filter((s) => s.is_final).map((s) => s.id));
+    return { selectedSegmentIds: [...new Set(ids)].filter((id) => finals.has(id)) };
+  }),
+  clearSelection: () => set({ selectedSegmentIds: [] }),
   reassignSpeaker: (fromId, toId) =>
     set((state) => ({
       segments: state.segments.map((s) =>

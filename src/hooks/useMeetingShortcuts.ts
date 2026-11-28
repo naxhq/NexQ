@@ -5,6 +5,7 @@
 import { useEffect } from "react";
 import { useMeetingStore } from "../stores/meetingStore";
 import { NOTES_UPDATE_EVENT, isTypingTarget, overlaySingleKey } from "../lib/hotkeys";
+import { useTranscriptStore } from "../stores/transcriptStore";
 
 interface ShortcutActions {
   addBookmark: () => void;
@@ -27,6 +28,12 @@ export function useMeetingShortcuts(actions: ShortcutActions) {
 
       // Escape always works (even in inputs) — close all panels
       if (overlaySingleKey(e.key)?.id === "closePanels") {
+        const transcript = useTranscriptStore.getState();
+        if (!isInput && transcript.selectedSegmentIds.length > 0) {
+          e.preventDefault();
+          transcript.clearSelection();
+          return;
+        }
         actions.closeAllPanels();
         return;
       }

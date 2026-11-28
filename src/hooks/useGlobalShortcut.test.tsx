@@ -391,6 +391,37 @@ describe("meeting shortcut (Ctrl+M) and demos", () => {
 describe("Ctrl+B and the in-meeting keys leave editors and buttons alone", () => {
   afterEach(() => { document.body.innerHTML = ""; });
 
+  it("sends selected final text in conversation order with Assist, respecting remapped keys", async () => {
+    const meeting = await mountWindow("overlay");
+    const { useTranscriptStore } = await import("../stores/transcriptStore");
+    const { useConfigStore } = await import("../stores/configStore");
+    const actions = await import("../lib/autoAnswer");
+    const run = vi.spyOn(actions, "runYourAction").mockResolvedValue();
+    meeting.setState({ activeMeeting: { id: "m" } as Meeting });
+    useTranscriptStore.setState({
+      segments: [
+        { id: "a", text: "Earlier question?", speaker: "Them", timestamp_ms: 1000, is_final: true, confidence: 1 },
+        { id: "b", text: "My clarification", speaker: "User", timestamp_ms: 2000, is_final: true, confidence: 1 },
+        { id: "c", text: "Unrelated latest question?", speaker: "Them", timestamp_ms: 3000, is_final: true, confidence: 1 },
+      ],
+      selectedSegmentIds: ["b", "a"],
+    });
+    useConfigStore.setState({ hotkeys: { ...useConfigStore.getState().hotkeys, mode_assist: "q" } });
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyQ", key: "q", bubbles: true, cancelable: true }));
+    expect(run).toHaveBeenCalledOnce();
+    expect(run.mock.calls[0][0]).toBe("Assist");
+    const target = run.mock.calls[0][1]!;
+    expect(target).toContain("Earlier question?");
+    expect(target).toContain("My clarification");
+    expect(target.indexOf("Earlier question?")).toBeLessThan(target.indexOf("My clarification"));
+    expect(target).not.toContain("Unrelated latest question?");
+    expect(useTranscriptStore.getState().selectedSegmentIds).toEqual([]);
+
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyQ", key: "q", bubbles: true, cancelable: true }));
+    expect(run).toHaveBeenLastCalledWith("Assist", undefined);
+    run.mockRestore();
+  });
+
   it("hands Ctrl+B to a focused rich-text editor (bold) instead of switching windows", async () => {
     await mountWindow("overlay");
     const editor = document.createElement("div");
